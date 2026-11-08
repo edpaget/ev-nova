@@ -20,7 +20,7 @@ impl Session {
     /// @0x6f2cb after the count-down, as `chord_fades` reads the
     /// countdown's next pass.
     pub(super) fn key_fades(&self) -> KeyFades {
-        let head = PlayerHead::of(self.ship.condition);
+        let head = PlayerHead::of(self.ship.condition, self.pod);
         let mut next = self.ship.condition;
         next.count_down();
         KeyFades::of(KeyFacts {

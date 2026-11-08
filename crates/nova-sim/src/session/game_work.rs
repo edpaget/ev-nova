@@ -222,6 +222,7 @@ pub(super) struct AdvanceRun<'a> {
 /// (@0x68aba-0x68ac6), before the pass's display settles a new
 /// condition.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)] // each is one flag `_HandlePlayer` reads at its top
 pub(super) struct PlayerHead {
     /// Whether the player was dying or destroyed, `_IsDying` (-0x2ca),
     /// which the self-destruct reads (see the `self_destruct` module).
@@ -235,15 +236,28 @@ pub(super) struct PlayerHead {
     /// the escort menu's block and the class-order bookkeeping (see the
     /// `class_orders` module).
     pub(super) dead: bool,
+    /// Whether the escape pod's frames run and return on this pass: the
+    /// pod countdown +0xc908 above 0 as the pod block tests it (@0x68d1d),
+    /// before its flight takes the pass's tick off (@0x68dc1), on a player
+    /// that isn't destroyed, since a destroyed one takes the dead branch
+    /// first (@0x68700). Its return (`jne 0x71113` @0x68ddd) skips the rest
+    /// of `_HandlePlayer`: the death timer's tick, the escort menu's block,
+    /// the klaxon, the eject, the self-destruct and the cloak key (see the
+    /// `display_step` module). It is false on the eject's own pass, whose
+    /// countdown is set after the test.
+    pub(super) in_pod: bool,
 }
 
 impl PlayerHead {
-    /// What a pass beginning with the player in `condition` reads.
-    pub(super) fn of(condition: Condition) -> Self {
+    /// What a pass beginning with the player in `condition`, its pod
+    /// countdown `pod` (`Session::pod`), reads.
+    pub(super) fn of(condition: Condition, pod: Option<u32>) -> Self {
+        let dead = condition == Condition::Destroyed;
         Self {
             dying: matches!(condition, Condition::Dying { .. } | Condition::Destroyed),
             disabled: matches!(condition, Condition::Disabled | Condition::Dying { .. }),
-            dead: condition == Condition::Destroyed,
+            dead,
+            in_pod: pod.is_some() && !dead,
         }
     }
 }
@@ -253,7 +267,7 @@ impl PassStart {
     pub(super) fn of(session: &Session) -> Self {
         Self {
             npcs: session.space.npcs_before(),
-            player: PlayerHead::of(session.ship.condition),
+            player: PlayerHead::of(session.ship.condition, session.pod),
             stood: session.ship.player.position,
         }
     }
@@ -1038,6 +1052,22 @@ mod tests {
     use crate::testkit::FakePilotCatalog;
     use crate::traffic::autopilot::Outcome;
     use crate::traffic::npc::{Mode, Npc, NpcId};
+
+    #[test]
+    fn a_pass_head_is_in_the_pod_while_the_countdown_runs_on_a_player_not_destroyed() {
+        use super::PlayerHead;
+        let dying = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        for condition in [Condition::Intact, Condition::Disabled, dying] {
+            assert!(PlayerHead::of(condition, Some(2)).in_pod, "{condition:?}");
+            assert!(!PlayerHead::of(condition, None).in_pod, "{condition:?}");
+        }
+        // The dead branch comes first (@0x68700).
+        assert!(!PlayerHead::of(Condition::Destroyed, Some(2)).in_pod);
+        assert!(PlayerHead::of(Condition::Destroyed, Some(2)).dead);
+    }
 
     /// What a decision saw of an NPC: whether it was provoked, the ship it
     /// targeted, and the damage aimed at it.

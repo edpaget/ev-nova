@@ -1245,7 +1245,10 @@ mod tests {
     }
 
     #[test]
-    fn a_clear_before_a_rescue_on_the_second_pass_comes_with_its_pass() {
+    fn a_pod_pass_before_a_rescue_on_the_second_pass_runs_no_menu_block_and_comes_with_its_pass() {
+        // The pod's frames return (@0x68ddd) before the escort menu's
+        // block (@0x6df59) and the class-order bookkeeping (@0x6e2e8), so
+        // the pod's pass before the rescue runs and reports no block.
         let catalog = catalog();
         let mut session = in_the_pod(&catalog, 2);
         session.space.escorts.class_orders[2] = Some(crate::escort::EscortOrder::Hold);
@@ -1258,7 +1261,7 @@ mod tests {
         let report = steps(&mut session, &catalog, &input, 3);
         assert_eq!(report.steps.len(), 1, "rescued");
         assert!(report.steps[0].rescued.is_some());
-        assert_eq!(cleared_by_pass(&report), [[Some(true)]]);
+        assert_eq!(cleared_by_pass(&report), [[None]]);
         assert_eq!(session.out.escort_menu, None, "none left for the next step");
     }
 

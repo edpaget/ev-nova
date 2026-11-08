@@ -24,6 +24,15 @@
 //!   `Session::pod` (none for -1 or 0) and the 0 outside the pod as
 //!   `Session::pod_zeroed` ([`PodWord`]).
 //!
+//!   A breaking-up or destroyed player can't fire, so only an intact one
+//!   steps its word, but its own hull can still break up while the word
+//!   runs. The pod's frames then return before the death timer's tick
+//!   (@0x68ddd before @0x6d7e0), so the breakup stalls with no klaxon and
+//!   the pod rescues the pilot (see the `display_step` module). A player
+//!   destroyed beside the running word anyway (by the default
+//!   `RuleKey::BreakupStall` reading) is held: the dead branch comes first
+//!   (@0x68700) and never reads the word, which stays as the beam left it.
+//!
 //! A beam of `ExitType` 6 steps +0xc90a the same way: the order word of
 //! any NPC ([`Npc::order_word`](crate::Npc::order_word), -1 from its
 //! spawn). The player's own word steps nothing here. On a ship the player
@@ -146,6 +155,7 @@ mod tests {
     use crate::catalog::WeaponRecord;
     use crate::chance::NeverFires;
     use crate::combat::Rules;
+    use crate::combat::hull::Condition;
     use crate::flight::Controls;
     use crate::player_fate::PlayerFate;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
@@ -349,6 +359,160 @@ mod tests {
         fire(&mut session, &mut Ranged::of(&[(4, 0)]));
         assert_eq!((session.pod, session.ship.fate.pod_zeroed), (None, false));
         assert_eq!(session.player_fate(), PlayerFate::Flying);
+    }
+
+    /// A session of [`beamed`] whose player hull has `DeathDelay`
+    /// `death_delay`, by `rules`, its intact player stepped by its own
+    /// beam to a pod word of 3 (-1 drawn to 2, then on to 3), then its
+    /// armour set to 0, a change with no hit that its next display settles
+    /// into a breakup.
+    ///
+    /// The beam is fired intact: a breaking-up or destroyed player can't
+    /// fire (`_IsDisabled` holds for it, and its fire and point defence are
+    /// gated on that @0x6ab1c, @0x6aba7, @0x68b30; the engine's
+    /// `Armament::fire_player` and `fire_point_defence` refuse anything but
+    /// `Condition::Intact`). The word is 3, not 1: a word of 1 is taken to
+    /// 0 by the next pass's pod flight in its move, which rescues the pilot
+    /// before that pass's display settles the armour, as the original's pod
+    /// block (@0x68d1d, rescue @0x68de3) comes before its display too, so
+    /// no breakup would ever meet the running word.
+    fn broken_up_beside_its_pod_word(
+        death_delay: i16,
+        rules: Rulebook,
+    ) -> (FakePilotCatalog, Session) {
+        let mut catalog = beamed();
+        for hull in &mut catalog.hulls {
+            hull.death_delay = death_delay;
+        }
+        let mut session = facing_an_npc(&catalog, 180).with_rules(rules);
+        fire(&mut session, &mut Ranged::of(&[(4, 2)]));
+        assert_eq!(session.pod, Some(3));
+        assert_eq!(session.player_condition(), Condition::Intact);
+        session.pilot.reserves.armor.now = 0.0;
+        (catalog, session)
+    }
+
+    /// The passes of `session`'s game work from `catalog` until the rescue
+    /// ends one, up to `passes`: after each, the player's condition and the
+    /// pass's sounds; and whether the rescue came.
+    fn until_rescued(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        passes: usize,
+    ) -> (Vec<(Condition, Vec<crate::sound::SimSound>)>, bool) {
+        let mut seen = Vec::new();
+        for _ in 0..passes {
+            session.take_sounds();
+            let rescued = session.game_work(
+                Controls::default(),
+                catalog,
+                &Passive,
+                Rules::default(),
+                &mut NeverFires,
+            );
+            seen.push((session.player_condition(), session.take_sounds()));
+            if rescued {
+                return (seen, true);
+            }
+        }
+        (seen, false)
+    }
+
+    #[test]
+    fn a_player_broken_up_beside_its_stray_pod_word_stalls_its_breakup_and_is_rescued() {
+        // The pod's frames return (`jne 0x71113` @0x68ddd) before the
+        // death timer's tick (@0x6d7e0) and the klaxon (@0x6f1e4), so the
+        // timer the display set stalls, the ship never explodes, and the
+        // pod reaches 0 and rescues the pilot (@0x68de3-0x68f2f). By
+        // `RuleKey::BreakupStall`'s original reading a hull of
+        // `DeathDelay` 0 stalls the same way.
+        let readings = [
+            (1, Rulebook::default()),
+            (
+                0,
+                Rulebook::default().with_override(RuleKey::BreakupStall, RuleSource::Engine),
+            ),
+        ];
+        for (death_delay, rules) in readings {
+            let (catalog, mut session) = broken_up_beside_its_pod_word(death_delay, rules);
+            let (seen, rescued) = until_rescued(&mut session, &catalog, 10);
+            assert!(
+                seen.iter()
+                    .any(|(condition, _)| matches!(condition, Condition::Dying { .. })),
+                "{death_delay}: it broke up: {seen:?}"
+            );
+            for (condition, sounds) in &seen {
+                assert_ne!(*condition, Condition::Destroyed, "{death_delay}: {seen:?}");
+                assert!(
+                    !sounds.contains(&crate::sound::SimSound::Klaxon),
+                    "{death_delay}: no klaxon in the pod: {seen:?}"
+                );
+            }
+            assert_eq!(session.player_end, None, "{death_delay}");
+            assert!(rescued, "{death_delay}: {seen:?}");
+            assert!(session.take_rescue_desc().is_some(), "{death_delay}");
+        }
+    }
+
+    #[test]
+    fn a_player_destroyed_beside_its_stray_pod_word_is_held_by_the_games_end_and_never_rescued() {
+        // The default `RuleKey::BreakupStall` reading destroys a hull of
+        // `DeathDelay` 0 at the display after its breakup, with the pod
+        // word still running. `_HandlePlayer` tests the active byte
+        // (@0x68700) before the pod block (@0x68d1d): the dead branch
+        // holds the player and never reads +0xc908, which stays as the
+        // beam left it until the next writer of -1 (`_ResetPlayer`
+        // @0x1d75b, `_DoNewPilot`, `_OpenPilotFile`).
+        let (catalog, mut session) = broken_up_beside_its_pod_word(0, Rulebook::default());
+        let mut exploded = None;
+        for pass in 0..10 {
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Passive,
+                Rules::default(),
+                &mut NeverFires,
+            );
+            if session.player_condition() == Condition::Destroyed {
+                exploded = Some(pass);
+                break;
+            }
+        }
+        assert!(exploded.is_some(), "it explodes");
+        assert_eq!(session.player_fate(), PlayerFate::Exploded);
+        let word = session.pod;
+        assert!(word.is_some(), "the word still runs as it explodes");
+        let at = session.ship.player.position;
+        let mut fates = Vec::new();
+        for _ in 0..crate::player_fate::HOLD_TICKS + 4 {
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Passive,
+                Rules::default(),
+                &mut NeverFires,
+            );
+            assert!(!session.ship.fate.rescue_due, "never rescued");
+            assert!(session.take_rescue_desc().is_none());
+            assert_eq!(session.ship.player.position, at, "held where it is");
+            assert_eq!(session.pod, word, "the word is inert");
+            fates.push(session.player_fate());
+        }
+        assert_eq!(
+            fates[0],
+            PlayerFate::Holding {
+                ticks_left: crate::player_fate::HOLD_TICKS - 1
+            }
+        );
+        assert_eq!(
+            fates.last(),
+            Some(&PlayerFate::Holding { ticks_left: 0 }),
+            "the hold runs out: {:?}",
+            session.player_end
+        );
+        assert!(session.take_hold_expired());
     }
 
     #[test]

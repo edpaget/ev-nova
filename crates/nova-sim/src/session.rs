@@ -1773,9 +1773,14 @@ impl Session {
     /// flight while its countdown runs, in place of the controls, the
     /// jump, the fuel and the dock approach (see the `eject` module's
     /// `pod_tick`), else the ship's motion ([`Session::move_player`]) and
-    /// the dock approach (see the `clearance` module).
+    /// the dock approach (see the `clearance` module). A destroyed player
+    /// never flies the pod, whatever its countdown holds: `_HandlePlayer`
+    /// tests the active byte (@0x68700) before the pod block (@0x68d1d),
+    /// so a destroyed player beside a word a stray beam stepped takes the
+    /// dead branch and is held, the word left as it is (see the
+    /// `stray_words` module).
     fn player_move(&mut self, controls: Controls, pass: GamePass) {
-        if self.pod.is_some() {
+        if self.pod.is_some() && self.ship.condition != Condition::Destroyed {
             self.pod_tick();
             return;
         }
