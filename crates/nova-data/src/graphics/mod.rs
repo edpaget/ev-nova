@@ -11,6 +11,10 @@
 //! | `ppat` | [`decode_ppat`] | one opaque image |
 //! | `rlëD` ([`RLED`]) | [`decode_rled`], [`decode_rled_as`] | a [`SpriteSheet`] of equal-sized frames |
 //!
+//! [`scan_rled`] reads an `rlëD`'s size, count and runs without decoding a
+//! pixel, and [`rled_frame`] reads only its header's frame size, as the
+//! original makes a sprite from one.
+//!
 //! [`apply_mask`] gives a decoded picture its alpha from a second picture,
 //! its mask, as Nova masks its button caps. [`cut_pict_sheet`] cuts a
 //! decoded sprites picture and its mask into a [`SpriteSheet`], as the
@@ -149,6 +153,6 @@ pub use pattern::{PPAT, decode_ppat};
 pub use pict::{PICT, PictFrame, decode_pict, pict_frame};
 pub use pict_sheet::{SheetMask, cut_pict_sheet};
 pub use rle_words::{RleWords, rled_words, sheet_rle_words};
-pub use rled::{RLED, RledInfo, decode_rled, decode_rled_as, scan_rled};
+pub use rled::{RLED, RledFrameSize, RledInfo, decode_rled, decode_rled_as, rled_frame, scan_rled};
 pub use rled8::EightBitReading;
 pub use sheet::{SheetLayout, SpriteSheet};

@@ -198,8 +198,8 @@ pub use store::{
     LayerError, LayerSprite, MissionCompletion, MissionObjective, MissionOffer, NewsItem,
     NoInterfaceFile, OpenError, Origin, Outcome, Outline, OutlineTriangle, ParsedSet, ParsedTest,
     PointAt, PointState, Provenance, Requires, SheetKind, SheetScan, ShipLayer, ShipLayerInfos,
-    ShipLayers, ShipSprite, ShipSpriteInfo, ShipSpriteWords, SourceFile, SpinSheet,
-    SpinSpriteError, SpriteError, StandIn, StandInOf, StellarSprite, StellarSpriteError,
+    ShipLayers, ShipSprite, ShipSpriteFrame, ShipSpriteInfo, ShipSpriteWords, SourceFile,
+    SpinSheet, SpinSpriteError, SpriteError, StandIn, StandInOf, StellarSprite, StellarSpriteError,
     StoreEntry, StoreResource, StoryEffects, StoryMission, Storylines, interface_path_candidates,
     load_interface, open_interface, ship_desc_id, shot_spin_id, stellar_spin_id,
 };

@@ -5,8 +5,8 @@ use std::fmt;
 use super::{GameData, SourceFile, StoreEntry};
 use crate::error::DecodeError;
 use crate::graphics::{
-    GraphicsError, RLED, RleWords, RledInfo, SheetLayout, SpriteSheet, decode_rled, rled_words,
-    scan_rled,
+    GraphicsError, RLED, RleWords, RledFrameSize, RledInfo, SheetLayout, SpriteSheet, decode_rled,
+    rled_frame, rled_words, scan_rled,
 };
 use crate::records::ship::Ship;
 use crate::records::ship_anim::ShipAnim;
@@ -98,6 +98,10 @@ pub type ShipSpriteInfo<'a> = ShipSprite<'a, SheetScan>;
 /// A ship's base sheet as [`GameData::ship_sprite_words`] reads it: its
 /// run-length tokens, which its pixels touch by.
 pub type ShipSpriteWords<'a> = ShipSprite<'a, RleWords>;
+
+/// A ship's base sheet as [`GameData::ship_sprite_frame`] reads it: its
+/// header's frame size alone.
+pub type ShipSpriteFrame<'a> = ShipSprite<'a, RledFrameSize>;
 
 /// What a sheet would hold once decoded, read without decoding it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -272,6 +276,14 @@ impl GameData {
     /// It fails where that does, but for tokens it does not check.
     pub fn ship_sprite_words(&self, ship: ShipId) -> Result<ShipSpriteWords<'_>, SpriteError> {
         self.resolve_sprite(ship, |data, _| rled_words(data))
+    }
+
+    /// What [`GameData::ship_sprite`] resolves, with the sheet read only as
+    /// its header's frame size ([`rled_frame`]), as the original makes a
+    /// ship's base sprite from it (`_SWCreateSpriteFromRLEResource`
+    /// @0x228b5). It fails where that does, but for tokens it does not read.
+    pub fn ship_sprite_frame(&self, ship: ShipId) -> Result<ShipSpriteFrame<'_>, SpriteError> {
+        self.resolve_sprite(ship, |data, _| rled_frame(data))
     }
 
     fn resolve_sprite<S>(
@@ -469,6 +481,50 @@ mod tests {
             }
         );
         assert_eq!(err.to_string(), "rlëD 1000: unsupported rlëD depth 32");
+    }
+
+    #[test]
+    fn a_ships_frame_is_its_base_rleds_header_size() {
+        let corrupt = RledBuilder::new(30, 50)
+            .frame(|f| f.line().token(5, 0))
+            .build();
+        let data = store(&[("Big Paint", fork(&[(RLED, 1000, corrupt)]))]);
+        let sprite = data.ship_sprite_frame(ShipId(128)).expect("resolves");
+        assert_eq!(
+            sprite.sheet,
+            RledFrameSize {
+                width: 30,
+                height: 50
+            }
+        );
+        assert_eq!(sprite.image_id, 1000);
+        assert_eq!(sprite.sheet_source.path, Path::new("/p/Big Paint"));
+    }
+
+    #[test]
+    fn a_ships_frame_fails_where_its_sprite_does() {
+        let other_image = fork(&[(ShipAnim::TYPE, 128, anim(1001, 3, 4))]);
+        let data = store(&[("Other", other_image)]);
+        assert_eq!(
+            data.ship_sprite_frame(ShipId(128)).map(|s| s.sheet),
+            Err(SpriteError::NoSheet {
+                ship: 128,
+                image_id: 1001
+            })
+        );
+        let deep = RledBuilder::new(2, 1).depth(32).build();
+        let data = store(&[("Bad Paint", fork(&[(RLED, 1000, deep)]))]);
+        assert_eq!(
+            data.ship_sprite_frame(ShipId(128)).map(|s| s.sheet),
+            Err(SpriteError::Graphics {
+                image_id: 1000,
+                source: GraphicsError::UnsupportedDepth { depth: 32 },
+            })
+        );
+        assert_eq!(
+            store(&[]).ship_sprite_frame(ShipId(129)).map(|s| s.sheet),
+            Err(SpriteError::NoShip(129))
+        );
     }
 
     /// A plug-in, `Layers`, giving ship 128 a `shän` with glow image `glow`
