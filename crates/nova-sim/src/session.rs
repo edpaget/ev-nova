@@ -635,6 +635,7 @@ mod plunder_loop;
 mod port;
 mod port_desc;
 mod precalced;
+mod priming_passes;
 #[cfg(test)]
 mod quote_roll_order;
 mod radar;
@@ -1746,9 +1747,10 @@ impl Session {
     }
 
     /// `_HandlePlayer`'s work on `frame` before its move, on `pass`: first
-    /// the tractor's hold on the player and the screen's white, at the very
-    /// top of `_HandlePlayer` (see the `tractor_hold` and `warp_stage`
-    /// modules), then the player's wrap (see the `player_wrap` module),
+    /// the tractor's hold on the player, at the very top of `_HandlePlayer`
+    /// (see the `tractor_hold` module), after the screen's white, which
+    /// its callers run unless the keys are ignored (see the `warp_stage`
+    /// and `priming_passes` modules), then the player's wrap (see the `player_wrap` module),
     /// then its lost-target check (see the `lost_target`
     /// module), then the Red Alert's check (@0x68c79), then the work that
     /// runs after the key block ([`Session::work_from_key_block`]): the
@@ -1761,7 +1763,6 @@ impl Session {
         // The very top of `_HandlePlayer`, before the pod's return (see
         // the `tractor_hold` module).
         self.hold_player(pass);
-        self.ship.gamma_tick(self.mode.jump());
         self.wrap_player_position();
         self.let_go_of_lost_target();
         self.red_alert_check(frame);
@@ -2016,8 +2017,10 @@ impl Session {
     /// coming out of a gate shown that the governments allow, or by
     /// hyperspace. Then every slot is displayed
     /// ([`Session::prepare_all_sprites`]), as the take-off
-    /// (`_HandlePlayerDockRequest` @0x6764e) and the entry into flight
-    /// (`_PlayGame` @0x45834) that populate the system display them.
+    /// (`_HandlePlayerDockRequest` @0x6764e) that populates the system
+    /// displays them, and as the developer's flight's first step does.
+    /// Game entry sets the ships up without it, before its own two
+    /// (see the `priming_passes` module).
     pub fn populate(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -2174,16 +2177,14 @@ impl Session {
 
     /// The end of a traffic tick, drawing on `chance`: the reinforcement
     /// clock's tick, held while work is queued on the line (it runs as the
-    /// work settles, [`Session::settle_line_queue`]), the gates' sprites
-    /// unless landed, and a target lost let go.
+    /// work settles, [`Session::settle_line_queue`]), and a target lost
+    /// let go. A frame's advance pass steps the gates' sprites after it
+    /// (see `PassCatalogs::priming`).
     fn traffic_tail(&mut self, chance: &mut (impl Chance + ?Sized)) {
         if self.space.traffic.holds_line_work() {
             self.space.reinforcements_held = true;
         } else {
             self.tick_reinforcements(chance);
-        }
-        if self.mode.landed().is_none() {
-            self.step_gate_sprites(chance);
         }
         self.let_go_of_gone_target();
     }

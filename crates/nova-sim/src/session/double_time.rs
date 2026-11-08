@@ -229,6 +229,9 @@ impl Session {
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
         let pass = GamePass::Again;
+        // The screen's white, at the very top of `_HandlePlayer`
+        // (@0x683a4-0x68424; see the `warp_stage` module).
+        self.ship.gamma_tick(self.mode.jump());
         self.before_move(self.space.pass_frame, pass);
         let start = PassStart::of(self);
         self.player_fires(pass, rules, chance);
@@ -241,6 +244,7 @@ impl Session {
             ai: None,
             sheets: None,
             quotes,
+            priming: false,
         };
         self.pass_after_move(&start, pass, catalogs, behaviour, rules, chance);
     }

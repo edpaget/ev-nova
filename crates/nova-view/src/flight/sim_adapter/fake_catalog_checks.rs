@@ -726,19 +726,34 @@ fn random_gate_held() -> (Rc<FakeCatalog>, Session) {
         .over(StellarId(150))
         .build();
     session.land().expect("requests clearance");
-    session.enter_game(SpeedMult::FULL, &mut NeverFires);
+    enter_by_hand(&mut session, &catalog, &mut NeverFires);
     (catalog, session)
+}
+
+/// `session` entering play at full gain as a flight of Nova's
+/// collaborators over `catalog` enters it, on `chance`.
+fn enter_by_hand(session: &mut Session, catalog: &Rc<FakeCatalog>, chance: &mut dyn Chance) {
+    let mut collab = nova_sim::StepCollaborators {
+        catalog: &**catalog,
+        behaviour: &nova_sim::NovaAi::default(),
+        rules: Rules::default(),
+        chance,
+    };
+    session.enter_game(SpeedMult::FULL, &mut collab);
 }
 
 #[test]
 fn entering_play_forwards_on_the_flights_chance() {
     let (catalog, session) = random_gate_held();
-    let (script, chance) = scripted(&[1]);
+    // Draws of 1 and 0 by turns, so the random gate's pick, which draws
+    // again on its frame, always moves on: a script run out draws `n - 1`.
+    let draws: Vec<u32> = (0..256).map(|draw| 1 - draw % 2).collect();
+    let (script, chance) = scripted(&draws);
     let mut flight = flight_of(&catalog, session.clone(), rolling_on(chance));
     assert!(flight.enter_game(SpeedMult::FULL));
     let mut by_hand = session;
-    let (own, mut own_chance) = scripted(&[1]);
-    by_hand.enter_game(SpeedMult::FULL, &mut own_chance);
+    let (own, mut own_chance) = scripted(&draws);
+    enter_by_hand(&mut by_hand, &catalog, &mut own_chance);
     assert_eq!(flight.session(), Ok(&by_hand));
     assert_eq!(script.borrow().asked, own.borrow().asked, "on its chance");
     assert!(!own.borrow().asked.is_empty());

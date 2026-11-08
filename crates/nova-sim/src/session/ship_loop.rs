@@ -168,8 +168,9 @@ impl Session {
     /// quote takes its slot among the loop's lines, the higher slot's
     /// replacing the lower's (`_DisplayComm` @0x9024b, @0x90251); the
     /// reinforcements' lines (`_HandleReinforcements` @0x44504) come after
-    /// every roll. On the advance pass the quote clock then moves on a
-    /// tick, after the loop; the second pass reads it unmoved.
+    /// every roll. On a frame's advance pass the quote clock then moves on
+    /// a tick, after the loop ([`Session::pass_from_key_block`]); the
+    /// second pass reads it unmoved.
     #[allow(clippy::too_many_arguments)] // the pass's collaborators, and the quotes' catalog
     pub(super) fn ship_loop(
         &mut self,
@@ -266,9 +267,6 @@ impl Session {
         if let Some(fly) = fly {
             self.space.traffic.end_fly(fly);
         }
-        // The quote clock moves on once a frame, on the advance pass, after
-        // its rolls; the second pass reads it unmoved.
-        let advance = !matches!(motion, Motion::Again);
         match motion {
             Motion::Fly(marks) => {
                 self.after_traffic_motion(&marks, &mut &mut *chance);
@@ -287,9 +285,6 @@ impl Session {
                     self.mission_ships_left(&marks);
                 }
             }
-        }
-        if advance && quotes.is_some() {
-            self.space.tick_quote_clock();
         }
         self.lay_out_displayed();
         self.space.traffic.step_fades(self.speed_mult());

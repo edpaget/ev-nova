@@ -54,11 +54,13 @@
 //! original fades the screen to white (`_FadeWhiteIn` @0x546f:
 //! `CGDisplayFade` to white over 1.5 s, not synchronous, so the game runs
 //! on under it); the view does it. `_PlayGame` sets it to −1.0 after the
-//! priming pass of a game's start (@0x45811). The gate's other two bytes
-//! are `_settings`+0xc, Run In A Window (`_LoadPrefs` @0xcee54, key
-//! `RunInAWindow`), under which the original fades no display, and the
-//! priming flag *0x3b5178: the engine fades its own frame, in a window
-//! too, and runs no priming pass.
+//! priming pass of a game's start (@0x4581c, `PlayerShip::reset_white`).
+//! The gate's other two bytes are `_settings`+0xc, Run In A Window
+//! (`_LoadPrefs` @0xcee54, key `RunInAWindow`), under which the original
+//! fades no display, and the priming flag *0x3b5178, `_ignoreKeys`: the
+//! engine fades its own frame, in a window too, and a priming pass skips
+//! the block, as its callers run it only on a frame's passes (see the
+//! `priming_passes` module).
 //!
 //! **Ordering against the original.** The warp end is decided in the
 //! player's pass, as the original's is, and the view arrives
@@ -437,6 +439,13 @@ impl PlayerShip {
         if self.warp.warp.gamma >= 0.0 {
             self.warp.warp.gamma = -1.0;
         }
+    }
+
+    /// `_PlayGame`'s `_hyperGamma` = −1.0 after its priming pass
+    /// (@0x4581c), whatever it was: the screen's white out (see the
+    /// `priming_passes` module).
+    pub(super) fn reset_white(&mut self) {
+        self.warp.warp.gamma = -1.0;
     }
 
     /// Sets `_hyperGamma` to `gamma`, for the tests.

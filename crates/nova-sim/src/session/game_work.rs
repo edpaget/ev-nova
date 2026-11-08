@@ -196,6 +196,26 @@ pub(super) struct PassCatalogs<'a> {
     /// rolls no quotes and counts nothing down ([`Session::game_work`],
     /// [`Session::tick_again`]), for the tests that count a pass's work.
     pub(super) quotes: Option<&'a dyn CommCatalog>,
+    /// Whether it is a priming pass at game entry (see the
+    /// `priming_passes` module). A frame's advance pass, after its ship
+    /// loop, moves the quote clock, which stands for `TickCount`, on a
+    /// tick when handed [`PassCatalogs::quotes`], and steps the gates
+    /// shown (`_HandleStellarSprites` @0x444d2,
+    /// [`Session::step_gate_sprites`]). A priming pass takes no real
+    /// time, and its stellar step is
+    /// rdm:phase/combat-and-flight/phase-10-stellar-step-of-the-frozen-entry-passes.
+    pub(super) priming: bool,
+}
+
+/// How an advance pass runs ([`Session::advance_pass`]): the hail quotes'
+/// lines it reads, if any ([`PassCatalogs::quotes`]), and whether it is a
+/// priming pass ([`PassCatalogs::priming`]).
+#[derive(Clone, Copy)]
+pub(super) struct AdvanceRun<'a> {
+    /// The hail quotes' lines.
+    pub(super) quotes: Option<&'a dyn CommCatalog>,
+    /// Whether it is a priming pass.
+    pub(super) priming: bool,
 }
 
 /// What `_HandlePlayer` computes of the player at its top
@@ -301,6 +321,34 @@ impl Session {
         // `_HandlePlayer` (@0x43e19), up to its move.
         self.ship.warp.gate = None;
         let frame = self.pass_head();
+        // The screen's white, at the very top of `_HandlePlayer`
+        // (@0x683a4-0x68424; see the `warp_stage` module).
+        self.ship.gamma_tick(self.mode.jump());
+        let run = AdvanceRun {
+            quotes,
+            priming: false,
+        };
+        self.advance_pass(frame, controls, catalog, run, behaviour, rules, chance)
+    }
+
+    /// An advance pass in flight on `frame`, under `controls`, from
+    /// `_HandlePlayer`'s work before its move on, its head already run
+    /// (the frame's, [`Session::game_work_quoting`], or none at a priming
+    /// pass, see the `priming_passes` module), the traffic drawn from
+    /// `catalog`, run as `run` says, the NPCs deciding as `behaviour`
+    /// says, the fight by `rules`, drawing on `chance`. Whether the escape
+    /// pod's rescue settled on it.
+    #[allow(clippy::too_many_arguments)] // the pass's collaborators, and its frame
+    pub(super) fn advance_pass(
+        &mut self,
+        frame: i16,
+        controls: Controls,
+        catalog: &(impl PilotCatalog + TrafficCatalog),
+        run: AdvanceRun<'_>,
+        behaviour: &(impl Behaviour + ?Sized),
+        rules: Rules,
+        chance: &mut dyn Chance,
+    ) -> bool {
         let pass = GamePass::Advance {
             double_time: self.ship.warp.double_time,
         };
@@ -320,7 +368,8 @@ impl Session {
         let catalogs = PassCatalogs {
             ai: Some(catalog),
             sheets: Some(catalog),
-            quotes,
+            quotes: run.quotes,
+            priming: run.priming,
         };
         self.pass_after_move(&start, pass, catalogs, behaviour, rules, chance);
         false
@@ -435,7 +484,12 @@ impl Session {
         rules: Rules,
         chance: &mut dyn Chance,
     ) {
-        let PassCatalogs { ai, sheets, quotes } = catalogs;
+        let PassCatalogs {
+            ai,
+            sheets,
+            quotes,
+            priming,
+        } = catalogs;
         // The end of `_HandlePlayer` from its key block, and its display
         // (@0x43e29).
         self.player_display_rest(behaviour, pass, rules, start.player_head(), chance);
@@ -494,12 +548,22 @@ impl Session {
             None => Motion::Again,
         };
         let displayed = self.ship_loop(behaviour, start, motion, pass, quotes, rules, chance);
+        // A frame's advance pass moves the quote clock, `TickCount`'s
+        // stand-in, after the loop (see `PassCatalogs::priming`).
+        let frames = ai.is_some() && !priming;
+        if frames && quotes.is_some() {
+            self.space.tick_quote_clock();
+        }
         // `_DoPlayGameWork`'s +0x47 pass (@0x443d4-0x4444f), after the
         // ship loop and before the guns read it (see the
         // `stellar_defence` module).
         self.mark_defended_stellars();
-        // `_HandleStellarSprites` (@0x444d2), then `_HandleStellarWeapons`
+        // `_HandleStellarSprites` (@0x444d2), on a frame's advance pass
+        // (see `PassCatalogs::priming`), then `_HandleStellarWeapons`
         // (@0x444d7).
+        if frames && self.mode.landed().is_none() {
+            self.step_gate_sprites(chance);
+        }
         self.stellar_guns(pass, rules, chance);
         // `_HandleAsteroids` (@0x444f5) and the second pass's
         // `_HandleReinforcements` (@0x44504), after the collision passes
@@ -581,7 +645,6 @@ impl Session {
                 return None;
             }
             self.populate(catalog, chance);
-            self.take_entry_gate_pass(chance);
         }
         let (strikes, marks) = self.before_traffic_ai(catalog, chance);
         self.step_traffic(|traffic, world| {

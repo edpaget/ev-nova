@@ -44,9 +44,8 @@
 
 use std::collections::BTreeSet;
 
-use super::{Chart, Session, Setup, Statics};
+use super::{Chart, Session, Setup, Statics, StepCollaborators};
 use crate::catalog::SystemId;
-use crate::chance::Chance;
 use crate::control::{FreshPilot, Gate};
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::story::GalaxyOverlay;
@@ -108,14 +107,18 @@ impl Session {
     /// afresh (see the module docs' "Ordering against the original"), and
     /// the routine's stellar passes run at `gain`, the `_gSpeedMult` the
     /// last game of the run left ([`CarryOver::speed_mult`](super::CarryOver::speed_mult)),
-    /// their random picks drawn on `chance` (see the `stellar_passes` and
+    /// their random picks drawn on the collaborators' chance (see the `stellar_passes` and
     /// `time_adjustment` modules). No `_HandleTimeAdjustment` runs before
-    /// `_PlayGame`'s loop, so all three passes (@0x1a359, @0x1a36c,
-    /// @0x45834) run at it, and the first frame holds it.
-    pub fn enter_game(&mut self, gain: crate::SpeedMult, chance: &mut (impl Chance + ?Sized)) {
+    /// `_PlayGame`'s loop, so all three stellar passes (@0x1a359,
+    /// @0x1a36c, @0x45834) and the two priming passes of
+    /// `_DoPlayGameWork(1)` between them (@0x1a38a, @0x4580c) run at it,
+    /// and the first frame holds it. The system's ships are set up first,
+    /// if still due, and the passes read `collab` as a frame's steps do,
+    /// under no keys and in no time (see the `priming_passes` module).
+    pub fn enter_game(&mut self, gain: crate::SpeedMult, collab: &mut StepCollaborators<'_>) {
         self.chart.snapshot_refresh();
         self.enter_time(gain);
-        self.enter_game_passes(chance);
+        self.enter_play(collab);
     }
 }
 
@@ -250,7 +253,12 @@ mod tests {
             LastRefresh::hiding([SystemId(132)]),
             "@0x1925e, before the OnStart"
         );
-        session.enter_game(crate::SpeedMult::FULL, &mut NeverFires);
+        crate::testkit::enter_game(
+            &mut session,
+            &catalog,
+            crate::SpeedMult::FULL,
+            &mut NeverFires,
+        );
         assert_eq!(session.last_refresh(), LastRefresh::default(), "@0x19f81");
     }
 

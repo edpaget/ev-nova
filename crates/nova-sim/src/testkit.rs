@@ -239,6 +239,24 @@ impl crate::catalog::CommCatalog for QuoteLines {
     }
 }
 
+/// Enters play at `gain` ([`Session::enter_game`]), its passes reading
+/// `catalog`, the NPCs deciding as Nova's do, the fight by the default
+/// rules, drawing on `chance`.
+pub(crate) fn enter_game(
+    session: &mut Session,
+    catalog: &dyn crate::session::SimCatalog,
+    gain: crate::SpeedMult,
+    chance: &mut dyn Chance,
+) {
+    let mut collab = crate::session::StepCollaborators {
+        catalog,
+        behaviour: &crate::ai::NovaAi::default(),
+        rules: Rules::default(),
+        chance,
+    };
+    session.enter_game(gain, &mut collab);
+}
+
 /// One advance pass under `controls` ([`Session::game_work`]), the traffic
 /// drawn from `catalog` keeping its goals ([`Passive`]), the fight by the
 /// default rules, no chance firing. Asserts no rescue ended it.

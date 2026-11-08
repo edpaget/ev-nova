@@ -26,8 +26,9 @@
 //! (@0x2d088-0x2d164) and, dying, takes the dying direction
 //! (@0x2d169-0x2d17e); a ship failing that test skips to @0x2ded6, past
 //! the step. No sound. It runs from `_EnterGameFromMainScreen` @0x1a36c
-//! and `_PlayGame`'s entry @0x45834 ([`Session::load`] and the first
-//! populate, [`Session::populate`]), `_PlayerEnterHypergate` @0x63e91
+//! and `_PlayGame`'s entry @0x45834, around the priming passes
+//! ([`Session::enter_game`]; see the `priming_passes` module),
+//! `_PlayerEnterHypergate` @0x63e91
 //! and `_PlayerEnterWormhole` @0x64743 (a gate entry, once the player's
 //! system is the exit's, @0x639fd and @0x642a7, and before the old ships
 //! are deleted, @0x67096, and the exit's setup, so the old ships pass the
@@ -93,11 +94,11 @@
 //! coordinates, @0x37fcd-0x37fd8), sized by a frame of its slot's frames
 //! ([`HoverPlace::Cloned`]): an escape fighter or a bay's fighter in a
 //! high slot no ship has used since launch, until its slot's display (rdm
-//! combat-and-flight phase 2). Left out: the places are the session's, and
-//! every session starts with none, where the original's outlive a game
-//! (they are the launch's): a slot a game before laid out and this one
-//! hasn't is boxed at its old place there, here at the top-left
-//! (rdm:phase/combat-and-flight-2 follow-up of this phase).
+//! combat-and-flight phase 2). The places are the launch's, as the sprites
+//! are: a session hands them to the next with the slot sprites
+//! ([`SlotSprites`](crate::ship_layer::SlotSprites), carried by
+//! [`CarryOver`](super::CarryOver)), so a slot an earlier game laid out is boxed at its old
+//! place and only one no game of the run has laid out at the top-left.
 //!
 //! **`_PrepareAllSprites`' other parts** change nothing the player sees
 //! (rdm weapons-fidelity phase 47's findings): no site that runs it holds
@@ -106,8 +107,7 @@
 //! display the view draws from state each frame. Its stellars' part isn't
 //! display: it steps their timers and frames. [`Session::stellar_pass`]
 //! runs it beside each call of [`Session::prepare_all_sprites`] that needs
-//! it, and game entry's where the ships are set up (see the
-//! `stellar_passes` module).
+//! it, game entry's among them (see the `stellar_passes` module).
 //!
 //! `_PlayGame`'s frozen `_DoPlayGameWork(1)` at entry (@0x457f3-0x4580c)
 //! is the `priming_passes` module's.

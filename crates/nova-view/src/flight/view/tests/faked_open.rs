@@ -346,6 +346,28 @@ fn entering_play_scatters_the_stars_once_the_flight_has_entered() {
 }
 
 #[test]
+fn entering_play_leaves_the_cursors_fade_at_0() {
+    // `_PlayGame` zeroes `_cursorAlpha` after its priming pass (@0x45822):
+    // the cursor stays hidden at the point it was read until the mouse
+    // moves.
+    let at = Point::new(300.0, 200.0);
+    let mut view = in_flight();
+    view.cursor_input(&Input::PointerMoved(at));
+    assert_eq!(view.cursor.fade(), crate::flight::boxes::FADE_LEVELS);
+    view.enter_game(|_| true);
+    assert_eq!(view.cursor.fade(), 0);
+    assert_eq!(view.cursor.shown_at(), None, "hidden");
+    let mut failed = in_flight();
+    failed.cursor_input(&Input::PointerMoved(at));
+    failed.enter_game(|_| false);
+    assert_eq!(
+        failed.cursor.fade(),
+        crate::flight::boxes::FADE_LEVELS,
+        "a flight that enters nothing"
+    );
+}
+
+#[test]
 fn an_arrival_after_beginning_is_laid_out_as_any_other() {
     let mut view = in_flight();
     view.begin(|_| true);
