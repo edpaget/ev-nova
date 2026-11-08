@@ -190,6 +190,50 @@ fn an_escape_pod_is_drawn_over_the_cargo_boxes() {
 }
 
 #[test]
+fn a_box_in_a_freed_lower_slot_is_drawn_under_an_older_box_in_a_higher_slot() {
+    // The frame lists the boxes in slot order: the newer box (frame 5)
+    // took freed slot 0, the older one (frame 9) holds slot 1. They
+    // overlap, so the one drawn later is on top (`_boxLayer`'s slot
+    // order, @0x1fb89-0x1fc6b).
+    let newer = FrameBox {
+        frame: 5,
+        ..box_at(Vec2::new(-20.0, 20.0))
+    };
+    let older = FrameBox {
+        frame: 9,
+        ..box_at(Vec2::new(-18.0, 20.0))
+    };
+    let frame = FlightFrame {
+        cargo_boxes: vec![newer, older],
+        ..in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)])
+    };
+    let view = world(trading(), frame);
+    let camera = Camera::centred_on_in(Point::new(0.0, 0.0), VIEW_SIZE);
+    let shown: Vec<u16> = view
+        .shown_boxes(&camera)
+        .iter()
+        .map(|shown| shown.frame)
+        .collect();
+    assert_eq!(shown, [5, 9], "the frame's order is kept");
+    let list = world_list(&view);
+    let drawn_at = |frame: u16| {
+        list.iter()
+            .position(|command| {
+                matches!(
+                    command,
+                    DrawCommand::Sprite { image, .. } if image.id == 500 && image.frame == frame
+                )
+            })
+            .unwrap_or_else(|| panic!("box frame {frame} drawn"))
+    };
+    let (newer, older) = (drawn_at(5), drawn_at(9));
+    assert!(
+        newer < older,
+        "the newer box is drawn under: {newer} {older}"
+    );
+}
+
+#[test]
 fn a_fading_box_is_drawn_at_its_frames_fade() {
     let frame = FlightFrame {
         cargo_boxes: vec![FrameBox {
