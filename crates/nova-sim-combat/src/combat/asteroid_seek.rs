@@ -308,6 +308,17 @@ mod tests {
     }
 
     #[test]
+    fn a_missile_that_locks_onto_an_asteroid_lets_its_ships_slot_go() {
+        let mut shot = Shot {
+            aimed_slot: Some(Slot::Berth(2)),
+            ..fired(missile(SEEKS_ASTEROIDS))
+        };
+        let rocks = [None, at(0.0, -150.0)];
+        fly(&mut shot, &[ship_at(300.0, 0.0)], &rocks, &mut seeks());
+        assert_eq!((shot.jam, shot.aimed_slot), (Jam::Asteroid(Some(1)), None));
+    }
+
+    #[test]
     fn a_missile_without_the_bit_or_a_shot_not_homing_never_rolls() {
         let rocks = [at(0.0, -150.0)];
         let ships = [ship_at(300.0, 0.0)];

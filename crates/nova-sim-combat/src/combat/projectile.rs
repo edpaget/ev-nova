@@ -3012,6 +3012,16 @@ mod tests {
     }
 
     #[test]
+    fn a_point_defence_shot_holds_no_slot() {
+        let mut defence = Shot {
+            aimed_slot: Some(crate::ship_layer::Slot::Berth(2)),
+            ..aimed_at_two(9)
+        };
+        step(&mut defence, &[]);
+        assert_eq!(defence.aimed_slot, None);
+    }
+
+    #[test]
     fn a_shot_whose_ship_is_breaking_up_stays_clear_and_one_destroyed_is_lost() {
         let dying = target(
             2,
@@ -3343,6 +3353,39 @@ mod tests {
             &mut Ranged::of(&[(500, 0)]),
         );
         assert_eq!(other.target, Some(TARGET), "no ship launched it");
+    }
+
+    #[test]
+    fn a_missile_turned_on_its_firer_holds_its_slot_and_follows_a_newcomer_in_it() {
+        // Its +0x2a becomes its firer's slot, so once the firer has left
+        // the fight a ship that takes its berth is the one it is aimed at
+        // ([`refilled_slot`](super::super::refilled_slot)).
+        let berth = crate::ship_layer::Slot::Berth(1);
+        let jammer = [jamming([30, 0, 0, 0])];
+        let firer = Target {
+            ship: FIRER,
+            ..target(1, 160.0, -1000.0, Condition::Intact)
+        };
+        let mut shot = Shot {
+            jam_rolls: [71, 0, 0, 0],
+            firer_slot: Some(berth),
+            ..seeking(TURNS_ON_FIRER, Some(TARGET))
+        };
+        let ships = [below(), firer];
+        guided(
+            &mut shot,
+            16,
+            (&ships, &jammer),
+            &mut Ranged::of(&[(500, 0)]),
+        );
+        assert_eq!((shot.aimed_at, shot.aimed_slot), (Some(FIRER), Some(berth)));
+        let newcomer = Target {
+            slot: berth,
+            ..target(5, 160.0, -1000.0, Condition::Intact)
+        };
+        super::super::refilled_slot::follow(&mut shot, &[below(), newcomer]);
+        let five = ShipRef::Npc(NpcId(5));
+        assert_eq!((shot.target, shot.aimed_at), (Some(five), Some(five)));
     }
 
     #[test]

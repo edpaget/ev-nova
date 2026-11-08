@@ -4,7 +4,7 @@
 //! original's +0x2a is a slot; by the other reading it is lost.
 
 use super::*;
-use crate::combat::projectile::Jam;
+use crate::combat::projectile::{HOMING_DELAY, Jam};
 
 /// C's berth, which B takes once C has left the fight.
 const BERTH: Slot = Slot::Berth(3);
@@ -126,6 +126,7 @@ fn a_shot_whose_slot_stays_empty_is_lost() {
     fly(&mut combat, &mut [Ship::at(1, 0.0, 300.0)]);
     let shot = flying(&combat, id).expect("in flight");
     assert_eq!((shot.aimed_at, shot.jam), (None, Jam::Lost));
+    assert_eq!(shot.aimed_slot, None, "aimed at no slot either");
 }
 
 #[test]
@@ -173,4 +174,32 @@ fn a_ship_fired_shot_holds_its_targets_slot() {
     assert_eq!(combat.shots()[0].aimed_slot, Some(BERTH));
     let combat = launched_by(Ship::at(1, 0.0, 0.0), blaster(), Vec::new());
     assert_eq!(combat.shots()[0].aimed_slot, None, "no target");
+}
+
+#[test]
+fn a_missile_that_breaks_its_lock_lets_its_slot_go_and_stays_off_its_old_ship() {
+    // A `Seeker` 0x4000 missile past its 15 ticks, heading right, with C
+    // behind it in its box: the lock breaks (@0x3233b-0x323ed) and its
+    // +0x2a is cleared with its ship, so C, still active in berth 3, is
+    // not taken back as a newcomer in its slot on the next pass.
+    let locked = WeaponRecord {
+        seeker: LOSES_LOCK_OFF_AHEAD,
+        ..missile()
+    };
+    let mut combat = Combat::default();
+    let id = put(&mut combat, locked, A, Vec2::ZERO, Vec2::ZERO);
+    let shot = shot_of(&mut combat, id);
+    (shot.target, shot.aimed_at, shot.aimed_slot) = (Some(C), Some(C), Some(BERTH));
+    shot.heading = 90.0;
+    shot.set_age(HOMING_DELAY);
+    let mut ships = [Ship::at(1, 0.0, 300.0), Ship::at(3, -50.0, 0.0)];
+    fly(&mut combat, &mut ships);
+    let broken = |combat: &Combat| {
+        let shot = flying(combat, id).expect("in flight");
+        (shot.target, shot.aimed_at, shot.aimed_slot, shot.jam)
+    };
+    assert_eq!(broken(&combat), (None, None, None, Jam::Clear));
+    phase::test_hits(&mut combat, &mut ships, &NovaDisable);
+    fly(&mut combat, &mut ships);
+    assert_eq!(broken(&combat), (None, None, None, Jam::Clear), "not lost");
 }
