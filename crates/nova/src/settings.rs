@@ -41,7 +41,8 @@
 //!
 //! `frame_upscaler` holds the player's Scaling, under the key phase 6 named
 //! when it held only the per-frame upscaler: `"native"`,
-//! `"sharp_bilinear"`, `"metalfx_spatial"` (macOS's MetalFX, which a
+//! `"sharp_bilinear"`, `"fsr1"` (AMD's FSR 1, which every device has),
+//! `"metalfx_spatial"` (macOS's MetalFX, which a
 //! device without it doesn't offer: the app then draws natively and says
 //! so once at startup) or `"super_xbr"` (sprites enlarged as they load).
 //! Files phase 6 saved load unchanged, their per-frame choice kept. A name
@@ -85,6 +86,7 @@ impl ScalingSetting {
         match self.0.as_str() {
             "native" => Some(Scaling::Native),
             "sharp_bilinear" => Some(Scaling::SharpBilinear),
+            "fsr1" => Some(Scaling::Fsr1),
             "metalfx_spatial" => Some(Scaling::MetalFxSpatial),
             "super_xbr" => Some(Scaling::SuperXbr),
             _ => None,
@@ -106,6 +108,7 @@ impl From<Scaling> for ScalingSetting {
         let name = match scaling {
             Scaling::Native => "native",
             Scaling::SharpBilinear => "sharp_bilinear",
+            Scaling::Fsr1 => "fsr1",
             Scaling::MetalFxSpatial => "metalfx_spatial",
             Scaling::SuperXbr => "super_xbr",
         };
@@ -1263,6 +1266,7 @@ mod tests {
         for (scaling, name) in [
             (Scaling::Native, "native"),
             (Scaling::SharpBilinear, "sharp_bilinear"),
+            (Scaling::Fsr1, "fsr1"),
             (Scaling::MetalFxSpatial, "metalfx_spatial"),
             (Scaling::SuperXbr, "super_xbr"),
         ] {
@@ -1357,6 +1361,7 @@ mod tests {
         for stored in [
             "native",
             "sharp_bilinear",
+            "fsr1",
             "metalfx_spatial",
             "super_xbr",
             "warp_drive",
@@ -1386,6 +1391,7 @@ mod tests {
             .scaling
         };
         assert_eq!(shown("sharp_bilinear"), Scaling::SharpBilinear);
+        assert_eq!(shown("fsr1"), Scaling::Fsr1);
         assert_eq!(shown("metalfx_spatial"), Scaling::MetalFxSpatial);
         assert_eq!(shown("super_xbr"), Scaling::SuperXbr);
         assert_eq!(shown("native"), Scaling::Native);

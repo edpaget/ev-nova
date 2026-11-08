@@ -733,6 +733,16 @@ fn take_offs_cost_with_a_sharp_bilinear_gpu() {
 
 #[test]
 #[ignore = "reads the clock; run by hand (see the module doc)"]
+fn take_offs_cost_with_an_fsr1_gpu() {
+    if let Some(mut gpu) = offscreen_gpu() {
+        // The harness never restores the pilot's scaling, so this holds.
+        gpu.set_upscaler(Upscaler::Fsr1);
+        run(gpu, "wgpu FSR 1");
+    }
+}
+
+#[test]
+#[ignore = "reads the clock; run by hand (see the module doc)"]
 fn take_offs_cost_with_a_metal_fx_gpu() {
     let Some(mut gpu) = offscreen_gpu() else {
         return;
