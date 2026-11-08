@@ -88,6 +88,8 @@
 //!   ([`player_scoops`](scoop::player_scoops),
 //!   [`npc_scoop`](scoop::npc_scoop)), which boxes they take and what each
 //!   box adds ([`Haul`](scoop::Haul)).
+//! - [`slot_pool`]: the original's first-free tables, the cargo boxes'
+//!   and the escape pods' ([`SlotPool`](slot_pool::SlotPool)).
 //! - [`targeting`]: which NPC the player's target command picks
 //!   ([`TargetPick`](targeting::TargetPick)): the nearest, the nearest
 //!   threat, the next in turn, or the next of the player's escorts.
@@ -138,5 +140,6 @@ pub mod navigation;
 pub mod planet_comm;
 pub mod scan;
 pub mod scoop;
+pub mod slot_pool;
 pub mod targeting;
 pub mod traffic;
