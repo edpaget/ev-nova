@@ -194,3 +194,39 @@ run "rejects_account_name_over_24_characters" {
 
   expect_failures = [var.account_name]
 }
+
+run "rejects_account_name_under_3_characters" {
+  command = plan
+
+  variables {
+    account_name = "ab"
+  }
+
+  expect_failures = [var.account_name]
+}
+
+run "accepts_account_name_of_3_characters" {
+  command = plan
+
+  variables {
+    account_name = "abc"
+  }
+
+  assert {
+    condition     = azurerm_trusted_signing_account.signing.name == "abc"
+    error_message = "A 3-character account_name must pass validation and name the account."
+  }
+}
+
+run "accepts_account_name_of_24_characters" {
+  command = plan
+
+  variables {
+    account_name = "abcdefghijklmnopqrstuvwx"
+  }
+
+  assert {
+    condition     = azurerm_trusted_signing_account.signing.name == "abcdefghijklmnopqrstuvwx"
+    error_message = "A 24-character account_name must pass validation and name the account."
+  }
+}
