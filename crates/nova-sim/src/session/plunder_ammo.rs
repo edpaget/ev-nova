@@ -7,7 +7,7 @@
 //! the offered rounds as, afresh: by the engine it scans the 512 records
 //! in order for the first whose *first* mod is `ModType` 3 naming the
 //! rounds (@0x93cdc-0x93d08), and by the other reading of
-//! [`RuleKey::PlunderAmmoOutfit`] the first with such a mod in any slot
+//! [`RuleKey::OutfitWeaponMods`] the first with such a mod in any slot
 //! ([`board::ammo_outfit`](crate::board::ammo_outfit)). When none
 //! matches, the press beeps [`SimSound::Refused`](crate::sound::SimSound::Refused)
 //! (`snd ` 153, @0x93d0a-0x93d2f) and takes nothing: the offer stays, as
@@ -44,14 +44,14 @@ use crate::rulebook::RuleKey;
 
 impl Session {
     /// The outfit a boarding's Ammo press takes the rounds of weapon
-    /// `slot` as, as [`RuleKey::PlunderAmmoOutfit`] reads it (see the
+    /// `slot` as, as [`RuleKey::OutfitWeaponMods`] reads it (see the
     /// module docs): none when none matches.
     pub(super) fn ammo_outfit(&self, slot: WeaponId) -> Option<OutfitId> {
         crate::board::ammo_outfit(
             &self.statics.outfits,
             &self.statics.ammo_outfits,
             slot,
-            self.setup.rules.source_for(RuleKey::PlunderAmmoOutfit),
+            self.setup.rules.source_for(RuleKey::OutfitWeaponMods),
         )
     }
 
@@ -218,8 +218,7 @@ mod tests {
             Vec::<u32>::new(),
             "no self-destruct armed"
         );
-        let bible =
-            Rulebook::default().with_override(RuleKey::PlunderAmmoOutfit, RuleSource::Bible);
+        let bible = Rulebook::default().with_override(RuleKey::OutfitWeaponMods, RuleSource::Bible);
         let mut session = ammo_session(&catalog).with_rules(bible);
         assert_eq!(
             take(&mut session, Take::Ammo, &[]).0,
@@ -258,7 +257,7 @@ mod tests {
             };
             assert_eq!(view.ammo, Some(unnamed), "{source:?}");
             let mut session = session
-                .with_rules(Rulebook::default().with_override(RuleKey::PlunderAmmoOutfit, source));
+                .with_rules(Rulebook::default().with_override(RuleKey::OutfitWeaponMods, source));
             session.take_sounds();
             assert_eq!(take(&mut session, Take::Ammo, &[]).0, Taken::Missed);
             assert_eq!(session.take_sounds(), [SimSound::Refused], "{source:?}");

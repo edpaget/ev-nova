@@ -334,7 +334,7 @@ pub struct AmmoOffer {
 }
 
 /// The outfit a boarding's Ammo press takes the rounds of weapon `slot`
-/// as, read as `source` says ([`RuleKey::PlunderAmmoOutfit`]): by the
+/// as, read as `source` says ([`RuleKey::OutfitWeaponMods`]): by the
 /// engine the lowest-ID outfit among `records` whose *first* mod is
 /// `ModType` 3 naming `slot`, as `_DoPlunderDialog` scans the 512 records'
 /// first `ModType` (+0x4) and `ModVal` (+0xc) alone (@0x93cdc-0x93d08); by

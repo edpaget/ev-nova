@@ -183,7 +183,7 @@
 //! | [`DialogTextWheel`](RuleKey::DialogTextWheel) | `dialog_text_wheel` | the wheel and trackpad do nothing: the original reads its events through `_WaitNextEvent` and installs no mouse Carbon handler (@0xcc748, @0xccb83) | a wheel or trackpad scroll over a dialog's scrolling text scrolls it, as Up and Down do (see `nova_view::ui::ScrollText`)\* |
 //! | [`LoadedCourse`](RuleKey::LoadedCourse) | `loaded_course` | a pilot opened from a save flies with no course: `_OpenPilotFile`'s and `_OpenLastPilotFile`'s `_ResetPlayer` clears `_hyperRoute` (@0x1d6bb-0x1d6cd), and `_LoadPilotData` never restores it | the saved course and its start are kept, the port's earlier behaviour (see `nova_sim::Session::load`)\* |
 //! | [`LoadedJumpedFrom`](RuleKey::LoadedJumpedFrom) | `loaded_jumped_from` | a pilot opened from a save has no system last jumped from: `_OpenPilotFile`'s and `_OpenLastPilotFile`'s `_ResetPlayer` sets player +0x94 to -1 (@0x1d5b1-0x1d5b8), and nothing on the load path writes it back, so mission ships coming in before the next jump enter at a drawn bearing | the saved system is kept and they enter from it, the port's earlier behaviour (see `nova_sim::Session::load`)\* |
-//! | [`PlunderAmmoOutfit`](RuleKey::PlunderAmmoOutfit) | `plunder_ammo_outfit` | a boarding's Ammo press takes the rounds as the lowest-ID outfit whose *first* mod is `ModType` 3 naming them, and beeps and takes nothing when none is (`_DoPlunderDialog` @0x93cdc-0x93d2f; see `nova_sim::Session::plunder`) | any of the four mods, the lowest ID |
+//! | [`OutfitWeaponMods`](RuleKey::OutfitWeaponMods) | `outfit_weapon_mods` | an outfit is a weapon (`ModType` 1) or ammunition (`ModType` 3) only by its *first* mod: the weapon and rounds arrays (`_SystemInfoToShipStats` @0xca8d, @0xcab1), their fold back onto the outfits (`_ShipStatsToSystemInfo` @0xcb61, @0xcba6, @0xcc40, @0xcc8c), the class's stock weapons and their mass (`_LoadObjectData` @0x7aab8, @0x7ac29), the shipyard's top-up (`_DoShipyardDialog` @0x5eebc-0x5ef92) and the boarding's Ammo press, which beeps and takes nothing when none is (`_DoPlunderDialog` @0x93cdc-0x93d2f); the outfitter Sell's launchers, the plunder dialog's name for the rounds and `_CanBuyFighter`'s scan read all four under both readings. This key replaces the plunder press's `plunder_ammo_outfit`, so the press and the arrays can't read the mods differently (see `nova_sim::Session::plunder` and `nova_sim_combat::combat::armament::Arsenal::player`) | any of the four mods, the lowest ID |
 //! | [`PurchaseStockFold`](RuleKey::PurchaseStockFold) | `purchase_stock_fold` | a bought ship's stock weapons and `AmmoLoad`, as far as the purchase tops them up, sit in the weapon array only (`_DoShipyardDialog` @0x5eebc-0x5ef92) and stay out of the outfit counts until the next `_ShipStatsToSystemInfo`: the outfitter opening (@0x5bb57), the player info (@0x5a06a), the hire screen closing (@0x49235), a `G`/`D`/`C`/`E`/`H` set operator (@0x15439, @0x15466, @0x154b3), the plunder dialog's grant pick or Ammo press (@0x931d9, @0x93cc9) or a landing (@0x63211). Every reader of the counts leaves them out: the shipyard's trade-in, carry, `Require` and cargo trim, the `Contribute` bits, an `o` test, a scan, the marines, the stats past each outfit's first mod, the gear readers, the grant pick and the eject's carry (see `nova_sim::Session::buy_ship`). A second purchase before the fold drops them unpaid (see `nova_sim::Session::buy_ship`) | the top-up is owned at once, and the next trade-in counts it, the port's earlier behaviour\* |
 //! | [`HailBusyUnderAttack`](RuleKey::HailBusyUnderAttack) | `hail_busy_under_attack` | a hailed ship is never busy for being attacked: `_IsShipThreatened` compares the hailed ship's own +0x70 with its own slot +0x86 (@0x8209e-0x820a9) and so never holds, and only `_AIIsShipBusy`'s goal set (@0x82fac-0x82fe4) makes it busy (see `nova_sim_ai::hail::nova::RequestAssistance`) | one that another NPC attacks or snipes at answers Request Assistance busy, the port's earlier reading\* |
 //! | [`DialogFocusRing`](RuleKey::DialogFocusRing) | `dialog_focus_ring` | an in-game dialog has no keyboard focus: `_MyModalDialog` (@0x59954) draws no focus ring, and no in-game filter (`_TextDialogFilter` @0x51f77, `_CommFilter` @0x908ed, `_PlunderFilter` @0x92f20 and kin) maps Tab or Space to a button, so Tab and Space do nothing unless the dialog's filter maps them (see the view's `ui::dialog`) | Tab moves an outlined focus through the enabled buttons, and Space activates the focused one: **the default — a deliberate departure from the original**††††††††††††††††† |
@@ -4449,18 +4449,38 @@ rule_keys! {
     /// Bible says nothing of it, so the other reading is a convenience of
     /// the port's (read by `nova_sim::Session::load`).
     LoadedJumpedFrom => "loaded_jumped_from",
-    /// Which outfit a boarding's Ammo press takes the offered rounds as
-    /// (read by `nova_sim::Session::plunder`). By the engine, the
-    /// lowest-ID outfit whose *first* mod is `ModType` 3 naming the
-    /// rounds, as `_DoPlunderDialog` scans the 512 records' first
-    /// `ModType` and `ModVal` alone (@0x93cdc-0x93d08); when none matches,
-    /// the press beeps and takes nothing. By the other reading, the
-    /// lowest-ID outfit with such a mod in any of its four slots, as the
-    /// Bible lists `ModType2`-`ModType4` alike with the first and as the
-    /// port read before. It covers the press's outfit only: the offer,
-    /// the dialog's name for the rounds and the ammunition cap don't read
-    /// it. No stock outfit has `ModType` 3 outside its first mod.
-    PlunderAmmoOutfit => "plunder_ammo_outfit",
+    /// Which of an outfit's four mods make it a weapon (`ModType` 1) or
+    /// ammunition (`ModType` 3), wherever the original reads the weapon
+    /// and rounds arrays (read by `nova_sim::Session::load` and its refit,
+    /// `nova_sim::Session::plunder`, `nova_sim::Session::buy_ship`, the
+    /// eject, the shipyard's standard-equipment mass and
+    /// `nova_sim_port::shipyard::purchase`, and
+    /// `nova_sim_story::pilot::Pilot::new_reading`). By the engine, the first mod alone:
+    /// `_SystemInfoToShipStats` builds the weapon and rounds arrays from
+    /// the first `ModType`/`ModVal` (@0xca8d, @0xcab1),
+    /// `_ShipStatsToSystemInfo` folds them back onto the outfits by it
+    /// (@0xcb61, @0xcba6, @0xcc40, @0xcc8c), `_LoadObjectData`'s stock
+    /// weapons and their mass take it (@0x7aab8, @0x7ac29),
+    /// `_DoShipyardDialog`'s top-up compares against those arrays
+    /// (@0x5eebc-0x5ef92) and `_DoPlunderDialog`'s Ammo press scans the
+    /// 512 records' first mod alone (@0x93cdc-0x93d08), beeping and
+    /// taking nothing when none matches (@0x93d2f). So an outfit naming a
+    /// weapon or rounds only in its second, third or fourth mod gives no
+    /// weapon, no rounds, holds no stock weapon and takes no plunder. By
+    /// the other reading, any of the four mods, the lowest-ID outfit with
+    /// such a mod in any slot, as the Bible lists `ModType2`-`ModType4`
+    /// alike with the first and as the port read before. The original's
+    /// all-slot scans read every mod under both readings: the outfitter
+    /// Sell's launchers and their ammunition (@0x5ca90-0x5cab3,
+    /// @0x5cc85-0x5cc9e), the plunder dialog's name for the rounds
+    /// (`_PlunderDialogUpdate` @0x92c59-0x92c81) and `_CanBuyFighter`'s
+    /// bay outfit (@0x5b95-0x5bd8). This key absorbed the plunder press's
+    /// own key, `plunder_ammo_outfit`, which is now unknown: its two
+    /// readings were these two at one more site, and two keys would let
+    /// the press take rounds the ship then doesn't hold, or beep over an
+    /// outfit the ship fires from. No stock outfit has `ModType` 1 or 3
+    /// outside its first mod.
+    OutfitWeaponMods => "outfit_weapon_mods",
     /// When a bought ship's stock weapons and `AmmoLoad` count as owned
     /// (read by `nova_sim::Session::buy_ship`). By the engine,
     /// `_DoShipyardDialog` tops the weapon array up to the stock counts
@@ -7657,7 +7677,7 @@ mod tests {
                 RuleKey::HailBusyUnderAttack,
                 RuleKey::DialogFocusRing,
                 RuleKey::LoadedJumpedFrom,
-                RuleKey::PlunderAmmoOutfit,
+                RuleKey::OutfitWeaponMods,
                 RuleKey::PurchaseStockFold,
                 RuleKey::NewPilotEmptyName,
                 RuleKey::NewPilotEscape,
@@ -9138,10 +9158,15 @@ mod tests {
     }
 
     #[test]
-    fn the_plunder_ammo_outfit_rule_is_found_by_its_key_and_reads_the_engine() {
-        let rule = RuleKey::PlunderAmmoOutfit;
-        assert_eq!(rule.key(), "plunder_ammo_outfit");
-        assert_eq!(RuleKey::from_key("plunder_ammo_outfit"), Some(rule));
+    fn the_outfit_weapon_mods_rule_is_found_by_its_key_and_reads_the_engine() {
+        let rule = RuleKey::OutfitWeaponMods;
+        assert_eq!(rule.key(), "outfit_weapon_mods");
+        assert_eq!(RuleKey::from_key("outfit_weapon_mods"), Some(rule));
+        assert_eq!(
+            RuleKey::from_key("plunder_ammo_outfit"),
+            None,
+            "the plunder press's old key is retired into this one"
+        );
         assert_eq!(rule.default_source(), RuleSource::Engine);
         assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         assert_eq!(
