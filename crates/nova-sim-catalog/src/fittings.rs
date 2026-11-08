@@ -8,7 +8,7 @@
 //! serves them through [`PilotCatalog::fittings`], whose default is none:
 //! the stock game has no fittings, so its exit points are its `shän`s'
 //! and no kit draws the law's attention. The rules that read them are
-//! above: the player's exit points (`nova_sim::combat::exits`) and the
+//! above: the player's exit points (`nova_sim::combat::spots`) and the
 //! dock scan (`nova_sim::dock_scan`).
 //!
 //! [`PilotCatalog::fittings`]: crate::catalog::PilotCatalog::fittings

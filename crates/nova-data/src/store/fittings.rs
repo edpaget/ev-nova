@@ -9,7 +9,7 @@
 //! ([`Fittings::kits`]) here, then [`GameData::with_fittings`] sets them
 //! and [`GameData::fittings`] answers them, so the session can rebuild
 //! the player's exit points from its class and the kits it carries
-//! (`nova_sim::combat::exits`). A kit's attention, how much more the law
+//! (`nova_sim::combat::spots`). A kit's attention, how much more the law
 //! notices a ship that carries it, has no `oütf` field either, so it is
 //! kept here too (`nova_sim::dock_scan`).
 //!
