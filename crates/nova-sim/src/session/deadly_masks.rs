@@ -39,6 +39,20 @@ use crate::geometry::Vec2;
 use crate::sprite_mask::PlacedMask;
 use crate::story::DrawnSheet;
 
+/// The mask sheet of `sheet` as `site` draws it: its `Type`'s graphic, its
+/// `DeadType`'s, or graphic type 0's; none for no frame, or a `DeadType`
+/// it has none of. Every reader of a stellar's mask maps the sheet drawn
+/// by it (this module and the `contact_masks` module).
+pub(super) fn drawn_mask_sheet(site: &LandingSite, sheet: DrawnSheet) -> Option<MaskSheet> {
+    let graphic = match sheet {
+        DrawnSheet::Type => site.graphic,
+        DrawnSheet::Dead => site.dead_graphic?,
+        DrawnSheet::TypeZero => 0,
+        DrawnSheet::NoFrame => return None,
+    };
+    Some(MaskSheet::Stellar(graphic))
+}
+
 impl Space {
     /// The mask of `site`, one of the stellars shown, showing `frame`, the
     /// player at `player` (see the module docs); none when its slot shows
@@ -52,14 +66,8 @@ impl Space {
         frame: u16,
     ) -> Option<PlacedMask> {
         let layout = self.slot_layout(statics, setup, site, player)?;
-        let graphic = match layout.sheet {
-            DrawnSheet::Type => site.graphic,
-            DrawnSheet::Dead => site.dead_graphic?,
-            DrawnSheet::TypeZero => 0,
-            DrawnSheet::NoFrame => return None,
-        };
         self.sprite_masks.placed(
-            MaskSheet::Stellar(graphic),
+            drawn_mask_sheet(site, layout.sheet)?,
             frame,
             layout.top_left,
             layout.size,

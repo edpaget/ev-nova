@@ -418,7 +418,10 @@ impl Session {
     /// The disc is centred where the slot's rect is
     /// ([`Space::slot_centre`]): a frame frozen sits from the centre less
     /// 16, as `_CheckShotProximities` reads the slot's rect (@0x372a8; see
-    /// the `uncounted_slots` module).
+    /// the `uncounted_slots` module). The disc is the fallback: where the
+    /// session lends the stellar's sprite and the shot's (the
+    /// `contact_masks` module), the proximity pass tests their masks
+    /// (`nova_sim::combat::stellar`).
     pub(super) fn stellar_targets(&self) -> Vec<StellarTarget> {
         self.chart
             .sites
@@ -739,6 +742,7 @@ impl Space {
         Some(SlotLayout {
             sheet,
             size: frame,
+            placed_as,
             top_left: sprite_pool::offset(site.position, player, placed_as),
         })
     }
@@ -827,6 +831,9 @@ pub(super) struct SlotLayout {
     pub(super) sheet: DrawnSheet,
     /// The frame drawn's size.
     pub(super) size: (u32, u32),
+    /// The size it is placed by ([`Space::slot_sprite_size`]): the frame
+    /// drawn's, or [`NO_SPRITE_SIDE`] square for a frame frozen.
+    pub(super) placed_as: (u32, u32),
     /// Its top left's offset from the player, in whole pixels.
     pub(super) top_left: (i32, i32),
 }

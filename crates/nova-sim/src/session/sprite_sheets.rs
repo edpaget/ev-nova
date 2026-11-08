@@ -3,7 +3,8 @@
 //! of the catalog ([`PilotCatalog::rle_sheet`]) once per session and
 //! kept, an unreadable one too ([`SpriteMasks`]). Every reader shares the
 //! one cache: the deadly stellars (the `deadly_masks` module), the
-//! contact passes and the scoop (the `contact_masks` module).
+//! contact passes, the stellars' shots and the scoop (the `contact_masks`
+//! module).
 //!
 //! **What is asked** ([`Session::load_sprite_masks`]), in every system:
 //! the player's and each NPC's sprite base (`HullRecord::sprite_base`),
@@ -11,8 +12,11 @@
 //! shows (sub-munitions among them), each asteroid kind in the field and
 //! each box graphic in space, and the escape pods' sheet (shän 895's)
 //! while any pod is adrift; and, while the system lists a deadly
-//! stellar, each stellar shown's `Type` and `DeadType` and graphic type
-//! 0's. The advance pass asks right after the player's move, before the
+//! stellar or the arsenal holds a planet-type weapon (whose shots strike
+//! stellars by their masks, see the `contact_masks` module), each stellar
+//! shown's `Type` and `DeadType` and graphic type 0's. Stock lists no
+//! deadly stellar and holds no planet-type weapon, so it never asks for
+//! them. The advance pass asks right after the player's move, before the
 //! scoop, its first reader, and again before its stellar hazards, so a
 //! ship spawned in the pass is asked for. Double time's second pass has
 //! no catalog and reads what the first kept: a shot it fires is met by
@@ -40,6 +44,7 @@ use crate::catalog::{MaskSheet, PilotCatalog, ShipId};
 use crate::combat::contact::ShipSprite;
 use crate::combat::hull::ESCAPE_POD_SHIP;
 use crate::combat::ship_frames::FrameSpec;
+use crate::combat::weapon::WeaponSpec;
 use crate::deadly_stellar::is_deadly;
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
@@ -187,7 +192,9 @@ impl Session {
             // The pods' sheet, shän 895's (see the `pod_scoop` module).
             wanted.push(MaskSheet::Ship(arsenal.sprite_base(ESCAPE_POD_SHIP)));
         }
-        if self.chart.listed.iter().any(|site| is_deadly(site.flags2)) {
+        let deadly = self.chart.listed.iter().any(|site| is_deadly(site.flags2));
+        let planet_type = arsenal.weapons().any(WeaponSpec::planet_type);
+        if deadly || planet_type {
             let stellars = self
                 .chart
                 .sites

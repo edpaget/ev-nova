@@ -1275,10 +1275,12 @@
 //! combat, and the `stellars` module of the session).
 //!
 //! - **Which stellars.** Those shown, whole, of `Strength` above 0 and
-//!   with a sprite. Each is a disc as big as the landing radius (half the
-//!   larger side of its `Type` frame), which is what the player sees: the
-//!   original tests the two sprites pixel by pixel (`_SWRLECollision`
-//!   @0x372a8), and one with no sprite cannot be hit. The shot's path
+//!   with a sprite. Each was a disc as big as the landing radius (half the
+//!   larger side of its `Type` frame); the original tests the two sprites
+//!   pixel by pixel (`_SWRLECollision` @0x372a8), and one with no sprite
+//!   cannot be hit. (Combat-and-flight phase 11 tests the masks, the shot
+//!   first, the hit at the shot's position, and keeps the disc where a
+//!   mask can't be read: see `nova_sim::combat::stellar`.) The shot's path
 //!   over the tick is swept, as for ships, and the nearest stellar along
 //!   it is hit; the original takes the first of the 16 slots that
 //!   collides, and explodes the shot at its own position, where the
@@ -1588,7 +1590,8 @@
 //!   sheet reads, and whether its `Type`'s `spïn` counts frames.
 //! - **Not switched**: NPC landing keeps the `landing_radius` circle
 //!   (story-runtime phase 16, npc-landing-reach), and so does the disc
-//!   the shots hit (phase 8: the original tests shots pixel by pixel).
+//!   the shots hit where a mask can't be read (combat-and-flight phase 11
+//!   tests the shot's and the stellar's masks).
 //!   Selecting the nearest stellar, clicking one, and the views are
 //!   unchanged.
 //!

@@ -302,7 +302,7 @@
 //! | [`SpawnAnimRollsFirstClass`](RuleKey::SpawnAnimRollsFirstClass) | `spawn_anim_rolls_first_class` | a ship spawned by `_GenericRandomShipSpawn` for a fleet, a person, an aux ship, the nag ship, a capture or a hired escort rolls its anim set `Rand(BaseSets)` and animation timer `Rand(AnimDelay)` on the first `shïp`'s, ID 128's, as the spawn writes the class +0x76 = 0 before its rolls (@0x3c929, @0x3cc56-0x3ccc2); only a mission's ship and a fighter roll again on their own (@0x3d03c-0x3d091, @0x3da72-0x3dad9; see `nova_sim_ai::traffic::ship_display`) | on its own class's `BaseSets` and `AnimDelay`\* |
 //! | [`StaleStellarSprite`](RuleKey::StaleStellarSprite) | `stale_stellar_sprite` | a deadly stellar hidden since it was last shown still kills by the sprite slot it last took, as nothing but `_HandleStellarSystemVisibility` writes its sprite pointer (spöb +0, @0x32fc8) and `_HandleDeadlyStellars` tests any listed stellar holding one (@0x39d1d): the slot's owner now, at that stellar's place and frame, or, unowned, graphic type 0's frame at the slot's last screen place, which follows the player (see [`deadly_stellar`](crate::deadly_stellar) and `nova_sim::story::sprite_pool`) | a hidden stellar kills nothing\* |
 //! | [`RleCollisionWalk`](RuleKey::RleCollisionWalk) | `rle_collision_walk` | two sprites touch as `_BlitPixieRLECollision` walks their run-length tokens (@0xc0c8d-0xc0ebe): a solid run (op 4) is passed with no width and its fill word read as a token, so a run never touches and later tokens on its line are read the run's length to the left; on a tie the second sprite steps first, so the first's drawn pixel at x − 1 touches the second's at x; and an 8-bit sheet's byte counts are read as pixels (see [`sprite_mask`](crate::sprite_mask)) | drawn pixels touch only where both sprites draw the same pixel, runs included\* |
-//! | [`ShotContact`](RuleKey::ShotContact) | `shot_contact` | a shot touches a ship or an asteroid by the two sprites' rects where the last pass placed them, strictly overlapping (`_SWCollideSpriteLayer` @0xacc30-0xacc81), then a ship by `_SWRadiusCollision` when the speed multiplier is 2.0 or more or the ship is 32 wide or less and otherwise, an asteroid always, by `_SWRLECollision` over their pixel masks, the hit at the shot's position, so a shot faster than its target's extent can pass through it (`_ShipCollisionHandler` @0x3700f-0x3704a, `_AsteroidCollisionHandler` @0x36a0e; see `nova_sim::combat::contact`) | the shot's swept path from its last place against the ship's 0.33-width disc or the asteroid's radius, hitting where it entered it\* |
+//! | [`ShotContact`](RuleKey::ShotContact) | `shot_contact` | a shot touches a ship or an asteroid by the two sprites' rects where the last pass placed them, strictly overlapping (`_SWCollideSpriteLayer` @0xacc30-0xacc81), then a ship by `_SWRadiusCollision` when the speed multiplier is 2.0 or more or the ship is 32 wide or less and otherwise, an asteroid always, by `_SWRLECollision` over their pixel masks, the hit at the shot's position, so a shot faster than its target's extent can pass through it (`_ShipCollisionHandler` @0x3700f-0x3704a, `_AsteroidCollisionHandler` @0x36a0e; see `nova_sim::combat::contact`); and a planet-type shot touches a destroyable stellar by `_SWRLECollision(shot, stellar)` over their masks, the shot first, with no rect pre-test, the hit at the shot's position (`_CheckShotProximities` @0x372a8; see `nova_sim::combat::stellar`), the stellar's disc where either mask can't be read | the shot's swept path from its last place against the ship's 0.33-width disc, the asteroid's radius or the stellar's disc, hitting where it entered it\* |
 //! | [`SpeedMultRamp`](RuleKey::SpeedMultRamp) | `speed_mult_ramp` | the frames after a landing's tail (`_PlayerLandOnStellar` @0x6375e), the info dialogs (`_HandlePlayer` @0x70357, @0x704e8), the escort, comm and planet comm dialogs' closes (@0x95693, @0x9690e, @0x97af2) and a game entry after one that ended landed run at the ramp from 0.0: held, then (3 × old + 1) / 4 a frame (`_HandleTimeAdjustment` @0x33332-0x3349b; see [`speed_mult`](crate::speed_mult)), and the frame a dialog opens on runs its rest, from `_HandlePlayer`'s key block on, at 0.0 as the first step after the dialog's zero (see `nova_sim`'s `opening_rest` module) | every frame at full gain, whole\* |
 //! | [`MissionInfoRebuild`](RuleKey::MissionInfoRebuild) | `mission_info_rebuild` | after an abort the rows are rebuilt from the shown missions, but each picks the active slot at its place in slot order, hidden ones (`Flags` 0x0400) counted, so a step can select past the rows, and the screen stays open while any mission is active (`_DoMissionInfoDialog` @0x9e5f9-0x9e60a, @0x9e69f-0x9e6d8; `nova_sim::Session::mission_info_after_abort`) | each row picks the mission it names, and the screen closes once none is shown: **the default — the original's table is a bug that loses stock missions**††††††††††††††††††† |
 //! | [`NpcJumpFuel`](RuleKey::NpcJumpFuel) | `npc_jump_fuel` | an NPC whose class's `Fuel` is above 99 and that no other ship tractors can jump with an empty tank; only a ship whose person starts with zero fuel (`përs` `Flags2` 0x0001) needs 100 fuel now (`_AIShipHasFuelForJump` @0x7f48f-0x7f500; see `nova_sim::ai::leave`) | every NPC also needs 100 fuel now\* |
@@ -4557,8 +4557,8 @@ rule_keys! {
     /// original's walk stays the default. The Bible says nothing of it (see
     /// [`sprite_mask`](crate::sprite_mask)).
     RleCollisionWalk => "rle_collision_walk",
-    /// How a shot touches a ship or an asteroid in the contact passes
-    /// (`_ShipCollisionHandler` @0x3700f-0x3704a, `_AsteroidCollisionHandler`
+    /// How a shot touches a ship or an asteroid in the contact passes, and
+    /// a stellar in the proximity pass (`_ShipCollisionHandler` @0x3700f-0x3704a, `_AsteroidCollisionHandler`
     /// @0x36a0e). By the engine, as the original tests the two sprites'
     /// rects where the last pass placed them, strictly overlapping
     /// (`_SWCollideSpriteLayer` @0xacc30-0xacc81), then a ship by
@@ -4566,12 +4566,17 @@ rule_keys! {
     /// pass's speed multiplier is 2.0 or more or the ship is 32 wide or
     /// less, and otherwise, and an asteroid always, by `_SWRLECollision`
     /// over their pixel masks, the hit at the shot's position (see
-    /// `nova_sim::combat::contact`); so a shot that moves farther in a tick
-    /// than its target's extent can pass through it. By the other reading,
-    /// the engine's swept hit radius as it stood: the shot's path from its
-    /// last place is tested against a disc of 0.33 × the ship's width, or
-    /// the asteroid's radius, and hits where it first entered it, so no
-    /// shot passes through. The other reading is the engine's feel before
+    /// `nova_sim::combat::contact`); and a planet-type shot a destroyable
+    /// stellar in the proximity pass by `_SWRLECollision(shot, stellar)`
+    /// over their masks, the shot first, with no rect pre-test, the hit at
+    /// the shot's position (`_CheckShotProximities` @0x372a8, see
+    /// `nova_sim::combat::stellar`), the stellar's disc where either mask
+    /// can't be read; so a shot that moves farther in a tick than its
+    /// target's extent can pass through it. By the other reading, the
+    /// engine's swept hit radius as it stood: the shot's path from its last
+    /// place is tested against a disc of 0.33 × the ship's width, the
+    /// asteroid's radius or the stellar's disc, and hits where it first
+    /// entered it, so no shot passes through. The other reading is the engine's feel before
     /// play-feel-8 phase 2, kept for a player used to it. The Bible says
     /// nothing of it.
     ShotContact => "shot_contact",
