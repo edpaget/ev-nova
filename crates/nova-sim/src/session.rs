@@ -1606,6 +1606,9 @@ impl Session {
             .set_seeker_lock_angle(rules.source_for(RuleKey::SeekerLockAngle));
         self.space
             .combat
+            .set_locked_shot_ship_slot(rules.source_for(RuleKey::LockedShotShipSlot));
+        self.space
+            .combat
             .set_quadrant_blind_spots(rules.source_for(RuleKey::QuadrantTurretBlindSpots));
         self.space
             .combat
@@ -18540,6 +18543,18 @@ pub(super) mod tests {
             session(bible).rules().source_for(RuleKey::JamHalving),
             RuleSource::Bible
         );
+    }
+
+    #[test]
+    fn the_rulebook_says_how_a_locked_shot_reads_its_asteroids_slot() {
+        let catalog = armed();
+        let session = |rules: Rulebook| Session::start(&catalog).expect("starts").with_rules(rules);
+        let mut none = Combat::default();
+        none.set_locked_shot_ship_slot(RuleSource::Bible);
+        assert_ne!(none, Combat::default());
+        let bible =
+            Rulebook::default().with_override(RuleKey::LockedShotShipSlot, RuleSource::Bible);
+        assert_eq!(session(bible).space.combat, none);
     }
 
     // Jamming and sensor interference (see `combat::jamming` and the
