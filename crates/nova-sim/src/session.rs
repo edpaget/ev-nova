@@ -644,6 +644,8 @@ mod ranks;
 mod rating_stretch;
 mod recharge;
 mod red_alert;
+#[cfg(test)]
+mod refilled_slot;
 mod refuel_dock;
 mod reinforcements;
 mod repair_dock;
@@ -1608,6 +1610,9 @@ impl Session {
         self.space
             .combat
             .set_locked_shot_ship_slot(rules.source_for(RuleKey::LockedShotShipSlot));
+        self.space
+            .combat
+            .set_reused_slot_shot_target(rules.source_for(RuleKey::ReusedSlotShotTarget));
         self.space
             .combat
             .set_quadrant_blind_spots(rules.source_for(RuleKey::QuadrantTurretBlindSpots));
