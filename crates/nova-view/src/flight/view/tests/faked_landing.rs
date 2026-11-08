@@ -320,6 +320,10 @@ fn landing_lets_go_of_the_line_the_effects_the_flashes_and_the_glows() {
     assert_eq!(held, Some(alt), "an alt held");
     view.say_for(TOO_FAR_PLANET, TOO_FAR_TICKS);
     assert_ne!(*view.effects(), Effects::default());
+    // A landing keeps the sounds not yet taken, as no landing stops one
+    // (F6 of rdm:phase/combat-and-flight/phase-13-second-pass-and-arrival-left-outs):
+    // take them first, so this is about the sprites.
+    view.drained_sounds();
     press_l(&mut view, landed(128));
     assert_eq!(view.take_landing(), Some(StellarId(128)));
     assert_eq!(view.message(), None, "forgotten once the ship lands");
@@ -621,6 +625,10 @@ fn a_wormhole_with_no_exit_lays_the_scene_out_afresh_once_from_the_flights_event
         }],
     );
     assert_ne!(*view.effects(), Effects::default());
+    // The layout keeps the sounds not yet taken (F6 of
+    // rdm:phase/combat-and-flight/phase-13-second-pass-and-arrival-left-outs):
+    // take them first, so this is about the sprites.
+    view.drained_sounds();
     let mut flash = ShieldFlash::default();
     flash.hit(false);
     view.flashes.insert(ShipRef::Player, flash);

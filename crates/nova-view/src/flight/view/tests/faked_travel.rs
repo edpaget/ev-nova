@@ -1028,6 +1028,41 @@ fn an_arrivals_pending_explosions_are_drawn_on_its_first_frame_and_unheard_from_
 }
 
 #[test]
+fn a_fights_sound_on_an_arrivals_tick_is_still_taken_after_its_layout() {
+    // `_HandleShot`'s `PlaySound` started it in its pass (@0x44385), and
+    // the arrival stops no sound (F6).
+    let mut view = world(
+        armed(0, &[BLASTER]),
+        in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]),
+    );
+    jump_now(&mut view);
+    super::faked_screen::warp_ends(&mut view);
+    let fired = CombatEvent::Fired {
+        ship: ShipRef::Player,
+        weapon: BLASTER,
+        at: Vec2::ZERO,
+        sound: Some(nova_sim::FireSound::at(
+            nova_sim::combat::PLAYER_FIRE_PRIORITY,
+        )),
+    };
+    view.sim
+        .queue_report(super::stepping::one_step(vec![PassReport {
+            combat: vec![fired],
+            ..PassReport::default()
+        }]));
+    view.tick(TICK);
+    assert!(sent_but_lines(&view).contains(&FlightCommand::Arrive));
+    let heard: Vec<_> = Screen::take_sounds(&mut view)
+        .into_iter()
+        .filter_map(|sound| match sound {
+            Sound::Combat(sound) => Some(sound.sound),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(heard, [nova_sim::SoundId(208)], "the blaster's `snd `");
+}
+
+#[test]
 fn arriving_lays_out_the_new_system_letting_go_of_the_effects_and_smoke() {
     let mut view = world(
         armed(0, &[BLASTER]),
@@ -1042,6 +1077,9 @@ fn arriving_lays_out_the_new_system_letting_go_of_the_effects_and_smoke() {
         }],
     );
     assert_ne!(*view.effects(), Effects::default());
+    // A clear keeps the sounds not yet taken (F6): take them first, so
+    // this is about the sprites and the smoke.
+    view.drained_sounds();
     jump_now(&mut view);
     at_the_warps_end(&mut view, Vec::new());
     view.arrival_frame(0);

@@ -191,6 +191,11 @@
 //! [`Effects::step`] and [`Effects::apply`] run the two halves together,
 //! the sound half first, so each makes the same draws in the same order.
 //!
+//! The sounds made wait to be taken ([`Effects::take_sounds`]) after the
+//! frame's tick, and a clear ([`Effects::clear`], as a new system's layout
+//! or a landing makes) keeps them: the original started each as its pass
+//! made it, and nothing after stops it.
+//!
 //! The effects draw on their own [`Chance`], never on the simulation's.
 
 use std::collections::BTreeMap;
@@ -951,12 +956,19 @@ impl Effects {
         }
     }
 
-    /// Clears everything: the explosions, the debris, the sounds, the
-    /// looped sounds playing and the particles of no life the caps count.
+    /// Clears the explosions, the debris, the looped sounds playing and
+    /// the particles of no life the caps count. The sounds made and not
+    /// yet taken stay to be taken ([`Effects::take_sounds`]): the
+    /// original's `PlaySound` started each in its pass (`_HandleShot`
+    /// @0x44385, `_CreateExplosion` @0x3f91a, `_HandleShipDisplay`
+    /// @0x2decf, `_HandleShip` @0x351fa), and no arrival, layout or
+    /// landing stops one: the jump's arrival (@0x6bbb8-0x6c625), the
+    /// hypergate's and the wormhole's make only `PlaySound` calls
+    /// (@0x6bc08, @0x63e61, @0x64447, @0x646cb), the arrival's beside one
+    /// `_ST_IsSoundPlaying` (@0x6bbe1).
     pub fn clear(&mut self) {
         self.explosions.clear();
         self.particles.clear();
-        self.sounds.clear();
         self.playing.clear();
         self.lifeless = 0;
     }
@@ -2196,6 +2208,7 @@ mod tests {
         let scene = per_firer();
         let mut effects = Effects::default();
         effects.apply(&fired(NPC, 155), &scene, &looks(), &mut Script::default());
+        assert_eq!(effects.take_sounds().len(), 1, "heard before the clear");
         effects.clear();
         effects.apply(&fired(NPC, 155), &scene, &looks(), &mut Script::default());
         assert_eq!(effects.take_sounds().len(), 1, "heard afresh");
@@ -2949,7 +2962,7 @@ mod tests {
     }
 
     #[test]
-    fn clearing_takes_everything_away() {
+    fn clearing_takes_everything_away_but_the_sounds_not_yet_taken() {
         let mut effects = Effects::default();
         exploded(&mut effects, 130, at(0.0, 0.0));
         effects.apply(
@@ -2959,7 +2972,32 @@ mod tests {
             &mut Script::default(),
         );
         effects.clear();
-        assert_eq!(effects, Effects::default());
+        assert!(!effects.take_sounds().is_empty(), "the sounds kept");
+        assert_eq!(effects, Effects::default(), "and nothing else");
+    }
+
+    #[test]
+    fn clearing_keeps_the_sounds_not_yet_taken() {
+        // The original's `PlaySound` started each in its pass, and no
+        // layout or landing stops it (F6 of
+        // rdm:phase/combat-and-flight/phase-13-second-pass-and-arrival-left-outs).
+        let mut effects = Effects::default();
+        let mut chance = Script::default();
+        effects.apply(&fired(NPC, 155), &scene(), &looks(), &mut chance);
+        let exploded = CombatEvent::Exploded {
+            at: Vec2::new(40.0, 0.0),
+            explosion: blast(130, true),
+            size: 30.0,
+        };
+        effects.apply(&exploded, &scene(), &looks(), &mut chance);
+        let mut made = effects.clone();
+        let made = made.take_sounds();
+        assert_eq!(made.len(), 2, "the shot's and the explosion's");
+        assert!(!effects.explosions().is_empty());
+        effects.clear();
+        assert_eq!(effects.explosions(), []);
+        assert_eq!(effects.particles(), []);
+        assert_eq!(effects.take_sounds(), made, "still to be taken");
     }
 
     /// A pass of every event with a sound and a sprite: a looped weapon
