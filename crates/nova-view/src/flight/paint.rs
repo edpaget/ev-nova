@@ -33,8 +33,12 @@
 //! Left out: a channel painted below t gives a negative source factor,
 //! which the blit's unsigned test (@0xc1645) sends down its brighten
 //! branch (@0xc164c). That is an integer wrap, which the engine does not
-//! replicate: the factor is held to 0. The 8-bit depth's blits
-//! (@0xbb7ed-0xbb8b6) are not modelled, as the view draws at 16 bits.
+//! replicate: the factor is held to 0.
+//!
+//! A hull whose `rlëD` is 8-bit goes through the draw proc's depth-8
+//! branches (@0xbb7ed-0xbb8b6) instead, which ignore the factors when
+//! opaque and unbiased, so its paint is dropped there
+//! ([`eight_bit_blit`](crate::eight_bit_blit)).
 
 use nova_sim::Rgb15;
 

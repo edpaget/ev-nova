@@ -113,16 +113,19 @@
 //! zeroes its intensity and count but not its timer, as `_ResetPlayer`
 //! does (@0x1d534-0x1d539). A new pilot's session starts it from rest; the
 //! original keeps slot 0's timer across a pilot load or new game until the
-//! app quits, which is recorded only. As a flight is entered the player's
-//! lights block runs once before the first frame, as `_PrepareAllSprites`
-//! runs `_HandleShipDisplay` (@0x3a776-0x3a78e;
-//! [`PlayerShip::prepare_player_lights`]), at the session's gain at
-//! construction, full; the original's entry runs it at the gain the last
-//! game left (`_EnterGameFromMainScreen` @0x1a36c). Its layers, visibility
-//! and fades are the `slot_visibility` module's
-//! (`Session::prepare_all_sprites`); its set step, the NPCs' lights, every
-//! ship's ion tint and the entry's gain there are
-//! rdm:phase/rendering/phase-13-prepare-all-sprites-steps-ship-frames's.
+//! app quits, which is recorded only.
+//!
+//! Before the first frame of each way into flight, `_PrepareAllSprites`
+//! runs `_HandleShipDisplay` over every slot (@0x3a776-0x3a78e, the call
+//! @0x3a783), so every ship's set, lights and ion tint step once there,
+//! through [`PlayerShip::display_frames`] and
+//! [`Space::display_npc_frames`] (`Session::display_slots`), at its site's
+//! gain: the entry's two in `Session::enter_game` (@0x1a36c, @0x45834),
+//! at the carried gain by the engine's reading of
+//! [`RuleKey::SpeedMultRamp`]; a take-off's two at 0; a gate's, an
+//! arrival's and the developer's flight's first setup's at the frame's. The `prepare_frames` module says where each runs; the
+//! layers, visibility and fades there are the `slot_visibility` module's
+//! (`Session::prepare_all_sprites`).
 //! Each display ends with the ship's ion tint
 //! (`nova_sim::combat::ion_tint`), its colour cleared once its charge is
 //! gone ([`Session::player_ion_tint`]). No sound plays in any of it: the
@@ -419,27 +422,6 @@ impl PlayerShip {
         self.ship_display.drawn = drawn;
         let capacity = self.ion_capacity();
         self.ship_display.ion_tint = ion_tint::display(&mut self.ion, capacity, &mut *chance);
-    }
-
-    /// The player's lights block run once as a flight is entered, before
-    /// its first frame, as `_PrepareAllSprites` runs `_HandleShipDisplay`
-    /// (@0x3a776-0x3a78e): so the first frame shows the lights at their
-    /// first step from rest, and each step's display the next. A random
-    /// light's first roll is the stateless solver's first, on
-    /// [`HashedRolls`](crate::blink::HashedRolls) from seed 0, as no
-    /// chance is to hand. The lights step at `gain`, the session's.
-    pub(super) fn prepare_player_lights(&mut self, setup: &Setup, gain: SpeedMult) {
-        use crate::blink::BlinkChance;
-        let spec = self.fit.hull.frames;
-        let moment = Moment {
-            disabled: self.condition.disabled(),
-            key_aboard: false,
-            rules: setup.display_rules(),
-            gain,
-        };
-        let rolls = crate::blink::HashedRolls::new(0);
-        let frames = &mut self.ship_display.frames;
-        self.ship_display.drawn.lights = frames.light(&spec, &moment, |sides| rolls.roll(0, sides));
     }
 
     /// The sets the player's ship was last drawn on: its hull's, and its
@@ -923,7 +905,10 @@ pub(in crate::session) mod tests {
             step(&mut session, Controls::default());
             sets.push(session.player_drawn().set);
         }
-        assert_eq!(sets, [0, 0, 0, 0, 0, 1, 1], "past 5 it steps");
+        // The first step's setup runs `_PlayGame`'s `_PrepareAllSprites`
+        // (@0x45834), whose display (@0x3a783) steps the set once before
+        // that step's own display: past 5 a step sooner.
+        assert_eq!(sets, [0, 0, 0, 0, 1, 1, 1], "past 5 it steps");
         assert_eq!(
             session.player_drawn().alt,
             crate::combat::ship_frames::Alt::None,
@@ -960,11 +945,23 @@ pub(in crate::session) mod tests {
         };
         let npc = session.space.npc_mut(id).expect("in the system");
         npc.display.frames.lights = lights;
+        // Kept, then stepped once by the setup's `_PrepareAllSprites`
+        // (@0x3a783; `_PlayGame` @0x45834, a take-off @0x6764e).
+        let (spec, mut kept, mut frames) =
+            (npc.hull.frames, npc.armament.fold(), npc.display.frames);
+        let moment = Moment {
+            disabled: false,
+            key_aboard: false,
+            rules: session.setup.display_rules(),
+            gain: session.speed_mult(),
+        };
+        frames.step(&spec, &mut kept, moment);
+        assert_ne!((kept.set, kept.dir), (1, -1), "the step shows");
         session.populate(&catalog, &mut NeverFires);
         let id = session.space.escorts.fleet[0].expect("placed");
         let escort = session.space.npc(id).expect("in the system");
         let fold = escort.armament.fold();
-        assert_eq!((fold.set, fold.dir), (1, -1), "kept");
+        assert_eq!((fold.set, fold.dir), (kept.set, kept.dir), "kept");
         assert_eq!(escort.display.frames.anim_set, 2);
         assert_eq!(
             escort.display.frames.lights, lights,
@@ -1037,18 +1034,32 @@ pub(in crate::session) mod tests {
     }
 
     #[test]
-    fn a_flown_sessions_player_lights_step_once_before_the_first_frame() {
-        let session = Session::start(&lit(0)).expect("starts");
+    fn entering_play_steps_the_players_lights_at_each_display_before_the_first_frame() {
+        // `_EnterGameFromMainScreen`'s `_PrepareAllSprites` (@0x1a36c,
+        // its display @0x3a783), the two priming passes' displays and
+        // `_PlayGame`'s (@0x45834), at the entry's gain; none at
+        // construction.
+        let catalog = lit(0);
+        let mut session = Session::start(&catalog).expect("starts");
         let lights = session.ship.ship_display.frames.lights;
-        assert_eq!((lights.intensity, lights.count), (0.75, 0), "one step");
-        assert_eq!(session.player_drawn().lights, None, "0.75: not drawn");
+        assert_eq!((lights.intensity, lights.count), (0.0, 0), "no step yet");
+        crate::testkit::enter_game(&mut session, &catalog, SpeedMult::FULL, &mut NeverFires);
+        let lights = session.ship.ship_display.frames.lights;
+        assert_eq!(
+            (lights.intensity, lights.count),
+            (3.0, 0),
+            "a step a display"
+        );
+        assert_eq!(session.player_drawn().lights, Some(3), "drawn at 3");
         let mut steady = lit(0);
         let display = steady.hulls[0].display.as_mut().expect("a shän");
         display.blink = crate::blink::Blink::STEADY;
-        let session = Session::start(&steady).expect("starts");
+        let mut session = Session::start(&steady).expect("starts");
+        crate::testkit::enter_game(&mut session, &steady, SpeedMult::FULL, &mut NeverFires);
         assert_eq!(session.player_drawn().lights, Some(32), "no tick needed");
         let pilot = session.pilot.clone();
-        let loaded = Session::fly(&steady, pilot).expect("loads");
+        let mut loaded = Session::fly(&steady, pilot).expect("loads");
+        crate::testkit::enter_game(&mut loaded, &steady, SpeedMult::FULL, &mut NeverFires);
         assert_eq!(loaded.player_drawn().lights, Some(32), "a load's too");
     }
 
@@ -1061,17 +1072,42 @@ pub(in crate::session) mod tests {
         assert_ne!(lights, crate::combat::ship_lights::ShipLights::default());
         land_now(&mut session).expect("lands");
         session.take_off(&catalog, &mut NeverFires);
+        // The take-off's two `_PrepareAllSprites` (@0x6764e, @0x67658;
+        // their display @0x3a783) run at its gain of 0, where a rising
+        // triangle holds.
+        let spec = session.ship.fit.hull.frames;
+        let moment = |session: &Session| Moment {
+            disabled: false,
+            key_aboard: false,
+            rules: session.setup.display_rules(),
+            gain: session.speed_mult(),
+        };
+        let mut held = ShipFrames {
+            lights,
+            ..ShipFrames::default()
+        };
+        for _ in 0..2 {
+            held.light(&spec, &moment(&session), |_| 0);
+        }
+        assert_eq!(held.lights, lights, "held at a gain of 0");
         assert_eq!(session.ship.ship_display.frames.lights, lights, "a landing");
-        // The passes flying out step the lights on; the arrival keeps them.
+        // The passes flying out step the lights on; the arrival's
+        // `_PrepareAllSprites` (@0x6c59c, its display @0x3a783) steps them
+        // once more at the frame's gain.
         session.plot_course(SystemId(131)).expect("a route");
         crate::testkit::fly_out(&mut session, &catalog);
         crate::testkit::begin_jump_now(&mut session, &catalog).expect("jumps");
-        let lights = session.ship.ship_display.frames.lights;
+        let mut stepped = session.ship.ship_display.frames;
+        stepped.light(&spec, &moment(&session), |_| 0);
+        assert_ne!(stepped.lights, session.ship.ship_display.frames.lights);
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(131))
         );
-        assert_eq!(session.ship.ship_display.frames.lights, lights, "a jump");
+        assert_eq!(
+            session.ship.ship_display.frames.lights, stepped.lights,
+            "a jump"
+        );
     }
 
     #[test]
@@ -1168,7 +1204,9 @@ pub(in crate::session) mod tests {
             .pilot
             .escorts
             .push(crate::session::tests::trader_escort());
-        session.populate(&catalog, &mut NeverFires);
+        // The setup alone, before its `_PrepareAllSprites` (@0x45834)
+        // displays the escort (@0x3a783).
+        session.populate_as(&catalog, &mut NeverFires, None);
         let id = session.space.escorts.fleet[0].expect("placed");
         let owed = session
             .space
@@ -1190,7 +1228,7 @@ pub(in crate::session) mod tests {
         npc.display.frames.anim_set = 2;
         // Entering again, it keeps its set: no roll asked of class 128's
         // four sets or its own six.
-        session.populate(&catalog, &mut NeverFires);
+        session.populate_as(&catalog, &mut NeverFires, None);
         let id = session.space.escorts.fleet[0].expect("placed");
         let mut again = Draws::of(&[]).keyed(4, 3).keyed(6, 5);
         let (statics, setup) = (&session.statics, &session.setup);
@@ -1219,11 +1257,16 @@ pub(in crate::session) mod tests {
             .pilot
             .escorts
             .push(crate::session::tests::trader_escort());
-        session.populate(&catalog, &mut NeverFires);
-        session.populate(&catalog, &mut NeverFires);
+        // The setups alone, before their `_PrepareAllSprites` (@0x45834,
+        // @0x6764e) display the escort (@0x3a783), which spends it.
+        session.populate_as(&catalog, &mut NeverFires, None);
+        session.populate_as(&catalog, &mut NeverFires, None);
         let id = session.space.escorts.fleet[0].expect("placed");
         let npc = session.space.npc(id).expect("in the system");
         assert_eq!(npc.display.rolls.anim, AnimRoll::FirstClass, "carried");
+        session.prepare_all_sprites(&mut NeverFires);
+        let npc = session.space.npc(id).expect("in the system");
+        assert_eq!(npc.display.rolls.anim, AnimRoll::None, "spent");
     }
 
     #[test]

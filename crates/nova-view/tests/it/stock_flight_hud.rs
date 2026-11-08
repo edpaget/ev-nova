@@ -263,32 +263,83 @@ fn every_stock_ships_target_card_matches_the_pilot_panel() {
     assert_eq!(data.target_cards(&ships), one_by_one, "in one batch");
 }
 
+/// Every stock `shïp`'s target card is the one its pictures give when
+/// each is sized by decoding it, as cards were read before
+/// `picture_size` scanned: the same subtitle and picture.
+#[test]
+fn every_stock_ships_target_card_is_the_one_its_decoded_pictures_give() {
+    use nova_data::graphics::{PICT, decode_pict};
+    use nova_data::records::ship::Ship;
+    use nova_view::flight::TargetCard;
+    use nova_view::target_picture::{game_ship_bases, target_picture};
+    let Some(data) = open() else {
+        return;
+    };
+    let bases = game_ship_bases(&data);
+    let decoded_size = |id: i16| {
+        let image = decode_pict(data.resource(PICT, id)?.resource.data()).ok()?;
+        Some((image.width(), image.height()))
+    };
+    let ships: Vec<ShipId> = data.ids(Ship::TYPE).iter().map(|&id| ShipId(id)).collect();
+    let decoded: Vec<TargetCard> = ships
+        .iter()
+        .map(|&ship| TargetCard {
+            subtitle: data
+                .get::<Ship>(ship.0)
+                .expect("a shïp")
+                .expect("it decodes")
+                .record
+                .subtitle
+                .as_str()
+                .to_owned(),
+            picture: target_picture(ship, &bases, decoded_size).map(|p| p.picture),
+        })
+        .collect();
+    assert_eq!(data.target_cards(&ships), decoded);
+}
+
 /// A ship's sheet as the flight read it before scanning: from the
 /// decoded base and layer sheets.
 fn decoded_ship_sheet(data: &GameData, id: ShipId) -> Result<ShipSheet, String> {
+    use nova_data::ShipImage;
     use nova_data::records::ship_anim::ShipAnim;
     use std::num::NonZeroU16;
     let sprite = data.ship_sprite(id).map_err(|err| err.to_string())?;
-    let layer = |layer: Option<Result<nova_data::LayerSprite<'_>, nova_data::LayerError>>| {
+    let layer = |(image, layer): (
+        ShipImage,
+        Option<Result<nova_data::LayerSprite<'_>, nova_data::LayerError>>,
+    )| {
         let layer = layer?.ok()?;
         Some(LayerSheet {
-            image_id: layer.image_id,
+            image: SheetImage::of_ship(layer.kind, id.0, image, layer.image_id),
             frames: NonZeroU16::new(layer.sheet.frames().len() as u16)?,
             frame_width: layer.sheet.frame_width(),
             frame_height: layer.sheet.frame_height(),
+            image_size: (layer.sheet.image_width(), layer.sheet.image_height()),
+            clip_quirks: layer.sheet.clip_quirks(),
             solid: layer.sheet.solid_frames().is_some(),
+            eight_bit: false,
         })
     };
     let [glow, lights, weapon, alt, shield] = data.ship_layers(id).map_or([None; 5], |l| {
-        [l.glow, l.lights, l.weapon, l.alt, l.shield].map(layer)
+        [
+            (ShipImage::Glow, l.glow),
+            (ShipImage::Lights, l.lights),
+            (ShipImage::Weapon, l.weapon),
+            (ShipImage::Alt, l.alt),
+            (ShipImage::Shield, l.shield),
+        ]
+        .map(layer)
     });
     let anim = data.get::<ShipAnim>(id.0).and_then(Result::ok);
     let field = |read: fn(&ShipAnim) -> i16| anim.map_or(0, |anim| read(anim.record));
     Ok(ShipSheet {
-        image_id: sprite.image_id,
+        image: SheetImage::of_ship(sprite.kind, id.0, ShipImage::Base, sprite.image_id),
         rotations: NonZeroU16::new(sprite.sheet.layout().columns()).expect("a column"),
         frame_width: sprite.sheet.frame_width(),
         frame_height: sprite.sheet.frame_height(),
+        image_size: (sprite.sheet.image_width(), sprite.sheet.image_height()),
+        clip_quirks: sprite.sheet.clip_quirks(),
         glow,
         lights,
         weapon,
@@ -297,6 +348,7 @@ fn decoded_ship_sheet(data: &GameData, id: ShipId) -> Result<ShipSheet, String> 
         shield,
         base_transp: field(|anim| anim.base_transp),
         solid: sprite.sheet.solid_frames().is_some(),
+        eight_bit: false,
     })
 }
 

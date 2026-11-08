@@ -9,7 +9,9 @@
 //! between. Lists append; flags and `Option`s keep the latest value, as
 //! the session's do. The session's own reset of the interface loads rides
 //! the stream ([`FlightEvent::InterfaceLoadsCleared`]): the inbox drops
-//! its untaken loads there. And the mission texts carry the bar each
+//! its untaken loads there. The kept escorts' displays carried
+//! ([`FlightEvent::DisplaysCarried`]) append, and the list is some once
+//! any placement was drained, empty or not. And the mission texts carry the bar each
 //! noted, so the inbox answers [`Inbox::text_bars`] and
 //! [`Inbox::text_nav`] over the texts not yet taken, as the session's did.
 //!
@@ -19,8 +21,7 @@
 //! so a fight's diagnostic and a report can interleave in the app's log.
 //! Nothing the player sees depends on it.
 
-use nova_sim::flight_frame::{FlightEvent, LoadedDesc};
-use nova_sim::gate_sprite::StellarPass;
+use nova_sim::flight_frame::{CarriedDisplay, FlightEvent, LoadedDesc};
 use nova_sim::{
     CommNote, FighterNote, Granted, InterfaceLoad, MissionBoardLine, MissionShown, NavMode,
     PayNote, PersonQuote, SessionEvent, SimDiagnostic, SimMessage, SimSound, TextBar,
@@ -66,8 +67,9 @@ pub(super) struct Inbox {
     rescue_desc: Option<LoadedDesc>,
     /// The message the last take-off left on.
     leave_message: Option<String>,
-    /// The stellar passes, in order.
-    stellar_passes: Vec<StellarPass>,
+    /// The kept escorts' displays carried since the last take, if the
+    /// fleet was placed since, in order.
+    carried: Option<Vec<CarriedDisplay>>,
 }
 
 impl Inbox {
@@ -100,7 +102,9 @@ impl Inbox {
                 FlightEvent::TakeoffNav(nav) => self.takeoff_nav = Some(nav),
                 FlightEvent::RescueDesc(desc) => self.rescue_desc = Some(desc),
                 FlightEvent::LeaveMessage(text) => self.leave_message = Some(text),
-                FlightEvent::StellarPass(pass) => self.stellar_passes.push(pass),
+                FlightEvent::DisplaysCarried(carried) => {
+                    self.carried.get_or_insert_with(Vec::new).extend(carried);
+                }
             }
         }
     }
@@ -217,9 +221,10 @@ impl Inbox {
         self.leave_message.take()
     }
 
-    /// The stellar passes, in order; taking them empties the list.
-    pub(super) fn take_stellar_passes(&mut self) -> Vec<StellarPass> {
-        std::mem::take(&mut self.stellar_passes)
+    /// The kept escorts' displays carried, in order, if the fleet was
+    /// placed since the last take; taking them leaves none.
+    pub(super) fn take_carried(&mut self) -> Option<Vec<CarriedDisplay>> {
+        self.carried.take()
     }
 }
 
@@ -232,7 +237,6 @@ mod tests {
 
     use super::*;
     use crate::flight::sim_port::fixture::FakeFlight;
-    use nova_sim::SpeedMult;
 
     /// `dësc` `id` as the rescue loaded it.
     fn rescued(id: i16) -> LoadedDesc {
@@ -292,26 +296,6 @@ mod tests {
             ship_name: "Kestrel".to_owned(),
             done: Help::Repair,
         }
-    }
-
-    #[test]
-    fn the_stellar_passes_are_taken_in_order_across_receives_once() {
-        let mut inbox = received(vec![
-            FlightEvent::StellarPass(StellarPass::entry(SpeedMult::FULL)),
-            FlightEvent::StellarPass(StellarPass::ticked(SpeedMult::FULL)),
-        ]);
-        inbox.receive(vec![FlightEvent::StellarPass(StellarPass::ticked(
-            SpeedMult::ZERO,
-        ))]);
-        assert_eq!(
-            inbox.take_stellar_passes(),
-            [
-                StellarPass::entry(SpeedMult::FULL),
-                StellarPass::ticked(SpeedMult::FULL),
-                StellarPass::ticked(SpeedMult::ZERO)
-            ]
-        );
-        assert_eq!(inbox.take_stellar_passes(), []);
     }
 
     #[test]
@@ -460,6 +444,28 @@ mod tests {
         assert_eq!(inbox.take_rescue_desc(), Some(rescued(14000)));
         assert_eq!(inbox.take_leave_message().as_deref(), Some("second"));
         assert_eq!(inbox, Inbox::default(), "each once");
+    }
+
+    fn carried(from: u32, to: u32) -> CarriedDisplay {
+        CarriedDisplay {
+            from: NpcId(from),
+            to: NpcId(to),
+            prepares: vec![nova_sim::SpeedMult::FULL],
+        }
+    }
+
+    #[test]
+    fn the_carried_displays_add_up_across_receives_and_are_taken_once() {
+        let mut inbox = received(vec![FlightEvent::DisplaysCarried(Vec::new())]);
+        assert_eq!(inbox.take_carried(), Some(Vec::new()), "an empty carry");
+        assert_eq!(inbox.take_carried(), None, "taken");
+        inbox.receive(vec![FlightEvent::DisplaysCarried(vec![carried(1, 2)])]);
+        inbox.receive(vec![FlightEvent::DisplaysCarried(vec![carried(3, 4)])]);
+        assert_eq!(
+            inbox.take_carried(),
+            Some(vec![carried(1, 2), carried(3, 4)])
+        );
+        assert_eq!(inbox.take_carried(), None);
     }
 
     #[test]

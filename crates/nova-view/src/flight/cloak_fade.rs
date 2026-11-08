@@ -47,6 +47,10 @@ pub const JITTER_STEP: f32 = 10.0;
 /// The fade the weapon glow's cap is taken from (the float 40.0 @0xdd660).
 pub const WEAPON_CAP_FROM: f32 = 40.0;
 
+/// The translucency a fading cloak writes to its hull, whatever the fade
+/// (@0x2d336).
+pub const FADING_TRANSLUCENCY: i16 = 0x20;
+
 /// How far, in screen pixels on each axis, a ship at `fade` is jittered:
 /// trunc(fade / 10).
 #[must_use]
@@ -128,6 +132,11 @@ pub struct CloakDraw {
     /// Its hull's tint and blend in place of its own, when drawn: the alt
     /// layer takes it too. Its colorize stays, as a cloak leaves +0xb0.
     pub hull: Option<(Color, Blend)>,
+    /// The translucency (+0xa8) it writes to its hull, which the alt layer
+    /// copies: [`FADING_TRANSLUCENCY`] fading, the full fade's level after
+    /// (0x1e seen, @0x2d1c0; 0x40 unseen, @0x2d1cd). The draw proc's
+    /// depth-8 dispatch reads it (`eight_bit_blit`).
+    pub hull_translucency: i16,
     /// How far its hull, alt, glow, lights and weapon glow are moved.
     pub offset: Point,
     /// The level its glow and lights are held to, or `None` when hidden.
@@ -149,8 +158,9 @@ impl CloakDraw {
         rolls: &impl BlinkChance,
     ) -> Option<Self> {
         let paint = paint_channels(paint);
-        let full = |hull| Self {
+        let full = |hull, translucency: u8| Self {
             hull,
+            hull_translucency: i16::from(translucency),
             offset: Point::new(0.0, 0.0),
             layers: None,
             weapon: weapon_cap(FADE_FULL),
@@ -158,9 +168,9 @@ impl CloakDraw {
         };
         match shown {
             CloakShown::Opaque => None,
-            CloakShown::Hidden => Some(full(None)),
-            CloakShown::Translucent(level) => {
-                let level = level.min(TRANSLUCENCY_STEPS);
+            CloakShown::Hidden => Some(full(None, TRANSLUCENCY_STEPS)),
+            CloakShown::Translucent(written) => {
+                let level = written.min(TRANSLUCENCY_STEPS);
                 // Each source factor is the channel's − +0xa8 + 32, capped
                 // at 32 (`_BlitPixieRLETranslucent` @0xc1568).
                 let source = paint.map(|channel| {
@@ -169,13 +179,14 @@ impl CloakDraw {
                         .min(32)
                 });
                 let tint = translucent_tint_by_channel(source, level);
-                Some(full(Some((tint, Blend::OrTranslucent))))
+                Some(full(Some((tint, Blend::OrTranslucent)), written))
             }
             CloakShown::Fading(fade) => Some(Self {
                 hull: Some((
                     lights_tint_by_channel(paint.map(|channel| hull_factor(channel, fade))),
                     Blend::Or,
                 )),
+                hull_translucency: FADING_TRANSLUCENCY,
                 offset: jitter(jitter_reach(fade), tick, rolls),
                 layers: Some(layer_cap(fade)),
                 weapon: weapon_cap(fade),
@@ -276,6 +287,16 @@ mod tests {
     }
 
     #[test]
+    fn the_hulls_translucency_is_0x20_fading_and_the_full_fades_level_after() {
+        let of =
+            |shown| CloakDraw::of(shown, None, 0, &Always(0)).map(|draw| draw.hull_translucency);
+        assert_eq!(of(CloakShown::Fading(0.5)), Some(0x20));
+        assert_eq!(of(CloakShown::Fading(31.9)), Some(0x20));
+        assert_eq!(of(CloakShown::Translucent(0x1e)), Some(0x1e));
+        assert_eq!(of(CloakShown::Hidden), Some(i16::from(TRANSLUCENCY_STEPS)));
+    }
+
+    #[test]
     fn an_opaque_ship_is_drawn_as_it_is() {
         assert_eq!(CloakDraw::of(CloakShown::Opaque, None, 0, &Always(0)), None);
     }
@@ -287,6 +308,7 @@ mod tests {
             draw,
             CloakDraw {
                 hull: Some((lights_tint(10), Blend::Or)),
+                hull_translucency: 0x20,
                 offset: Point::new(2.0, 2.0),
                 layers: Some(10),
                 weapon: 18,
@@ -341,6 +363,7 @@ mod tests {
             faint,
             CloakDraw {
                 hull: Some((translucent_tint(4, 30), Blend::OrTranslucent)),
+                hull_translucency: 0x1e,
                 offset: Point::new(0.0, 0.0),
                 layers: None,
                 weapon: 8,
@@ -352,6 +375,7 @@ mod tests {
             hidden,
             CloakDraw {
                 hull: None,
+                hull_translucency: i16::from(TRANSLUCENCY_STEPS),
                 ..faint
             }
         );
@@ -373,11 +397,17 @@ mod tests {
 
         fn layer(image_id: i16) -> LayerSheet {
             LayerSheet {
-                image_id,
+                image: crate::SheetImage::Rled(image_id),
                 frames: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: crate::flight::fake_catalog::LAYER_SIDE,
                 frame_height: crate::flight::fake_catalog::LAYER_SIDE,
+                image_size: (
+                    crate::flight::fake_catalog::LAYER_SIDE,
+                    crate::flight::fake_catalog::LAYER_SIDE,
+                ),
+                clip_quirks: false,
                 solid: false,
+                eight_bit: false,
             }
         }
 
@@ -385,10 +415,12 @@ mod tests {
         /// alt 1400 and shield 1500.
         fn sheet() -> ShipSheet {
             ShipSheet {
-                image_id: 1000,
+                image: crate::SheetImage::Rled(1000),
                 rotations: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: 10,
                 frame_height: 10,
+                image_size: (10, 10),
+                clip_quirks: false,
                 glow: Some(layer(1100)),
                 lights: Some(layer(1200)),
                 weapon: Some(layer(1930)),
@@ -397,6 +429,7 @@ mod tests {
                 shield: Some(layer(1500)),
                 base_transp: 0,
                 solid: false,
+                eight_bit: false,
             }
         }
 

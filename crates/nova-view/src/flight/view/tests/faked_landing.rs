@@ -306,6 +306,7 @@ fn landing_lets_go_of_the_line_the_effects_the_flashes_and_the_glows() {
     let alt = crate::flight::held_alt::AltLayer {
         image: ImageKey::sprite(2100, 0),
         at: Point::new(0.0, 0.0),
+        shown: true,
         tint: Color::WHITE,
         colorize: None,
         blend: crate::Blend::Normal,

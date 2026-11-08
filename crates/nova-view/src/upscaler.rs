@@ -18,6 +18,11 @@ pub enum Upscaler {
     /// fractional ones.
     SharpBilinear,
     /// The world is drawn at the logical resolution, then enlarged onto
+    /// the viewport with AMD's `FidelityFX` Super Resolution 1: EASU, an
+    /// edge-adaptive spatial upsample, then RCAS, a contrast-adaptive
+    /// sharpen. Two plain fragment passes, so every device has it.
+    Fsr1,
+    /// The world is drawn at the logical resolution, then enlarged onto
     /// the viewport with MetalFX's spatial scaler: edge-adaptive, with
     /// built-in sharpening. macOS on Metal only; elsewhere it is never
     /// offered.

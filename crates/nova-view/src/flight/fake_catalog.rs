@@ -31,7 +31,7 @@ use crate::flight::view::*;
 use crate::flight::weapons::BEAM_UNDER_SHIPS;
 use crate::galaxy::{Galaxy, GalaxyCatalog, SystemEntry};
 use crate::system::catalog::{
-    AnimationData, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemContents,
+    StellarAnimation, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemContents,
 };
 use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 use crate::{Color, Font, Input, Key, Point, Screen};
@@ -282,16 +282,19 @@ pub(in crate::flight) fn sheet() -> ShipSheet {
     ShipSheet {
         weapon: None,
         weap_decay: 0,
-        image_id: 2000,
+        image: crate::SheetImage::Rled(2000),
         rotations: NonZeroU16::new(36).expect("non-zero"),
         frame_width: 40,
         frame_height: 40,
+        image_size: (40, 40),
+        clip_quirks: false,
         glow: None,
         lights: None,
         alt: None,
         shield: None,
         base_transp: 0,
         solid: false,
+        eight_bit: false,
     }
 }
 
@@ -343,12 +346,16 @@ pub(in crate::flight) fn catalog() -> FakeCatalog {
         box_sheet: Ok(EffectSheet {
             frame_width: 0,
             frame_height: 0,
+            image_size: (0, 0),
+            clip_quirks: false,
             image: crate::SheetImage::Rled(500),
             frames: NonZeroU16::new(36).expect("non-zero"),
         }),
         cursor_sheet: Ok(EffectSheet {
             frame_width: 0,
             frame_height: 0,
+            image_size: (0, 0),
+            clip_quirks: false,
             image: crate::SheetImage::Rled(651),
             frames: NonZeroU16::new(8).expect("non-zero"),
         }),
@@ -769,9 +776,12 @@ pub(in crate::flight) fn stellar(
             frames: NonZeroU16::new(frames).expect("non-zero"),
             frame_width: 20,
             frame_height: 20,
+            image_size: (20, 20),
+            eight_bit: false,
+            clip_quirks: false,
         }),
         dead_sprite: None,
-        animation: AnimationData {
+        animation: StellarAnimation {
             delay: 1,
             frame0_bias: 0,
             flags2: 0,
@@ -798,6 +808,9 @@ pub(in crate::flight) fn dying(
             frames: NonZeroU16::MIN,
             frame_width: 30,
             frame_height: 30,
+            image_size: (30, 30),
+            eight_bit: false,
+            clip_quirks: false,
         })),
         ..stellar(id, name, at, frames)
     }
@@ -843,6 +856,9 @@ impl SystemCatalog for FakeCatalog {
                 frames: NonZeroU16::new(frames).expect("non-zero"),
                 frame_width: width,
                 frame_height: width,
+                image_size: (width, width),
+                eight_bit: false,
+                clip_quirks: false,
             };
             for stellar in stellars.iter_mut().filter(|s| s.id == StellarId(129)) {
                 stellar.sprite = Ok(square(1129, moon.width, moon.frames));
@@ -866,6 +882,9 @@ impl SystemCatalog for FakeCatalog {
                 frames: NonZeroU16::MIN,
                 frame_width: zero,
                 frame_height: zero,
+                image_size: (zero, zero),
+                eight_bit: false,
+                clip_quirks: false,
             }),
             problems: Vec::new(),
         }
@@ -942,7 +961,7 @@ impl ShipSprites for FakeCatalog {
             895 => Err("no shän 895".to_owned()),
             129 if self.npc_sheet.is_some() => self.npc_sheet.ok_or_else(String::new),
             129 => Ok(ShipSheet {
-                image_id: 2001,
+                image: crate::SheetImage::Rled(2001),
                 rotations: NonZeroU16::new(72).expect("non-zero"),
                 glow: Some(layer(2101, 72)),
                 lights: Some(layer(2201, 72)),
@@ -952,9 +971,10 @@ impl ShipSprites for FakeCatalog {
             }),
             130 => Err("no shän 130".to_owned()),
             131 => Ok(ShipSheet {
-                image_id: 2002,
+                image: crate::SheetImage::Rled(2002),
                 frame_width: 100,
                 frame_height: 100,
+                image_size: (100, 100),
                 ..sheet()
             }),
             other => panic!("asked for shïp {other}'s sheet"),
@@ -1022,6 +1042,8 @@ impl CombatLooks for FakeCatalog {
             1..=4 => Ok(EffectSheet {
                 frame_width: 0,
                 frame_height: 0,
+                image_size: (0, 0),
+                clip_quirks: false,
                 image: crate::SheetImage::Rled(500 + graphic.cast_signed()),
                 frames: NonZeroU16::new(36).expect("non-zero"),
             }),
@@ -1034,6 +1056,8 @@ impl CombatLooks for FakeCatalog {
         Ok(EffectSheet {
             frame_width: 0,
             frame_height: 0,
+            image_size: (0, 0),
+            clip_quirks: false,
             image: crate::SheetImage::Rled(1800 + i16::from(kind)),
             frames: NonZeroU16::new(36).expect("non-zero"),
         })
@@ -1050,6 +1074,8 @@ impl CombatLooks for FakeCatalog {
             frames: NonZeroU16::new(36).expect("non-zero"),
             frame_width: 0,
             frame_height: 0,
+            image_size: (0, 0),
+            clip_quirks: false,
         })
     }
 
@@ -1936,11 +1962,14 @@ pub(in crate::flight) fn at(x: f32, y: f32) -> Point {
 /// square.
 pub(in crate::flight) fn layer(image_id: i16, frames: u16) -> LayerSheet {
     LayerSheet {
-        image_id,
+        image: crate::SheetImage::Rled(image_id),
         frames: NonZeroU16::new(frames).expect("non-zero"),
         frame_width: LAYER_SIDE,
         frame_height: LAYER_SIDE,
+        image_size: (LAYER_SIDE, LAYER_SIDE),
+        clip_quirks: false,
         solid: false,
+        eight_bit: false,
     }
 }
 
@@ -1975,6 +2004,8 @@ pub(in crate::flight) fn effect_sheet(image_id: i16, frames: u16) -> EffectSheet
     EffectSheet {
         frame_width: 0,
         frame_height: 0,
+        image_size: (0, 0),
+        clip_quirks: false,
         image: crate::SheetImage::Rled(image_id),
         frames: Frames::new(frames).expect("non-zero"),
     }

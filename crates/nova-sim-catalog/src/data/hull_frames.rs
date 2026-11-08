@@ -23,7 +23,8 @@ use nova_data::GameData;
 use crate::catalog::{FrameSize, ShipId};
 
 /// The frame of `base`'s loaded base sprite: its `BaseImage` `rlëD`'s
-/// header size when that reads, otherwise its `shän`'s `(BaseXSize,
+/// header size, or the frames its `PICT` pair cuts into, when that reads
+/// (`GameData::ship_sprite_frame`); otherwise its `shän`'s `(BaseXSize,
 /// BaseYSize)`, `shan`, when both are positive; otherwise none.
 pub(super) fn base_frame(data: &GameData, base: ShipId, shan: (i16, i16)) -> Option<FrameSize> {
     if let Ok(sprite) = data.ship_sprite_frame(base) {
@@ -126,7 +127,7 @@ mod tests {
 
     #[test]
     fn an_unreadable_rled_header_falls_back_to_the_shän_sizes() {
-        let deep = (RLED, 1000, RledBuilder::new(30, 50).depth(12).build());
+        let deep = (RLED, 1000, RledBuilder::new(30, 50).depth(1).build());
         let hulls = store(&[ship(128), shan(128, 1000, 24, 40), deep]).hulls();
         assert_eq!(hull(&hulls, 128).frame, Some(size(24, 40)));
     }

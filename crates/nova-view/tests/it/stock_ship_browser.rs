@@ -51,14 +51,16 @@ fn sprite_ids(browser: &impl Screen) -> Vec<i16> {
 /// base, its glow, and its lights while its blink has them lit, rolling as
 /// the browser does on [`HashedRolls`] from seed 0.
 fn expected_sprites(ship: &ShipEntry, sprite: SheetInfo, tick: u64) -> Vec<i16> {
-    let mut expected = vec![sprite.image_id];
+    // Every stock sheet is an `rlëD`.
+    let id = |sheet: &SheetInfo| sheet.image.rled().expect("an rlëD");
+    let mut expected = vec![id(&sprite)];
     if let Some(Ok(glow)) = &ship.glow {
-        expected.push(glow.image_id);
+        expected.push(id(glow));
     }
     if let Some(Ok(lights)) = &ship.lights
         && lights_level(&ship.blink, tick, &HashedRolls::new(0)).is_some()
     {
-        expected.push(lights.image_id);
+        expected.push(id(lights));
     }
     expected
 }

@@ -40,6 +40,7 @@
 //! | [`StellarFrameCount`](RuleKey::StellarFrameCount) | `stellar_frame_count` | a stellar animates over the frame count of the sheet its sprite slot held at the last rebuild point, the frame shown wrapping past the end of a shorter sheet drawn (`_HandleStellarSystemVisibility` @0x331c9; `_HandleStellarSprites` @0x2e802, @0x2eddc-0x2edf4; `_SWSetCurrentFrameIndex` @0xa90d4-0xa90e9; see `nova_sim::story`) | over the frame count of the sheet it draws, from the moment it is swapped: `Flags2` 0x0080, "the stellar's graphic is animated after it's been destroyed" |
 //! | [`TypeSheetFallback`](RuleKey::TypeSheetFallback) | `type_sheet_fallback` | from the first rebuild point that shows it, a whole stellar whose `Type` has no readable sheet draws, is clicked by and is shot by what its sprite slot holds: graphic type 0, `spïn` 1000, the sheet the rebuild means an empty slot to get (its fill @0x33231-0x332d0; its own code faults first, @0x33096), or a `DeadType` sheet a flight frame cloned in since (`_HandleStellarSprites` @0x2e7c7-0x2e7e5; see `nova_sim::story`) | the engine's placeholder box and the reason, which shows the broken data\* |
 //! | [`EightBitSheet`](RuleKey::EightBitSheet) | `eight_bit_sheet` | an 8-bit `rlëD` draws as its bytes fall into the 16-bit world: each pair of bytes one little-endian RGB555 pixel, filling the left half of the frame (`_SWCreateSpriteFromRLEResource` @0xa9990, `_BlitPixieRLESwap` @0xbe3f0-0xbe3f7, `_BlitPixieRLE` @0xbddd0; see `nova_render::GameImages` and `nova_sim::story`) | each byte a colour of the Mac's standard 256-colour table, at full width\* |
+//! | [`ThirtyTwoBitSheet`](RuleKey::ThirtyTwoBitSheet) | `thirty_two_bit_sheet` | a 32-bit `rlëD` draws as its bytes fall into the 16-bit world: each pixel swapped to little-endian, then two RGB555 pixels, twice its width from the box's left edge, cut to the box when the box touches the world's edge (`_BlitPixieRLESwap` @0xbe46e-0xbe48e, `_BlitPixieRLETranslucentDrawProc` @0xbb56d-0xbb579, `_BlitPixieRLE` @0xbddd0-0xbde97, `_BlitPixieRLEClipped` @0xbde9c-0xbe0b3; see `nova_render::GameImages` and `nova_data::graphics`) | each pixel one `xRRGGBB` true-colour pixel, opaque, at the box's width\* |
 //! | [`UncountedSheet`](RuleKey::UncountedSheet) | `uncounted_sheet` | a sprite slot cloning a graphic whose `spïn`'s `xTiles` × `yTiles` is 0 or less keeps the frame it showed: none from a rebuild point (nothing drawn, the landing reach 75), and between rebuild points the frame it had, frozen and placed as a 32-pixel sprite; the stellar does not animate until the next rebuild point (`_SWCloneFramesFromMaster` @0xac4ec, `_SWSetCurrentFrameIndex` @0xa90e7-0xa90ee, `_HandleStellarSystemVisibility` @0x32e7a, @0x331c6; `_HandleStellarSprites` @0x2e7e5, @0x2ee20-0x2ef1a; see `nova_sim::story`) | the sheet's own decoded frames, drawn and animated\* |
 //! | [`NpcLanding`](RuleKey::NpcLanding) | `npc_landing` | an NPC lands when its whole-pixel offset from the stellar's centre is at most 40 on each axis (trunc((9 − turn) × 8 + 32) below a turn rate of 8) and it moves below 0.35 a tick on each axis; inside the box but faster it brakes by sub 1, its velocity and speed × 0.98 a tick; outside it flies sub 2's approach, and a folding ship unfolds inside the box (`_HighLevelAIHandler` @0x8d903-0x8db5a; see `nova_sim_ai::traffic::land_flight`); and state 20's approach to a hypergate or wormhole outside its box flies sub 2 too, never braking (@0x8dc42-0x8dc55; see `nova_sim_ai::traffic::gate_entry`) | within `landing_radius` (half the larger side of the `Type` frame, or 32 with no sprite), as a circle, at or below 1.0 a tick, flying the port's earlier approach, which brakes by its stopping distance, for the gate approach too\* |
 //! | [`HireFee`](RuleKey::HireFee) | `hire_fee` | a hire takes trunc(cash − 0.1 × price) off the cash, a credit more than the fee shown when the tenth has a fraction (`nova_sim::NovaHire`) | exactly the fee shown\* |
@@ -133,7 +134,7 @@
 //! | [`ShipDoneOnce`](RuleKey::ShipDoneOnce) | `ship_done_once` | every time a mission's goals go from unmet to met, its `ShipDoneText` is shown and its `OnShipDone` runs, so an escort goal's run again each time its ships come back to the player (`_MissionObjectivesCheck` @0x9ec70-0x9ed87; see `nova_sim::mission::goals`) | the moment's text, script and auto-abort happen only the first time\* |
 //! | [`SwapArrives`](RuleKey::SwapArrives) | `swap_arrives` | the ship swapped in for a person raises no arrived count and leaves the appear timer running, so for a `ShipStart` of 1 or more the timer still brings another ship in beside it (`_HandlePlayerCommunication` @0x6244b-0x6252f, `_EnterMoreShips` @0x437ec-0x43aa5; see `nova_sim::mission::ships`) | the swapped ship counts as the timer's arrival: the timer stops, and for `ShipStart` 1 the arrived count goes up by one\* |
 //! | [`SmugglingShipName`](RuleKey::SmugglingShipName) | `smuggling_ship_name` | the smuggling notice names the scanner by the found mission's drawn ship name whenever that name is not empty, whoever the scanner is (`_ScanPlayer` @0x7e7ce; see `nova_sim::scan`) | by the mission's ship name only when the scanner is that mission's special ship, else by its class\* |
-//! | [`HudCadence`](RuleKey::HudCadence) | `hud_cadence` | the HUD's content refreshes on the original's timing: the radar every 15 Mac ticks, 8 engine ticks (`_DrawStatus` @0x4c85d, @0x4c911-0x4c94f), the nav area every 15 engine ticks (`TickCount() % 30`, @0x4c899-0x4c8b6) or at once on a selection change, and the target panel every 45 engine ticks (`TickCount() % 45`, @0x4c8b9-0x4c8eb), at the next radar refresh once its shield or ship type changes (@0x4c963-0x4c994), or at once on a change of target; docked, the bar holds between the port's redraws: the radar after an outfitter order, radar, nav and target on a ship purchase (everything on a new `ïntf`, @0x739bd), fuel on a recharge (@0x5fe05), everything as a shop closes (`_RefreshSAT`); see `nova_view::flight::cadence` | it follows every frame\* |
+//! | [`HudCadence`](RuleKey::HudCadence) | `hud_cadence` | the HUD's content refreshes on the original's timing: the radar every 15 Mac ticks, 8 engine ticks (`_DrawStatus` @0x4c85d, @0x4c911-0x4c94f), the nav area every 15 engine ticks (`TickCount() % 30`, @0x4c899-0x4c8b6) or at once on a selection change, and the target panel every 45 engine ticks (`TickCount() % 45`, @0x4c8b9-0x4c8eb), at the next radar refresh once its shield or ship type changes (@0x4c963-0x4c994), or at once on a change of target; docked, the bar holds between the port's redraws: the radar after an outfitter order, radar, nav and target on a ship purchase (everything on a new `ïntf`, @0x739bd), fuel on a recharge (@0x5fe05), everything as a shop closes (`_RefreshSAT`); and the escort menu's rows hold between `_DrawEscortMenuInFrame`'s redraws (see `nova_view::flight::escorts`); see `nova_view::flight::cadence` | it follows every frame\* |
 //! | [`PaySlotOffset`](RuleKey::PaySlotOffset) | `pay_slot_offset` | a slot's `<PAY>` of a pay that is not cash, a fine or a charge reads the slot's byte offset, slot × 2,284 (`_MungeBriefing` @0x9cd2a-0x9cdb6; see `nova_sim::text_tags`) | it reads 0, as an offer's does\* |
 //! | [`MissionlessTags`](RuleKey::MissionlessTags) | `missionless_tags` | a text filled with no mission (a hail quote, a `RefuseText`) reads `"[Error]"` for each mission tag (`_MungeBriefing` @0x9c83f-0x9c843; see `nova_sim::text_tags`) | they are left as written\* |
 //! | [`PrkNnnName`](RuleKey::PrkNnnName) | `prk_nnn_name` | `<PRKnnn>` reads the rank's `ShortName`, as `<SRKnnn>` does (`_MungeBriefing` +0xde @0x9d1ef, @0x9d2d0; see `nova_sim::text_tags`) | its `ConvName`, "same as `<PRK>`" |
@@ -141,7 +142,7 @@
 //! | [`OfferingShipName`](RuleKey::OfferingShipName) | `offering_ship_name` | `<OSN>` names the person of the ship last hailed with a `LinkMission`, kept after the dialog until a quote, a board or a new pilot clears it, so a later text names it (`_HandlePlayerCommunication` @0x621de, @0x625a4; `_MungeBriefing` @0x9cebe-0x9cf28; see `nova_sim::text_tags`) | only the person offering while its offer is open, "only works when offering a mission from a ship" |
 //! | [`CachedAvailBits`](RuleKey::CachedAvailBits) | `cached_avail_bits` | a person's 0x0400 hail quote filter reads its mission's `AvailBits` verdict as cached at the last landing, arrival, load or check of it, so a bit changed in flight goes unseen until then (`_IsMissionAvailable` @0x9b4af-0x9b4f5, `_HandleShip` @0x33e1d) | the bits are tested now\* |
 //! | [`SpawnAvailability`](RuleKey::SpawnAvailability) | `spawn_availability` | a shïp's or flët's `AppearOn` and a randomly drawn përs's `ActiveOn` are read as the last galaxy refresh (a landing, a jump's arrival, a new pilot or a load) evaluated them, a drawn person's also now, so a bit set in between brings those ships only from the next refresh; a system's person slots read `ActiveOn` now (`_PropagateMissionBitEffects` @0x997c3-0x9987a, `_SpawnPerson` @0x409b5, @0x40b5d; see the session's `spawn_availability` module) | every test is read now, at each spawn\* |
-//! | [`HudCadence`](RuleKey::HudCadence) | `hud_cadence` | the HUD's content refreshes on the original's timing: the radar every 15 Mac ticks, 8 engine ticks (`_DrawStatus` @0x4c85d, @0x4c911-0x4c94f), the nav area every 15 engine ticks (`TickCount() % 30`, @0x4c899-0x4c8b6) or at once on a selection change, and the target panel every 45 engine ticks (`TickCount() % 45`, @0x4c8b9-0x4c8eb), at the next radar refresh once its shield or ship type changes (@0x4c963-0x4c994), or at once on a change of target; see `nova_view::flight::cadence` | it follows every frame\* |
+//! | [`HudCadence`](RuleKey::HudCadence) | `hud_cadence` | the HUD's content refreshes on the original's timing: the radar every 15 Mac ticks, 8 engine ticks (`_DrawStatus` @0x4c85d, @0x4c911-0x4c94f), the nav area every 15 engine ticks (`TickCount() % 30`, @0x4c899-0x4c8b6) or at once on a selection change, and the target panel every 45 engine ticks (`TickCount() % 45`, @0x4c8b9-0x4c8eb), at the next radar refresh once its shield or ship type changes (@0x4c963-0x4c994), or at once on a change of target; and the escort menu's rows hold between `_DrawEscortMenuInFrame`'s redraws (see `nova_view::flight::escorts`); see `nova_view::flight::cadence` | it follows every frame\* |
 //! | [`GateFollow`](RuleKey::GateFollow) | `gate_follow` | at a hypergate or wormhole exit, the ships of a mission following the player (`ShipSyst` -6) escort it at once, follow it out of the exit gate on their government's `Flags2` or odds when they attack it, and are otherwise lost until a `ShipStart` 1 timer restarts (`_HandlePlayerDockRequest` @0x6716a-0x67487; see `nova_sim::mission::ships`) | the exit leaves them as a jump does, and its setup sets them up again\* |
 //! | [`AlertBlink`](RuleKey::AlertBlink) | `alert_blink` | a Red Alert blinks its icon only while the player's sound is quiet, off or at effects level 1 or less (the original's `Volume` preference ≤ 1); louder, the alert is the sound alone (`_HandlePlayer` @0x68d04-0x68d15; see `nova_sim::red_alert`) | the icon blinks with every alert\* |
 //! | [`CronRandomScale`](RuleKey::CronRandomScale) | `cron_random_scale` | `Rand(101) <= Random`, rolled for every inactive crön before its other checks (`_CronEventHandler` @0x38804-0x38818; see `nova_sim::cron`) | `Random` % (0 never, 100 or more always)§§§§§§ |
@@ -352,7 +353,8 @@
 //! `ship_info_rounding`,
 //! `stale_secondary`,
 //! `secondary_sale`, `landing_distance`, `type_sheet_fallback`,
-//! `eight_bit_sheet`, `uncounted_sheet`, `npc_landing`, `landing_speed`,
+//! `eight_bit_sheet`, `thirty_two_bit_sheet`, `uncounted_sheet`, `npc_landing`,
+//! `landing_speed`,
 //! `gate_pick_range`,
 //! `repeat_mission_failure`,
 //! `start_active_mission`, `start_outside_dialog`, `offer_shift`,
@@ -1123,6 +1125,26 @@ rule_keys! {
     /// (`nova_render::GameImages`; see the `nova_sim::story` module's
     /// "Checked for stellar-fidelity phase 4").
     EightBitSheet => "eight_bit_sheet",
+    /// How an `rlëD` whose header says 32 bits is drawn: by the engine, as
+    /// its bytes fall into the original's 16-bit world. `_BlitPixieRLESwap`
+    /// swaps each 32-bit pixel to little-endian (@0xbe46e-0xbe48e), and
+    /// the draw proc takes the 16-bit routines for every depth but 8
+    /// (`_BlitPixieRLETranslucentDrawProc` @0xbb56d-0xbb579, @0xbb770-0xbb789),
+    /// whose byte copy (`_BlitPixieRLE` @0xbddd0-0xbde97) lays each pixel
+    /// down as two RGB555 pixels: the row is twice the box's width from its
+    /// left edge, and the clipped blit (`_BlitPixieRLEClipped`
+    /// @0xbde9c-0xbe0b3) cuts it to the box when the box touches the
+    /// world's edge. By the other reading, each pixel is one `xRRGGBB`
+    /// true-colour pixel, opaque, at the box's width. Either reading loads
+    /// or fails a sheet, and sizes it, as the original does, since the
+    /// game data decides graphic type 0's fallback and the sizes by it: the
+    /// reading changes only the colours. The Bible calls
+    /// `rlëD`s 16-bit and says nothing of 32, so the other reading is the
+    /// intended alternative, not anything the Bible says. The reading is
+    /// applied where the game's images are decoded
+    /// (`nova_render::GameImages`; see `nova_data::graphics`'s `rled_wide`
+    /// module docs and rendering phase 1).
+    ThirtyTwoBitSheet => "thirty_two_bit_sheet",
     /// What a stellar's sprite slot shows when the graphic it clones has a
     /// `spïn` whose `xTiles` × `yTiles` is 0 or less, the master's frame
     /// count (`_LoadMasterStellarSprite` @0x1ed8c-0x1ed97). By the engine,
@@ -2463,7 +2485,9 @@ rule_keys! {
     /// after an outfitter order (@0x5c5a1, @0x5d328), the radar, nav and
     /// target on a ship purchase (@0x5f0b1; everything under a new
     /// `ïntf`, @0x739bd), the fuel gauge on a recharge (@0x5fe05), and
-    /// everything as a shop closes (`_RefreshSAT`). By
+    /// everything as a shop closes (`_RefreshSAT`). And the escort menu's
+    /// rows hold between `_DrawEscortMenuInFrame`'s redraws (see
+    /// `nova_view::flight::escorts`). By
     /// the other reading, every frame. The target's blink keeps the engine's timing under both,
     /// as it is a feature, not a redraw artefact. The Bible says nothing
     /// of it, so the other reading is the obvious alternative, not
@@ -7294,6 +7318,15 @@ mod tests {
             Some(RuleKey::EightBitSheet)
         );
         assert_eq!(RuleKey::EightBitSheet.default_source(), RuleSource::Engine);
+        assert_eq!(RuleKey::ThirtyTwoBitSheet.key(), "thirty_two_bit_sheet");
+        assert_eq!(
+            RuleKey::from_key("thirty_two_bit_sheet"),
+            Some(RuleKey::ThirtyTwoBitSheet)
+        );
+        assert_eq!(
+            RuleKey::ThirtyTwoBitSheet.default_source(),
+            RuleSource::Engine
+        );
         assert_eq!(RuleKey::UncountedSheet.key(), "uncounted_sheet");
         assert_eq!(
             RuleKey::from_key("uncounted_sheet"),
@@ -7341,6 +7374,7 @@ mod tests {
                 RuleKey::StellarFrameCount,
                 RuleKey::TypeSheetFallback,
                 RuleKey::EightBitSheet,
+                RuleKey::ThirtyTwoBitSheet,
                 RuleKey::UncountedSheet,
                 RuleKey::NpcLanding,
                 RuleKey::HireFee,
@@ -8812,7 +8846,7 @@ mod tests {
                 .source_for(rule),
             RuleSource::Bible
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(309), Some(&rule));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(310), Some(&rule));
     }
 
     #[test]

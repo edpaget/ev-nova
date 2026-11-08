@@ -1,5 +1,8 @@
 //! Images from the game data: `PICT`s, masked `PICT`s, `rlëD` sprite
-//! sheets, the sheets `spïn`s resolve to (a `PICT` pair cut into frames),
+//! sheets (whole, their solid runs, or as the clipped blit draws them at
+//! the world's edge, [`ImageKind::RledClipped`], and their solid runs so,
+//! [`ImageKind::RledClippedSolid`]), the sheets `spïn`s and a `shän`'s
+//! images resolve to (a `PICT` pair cut into frames),
 //! `ppat` pixel patterns and `cicn` colour icons, decoded on request; and,
 //! when it is given one, from the interface file (`Nova-DF.rsrc` or
 //! `Nova.rez`): its `PICT`s, as [`ImageKind::InterfacePict`].
@@ -13,16 +16,23 @@ use std::borrow::Borrow;
 use std::rc::Rc;
 
 use nova_data::graphics::{
-    CICN, EightBitReading, Image, PICT, PPAT, RLED, apply_mask, decode_cicn, decode_pict,
-    decode_ppat, decode_rled_as,
+    CICN, ClipCut, DeepImage, EightBitReading, Image, PICT, PPAT, PixelDepth, RLED, RledReadings,
+    ThirtyTwoBitReading, apply_mask, decode_cicn, decode_pict, decode_pict_deep, decode_ppat,
+    decode_rled_clipped, decode_rled_with,
 };
-use nova_data::{GameData, InterfaceData, PictId, SheetKind, SpinSpriteError};
+use nova_data::{GameData, InterfaceData, PictId, SheetKind, ShipId, ShipImage, SpinSpriteError};
 use nova_view::ImageKind;
 
 use crate::images::{ImageError, ImageSource};
 
 /// The game data as an image source, decoding an 8-bit `rlëD` by
-/// `eight_bit` (the rulebook's `eight_bit_sheet` reading).
+/// `eight_bit` (the rulebook's `eight_bit_sheet` reading) and a 32-bit one
+/// by the reading given to
+/// [`with_thirty_two_bit`](Self::with_thirty_two_bit) (the
+/// `thirty_two_bit_sheet` reading), by default as the original draws it.
+/// Either 32-bit reading draws a sheet the game data resolves
+/// ([`GameData::spin_sheet`]) at the size it resolves, and fails one it
+/// fails: the reading changes only the colours.
 ///
 /// It looks resources up in the store (later files winning) and decodes
 /// them on every call; the renderer keeps what it needs in the atlas. A
@@ -34,18 +44,33 @@ use crate::images::{ImageError, ImageSource};
 #[derive(Clone, Debug)]
 pub struct GameImages<D> {
     data: D,
-    eight_bit: EightBitReading,
+    readings: RledReadings,
     interface: Option<Rc<InterfaceData>>,
 }
 
 impl<D: Borrow<GameData>> GameImages<D> {
-    /// `data`'s images, with 8-bit sheets read as `eight_bit` says, and no
-    /// interface file.
+    /// `data`'s images, with 8-bit sheets read as `eight_bit` says, 32-bit
+    /// sheets as the original draws them, and no interface file.
     pub fn new(data: D, eight_bit: EightBitReading) -> Self {
         Self {
             data,
-            eight_bit,
+            readings: RledReadings {
+                eight_bit,
+                ..RledReadings::default()
+            },
             interface: None,
+        }
+    }
+
+    /// These images, with 32-bit sheets read as `thirty_two_bit` says.
+    #[must_use]
+    pub fn with_thirty_two_bit(self, thirty_two_bit: ThirtyTwoBitReading) -> Self {
+        Self {
+            readings: RledReadings {
+                thirty_two_bit,
+                ..self.readings
+            },
+            ..self
         }
     }
 
@@ -59,10 +84,47 @@ impl<D: Borrow<GameData>> GameImages<D> {
         }
     }
 
-    /// The interface file's `PICT` `id`, decoded.
-    fn interface_picture(&self, id: i16) -> Result<Image, ImageError> {
+    /// The interface file's `PICT` `id`, decoded with its depth.
+    fn interface_picture(&self, id: i16) -> Result<DeepImage, ImageError> {
         let interface = self.interface.as_ref().ok_or(ImageError::Missing)?;
-        Ok(interface.picture(PictId(id)).ok_or(ImageError::Missing)??)
+        Ok(interface
+            .picture_deep(PictId(id))
+            .ok_or(ImageError::Missing)??)
+    }
+
+    /// The bytes of the store's `PICT` `id`.
+    fn pict_bytes(&self, id: i16) -> Result<&[u8], ImageError> {
+        self.data
+            .borrow()
+            .resource(PICT, id)
+            .map(|found| found.resource.data())
+            .ok_or(ImageError::Missing)
+    }
+
+    /// A picture's one frame, with its depth, for the kinds that decode a
+    /// `PICT`: `None` for the others.
+    fn deep_picture(&self, kind: ImageKind, id: i16) -> Option<Result<DeepImage, ImageError>> {
+        let deep =
+            |id| -> Result<DeepImage, ImageError> { Ok(decode_pict_deep(self.pict_bytes(id)?)?) };
+        Some(match kind {
+            ImageKind::Pict => deep(id),
+            ImageKind::InterfacePict => self.interface_picture(id),
+            ImageKind::MaskedPict { mask } => deep(id).and_then(|picture| {
+                let mask = decode_pict(self.pict_bytes(mask)?)?;
+                let masked = apply_mask(picture.image(), &mask)?;
+                Ok(picture
+                    .with_image(masked)
+                    .expect("a mask keeps the picture's size"))
+            }),
+            ImageKind::Rled
+            | ImageKind::RledSolid
+            | ImageKind::RledClipped { .. }
+            | ImageKind::RledClippedSolid { .. }
+            | ImageKind::Pattern
+            | ImageKind::Icon
+            | ImageKind::SpinSheet
+            | ImageKind::ShipSheet { .. } => return None,
+        })
     }
 
     /// The frames `spïn` `id` resolves to ([`GameData::spin_sheet`]): an
@@ -84,10 +146,36 @@ impl<D: Borrow<GameData>> GameImages<D> {
             ) => Err(ImageError::Missing),
         }
     }
+
+    /// The frames `shïp` `ship`'s `image` resolves to
+    /// ([`GameData::ship_image`]): an `rlëD`'s as [`ImageKind::Rled`]
+    /// decodes them, or its `PICT` pair cut. A link that is not there is
+    /// [`ImageError::Missing`], a sheet that does not decode or cut is
+    /// [`ImageError::Decode`].
+    fn ship_frames(&self, ship: i16, image: ShipImage) -> Result<Vec<Image>, ImageError> {
+        match self.data.borrow().ship_image(ShipId(ship), image) {
+            Ok(sheet) if sheet.kind == SheetKind::Rled => {
+                self.frames(ImageKind::Rled, sheet.image_id)
+            }
+            Ok(sheet) => Ok(sheet.sheet.into_frames()),
+            Err(err) => Err(err.graphics().map_or(ImageError::Missing, |source| {
+                ImageError::Decode(source.clone())
+            })),
+        }
+    }
 }
 
+/// A picture (`Pict`, `MaskedPict`, `InterfacePict`) has its depth: the
+/// one it was stored at ([`decode_pict_deep`]), the mask setting only its
+/// alpha. Every other kind (`rlëD`s, `ppat`s, `cicn`s, and `spïn` and
+/// ship sheets)
+/// gives its frames at [`PixelDepth::Direct32`]: none goes through
+/// `_DrawPicHandle`, and no stock site stretches one.
 impl<D: Borrow<GameData>> ImageSource for GameImages<D> {
     fn frames(&self, kind: ImageKind, id: i16) -> Result<Vec<Image>, ImageError> {
+        if let Some(picture) = self.deep_picture(kind, id) {
+            return Ok(vec![picture?.into_image()]);
+        }
         let bytes = |ty, id| {
             self.data
                 .borrow()
@@ -96,31 +184,54 @@ impl<D: Borrow<GameData>> ImageSource for GameImages<D> {
                 .ok_or(ImageError::Missing)
         };
         let rled = |id| -> Result<_, ImageError> {
-            Ok(decode_rled_as(bytes(RLED, id)?, None, self.eight_bit)?)
+            Ok(decode_rled_with(bytes(RLED, id)?, None, self.readings)?)
         };
         Ok(match kind {
-            ImageKind::Pict => vec![decode_pict(bytes(PICT, id)?)?],
-            ImageKind::InterfacePict => vec![self.interface_picture(id)?],
             ImageKind::Rled => rled(id)?.into_frames(),
             ImageKind::RledSolid => rled(id)?.into_solid_frames().ok_or(ImageError::Missing)?,
-            ImageKind::MaskedPict { mask } => {
-                let picture = decode_pict(bytes(PICT, id)?)?;
-                let mask = decode_pict(bytes(PICT, mask)?)?;
-                vec![apply_mask(&picture, &mask)?]
+            ImageKind::RledClipped { top, left } => {
+                let cut = ClipCut { top, left };
+                decode_rled_clipped(bytes(RLED, id)?, None, self.readings, cut)?.into_frames()
+            }
+            ImageKind::RledClippedSolid { top, left } => {
+                let cut = ClipCut { top, left };
+                decode_rled_clipped(bytes(RLED, id)?, None, self.readings, cut)?
+                    .into_solid_frames()
+                    .ok_or(ImageError::Missing)?
             }
             ImageKind::Pattern => vec![decode_ppat(bytes(PPAT, id)?)?],
             ImageKind::Icon => vec![decode_cicn(bytes(CICN, id)?)?],
             ImageKind::SpinSheet => self.spin_frames(id)?,
+            ImageKind::ShipSheet { image } => self.ship_frames(id, image)?,
+            ImageKind::Pict | ImageKind::InterfacePict | ImageKind::MaskedPict { .. } => {
+                unreachable!("a picture is decoded deep")
+            }
         })
+    }
+
+    fn deep_frames(&self, kind: ImageKind, id: i16) -> Result<Vec<DeepImage>, ImageError> {
+        match self.deep_picture(kind, id) {
+            Some(picture) => Ok(vec![picture?]),
+            None => Ok(self
+                .frames(kind, id)?
+                .into_iter()
+                .filter_map(|frame| DeepImage::new(frame, PixelDepth::Direct32))
+                .collect()),
+        }
     }
 }
 
 /// The game data's images as the original draws them: [`GameImages`] with
-/// 8-bit sheets [`EightBitReading::AsDrawn`] and no interface file, so an
-/// interface picture is [`ImageError::Missing`].
+/// 8-bit sheets [`EightBitReading::AsDrawn`], 32-bit sheets
+/// [`ThirtyTwoBitReading::AsDrawn`] and no interface file, so an interface
+/// picture is [`ImageError::Missing`].
 impl ImageSource for GameData {
     fn frames(&self, kind: ImageKind, id: i16) -> Result<Vec<Image>, ImageError> {
         GameImages::new(self, EightBitReading::AsDrawn).frames(kind, id)
+    }
+
+    fn deep_frames(&self, kind: ImageKind, id: i16) -> Result<Vec<DeepImage>, ImageError> {
+        GameImages::new(self, EightBitReading::AsDrawn).deep_frames(kind, id)
     }
 }
 
@@ -131,9 +242,14 @@ mod tests {
     use nova_data::graphics::GraphicsError;
     use std::rc::Rc;
 
+    use nova_data::ShipImage;
+    use nova_data::graphics::PixelDepth;
     use nova_data::graphics::fixture::{
-        BitMap, Cicn, Ctab, DirectBits, PictBuilder, Ppat, RledBuilder, rgb888_pict,
+        BitMap, Cicn, Ctab, DirectBits, IndexedBits, PictBuilder, Ppat, RledBuilder, rgb888_pict,
     };
+    use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
+    use nova_data::records::ship::Ship;
+    use nova_data::records::ship_anim::ShipAnim;
     use nova_data::records::spin::Spin;
     use nova_data::store::fixture::{interface_of, store_of};
 
@@ -428,6 +544,115 @@ mod tests {
         );
     }
 
+    /// Ship 128 of a `shän` of one set of 3 frames per rotation, base
+    /// sprites `PICT` 2000 masked by 2100 in 1x1 frames, and glow `glow`:
+    /// sprites `PICT` 2002 masked by itself, in 2x1 frames.
+    fn ship_store(glow: i16, extra: &[(ResType, i16, Vec<u8>)]) -> GameData {
+        let anim = ShipAnimBuilder::new()
+            .frames_per(3)
+            .base_set_count(1)
+            .base_image_id(2000)
+            .base_mask_id(2100)
+            .base_x_size(1)
+            .base_y_size(1)
+            .glow_image_id(glow)
+            .glow_mask_id(2002)
+            .glow_x_size(2)
+            .glow_y_size(1)
+            .build();
+        let mut resources = vec![
+            (Ship::TYPE, 128, ShipBuilder::new().build()),
+            (ShipAnim::TYPE, 128, anim),
+        ];
+        resources.extend_from_slice(extra);
+        store(&resources)
+    }
+
+    /// A ship image's key kind.
+    fn ship_sheet(image: ShipImage) -> ImageKind {
+        ImageKind::ShipSheet { image }
+    }
+
+    #[test]
+    fn a_ship_sheet_is_the_frames_its_pict_pair_cuts() {
+        let data = ship_store(
+            2002,
+            &[
+                (
+                    PICT,
+                    2000,
+                    rgb888_pict(3, 1, &[[255, 0, 0], [0, 255, 0], [0, 0, 255]]),
+                ),
+                (PICT, 2100, rgb888_pict(3, 1, &[[255; 3]; 3])),
+                (PICT, 2002, rgb888_pict(6, 1, &[[0; 3]; 6])),
+            ],
+        );
+        let frames = data.frames(ship_sheet(ShipImage::Base), 128).unwrap();
+        assert_eq!(frames.len(), 3, "3 frames of 1x1");
+        assert_eq!(frames[0].pixel(0, 0), Some([255, 0, 0, 255]));
+        assert_eq!(frames[2].pixel(0, 0), Some([0, 0, 255, 255]));
+        // The glow is its own pair, of its own size.
+        let glow = data.frames(ship_sheet(ShipImage::Glow), 128).unwrap();
+        assert_eq!(glow.len(), 3);
+        assert_eq!((glow[0].width(), glow[0].height()), (2, 1));
+        // The base read as an `rlëD` is missing.
+        assert_eq!(data.frames(ImageKind::Rled, 2000), Err(ImageError::Missing));
+    }
+
+    #[test]
+    fn a_ship_sheet_of_an_rled_is_its_rled() {
+        let data = ship_store(200, &[(RLED, 200, sheet())]);
+        assert_eq!(
+            data.frames(ship_sheet(ShipImage::Glow), 128),
+            data.frames(ImageKind::Rled, 200)
+        );
+        // Through the rlëD path, so under the images' readings: a 32-bit
+        // sheet in true colour, not as `GameData::ship_image` decodes it.
+        let thirty_two = RledBuilder::new(2, 1)
+            .depth(32)
+            .count_lines()
+            .frame(|f| f.line().pixels32(&[0x0000_7C00, 0x0000_03E0]))
+            .build();
+        let data = ship_store(200, &[(RLED, 200, thirty_two)]);
+        let images = GameImages::new(&data, EightBitReading::AsDrawn)
+            .with_thirty_two_bit(ThirtyTwoBitReading::TrueColour);
+        let glow = images.frames(ship_sheet(ShipImage::Glow), 128).unwrap();
+        assert_eq!(Ok(glow.clone()), images.frames(ImageKind::Rled, 200));
+        assert_ne!(Ok(glow), data.frames(ImageKind::Rled, 200));
+    }
+
+    #[test]
+    fn a_ship_sheet_with_a_missing_link_is_missing_and_a_bad_cut_a_decode_error() {
+        let pair = [(PICT, 2000, rgb888_pict(3, 1, &[[0; 3]; 3]))];
+        let data = ship_store(-1, &pair);
+        for (image, ship, why) in [
+            (ShipImage::Base, 128, "no mask"),
+            (ShipImage::Glow, 128, "no glow"),
+            (ShipImage::Base, 129, "no shïp"),
+        ] {
+            assert_eq!(
+                data.frames(ship_sheet(image), ship),
+                Err(ImageError::Missing),
+                "{why}"
+            );
+        }
+        // 4 frames, not 3.
+        let data = ship_store(
+            -1,
+            &[
+                (PICT, 2000, rgb888_pict(4, 1, &[[0; 3]; 4])),
+                (PICT, 2100, rgb888_pict(4, 1, &[[255; 3]; 4])),
+            ],
+        );
+        assert_eq!(
+            data.frames(ship_sheet(ShipImage::Base), 128),
+            Err(ImageError::Decode(GraphicsError::FrameCountMismatch {
+                frames: 4,
+                expected: 3
+            }))
+        );
+    }
+
     #[test]
     fn a_spin_sheet_of_an_rled_is_its_rled() {
         let data = store(&[(Spin::TYPE, 3000, spin(200, -1)), (RLED, 200, sheet())]);
@@ -440,6 +665,175 @@ mod tests {
             bad.frames(ImageKind::SpinSheet, 3000),
             Err(ImageError::Decode(_))
         ));
+    }
+
+    #[test]
+    fn a_32_bit_sheet_is_drawn_as_the_reading_says() {
+        // One 2x1 frame: a run of the file pixel 00 00 7C 00, then the
+        // pixel 00 00 03 E0.
+        let thirty_two = RledBuilder::new(2, 1)
+            .depth(32)
+            .count_lines()
+            .frame(|f| f.line().run32(1, 0x0000_7C00).pixels32(&[0x0000_03E0]))
+            .build();
+        let data = store(&[(RLED, 200, thirty_two), (Spin::TYPE, 3000, spin(200, -1))]);
+        let rgba = |frames: Vec<Image>| -> Vec<(u32, Vec<u8>)> {
+            frames
+                .into_iter()
+                .map(|frame| (frame.width(), frame.into_pixels()))
+                .collect()
+        };
+        let (red, green, black, clear) =
+            ([255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 0, 255], [0; 4]);
+        // As drawn, each pixel is two RGB555 pixels, little-endian, from
+        // the box's left edge; the image is padded on the left to keep the
+        // box at its centre.
+        let as_drawn = vec![(6, [clear, clear, red, black, green, black].concat())];
+        let as_drawn_solid = vec![(6, [clear, clear, red, black, clear, clear].concat())];
+        // In true colour, each pixel is one, in the box of an image the
+        // drawn one's size.
+        let (true_red, true_green) = ([0, 0x7C, 0, 255], [0, 0x03, 0xE0, 255]);
+        let true_colour = vec![(
+            6,
+            [clear, clear, true_red, true_green, clear, clear].concat(),
+        )];
+        let true_colour_solid = vec![(6, [clear, clear, true_red, clear, clear, clear].concat())];
+        let drawn = GameImages::new(&data, EightBitReading::AsDrawn);
+        let true_colour_images = drawn
+            .clone()
+            .with_thirty_two_bit(ThirtyTwoBitReading::TrueColour);
+        for (images, frames, solid) in [
+            (&drawn, &as_drawn, &as_drawn_solid),
+            (&true_colour_images, &true_colour, &true_colour_solid),
+        ] {
+            assert_eq!(rgba(images.frames(ImageKind::Rled, 200).unwrap()), *frames);
+            assert_eq!(
+                rgba(images.frames(ImageKind::SpinSheet, 3000).unwrap()),
+                *frames
+            );
+            assert_eq!(
+                rgba(images.frames(ImageKind::RledSolid, 200).unwrap()),
+                *solid
+            );
+        }
+        assert_eq!(
+            rgba(data.frames(ImageKind::Rled, 200).unwrap()),
+            as_drawn,
+            "the game data alone draws it as the original does"
+        );
+    }
+
+    /// A clipped key ([`ImageKind::RledClipped`]) gives the sheet's frames
+    /// as the clipped blit draws them, each its box: under the true-colour
+    /// reading, its frames cut to the box.
+    #[test]
+    fn a_clipped_sprite_is_the_sheet_as_the_clipped_blit_draws_it() {
+        let two_colour = RledBuilder::new(4, 1)
+            .count_lines()
+            .frame(|f| f.line().run(4, 0x7C00, 0x001F))
+            .build();
+        let thirty_two = RledBuilder::new(2, 1)
+            .depth(32)
+            .count_lines()
+            .frame(|f| f.line().run32(1, 0x0000_7C00).pixels32(&[0x0000_03E0]))
+            .build();
+        let data = store(&[(RLED, 200, two_colour), (RLED, 201, thirty_two)]);
+        let clipped = |top, left| ImageKind::RledClipped { top, left };
+        let rgba = |frames: Vec<Image>| -> Vec<(u32, Vec<u8>)> {
+            frames
+                .into_iter()
+                .map(|frame| (frame.width(), frame.into_pixels()))
+                .collect()
+        };
+        let (red, blue, black, clear) =
+            ([255, 0, 0, 255], [0, 0, 255, 255], [0, 0, 0, 255], [0; 4]);
+        // The run restarts at the cut: blue (its low half) at pixel 1.
+        assert_eq!(
+            rgba(data.frames(clipped(0, 1), 200).unwrap()),
+            [(4, [clear, blue, red, blue].concat())]
+        );
+        assert_eq!(
+            rgba(data.frames(clipped(0, 0), 201).unwrap()),
+            [(2, [red, black].concat())]
+        );
+        let true_colour = GameImages::new(&data, EightBitReading::AsDrawn)
+            .with_thirty_two_bit(ThirtyTwoBitReading::TrueColour);
+        assert_eq!(
+            rgba(true_colour.frames(clipped(0, 1), 201).unwrap()),
+            [(2, [clear, [0, 0x03, 0xE0, 255]].concat())]
+        );
+        assert_eq!(data.frames(clipped(0, 1), 202), Err(ImageError::Missing));
+    }
+
+    /// A clipped solid key ([`ImageKind::RledClippedSolid`]) gives the
+    /// clipped draw's solid runs alone, and is missing for a sheet with
+    /// none.
+    #[test]
+    fn a_clipped_sprites_solid_runs_are_the_clipped_draws_runs() {
+        let two_colour = RledBuilder::new(4, 1)
+            .count_lines()
+            .frame(|f| f.line().run(4, 0x7C00, 0x001F))
+            .build();
+        let no_runs = RledBuilder::new(2, 1)
+            .count_lines()
+            .frame(|f| f.line().pixels(&[0x7C00, 0x001F]))
+            .build();
+        let data = store(&[(RLED, 200, two_colour), (RLED, 201, no_runs)]);
+        let solid = |top, left| ImageKind::RledClippedSolid { top, left };
+        let rgba = |frames: Vec<Image>| -> Vec<(u32, Vec<u8>)> {
+            frames
+                .into_iter()
+                .map(|frame| (frame.width(), frame.into_pixels()))
+                .collect()
+        };
+        let (red, blue, clear) = ([255, 0, 0, 255], [0, 0, 255, 255], [0; 4]);
+        // The run restarts at the cut, as the clipped draw fills it.
+        assert_eq!(
+            rgba(data.frames(solid(0, 1), 200).unwrap()),
+            [(4, [clear, blue, red, blue].concat())]
+        );
+        assert_eq!(data.frames(solid(0, 1), 201), Err(ImageError::Missing));
+        assert_eq!(data.frames(solid(0, 1), 202), Err(ImageError::Missing));
+    }
+
+    /// The game data resolves a sheet by the original's reading, which
+    /// decides graphic type 0's fallback and the sizes a view places it
+    /// by. Under either reading, the images draw a 32-bit sheet the store
+    /// resolves at the size it resolves, and fail one it fails.
+    #[test]
+    fn either_reading_draws_a_32_bit_sheet_as_the_store_resolves_it() {
+        let wide = RledBuilder::new(1, 1)
+            .depth(32)
+            .count_lines()
+            .frame(|f| f.line().pixels32(&[1, 2]))
+            .build();
+        let uncounted = RledBuilder::new(2, 1)
+            .depth(32)
+            .frame(|f| f.line().pixels32(&[1, 2]))
+            .build();
+        for (why, bytes, resolves) in [
+            ("a row wider than its box", wide, true),
+            ("line starts without their byte counts", uncounted, false),
+        ] {
+            let data = store(&[(RLED, 200, bytes), (Spin::TYPE, 3000, spin(200, -1))]);
+            let resolved = match data.spin_sheet(3000) {
+                Ok(spin) => Ok((spin.sheet.image_width(), spin.sheet.image_height())),
+                Err(SpinSpriteError::Graphics { source, .. }) => Err(ImageError::Decode(source)),
+                Err(other) => panic!("{why}: {other}"),
+            };
+            assert_eq!(resolved.is_ok(), resolves, "{why}");
+            for reading in [
+                ThirtyTwoBitReading::AsDrawn,
+                ThirtyTwoBitReading::TrueColour,
+            ] {
+                let images =
+                    GameImages::new(&data, EightBitReading::AsDrawn).with_thirty_two_bit(reading);
+                let drawn = images
+                    .frames(ImageKind::Rled, 200)
+                    .map(|frames| (frames[0].width(), frames[0].height()));
+                assert_eq!(drawn, resolved, "{why}, {reading:?}");
+            }
+        }
     }
 
     #[test]
@@ -586,5 +980,143 @@ mod tests {
             data.frames(ImageKind::Rled, 200),
             Err(ImageError::Decode(_))
         ));
+    }
+
+    /// A 2x1 16-bit picture: red, then blue.
+    fn picture_16() -> Vec<u8> {
+        PictBuilder::new([0, 0, 1, 2])
+            .direct_bits(&DirectBits::rgb555([0, 0, 1, 2], &[0x7C00, 0x001F]))
+            .end()
+            .build()
+    }
+
+    /// A 3x2 8-bit indexed picture of indices 0 to 5.
+    fn picture_indexed() -> Vec<u8> {
+        let entries = (0..6).map(|i| (i, [i * 0x2000; 3])).collect();
+        let ctab = Ctab {
+            device: false,
+            entries,
+        };
+        PictBuilder::new([0, 0, 2, 3])
+            .packbits_rect(&IndexedBits::new(
+                [0, 0, 2, 3],
+                8,
+                &ctab,
+                &[0, 1, 2, 3, 4, 5],
+            ))
+            .end()
+            .build()
+    }
+
+    fn indexed(indices: &[u8]) -> PixelDepth {
+        PixelDepth::Indexed {
+            indices: indices.to_vec(),
+        }
+    }
+
+    /// The depth and colours of (`kind`, `id`)'s one deep frame, after
+    /// checking its colours are `frames`'s.
+    fn deep_one(source: &impl ImageSource, kind: ImageKind, id: i16) -> PixelDepth {
+        let deep = source.deep_frames(kind, id).expect("decodes");
+        let frames = source.frames(kind, id).expect("decodes");
+        assert_eq!(deep.len(), 1);
+        assert_eq!(deep[0].image(), &frames[0], "the colours are frames'");
+        deep[0].depth().clone()
+    }
+
+    #[test]
+    fn a_pictures_deep_frame_has_the_depth_it_was_stored_at() {
+        let data = store(&[
+            (PICT, 128, picture()),
+            (PICT, 129, picture_16()),
+            (PICT, 130, picture_indexed()),
+        ]);
+        let images = GameImages::new(&data, EightBitReading::AsDrawn);
+        assert_eq!(
+            deep_one(&images, ImageKind::Pict, 128),
+            PixelDepth::Direct32
+        );
+        assert_eq!(
+            deep_one(&images, ImageKind::Pict, 129),
+            PixelDepth::Direct16
+        );
+        assert_eq!(
+            deep_one(&images, ImageKind::Pict, 130),
+            indexed(&[0, 1, 2, 3, 4, 5])
+        );
+        // The game data itself answers as its images do.
+        assert_eq!(deep_one(&data, ImageKind::Pict, 129), PixelDepth::Direct16);
+    }
+
+    #[test]
+    fn a_masked_picture_keeps_its_pictures_depth_with_the_masks_alpha() {
+        let data = store(&[(PICT, 130, picture_indexed()), (PICT, 228, mask())]);
+        let masked = ImageKind::MaskedPict { mask: 228 };
+        assert_eq!(deep_one(&data, masked, 130), indexed(&[0, 1, 2, 3, 4, 5]));
+        let deep = data.deep_frames(masked, 130).expect("decodes");
+        assert_eq!(deep[0].image().pixel(1, 0).map(|p| p[3]), Some(0));
+    }
+
+    #[test]
+    fn an_interface_pictures_deep_frame_has_its_depth() {
+        let data = store(&[]);
+        let interface = Rc::new(interface_of(&[
+            (PICT, 128, interface_picture()),
+            (PICT, 129, picture_16()),
+        ]));
+        let images = GameImages::new(&data, EightBitReading::AsDrawn).with_interface(interface);
+        assert_eq!(
+            deep_one(&images, ImageKind::InterfacePict, 128),
+            indexed(&[1, 0])
+        );
+        assert_eq!(
+            deep_one(&images, ImageKind::InterfacePict, 129),
+            PixelDepth::Direct16
+        );
+    }
+
+    #[test]
+    fn other_kinds_deep_frames_are_their_frames_at_32_bits() {
+        let data = store(&[(RLED, 200, sheet())]);
+        let deep = data.deep_frames(ImageKind::Rled, 200).expect("decodes");
+        let frames = data.frames(ImageKind::Rled, 200).expect("decodes");
+        assert_eq!(deep.len(), 2);
+        for (deep, frame) in deep.iter().zip(&frames) {
+            assert_eq!(deep.depth(), &PixelDepth::Direct32);
+            assert_eq!(deep.image(), frame);
+        }
+    }
+
+    #[test]
+    fn a_deep_frame_fails_as_its_frame_does() {
+        let data = store(&[
+            (PICT, 128, picture()),
+            (PICT, 228, mask()),
+            (PICT, 1, vec![0; 3]),
+            (PICT, 2, picture_16()),
+        ]);
+        let interface = Rc::new(interface_of(&[(PICT, 1, vec![0; 3])]));
+        let images = GameImages::new(&data, EightBitReading::AsDrawn).with_interface(interface);
+        let bare = GameImages::new(&data, EightBitReading::AsDrawn);
+        for (source, kind, id) in [
+            (&images, ImageKind::Pict, 1),
+            (&images, ImageKind::Pict, 3),
+            (&images, ImageKind::MaskedPict { mask: 228 }, 1),
+            (&images, ImageKind::MaskedPict { mask: 1 }, 128),
+            (&images, ImageKind::MaskedPict { mask: 229 }, 128),
+            (&images, ImageKind::MaskedPict { mask: 228 }, 129),
+            (&images, ImageKind::MaskedPict { mask: 2 }, 128),
+            (&images, ImageKind::InterfacePict, 1),
+            (&images, ImageKind::InterfacePict, 2),
+            (&bare, ImageKind::InterfacePict, 1),
+        ] {
+            let frames = source.frames(kind, id).map(|_| ());
+            assert!(frames.is_err(), "{kind:?} {id}");
+            assert_eq!(
+                source.deep_frames(kind, id).map(|_| ()),
+                frames,
+                "{kind:?} {id}"
+            );
+        }
     }
 }

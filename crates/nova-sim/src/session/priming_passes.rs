@@ -88,11 +88,11 @@
 //! lines, and the first step's report carries the fight events and
 //! quotes. No stellar step: that is
 //! rdm:phase/combat-and-flight/phase-10-stellar-step-of-the-frozen-entry-passes,
-//! so a priming pass steps no gate after its ship loop, where a frame's
-//! pass does (`_HandleStellarSprites` @0x444d2,
-//! [`PassCatalogs::priming`](super::game_work::PassCatalogs::priming)),
-//! and raises no stellar pass for the view: the one place that phase
-//! changes.
+//! so a priming pass runs no sprite tick after its ship loop, where each
+//! of a frame's passes does (`_HandleStellarSprites` @0x444d2,
+//! `Session::stellar_sprite_tick`,
+//! [`PassCatalogs::priming`](super::game_work::PassCatalogs::priming)):
+//! no stellar or gate steps in it, the one place that phase changes.
 //!
 //! A player landed at entry, which no way into play leaves since a pilot
 //! opens in space over its stellar, has no ships set up (the take-off sets
@@ -139,7 +139,7 @@ impl Session {
             GateHolds::AsTheyStand,
             &mut *collab.chance,
         );
-        self.prepare_all_sprites();
+        self.prepare_all_sprites(&mut *collab.chance);
         self.stellar_pass(
             PassKind::Ticked,
             GateHolds::AsTheyStand,
@@ -156,7 +156,7 @@ impl Session {
         // @0x4581c.
         self.ship.reset_white();
         // `_PlayGame` @0x45834.
-        self.prepare_all_sprites();
+        self.prepare_all_sprites(&mut *collab.chance);
         self.stellar_pass(
             PassKind::Ticked,
             GateHolds::AsTheyStand,

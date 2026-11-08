@@ -275,13 +275,19 @@ impl PilotCatalog for GameData {
 
     fn landing_site(&self, id: StellarId) -> Option<LandingSite> {
         let stellar = self.get::<Stellar>(id.0)?.ok()?.record;
-        let frame_size = self
-            .stellar_sprite(id)
-            .ok()
-            .map(|sprite| (sprite.sheet.frame_width(), sprite.sheet.frame_height()));
-        let dead_frame_size = match self.stellar_dead_sprite(id) {
-            Ok(Some(sprite)) => Some((sprite.sheet.frame_width(), sprite.sheet.frame_height())),
-            _ => None,
+        let (frame_size, type_sheet_frames) =
+            self.stellar_sprite(id).ok().map_or((None, 0), |sprite| {
+                (
+                    Some((sprite.sheet.frame_width(), sprite.sheet.frame_height())),
+                    saturated(sprite.frame_count()),
+                )
+            });
+        let (dead_frame_size, dead_sheet_frames) = match self.stellar_dead_sprite(id) {
+            Ok(Some(sprite)) => (
+                Some((sprite.sheet.frame_width(), sprite.sheet.frame_height())),
+                saturated(sprite.frame_count()),
+            ),
+            _ => (None, 0),
         };
         let mut special_tech = [0; 8];
         special_tech[..3].copy_from_slice(&stellar.special_tech1_3);
@@ -314,6 +320,8 @@ impl PilotCatalog for GameData {
                 open_frame: stellar.cust_pic_id,
                 type_frames: frame_count(self, stellar.graphic_type),
                 dead_frames: dead_frame_size.map_or(0, |_| frame_count(self, stellar.dead_type)),
+                type_sheet_frames,
+                dead_sheet_frames,
             },
             defense_dude: stellar.defense_dude.filter(|dude| dude.0 >= 128),
             def_count: stellar.def_count,
@@ -502,6 +510,12 @@ impl PilotCatalog for GameData {
 
     fn fallback_counts_frames(&self) -> bool {
         counts_frames(self, 0)
+    }
+
+    fn fallback_frame_count(&self) -> u16 {
+        stellar_spin_id(0)
+            .and_then(|spin_id| self.spin_sheet(spin_id).ok())
+            .map_or(1, |sheet| saturated(sheet.stellar_frame_count()).max(1))
     }
 
     /// Each `Visibility` parsed once and shared
@@ -897,6 +911,11 @@ const LAST_RANK: i16 = 255;
 /// (@0x1ed8c-0x1ed97).
 fn counts_frames(data: &GameData, graphic: i16) -> bool {
     tiles(data, graphic).is_some_and(|tiles| tiles > 0)
+}
+
+/// `count` as a `u16`, saturated at 65535.
+fn saturated(count: usize) -> u16 {
+    u16::try_from(count).unwrap_or(u16::MAX)
 }
 
 /// Graphic type `graphic`'s frame count in `data`, its `spïn`'s `xTiles` ×
@@ -2907,6 +2926,8 @@ mod tests {
                     animation: SiteAnimation {
                         type_frames: 1,
                         dead_frames: 1,
+                        type_sheet_frames: 1,
+                        dead_sheet_frames: 1,
                         ..SiteAnimation::default()
                     },
                     defense_dude: None,
@@ -2935,6 +2956,7 @@ mod tests {
                     fee: 0,
                     animation: SiteAnimation {
                         dead_frames: 1,
+                        dead_sheet_frames: 1,
                         ..SiteAnimation::default()
                     },
                     defense_dude: None,
@@ -3315,20 +3337,27 @@ mod tests {
         assert_eq!(
             animations,
             [
+                // Each sheet one frame: its master count is 1, whatever
+                // its tiles.
                 SiteAnimation {
                     delay: -1,
                     frame0_bias: 4,
                     open_frame: 17,
                     type_frames: 42,
                     dead_frames: 8,
+                    type_sheet_frames: 1,
+                    dead_sheet_frames: 1,
                 },
                 SiteAnimation {
                     type_frames: 6,
+                    type_sheet_frames: 1,
                     ..SiteAnimation::default()
                 },
                 SiteAnimation {
                     type_frames: 0,
                     dead_frames: u16::MAX,
+                    type_sheet_frames: 1,
+                    dead_sheet_frames: 1,
                     ..SiteAnimation::default()
                 },
             ]

@@ -75,8 +75,8 @@ use crate::system::catalog::SystemCatalog;
 
 use super::between_passes::{self, BetweenPasses};
 use super::{
-    FlightView, dying, glow_decay, play_area, point, show_combat, show_frozen_frames,
-    show_gate_frames, stars, window_width,
+    FlightView, dying, glow_decay, play_area, point, show_combat, show_stellars, stars,
+    window_width,
 };
 
 /// The rules the view shows the steps' effects, the stars, the world, the
@@ -305,7 +305,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
             }
             self.release_between_passes(anchor);
         }
-        let mut held = report.steps.last_mut().and_then(BetweenPasses::taken_from);
+        let mut held = report
+            .steps
+            .last_mut()
+            .and_then(|run| BetweenPasses::taken_from(run, self.elapsed));
         let mut rescued = false;
         for run in &report.steps {
             notes.extend(run.comm.iter().cloned());
@@ -401,6 +404,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         // the glows (@0x2c7ed). The shot looks read it from `pass` for
         // `_HandleSmoke` (@0x2e3d6).
         let gain = pass.speed_mult;
+        self.moved_at = gain;
         self.effects.show_step(&breakups, &scene, &self.looks, gain);
         let shown = (&mut self.effects, &mut self.flashes);
         let sheets = (&self.sheet, &self.npc_sheets);
@@ -457,15 +461,15 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// out. Last the sheets of a system the session populated afresh are
     /// read. Flight and the jump's warp both step this way.
     ///
-    /// The comm notes and quotes are said before the gates' frames are
-    /// shown, where the view once showed the frames first: the two touch
-    /// nothing in common, and both are set before the frame is drawn.
+    /// The comm notes and quotes are said after the stellars' looks and
+    /// frames are shown from `drawn` (the hold, when a double-time frame
+    /// is drawn between its passes): the two touch nothing in common, and
+    /// both are set before the frame is drawn.
     pub(super) fn run_steps(&mut self, steps: u32, pod: Option<super::rescue::PodFrame>) {
         let rescued = self.step_frame(steps, self.anchor());
         let drawn = between_passes::drawn(self.between_passes.as_ref(), &self.frame);
         if let Some(scene) = &mut self.scene {
-            show_frozen_frames(scene, drawn);
-            show_gate_frames(scene, drawn);
+            show_stellars(scene, drawn);
         }
         self.relay_messages();
         self.relay_last_line();

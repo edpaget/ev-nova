@@ -315,6 +315,8 @@ fn it_draws_the_stars_the_stellars_the_ship_then_the_hud() {
         let scene = view.scene().expect("a scene");
         scene::draw_stellars(expected, scene, &view.camera(), Some(view.seen_murk()));
         expected.sprite(ImageKey::sprite(2000, 0), PLAYER_AT, Color::WHITE);
+        // The floaters and the particles, none of them up.
+        expected.start_world_tail();
     });
     let bar = view.status_bar.as_ref().expect("a status bar");
     hud::draw(
@@ -488,15 +490,6 @@ fn the_ship_stays_at_the_play_areas_centre_as_the_stellars_go_by() {
     let stars = faked_stars(&view);
     assert_eq!(stars.len(), 20);
     assert!(list.iter().take(stars.len()).eq(stars.iter()), "the stars");
-}
-
-#[test]
-fn the_stellars_animate_with_time() {
-    let mut view = at_rest(catalog());
-    ticked(&mut view, 1);
-    assert_eq!(sprites(&flown(&view))[1].0, ImageKey::sprite(1129, 1));
-    ticked(&mut view, 2);
-    assert_eq!(sprites(&flown(&view))[1].0, ImageKey::sprite(1129, 3));
 }
 
 #[test]

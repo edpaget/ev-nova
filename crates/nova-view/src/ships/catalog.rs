@@ -19,11 +19,11 @@ pub struct ShipStats {
     pub shield: i16,
 }
 
-/// A resolved sprite sheet: its `rlëD` ID and how many frames it has.
+/// A resolved sprite sheet: its image and how many frames it has.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SheetInfo {
-    /// The `rlëD`'s ID.
-    pub image_id: i16,
+    /// Where its frames come from: its `rlëD`, or its `PICT` pair cut.
+    pub image: crate::SheetImage,
     /// How many frames it has; never zero.
     pub frames: NonZeroU16,
 }

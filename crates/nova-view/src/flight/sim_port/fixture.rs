@@ -862,10 +862,8 @@ pub mod record {
             shown: true,
             destroyed: false,
             drawn: DrawnSheet::Type,
-            counted: DrawnSheet::Type,
             frozen: false,
-            counts_none: false,
-            gate_frame: None,
+            frame: 0,
         }
     }
 

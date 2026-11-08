@@ -19,11 +19,11 @@ use nova_render::{
     Gpu, LogicalSize, PixelRect, Renderer, Upscaler, UpscalerProbe, Viewport, WorldResolution,
     resolution_of,
 };
-use nova_view::{Color, DrawList, ImageKey, ViewShape};
+use nova_view::{DrawList, ViewShape};
 
 use super::flight_frame::{
-    LOGICAL, SOFT, Sprites, TOLERANCE, alone, as_world, at, drawn, fitted, flight, hud,
-    hud_over_white, largest_difference, over, world,
+    LOGICAL, Sprites, TOLERANCE, alone, as_world, assert_matches, drawn, fitted, flight, hud,
+    hud_over_white, largest_difference, over, sparse_world, world,
 };
 use super::wgpu_offscreen::gpu_with;
 
@@ -100,24 +100,6 @@ fn enlarged(
         }
     }
     out
-}
-
-/// Asserts `frame` is opaque, `reference` within [`TOLERANCE`] inside
-/// `onto`, and exactly it in the bars.
-#[track_caller]
-fn assert_matches(frame: &[u8], reference: &[u8], target: (u32, u32), onto: PixelRect) {
-    assert_eq!(frame.len(), reference.len());
-    for (at, (got, want)) in frame.chunks(4).zip(reference.chunks(4)).enumerate() {
-        let (x, y) = (at as u32 % target.0, at as u32 / target.0);
-        assert_eq!(got[3], 255, "alpha at ({x}, {y})");
-        let inside =
-            (onto.x..onto.x + onto.w).contains(&x) && (onto.y..onto.y + onto.h).contains(&y);
-        let tolerance = if inside { TOLERANCE } else { 0 };
-        assert!(
-            (0..3).all(|c| got[c].abs_diff(want[c]) <= tolerance),
-            "({x}, {y}) is {got:?}, want {want:?} ±{tolerance}"
-        );
-    }
 }
 
 /// Draws [`flight`] into `viewport` with sharp-bilinear and checks it
@@ -201,14 +183,6 @@ fn at_2x_the_world_is_its_nearest_enlargement_exactly() {
     let (most, at) = largest_difference(&frame, &nearest, 64);
     assert_eq!(most, 0, "differs at {at:?}");
     assert!(frame.chunks(4).all(|pixel| pixel[3] == 255));
-}
-
-/// A sparse world for a widened view: the patterned picture, the soft
-/// sprite and the additive one, far apart.
-fn sparse_world(list: &mut DrawList) {
-    list.picture(ImageKey::picture(1), at(100.0, 100.0))
-        .sprite(ImageKey::sprite(SOFT, 0), at(700.0, 400.0), Color::WHITE)
-        .additive_sprite(ImageKey::sprite(5, 0), at(1300.0, 700.0), Color::WHITE);
 }
 
 #[test]

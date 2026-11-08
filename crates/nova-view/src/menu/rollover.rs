@@ -51,7 +51,6 @@ use std::time::Duration;
 use super::art::RolloverArt;
 use crate::draw::{DrawList, lights_tint};
 use crate::geometry::Point;
-use crate::image::ImageKey;
 use crate::time::{MAC_TICK_NANOS, sixtieths};
 
 /// How far the alpha moves a tick.
@@ -161,11 +160,7 @@ impl Rollover {
             corner.x + art.position.x + art.frame_size.0 / 2.0,
             corner.y + art.position.y + art.frame_size.1 / 2.0,
         );
-        list.or_sprite(
-            ImageKey::sprite(art.sprite, frame),
-            center,
-            lights_tint(self.alpha),
-        );
+        list.or_sprite(art.image.frame(frame), center, lights_tint(self.alpha));
     }
 }
 
@@ -175,6 +170,7 @@ mod tests {
 
     use super::*;
     use crate::draw::{Blend, DrawCommand};
+    use crate::image::ImageKey;
 
     fn ticked(rollover: &mut Rollover, target: Option<usize>) -> (u16, u8) {
         rollover.tick(mac_ticks(1), target);
@@ -325,7 +321,7 @@ mod tests {
 
     fn art() -> RolloverArt {
         RolloverArt {
-            sprite: 8020,
+            image: crate::SheetImage::Rled(8020),
             frame_size: (136.0, 98.0),
             frames: 7,
             position: Point::new(444.0, 465.0),
@@ -352,6 +348,30 @@ mod tests {
                 blend: Blend::Or,
             }]
         );
+    }
+
+    #[test]
+    fn a_pict_pair_rollover_draws_its_spins_cut_frames() {
+        let rollover = Rollover {
+            shown: 2,
+            alpha: 12,
+            frames: 7,
+            since: Duration::ZERO,
+        };
+        let art = RolloverArt {
+            image: crate::SheetImage::Spin(607),
+            ..art()
+        };
+        let mut list = DrawList::new();
+        rollover.draw(&mut list, &art, Point::new(10.0, 20.0));
+        let images: Vec<ImageKey> = list
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Sprite { image, .. } => Some(*image),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(images, [ImageKey::spin_sheet(607, 2)]);
     }
 
     #[test]

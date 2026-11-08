@@ -679,7 +679,7 @@ pub(super) mod tests {
         });
         // Displayed, as a system entry displays every slot
         // (`_PrepareAllSprites` @0x3a75a).
-        session.prepare_all_sprites();
+        session.prepare_all_sprites(&mut crate::chance::NeverFires);
         for _ in 0..3 {
             crate::testkit::work_with(
                 &mut session,

@@ -23,9 +23,15 @@
 //!   rdm:phase/play-feel-4/phase-17-murk-other-sprites). The murk mixes
 //!   it and the fade keeps its alpha, as the original's murk writes the
 //!   sprite's +0xb0/+0xb4 and its fade +0xa8.
+//! - A box is a sprite of the sprite world, drawn through
+//!   `_BlitPixieRLETranslucentDrawProc` (@0xbb3fc-0xbba11): where the
+//!   world's edge cuts its box, an overhanging sheet is cut to the box and
+//!   one with clip quirks draws the clipped blit's frame
+//!   ([`BoxCut`], @0xbb56d-0xbb579, @0xbb770-0xbb789).
 
 use super::catalog::Looks;
 use super::weapons::SHOT_PLACEHOLDER_SIZE;
+use crate::box_cut::BoxCut;
 use crate::draw::crossed_box;
 use crate::system::scene::PLACEHOLDER;
 use crate::{Blend, Color, Colorize, DrawList, Point};
@@ -56,8 +62,9 @@ pub fn draw_boxes(list: &mut DrawList, boxes: &[BoxShown], looks: &Looks) {
             Some(sheet) => {
                 let frame = shown.frame % sheet.frames.get();
                 let image = sheet.image.frame(frame);
-                let tint = fade_tint(shown.fade);
-                list.mixed_sprite(image, shown.at, tint, Blend::Normal, Some(shown.colorize));
+                let cut = BoxCut::of(list.world_clip(), shown.at, sheet.edge());
+                let look = (fade_tint(shown.fade), Blend::Normal, Some(shown.colorize));
+                cut.mixed_sprite(list, image, shown.at, look);
             }
             None => crossed_box(list, shown.at, SHOT_PLACEHOLDER_SIZE, PLACEHOLDER),
         }
@@ -80,7 +87,9 @@ mod tests {
 
     use super::*;
     use crate::ImageKey;
+    use crate::box_cut::{box_of, drawn_cuts};
     use crate::flight::catalog::EffectSheet;
+    use crate::geometry::Bounds;
 
     /// A stock system's murk colour.
     const COLOUR: u16 = 0x1081;
@@ -100,6 +109,8 @@ mod tests {
         EffectSheet {
             frame_width: 0,
             frame_height: 0,
+            image_size: (0, 0),
+            clip_quirks: false,
             image: crate::SheetImage::Rled(600),
             frames: NonZeroU16::new(frames).expect("non-zero"),
         }
@@ -137,6 +148,8 @@ mod tests {
                     let sheet = EffectSheet {
                         frame_width: 0,
                         frame_height: 0,
+                        image_size: (0, 0),
+                        clip_quirks: false,
                         image: crate::SheetImage::Rled(500 + graphic.cast_signed()),
                         frames: NonZeroU16::new(36).expect("non-zero"),
                     };
@@ -219,5 +232,63 @@ mod tests {
             );
             assert_eq!(list, expected);
         }
+    }
+
+    /// What a box of a 10 x 8 sheet `rlëD` 600, edged by `edge`, draws at
+    /// `centre` in a 100-square world.
+    fn cut_at(
+        edge: impl Fn(EffectSheet) -> EffectSheet,
+        centre: Point,
+    ) -> Vec<(ImageKey, Option<Bounds>)> {
+        let sheet = EffectSheet {
+            frame_width: 10,
+            frame_height: 8,
+            image_size: (10, 8),
+            ..sheet(4)
+        };
+        let shown = BoxShown {
+            at: centre,
+            ..shown(0.0, 2, 0)
+        };
+        let world = Bounds::at(at(0.0, 0.0), 100.0, 100.0);
+        let mut list = DrawList::new();
+        list.world_in(world, |list| {
+            draw_boxes(list, &[shown], &looks(Ok(edge(sheet))));
+        });
+        drawn_cuts(&list)
+    }
+
+    #[test]
+    fn an_overhanging_box_straddling_the_worlds_edge_is_cut_to_its_box() {
+        let overhanging = |sheet| EffectSheet {
+            image_size: (14, 12),
+            ..sheet
+        };
+        let right = at(97.0, 50.0);
+        assert_eq!(
+            cut_at(overhanging, right),
+            [(ImageKey::sprite(600, 2), Some(box_of(right, (10.0, 8.0))))]
+        );
+        assert_eq!(
+            cut_at(overhanging, at(50.0, 50.0)),
+            [(ImageKey::sprite(600, 2), None)],
+            "wholly inside, drawn whole"
+        );
+    }
+
+    #[test]
+    fn a_quirky_box_cut_at_the_left_draws_its_clipped_frame() {
+        let quirky = |sheet| EffectSheet {
+            clip_quirks: true,
+            ..sheet
+        };
+        let left = at(3.0, 50.0);
+        assert_eq!(
+            cut_at(quirky, left),
+            [(
+                ImageKey::clipped_sprite(600, 2, (0, 2)),
+                Some(box_of(left, (10.0, 8.0)))
+            )]
+        );
     }
 }

@@ -27,14 +27,18 @@ use nova_sim::combat::ship_frames::Alt;
 
 use crate::{Blend, Color, Colorize, ImageKey, Point};
 
-/// An alt layer as drawn: its frame, its screen place, its tint and its
-/// colorize.
+/// An alt layer as drawn: its frame, its screen place, whether it shows,
+/// its tint and its colorize.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AltLayer {
     /// Its sprite and frame.
     pub image: ImageKey,
     /// Its centre on screen.
     pub at: Point,
+    /// Whether the draw proc draws it at all: an 8-bit sheet in a state
+    /// its depth-8 dispatch draws nothing in does not
+    /// (`eight_bit_blit`), and kept so, it stays undrawn while held.
+    pub shown: bool,
     /// Its tint, the hull's.
     pub tint: Color,
     /// Its colorize, the hull's, if any.
@@ -102,6 +106,7 @@ mod tests {
         AltLayer {
             image: ImageKey::sprite(2400, frame),
             at: Point::new(x, 200.0),
+            shown: true,
             tint: Color::WHITE,
             colorize: None,
             blend: Blend::Normal,

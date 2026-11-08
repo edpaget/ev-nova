@@ -14,7 +14,8 @@ use std::path::Path;
 
 use nova_data::decode_all;
 use nova_data::graphics::{
-    Image, RledInfo, decode_cicn, decode_pict, decode_ppat, decode_rled, rled_words, scan_rled,
+    Image, PixelDepth, RledInfo, decode_cicn, decode_pict, decode_pict_deep, decode_ppat,
+    decode_rled, rled_words, scan_pict, scan_rled,
 };
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
@@ -94,6 +95,37 @@ fn every_stock_pict_decodes_opaque_at_its_frame_size() {
     });
 }
 
+/// A scan gives what the decode does, for every stock picture: its size,
+/// or the same error.
+#[test]
+fn every_stock_pict_scans_as_it_decodes() {
+    check_all("PICT", 671, |data, problems| {
+        let decoded = decode_pict(data).map(|image| (image.width(), image.height()));
+        let scanned = scan_pict(data);
+        if scanned != decoded {
+            problems.push(format!("scanned {scanned:?}, decoded {decoded:?}"));
+        }
+    });
+}
+
+/// Every stock picture is stored at 16 or 32 bits, none indexed, so
+/// QuickDraw shrinks each on 5-bit or 8-bit channels.
+#[test]
+fn every_stock_pict_is_16_or_32_bit() {
+    let (mut sixteen, mut thirty_two) = (0, 0);
+    check_all("PICT", 671, |data, problems| match decode_pict_deep(data) {
+        Err(e) => problems.push(e.to_string()),
+        Ok(deep) => match deep.depth() {
+            PixelDepth::Direct16 => sixteen += 1,
+            PixelDepth::Direct32 => thirty_two += 1,
+            other @ PixelDepth::Indexed { .. } => problems.push(format!("stored as {other:?}")),
+        },
+    });
+    if nova_data().is_some() {
+        assert_eq!((sixteen, thirty_two), (598, 73));
+    }
+}
+
 #[test]
 fn every_stock_rled_decodes_its_frames_at_the_header_size() {
     check_all("rlëD", 282, |data, problems| {
@@ -117,8 +149,22 @@ fn every_stock_rled_decodes_its_frames_at_the_header_size() {
     });
 }
 
+/// No stock sheet draws otherwise at the world's edge than cut to its
+/// box: `_BlitPixieRLEClipped`'s row skip, run restart and even-byte skip
+/// change no stock frame, so a stock stellar's edge draw stays a crop.
+#[test]
+fn no_stock_rled_has_clip_quirks() {
+    check_all("rlëD", 282, |data, problems| {
+        match decode_rled(data, None) {
+            Err(e) => problems.push(e.to_string()),
+            Ok(sheet) if sheet.clip_quirks() => problems.push("has clip quirks".to_owned()),
+            Ok(_) => {}
+        }
+    });
+}
+
 /// A scan reads what the decode gives, for every stock sheet: its frame
-/// size, frame count and whether it has runs, or the same error.
+/// size, frame count, depth and whether it has runs, or the same error.
 #[test]
 fn every_stock_rled_scans_as_it_decodes() {
     check_all("rlëD", 282, |data, problems| {
@@ -127,6 +173,10 @@ fn every_stock_rled_scans_as_it_decodes() {
             frame_height: sheet.frame_height(),
             frames: sheet.frames().len() as u16,
             has_runs: sheet.solid_frames().is_some(),
+            depth: sheet.depth(),
+            image_width: sheet.image_width(),
+            image_height: sheet.image_height(),
+            clip_quirks: sheet.clip_quirks(),
         });
         let scanned = scan_rled(data);
         if scanned != decoded {
@@ -146,20 +196,18 @@ fn every_stock_rleds_words_start_each_frame_and_count_each_lines_bytes() {
             Ok(words) => words,
             Err(e) => return problems.push(e.to_string()),
         };
-        if words.starts.iter().any(Option::is_none) {
-            return problems.push(format!("starts {:?}", words.starts));
-        }
-        for (frame, &start) in words.starts.iter().flatten().enumerate() {
+        for (frame, &start) in words.starts.iter().enumerate() {
             let mut at = start;
             let mut line: Option<(usize, u32)> = None;
             loop {
-                let Some(&word) = words.words.get(at) else {
+                let Some(&[a, b, c, d]) = words.bytes.get(at..at + 4) else {
                     return problems.push(format!("frame {frame} runs out"));
                 };
+                let word = u32::from_le_bytes([a, b, c, d]);
                 let (op, count) = (word >> 24, word & 0x00FF_FFFF);
                 if op <= 1 {
                     if let Some((from, counted)) = line {
-                        let bytes = 4 * (at - from - 1) as u32;
+                        let bytes = (at - from - 4) as u32;
                         if bytes != counted {
                             return problems.push(format!(
                                 "frame {frame}: a line of {bytes} bytes counts {counted}"
@@ -172,9 +220,9 @@ fn every_stock_rleds_words_start_each_frame_and_count_each_lines_bytes() {
                     line = Some((at, count));
                 }
                 at += match op {
-                    1 | 3 => 1,
-                    2 => 1 + count.div_ceil(4) as usize,
-                    4 => 2,
+                    1 | 3 => 4,
+                    2 => 4 + (count as usize).next_multiple_of(4),
+                    4 => 8,
                     _ => return problems.push(format!("frame {frame}: op {op}")),
                 };
             }

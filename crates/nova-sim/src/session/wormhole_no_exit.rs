@@ -108,7 +108,7 @@ impl Session {
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(in crate::session) mod tests {
     use crate::SimMessage;
     use crate::catalog::{SystemId, WeaponRecord};
     use crate::chance::NeverFires;
@@ -203,7 +203,7 @@ mod tests {
 
     /// [`nowhere`] laid over [`armed`], the ship and its traffic each
     /// carrying `weapon`: system 130 has traffic of ship 129.
-    fn fought(weapon: WeaponRecord) -> FakePilotCatalog {
+    pub(in crate::session) fn fought(weapon: WeaponRecord) -> FakePilotCatalog {
         let holes = nowhere();
         FakePilotCatalog {
             sites: holes.sites,
@@ -216,7 +216,7 @@ mod tests {
 
     /// Presses L over the wormhole, runs the dock approach and presses L
     /// again, as [`at_wormhole`] does, then takes the sounds and events.
-    fn press_over(session: &mut Session) {
+    pub(in crate::session) fn press_over(session: &mut Session) {
         assert!(matches!(
             session.land(),
             Ok(LandPress::Outcome(LandOutcome::Requested { .. }))
@@ -244,7 +244,7 @@ mod tests {
         session
     }
 
-    fn refuse(session: &mut Session, catalog: &FakePilotCatalog) {
+    pub(in crate::session) fn refuse(session: &mut Session, catalog: &FakePilotCatalog) {
         assert_eq!(
             session.enter_wormhole(catalog, &mut NeverFires),
             Err(GateRefusal::NoExit)

@@ -15,7 +15,9 @@ use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::weapon::Weapon;
 use nova_data::sound::decode_snd;
-use nova_data::{GameData, LayerError, LayerSprite, SheetScan, StandIn, StandInOf, shot_spin_id};
+use nova_data::{
+    GameData, LayerError, LayerSprite, SheetScan, ShipImage, StandIn, StandInOf, shot_spin_id,
+};
 use nova_rsrc::ResType;
 use nova_sim::TICKS_PER_SECOND;
 use nova_sim::combat::weapon::loaded_falloff;
@@ -49,21 +51,23 @@ impl ShipSprites for GameData {
         let [glow, lights, weapon, alt, shield] =
             self.ship_layer_infos(id).map_or([None; 5], |layers| {
                 [
-                    layers.glow,
-                    layers.lights,
-                    layers.weapon,
-                    layers.alt,
-                    layers.shield,
+                    (ShipImage::Glow, layers.glow),
+                    (ShipImage::Lights, layers.lights),
+                    (ShipImage::Weapon, layers.weapon),
+                    (ShipImage::Alt, layers.alt),
+                    (ShipImage::Shield, layers.shield),
                 ]
-                .map(|layer| layer.and_then(layer_sheet))
+                .map(|(image, layer)| layer.and_then(|layer| layer_sheet(id, image, layer)))
             });
         let anim = self.get::<ShipAnim>(id.0).and_then(Result::ok);
         let field = |read: fn(&ShipAnim) -> i16| anim.map_or(0, |anim| read(anim.record));
         Ok(ShipSheet {
-            image_id: sprite.image_id,
+            image: SheetImage::of_ship(sprite.kind, id.0, ShipImage::Base, sprite.image_id),
             rotations,
             frame_width: sheet.info.frame_width,
             frame_height: sheet.info.frame_height,
+            image_size: (sheet.info.image_width, sheet.info.image_height),
+            clip_quirks: sheet.info.clip_quirks,
             glow,
             lights,
             weapon,
@@ -72,6 +76,7 @@ impl ShipSprites for GameData {
             shield,
             base_transp: field(|anim| anim.base_transp),
             solid: sheet.info.has_runs,
+            eight_bit: sheet.info.depth == 8,
         })
     }
 
@@ -106,21 +111,28 @@ pub(crate) fn view_outline(outline: &nova_data::Outline) -> Outline {
     }
 }
 
-/// A resolved layer's ID, frame count, frame size and whether it holds
-/// solid runs;
-/// `None` for one that failed.
-fn layer_sheet(layer: Result<LayerSprite<'_, SheetScan>, LayerError>) -> Option<LayerSheet> {
+/// Ship `ship`'s resolved layer `image`'s image, frame count, frame size,
+/// image size, clip quirks, whether it holds solid runs and whether it is
+/// 8-bit; `None` for one that failed.
+fn layer_sheet(
+    ship: ShipId,
+    image: ShipImage,
+    layer: Result<LayerSprite<'_, SheetScan>, LayerError>,
+) -> Option<LayerSheet> {
     let layer = layer.ok()?;
     // The scan, like the decoder, rejects a sheet with no frames
     // (`GraphicsError::NoFrames`).
     let frames =
         NonZeroU16::new(layer.sheet.info.frames).expect("a scanned rlëD has at least one frame");
     Some(LayerSheet {
-        image_id: layer.image_id,
+        image: SheetImage::of_ship(layer.kind, ship.0, image, layer.image_id),
         frames,
         frame_width: layer.sheet.info.frame_width,
         frame_height: layer.sheet.info.frame_height,
+        image_size: (layer.sheet.info.image_width, layer.sheet.info.image_height),
+        clip_quirks: layer.sheet.info.clip_quirks,
         solid: layer.sheet.info.has_runs,
+        eight_bit: layer.sheet.info.depth == 8,
     })
 }
 
@@ -258,19 +270,23 @@ impl CombatLooks for GameData {
     }
 
     /// Reads every `shïp`'s base image once for the batch, rather than
-    /// once per ship.
+    /// once per ship, and sizes each `PICT` once
+    /// ([`target_pictures`](crate::target_picture::target_pictures)).
     fn target_cards(&self, ships: &[ShipId]) -> Vec<TargetCard> {
         let bases = crate::target_picture::game_ship_bases(self);
+        let pictures = crate::target_picture::target_pictures(ships, &bases, |id| {
+            crate::ui::PictureSizes::picture_size(self, id)
+        });
         ships
             .iter()
-            .map(|&ship| {
+            .zip(pictures)
+            .map(|(&ship, picture)| {
                 let Some(Ok(entry)) = self.get::<Ship>(ship.0) else {
                     return TargetCard::default();
                 };
                 TargetCard {
                     subtitle: entry.record.subtitle.as_str().to_owned(),
-                    picture: crate::target_picture::game_target_picture_among(self, &bases, ship)
-                        .map(|p| p.picture),
+                    picture: picture.map(|p| p.picture),
                 }
             })
             .collect()
@@ -300,19 +316,23 @@ impl CombatLooks for GameData {
     fn pod_sheet(&self) -> Result<EffectSheet, String> {
         let sheet = self.ship_sheet(nova_sim::ESCAPE_POD_SHIP)?;
         Ok(EffectSheet {
-            image: SheetImage::Rled(sheet.image_id),
+            image: sheet.image,
             frames: sheet.rotations,
             frame_width: sheet.frame_width,
             frame_height: sheet.frame_height,
+            image_size: sheet.image_size,
+            clip_quirks: sheet.clip_quirks,
         })
     }
 
     fn star_sheet(&self) -> Result<StarSheet, String> {
         let spin = self.spin_sheet(STAR_SPIN).map_err(|err| err.to_string())?;
-        // The decoder refuses a sheet without frames.
-        let count = u16::try_from(spin.frame_count()).unwrap_or(u16::MAX);
+        // The decoders refuse a sheet without frames; the master counts
+        // its tiles when fewer (`_LoadSprites` @0x210a4-0x210d2,
+        // @0x21218-0x21225).
+        let count = u16::try_from(spin.stellar_frame_count()).unwrap_or(u16::MAX);
         Ok(StarSheet {
-            image_id: spin.image_id,
+            image: SheetImage::of(spin.kind, spin.spin_id, spin.image_id),
             frames: NonZeroU16::new(count).unwrap_or(NonZeroU16::MIN),
             size: (spin.sheet.frame_width(), spin.sheet.frame_height()),
         })
@@ -356,6 +376,8 @@ fn effect_sheet(data: &GameData, id: i16) -> Result<EffectSheet, String> {
         frames,
         frame_width: spin.sheet.frame_width(),
         frame_height: spin.sheet.frame_height(),
+        image_size: (spin.sheet.image_width(), spin.sheet.image_height()),
+        clip_quirks: spin.sheet.clip_quirks(),
     })
 }
 
@@ -511,11 +533,14 @@ mod tests {
     /// A layer of `frames` 3 x 2 frames, as [`sheet`] builds them.
     fn layer(image_id: i16, frames: u16) -> LayerSheet {
         LayerSheet {
-            image_id,
+            image: crate::SheetImage::Rled(image_id),
             frames: NonZeroU16::new(frames).expect("non-zero"),
             frame_width: 3,
             frame_height: 2,
+            image_size: (3, 2),
+            clip_quirks: false,
             solid: false,
+            eight_bit: false,
         }
     }
 
@@ -543,10 +568,12 @@ mod tests {
         assert_eq!(
             data.ship_sheet(ShipId(128)),
             Ok(ShipSheet {
-                image_id: 1000,
+                image: crate::SheetImage::Rled(1000),
                 rotations: NonZeroU16::new(8).expect("non-zero"),
                 frame_width: 3,
                 frame_height: 2,
+                image_size: (3, 2),
+                clip_quirks: false,
                 glow: None,
                 lights: None,
                 weapon: None,
@@ -555,6 +582,7 @@ mod tests {
                 shield: None,
                 base_transp: 0,
                 solid: false,
+                eight_bit: false,
             })
         );
     }
@@ -619,6 +647,109 @@ mod tests {
         assert!(!plain.ship_sheet(ShipId(128)).expect("a sheet").solid);
     }
 
+    /// An `rlëD` of `frames` 3 x 2 frames at depth 8.
+    fn eight_bit_sheet(frames: u16) -> Vec<u8> {
+        (0..frames)
+            .fold(RledBuilder::new(3, 2).depth(8), |b, _| {
+                b.frame(|f| f.line().pixels8(&[0x7C, 0x00]).line())
+            })
+            .build()
+    }
+
+    #[test]
+    fn a_ships_sheet_marks_the_hull_and_layers_whose_sheets_are_8_bit() {
+        let data = store(&[
+            (Ship::TYPE, 128, ship()),
+            (ShipAnim::TYPE, 128, layered(1000, 1, 8, 1100, 1200)),
+            (RLED, 1000, eight_bit_sheet(8)),
+            (RLED, 1100, eight_bit_sheet(8)),
+            (RLED, 1200, sheet(8)),
+        ]);
+        let found = data.ship_sheet(ShipId(128)).expect("a sheet");
+        assert!(found.eight_bit, "the hull");
+        assert_eq!(found.glow.map(|layer| layer.eight_bit), Some(true));
+        assert_eq!(found.lights.map(|layer| layer.eight_bit), Some(false));
+        let plain = store(&[
+            (Ship::TYPE, 128, ship()),
+            (ShipAnim::TYPE, 128, anim(1000, 1, 8)),
+            (RLED, 1000, sheet(8)),
+        ]);
+        assert!(!plain.ship_sheet(ShipId(128)).expect("a sheet").eight_bit);
+    }
+
+    /// An `rlëD` of `frames` 3 x 2 frames at 32 bits, each row of three
+    /// words, so its image draws past its box.
+    fn wide_sheet(frames: u16) -> Vec<u8> {
+        (0..frames)
+            .fold(RledBuilder::new(3, 2).depth(32).count_lines(), |b, _| {
+                b.frame(|f| {
+                    f.line()
+                        .pixels32(&[0x7C00; 3])
+                        .line()
+                        .pixels32(&[0x7C00; 3])
+                })
+            })
+            .build()
+    }
+
+    /// An `rlëD` of `frames` 3 x 2 frames whose first row is a run whose
+    /// word's halves differ: a clip quirk.
+    fn quirky_sheet(frames: u16) -> Vec<u8> {
+        (0..frames)
+            .fold(RledBuilder::new(3, 2).count_lines(), |b, _| {
+                b.frame(|f| {
+                    f.line()
+                        .run(2, 0x7C00, 0x001F)
+                        .pixels(&[0x7C00])
+                        .line()
+                        .pixels(&[0x7C00; 3])
+                })
+            })
+            .build()
+    }
+
+    /// The image size and clip quirks `bytes` decode to.
+    fn decoded_edge(bytes: &[u8]) -> ((u32, u32), bool) {
+        let sheet = nova_data::graphics::decode_rled(bytes, None).expect("decodes");
+        (
+            (sheet.image_width(), sheet.image_height()),
+            sheet.clip_quirks(),
+        )
+    }
+
+    #[test]
+    fn a_ships_hull_and_layers_have_their_decoded_image_size_and_clip_quirks() {
+        let (wide, quirky) = (wide_sheet(8), quirky_sheet(8));
+        let (wide_edge, quirky_edge) = (decoded_edge(&wide), decoded_edge(&quirky));
+        assert_ne!(wide_edge.0, (3, 2), "the wide sheet overhangs");
+        assert!(quirky_edge.1, "the quirky sheet has quirks");
+        let data = store(&[
+            (Ship::TYPE, 128, ship()),
+            (ShipAnim::TYPE, 128, layered(1000, 1, 8, 1100, 1200)),
+            (RLED, 1000, wide.clone()),
+            (RLED, 1100, quirky.clone()),
+            (RLED, 1200, sheet(8)),
+            (Ship::TYPE, 129, ship()),
+            (ShipAnim::TYPE, 129, layered(1001, 1, 8, 1000, 0)),
+            (RLED, 1001, quirky),
+        ]);
+        let found = data.ship_sheet(ShipId(128)).expect("a sheet");
+        let edge = |size, quirks| (size, quirks);
+        assert_eq!(edge(found.image_size, found.clip_quirks), wide_edge, "hull");
+        let glow = found.glow.expect("a glow");
+        assert_eq!(edge(glow.image_size, glow.clip_quirks), quirky_edge, "glow");
+        let lights = found.lights.expect("lights");
+        assert_eq!(edge(lights.image_size, lights.clip_quirks), ((3, 2), false));
+        let other = data.ship_sheet(ShipId(129)).expect("a sheet");
+        assert_eq!(
+            edge(other.image_size, other.clip_quirks),
+            quirky_edge,
+            "hull"
+        );
+        let glow = other.glow.expect("a glow");
+        assert_eq!(edge(glow.image_size, glow.clip_quirks), wide_edge, "glow");
+    }
+
     #[test]
     fn a_ships_sheet_carries_its_alt_and_shield_layers_and_translucency() {
         // The Thunderforge's: `Flags` 0x58, alt 1330 of 6 sets; and a
@@ -651,6 +782,128 @@ mod tests {
     }
 
     #[test]
+    fn a_ships_pict_pair_hull_and_glow_are_keyed_by_the_ship_and_image() {
+        use nova_data::graphics::fixture::rgb888_pict;
+        // Two frames of 3 x 2 each, masked by their own white.
+        let pict = || rgb888_pict(6, 2, &[[0; 3]; 12]);
+        let anim = ShipAnimBuilder::new()
+            .base_image_id(2000)
+            .base_mask_id(2000)
+            .base_x_size(3)
+            .base_y_size(2)
+            .glow_image_id(2002)
+            .glow_mask_id(2002)
+            .glow_x_size(3)
+            .glow_y_size(2)
+            .base_set_count(1)
+            .frames_per(2)
+            .build();
+        let data = store(&[
+            (Ship::TYPE, 128, ship()),
+            (ShipAnim::TYPE, 128, anim),
+            (PICT, 2000, pict()),
+            (PICT, 2002, pict()),
+        ]);
+        let found = data.ship_sheet(ShipId(128)).expect("a sheet");
+        let pair = |image| SheetImage::Ship { ship: 128, image };
+        assert_eq!(found.image, pair(ShipImage::Base));
+        assert_eq!(found.rotations.get(), 2);
+        assert_eq!((found.size(), found.image_size), ((3, 2), (3, 2)));
+        assert!(!found.solid && !found.eight_bit && !found.clip_quirks);
+        assert_eq!(
+            found.glow,
+            Some(LayerSheet {
+                image: pair(ShipImage::Glow),
+                frames: NonZeroU16::new(2).expect("non-zero"),
+                frame_width: 3,
+                frame_height: 2,
+                image_size: (3, 2),
+                clip_quirks: false,
+                solid: false,
+                eight_bit: false,
+            })
+        );
+    }
+
+    #[test]
+    fn each_pict_pair_layer_is_keyed_by_its_own_image_with_its_own_cut() {
+        use nova_data::graphics::fixture::rgb888_pict;
+        // Each layer a pair of its own frame size, and alt and shield of
+        // their own frame count, so no two slots could swap unseen.
+        /// A layer: its image, `PICT`, frame size, sheet size and frames.
+        type Slot = (ShipImage, i16, (u8, u8), (u8, u8), u16);
+        let slots: [Slot; 5] = [
+            (ShipImage::Glow, 2002, (3, 1), (6, 2), 4),
+            (ShipImage::Lights, 2003, (1, 1), (2, 2), 4),
+            (ShipImage::Weapon, 2004, (2, 2), (4, 4), 4),
+            (ShipImage::Alt, 2001, (1, 2), (2, 2), 2),
+            (ShipImage::Shield, 2005, (1, 3), (3, 3), 3),
+        ];
+        let anim = ShipAnimBuilder::new()
+            .base_image_id(2000)
+            .base_mask_id(2000)
+            .base_x_size(2)
+            .base_y_size(1)
+            .base_set_count(2)
+            .frames_per(2)
+            .glow_image_id(2002)
+            .glow_mask_id(2002)
+            .glow_x_size(3)
+            .glow_y_size(1)
+            .light_image_id(2003)
+            .light_mask_id(2003)
+            .light_x_size(1)
+            .light_y_size(1)
+            .weap_image_id(2004)
+            .weap_mask_id(2004)
+            .weap_x_size(2)
+            .weap_y_size(2)
+            .alt_image_id(2001)
+            .alt_mask_id(2001)
+            .alt_x_size(1)
+            .alt_y_size(2)
+            .alt_set_count(1)
+            .shield_image_id(2005)
+            .shield_mask_id(2005)
+            .shield_x_size(1)
+            .shield_y_size(3)
+            .build();
+        let mut resources = vec![
+            (Ship::TYPE, 128, ship()),
+            (ShipAnim::TYPE, 128, anim),
+            (PICT, 2000, rgb888_pict(4, 2, &[[0; 3]; 8])),
+        ];
+        for (_, id, _, (w, h), _) in slots {
+            let pixels = vec![[0; 3]; usize::from(w) * usize::from(h)];
+            resources.push((PICT, id, rgb888_pict(w.into(), h.into(), &pixels)));
+        }
+        let found = store(&resources).ship_sheet(ShipId(128)).expect("a sheet");
+        let layers = [
+            found.glow,
+            found.lights,
+            found.weapon,
+            found.alt,
+            found.shield,
+        ];
+        for (layer, (image, _, (w, h), size, frames)) in layers.into_iter().zip(slots) {
+            assert_eq!(
+                layer,
+                Some(LayerSheet {
+                    image: SheetImage::Ship { ship: 128, image },
+                    frames: NonZeroU16::new(frames).expect("non-zero"),
+                    frame_width: w.into(),
+                    frame_height: h.into(),
+                    image_size: (w.into(), h.into()),
+                    clip_quirks: false,
+                    solid: false,
+                    eight_bit: false,
+                }),
+                "{image:?}, sheet {size:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_ships_sheet_carries_its_glow_and_lights_layers() {
         // The glow has as many frames as the base; the lights one set of
         // rotations under the two-set base.
@@ -662,7 +915,7 @@ mod tests {
             (RLED, 1200, sheet(8)),
         ]);
         let found = data.ship_sheet(ShipId(128)).expect("a sheet");
-        assert_eq!(found.image_id, 1000);
+        assert_eq!(found.image, SheetImage::Rled(1000));
         assert_eq!(found.glow, Some(layer(1100, 16)));
         assert_eq!(found.lights, Some(layer(1200, 8)));
     }
@@ -755,7 +1008,7 @@ mod tests {
         );
         assert_eq!(
             data.ship_sheet(ShipId(129)),
-            Err("shïp 129: no rlëD 1001 for its base image".to_owned())
+            Err("shïp 129: no rlëD or PICT 1001 for its base image".to_owned())
         );
         assert_eq!(data.ship_sheet(ShipId(140)), Err("no shïp 140".to_owned()));
     }
@@ -995,6 +1248,8 @@ mod tests {
             frames: NonZeroU16::new(frames).expect("non-zero"),
             frame_width: 3,
             frame_height: 2,
+            image_size: (3, 2),
+            clip_quirks: false,
         }
     }
 
@@ -1241,8 +1496,41 @@ mod tests {
                 frames: NonZeroU16::new(8).expect("non-zero"),
                 frame_width: 3,
                 frame_height: 2,
+                image_size: (3, 2),
+                clip_quirks: false,
             })
         );
+    }
+
+    #[test]
+    fn the_escape_pods_sheet_has_its_ships_image_size_and_clip_quirks() {
+        for bytes in [wide_sheet(8), quirky_sheet(8)] {
+            let edge = decoded_edge(&bytes);
+            let data = store(&[
+                (Ship::TYPE, nova_sim::ESCAPE_POD_SHIP.0, ship()),
+                (
+                    ShipAnim::TYPE,
+                    nova_sim::ESCAPE_POD_SHIP.0,
+                    anim(1000, 1, 8),
+                ),
+                (RLED, 1000, bytes),
+            ]);
+            let pod = data.pod_sheet().expect("a sheet");
+            assert_eq!((pod.image_size, pod.clip_quirks), edge);
+        }
+    }
+
+    #[test]
+    fn an_effects_sheet_has_its_decoded_image_size_and_clip_quirks() {
+        let (wide, quirky) = (wide_sheet(8), quirky_sheet(8));
+        let (wide_edge, quirky_edge) = (decoded_edge(&wide), decoded_edge(&quirky));
+        assert_ne!(wide_edge.0, (3, 2), "the wide sheet overhangs");
+        assert!(quirky_edge.1, "the quirky sheet has quirks");
+        for (bytes, edge) in [(wide, wide_edge), (quirky, quirky_edge)] {
+            let data = named_store(&[(Spin::TYPE, 650, None, spin(651)), (RLED, 651, None, bytes)]);
+            let sheet = data.cursor_sheet().expect("a sheet");
+            assert_eq!((sheet.image_size, sheet.clip_quirks), edge);
+        }
     }
 
     #[test]
@@ -1267,12 +1555,62 @@ mod tests {
         assert_eq!(
             data.star_sheet(),
             Ok(StarSheet {
-                image_id: 701,
+                image: crate::SheetImage::Rled(701),
                 frames: NonZeroU16::new(16).expect("non-zero"),
                 size: (3, 2),
             })
         );
         assert_eq!(named_store(&[]).star_sheet(), Err("no spïn 700".to_owned()));
+    }
+
+    #[test]
+    fn the_stars_sheet_counts_its_spins_tiles_when_fewer_than_its_rleds_frames() {
+        // 2 x 2 tiles over a 16-frame `rlëD` (`_LoadSprites` @0x210a4-0x210d2).
+        let mut two_by_two = spin(701);
+        put_i16(&mut two_by_two, 0x08, 2);
+        put_i16(&mut two_by_two, 0x0A, 2);
+        let data = named_store(&[
+            (Spin::TYPE, 700, None, two_by_two),
+            (RLED, 701, None, sheet(16)),
+        ]);
+        assert_eq!(data.star_sheet().map(|sheet| sheet.frames.get()), Ok(4));
+    }
+
+    #[test]
+    fn the_stars_sheet_from_a_pict_pair_is_keyed_by_spin_700() {
+        use nova_data::graphics::fixture::rgb888_pict;
+
+        // `spïn` 700 has no `rlëD`: sprites `PICT` 2700 and mask 2800, two
+        // 4 x 4 frames cut from the 8 x 4 picture (@0x21126-0x21225).
+        let mut pict_pair = vec![0; Spin::SIZE.expect("fixed")];
+        for (at, value) in [
+            (0x00, 2700),
+            (0x02, 2800),
+            (0x04, 4),
+            (0x06, 4),
+            (0x08, 2),
+            (0x0A, 1),
+        ] {
+            put_i16(&mut pict_pair, at, value);
+        }
+        let data = named_store(&[
+            (Spin::TYPE, 700, None, pict_pair),
+            (
+                PICT,
+                2700,
+                None,
+                rgb888_pict(8, 4, &[[0x80, 0x40, 0x20]; 32]),
+            ),
+            (PICT, 2800, None, rgb888_pict(8, 4, &[[0xFF; 3]; 32])),
+        ]);
+        assert_eq!(
+            data.star_sheet(),
+            Ok(StarSheet {
+                image: crate::SheetImage::Spin(700),
+                frames: NonZeroU16::new(2).expect("non-zero"),
+                size: (4, 4),
+            })
+        );
     }
 
     #[test]
@@ -1384,6 +1722,8 @@ mod tests {
                 frames: NonZeroU16::new(2).expect("non-zero"),
                 frame_width: 4,
                 frame_height: 4,
+                image_size: (4, 4),
+                clip_quirks: false,
             })
         );
     }

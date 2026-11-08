@@ -12,7 +12,7 @@ use nova_data::records::system::System;
 use nova_data::{GameData, Record, StandIn, StandInOf, StellarSprite, StoreEntry, stellar_spin_id};
 
 use super::catalog::{
-    AnimationData, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemContents,
+    StellarAnimation, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemContents,
     SystemId,
 };
 use crate::color::Color;
@@ -59,7 +59,7 @@ fn type_zero_sprite(data: &GameData) -> Result<StellarSheet, String> {
     data.spin_sheet(spin)
         .map(|found| {
             let image = SheetImage::of(found.kind, found.spin_id, found.image_id);
-            sheet(image, &found.sheet)
+            sheet(image, &found.sheet, found.stellar_frame_count())
         })
         .map_err(|err| err.to_string())
 }
@@ -99,7 +99,7 @@ fn contents(data: &GameData, id: StellarId, stellar: &StoreEntry<'_, Stellar>) -
             .map(|sprite| sprite.as_ref().map(stellar_sheet))
             .map_err(|err| err.to_string())
             .transpose(),
-        animation: AnimationData {
+        animation: StellarAnimation {
             delay: record.anim_delay,
             frame0_bias: record.frame0_bias,
             flags2: record.flags2.bits(),
@@ -121,21 +121,25 @@ fn stand_in(stand_in: &StandIn) -> StellarStandIn {
 /// A resolved stellar sprite's sheet.
 fn stellar_sheet(sprite: &StellarSprite<'_>) -> StellarSheet {
     let image = SheetImage::of(sprite.kind, sprite.spin_id, sprite.image_id);
-    sheet(image, &sprite.sheet)
+    sheet(image, &sprite.sheet, sprite.frame_count())
 }
 
-/// The sheet `image`, its frame count and frame size, decoded as `sheet`.
-fn sheet(image: SheetImage, sheet: &SpriteSheet) -> StellarSheet {
+/// The sheet `image`, decoded as `sheet`, animating over `frames` of it
+/// (the store's `master_frame_count`), with its frame size.
+fn sheet(image: SheetImage, sheet: &SpriteSheet, frames: usize) -> StellarSheet {
     // Neither decoder makes a sheet with no frames
     // (`GraphicsError::NoFrames`). An `rlëD` header counts its frames in a
     // u16, but a `PICT` pair cut into small frames can hold more: the
     // count saturates.
-    let count = u16::try_from(sheet.frames().len()).unwrap_or(u16::MAX);
+    let count = u16::try_from(frames).unwrap_or(u16::MAX);
     StellarSheet {
         image,
         frames: NonZeroU16::new(count).unwrap_or(NonZeroU16::MIN),
         frame_width: sheet.frame_width(),
         frame_height: sheet.frame_height(),
+        image_size: (sheet.image_width(), sheet.image_height()),
+        eight_bit: sheet.depth() == 8,
+        clip_quirks: sheet.clip_quirks(),
     }
 }
 
@@ -156,7 +160,7 @@ mod tests {
     use nova_rsrc::fixture::ForkBuilder;
 
     use super::*;
-    use crate::system::catalog::{AnimationData, StellarContents, StellarId, StellarSheet};
+    use crate::system::catalog::{StellarAnimation, StellarContents, StellarId, StellarSheet};
 
     /// A resource: type, ID, name and bytes.
     type Res = (ResType, i16, Option<&'static str>, Vec<u8>);
@@ -223,6 +227,39 @@ mod tests {
         bytes
     }
 
+    /// [`spin`] with `y_tiles` down as well.
+    fn spin_tiles(image: i16, x_tiles: i16, y_tiles: i16) -> Vec<u8> {
+        let mut bytes = spin(image, x_tiles);
+        put_i16s(&mut bytes, 0x0A, &[y_tiles]);
+        bytes
+    }
+
+    #[test]
+    fn a_spin_counting_no_frames_reads_its_sheet_with_no_problem() {
+        // `_HandleStellarSystemVisibility` only writes crash-log lines for
+        // a slot with no frame or one not locked (@0x332d5-0x3330b): no
+        // alert, so no problem line.
+        for (x, y) in [(0, 1), (2, 0), (-1, 2)] {
+            let mut resources = sol();
+            let earth_spin = resources
+                .iter_mut()
+                .find(|(ty, id, ..)| *ty == Spin::TYPE && *id == 1000)
+                .expect("Earth's spïn");
+            earth_spin.3 = spin_tiles(1000, x, y);
+            let data = store(&resources);
+            let contents = data.system(SystemId(130));
+            assert_eq!(contents.problems, Vec::<String>::new(), "{x} x {y}");
+            let earth = contents
+                .stellars
+                .iter()
+                .find(|stellar| stellar.id == StellarId(128))
+                .expect("Earth");
+            assert!(earth.sprite.is_ok(), "{x} x {y}: {:?}", earth.sprite);
+            let scene = crate::system::SystemScene::load(&data, SystemId(130));
+            assert!(scene.problems().is_empty(), "{x} x {y}");
+        }
+    }
+
     /// An `rlëD` of `frames` frames, each `size` x `size`.
     fn sheet(frames: u16, size: u16) -> Vec<u8> {
         (0..frames)
@@ -240,6 +277,9 @@ mod tests {
             frames: NonZeroU16::new(frames).expect("non-zero"),
             frame_width: size,
             frame_height: size,
+            image_size: (size, size),
+            eight_bit: false,
+            clip_quirks: false,
         }
     }
 
@@ -271,7 +311,7 @@ mod tests {
             y: 0,
             sprite: Ok(sheet_of(1000, 1, 8)),
             dead_sprite: None,
-            animation: AnimationData::default(),
+            animation: StellarAnimation::default(),
             stand_in: None,
         }
     }
@@ -358,7 +398,7 @@ mod tests {
                         y: -600,
                         sprite: Ok(sheet_of(1001, 4, 6)),
                         dead_sprite: None,
-                        animation: AnimationData {
+                        animation: StellarAnimation {
                             delay: 2,
                             frame0_bias: -1,
                             flags2: 0x2000,
@@ -470,8 +510,8 @@ mod tests {
             resources.push((Stellar::TYPE, id, None, animated(0, 0, 0, flags2, 3, 2)));
         }
         let contents = store(&resources).system(SystemId(131));
-        let flags: Vec<AnimationData> = contents.stellars.iter().map(|s| s.animation).collect();
-        let data = |flags2| AnimationData {
+        let flags: Vec<StellarAnimation> = contents.stellars.iter().map(|s| s.animation).collect();
+        let data = |flags2| StellarAnimation {
             delay: 3,
             frame0_bias: 2,
             flags2,
@@ -535,6 +575,59 @@ mod tests {
         assert_eq!(contents.stellars[0].name, "spöb 140");
     }
 
+    /// Sol with the Wormhole's `spïn` 1001 tiled 2 x 1 over its 4-frame
+    /// `rlëD`, and graphic type 0's `spïn` 1000 tiled 2 x 1 over a 4-frame
+    /// `rlëD` too.
+    fn two_tiles_over_four_frames() -> Vec<Res> {
+        let mut resources = sol();
+        for (ty, id, _, data) in &mut resources {
+            match (*ty, *id) {
+                (t, 1000 | 1001) if t == Spin::TYPE => *data = spin_tiles(*id, 2, 1),
+                (t, 1000) if t == RLED => *data = sheet(4, 8),
+                _ => {}
+            }
+        }
+        resources
+    }
+
+    #[test]
+    fn a_stellar_with_two_tiles_over_four_frames_animates_over_frames_0_and_1() {
+        let data = store(&two_tiles_over_four_frames());
+        let contents = data.system(SystemId(130));
+        let wormhole = contents
+            .stellars
+            .iter()
+            .find(|stellar| stellar.id == StellarId(129))
+            .expect("the Wormhole");
+        assert_eq!(wormhole.sprite.as_ref().map(|s| s.frames.get()), Ok(2));
+        let mut scene = crate::system::SystemScene::load(&data, SystemId(130));
+        let mut shown = std::collections::BTreeSet::new();
+        for _ in 0..40 {
+            scene.step(1, &mut nova_sim::NeverFires);
+            let stellar = scene
+                .stellars()
+                .iter()
+                .find(|stellar| stellar.id == StellarId(129))
+                .expect("the Wormhole");
+            shown.insert(stellar.frames.shown());
+        }
+        assert_eq!(shown, [0, 1].into());
+    }
+
+    #[test]
+    fn graphic_type_0s_sheet_counts_the_frames_the_store_gives_it() {
+        let data = store(&two_tiles_over_four_frames());
+        let expected = data
+            .spin_sheet(1000)
+            .expect("resolves")
+            .stellar_frame_count();
+        let sprite = data
+            .system(SystemId(130))
+            .type_zero_sprite
+            .expect("a sheet");
+        assert_eq!(usize::from(sprite.frames.get()), expected);
+    }
+
     #[test]
     fn graphic_type_0s_sheet_comes_with_the_system_or_why_not() {
         let mut resources = sol();
@@ -556,5 +649,97 @@ mod tests {
             store(&resources).system(SystemId(130)).type_zero_sprite,
             Err("spïn 1000: no rlëD or PICT 1000 for its sprites".to_owned())
         );
+    }
+
+    /// A sheet's image size is the decoded sheet's, apart from its frame
+    /// box: the store decides how far a 32-bit `rlëD` draws past its box
+    /// (rendering phase 1), and the catalog passes that on.
+    #[test]
+    fn a_sheet_s_image_size_is_the_decoded_sheet_s_apart_from_its_box() {
+        let wide = RledBuilder::new(2, 2)
+            .depth(32)
+            .count_lines()
+            .frame(|f| {
+                f.line()
+                    .pixels32(&[0x7C00, 0x7C00])
+                    .line()
+                    .pixels32(&[0x7C00, 0x7C00])
+            })
+            .build();
+        let mut resources = sol();
+        resources
+            .retain(|(ty, id, _, _)| ![(Spin::TYPE, 1001), (RLED, 1001)].contains(&(*ty, *id)));
+        resources.push((Spin::TYPE, 1001, None, spin(1001, 1)));
+        resources.push((RLED, 1001, None, wide));
+        let data = store(&resources);
+        let decoded = data
+            .stellar_sprite(StellarId(129))
+            .expect("the wormhole's sheet decodes")
+            .sheet;
+        let wormhole = data
+            .system(SystemId(130))
+            .stellars
+            .into_iter()
+            .find(|stellar| stellar.id == StellarId(129))
+            .expect("the wormhole")
+            .sprite
+            .expect("its sheet");
+        assert_eq!(
+            wormhole.image_size,
+            (decoded.image_width(), decoded.image_height())
+        );
+        assert_eq!(
+            (wormhole.frame_width, wormhole.frame_height),
+            (decoded.frame_width(), decoded.frame_height())
+        );
+    }
+
+    /// An 8-bit `rlëD`'s sheet says so, so the scene can draw it as the
+    /// draw proc's depth-8 branches do; a 16-bit one's does not.
+    #[test]
+    fn an_8_bit_rled_s_sheet_is_eight_bit() {
+        let eight = RledBuilder::new(2, 1)
+            .depth(8)
+            .frame(|f| f.line().pixels8(&[0x00, 0x7C]))
+            .build();
+        let mut resources = sol();
+        resources.retain(|(ty, id, _, _)| (*ty, *id) != (RLED, 1001));
+        resources.push((RLED, 1001, None, eight));
+        let data = store(&resources);
+        let sprites: Vec<_> = data
+            .system(SystemId(130))
+            .stellars
+            .into_iter()
+            .map(|stellar| (stellar.id, stellar.sprite.expect("its sheet").eight_bit))
+            .collect();
+        assert_eq!(sprites, [(StellarId(129), true), (StellarId(128), false)]);
+    }
+
+    /// A sheet whose clipped draw can differ from a crop says so, as the
+    /// decoded sheet does, so the scene can ask for the clipped draw at the
+    /// world's edge; a stock-shaped one does not.
+    #[test]
+    fn a_sheet_with_clip_quirks_says_so() {
+        // A run whose word's halves differ, its line counted.
+        let two_colour = RledBuilder::new(2, 1)
+            .count_lines()
+            .frame(|f| f.line().run(2, 0x7C00, 0x001F))
+            .build();
+        let mut resources = sol();
+        resources.retain(|(ty, id, _, _)| (*ty, *id) != (RLED, 1001));
+        resources.push((RLED, 1001, None, two_colour));
+        let data = store(&resources);
+        let decoded = data
+            .stellar_sprite(StellarId(129))
+            .expect("the wormhole's sheet decodes")
+            .sheet;
+        assert!(decoded.clip_quirks());
+        let sprites: Vec<_> = data
+            .system(SystemId(130))
+            .stellars
+            .into_iter()
+            .map(|stellar| (stellar.id, stellar.sprite.expect("its sheet").clip_quirks))
+            .collect();
+        assert_eq!(sprites, [(StellarId(129), true), (StellarId(128), false)]);
     }
 }

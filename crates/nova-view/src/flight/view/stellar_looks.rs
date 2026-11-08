@@ -1,110 +1,35 @@
 //! [`FlightView`]'s scene as the kept frame holds its stellars, over the
-//! [`FlightSim`] port: which are shown, how each looks
-//! ([`FrameStellar`](nova_sim::flight_frame::FrameStellar)) and where its
-//! animation stands, and the starfield scattered about the frame's ship.
+//! [`FlightSim`] port: which are shown, how each looks and the frame its
+//! session reports it shows
+//! ([`FrameStellar`](nova_sim::flight_frame::FrameStellar)), and the
+//! starfield scattered about the frame's ship.
 //! Any flight drives them, a scripted one in the component tests.
 
-use std::time::Duration;
-
 use nova_sim::SystemId;
-use nova_sim::gate_sprite::StellarPass;
 
 use crate::flight::catalog::{CombatLooks, ShipSprites};
 use crate::flight::sim_port::FlightSim;
 use crate::system::catalog::SystemCatalog;
 
+use super::between_passes;
 use super::stars;
-use super::{FlightView, Redrawn, look, show_destroyed, show_gate_frames, shown_scene};
+use super::{FlightView, Redrawn, show_stellars, shown_scene};
 
 impl<C, S: FlightSim> FlightView<C, S> {
-    /// Draws each stellar of the scene shown as the kept frame holds it
-    /// after a rebuild point
-    /// ([`SystemScene::rebuild`](crate::system::scene::SystemScene::rebuild)):
-    /// one whose look changed shows its current frame. The scene is not
-    /// laid out again.
-    pub(super) fn rebuild_stellars(&mut self) {
-        if let Some(scene) = &mut self.scene {
-            scene.rebuild(|id| look(&self.frame, id));
-        }
-    }
-
-    /// Draws each stellar of the scene shown as the kept frame holds it
-    /// ([`show_destroyed`]). The scene is not laid out again.
-    pub(super) fn show_destroyed(&mut self) {
-        if let Some(scene) = &mut self.scene {
-            show_destroyed(scene, &self.frame);
-        }
-    }
-
-    /// The take-off's reset of every stellar's frames
-    /// (`_HandlePlayerDockRequest` @0x675ce-0x675fa, play-feel-4 phase
-    /// 14; `nova_sim::SessionEvent::StellarFramesReset`): those of the
-    /// scene shown
-    /// ([`SystemScene::take_off_reset`](crate::system::scene::SystemScene::take_off_reset))
-    /// and those kept
-    /// ([`KeptFrames::reset`](crate::system::kept_frames::KeptFrames::reset)).
-    /// [`FlightView::replay_stellar_passes`] runs it once the scene is laid
-    /// out, so it zeroes what the layout just kept of the old scene with
-    /// the new scene's own, as the original zeroes every `spöb` (@0x675ce)
-    /// whether a slot shows it or not. The session raises the event at the
-    /// take-off or the exit, and the view settles it in the catch-up that
-    /// follows, before the first frame is drawn.
-    pub(super) fn reset_stellar_frames(&mut self) {
-        self.kept_frames.reset();
-        if let Some(scene) = &mut self.scene {
-            scene.take_off_reset();
-        }
-    }
-
-    /// Replays the stellar passes the flight raised on the scene shown, the
-    /// system entered's, on the effects' chance: the entry's first, on each
-    /// stellar's true frames ([`StellarPass::is_entry`]); then the frames'
-    /// reset when `frames_reset`; then the rest, so a take-off's and a
-    /// gate's exit step from the frames it leaves, before the first frame
-    /// is drawn. Every view method that drives a transition catches up
-    /// last, so a catch-up holds one transition's passes.
-    fn replay_stellar_passes(&mut self, frames_reset: bool) {
-        let (entry, others): (Vec<StellarPass>, Vec<StellarPass>) = self
-            .inbox
-            .take_stellar_passes()
-            .into_iter()
-            .partition(|pass| pass.is_entry());
-        self.step_scene_by(&entry);
-        if frames_reset {
-            self.reset_stellar_frames();
-        }
-        self.step_scene_by(&others);
-    }
-
-    /// Steps the scene shown once for each of `passes`, each at its own
-    /// gain.
-    fn step_scene_by(&mut self, passes: &[StellarPass]) {
-        if let Some(scene) = &mut self.scene {
-            for pass in passes {
-                scene.step_pass(pass.gain(), &mut self.effects_chance);
-            }
-        }
-    }
-
-    /// Moves the clock on by `dt` and steps the stellars' animations by
-    /// the whole ticks of 1/30 s it crossed, as the original's sprite tick
-    /// runs every play frame, the jump's included, each at the gain the
-    /// kept frame says the next step runs at
-    /// ([`FlightFrame::speed_mult`](nova_sim::flight_frame::FlightFrame::speed_mult),
-    /// `_gSpeedMult`). A tick that crosses several wall ticks during a
-    /// ramp steps them all at that one gain: a catch-up inside one tick,
-    /// which no frame drawn between them shows. A random next frame
-    /// (`Flags2` 0x0002) is drawn on the effects' chance, never the
-    /// session's: the frame a stellar shows is drawn state only.
-    pub(super) fn step_stellars(&mut self, dt: Duration) {
-        let before = crate::time::ticks(self.elapsed);
+    /// Moves the flight's clock on by `dt`, which the escort menu, the
+    /// floating map and the drawing read. The stellars take no part: their
+    /// session steps their frames.
+    pub(super) fn advance_clock(&mut self, dt: std::time::Duration) {
         self.elapsed += dt;
+    }
+
+    /// Draws each stellar of the scene shown as the frame drawn holds it
+    /// ([`show_stellars`]): its look and the frame its session reports.
+    /// The scene is not laid out again.
+    pub(super) fn show_stellars(&mut self) {
+        let drawn = between_passes::drawn(self.between_passes.as_ref(), &self.frame);
         if let Some(scene) = &mut self.scene {
-            scene.step_by(
-                crate::time::ticks(self.elapsed) - before,
-                self.frame.speed_mult,
-                &mut self.effects_chance,
-            );
+            show_stellars(scene, drawn);
         }
     }
 
@@ -126,26 +51,16 @@ impl<C, S: FlightSim> FlightView<C, S> {
 }
 
 impl<C: SystemCatalog, S: FlightSim> FlightView<C, S> {
-    /// Lets go of the scene shown, keeping each of its stellars'
-    /// animation state
-    /// ([`KeptFrames::keep`](crate::system::kept_frames::KeptFrames::keep)),
-    /// and shows the frame's in its place, read from the catalog with the
-    /// stellars the kept frame shows ([`shown_scene`]): each
-    /// stellar looking as the frame holds it ([`show_destroyed`]), then each
-    /// the flight has shown before resumed where it was left, on the sheet
-    /// it now draws
-    /// ([`SystemScene::resume`](crate::system::scene::SystemScene::resume)),
-    /// and each hypergate on its frame's frame. The look is set before the
-    /// frames resume, so the rebuild or redraw that follows finds it
-    /// unchanged and leaves them alone.
+    /// Lets go of the scene shown and shows the frame's in its place, read
+    /// from the catalog with the stellars the kept frame shows
+    /// ([`shown_scene`]), each stellar looking as the frame holds it and
+    /// on the frame its session reports ([`show_stellars`]): the session
+    /// keeps each stellar's frames across systems, so one shown again is
+    /// where it was left (see `nova_sim::Session`'s `stellar_frames`
+    /// module).
     pub(super) fn show_scene(&mut self) {
-        if let Some(left) = &self.scene {
-            self.kept_frames.keep(left);
-        }
         let mut scene = shown_scene(&*self.catalog, &self.frame);
-        show_destroyed(&mut scene, &self.frame);
-        scene.resume(&self.kept_frames);
-        show_gate_frames(&mut scene, &self.frame);
+        show_stellars(&mut scene, &self.frame);
         self.scene = Some(scene);
     }
 }
@@ -157,9 +72,8 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S
     /// [`FlightView::catch_up`]'s redraws, given what the events asked for
     /// (`redrawn`), in their order: the ship's sheet, the bar (`bar`), the
     /// layout or the ship's place, the scene read again, the stellars'
-    /// looks, the stellar passes with the frames' reset among them
-    /// ([`FlightView::replay_stellar_passes`]), the status bar (`status`,
-    /// on a system entered) and the stars.
+    /// looks and frames ([`FlightView::show_stellars`]), the status bar
+    /// (`status`, on a system entered) and the stars.
     /// The kept frame was filled afresh as the events were drained
     /// ([`FlightView::catch_up_then`]), so each reads the flight as the
     /// events left it. `bar` and `status` are the session's still
@@ -193,12 +107,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S
         if reshown {
             self.show_scene();
         }
-        if redrawn.rebuilt {
-            self.rebuild_stellars();
-        } else if redrawn.galaxy || redrawn.system {
-            self.show_destroyed();
-        }
-        self.replay_stellar_passes(redrawn.frames_reset);
+        self.show_stellars();
         if redrawn.system {
             status(self);
         }
@@ -210,7 +119,9 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S
     /// Lays out `system`, the frame's: its scene ([`FlightView::show_scene`]),
     /// each stellar shown before resuming its animation where it was left,
     /// the course map's course, and the ship drawn from where the frame,
-    /// filled afresh, has it, the last system's NPCs and effects let go.
+    /// filled afresh, has it, the last system's NPCs and effects let go,
+    /// the NPCs' flashes and glows held for the escorts the fleet keeps
+    /// ([`HeldDisplays`](crate::flight::carried_displays::HeldDisplays)).
     fn lay_out(&mut self, system: SystemId) {
         self.drop_between_passes();
         self.show_scene();
@@ -219,9 +130,8 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S
         self.alpha = 0.0;
         self.npc_previous.clear();
         self.effects.clear();
-        self.flashes.clear();
+        self.held_displays.hold(&mut self.flashes, &mut self.glows);
         self.held_alts.get_mut().clear();
-        self.glows.clear();
         self.shot_looks.clear();
         self.read_npc_sheets();
     }

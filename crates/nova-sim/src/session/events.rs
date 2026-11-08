@@ -46,10 +46,11 @@
 //!   wormhole's exit, or a wormhole that leads nowhere reset every
 //!   stellar's current and next frames to 0, as the original's dock
 //!   request does (see the `takeoff_frames` module), told after that
-//!   entry's other events: the flight view resets the frames of every
-//!   stellar it shows and keeps once it has laid the scene out, between
-//!   the entry's stellar pass and the rest (see the `stellar_passes`
-//!   module). Only a refused hypergate tells nothing.
+//!   entry's other events. The session resets every stellar's frames
+//!   itself, between the entry's stellar pass and the rest (see the
+//!   `stellar_frames` and `stellar_passes` modules); nothing in the view
+//!   acts on it, and the session's tests read it as the mark of each
+//!   reset. Only a refused hypergate tells nothing.
 //!
 //! The session's other one-shot outputs (its sounds, messages, pay notes,
 //! fighter notes, stellar passes and the rest, each with its own `take_*`) are drained
@@ -78,7 +79,8 @@ pub enum SessionEvent {
     /// The flight's starfield is drawn afresh about the ship.
     StarfieldReset,
     /// Every stellar's frames were reset, as a take-off or a gate's exit
-    /// resets them.
+    /// resets them. The session resets every stellar's frames itself;
+    /// nothing in the view acts on it.
     StellarFramesReset,
 }
 

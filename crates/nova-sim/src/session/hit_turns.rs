@@ -181,7 +181,7 @@ mod wired {
         };
         pirate.target = Some(ShipRef::Npc(quarry));
         let pirate = session.space.traffic.add_npc_at(pirate, p_berth);
-        session.prepare_all_sprites();
+        session.prepare_all_sprites(&mut crate::chance::NeverFires);
         (session, pirate, quarry)
     }
 

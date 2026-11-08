@@ -6,7 +6,7 @@
 
 use crate::common;
 
-use nova_data::graphics::{EightBitReading, Image};
+use nova_data::graphics::{EightBitReading, Image, PixelDepth};
 use nova_data::{GameData, open_interface};
 use nova_render::quickdraw_stretch::{Span, columns, rows, stretched};
 use nova_render::recording::{GpuCall, RecordingGpu};
@@ -86,9 +86,11 @@ fn picture_8527_over_dlog_3004_keeps_row_207_at_row_208_by_quickdraws_rule() {
     };
     let data = GameData::open(&dir, None).expect("the stock data opens");
     let images = GameImages::new(&data, EightBitReading::AsDrawn);
-    let picture = images.frames(ImageKind::Pict, 8527).expect("8527")[0].clone();
+    let deep = images.deep_frames(ImageKind::Pict, 8527).expect("8527")[0].clone();
+    assert_eq!(deep.depth(), &PixelDepth::Direct16, "8527 is 16-bit");
+    let picture = deep.image().clone();
     assert_ne!((picture.width(), picture.height()), size, "stretched");
-    let resampled = stretched(&picture, size.0, size.1);
+    let resampled = stretched(&deep, size.0, size.1);
     let upload = drawn_stretch(images, 8527, size);
     let GpuCall::Upload { width, height, .. } = upload else {
         unreachable!("an upload");
@@ -138,9 +140,10 @@ fn picture_8528_over_dlog_1020_repeats_columns_162_and_487() {
     };
     let data = GameData::open(&dir, None).expect("the stock data opens");
     let images = GameImages::new(&data, EightBitReading::AsDrawn);
-    let picture = images.frames(ImageKind::Pict, 8528).expect("8528")[0].clone();
+    let deep = images.deep_frames(ImageKind::Pict, 8528).expect("8528")[0].clone();
+    let picture = deep.image().clone();
     assert_eq!(picture.height(), size.1, "stretched across only");
-    let resampled = stretched(&picture, size.0, size.1);
+    let resampled = stretched(&deep, size.0, size.1);
     let upload = drawn_stretch(images, 8528, size);
     assert_eq!(
         upload,

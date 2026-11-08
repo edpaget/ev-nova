@@ -63,6 +63,7 @@ pub mod asteroids;
 pub mod boxes;
 pub mod brackets;
 pub mod cadence;
+pub mod carried_displays;
 pub mod catalog;
 pub mod cloak_fade;
 pub mod cursor;

@@ -8,7 +8,7 @@ use nova_sim::SessionEvent;
 use nova_sim::gate::next_gate_pick;
 
 use nova_sim::flight_frame::{
-    Answer, FlightCommand, MapClick, MapOpen, MapScreen, ScreenAnswer, ScreenAsk,
+    Answer, CarriedDisplay, FlightCommand, MapClick, MapOpen, MapScreen, ScreenAnswer, ScreenAsk,
 };
 
 use crate::devtools::{DevDesk, FlightDesk};
@@ -223,12 +223,19 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// drawing follows the galaxy, the explored and known sets, the course
     /// and the nav ([`FlightView::redraw_map`]): the flight is paused while
     /// it is open, so this is rare, a set expression or the developer
-    /// tools. Gives what was redrawn.
+    /// tools. Between the two, once the fleet was placed afresh
+    /// ([`FlightEvent::DisplaysCarried`]), the kept escorts' flashes and
+    /// glows that the redraw's lay-out or the landing held are carried
+    /// into their new NPCs ([`FlightView::carry_displays`]). Gives what
+    /// was redrawn.
     ///
     /// [`FlightEvent::Session`]: nova_sim::flight_frame::FlightEvent::Session
+    /// [`FlightEvent::DisplaysCarried`]: nova_sim::flight_frame::FlightEvent::DisplaysCarried
     pub(super) fn catch_up_then(&mut self, redraw: impl FnOnce(&mut Self, Redrawn)) -> Redrawn {
         let mut redrawn = Redrawn::default();
-        let events = self.drain().take_events();
+        let inbox = self.drain();
+        let events = inbox.take_events();
+        let carried = inbox.take_carried();
         // The kept frame afresh before anything redraws from it.
         self.refresh_frame();
         for event in events {
@@ -239,7 +246,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 SessionEvent::GalaxyChanged => redrawn.galaxy = true,
                 SessionEvent::StellarsRebuilt => redrawn.rebuilt = true,
                 SessionEvent::StarfieldReset => redrawn.stars = true,
-                SessionEvent::StellarFramesReset => redrawn.frames_reset = true,
+                // The session resets every stellar's frames itself.
+                SessionEvent::StellarFramesReset => {}
             }
         }
         if redrawn.galaxy {
@@ -251,11 +259,31 @@ impl<C, S: FlightSim> FlightView<C, S> {
         // A redraw changes the flight only through a command, which fills
         // the kept frame afresh, so it needs no fill after it.
         redraw(self, redrawn);
+        // After the redraw, whose lay-out holds what the system left had.
+        if let Some(carried) = carried {
+            self.carry_displays(&carried);
+        }
         if self.map_open && (redrawn.galaxy || self.map_seen.as_ref() != Some(&self.frame.map_key))
         {
             self.redraw_map();
         }
         redrawn
+    }
+
+    /// Carries each kept escort's flash and glow held through the change,
+    /// `carried`, into its new NPC, stepped once for each prepare's gain
+    /// by the new ship's shield and class as the kept frame, filled
+    /// afresh, has them, and lets go of the rest
+    /// ([`HeldDisplays::carry`](crate::flight::carried_displays::HeldDisplays::carry)).
+    pub(super) fn carry_displays(&mut self, carried: &[CarriedDisplay]) {
+        let ships = &self.frame.ships;
+        let sheets = (&self.sheet, &self.npc_sheets);
+        self.held_displays.carry(
+            carried,
+            (&mut self.flashes, &mut self.glows),
+            |ship| super::flash_look(ships, sheets, ship),
+            |ship| super::glow_decay(ships, sheets.0, sheets.1, ship),
+        );
     }
 
     /// Shows the course as it is flown on the course map, from the

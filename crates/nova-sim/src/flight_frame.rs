@@ -52,7 +52,6 @@ use crate::escort_dialog::{EscortButton, EscortDialogView};
 use crate::flight::{Amounts, Controls, ShipState};
 use crate::gamble::{Bet, RaceRun};
 use crate::gate::{GateKind, GateRefusal};
-use crate::gate_sprite::StellarPass;
 use crate::geometry::Vec2;
 use crate::grant::Granted;
 use crate::hail::{CommNote, Haggle, HailRefusal, HailView};
@@ -1623,9 +1622,32 @@ pub enum FlightEvent {
     RescueDesc(LoadedDesc),
     /// The message the last take-off left on, a held `Q`'s.
     LeaveMessage(String),
-    /// A stellar pass run outside a play frame, for the view to replay on
-    /// its scene before the next frame is drawn.
-    StellarPass(StellarPass),
+    /// The fleet was placed afresh (`_RespawnEscort`, from
+    /// `_SetupShipsInSystem` @0x42c79): each kept escort's display
+    /// carried into its new NPC, empty when none was kept. Every other
+    /// NPC's display went with the system left, so the view lets go of
+    /// whatever else it held through the change.
+    DisplaysCarried(Vec<CarriedDisplay>),
+}
+
+/// A kept escort's display carried into its new NPC
+/// ([`FlightEvent::DisplaysCarried`]): `_RespawnEscort` (@0x3d4b8-0x3d62c)
+/// writes neither its weapon glow (+0xc8e8) nor its shield flash
+/// (+0xc8f0), so both go on from where its last flight display left them,
+/// stepped once by each `_PrepareAllSprites` that displayed it since, at
+/// that prepare's gain.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CarriedDisplay {
+    /// Its NPC before the placement.
+    pub from: NpcId,
+    /// Its NPC now.
+    pub to: NpcId,
+    /// The gain of each `_PrepareAllSprites` that displayed it, as `from`
+    /// or as `to`, since its last flight display, in order: one at a
+    /// jump's arrival, two at a gate's exit (three when the exit is in
+    /// the system gone in) and at a wormhole with no exit, two at a
+    /// take-off at its gain of 0.
+    pub prepares: Vec<SpeedMult>,
 }
 
 /// What a frame's fixed steps are given
@@ -1823,9 +1845,11 @@ pub struct PassReport {
     /// view carries its own effects by.
     pub wrap: Option<PlayerWrap>,
     /// What `_HandlePlayer`'s escort-menu block read on this pass (the
-    /// fade @0x6df4a-0x6e052) and whether the class-order bookkeeping
-    /// after it cleared an order (@0x6e2e8-0x6e452): the view runs the
-    /// menu's fade once for each pass that reports one. `None` when the
+    /// fade @0x6df4a-0x6e052), whether the class-order bookkeeping after
+    /// it cleared an order (@0x6e2e8-0x6e452), and the rows the pass's
+    /// redraws read: the view runs the menu's fade once for each pass that
+    /// reports one, and redraws its held rows from the pass's where the
+    /// original's `_DrawEscortMenuInFrame` runs. `None` when the
     /// pass returned before both, a destroyed player's dead branch
     /// (@0x68853, @0x6888c).
     pub escort_menu: Option<EscortMenuPass>,
@@ -1833,11 +1857,22 @@ pub struct PassReport {
 
 /// `_HandlePlayer`'s escort-menu block on one pass, as
 /// [`PassReport::escort_menu`] reports it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EscortMenuPass {
-    /// Whether an escort flew as the fade counted them (@0x6df59-0x6dfd0),
-    /// before the pass's bookkeeping, a disabled ship never counted.
-    pub escorts_flying: bool,
+    /// How many escorts flew as the fade counted them (@0x6df59-0x6dfa7),
+    /// before the pass's bookkeeping: the ships the player leads that are
+    /// intact, a disabled or dying ship never counted. The menu redraws
+    /// whenever the count differs from the last it stored (`*0xdee60`,
+    /// @0x6dfa9-0x6dfd0), zero or not.
+    pub escorts_flying: u32,
+    /// The menu's class rows as the pass's class-order bookkeeping leaves
+    /// them, in [`EscortClass::ALL`]'s order: what each of the pass's
+    /// redraws (`_DrawEscortMenuInFrame`, from @0x6dfd0 and through
+    /// `_ShowEscortMenu` @0x6e388, @0x6e446) reads. A fighter launched on
+    /// the pass is in them, as `_FirePlayerWeapon` launches it (@0x62c61)
+    /// before the block (@0x6df4a); a ship lost later in the pass is not
+    /// gone from them.
+    pub rows: [ClassRow; 4],
     /// Whether the class-order bookkeeping cleared an escort class's kept
     /// order (@0x6e37d, @0x6e43f), a lone launch's clear included (see the
     /// session's `fighters` module): each clear shows the escort menu in
@@ -1845,6 +1880,22 @@ pub struct EscortMenuPass {
     /// called @0x6e388 and @0x6e446), after this pass's drop and before
     /// the next pass's. It plays no sound.
     pub class_orders_cleared: bool,
+}
+
+impl Default for EscortMenuPass {
+    /// No escort flying, no row present (as [`FrameHud::default`] builds
+    /// them) and nothing cleared.
+    fn default() -> Self {
+        Self {
+            escorts_flying: 0,
+            rows: EscortClass::ALL.map(|class| ClassRow {
+                class,
+                present: false,
+                order: None,
+            }),
+            class_orders_cleared: false,
+        }
+    }
 }
 
 /// A ship as a [`FlightFrame`] and a [`PassReport`] carry it: one record
@@ -2188,19 +2239,13 @@ pub struct FrameStellar {
     /// The sheet it draws
     /// (`Session::drawn_sheet`).
     pub drawn: DrawnSheet,
-    /// The sheet whose frame count it animates over
-    /// (`Session::counted_sheet`).
-    pub counted: DrawnSheet,
     /// Whether its frame is frozen
     /// (`Session::frame_frozen`).
     pub frozen: bool,
-    /// Whether it animates over no frames
-    /// (`Session::counts_no_frames`).
-    pub counts_none: bool,
-    /// The frame it draws as a hypergate, or `None` for one that isn't
-    /// one or isn't shown
-    /// (`Session::gate_frame`).
-    pub gate_frame: Option<u16>,
+    /// The frame of the sheet it draws that its slot shows, as its
+    /// session steps it at each pass's sprite tick
+    /// (`Session::stellar_frame`); 0 for one not shown.
+    pub frame: u16,
 }
 
 /// A stellar its system lists, shown or not, as the radar draws its blip
@@ -2594,10 +2639,8 @@ mod tests {
             shown,
             destroyed: false,
             drawn: DrawnSheet::Type,
-            counted: DrawnSheet::Type,
             frozen: false,
-            counts_none: false,
-            gate_frame: None,
+            frame: 0,
         };
         let frame = FlightFrame {
             stellars: vec![stellar(131, true), stellar(128, true), stellar(129, false)],

@@ -77,10 +77,12 @@ mod comm_line;
 mod controls;
 mod dialog_map;
 mod display_gain;
+mod drawn_back_by_gain;
 mod effects_gain;
 mod escorts;
 mod faded_keys;
 mod faked_board;
+mod faked_carried_displays;
 mod faked_combat;
 mod faked_conversation;
 mod faked_desk;
@@ -129,6 +131,7 @@ mod pad_live;
 mod pad_map;
 mod painted_ships;
 mod particle_pixels;
+mod pict_pair_ships;
 mod port_screen_map;
 mod rebinding;
 mod rescue;
@@ -137,7 +140,6 @@ mod ship_outlines;
 mod shots;
 mod stars;
 mod stellar_looks;
-mod stellar_passes;
 mod stellars;
 mod stepping;
 mod touch_flight;
@@ -180,10 +182,6 @@ fn held(key: Key) -> Input {
     }
 }
 
-/// The second half of a tick: `TICK / 2` rounds down, so this is a
-/// nanosecond longer.
-const REST_OF_TICK: Duration = Duration::from_nanos(16_666_667);
-
 fn drawn(view: &FlightView<FakeCatalog, impl FlightSim>) -> DrawList {
     let mut list = DrawList::new();
     view.draw(&mut list);
@@ -225,7 +223,7 @@ fn overlay(text: &str, origin: Point, size: f32, color: Color) -> DrawCommand {
 /// The stars' sheet, `rlëD` 700 of 16 frames of 5 × 5, as stock's.
 fn star_sheet() -> StarSheet {
     StarSheet {
-        image_id: 700,
+        image: crate::SheetImage::Rled(700),
         frames: NonZeroU16::new(16).expect("non-zero"),
         size: (5, 5),
     }

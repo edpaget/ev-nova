@@ -16,7 +16,11 @@
 //!   `_HandlePlayerDockRequest` @0x66ffc, `_HandlePlayer` @0x6c581,
 //!   `_LoadPilotData` @0x76385). The view keeps a flash only for a ship
 //!   hit since it came into the fight, from [`ShieldFlash::default`], and
-//!   clears them all as the player lands.
+//!   lets go of them all as it lays out a system and as the player lands,
+//!   but a kept escort's: `_RespawnEscort` leaves +0xc8f0, so its flash
+//!   is carried into its new NPC, stepped by each `_PrepareAllSprites`
+//!   that displays it (see the
+//!   [`carried_displays`](super::carried_displays) module).
 //! - Each frame, while the timer is above none, the ship's shield above
 //!   none and its class has a shield layer, the timer is first held down
 //!   to `L = trunc(shield × 32 / base)`, where `base` is the class's own
@@ -79,6 +83,17 @@ fn share(shield: f32, base: f32) -> f32 {
 }
 
 use nova_sim::SpeedMult;
+
+/// What a ship's display holds its flash by ([`ShieldFlash::step`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FlashLook {
+    /// Its shield now.
+    pub shield: f32,
+    /// Its class's own `Shield`, as loaded.
+    pub base: f32,
+    /// Whether its class has a shield layer.
+    pub has_layer: bool,
+}
 
 /// One ship's shield flash.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

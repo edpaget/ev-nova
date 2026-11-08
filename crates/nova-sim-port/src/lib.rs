@@ -2,9 +2,10 @@
 //! stellar and the screens that come with it (the outfitter, the
 //! shipyard, the bar's hires, recharging, the player info screen),
 //! boarding a disabled ship and its grants, the escape pod, the radar's
-//! IFF and the hypergate sprite. It builds on the foundation,
-//! `nova-sim-base`, the catalog, `nova-sim-catalog`, the state,
-//! `nova-sim-state`, combat, `nova-sim-combat`, the ai and traffic layer,
+//! IFF, the hypergate sprite and every other stellar's animation
+//! frame. It builds on the foundation, `nova-sim-base`, the catalog,
+//! `nova-sim-catalog`, the state, `nova-sim-state`, combat,
+//! `nova-sim-combat`, the ai and traffic layer,
 //! `nova-sim-ai`, and the story, `nova-sim-story`, since every shop
 //! settles on the story's [`Pilot`](nova_sim_story::pilot::Pilot).
 //! `nova-sim` re-exports each module at its old path
@@ -110,6 +111,11 @@
 //!   trades in for, and buying a new one
 //!   ([`ShipPurchase`](shipyard::ShipPurchase)): which outfits carry
 //!   over, the cargo kept and the default items fitted.
+//! - [`stellar_frames`]: which frame every other stellar's sprite shows,
+//!   by the sprite tick's sequential branch
+//!   ([`StellarFrames`](stellar_frames::StellarFrames)), stepped from its
+//!   `spöb`'s animation fields
+//!   ([`StellarAnimation`](stellar_frames::StellarAnimation)).
 //! - [`wares`]: the rules the outfitter and the shipyard share: tech
 //!   levels, `Require` and `Contribute`, the hiding flags, the hide-higher
 //!   sweep and the rows' order.
@@ -162,5 +168,6 @@ pub mod player_info;
 pub mod recharge;
 pub mod ship_change;
 pub mod shipyard;
+pub mod stellar_frames;
 pub(crate) mod string_entry;
 pub mod wares;

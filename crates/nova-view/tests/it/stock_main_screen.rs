@@ -20,7 +20,8 @@ use nova_view::ui::yes_no::{
 };
 use nova_view::ui::{DescriptionSource, DialogResources, YesNoDialog};
 use nova_view::{
-    DrawCommand, DrawList, ImageKey, ImageKind, Input, Key, MouseButton, Screen, Sound, UiSound,
+    DrawCommand, DrawList, ImageKey, ImageKind, Input, Key, MouseButton, Screen, SheetImage, Sound,
+    UiSound,
 };
 
 /// The stock game data and its main-screen art, when `NOVA_DATA` is set.
@@ -80,7 +81,7 @@ fn the_stock_art_resolves_where_it_was_recorded() {
     };
     assert_eq!((art.background, art.background_size), (8000, (1024, 768)));
     for (button, (sprite, (x, y), size)) in art.buttons.iter().zip(BUTTONS) {
-        assert_eq!(button.sprite, sprite);
+        assert_eq!(button.image, SheetImage::Rled(sprite));
         assert_eq!(button.position, Point::new(x, y), "{sprite}");
         assert_eq!(
             (button.mask.width(), button.mask.height()),
@@ -92,7 +93,7 @@ fn the_stock_art_resolves_where_it_was_recorded() {
     assert_eq!(art.logo.frame_size, (654.0, 209.0));
     assert_eq!((art.logo.columns, art.logo.frames), (1, 7));
     assert_eq!(art.logo.position, Point::new(191.0, 162.0));
-    assert_eq!(art.rollover.sprite, 8020);
+    assert_eq!(art.rollover.image, SheetImage::Rled(8020));
     assert_eq!(art.rollover.frame_size, (136.0, 98.0));
     assert_eq!(art.rollover.frames, 7);
     assert_eq!(art.rollover.position, Point::new(444.0, 465.0));

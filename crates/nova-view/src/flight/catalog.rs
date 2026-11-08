@@ -11,6 +11,7 @@ use std::rc::Rc;
 use nova_sim::asteroid::KINDS;
 pub use nova_sim::{Blink, BoomId, GovtId, ShipId, SoundId, WeaponId};
 
+use crate::box_cut::SheetEdge;
 use crate::color::Color;
 use crate::font::Font;
 use crate::geometry::Bounds;
@@ -18,11 +19,11 @@ use crate::outline::Outline;
 use crate::sheet_image::SheetImage;
 
 /// One of a ship's `shän` layers drawn over its base sprite: the layer's
-/// `rlëD`, how many frames it holds and their size.
+/// image, how many frames it holds and their size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LayerSheet {
-    /// The `rlëD`'s ID.
-    pub image_id: i16,
+    /// Where its frames come from: its `rlëD`, or its `PICT` pair cut.
+    pub image: SheetImage,
     /// The layer's frames. The base's rotation frame `f` is drawn with the
     /// layer's frame `f % frames`.
     pub frames: NonZeroU16,
@@ -31,9 +32,23 @@ pub struct LayerSheet {
     pub frame_width: u32,
     /// Each frame's height in pixels.
     pub frame_height: u32,
+    /// Each frame's image's width and height: the frame's, unless the
+    /// sheet draws past its frame box, as a 32-bit `rlëD` does (see
+    /// `nova_data::graphics::SpriteSheet::box_origin`). Its image is then
+    /// padded to keep the box at its centre.
+    pub image_size: (u32, u32),
+    /// Whether a frame the world's edge cuts can draw otherwise than its
+    /// image cut to its box (`nova_data::graphics::SpriteSheet::clip_quirks`),
+    /// so it is drawn through `_BlitPixieRLEClipped`'s port
+    /// ([`ImageKind::RledClipped`](crate::ImageKind::RledClipped)) there. Never
+    /// for any stock sheet.
+    pub clip_quirks: bool,
     /// Whether its `rlëD` holds solid runs, drawn raw over the layer (see
     /// [`solid_runs`](super::solid_runs)).
     pub solid: bool,
+    /// Whether its `rlëD` header says depth 8, so the draw proc takes its
+    /// depth-8 branches (@0xbb5a4, @0xbb792; see `eight_bit_blit`).
+    pub eight_bit: bool,
 }
 
 impl LayerSheet {
@@ -42,9 +57,19 @@ impl LayerSheet {
     pub fn size(&self) -> (u32, u32) {
         (self.frame_width, self.frame_height)
     }
+
+    /// What deciding its draw at the world's edge needs of it.
+    #[must_use]
+    pub fn edge(&self) -> SheetEdge {
+        SheetEdge {
+            frame_size: self.size(),
+            image_size: self.image_size,
+            clip_quirks: self.clip_quirks,
+        }
+    }
 }
 
-/// A ship's resolved sprite sheet: its `rlëD`, how many frames make one
+/// A ship's resolved sprite sheet: its image, how many frames make one
 /// turn, each frame's size, and the engine glow and running lights drawn
 /// over it.
 ///
@@ -53,8 +78,9 @@ impl LayerSheet {
 /// says nothing. The ship browser is where layer errors are reported.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ShipSheet {
-    /// The `rlëD`'s ID.
-    pub image_id: i16,
+    /// Where its hull's frames come from: its `rlëD`, or its `PICT` pair
+    /// cut.
+    pub image: SheetImage,
     /// The `shän`'s frames per rotation: the frames of one set, which turn
     /// the ship once round.
     pub rotations: NonZeroU16,
@@ -62,6 +88,17 @@ pub struct ShipSheet {
     pub frame_width: u32,
     /// Each frame's height in pixels.
     pub frame_height: u32,
+    /// Each frame's image's width and height: the frame's, unless the
+    /// sheet draws past its frame box, as a 32-bit `rlëD` does (see
+    /// `nova_data::graphics::SpriteSheet::box_origin`). Its image is then
+    /// padded to keep the box at its centre.
+    pub image_size: (u32, u32),
+    /// Whether a frame the world's edge cuts can draw otherwise than its
+    /// image cut to its box (`nova_data::graphics::SpriteSheet::clip_quirks`),
+    /// so it is drawn through `_BlitPixieRLEClipped`'s port
+    /// ([`ImageKind::RledClipped`](crate::ImageKind::RledClipped)) there. Never
+    /// for any stock sheet.
+    pub clip_quirks: bool,
     /// The engine glow, drawn at the level [`nova_sim::glow_level`] gives
     /// for the ship's glow base, which thrust ramps up.
     pub glow: Option<LayerSheet>,
@@ -86,6 +123,10 @@ pub struct ShipSheet {
     /// Whether the hull's `rlëD` holds solid runs, drawn raw over the hull
     /// (see [`solid_runs`](super::solid_runs)).
     pub solid: bool,
+    /// Whether the hull's `rlëD` header says depth 8, so the draw proc
+    /// takes its depth-8 branches (@0xbb5a4, @0xbb792; see
+    /// `eight_bit_blit`).
+    pub eight_bit: bool,
 }
 
 impl ShipSheet {
@@ -94,6 +135,16 @@ impl ShipSheet {
     #[must_use]
     pub fn size(&self) -> (u32, u32) {
         (self.frame_width, self.frame_height)
+    }
+
+    /// What deciding its hull's draw at the world's edge needs of it.
+    #[must_use]
+    pub fn edge(&self) -> SheetEdge {
+        SheetEdge {
+            frame_size: self.size(),
+            image_size: self.image_size,
+            clip_quirks: self.clip_quirks,
+        }
     }
 }
 
@@ -279,6 +330,17 @@ pub struct EffectSheet {
     /// Each frame's height in pixels (`_GetSpriteYSize` @0x2703-0x2731):
     /// an explosion is placed by half of it.
     pub frame_height: u32,
+    /// Each frame's image's width and height: the frame's, unless the
+    /// sheet draws past its frame box, as a 32-bit `rlëD` does (see
+    /// `nova_data::graphics::SpriteSheet::box_origin`). Its image is then
+    /// padded to keep the box at its centre.
+    pub image_size: (u32, u32),
+    /// Whether a frame the world's edge cuts can draw otherwise than its
+    /// image cut to its box (`nova_data::graphics::SpriteSheet::clip_quirks`),
+    /// so it is drawn through `_BlitPixieRLEClipped`'s port
+    /// ([`ImageKind::RledClipped`](crate::ImageKind::RledClipped)) there. Never
+    /// for a `PICT` pair, nor for any stock sheet.
+    pub clip_quirks: bool,
 }
 
 impl EffectSheet {
@@ -288,18 +350,31 @@ impl EffectSheet {
     pub fn size(&self) -> (u32, u32) {
         (self.frame_width, self.frame_height)
     }
+
+    /// What deciding its draw at the world's edge needs of it.
+    #[must_use]
+    pub fn edge(&self) -> SheetEdge {
+        SheetEdge {
+            frame_size: self.size(),
+            image_size: self.image_size,
+            clip_quirks: self.clip_quirks,
+        }
+    }
 }
 
 /// The starfield's sprite sheet ([`CombatLooks::star_sheet`]): its
-/// `rlëD`, how many frames it holds and each frame's width and height,
+/// `rlëD` or `PICT`-pair `spïn`, how many frames it holds and each frame's width and height,
 /// which the stars wrap and are placed by (`_HandleStars` reads them with
 /// `_GetSpriteXSize` and `_GetSpriteYSize`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StarSheet {
-    /// The `rlëD`'s ID.
-    pub image_id: i16,
-    /// How many frames the sheet holds: the `spïn`'s x tiles × y tiles
-    /// (`_LoadSprites` stores it at +0x54).
+    /// The image the stars are cut from: `spïn` 700's `rlëD`, or the
+    /// `spïn` itself when it names a `PICT` pair (`_LoadSprites`
+    /// @0x21097-0x21225).
+    pub image: SheetImage,
+    /// How many frames the master holds: the `spïn`'s x tiles × y tiles
+    /// when fewer than the frames decoded, else those (`_LoadSprites`
+    /// @0x210a4-0x210d2, @0x21218-0x21225).
     pub frames: NonZeroU16,
     /// Each frame's width and height in pixels.
     pub size: (u32, u32),
@@ -740,16 +815,19 @@ mod tests {
             Ok(ShipSheet {
                 weapon: None,
                 weap_decay: 0,
-                image_id: id.0,
+                image: SheetImage::Rled(id.0),
                 rotations: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: 48,
                 frame_height: 48,
+                image_size: (48, 48),
+                clip_quirks: false,
                 glow: None,
                 lights: None,
                 alt: None,
                 shield: None,
                 base_transp: 0,
                 solid: false,
+                eight_bit: false,
             })
         }
 
@@ -764,8 +842,8 @@ mod tests {
         }
     }
 
-    fn image(catalog: impl ShipSprites, id: i16) -> Result<i16, String> {
-        catalog.ship_sheet(ShipId(id)).map(|sheet| sheet.image_id)
+    fn image(catalog: impl ShipSprites, id: i16) -> Result<SheetImage, String> {
+        catalog.ship_sheet(ShipId(id)).map(|sheet| sheet.image)
     }
 
     fn outline_reach(catalog: impl ShipSprites, id: i16) -> Option<f32> {
@@ -776,8 +854,8 @@ mod tests {
 
     #[test]
     fn borrowed_and_shared_catalogs_are_catalogs() {
-        assert_eq!(image(&Sheets, 130), Ok(130));
-        assert_eq!(image(Rc::new(Sheets), 131), Ok(131));
+        assert_eq!(image(&Sheets, 130), Ok(SheetImage::Rled(130)));
+        assert_eq!(image(Rc::new(Sheets), 131), Ok(SheetImage::Rled(131)));
         assert_eq!(outline_reach(&Sheets, 130), Some(130.0));
         assert_eq!(outline_reach(Rc::new(Sheets), 131), Some(131.0));
     }
@@ -864,6 +942,8 @@ mod tests {
                 sheet: Ok(EffectSheet {
                     frame_width: 0,
                     frame_height: 0,
+                    image_size: (0, 0),
+                    clip_quirks: false,
                     image: crate::SheetImage::Rled(id.0),
                     frames: NonZeroU16::MIN,
                 }),
@@ -887,6 +967,8 @@ mod tests {
             Ok(EffectSheet {
                 frame_width: 0,
                 frame_height: 0,
+                image_size: (0, 0),
+                clip_quirks: false,
                 image: crate::SheetImage::Rled(500 + graphic.cast_signed()),
                 frames: NonZeroU16::MIN,
             })
@@ -896,6 +978,8 @@ mod tests {
             Ok(EffectSheet {
                 frame_width: 0,
                 frame_height: 0,
+                image_size: (0, 0),
+                clip_quirks: false,
                 image: crate::SheetImage::Rled(800 + i16::from(kind)),
                 frames: NonZeroU16::MIN,
             })
@@ -905,6 +989,8 @@ mod tests {
             Ok(EffectSheet {
                 frame_width: 0,
                 frame_height: 0,
+                image_size: (0, 0),
+                clip_quirks: false,
                 image: crate::SheetImage::Rled(650),
                 frames: NonZeroU16::MIN,
             })
@@ -916,6 +1002,8 @@ mod tests {
                 frames: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: 0,
                 frame_height: 0,
+                image_size: (0, 0),
+                clip_quirks: false,
             })
         }
 
@@ -928,7 +1016,7 @@ mod tests {
 
         fn star_sheet(&self) -> Result<StarSheet, String> {
             Ok(StarSheet {
-                image_id: 700,
+                image: crate::SheetImage::Rled(700),
                 frames: NonZeroU16::new(16).expect("non-zero"),
                 size: (5, 5),
             })
@@ -955,8 +1043,20 @@ mod tests {
             catalog.box_sheet(2).map(|sheet| sheet.image),
             catalog.asteroid_sheet(3).map(|sheet| sheet.image),
             catalog.smoke_sheet(1).map(|sheet| sheet.first_icon),
-            catalog.star_sheet().map(|sheet| sheet.image_id),
+            catalog.star_sheet().map(|sheet| sheet.image),
         )
+    }
+
+    /// The sheet of one frame of no size the fake gives for `rlëD` `id`.
+    fn sizeless(id: i16) -> EffectSheet {
+        EffectSheet {
+            frame_width: 0,
+            frame_height: 0,
+            image_size: (0, 0),
+            clip_quirks: false,
+            image: crate::SheetImage::Rled(id),
+            frames: NonZeroU16::MIN,
+        }
     }
 
     #[test]
@@ -973,57 +1073,22 @@ mod tests {
         assert_eq!(booms, (128..=150).collect::<Vec<_>>());
         assert_eq!(
             looks.boom(BoomId(150)).map(|look| look.sheet.clone()),
-            Some(Ok(EffectSheet {
-                frame_width: 0,
-                frame_height: 0,
-                image: crate::SheetImage::Rled(150),
-                frames: NonZeroU16::MIN
-            }))
+            Some(Ok(sizeless(150)))
         );
         assert_eq!(looks.boom(BoomId(151)), None);
         assert_eq!(
             looks.box_sheet(0),
-            Some(&EffectSheet {
-                frame_width: 0,
-                frame_height: 0,
-                image: crate::SheetImage::Rled(500),
-                frames: NonZeroU16::MIN
-            }),
+            Some(&sizeless(500)),
             "a jettisoned box's"
         );
         let boxes: Vec<_> = looks.boxes.keys().copied().collect();
         assert_eq!(boxes, [0, 1, 2, 3, 4], "and the asteroids' 1-4");
-        assert_eq!(
-            looks.box_sheet(4),
-            Some(&EffectSheet {
-                frame_width: 0,
-                frame_height: 0,
-                image: crate::SheetImage::Rled(504),
-                frames: NonZeroU16::MIN
-            })
-        );
+        assert_eq!(looks.box_sheet(4), Some(&sizeless(504)));
         assert_eq!(looks.box_sheet(5), None);
-        assert_eq!(
-            looks.cursor_sheet(),
-            Some(&EffectSheet {
-                frame_width: 0,
-                frame_height: 0,
-                image: crate::SheetImage::Rled(650),
-                frames: NonZeroU16::MIN
-            }),
-            "the cursor's"
-        );
+        assert_eq!(looks.cursor_sheet(), Some(&sizeless(650)), "the cursor's");
         let asteroids: Vec<_> = looks.asteroids.keys().copied().collect();
         assert_eq!(asteroids, (0..16).collect::<Vec<u8>>(), "every type's");
-        assert_eq!(
-            looks.asteroid_sheet(15),
-            Some(&EffectSheet {
-                frame_width: 0,
-                frame_height: 0,
-                image: crate::SheetImage::Rled(815),
-                frames: NonZeroU16::MIN
-            })
-        );
+        assert_eq!(looks.asteroid_sheet(15), Some(&sizeless(815)));
         assert_eq!(looks.asteroid_sheet(16), None);
         assert_eq!(
             looks.pod_sheet(),
@@ -1032,6 +1097,8 @@ mod tests {
                 frames: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: 0,
                 frame_height: 0,
+                image_size: (0, 0),
+                clip_quirks: false,
             }),
             "the escape pods'"
         );
@@ -1068,7 +1135,7 @@ mod tests {
         assert_eq!(
             looks.star_sheet(),
             Some(&StarSheet {
-                image_id: 700,
+                image: crate::SheetImage::Rled(700),
                 frames: NonZeroU16::new(16).expect("non-zero"),
                 size: (5, 5),
             })
@@ -1083,7 +1150,7 @@ mod tests {
 
     #[test]
     fn borrowed_and_shared_combat_looks_are_combat_looks() {
-        let direct = r#"Ok("w128") ["s132", "s133"] Some(Ok(Ok(Rled(129)))) "s130" Some("g131") Ok(Rled(502)) Ok(Rled(803)) Some(1008) Ok(700)"#;
+        let direct = r#"Ok("w128") ["s132", "s133"] Some(Ok(Ok(Rled(129)))) "s130" Some("g131") Ok(Rled(502)) Ok(Rled(803)) Some(1008) Ok(Rled(700))"#;
         assert_eq!(looks(Named), direct);
         assert_eq!(looks(&Named), direct);
         assert_eq!(looks(Rc::new(Named)), direct);

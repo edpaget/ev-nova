@@ -758,7 +758,7 @@ impl Session {
                 .filter(|site| held.contains(&site.id))
                 .copied()
                 .collect();
-            self.keep_gate_sprites();
+            self.keep_stellar_frames();
         }
         if waiting_stale {
             let sites = self.chart.read_sites(catalog, self.pilot.system);

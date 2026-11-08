@@ -1,26 +1,45 @@
-//! Movie frames ([`nova_view::DrawCommand::MovieFrame`]) streamed onto
-//! pages of their own.
+//! Images streamed onto pages of their own, outside the atlas: movie
+//! frames ([`nova_view::DrawCommand::MovieFrame`]), and sprite frames the
+//! clipped blit draws ([`nova_view::ImageKind::RledClipped`], and their
+//! solid runs, [`nova_view::ImageKind::RledClippedSolid`]), whose cut
+//! changes each frame a stellar scrolls across the world's edge, so the
+//! atlas, which never evicts, must not hold them.
 //!
-//! Each stream a frame is drawn from holds one square page, numbered down
-//! from `PageId(u32::MAX)`, so it never takes an atlas page's id, which
-//! count up from 0. The frame is uploaded to the page's top-left corner
-//! only when its stream's generation moves on: the same frame drawn again
-//! costs nothing. A page too small for a new frame is created again,
-//! bigger, under the same id. A stream not drawn in a frame lets its page
-//! go to the next stream drawn, so the pages never outnumber the movies
-//! drawn at once.
+//! Each owner an image is drawn for (a movie's stream, or a clipped
+//! sprite's key) holds one square page, numbered down from
+//! `PageId(u32::MAX)`, so it never takes an atlas page's id, which count
+//! up from 0. The image is uploaded to the page's top-left corner only
+//! when its owner's generation moves on: the same image drawn again costs
+//! nothing. A page too small for a new image is created again, bigger,
+//! under the same id. An owner not drawn in a frame lets its page go to
+//! the next owner drawn, so the pages never outnumber the images drawn at
+//! once.
 
-use nova_view::{MovieFrame, StreamId};
+use nova_data::graphics::Image;
+use nova_view::{ImageKey, MovieFrame, StreamId};
 
 use crate::atlas::{AtlasEntry, PageId, Uv};
 use crate::gpu::{Gpu, MAX_TEXTURE_SIDE};
 use crate::viewport::PixelRect;
 
-/// The frame a page holds.
+/// Who a page's image is drawn for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Owner {
+    /// A movie's stream.
+    Stream(StreamId),
+    /// A sprite frame the clipped blit draws, by its key.
+    Clipped(ImageKey),
+}
+
+/// The image a page holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Held {
-    stream: StreamId,
+    owner: Owner,
     generation: u64,
+    /// Where on the page it is.
+    rect: PixelRect,
+    /// The size its owner draws it at.
+    size: (u32, u32),
 }
 
 /// One stream page.
@@ -29,13 +48,31 @@ struct Slot {
     page: PageId,
     /// Its side, 0 until it is created.
     side: u32,
-    /// The frame on it, if a stream holds it.
+    /// The image on it, if an owner holds it.
     held: Option<Held>,
     /// Whether it was drawn in the frame being made.
     drawn: bool,
 }
 
-/// The stream pages and the frames on them.
+impl Slot {
+    /// Where `rect` on this page is.
+    fn entry(&self, rect: PixelRect) -> AtlasEntry {
+        let page_side = self.side as f32;
+        AtlasEntry {
+            page: self.page,
+            rect,
+            uv: Uv {
+                u0: 0.0,
+                v0: 0.0,
+                u1: rect.w as f32 / page_side,
+                v1: rect.h as f32 / page_side,
+            },
+            opened: false,
+        }
+    }
+}
+
+/// The stream pages and the images on them.
 #[derive(Debug, Default)]
 pub(crate) struct Streams {
     slots: Vec<Slot>,
@@ -52,53 +89,91 @@ impl Streams {
     /// hold it yet: none for a frame with no pixels, or one wider or taller
     /// than [`MAX_TEXTURE_SIDE`].
     pub(crate) fn place(&mut self, frame: &MovieFrame, gpu: &mut impl Gpu) -> Option<AtlasEntry> {
-        let (w, h) = frame.size();
+        let owner = Owner::Stream(frame.stream());
+        let generation = frame.generation();
+        match self.held(owner, generation) {
+            Some((entry, _)) => Some(entry),
+            None => self.put(owner, generation, frame.image(), frame.size(), gpu),
+        }
+    }
+
+    /// Where `owner`'s image of `generation` is on its page, and the size
+    /// it is drawn at, if a page holds it; it counts as drawn in this frame.
+    pub(crate) fn held(
+        &mut self,
+        owner: Owner,
+        generation: u64,
+    ) -> Option<(AtlasEntry, (u32, u32))> {
+        let slot = self.slots.iter_mut().find(|slot| {
+            slot.held
+                .is_some_and(|held| held.owner == owner && held.generation == generation)
+        })?;
+        slot.drawn = true;
+        let held = slot.held?;
+        Some((slot.entry(held.rect), held.size))
+    }
+
+    /// Uploads `image` as `owner`'s of `generation`, drawn at `drawn_at`,
+    /// onto its page, and gives where it is: none for an image with no pixels,
+    /// or one wider or taller than [`MAX_TEXTURE_SIDE`].
+    pub(crate) fn put(
+        &mut self,
+        owner: Owner,
+        generation: u64,
+        image: &Image,
+        drawn_at: (u32, u32),
+        gpu: &mut impl Gpu,
+    ) -> Option<AtlasEntry> {
+        let (w, h) = (image.width(), image.height());
         let side = w.max(h);
         if w == 0 || h == 0 || side > MAX_TEXTURE_SIDE {
             return None;
         }
-        let held = Held {
-            stream: frame.stream(),
-            generation: frame.generation(),
-        };
-        let index = self.slot_for(held.stream, side);
+        let index = self.slot_for(owner, side);
         let slot = &mut self.slots[index];
         slot.drawn = true;
         if slot.side < side {
             gpu.create_page(slot.page, side);
             slot.side = side;
-            slot.held = None;
         }
         let rect = PixelRect { x: 0, y: 0, w, h };
-        if slot.held != Some(held) {
-            gpu.upload(slot.page, rect, frame.image());
-            slot.held = Some(held);
-        }
-        let page_side = slot.side as f32;
-        Some(AtlasEntry {
-            page: slot.page,
+        gpu.upload(slot.page, rect, image);
+        slot.held = Some(Held {
+            owner,
+            generation,
             rect,
-            uv: Uv {
-                u0: 0.0,
-                v0: 0.0,
-                u1: w as f32 / page_side,
-                v1: h as f32 / page_side,
-            },
-            opened: false,
-        })
+            size: drawn_at,
+        });
+        Some(slot.entry(rect))
     }
 
-    /// The slot `stream` holds; else a free one, one at least `side` big
-    /// first; else a new one.
-    fn slot_for(&mut self, stream: StreamId, side: u32) -> usize {
-        let holds = |slot: &Slot| slot.held.is_some_and(|held| held.stream == stream);
+    /// The slot `owner` holds; else a free one, one at least `side` big
+    /// first; else the last one a clipped sprite holds that hasn't been
+    /// drawn in this frame; else a new one.
+    ///
+    /// A clipped sprite's key changes as its cut does, so its page would
+    /// otherwise stay held, by a key not drawn again, until the frame
+    /// ends, and a sprite crossing the world's edge would take a second
+    /// page. Taking the last such page keeps the pages to the clipped
+    /// sprites drawn at once, and leaves the earlier pages, which the
+    /// sprites drawn first took, to those sprites when they are drawn
+    /// again in the same order.
+    fn slot_for(&mut self, owner: Owner, side: u32) -> usize {
+        let holds = |slot: &Slot| slot.held.is_some_and(|held| held.owner == owner);
         let free = |slot: &Slot| slot.held.is_none() && !slot.drawn;
+        let stale = |slot: &Slot| {
+            !slot.drawn
+                && slot
+                    .held
+                    .is_some_and(|held| matches!(held.owner, Owner::Clipped(_)))
+        };
         if let Some(index) = self.slots.iter().position(holds) {
             return index;
         }
         if let Some(index) = (self.slots.iter())
             .position(|slot| free(slot) && slot.side >= side)
             .or_else(|| self.slots.iter().position(free))
+            .or_else(|| self.slots.iter().rposition(stale))
         {
             return index;
         }
@@ -112,8 +187,8 @@ impl Streams {
         self.slots.len() - 1
     }
 
-    /// Ends a frame: each page whose stream wasn't drawn in it is freed for
-    /// the next stream drawn, which uploads onto it.
+    /// Ends a frame: each page whose owner wasn't drawn in it is freed for
+    /// the next owner drawn, which uploads onto it.
     pub(crate) fn end_frame(&mut self) {
         for slot in &mut self.slots {
             if !std::mem::take(&mut slot.drawn) {

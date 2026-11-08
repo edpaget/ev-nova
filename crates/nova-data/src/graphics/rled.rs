@@ -1,11 +1,12 @@
-//! `rlëD`: EV Nova's run-length encoded sprite sheets, 16-bit and 8-bit.
+//! `rlëD`: EV Nova's run-length encoded sprite sheets, 16-bit, 8-bit, and
+//! of any other depth the original draws.
 //!
 //! Sources: the EV Nova Bible for meaning (16-bit run-length sprite sheets,
 //! referenced by `spïn` and `shän`), and the open-source ResForge editor's
 //! (MIT) `rlëD` decoder, consulted as a second reading for the byte layout
 //! and token semantics. No code was copied. How the original fills a run,
-//! and how it draws an 8-bit sheet ([`super::rled8`]), come from its own
-//! blitter.
+//! and how it draws an 8-bit sheet ([`super::rled8`]) or a sheet of any
+//! other depth ([`super::rled_wide`]), come from its own blitter.
 
 use nova_rsrc::ResType;
 
@@ -14,7 +15,10 @@ use super::budget::check_budget;
 use super::color::rgb555;
 use super::image::Image;
 use super::reader::Reader;
+use super::rled_clipped::{clip_quirks, takes_the_blit};
+use super::rled_wide::decode_wide;
 use super::rled8::{EightBitReading, Rled8};
+use super::rled32::ThirtyTwoBitReading;
 use super::sheet::{SheetLayout, SpriteSheet};
 
 /// The `rlëD` resource type: `rl`, Mac Roman `ë` (`0x91`), `D`.
@@ -49,6 +53,20 @@ pub struct RledInfo {
     /// Whether any frame has a run, so the decoded sheet would keep
     /// [`SpriteSheet::solid_frames`].
     pub has_runs: bool,
+    /// The header's depth, as the decoded sheet's [`SpriteSheet::depth`]:
+    /// 16, 8, 32 or another the original draws.
+    pub depth: u16,
+    /// Each frame's image's width in pixels, as the decoded sheet's
+    /// [`SpriteSheet::image_width`]: the frame's, unless the sheet draws
+    /// past its box, as a 32-bit sheet does.
+    pub image_width: u32,
+    /// Each frame's image's height in pixels
+    /// ([`SpriteSheet::image_height`]).
+    pub image_height: u32,
+    /// Whether a frame the world's edge cuts can draw otherwise than its
+    /// image cut to its box, as the decoded sheet's
+    /// [`SpriteSheet::clip_quirks`].
+    pub clip_quirks: bool,
 }
 
 /// Decodes an `rlëD` to its frames, arranged by `layout` (or
@@ -56,8 +74,8 @@ pub struct RledInfo {
 /// original's 16-bit world draws it ([`EightBitReading::AsDrawn`]); see
 /// [`decode_rled_as`] for the other reading.
 ///
-/// The 16-byte header is width, height, depth (16 or 8), palette (unused),
-/// frame count and three reserved words. Tokens follow, each a big-endian
+/// The 16-byte header is width, height, depth, palette (unused), frame
+/// count and three reserved words. Tokens follow, each a big-endian
 /// `u32` with an opcode in the top byte and a byte count below. At 16 bits:
 ///
 /// - `0` ends the frame. Lines not drawn stay transparent (every stock
@@ -83,28 +101,82 @@ pub struct RledInfo {
 /// translucency or blend, so a view draws these again over the layer.
 /// A sheet with none keeps nothing more.
 ///
-/// Tokens after the last frame are ignored. Any other depth is
-/// [`GraphicsError::UnsupportedDepth`].
+/// Tokens after the last frame are ignored. A pixel token of no bytes is
+/// [`GraphicsError::RunawaySwap`]: the original's byte swap runs away on
+/// it (@0xbe460-0xbe46a).
+///
+/// A sheet of any other depth whose signed value is above 7, 32 among
+/// them, decodes byte for byte as the original's 16-bit world draws it,
+/// its images padded about its box where they overhang it (see
+/// [`super::rled_wide`]). A depth of 7 or less, or of 0x8000 and up, is
+/// [`GraphicsError::UnsupportedDepth`]: the original's draw procs assert
+/// on it, which quits the game.
 pub fn decode_rled(data: &[u8], layout: Option<SheetLayout>) -> Result<SpriteSheet, GraphicsError> {
-    decode_rled_as(data, layout, EightBitReading::AsDrawn)
+    decode_rled_with(data, layout, RledReadings::default())
 }
 
 /// Decodes an `rlëD` as [`decode_rled`] does, reading an 8-bit sheet as
-/// `reading` says. A 16-bit sheet decodes the same under either reading.
+/// `reading` says, and a 32-bit one as the original draws it. A sheet of
+/// another depth decodes the same under either reading.
 pub fn decode_rled_as(
     data: &[u8],
     layout: Option<SheetLayout>,
     reading: EightBitReading,
 ) -> Result<SpriteSheet, GraphicsError> {
+    let readings = RledReadings {
+        eight_bit: reading,
+        ..RledReadings::default()
+    };
+    decode_rled_with(data, layout, readings)
+}
+
+/// How the depths that have another reading are read: 8 bits and 32. Each
+/// defaults to the original's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct RledReadings {
+    /// How an 8-bit sheet is read.
+    pub eight_bit: EightBitReading,
+    /// How a 32-bit sheet is read.
+    pub thirty_two_bit: ThirtyTwoBitReading,
+}
+
+/// Decodes an `rlëD` as [`decode_rled`] does, reading an 8-bit or 32-bit
+/// sheet as `readings` say. A sheet of any other depth decodes the same
+/// under every reading.
+pub fn decode_rled_with(
+    data: &[u8],
+    layout: Option<SheetLayout>,
+    readings: RledReadings,
+) -> Result<SpriteSheet, GraphicsError> {
     let mut r = Reader::new(data);
     let header = read_header(&mut r, data.len())?;
-    let (width, height) = (header.width, header.height);
-    let units = Units::of(&header, reading);
     let layout = layout.unwrap_or(SheetLayout::DEFAULT);
+    let sheet = decode_plain(data, r.pos(), &header, layout, readings)?;
+    let quirks = takes_the_blit(&header, readings) && clip_quirks(data, &header);
+    Ok(sheet.with_clip_quirks(quirks))
+}
+
+/// The sheet [`decode_rled_with`] decodes, before its
+/// [`SpriteSheet::clip_quirks`]: `data`'s tokens from `start`, under the
+/// checked `header`.
+fn decode_plain(
+    data: &[u8],
+    start: usize,
+    header: &Header,
+    layout: SheetLayout,
+    readings: RledReadings,
+) -> Result<SpriteSheet, GraphicsError> {
+    let (width, height) = (header.width, header.height);
+    if header.depth != DEPTH && header.depth != DEPTH_8 {
+        return decode_wide(data, header, layout, readings.thirty_two_bit)
+            .map(|sheet| sheet.with_depth(header.depth));
+    }
+    let reading = readings.eight_bit;
+    let units = Units::of(header, reading);
     if header.depth == DEPTH_8 {
         let mut painter = Rled8::new(reading, width, height, header.count);
-        walk(data, r.pos(), &header, units, &mut painter)?;
-        Ok(painter.finish(layout))
+        walk(data, start, header, units, &mut painter)?;
+        Ok(painter.finish(layout).with_depth(DEPTH_8))
     } else {
         let mut painter = Painter {
             width,
@@ -114,20 +186,40 @@ pub fn decode_rled_as(
             solids: Vec::with_capacity(usize::from(header.count)),
             solid: None,
         };
-        walk(data, r.pos(), &header, units, &mut painter)?;
+        walk(data, start, header, units, &mut painter)?;
         let sheet = SpriteSheet::new(width, height, painter.frames, layout);
         Ok(sheet.with_solid(solid_frames(painter.solids, width, height)))
     }
 }
 
-/// Reads an `rlëD`'s frame size, frame count and whether it has runs,
-/// without decoding a pixel.
+/// Reads an `rlëD`'s frame size, frame count, whether it has runs, its
+/// image size and its clip quirks, without decoding a pixel of a 16 or
+/// 8-bit sheet.
 ///
 /// It walks the same tokens as [`decode_rled`], so it fails exactly where
 /// and as that does, and succeeds with what the decoded sheet would hold.
 pub fn scan_rled(data: &[u8]) -> Result<RledInfo, GraphicsError> {
     let mut r = Reader::new(data);
     let header = read_header(&mut r, data.len())?;
+    if header.depth != DEPTH && header.depth != DEPTH_8 {
+        // Either reading loads, fails and sizes a sheet alike.
+        let sheet = decode_wide(
+            data,
+            &header,
+            SheetLayout::DEFAULT,
+            ThirtyTwoBitReading::AsDrawn,
+        )?;
+        return Ok(RledInfo {
+            frame_width: header.width,
+            frame_height: header.height,
+            frames: header.count,
+            has_runs: sheet.solid_frames().is_some(),
+            depth: header.depth,
+            image_width: sheet.image_width(),
+            image_height: sheet.image_height(),
+            clip_quirks: scanned_quirks(data, &header),
+        });
+    }
     let units = Units::of(&header, EightBitReading::AsDrawn);
     let mut scanner = Scanner { has_runs: false };
     walk(data, r.pos(), &header, units, &mut scanner)?;
@@ -136,6 +228,10 @@ pub fn scan_rled(data: &[u8]) -> Result<RledInfo, GraphicsError> {
         frame_height: header.height,
         frames: header.count,
         has_runs: scanner.has_runs,
+        depth: header.depth,
+        image_width: header.width,
+        image_height: header.height,
+        clip_quirks: scanned_quirks(data, &header),
     })
 }
 
@@ -164,11 +260,19 @@ pub fn rled_frame(data: &[u8]) -> Result<RledFrameSize, GraphicsError> {
     })
 }
 
+/// The [`SpriteSheet::clip_quirks`] of the sheet `data`, whose checked
+/// header is `header`, as [`decode_rled`] reads it: the walk
+/// [`decode_rled_with`] takes, under the default readings.
+fn scanned_quirks(data: &[u8], header: &Header) -> bool {
+    takes_the_blit(header, RledReadings::default()) && clip_quirks(data, header)
+}
+
 /// An `rlëD`'s checked header.
 pub(super) struct Header {
     pub(super) width: u32,
     pub(super) height: u32,
-    /// [`DEPTH`] or [`DEPTH_8`].
+    /// Above 7 as a signed word: [`DEPTH`], [`DEPTH_8`], or another the
+    /// original draws as [`super::rled_wide`] says.
     pub(super) depth: u16,
     /// At least one.
     pub(super) count: u16,
@@ -182,7 +286,10 @@ pub(super) fn read_header(r: &mut Reader<'_>, input_len: usize) -> Result<Header
     r.skip(2)?; // palette
     let count = r.u16()?;
     r.skip(6)?; // reserved
-    if depth != DEPTH && depth != DEPTH_8 {
+    // The draw procs compare the depth signed (`cmpw $0x7; jle`,
+    // @0xbb46e-0xbb476).
+    #[allow(clippy::cast_possible_wrap)]
+    if depth as i16 <= 7 {
         return Err(GraphicsError::UnsupportedDepth { depth });
     }
     if width == 0 || height == 0 {
@@ -305,8 +412,11 @@ fn walk(
                 let Some(y) = lines.checked_sub(1) else {
                     return Err(GraphicsError::TokenOutsideLine { offset });
                 };
-                if units.size == 2 && op == PIXELS && token & 1 == 1 {
+                if op == PIXELS && !(token & COUNT_MASK).is_multiple_of(units.size) {
                     return Err(GraphicsError::OddByteCount { offset });
+                }
+                if units.size > 1 && op == PIXELS && len == 0 {
+                    return Err(GraphicsError::RunawaySwap { offset });
                 }
                 if x + len > units.row_len {
                     return Err(GraphicsError::LineOverflow {
@@ -426,6 +536,7 @@ mod tests {
     use crate::graphics::color::rgb555;
     use crate::graphics::fixture::{RledBuilder, RledFrame};
     use crate::graphics::image::Image;
+    use crate::graphics::rled32::ThirtyTwoBitReading;
 
     #[test]
     fn the_resource_type_is_rled_in_mac_roman() {
@@ -658,8 +769,8 @@ mod tests {
             Err(GraphicsError::UnsupportedDepth { depth: 1 })
         );
         assert_eq!(
-            one(RledBuilder::new(2, 2).depth(32)),
-            Err(GraphicsError::UnsupportedDepth { depth: 32 })
+            one(RledBuilder::new(2, 2).depth(0x8000)),
+            Err(GraphicsError::UnsupportedDepth { depth: 0x8000 })
         );
         assert_eq!(
             one(RledBuilder::new(0, 2)),
@@ -679,6 +790,35 @@ mod tests {
             one(RledBuilder::new(2, 2).frame_count(0)),
             Err(GraphicsError::NoFrames)
         );
+    }
+
+    #[test]
+    fn a_32_bit_sheet_decodes_as_drawn_unless_asked_otherwise() {
+        let bytes = RledBuilder::new(1, 1)
+            .depth(32)
+            .count_lines()
+            .frame(|f| f.line().pixels32(&[0x0000_7C00]))
+            .build();
+        let as_drawn = RledReadings {
+            thirty_two_bit: ThirtyTwoBitReading::AsDrawn,
+            ..RledReadings::default()
+        };
+        let drawn = decode_rled_with(&bytes, None, as_drawn).unwrap();
+        assert_eq!(decode(&bytes), Ok(drawn.clone()));
+        assert_eq!(
+            decode_rled_as(&bytes, None, EightBitReading::SystemPalette),
+            Ok(drawn.clone())
+        );
+        assert_eq!(drawn.image_width(), 3);
+        let true_colour = RledReadings {
+            thirty_two_bit: ThirtyTwoBitReading::TrueColour,
+            ..RledReadings::default()
+        };
+        let three = SheetLayout::new(3).unwrap();
+        let sheet = decode_rled_with(&bytes, Some(three), true_colour).unwrap();
+        // In images the size of the drawn sheet's.
+        assert_eq!((sheet.image_width(), sheet.layout()), (3, three));
+        assert_ne!(sheet.frames(), drawn.frames());
     }
 
     #[test]
@@ -703,12 +843,57 @@ mod tests {
             decode_rled_as(&bytes, None, EightBitReading::SystemPalette),
             decode(&bytes)
         );
-        // Any other depth is unsupported.
-        let bytes = RledBuilder::new(2, 1).depth(32).frame(|f| f).build();
+        // A depth of 7 or less is unsupported.
+        let bytes = RledBuilder::new(2, 1).depth(1).frame(|f| f).build();
         assert_eq!(
             decode_rled_as(&bytes, None, EightBitReading::SystemPalette),
-            Err(GraphicsError::UnsupportedDepth { depth: 32 })
+            Err(GraphicsError::UnsupportedDepth { depth: 1 })
         );
+    }
+
+    /// One-pixel sheets of depth 16, 8 and 32.
+    fn sheets_of_each_depth() -> [(u16, Vec<u8>); 3] {
+        [
+            (
+                16,
+                RledBuilder::new(1, 1)
+                    .frame(|f| f.line().pixels(&[RED]))
+                    .build(),
+            ),
+            (
+                8,
+                RledBuilder::new(2, 1)
+                    .depth(8)
+                    .frame(|f| f.line().pixels8(&[0x00, 0x7C]))
+                    .build(),
+            ),
+            (
+                32,
+                RledBuilder::new(1, 1)
+                    .depth(32)
+                    .count_lines()
+                    .frame(|f| f.line().pixels32(&[0x0000_7C00]))
+                    .build(),
+            ),
+        ]
+    }
+
+    #[test]
+    fn a_sheet_reports_its_header_depth_under_either_reading() {
+        for (depth, bytes) in sheets_of_each_depth() {
+            for reading in [EightBitReading::AsDrawn, EightBitReading::SystemPalette] {
+                let sheet = decode_rled_as(&bytes, None, reading).unwrap();
+                assert_eq!(sheet.depth(), depth, "{depth} {reading:?}");
+            }
+            assert_eq!(decode(&bytes).unwrap().depth(), depth);
+        }
+    }
+
+    #[test]
+    fn a_scan_reports_the_header_depth() {
+        for (depth, bytes) in sheets_of_each_depth() {
+            assert_eq!(scan_rled(&bytes).map(|info| info.depth), Ok(depth));
+        }
     }
 
     #[test]
@@ -875,6 +1060,29 @@ mod tests {
         );
     }
 
+    /// `_BlitPixieRLESwap` swaps `count / 2` words from 1 up, so a pixel
+    /// token of no bytes runs it away (@0xbe460-0xbe46a).
+    #[test]
+    fn a_16_bit_pixel_token_of_no_bytes_is_an_error() {
+        let bytes = RledBuilder::new(2, 1)
+            .frame(|f| f.line().token(2, 0).pixels(&[RED]))
+            .build();
+        assert_eq!(
+            decode(&bytes),
+            Err(GraphicsError::RunawaySwap { offset: 20 })
+        );
+        assert_eq!(
+            scan_rled(&bytes),
+            Err(GraphicsError::RunawaySwap { offset: 20 })
+        );
+        // An 8-bit sheet steps over its bytes instead: none is nothing.
+        let bytes = RledBuilder::new(2, 1)
+            .depth(8)
+            .frame(|f| f.line().token(2, 0))
+            .build();
+        assert!(decode(&bytes).is_ok());
+    }
+
     #[test]
     fn a_huge_header_in_a_tiny_sheet_is_too_large() {
         let bytes = RledBuilder::new(65535, 65535).frame_count(65535).build();
@@ -894,6 +1102,10 @@ mod tests {
             frame_height: sheet.frame_height(),
             frames: sheet.frames().len() as u16,
             has_runs: sheet.solid_frames().is_some(),
+            depth: sheet.depth(),
+            image_width: sheet.image_width(),
+            image_height: sheet.image_height(),
+            clip_quirks: sheet.clip_quirks(),
         }
     }
 
@@ -908,6 +1120,10 @@ mod tests {
             frame_height: 2,
             frames: 2,
             has_runs: true,
+            depth: 16,
+            image_width: 3,
+            image_height: 2,
+            clip_quirks: false,
         };
         assert_eq!(scan_rled(&bytes), Ok(expected));
         assert_eq!(decode(&bytes).map(|sheet| info_of(&sheet)), Ok(expected));
@@ -927,8 +1143,67 @@ mod tests {
                 frame_height: 1,
                 frames: 3,
                 has_runs: false,
+                depth: 16,
+                image_width: 4,
+                image_height: 1,
+                clip_quirks: false,
             })
         );
+    }
+
+    /// A 32-bit sheet whose image overhangs its box, a 16-bit sheet whose
+    /// two-colour run is a clip quirk, and a plain 16-bit sheet.
+    fn sheets_of_each_edge() -> [(&'static str, Vec<u8>); 3] {
+        [
+            (
+                "overhanging",
+                RledBuilder::new(1, 1)
+                    .depth(32)
+                    .count_lines()
+                    .frame(|f| f.line().pixels32(&[0x0000_7C00]))
+                    .build(),
+            ),
+            (
+                "quirky",
+                RledBuilder::new(4, 1)
+                    .count_lines()
+                    .frame(|f| f.line().run(4, RED, BLUE))
+                    .build(),
+            ),
+            (
+                "plain",
+                RledBuilder::new(2, 1)
+                    .count_lines()
+                    .frame(|f| f.line().pixels(&[RED, GREEN]))
+                    .build(),
+            ),
+        ]
+    }
+
+    #[test]
+    fn a_scan_reads_the_image_size_and_clip_quirks_as_the_decode_has_them() {
+        let [overhanging, quirky, plain] = sheets_of_each_edge();
+        for (name, bytes) in [&overhanging, &quirky, &plain] {
+            assert_eq!(
+                scan_rled(bytes),
+                decode(bytes).map(|sheet| info_of(&sheet)),
+                "{name}"
+            );
+        }
+        let overhanging = scan_rled(&overhanging.1).unwrap();
+        assert_ne!(
+            (overhanging.image_width, overhanging.image_height),
+            (overhanging.frame_width, overhanging.frame_height),
+            "the 32-bit sheet overhangs"
+        );
+        assert!(!overhanging.clip_quirks);
+        assert!(
+            scan_rled(&quirky.1).unwrap().clip_quirks,
+            "a two-colour run"
+        );
+        let plain = scan_rled(&plain.1).unwrap();
+        assert_eq!((plain.image_width, plain.image_height), (2, 1));
+        assert!(!plain.clip_quirks);
     }
 
     /// Every way a sheet can be broken fails the scan as it fails the
@@ -942,7 +1217,7 @@ mod tests {
         let cases: Vec<(&str, Vec<u8>)> = vec![
             (
                 "bad depth",
-                RledBuilder::new(2, 2).depth(24).frame(|f| f).build(),
+                RledBuilder::new(2, 2).depth(7).frame(|f| f).build(),
             ),
             ("zero width", RledBuilder::new(0, 2).frame(|f| f).build()),
             ("zero height", RledBuilder::new(2, 0).frame(|f| f).build()),
@@ -963,6 +1238,12 @@ mod tests {
                 RledBuilder::new(2, 2)
                     .frame(RledFrame::line)
                     .frame(|f| f.run(1, RED, RED))
+                    .build(),
+            ),
+            (
+                "runaway swap",
+                RledBuilder::new(3, 1)
+                    .frame(|f| f.line().token(2, 0))
                     .build(),
             ),
             (
@@ -1029,7 +1310,7 @@ mod tests {
         let cases: Vec<(&str, Vec<u8>)> = vec![
             (
                 "bad depth",
-                RledBuilder::new(2, 2).depth(12).frame(|f| f).build(),
+                RledBuilder::new(2, 2).depth(7).frame(|f| f).build(),
             ),
             ("zero width", RledBuilder::new(0, 2).frame(|f| f).build()),
             ("zero height", RledBuilder::new(2, 0).frame(|f| f).build()),

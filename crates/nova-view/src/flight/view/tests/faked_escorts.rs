@@ -3,6 +3,7 @@
 //! (rdm:phase/view-sim-seam/phase-10-comm-escorts-boarding-on-port): the
 //! menu opened, timed out and drawn over the frame's rows
 //! ([`FrameHud::escort_rows`](nova_sim::flight_frame::FrameHud::escort_rows)),
+//! held between its redraws from each pass's,
 //! the commands the keys send and what the view says of the flight's
 //! answers. What a command does to the escorts is nova-sim's
 //! (`session::escorts`, `session::fighters`, `session::voices`). Kept
@@ -15,7 +16,9 @@ use crate::flight::escorts::{ABSENT_ROW, MENU_AT, MENU_HEIGHT, MENU_TIMEOUT, MEN
 use nova_sim::flight_frame::{
     EscortMenuPass, FlightEvent, FrameHud, PassReport, StepReport, StepRun,
 };
-use nova_sim::{Commanded, EscortCommand, EscortGroup, EscortOrder, SimSound, TargetPick};
+use nova_sim::{
+    ClassRow, Commanded, EscortCommand, EscortGroup, EscortOrder, SimSound, TargetPick,
+};
 
 /// A frame in Sol, the player alone, the escort rows of `present` shown
 /// and an escort flying when there are any.
@@ -71,11 +74,22 @@ fn ui_heard(view: &mut Faked) -> Vec<UiSound> {
 }
 
 /// A pass that reached `_HandlePlayer`'s escort-menu block, with an
-/// escort flying as `view`'s frame shows, clearing a class's kept order
-/// as `cleared` says.
+/// escort flying as `view`'s frame shows and its rows, clearing a class's
+/// kept order as `cleared` says.
 fn menu_pass(view: &Faked, cleared: bool) -> EscortMenuPass {
+    rows_pass(
+        view.frame.hud.escort_rows,
+        u32::from(view.frame.hud.escorts_flying),
+        cleared,
+    )
+}
+
+/// A pass that reached `_HandlePlayer`'s escort-menu block with `rows`,
+/// `flying` escorts flying, clearing as `cleared` says.
+fn rows_pass(rows: [ClassRow; 4], flying: u32, cleared: bool) -> EscortMenuPass {
     EscortMenuPass {
-        escorts_flying: view.frame.hud.escorts_flying,
+        escorts_flying: flying,
+        rows,
         class_orders_cleared: cleared,
     }
 }
@@ -119,7 +133,7 @@ pub(super) fn single_steps(view: &mut Faked, n: u32) {
 /// `dt` of flight time, then the escort menu's frame of one single-time
 /// flight step, as a frame's tick runs it.
 fn menu_tick(view: &mut Faked, dt: Duration) {
-    view.step_stellars(dt);
+    view.advance_clock(dt);
     single_steps(view, 1);
 }
 
@@ -242,7 +256,7 @@ fn the_menu_fades_over_32_steps_once_timed_out_then_shuts_silently() {
     ui_heard(&mut view);
     menu_tick(&mut view, MENU_TIMEOUT);
     assert_eq!(view.escort_menu().level(), Some(32), "480 ticks: not yet");
-    view.step_stellars(TICK);
+    view.advance_clock(TICK);
     single_steps(&mut view, 0);
     assert_eq!(view.escort_menu().level(), Some(32), "no step, no drop");
     single_steps(&mut view, 2);
@@ -1145,7 +1159,7 @@ fn in_double_time_the_menu_fades_a_level_on_each_pass_and_shuts_16_steps_after_i
             view.hold_key(MENU_KEY);
         }
         ui_heard(&mut view);
-        view.step_stellars(MENU_TIMEOUT + TICK);
+        view.advance_clock(MENU_TIMEOUT + TICK);
         double_steps(&mut view, 1);
         assert_eq!(view.escort_menu().level(), Some(30), "two levels a step");
         double_steps(&mut view, 14);
@@ -1183,7 +1197,7 @@ fn a_double_step_whose_second_pass_counts_none_flying_fades_on_that_pass_only() 
     press(&mut view, GROUP_KEYS[3]);
     let flying = Some(menu_pass(&view, false));
     let none = Some(EscortMenuPass::default());
-    view.step_stellars(TICK);
+    view.advance_clock(TICK);
     steps_reporting(&mut view, &[vec![flying, none]]);
     assert_eq!(view.escort_menu().level(), Some(31), "not timed out: once");
     assert_eq!(view.escort_menu().group(), EscortGroup::All);
@@ -1213,7 +1227,7 @@ fn the_menu_is_drawn_at_its_fades_level() {
     let mut view = world(catalog(), fleet_of(&[EscortClass::Warship])).with_overlays(TITLED);
     press(&mut view, MENU_KEY);
     assert_eq!(title_alpha(&view), Some(255), "in full");
-    view.step_stellars(MENU_TIMEOUT + TICK);
+    view.advance_clock(MENU_TIMEOUT + TICK);
     single_steps(&mut view, 16);
     assert_eq!(view.escort_menu().level(), Some(16));
     assert_eq!(title_alpha(&view), Some(128), "at 16/32");
@@ -1232,4 +1246,289 @@ fn tab_held_keeps_the_click_off_the_escort_menu() {
     click(&mut view, row_at(3));
     assert_eq!(view.escort_menu().group(), group, "no row taken");
     assert!(!clicked_in_space(&view));
+}
+
+// The menu's rows, held between `_DrawEscortMenuInFrame`'s redraws
+// (`_ShowEscortMenu` @0x56658 and a change in the count @0x6dfd0), by
+// `RuleKey::HudCadence`.
+
+/// Whether the world `view` draws shows the menu text `text` in `color`.
+fn menu_shows(view: &Faked, text: &str, color: Color) -> bool {
+    drawn_texts(&world_list(view)).contains(&(text.to_owned(), color))
+}
+
+/// The row the world `view` draws the menu's bar on, from 0.
+fn bar_drawn_on(view: &Faked) -> Option<usize> {
+    world_list(view).iter().find_map(|command| match command {
+        DrawCommand::Line { from, width, .. } if *width == 13.0 && from.x == MENU_AT.x + 4.0 => {
+            (0..5).find(|&n| from.y == MENU_AT.y + 36.5 + 18.0 * n as f32)
+        }
+        _ => None,
+    })
+}
+
+/// `rows` with `class`'s row `present` and holding `order`.
+fn with_row(
+    mut rows: [ClassRow; 4],
+    class: EscortClass,
+    present: bool,
+    order: Option<EscortOrder>,
+) -> [ClassRow; 4] {
+    for row in &mut rows {
+        if row.class == class {
+            row.present = present;
+            row.order = order;
+        }
+    }
+    rows
+}
+
+/// The flight's frame shows `rows` from now on.
+fn frame_rows(view: &mut Faked, rows: [ClassRow; 4]) {
+    view.sim.frame_mut().hud.escort_rows = rows;
+    view.refresh_frame();
+}
+
+#[test]
+fn the_menu_shows_on_the_frame_it_opens() {
+    // E's `_ShowEscortMenu` (@0x6df2e) draws at once.
+    let mut view = escorted();
+    press(&mut view, MENU_KEY);
+    assert!(menu_shows(&view, "4) Warships", Color::WHITE));
+    assert!(menu_shows(&view, "2) Fighters", ABSENT_ROW));
+    assert_eq!(bar_drawn_on(&view), Some(0));
+}
+
+#[test]
+fn a_group_selected_shows_on_the_frame_of_its_press() {
+    // @0x6e114 and @0x6a107.
+    let mut view = escorted();
+    press(&mut view, MENU_KEY);
+    single_steps(&mut view, 1);
+    press(&mut view, GROUP_KEYS[3]);
+    assert_eq!(bar_drawn_on(&view), Some(3), "a key");
+    click(&mut view, row_at(4));
+    assert_eq!(bar_drawn_on(&view), Some(4), "a row clicked");
+}
+
+#[test]
+fn an_order_given_shows_on_the_frame_of_its_command() {
+    // @0x6e2a2: the next pass's rows carry the command's order.
+    let mut view = escorted();
+    press(&mut view, MENU_KEY);
+    single_steps(&mut view, 1);
+    view.sim
+        .queue_answer(commanded(EscortGroup::All, EscortCommand::Attack, false));
+    press(&mut view, ESCORT_ATTACK_KEY);
+    let attacking = with_row(
+        view.frame.hud.escort_rows,
+        EscortClass::Warship,
+        true,
+        Some(EscortOrder::Attack),
+    );
+    frame_rows(&mut view, attacking);
+    steps_reporting(&mut view, &[vec![Some(rows_pass(attacking, 1, false))]]);
+    assert!(menu_shows(&view, "Attack", Color::WHITE));
+}
+
+#[test]
+fn a_class_whose_last_ship_leaves_stays_white_until_the_next_redraw() {
+    for cadence in [RuleSource::Engine, RuleSource::Bible] {
+        let mut view = faked(fleet_of(&[EscortClass::Fighter, EscortClass::Warship]));
+        view.presentation.hud_cadence = cadence;
+        let fighting = with_row(
+            view.frame.hud.escort_rows,
+            EscortClass::Fighter,
+            true,
+            Some(EscortOrder::Attack),
+        );
+        frame_rows(&mut view, fighting);
+        press(&mut view, MENU_KEY);
+        single_steps(&mut view, 1);
+        // Its berth goes inactive: the count changed when it was disabled,
+        // and that redraw still counted it.
+        let gone = with_row(fighting, EscortClass::Fighter, false, None);
+        frame_rows(&mut view, gone);
+        steps_reporting(&mut view, &[vec![Some(rows_pass(gone, 1, false))]]);
+        if cadence == RuleSource::Engine {
+            assert!(menu_shows(&view, "2) Fighters", Color::WHITE), "held");
+            assert!(menu_shows(&view, "Attack", Color::WHITE));
+            steps_reporting(&mut view, &[vec![Some(rows_pass(gone, 1, true))]]);
+            assert!(menu_shows(&view, "2) Fighters", ABSENT_ROW), "redrawn");
+        } else {
+            assert!(menu_shows(&view, "2) Fighters", ABSENT_ROW), "at once");
+            assert!(!menu_shows(&view, "Attack", Color::WHITE));
+        }
+    }
+}
+
+#[test]
+fn a_marked_ships_loss_after_the_bookkeeping_shows_at_the_next_steps_clear() {
+    let mut view = escorted();
+    let holding = with_row(
+        view.frame.hud.escort_rows,
+        EscortClass::Warship,
+        true,
+        Some(EscortOrder::Hold),
+    );
+    frame_rows(&mut view, holding);
+    press(&mut view, MENU_KEY);
+    single_steps(&mut view, 1);
+    // Lost after the pass's bookkeeping: the frame reads the order as the
+    // next bookkeeping will leave it, the pass's rows as this one did.
+    let formation = with_row(holding, EscortClass::Warship, true, None);
+    frame_rows(&mut view, formation);
+    steps_reporting(&mut view, &[vec![Some(rows_pass(holding, 1, false))]]);
+    assert!(
+        menu_shows(&view, "Hold Position", Color::WHITE),
+        "that step"
+    );
+    steps_reporting(&mut view, &[vec![Some(rows_pass(formation, 1, true))]]);
+    assert!(!menu_shows(&view, "Hold Position", Color::WHITE));
+    assert!(
+        menu_shows(&view, "Formation", Color::WHITE),
+        "the next step's"
+    );
+}
+
+/// Runs one double-time step of `first` and `second`, `between` the
+/// flight between them, held as a tick holds it: then the escort menu's
+/// frame.
+fn held_double_step(
+    view: &mut Faked,
+    first: Option<EscortMenuPass>,
+    second: Option<EscortMenuPass>,
+    between: FlightFrame,
+) {
+    let pass = |escort_menu| PassReport {
+        escort_menu,
+        double_time: true,
+        ..PassReport::default()
+    };
+    view.sim
+        .queue_report(super::stepping::doubled(pass(first), pass(second), between));
+    view.run_steps(1, None);
+    view.update_escort_menu();
+}
+
+#[test]
+fn a_double_steps_held_second_pass_fades_and_redraws_as_the_hold_goes() {
+    // `_PlayGame` draws between `_DoPlayGameWork(1)` and
+    // `_DoPlayGameWork(0)` (@0x45bc1-0x45f31): the second pass's block
+    // shows on the next frame.
+    let mut view = faded_to(22);
+    let attacking = with_row(
+        view.frame.hud.escort_rows,
+        EscortClass::Warship,
+        true,
+        Some(EscortOrder::Attack),
+    );
+    let between = view.frame.clone();
+    let first = Some(menu_pass(&view, false));
+    held_double_step(
+        &mut view,
+        first,
+        Some(rows_pass(attacking, 1, true)),
+        between,
+    );
+    assert_eq!(view.escort_menu().level(), Some(21), "the first pass's");
+    assert!(!menu_shows(&view, "Attack", Color::WHITE), "the old rows");
+    steps_reporting(&mut view, &[vec![None]]);
+    assert_eq!(
+        view.escort_menu().level(),
+        Some(32),
+        "the held pass dropped, then cleared"
+    );
+    assert!(menu_shows(&view, "Attack", Color::WHITE), "and redrew");
+}
+
+#[test]
+fn held_double_steps_shut_the_menu_on_the_release_after_the_16th() {
+    let mut view = world(catalog(), fleet_of(&[EscortClass::Warship])).with_overlays(TITLED);
+    press(&mut view, MENU_KEY);
+    view.hold_key(MENU_KEY);
+    ui_heard(&mut view);
+    view.advance_clock(MENU_TIMEOUT + TICK);
+    for _ in 0..16 {
+        let (pass, between) = (Some(menu_pass(&view, false)), view.frame.clone());
+        held_double_step(&mut view, pass, pass, between);
+    }
+    assert_eq!(view.escort_menu().level(), Some(1), "31 passes run");
+    assert_eq!(title_alpha(&view), Some(8), "drawn at 1/32");
+    assert_eq!(ui_heard(&mut view), []);
+    steps_reporting(&mut view, &[vec![None]]);
+    assert!(!view.escort_menu().is_open(), "the 16th's second pass");
+    assert_eq!(title_alpha(&view), None, "not drawn on that frame");
+    assert_eq!(ui_heard(&mut view), [UiSound::EscortMenuToggled]);
+}
+
+#[test]
+fn a_dropped_holds_second_pass_still_fades_and_redraws_the_menu() {
+    // Seating the ship afresh drops the hold unreplayed, but its second
+    // pass's escort-menu block is the flight's state, not an effect.
+    let mut view = faded_to(22);
+    let attacking = with_row(
+        view.frame.hud.escort_rows,
+        EscortClass::Warship,
+        true,
+        Some(EscortOrder::Attack),
+    );
+    let between = view.frame.clone();
+    let first = Some(menu_pass(&view, false));
+    held_double_step(
+        &mut view,
+        first,
+        Some(rows_pass(attacking, 1, true)),
+        between,
+    );
+    assert_eq!(view.escort_menu().level(), Some(21), "the first pass's");
+    view.place_ship();
+    assert_eq!(
+        view.escort_menu().level(),
+        Some(32),
+        "the dropped pass dropped, then cleared"
+    );
+    assert!(menu_shows(&view, "Attack", Color::WHITE), "and redrew");
+}
+
+#[test]
+fn a_dropped_holds_second_pass_shuts_the_menu_and_beeps_with_e_held() {
+    let mut view = world(catalog(), fleet_of(&[EscortClass::Warship])).with_overlays(TITLED);
+    press(&mut view, MENU_KEY);
+    view.hold_key(MENU_KEY);
+    ui_heard(&mut view);
+    view.advance_clock(MENU_TIMEOUT + TICK);
+    for _ in 0..16 {
+        let (pass, between) = (Some(menu_pass(&view, false)), view.frame.clone());
+        held_double_step(&mut view, pass, pass, between);
+    }
+    assert_eq!(view.escort_menu().level(), Some(1), "31 passes run");
+    assert_eq!(ui_heard(&mut view), []);
+    view.place_ship();
+    assert!(!view.escort_menu().is_open(), "the 16th's dropped pass");
+    assert_eq!(title_alpha(&view), None);
+    assert_eq!(ui_heard(&mut view), [UiSound::EscortMenuToggled]);
+}
+
+#[test]
+fn an_order_given_after_a_hold_was_taken_shows_on_the_next_steps_frame() {
+    // The held second pass ran before the command reached the flight, so
+    // its rows can't pay the redraw the command owes (@0x6e2a2).
+    let mut view = escorted();
+    press(&mut view, MENU_KEY);
+    single_steps(&mut view, 1);
+    let (pass, between) = (Some(menu_pass(&view, false)), view.frame.clone());
+    held_double_step(&mut view, pass, pass, between);
+    view.sim
+        .queue_answer(commanded(EscortGroup::All, EscortCommand::Attack, false));
+    press(&mut view, ESCORT_ATTACK_KEY);
+    let attacking = with_row(
+        view.frame.hud.escort_rows,
+        EscortClass::Warship,
+        true,
+        Some(EscortOrder::Attack),
+    );
+    frame_rows(&mut view, attacking);
+    steps_reporting(&mut view, &[vec![Some(rows_pass(attacking, 1, false))]]);
+    assert!(menu_shows(&view, "Attack", Color::WHITE));
 }

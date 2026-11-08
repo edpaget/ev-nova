@@ -102,7 +102,7 @@ pub(super) fn shown(
 /// The NPC's sheet: `rlëD` 2001 of 72 rotations, glow 2101, lights 2201.
 pub(super) fn npc_sheet() -> ShipSheet {
     ShipSheet {
-        image_id: 2001,
+        image: crate::SheetImage::Rled(2001),
         rotations: NonZeroU16::new(72).expect("non-zero"),
         glow: Some(layer(2101, 72)),
         lights: Some(layer(2201, 72)),
@@ -328,6 +328,42 @@ fn pass_raising(view: &mut Faked, combat: Vec<CombatEvent>) {
 }
 
 #[test]
+fn a_hits_flash_is_held_to_the_shields_share_of_its_classs_shield_not_its_capacity() {
+    // A capacity (80, raised by an outfit, say) twice the class's own
+    // `Shield` (40): the flash is held to the shield's share of the class's.
+    let catalog = FakeCatalog {
+        npc_sheet: Some(ShipSheet {
+            shield: Some(layer(2501, 72)),
+            ..npc_sheet()
+        }),
+        ..armed(1, &[BLASTER])
+    };
+    let mut view = flying_with(catalog, 180.0);
+    let npc = ShipRef::Npc(NPC_0);
+    redrawn(&mut view, 1, |npc| {
+        npc.shield = nova_sim::Gauge {
+            now: 20.0,
+            max: 80.0,
+        };
+        npc.class_shield = Some(40.0);
+    });
+    let hit = CombatEvent::Hit {
+        ship: npc,
+        weapon: Some(BLASTER),
+        at: Vec2::new(100.0, -100.0),
+        passes_shields: false,
+        late: false,
+    };
+    pass_raising(&mut view, vec![hit]);
+    // The hit sets the timer to 32: trunc(min(32, share(20, 40))) =
+    // trunc(min(32, 20 * 32 / 40)) = 16. Held to the capacity it would be
+    // share(20, 80) = 8; both sit inside share's 4..=32 band.
+    assert_eq!(view.flashes[&npc].drawn(), Some(16));
+    let hull = frames_of(&view, 2001)[0];
+    assert_eq!(drawn_of(&view, 2501), [(hull, lights_tint(16), true)]);
+}
+
+#[test]
 fn a_plug_in_shield_image_flashes_on_a_hit_and_fades() {
     // What the hit does to the shield is the session's; the view flashes
     // the layer from the hit the pass reports.
@@ -547,6 +583,46 @@ fn an_npcs_base_transp_gives_way_to_its_gate_fade_and_cloak() {
         npc_hull(&view, &npc),
         Some(crate::draw::translucent_tint(4, 30)),
         "at 4 over 30, not its BaseTransp"
+    );
+}
+
+/// A cloaking NPC whose sheet is 8-bit (rendering phase 2): fading, the
+/// cloak writes +0xa8 = 0x20 (@0x2d336) with factors below 0x20, which the
+/// draw proc's depth-8 dispatch draws nothing at (@0xbb8df-0xbb907); fully
+/// faded and seen, 0x1e (@0x2d1c0), whose depth-8 routine crashes the
+/// original, so it is drawn as a 16-bit hull is.
+#[test]
+fn a_cloaking_npc_whose_sheet_is_8_bit_hides_its_hull_mid_fade_and_draws_it_faint_fully_faded() {
+    let eight = ShipSheet {
+        eight_bit: true,
+        ..npc_sheet()
+    };
+    let view = flying_with(shown(display(0, 1, 0), display(0, 1, 0), Some(eight)), 0.0);
+    let sixteen = flying_with(
+        shown(display(0, 1, 0), display(0, 1, 0), Some(npc_sheet())),
+        0.0,
+    );
+    let mut npc = npc_record(&view, NPC_0);
+    assert_eq!(npc_hull(&view, &npc), Some(Color::WHITE), "uncloaked");
+    npc.cloak = CloakShown::Fading(25.0);
+    assert_eq!(npc_hull(&view, &npc), None, "mid-fade");
+    assert_eq!(npc_hull(&sixteen, &npc), Some(lights_tint(7)));
+    npc.cloak = CloakShown::Translucent(0x1e);
+    let mut list = DrawList::new();
+    view.draw_npc(&mut list, &npc, &|_| VIEW_CENTER, npc.heading);
+    let hull = list.iter().find_map(|command| match *command {
+        DrawCommand::Sprite {
+            image, tint, blend, ..
+        } if image.id == 2001 => Some((tint, blend)),
+        _ => None,
+    });
+    assert_eq!(
+        hull,
+        Some((
+            crate::draw::translucent_tint(4, 30),
+            crate::draw::Blend::OrTranslucent
+        )),
+        "fully faded and seen"
     );
 }
 

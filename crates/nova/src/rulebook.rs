@@ -35,7 +35,7 @@
 use core::num::NonZeroU32;
 use nova_audio::SettingsStore;
 
-use nova_data::graphics::EightBitReading;
+use nova_data::graphics::{EightBitReading, ThirtyTwoBitReading};
 use nova_sim::{RuleKey, RuleSource, RuleValue, Rulebook};
 use serde_json::{Map, Value};
 
@@ -184,6 +184,17 @@ pub fn eight_bit_reading(rulebook: &Rulebook) -> EightBitReading {
     }
 }
 
+/// How `rulebook` has the game's images decode a 32-bit `rlëD`
+/// ([`RuleKey::ThirtyTwoBitSheet`]): as the original's 16-bit world draws
+/// it, or as true colour at its box's width.
+#[must_use]
+pub fn thirty_two_bit_reading(rulebook: &Rulebook) -> ThirtyTwoBitReading {
+    match rulebook.source_for(RuleKey::ThirtyTwoBitSheet) {
+        RuleSource::Engine => ThirtyTwoBitReading::AsDrawn,
+        RuleSource::Bible => ThirtyTwoBitReading::TrueColour,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use nova_audio::recording::MemorySettings;
@@ -208,6 +219,27 @@ mod tests {
                     .with_override(RuleKey::EightBitSheet, RuleSource::Engine)
             ),
             EightBitReading::AsDrawn
+        );
+    }
+
+    #[test]
+    fn the_thirty_two_bit_reading_follows_the_rulebook() {
+        assert_eq!(
+            thirty_two_bit_reading(&Rulebook::default()),
+            ThirtyTwoBitReading::AsDrawn
+        );
+        assert_eq!(
+            thirty_two_bit_reading(
+                &Rulebook::default().with_override(RuleKey::ThirtyTwoBitSheet, RuleSource::Bible)
+            ),
+            ThirtyTwoBitReading::TrueColour
+        );
+        assert_eq!(
+            thirty_two_bit_reading(
+                &Rulebook::new(RuleSource::Bible)
+                    .with_override(RuleKey::ThirtyTwoBitSheet, RuleSource::Engine)
+            ),
+            ThirtyTwoBitReading::AsDrawn
         );
     }
 

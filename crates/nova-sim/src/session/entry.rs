@@ -931,7 +931,7 @@ impl Session {
         );
         self.chart.listed = listed;
         self.chart.shown = system;
-        self.keep_gate_sprites();
+        self.keep_stellar_frames();
     }
 
     /// Derives the stellars shown afresh from those their system lists, in

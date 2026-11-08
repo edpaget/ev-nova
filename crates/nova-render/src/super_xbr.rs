@@ -1084,6 +1084,9 @@ mod tests {
             ImageKind::MaskedPict { mask: 3 },
             ImageKind::Icon,
             ImageKind::SpinSheet,
+            ImageKind::ShipSheet {
+                image: nova_data::ShipImage::Base,
+            },
         ] {
             assert_eq!(
                 SuperXbr.enlarge(kind, &frame).into_owned(),

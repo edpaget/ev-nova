@@ -8,13 +8,13 @@
 //! `_dockPermission` and the ship table as each site leaves them, and it
 //! plays no sound. Only the gain and the callers' state differ.
 //!
-//! [`Session::stellar_pass`] steps every gate shown by the session's gain
-//! and raises the pass ([`StellarPass`]), which the view replays on its
-//! scene before the next frame is drawn. The streams:
+//! [`Session::stellar_pass`] steps every stellar shown, gates included,
+//! by the session's gain (see the `stellar_frames` module): the view
+//! replays nothing, drawing the frame the session reports. The streams:
 //!
 //! | Way in | Passes |
 //! |---|---|
-//! | Entering play ([`Session::enter_game`]) | ticked x 3 (@0x1a359, @0x1a36c, @0x45834), the priming passes between the second and the third, at the gain carried |
+//! | Entering play ([`Session::enter_game`]) | ticked x 3 (@0x1a359, @0x1a36c, @0x45834), the priming passes between the second and the third, at the gain carried, @0x1a36c's and @0x45834's each after its ships' display |
 //! | A take-off | ticked x 2 (@0x6764e, @0x67658), at 0 |
 //! | A hypergate's or wormhole's exit | entry (@0x63e91, @0x64743), ticked x 2 (@0x6764e, @0x67658), at the frame's gain |
 //! | A wormhole with no exit | ticked x 2 (@0x6764e, @0x67658), at the frame's gain |
@@ -49,8 +49,9 @@
 //! **Left out**, each recorded in
 //! rdm:phase/play-feel-7/phase-3-prepare-all-sprites-steps-stellar-animation:
 //!
-//! - the slot plumbing (@0x2e744-0x2e7e5, @0x2ee35-0x2ef1a), which the view
-//!   draws every frame;
+//! - the slot plumbing (@0x2e744-0x2e7e5, @0x2ee35-0x2ef1a): the clone and
+//!   the placement, which the play frame's sprite tick runs
+//!   (`Session::see_stellars`) and these passes don't;
 //! - the stellar step of the two frozen `_DoPlayGameWork(1)` passes
 //!   (@0x1a38a, @0x4580c),
 //!   rdm:phase/combat-and-flight/phase-10-stellar-step-of-the-frozen-entry-passes.
@@ -84,9 +85,10 @@ pub(super) enum GateHolds {
 }
 
 impl Session {
-    /// Runs a pass of `kind` on every gate shown, at the session's gain as
-    /// it stands (see the `time_adjustment` module), held as `holds` says,
-    /// its random picks drawn on `chance`, and raises it for the view.
+    /// Runs a pass of `kind` on every stellar shown, gates included, at
+    /// the session's gain as it stands (see the `time_adjustment`
+    /// module), gates held as `holds` says, its random picks drawn on
+    /// `chance` (see the `stellar_frames` module).
     pub(super) fn stellar_pass(
         &mut self,
         kind: PassKind,
@@ -94,7 +96,8 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) {
         let pass = self.pass_of(kind);
-        self.step_gates_by(pass.gain(), holds, chance);
+        self.step_stellars_by(pass.gain(), holds, chance);
+        #[cfg(test)]
         self.out.stellar_passes.push(pass);
     }
 
@@ -107,8 +110,9 @@ impl Session {
         }
     }
 
-    /// The stellar passes raised since they were last taken, in order;
+    /// The stellar passes run since the tests last took them, in order;
     /// taking them empties the list.
+    #[cfg(test)]
     pub(crate) fn take_stellar_passes(&mut self) -> Vec<StellarPass> {
         std::mem::take(&mut self.out.stellar_passes)
     }
@@ -248,6 +252,41 @@ mod tests {
             stepped(GateSprite::exit_gate(&exit), &exit, 2),
             "opened after the entry's pass"
         );
+    }
+
+    #[test]
+    fn a_hypergate_exit_steps_every_other_stellar_by_each_pass_around_the_reset() {
+        use crate::stellar_frames::{StellarAnimation, StellarFrames};
+        // A planet of 131 of 4 frames stepping every pass.
+        let mut catalog = gate_exits();
+        let planet = LandingSite {
+            animation: SiteAnimation {
+                delay: 1,
+                type_frames: 4,
+                type_sheet_frames: 4,
+                ..SiteAnimation::default()
+            },
+            ..planet(312, -100.0, 200.0)
+        };
+        catalog.sites[1].1.push(planet);
+        let mut session = at_gate(&catalog);
+        let mut oracle = session.space.stellar_frames_afresh;
+        assert_eq!(
+            session.enter_hypergate(Some(SystemId(131)), &catalog, &mut NeverFires),
+            Ok(SystemId(131))
+        );
+        let four = std::num::NonZeroU16::new(4).expect("non-zero");
+        let anim = StellarAnimation::of(&planet);
+        let pass = |frames: &mut StellarFrames| {
+            frames.step_by(SpeedMult::FULL, anim, false, four, four, &mut NeverFires);
+        };
+        // The entry's pass, the reset, then the tail's two.
+        pass(&mut oracle);
+        oracle.take_off_reset();
+        pass(&mut oracle);
+        pass(&mut oracle);
+        assert_eq!(session.space.stellar_frames[&StellarId(312)].frames, oracle);
+        assert_eq!(session.stellar_frame(StellarId(312)), oracle.shown());
     }
 
     #[test]
@@ -442,6 +481,56 @@ mod tests {
             stepped(before, &anim, 4),
             "the step's own alone"
         );
+    }
+
+    #[test]
+    fn game_entry_steps_every_other_stellar_three_times_with_the_ships_set_up() {
+        use crate::stellar_frames::{StellarAnimation, StellarFrames};
+        // A planet of 5 frames stepping every pass, beside the gate.
+        let animated = LandingSite {
+            animation: SiteAnimation {
+                delay: 1,
+                type_frames: 5,
+                type_sheet_frames: 5,
+                ..SiteAnimation::default()
+            },
+            ..planet(140, -100.0, 200.0)
+        };
+        let catalog = showing([gate(300, 5), animated]);
+        let id = StellarId(140);
+        let five = std::num::NonZeroU16::new(5).expect("non-zero");
+        let anim = StellarAnimation::of(&animated);
+        let stepped = |mut frames: StellarFrames, passes: usize| {
+            for _ in 0..passes {
+                frames.step_by(SpeedMult::FULL, anim, false, five, five, &mut NeverFires);
+            }
+            frames
+        };
+        let frames = |session: &Session| session.space.stellar_frames[&id].frames;
+        // A first entry: the ships set up at entry, so all three at once,
+        // the priming passes stepping none.
+        let mut session = begun(&catalog);
+        assert!(session.space.traffic_due);
+        let start = frames(&session);
+        enter_game(&mut session, &catalog, SpeedMult::FULL, &mut NeverFires);
+        assert!(!session.space.traffic_due);
+        let oracle = stepped(start, 3);
+        assert_eq!(frames(&session), oracle, "all three");
+        assert_eq!(session.stellar_frame(id), oracle.shown());
+        tick(&mut session, &catalog);
+        let oracle = stepped(start, 4);
+        assert_eq!(frames(&session), oracle, "the step's own alone");
+        assert_eq!(session.stellar_frame(id), oracle.shown());
+        // A re-entry: all three again.
+        let before = frames(&session);
+        enter_game(&mut session, &catalog, SpeedMult::FULL, &mut NeverFires);
+        let oracle = stepped(before, 3);
+        assert_eq!(frames(&session), oracle, "all three");
+        assert_eq!(session.stellar_frame(id), oracle.shown());
+        tick(&mut session, &catalog);
+        let oracle = stepped(before, 4);
+        assert_eq!(frames(&session), oracle, "the step's own alone");
+        assert_eq!(session.stellar_frame(id), oracle.shown());
     }
 
     #[test]

@@ -38,7 +38,7 @@ pub(super) fn flown(view: &Faked) -> DrawList {
 /// One tick's HUD work, as a flight's tick ends: the clock moved on a
 /// tick, then the HUD advanced ([`FlightView::advance_hud`]).
 pub(super) fn hud_tick(view: &mut Faked) {
-    view.step_stellars(TICK);
+    view.advance_clock(TICK);
     view.advance_hud();
 }
 
@@ -263,6 +263,9 @@ fn a_blip_is_sized_by_the_type_master_not_the_sheet_drawn() {
                 frames: std::num::NonZeroU16::MIN,
                 frame_width: 300,
                 frame_height: 300,
+                image_size: (300, 300),
+                eight_bit: false,
+                clip_quirks: false,
             }),
             ..stellar(150, "Wide", (320, 0), 1)
         }],

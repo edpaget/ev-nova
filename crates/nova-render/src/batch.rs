@@ -8,14 +8,15 @@ use nova_view::geometry::Bounds;
 use nova_view::text::LINE_HEIGHT;
 use nova_view::{Blend, Color, DrawCommand, DrawLayer, DrawList, ImageKey, ImageKind, Point};
 
-use crate::atlas::{Atlas, AtlasEntry, PAGE_SIZE, Uv};
+use crate::atlas::{Atlas, AtlasEntry, PAGE_SIZE, PackError, Uv};
 use crate::enlarge::{Enlarger, NativeDetail};
 use crate::gpu::{
-    Batch, Frame, Gpu, NO_COLORIZE, QuadInstance, Rect, SolidQuad, TextRun, colorize_instance,
+    Batch, Frame, Gpu, MAX_TEXTURE_SIDE, NO_COLORIZE, QuadInstance, Rect, SolidQuad, TextRun,
+    colorize_instance,
 };
 use crate::images::{ImageError, ImageSource};
 use crate::quickdraw_stretch;
-use crate::streams::Streams;
+use crate::streams::{Owner, Streams};
 use crate::upscale::world_space;
 use crate::viewport::{PixelRect, Viewport};
 
@@ -63,7 +64,7 @@ pub struct Renderer<S> {
     /// Whether the atlas starts afresh at the next frame, for a new
     /// enlarger.
     rebuild: bool,
-    /// The movie frames' pages.
+    /// The pages of movie frames and clipped sprites, outside the atlas.
     streams: Streams,
     /// Each picture frame stretched by QuickDraw's rule, by its key and
     /// size, or `None` when it couldn't be placed
@@ -141,12 +142,20 @@ impl<S: ImageSource> Renderer<S> {
     /// every text run is in target pixels. The list's world clip
     /// ([`DrawList::world_in`]) is the frame's ([`Frame::world_clip`]): the
     /// batches are the same with it or without, and the GPU cuts the
-    /// world's draws to it ([`Frame::world_scissor`]).
+    /// world's draws to it ([`Frame::world_scissor`]). The list's world
+    /// tail ([`DrawList::start_world_tail`]) settles the run it falls in,
+    /// so no batch straddles it, and the index of the first batch from it
+    /// on is the frame's ([`Frame::world_tail`]): the frame's batch count
+    /// for a tail at or past the list's end, an empty tail. Drawn in the
+    /// target, the extra cut changes no pixel: it splits one batch into
+    /// two of the same kind, drawn one after the other.
     ///
     /// A movie frame ([`DrawCommand::MovieFrame`]) is uploaded onto its
     /// stream's page only when the page doesn't hold it yet
     /// ([`crate::streams`]); a stream not drawn in this frame frees its
-    /// page.
+    /// page. A clipped sprite ([`ImageKind::RledClipped`]), and its solid
+    /// runs ([`ImageKind::RledClippedSolid`]), are placed on such a page
+    /// too, never in the atlas ([`Renderer::clipped_entry`]).
     ///
     /// A frame drawn after [`Renderer::set_enlarger`] first starts the
     /// atlas afresh, the stream pages with it; a zero-area viewport leaves
@@ -164,12 +173,24 @@ impl<S: ImageSource> Renderer<S> {
         self.rebuild(gpu);
         let target = Target { rect, scale };
         let mut layers = Layers::default();
-        for (layer, command) in list.layered() {
+        let tail = list.world_tail();
+        for (index, (layer, command)) in list.layered().enumerate() {
+            if tail == Some(index) {
+                layers.start_tail();
+            }
             let run = layers.run_in(layer);
             self.draw(command, None, target, run, gpu, &mut report);
         }
+        if tail.is_some_and(|tail| tail >= list.len()) {
+            layers.start_tail();
+        }
         self.streams.end_frame();
-        let Layers { batches, world, .. } = layers.settled();
+        let Layers {
+            batches,
+            world,
+            tail,
+            ..
+        } = layers.settled();
         gpu.submit(&Frame {
             target: viewport.window_px(),
             viewport: rect,
@@ -184,6 +205,7 @@ impl<S: ImageSource> Renderer<S> {
                 w: clip.width(),
                 h: clip.height(),
             }),
+            world_tail: tail,
         });
         report
     }
@@ -416,8 +438,10 @@ impl<S: ImageSource> Renderer<S> {
     /// stretch ([`crate::quickdraw_stretch`]). So a rectangle a whole
     /// number of pixels wide and high, where that stretch would show other
     /// pixels than the GPU's sampling ([`quickdraw_stretch::differs`]),
-    /// draws from an entry of its own: the frame decoded once more,
-    /// resampled by [`quickdraw_stretch::stretched`], turned by the
+    /// draws from an entry of its own: the frame decoded once more with
+    /// the depth it was stored at ([`ImageSource::deep_frames`]),
+    /// resampled by [`quickdraw_stretch::stretched`] (which merges by that
+    /// depth), turned by the
     /// enlarger as any frame is, placed in the atlas and kept by key and
     /// size until the atlas starts afresh. It is drawn at its own size,
     /// with the crop and the blend of any other. A fractional rectangle
@@ -477,7 +501,7 @@ impl<S: ImageSource> Renderer<S> {
         if let Some(placed) = self.stretches.get(&(image, size)) {
             return *placed;
         }
-        let frames = self.images.frames(image.kind, image.id).ok();
+        let frames = self.images.deep_frames(image.kind, image.id).ok();
         let placed = frames
             .as_ref()
             .and_then(|frames| frames.get(usize::from(image.frame)))
@@ -524,6 +548,12 @@ impl<S: ImageSource> Renderer<S> {
         gpu: &mut impl Gpu,
         report: &mut RenderReport,
     ) -> Option<Placed> {
+        if matches!(
+            key.kind,
+            ImageKind::RledClipped { .. } | ImageKind::RledClippedSolid { .. }
+        ) {
+            return self.clipped_entry(key, gpu, report);
+        }
         let resource = (key.kind, key.id);
         if !self.resident.contains_key(&resource) {
             let loaded = self.load(key, gpu, report);
@@ -544,6 +574,74 @@ impl<S: ImageSource> Renderer<S> {
             report.new_failures.push((key, error));
         }
         None
+    }
+
+    /// The placement of `key`, a clipped sprite
+    /// ([`ImageKind::RledClipped`]) or its solid runs
+    /// ([`ImageKind::RledClippedSolid`]), on a transient page
+    /// ([`crate::streams`]) rather than in the atlas: its cut changes every
+    /// frame a stellar scrolls across the world's edge, and the atlas never
+    /// evicts. A key drawn again while its page holds it is not decoded or
+    /// uploaded again; otherwise its frame is decoded, turned by the
+    /// enlarger (or kept as decoded when that is too big for a page), and
+    /// uploaded. A resource that fails as a whole fails for good, and a
+    /// frame that fails on its own fails for its key, each reported once.
+    fn clipped_entry(
+        &mut self,
+        key: ImageKey,
+        gpu: &mut impl Gpu,
+        report: &mut RenderReport,
+    ) -> Option<Placed> {
+        let owner = Owner::Clipped(key);
+        let drawn_at = |(w, h): (u32, u32)| (w as f32, h as f32);
+        if let Some((entry, size)) = self.streams.held(owner, 0) {
+            return Some(Placed {
+                entry,
+                size: drawn_at(size),
+            });
+        }
+        let resource = (key.kind, key.id);
+        if self.reported.contains(&key) || self.resident.contains_key(&resource) {
+            return None;
+        }
+        let frames = match self.images.frames(key.kind, key.id) {
+            Ok(frames) => frames,
+            Err(error) => {
+                report.new_failures.push((key, error));
+                self.resident.insert(resource, Resident::Failed);
+                return None;
+            }
+        };
+        let placed = match frames.get(usize::from(key.frame)) {
+            None => Err(ImageError::NoFrame {
+                frame: key.frame,
+                count: frames.len(),
+            }),
+            Some(image) => {
+                let size = (image.width(), image.height());
+                let enlarged = self.enlarger.enlarge(key.kind, image);
+                self.streams
+                    .put(owner, 0, &enlarged, size, gpu)
+                    .or_else(|| self.streams.put(owner, 0, image, size, gpu))
+                    .map(|entry| Placed {
+                        entry,
+                        size: drawn_at(size),
+                    })
+                    .ok_or(ImageError::Pack(PackError::TooLarge {
+                        width: size.0,
+                        height: size.1,
+                        page: MAX_TEXTURE_SIDE,
+                    }))
+            }
+        };
+        match placed {
+            Ok(placed) => Some(placed),
+            Err(error) => {
+                self.reported.insert(key);
+                report.new_failures.push((key, error));
+                None
+            }
+        }
     }
 
     /// Decodes every frame of `key`'s resource, has the enlarger turn them
@@ -613,6 +711,8 @@ struct Layers {
     /// The run being batched, and its layer.
     run: Vec<Batch>,
     layer: DrawLayer,
+    /// The index of the world's tail's first batch, once it has started.
+    tail: Option<usize>,
 }
 
 impl Layers {
@@ -633,6 +733,13 @@ impl Layers {
             self.world.extend(start..start + self.run.len());
         }
         self.batches.append(&mut self.run);
+    }
+
+    /// Starts the world's tail: settles the current run, so no batch
+    /// straddles the tail, and marks the next batch as its first.
+    fn start_tail(&mut self) {
+        self.settle();
+        self.tail = Some(self.batches.len());
     }
 
     /// Every run settled.
@@ -917,7 +1024,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::rc::Rc;
 
-    use nova_data::graphics::Image;
+    use nova_data::graphics::{DeepImage, Image, PixelDepth};
     use nova_view::{Blend, Color, DrawList, Font, ImageKey, ImageKind, Point};
 
     use super::*;
@@ -935,12 +1042,23 @@ mod tests {
     #[derive(Default)]
     struct FakeImages {
         resources: BTreeMap<(ImageKind, i16), Result<Vec<Image>, ImageError>>,
+        /// Pictures with the depth they were stored at; any other
+        /// resource's frames are 32-bit.
+        deep: BTreeMap<(ImageKind, i16), DeepImage>,
         calls: RefCell<Vec<(ImageKind, i16)>>,
     }
 
     impl FakeImages {
         fn with(mut self, kind: ImageKind, id: i16, frames: Vec<Image>) -> Self {
             self.resources.insert((kind, id), Ok(frames));
+            self
+        }
+
+        /// A picture of one frame, `deep`, at the depth it holds.
+        fn with_deep(mut self, kind: ImageKind, id: i16, deep: DeepImage) -> Self {
+            self.resources
+                .insert((kind, id), Ok(vec![deep.image().clone()]));
+            self.deep.insert((kind, id), deep);
             self
         }
 
@@ -962,6 +1080,19 @@ mod tests {
                 .cloned()
                 .unwrap_or(Err(ImageError::Missing))
         }
+
+        fn deep_frames(&self, kind: ImageKind, id: i16) -> Result<Vec<DeepImage>, ImageError> {
+            let frames = self.frames(kind, id)?;
+            Ok(match self.deep.get(&(kind, id)) {
+                Some(deep) => vec![deep.clone()],
+                None => frames.into_iter().map(direct32).collect(),
+            })
+        }
+    }
+
+    /// `image` stored at 32 bits.
+    fn direct32(image: Image) -> DeepImage {
+        DeepImage::new(image, PixelDepth::Direct32).expect("direct")
     }
 
     /// A `w` x `h` image of one colour.
@@ -1103,6 +1234,7 @@ mod tests {
                     }],
                     world: Vec::new(),
                     world_clip: None,
+                    world_tail: None,
                 }),
             ]
         );
@@ -2969,6 +3101,75 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_world_tail_breaks_the_world_run_and_marks_its_first_batch() {
+        let mut list = DrawList::new();
+        list.world(|list| {
+            list.line(at(0.0, 0.0), at(4.0, 0.0), 1.0, Color::WHITE)
+                .start_world_tail()
+                .line(at(0.0, 2.0), at(4.0, 2.0), 1.0, Color::WHITE);
+        });
+
+        let frame = render_through(&list, &mut RecordingGpu::new());
+
+        assert_eq!(
+            layered_shape(&frame),
+            [("solid", 1, WORLD), ("solid", 1, WORLD)]
+        );
+        assert_eq!(frame.world_tail, Some(1));
+    }
+
+    #[test]
+    fn the_world_tail_after_overlay_text_marks_the_next_batch() {
+        let mut list = DrawList::new();
+        list.world(|list| {
+            list.line(at(0.0, 0.0), at(4.0, 0.0), 1.0, Color::WHITE)
+                .text("a", at(0.0, 0.0), 8.0, None, Color::WHITE)
+                .start_world_tail()
+                .text("b", at(0.0, 0.0), 8.0, None, Color::WHITE)
+                .dot(at(1.0, 1.0), 1.0, Color::WHITE);
+        });
+
+        let frame = render_through(&list, &mut RecordingGpu::new());
+
+        assert_eq!(
+            layered_shape(&frame),
+            [
+                ("solid", 1, WORLD),
+                ("text", 1, OVERLAY),
+                ("text", 1, OVERLAY),
+                ("solid", 1, WORLD),
+            ]
+        );
+        assert_eq!(frame.world_tail, Some(2));
+    }
+
+    #[test]
+    fn a_list_with_no_world_tail_makes_a_frame_with_none() {
+        let mut list = DrawList::new();
+        list.world(|list| {
+            list.line(at(0.0, 0.0), at(4.0, 0.0), 1.0, Color::WHITE);
+        });
+
+        let frame = render_through(&list, &mut RecordingGpu::new());
+
+        assert_eq!(frame.world_tail, None);
+    }
+
+    #[test]
+    fn a_world_tail_after_the_last_command_is_empty() {
+        let mut list = DrawList::new();
+        list.world(|list| {
+            list.line(at(0.0, 0.0), at(4.0, 0.0), 1.0, Color::WHITE)
+                .start_world_tail();
+        });
+
+        let frame = render_through(&list, &mut RecordingGpu::new());
+
+        assert_eq!(frame.batches.len(), 1);
+        assert_eq!(frame.world_tail, Some(frame.batches.len()));
+    }
+
     /// The world's clip in the clip tests: the 64x48 logical space less a
     /// 16-unit column at the right, as flight's play area leaves the
     /// status bar's.
@@ -3076,7 +3277,7 @@ mod tests {
                     ..
                 } => {
                     let layer = frame.layer(at);
-                    (layer, frame.pixels_covered(layer, quads))
+                    (layer, frame.pixels_covered(frame.space_of(at), quads))
                 }
                 other => panic!("an OR batch: {other:?}"),
             })
@@ -3578,7 +3779,7 @@ mod tests {
         let report = renderer.render(&list, &viewport(), &mut gpu);
 
         assert_eq!(report, RenderReport::default());
-        let resampled = crate::quickdraw_stretch::stretched(&two_by_two(), 2, 3);
+        let resampled = crate::quickdraw_stretch::stretched(&direct32(two_by_two()), 2, 3);
         let rows: Vec<u8> = (0..3)
             .map(|y| resampled.pixel(0, y).expect("inside")[0])
             .collect();
@@ -3603,6 +3804,36 @@ mod tests {
                 tint: WHITE,
                 colorize: NO_COLORIZE,
             }]
+        );
+    }
+
+    /// A 16-bit picture's stretch merges its 5-bit channels: two rows of
+    /// red 1 and 2 (decoded 8 and 16) show red 1 (8), not the 8-bit
+    /// average, 12.
+    #[test]
+    fn a_16_bit_pictures_stretch_merges_by_its_depth() {
+        use nova_data::graphics::decode_pict_deep;
+        use nova_data::graphics::fixture::{DirectBits, PictBuilder};
+        let pict = PictBuilder::new([0, 0, 2, 1])
+            .direct_bits(&DirectBits::rgb555([0, 0, 2, 1], &[1 << 10, 2 << 10]))
+            .end()
+            .build();
+        let deep = decode_pict_deep(&pict).expect("decodes");
+        assert_eq!(deep.depth(), &PixelDepth::Direct16);
+        let images = FakeImages::default().with_deep(ImageKind::Pict, 301, deep.clone());
+        let mut list = DrawList::new();
+        list.stretched_picture(ImageKey::picture(301), at(0.0, 0.0), 1.0, 1.0);
+        let mut renderer = renderer(images);
+        let mut gpu = RecordingGpu::new();
+        renderer.render(&list, &viewport(), &mut gpu);
+        let resampled = crate::quickdraw_stretch::stretched(&deep, 1, 1);
+        assert_eq!(resampled.pixel(0, 0), Some([8, 0, 0, 255]));
+        assert_eq!(
+            uploads(&gpu.calls),
+            [
+                &GpuCall::upload(PageId(0), rect(0, 0, 1, 2), deep.image()),
+                &GpuCall::upload(PageId(0), rect(2, 0, 1, 1), &resampled),
+            ]
         );
     }
 
@@ -3744,7 +3975,7 @@ mod tests {
         renderer.set_enlarger(Box::new(NativeDetail));
         let mut again = RecordingGpu::new();
         renderer.render(&list, &viewport(), &mut again);
-        let resampled = crate::quickdraw_stretch::stretched(&two_by_two(), 2, 3);
+        let resampled = crate::quickdraw_stretch::stretched(&direct32(two_by_two()), 2, 3);
         assert_eq!(
             uploads(&again.calls),
             [
@@ -3776,5 +4007,274 @@ mod tests {
         renderer.render(&list, &viewport(), &mut gpu);
         assert_eq!(uploads(&gpu.calls).len(), 1);
         assert_eq!(all_quads(gpu.submits()[0])[0].uv, uv(0, 0, 2, 2));
+    }
+
+    /// The first transient page's id, and the next: counted down from the
+    /// top, so never an atlas page's.
+    const TRANSIENT: PageId = PageId(u32::MAX);
+    const SECOND_TRANSIENT: PageId = PageId(u32::MAX - 1);
+
+    /// Frame 0 of `rlëD` 300 as the clipped blit draws it with its box
+    /// cut by `(0, left)`.
+    fn clipped(left: u16) -> ImageKey {
+        ImageKey::clipped_sprite(300, 0, (0, left))
+    }
+
+    /// Clipped draws of `rlëD` 300 for left cuts 1 to 3, each a 4x2 frame
+    /// of its own colour; and cut by 4, a frame too big for any page.
+    fn clipped_images() -> FakeImages {
+        let kind = |left| clipped(left).kind;
+        FakeImages::default()
+            .with(kind(1), 300, vec![solid(4, 2, [255, 0, 0, 255])])
+            .with(kind(2), 300, vec![solid(4, 2, [0, 255, 0, 255])])
+            .with(kind(3), 300, vec![solid(4, 2, [0, 0, 255, 255])])
+            .with(kind(4), 300, vec![solid(8193, 1, [9, 9, 9, 255])])
+    }
+
+    fn drawing_sprites(keys: &[ImageKey]) -> DrawList {
+        let mut list = DrawList::new();
+        for (i, &key) in (0..).zip(keys) {
+            list.sprite(key, at(10.0 + 10.0 * i as f32, 10.0), Color::WHITE);
+        }
+        list
+    }
+
+    /// The calls besides the submits, taken from `gpu`.
+    fn taken_uploads(gpu: &mut RecordingGpu) -> Vec<GpuCall> {
+        gpu.take()
+            .into_iter()
+            .filter(|call| !matches!(call, GpuCall::Submit(_)))
+            .collect()
+    }
+
+    #[test]
+    fn a_clipped_sprite_is_placed_on_a_transient_page_not_in_the_atlas() {
+        let mut renderer = renderer(clipped_images());
+        let mut gpu = RecordingGpu::new();
+        let report = renderer.render(&drawing_sprites(&[clipped(1)]), &viewport(), &mut gpu);
+        assert_eq!(report, RenderReport::default());
+        let frame = gpu.submits().last().copied().cloned().expect("a frame");
+        assert_eq!(
+            taken_uploads(&mut gpu),
+            [
+                GpuCall::CreatePage {
+                    page: TRANSIENT,
+                    size: 4
+                },
+                GpuCall::upload(TRANSIENT, rect(0, 0, 4, 2), &solid(4, 2, [255, 0, 0, 255])),
+            ]
+        );
+        assert_eq!(renderer.atlas.page_count(), 0);
+        assert_eq!(
+            frame.batches,
+            [Batch::Sprites {
+                page: TRANSIENT,
+                blend: Blend::Normal,
+                quads: vec![QuadInstance {
+                    dest: Rect {
+                        x: 8.0,
+                        y: 9.0,
+                        w: 4.0,
+                        h: 2.0
+                    },
+                    uv: Uv {
+                        u0: 0.0,
+                        v0: 0.0,
+                        u1: 1.0,
+                        v1: 0.5
+                    },
+                    tint: WHITE,
+                    colorize: NO_COLORIZE,
+                }],
+            }]
+        );
+    }
+
+    #[test]
+    fn a_clipped_sprites_solid_runs_are_placed_on_a_transient_page_not_in_the_atlas() {
+        let key = ImageKey::clipped_solid_runs(300, 0, (0, 1));
+        let images = FakeImages::default().with(key.kind, 300, vec![solid(4, 2, [255, 0, 0, 255])]);
+        let mut renderer = renderer(images);
+        let mut gpu = RecordingGpu::new();
+        let report = renderer.render(&drawing_sprites(&[key]), &viewport(), &mut gpu);
+        assert_eq!(report, RenderReport::default());
+        assert_eq!(
+            taken_uploads(&mut gpu),
+            [
+                GpuCall::CreatePage {
+                    page: TRANSIENT,
+                    size: 4
+                },
+                GpuCall::upload(TRANSIENT, rect(0, 0, 4, 2), &solid(4, 2, [255, 0, 0, 255])),
+            ]
+        );
+        assert_eq!(renderer.atlas.page_count(), 0);
+    }
+
+    #[test]
+    fn a_clipped_sprite_drawn_in_frames_running_is_decoded_and_uploaded_once() {
+        let mut renderer = renderer(clipped_images());
+        let mut gpu = RecordingGpu::new();
+        let list = drawing_sprites(&[clipped(1)]);
+        renderer.render(&list, &viewport(), &mut gpu);
+        gpu.take();
+        renderer.render(&list, &viewport(), &mut gpu);
+        assert_eq!(taken_uploads(&mut gpu), []);
+        assert_eq!(renderer.images().calls(), [(clipped(1).kind, 300)]);
+    }
+
+    #[test]
+    fn a_clipped_sprite_not_drawn_frees_its_page_for_the_next() {
+        let mut renderer = renderer(clipped_images());
+        let mut gpu = RecordingGpu::new();
+        for left in 1..=3 {
+            renderer.render(&drawing_sprites(&[clipped(left)]), &viewport(), &mut gpu);
+        }
+        let colours = [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]];
+        let mut expected = vec![GpuCall::CreatePage {
+            page: TRANSIENT,
+            size: 4,
+        }];
+        expected.extend(
+            colours
+                .map(|colour| GpuCall::upload(TRANSIENT, rect(0, 0, 4, 2), &solid(4, 2, colour))),
+        );
+        assert_eq!(taken_uploads(&mut gpu), expected);
+        assert_eq!(renderer.atlas.page_count(), 0);
+        // Coming back to the first decodes it again.
+        renderer.render(&drawing_sprites(&[clipped(1)]), &viewport(), &mut gpu);
+        assert_eq!(renderer.images().calls().len(), 4);
+    }
+
+    #[test]
+    fn clipped_sprites_drawn_at_once_take_a_page_each_and_no_more() {
+        let mut renderer = renderer(clipped_images());
+        let mut gpu = RecordingGpu::new();
+        renderer.render(
+            &drawing_sprites(&[clipped(1), clipped(2)]),
+            &viewport(),
+            &mut gpu,
+        );
+        renderer.render(
+            &drawing_sprites(&[clipped(3), clipped(1)]),
+            &viewport(),
+            &mut gpu,
+        );
+        let pages: Vec<PageId> = taken_uploads(&mut gpu)
+            .into_iter()
+            .filter_map(|call| match call {
+                GpuCall::CreatePage { page, .. } => Some(page),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(pages, [TRANSIENT, SECOND_TRANSIENT]);
+        // The second frame drew 1 again from its page, and 3 onto 2's.
+        assert_eq!(renderer.images().calls().len(), 3);
+    }
+
+    #[test]
+    fn a_clipped_sprite_is_enlarged_and_drawn_at_its_own_size() {
+        let mut renderer = doubling(clipped_images());
+        let mut gpu = RecordingGpu::new();
+        renderer.render(&drawing_sprites(&[clipped(1)]), &viewport(), &mut gpu);
+        let frame = gpu.submits().last().copied().cloned().expect("a frame");
+        assert_eq!(
+            taken_uploads(&mut gpu),
+            [
+                GpuCall::CreatePage {
+                    page: TRANSIENT,
+                    size: 8
+                },
+                GpuCall::upload(
+                    TRANSIENT,
+                    rect(0, 0, 8, 4),
+                    &doubled(&solid(4, 2, [255, 0, 0, 255]))
+                ),
+            ]
+        );
+        let Batch::Sprites { quads, .. } = &frame.batches[0] else {
+            panic!("a sprite batch")
+        };
+        assert_eq!(
+            quads[0].dest,
+            Rect {
+                x: 8.0,
+                y: 9.0,
+                w: 4.0,
+                h: 2.0
+            }
+        );
+        // A new enlarger starts the pages afresh, and loads it again.
+        renderer.set_enlarger(Box::new(NativeDetail));
+        renderer.render(&drawing_sprites(&[clipped(1)]), &viewport(), &mut gpu);
+        assert_eq!(
+            taken_uploads(&mut gpu),
+            [
+                GpuCall::ClearPages,
+                GpuCall::CreatePage {
+                    page: TRANSIENT,
+                    size: 4
+                },
+                GpuCall::upload(TRANSIENT, rect(0, 0, 4, 2), &solid(4, 2, [255, 0, 0, 255])),
+            ]
+        );
+        assert_eq!(renderer.images().calls().len(), 2);
+    }
+
+    #[test]
+    fn a_clipped_sprite_too_big_for_a_page_once_enlarged_is_drawn_as_decoded() {
+        // 4097 texels wide: doubled, 8194, past the page's side.
+        let native = solid(4097, 1, [7, 7, 7, 255]);
+        let images = FakeImages::default().with(clipped(1).kind, 300, vec![native.clone()]);
+        let mut renderer = doubling(images);
+        let mut gpu = RecordingGpu::new();
+        let report = renderer.render(&drawing_sprites(&[clipped(1)]), &viewport(), &mut gpu);
+        assert_eq!(report, RenderReport::default());
+        let frame = gpu.submits().last().copied().cloned().expect("a frame");
+        assert_eq!(
+            taken_uploads(&mut gpu),
+            [
+                GpuCall::CreatePage {
+                    page: TRANSIENT,
+                    size: 4097
+                },
+                GpuCall::upload(TRANSIENT, rect(0, 0, 4097, 1), &native),
+            ]
+        );
+        let Batch::Sprites { page, quads, .. } = &frame.batches[0] else {
+            panic!("a sprite batch")
+        };
+        assert_eq!(*page, TRANSIENT);
+        assert_eq!((quads[0].dest.w, quads[0].dest.h), (4097.0, 1.0));
+    }
+
+    #[test]
+    fn a_failing_clipped_sprite_is_reported_once() {
+        let missing = ImageKey::clipped_sprite(301, 0, (0, 1));
+        let out_of_range = ImageKey::clipped_sprite(300, 1, (0, 1));
+        let too_large = clipped(4);
+        let mut renderer = renderer(clipped_images());
+        let mut gpu = RecordingGpu::new();
+        let list = drawing_sprites(&[missing, out_of_range, too_large]);
+        let report = renderer.render(&list, &viewport(), &mut gpu);
+        assert_eq!(
+            report.new_failures,
+            [
+                (missing, ImageError::Missing),
+                (out_of_range, ImageError::NoFrame { frame: 1, count: 1 }),
+                (
+                    too_large,
+                    ImageError::Pack(PackError::TooLarge {
+                        width: 8193,
+                        height: 1,
+                        page: crate::gpu::MAX_TEXTURE_SIDE,
+                    })
+                ),
+            ]
+        );
+        let calls = renderer.images().calls().len();
+        let report = renderer.render(&list, &viewport(), &mut gpu);
+        assert_eq!(report, RenderReport::default());
+        assert_eq!(renderer.images().calls().len(), calls, "not decoded again");
     }
 }

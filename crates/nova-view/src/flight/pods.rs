@@ -41,6 +41,7 @@ use nova_sim::escape_pod::Pod;
 
 use super::catalog::Looks;
 use super::murk::SeenMurk;
+use crate::box_cut::BoxCut;
 use crate::system::camera::Camera;
 use crate::{Blend, Color, DrawList, Point};
 
@@ -77,7 +78,11 @@ pub fn tint(pod: &Pod) -> Option<Color> {
 /// ([`Camera::sprite_centre`], `_HandleEscapePods` @0x39ef0-0x39f7d),
 /// murked as the player sees it, `seen` ([`SeenMurk::at`]), as
 /// `_HandleEscapePods` murks it at its position (@0x39f90-0x39fbc) before
-/// its fade. None is drawn without the pods' sheet.
+/// its fade. A pod is a sprite of the sprite world, drawn through
+/// `_BlitPixieRLETranslucentDrawProc` (@0xbb3fc-0xbba11): where the
+/// world's edge cuts its box, an overhanging sheet is cut to the box and
+/// one with clip quirks draws the clipped blit's frame ([`BoxCut`]). None
+/// is drawn without the pods' sheet.
 pub fn draw_pods(
     list: &mut DrawList,
     camera: &Camera,
@@ -101,7 +106,8 @@ pub fn draw_pods(
         } else {
             Blend::OrCrossfade
         };
-        list.mixed_sprite(frame, at, tint, blend, Some(colorize));
+        let cut = BoxCut::of(list.world_clip(), at, sheet.edge());
+        cut.mixed_sprite(list, frame, at, (tint, blend, Some(colorize)));
     }
 }
 
@@ -138,6 +144,8 @@ mod tests {
                 frames: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: 0,
                 frame_height: 0,
+                image_size: (0, 0),
+                clip_quirks: false,
             })),
             ..Looks::default()
         }
@@ -193,6 +201,7 @@ mod tests {
             pod: Some(Ok(EffectSheet {
                 frame_width: 31,
                 frame_height: 29,
+                image_size: (31, 29),
                 ..*looks().pod_sheet().expect("read")
             })),
             ..Looks::default()
@@ -344,6 +353,70 @@ mod tests {
             mixed(20.0, Vec2::ZERO),
             [(fading, Blend::OrCrossfade, Some(murk))],
             "the mix under its fade"
+        );
+    }
+
+    /// What a pod placed at top left (503, 420), its 31 x 29 sheet edged
+    /// by `edge`, draws in a world whose left edge is at `left`.
+    fn pod_cut(
+        edge: impl Fn(EffectSheet) -> EffectSheet,
+        left: f32,
+    ) -> Vec<(ImageKey, Option<crate::geometry::Bounds>)> {
+        // As in `a_pod_is_placed_at_whole_pixels_by_its_sheets_own_sides`.
+        let pod = pod_at(Vec2::new(103.5, 50.0), 100.0);
+        let sheet = EffectSheet {
+            frame_width: 31,
+            frame_height: 29,
+            image_size: (31, 29),
+            ..*looks().pod_sheet().expect("read")
+        };
+        let edged = Looks {
+            pod: Some(Ok(edge(sheet))),
+            ..Looks::default()
+        };
+        let camera = Camera::centred_on(Point::new(0.25, -0.5)).with_anchor(Anchor::PlayAreaCentre);
+        let world = crate::geometry::Bounds {
+            min: Point::new(left, 0.0),
+            max: Point::new(1024.0, 768.0),
+        };
+        let mut list = DrawList::new();
+        list.world_in(world, |list| {
+            draw_pods(list, &camera, &edged, CLEAR, &[pod]);
+        });
+        crate::box_cut::drawn_cuts(&list)
+    }
+
+    /// The pod's 31 x 29 box, top left (503, 420).
+    fn pod_box() -> crate::geometry::Bounds {
+        crate::geometry::Bounds::at(Point::new(503.0, 420.0), 31.0, 29.0)
+    }
+
+    #[test]
+    fn an_overhanging_pod_straddling_the_worlds_edge_is_cut_to_its_box() {
+        let overhanging = |sheet| EffectSheet {
+            image_size: (35, 29),
+            ..sheet
+        };
+        assert_eq!(
+            pod_cut(overhanging, 504.0),
+            [(ImageKey::sprite(1095, 9), Some(pod_box()))]
+        );
+        assert_eq!(
+            pod_cut(overhanging, 0.0),
+            [(ImageKey::sprite(1095, 9), None)],
+            "wholly inside, drawn whole"
+        );
+    }
+
+    #[test]
+    fn a_quirky_pod_cut_at_the_left_draws_its_clipped_frame() {
+        let quirky = |sheet| EffectSheet {
+            clip_quirks: true,
+            ..sheet
+        };
+        assert_eq!(
+            pod_cut(quirky, 504.0),
+            [(ImageKey::clipped_sprite(1095, 9, (0, 1)), Some(pod_box()))]
         );
     }
 }

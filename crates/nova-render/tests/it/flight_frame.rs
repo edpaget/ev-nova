@@ -1,11 +1,13 @@
 //! A small flight frame (a world and a HUD over it) and what the
-//! upscaler tests (`sharp_bilinear`, `metal_fx`) draw and compare it with.
+//! upscaler tests (`sharp_bilinear`, `fsr1`, `metal_fx`) draw and compare it with.
 //!
 //! Needs a GPU adapter; each drawing helper answers `None` without one.
 
 use nova_data::graphics::Image;
 use nova_render::fonts::FontFaces;
-use nova_render::{Gpu, ImageError, ImageSource, LogicalSize, Renderer, Upscaler, Viewport};
+use nova_render::{
+    Gpu, ImageError, ImageSource, LogicalSize, PixelRect, Renderer, Upscaler, Viewport,
+};
 use nova_view::geometry::Bounds;
 use nova_view::{Color, DrawList, ImageKey, ImageKind, Point};
 
@@ -82,6 +84,14 @@ pub(crate) fn hud(list: &mut DrawList) {
             Color::rgba(255, 0, 0, 128),
         )
         .text("B", at(16.0, 16.0), 6.0, None, Color::WHITE);
+}
+
+/// A sparse world for a widened view: the patterned picture, the soft
+/// sprite and the additive one, far apart.
+pub(crate) fn sparse_world(list: &mut DrawList) {
+    list.picture(ImageKey::picture(1), at(100.0, 100.0))
+        .sprite(ImageKey::sprite(SOFT, 0), at(700.0, 400.0), Color::WHITE)
+        .additive_sprite(ImageKey::sprite(5, 0), at(1300.0, 700.0), Color::WHITE);
 }
 
 /// The world, marked, then the HUD.
@@ -164,4 +174,22 @@ pub(crate) fn largest_difference(a: &[u8], b: &[u8], width: u32) -> (u8, (u32, u
         })
         .max_by_key(|&(most, _)| most)
         .unwrap_or((0, (0, 0)))
+}
+
+/// Asserts `frame` is opaque, `reference` within [`TOLERANCE`] inside
+/// `onto`, and exactly it in the bars.
+#[track_caller]
+pub(crate) fn assert_matches(frame: &[u8], reference: &[u8], target: (u32, u32), onto: PixelRect) {
+    assert_eq!(frame.len(), reference.len());
+    for (at, (got, want)) in frame.chunks(4).zip(reference.chunks(4)).enumerate() {
+        let (x, y) = (at as u32 % target.0, at as u32 / target.0);
+        assert_eq!(got[3], 255, "alpha at ({x}, {y})");
+        let inside =
+            (onto.x..onto.x + onto.w).contains(&x) && (onto.y..onto.y + onto.h).contains(&y);
+        let tolerance = if inside { TOLERANCE } else { 0 };
+        assert!(
+            (0..3).all(|c| got[c].abs_diff(want[c]) <= tolerance),
+            "({x}, {y}) is {got:?}, want {want:?} ±{tolerance}"
+        );
+    }
 }

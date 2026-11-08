@@ -38,7 +38,12 @@
 //! leaves arrives the same way, its fade then stepped by the entry's
 //! `_PrepareAllSprites` calls before the first frame (once at a jump's
 //! arrival, twice at a take-off or gate exit; see the `slot_visibility`
-//! module), and decides from there on its first think. Through a jump's
+//! module), and decides from there on its first think. It keeps its
+//! weapon glow and shield flash too, which `_RespawnEscort` writes
+//! neither of (+0xc8e8, +0xc8f0), each stepped again by those calls: the
+//! view carries them into its new NPC as the session reports
+//! ([`FlightEvent::DisplaysCarried`](crate::flight_frame::FlightEvent::DisplaysCarried);
+//! see the `display_carry` module). Through a jump's
 //! warp it goes on thinking its cloak and stepping its fade, in goal
 //! 0xb, to the warp's end. A ship captured into the fleet joins with
 //! neither fade nor direction (`_DoPlunderDialog` @0x946e3, @0x946f9;
@@ -192,6 +197,11 @@ use crate::traffic::table::ShipKind;
 /// ([`Space::fleet_kept`]).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(super) struct KeptEscort {
+    /// Its old NPC, whose weapon glow and shield flash it carries, as
+    /// `_RespawnEscort` writes neither +0xc8e8 nor +0xc8f0 (see the
+    /// `display_carry` module); none when its NPC was not in the system,
+    /// and it carries nothing.
+    pub(super) npc: Option<NpcId>,
     /// Its aux mark ([`Npc::aux`]).
     pub(super) aux: Option<u8>,
     /// Its cloak, fade and direction ([`Npc::cloak`]), as `_RespawnEscort`
@@ -310,7 +320,7 @@ impl Session {
             self.space.escorts.class_orders = [None; 4];
         }
         let restock = self.space.escorts.restock;
-        self.space.escorts.fleet = (0..self.pilot.escorts.len())
+        let fleet: Vec<Option<NpcId>> = (0..self.pilot.escorts.len())
             .map(|index| {
                 let kept = kept.get(index).cloned().unwrap_or_default();
                 let id = self.place_escort_at(
@@ -373,6 +383,14 @@ impl Session {
                 Some(id)
             })
             .collect();
+        // Each kept escort's glow and flash go on in its new NPC (see the
+        // `display_carry` module).
+        let carried = kept
+            .iter()
+            .zip(&fleet)
+            .filter_map(|(kept, &to)| Some((kept.npc?, to?)));
+        self.space.escorts.carry.placed(carried);
+        self.space.escorts.fleet = fleet;
         if !engine {
             self.space.keep_record_orders(&self.pilot, &self.statics);
             self.space.mark_kept_orders();
@@ -1116,6 +1134,7 @@ impl Space {
                     .flatten()
                     .and_then(|id| self.npc(id));
                 npc.map_or_else(KeptEscort::default, |npc| KeptEscort {
+                    npc: Some(npc.id),
                     aux: npc.aux,
                     display: Some((
                         npc.display.frames,
@@ -1244,8 +1263,19 @@ impl Space {
     /// escort and a launched fighter all count; a hired escort disabled or
     /// breaking up does not.
     pub(super) fn escorts_flying(&self) -> bool {
-        self.player_led()
-            .any(|npc| npc.condition == Condition::Intact)
+        self.escorts_intact() > 0
+    }
+
+    /// How many escorts the player has flying, as the escort menu counts
+    /// them each pass it shows (`_HandlePlayer` @0x6df59-0x6dfa7): the
+    /// ships the player leads ([`Space::player_led`]) that are neither
+    /// disabled nor breaking up ([`Space::escorts_flying`]'s).
+    pub(super) fn escorts_intact(&self) -> u32 {
+        let intact = self
+            .player_led()
+            .filter(|npc| npc.condition == Condition::Intact)
+            .count();
+        u32::try_from(intact).unwrap_or(u32::MAX)
     }
 
     /// `class`'s row in the escort menu (`_DrawEscortMenuInFrame`

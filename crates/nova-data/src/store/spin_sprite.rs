@@ -1,11 +1,15 @@
 //! Resolving a `spïn` to its sprite sheet: the link stellars, shots and
 //! explosions share.
 
+use super::pict_pair::{PICT_SHEET_DEPTH, PairCut, PairError, SheetKind};
+use super::stellar_sprite::master_frame_count;
 use super::{GameData, SourceFile};
 use crate::error::DecodeError;
+#[cfg(doc)]
+use crate::graphics::cut_pict_sheet;
 use crate::graphics::{
-    GraphicsError, Image, PICT, RLED, RleWords, SheetMask, SpriteSheet, cut_pict_sheet,
-    decode_pict, decode_rled, rled_words, sheet_rle_words,
+    FrameLimit, GraphicsError, PICT, RLED, RleWords, SpriteSheet, decode_rled, rled_words,
+    sheet_rle_words,
 };
 use crate::records::spin::Spin;
 use crate::wire::id::NovaId;
@@ -23,32 +27,34 @@ pub struct SpinSheet<'a> {
     /// The decoded sheet, laid out with the `spïn`'s `xTiles` as its
     /// columns.
     pub sheet: SpriteSheet,
+    /// The `spïn`'s `xTiles` x `yTiles`, multiplied in 32 bits (the
+    /// original's overwrite @0x1ed94): see [`master_frame_count`].
+    pub tiles: i32,
     /// The file the `spïn` came from.
     pub spin: &'a SourceFile,
     /// The file the `rlëD`, or the sprites `PICT`, came from.
     pub sheet_source: &'a SourceFile,
 }
 
-/// What a `spïn`'s sheet was read from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum SheetKind {
-    /// The `rlëD` named by its `SpritesID`.
-    Rled,
-    /// The sprites `PICT` named by its `SpritesID` and the mask `PICT`
-    /// `mask_id` (its `MasksID`, which may be the sprites themselves), cut
-    /// into frames as the original does with no `rlëD`
-    /// ([`cut_pict_sheet`]).
-    PictPair {
-        /// The mask `PICT`'s ID.
-        mask_id: i16,
-    },
-}
-
 impl SpinSheet<'_> {
-    /// How many frames the sheet holds.
+    /// How many frames the sheet holds, as decoded: effects and the
+    /// cursor count this; stellars and the starfield count
+    /// [`SpinSheet::stellar_frame_count`].
     #[must_use]
     pub fn frame_count(&self) -> usize {
         self.sheet.frames().len()
+    }
+
+    /// How many frames a stellar or the starfield drawn from this sheet
+    /// animates over ([`master_frame_count`]): `_LoadSprites` counts the
+    /// star master the same way (@0x210a4-0x210d2, @0x21218-0x21225),
+    /// and the main screen's rollover (`spïn` 607) too
+    /// (@0x212d6-0x21301, @0x213fc-0x21409).
+    /// [`SpinSheet::frame_count`] stays the decoded count, which effects
+    /// and the cursor use.
+    #[must_use]
+    pub fn stellar_frame_count(&self) -> usize {
+        master_frame_count(self.tiles, self.frame_count())
     }
 }
 
@@ -98,10 +104,6 @@ pub enum SpinSpriteError {
     },
 }
 
-/// The depth a cut `PICT` sheet's tokens are made at: the 16-bit world's,
-/// as `_SWCreateRLEData` parses each frame's 16-bit pixels.
-const PICT_SHEET_DEPTH: u16 = 16;
-
 /// A `MasksID` for an error message: the ID, or "none".
 pub(super) fn mask_label(mask_id: Option<i16>) -> String {
     mask_id.map_or_else(|| "none".to_owned(), |id| id.to_string())
@@ -150,6 +152,7 @@ impl GameData {
             image_id,
             kind,
             sheet,
+            tiles: i32::from(record.x_tiles) * i32::from(record.y_tiles),
             spin: spin.source,
             sheet_source: found.source,
         })
@@ -159,8 +162,9 @@ impl GameData {
     /// touch by, from the sheet [`GameData::spin_sheet`] resolves: an
     /// `rlëD`'s own ([`rled_words`]), or those the original makes of its
     /// cut `PICT` pair at 16 bits ([`sheet_rle_words`]). It fails where
-    /// that does, but for an `rlëD`'s tokens, which it does not check. The
-    /// sheet is read on every call and not cached.
+    /// that does, but for an `rlëD`'s tokens, which it checks only as
+    /// [`rled_words`] does. The sheet is read on every call and not
+    /// cached.
     pub fn spin_words(&self, spin_id: i16) -> Result<RleWords, SpinSpriteError> {
         let spin = self
             .get::<Spin>(spin_id)
@@ -190,35 +194,23 @@ impl GameData {
         record: &Spin,
         sprites: &[u8],
     ) -> Result<(i16, SpriteSheet), SpinSpriteError> {
-        let image_id = record.sprites_id;
-        let decode = |pict_id: i16, data: &[u8]| {
-            decode_pict(data).map_err(|source| SpinSpriteError::Picture { pict_id, source })
+        let mask_id = record.masks_id.map(NovaId::raw);
+        let cut = PairCut {
+            x_size: record.x_size,
+            y_size: record.y_size,
+            limit: FrameLimit::WholeGrid,
+            layout: record.sheet_layout(),
         };
-        let sprites = decode(image_id, sprites)?;
-        let no_mask = SpinSpriteError::NoMask {
-            spin: spin_id,
-            mask_id: record.masks_id.map(NovaId::raw),
-        };
-        let mask_id = record.masks_id.ok_or(no_mask.clone())?.raw();
-        let mask: Option<Image> = if mask_id == image_id {
-            None
-        } else {
-            let found = self.resource(PICT, mask_id).ok_or(no_mask)?;
-            Some(decode(mask_id, found.resource.data())?)
-        };
-        let mask = mask.as_ref().map_or(SheetMask::Itself, SheetMask::Picture);
-        let sheet = cut_pict_sheet(
-            &sprites,
-            mask,
-            record.x_size,
-            record.y_size,
-            record.sheet_layout(),
-        )
-        .map_err(|source| SpinSpriteError::Picture {
-            pict_id: image_id,
-            source,
-        })?;
-        Ok((mask_id, sheet))
+        self.cut_pict_pair(record.sprites_id, sprites, mask_id, cut)
+            .map_err(|error| match error {
+                PairError::NoMask => SpinSpriteError::NoMask {
+                    spin: spin_id,
+                    mask_id,
+                },
+                PairError::Picture { pict_id, source } => {
+                    SpinSpriteError::Picture { pict_id, source }
+                }
+            })
     }
 }
 
@@ -290,9 +282,10 @@ mod tests {
         [((i << 3) | (i >> 2)) as u8, 66, 132, 255]
     }
 
-    /// An `rlëD` of `frames` 2x1 frames whose pixels are `color`.
+    /// An `rlëD` of `frames` 2x1 frames whose pixels are `color`, its
+    /// lines counted.
     fn sheet(frames: u16, color: u16) -> Vec<u8> {
-        let mut builder = RledBuilder::new(2, 1);
+        let mut builder = RledBuilder::new(2, 1).count_lines();
         for _ in 0..frames {
             builder = builder.frame(|f| f.line().pixels(&[color, color]));
         }
@@ -432,12 +425,12 @@ mod tests {
         let words = data.spin_words(3000).expect("a PICT pair");
         assert_eq!(words, sheet_rle_words(&cut, 16));
         assert_eq!(words.starts.len(), 6);
-        let deep = fork(&[(RLED, 2000, RledBuilder::new(2, 1).depth(32).build())]);
+        let deep = fork(&[(RLED, 2000, RledBuilder::new(2, 1).depth(1).build())]);
         assert_eq!(
             store(&[("Bad", deep)]).spin_words(3000),
             Err(SpinSpriteError::Graphics {
                 image_id: 2000,
-                source: GraphicsError::UnsupportedDepth { depth: 32 },
+                source: GraphicsError::UnsupportedDepth { depth: 1 },
             })
         );
         let nothing = fork(&[(Spin::TYPE, 3000, masked_spin(2001, 2101, 2, 1, 6, 6))]);
@@ -574,19 +567,68 @@ mod tests {
         assert_eq!(frame.pixel(1, 0), Some([0; 4]));
     }
 
+    /// The store resolves an `rlëD` by the original's reading, and that
+    /// decides graphic type 0's fallback and the sheet's sizes. A 32-bit
+    /// sheet read in true colour loads or fails alike, at the same sizes.
+    #[test]
+    fn a_32_bit_sheet_resolves_or_fails_alike_under_either_reading() {
+        use crate::graphics::{RledReadings, SpriteSheet, ThirtyTwoBitReading, decode_rled_with};
+        /// The box, the images' size, the box's place in them, and the
+        /// frame count.
+        type Sizes = ((u32, u32), (u32, u32), (u32, u32), usize);
+        fn sizes(sheet: &SpriteSheet) -> Sizes {
+            (
+                (sheet.frame_width(), sheet.frame_height()),
+                (sheet.image_width(), sheet.image_height()),
+                sheet.box_origin(),
+                sheet.frames().len(),
+            )
+        }
+        let true_colour = RledReadings {
+            thirty_two_bit: ThirtyTwoBitReading::TrueColour,
+            ..RledReadings::default()
+        };
+        let wide = RledBuilder::new(1, 1)
+            .depth(32)
+            .count_lines()
+            .frame(|f| f.line().pixels32(&[1, 2]))
+            .build();
+        let uncounted = RledBuilder::new(2, 1)
+            .depth(32)
+            .frame(|f| f.line().pixels32(&[1, 2]))
+            .build();
+        for (why, bytes, resolves) in [
+            ("a row wider than its box", wide, true),
+            ("line starts without their byte counts", uncounted, false),
+        ] {
+            let data = store(&[("Wide Paint", fork(&[(RLED, 2000, bytes.clone())]))]);
+            let resolved = match data.spin_sheet(3000) {
+                Ok(sheet) => Ok(sizes(&sheet.sheet)),
+                Err(SpinSpriteError::Graphics { source, .. }) => Err(source),
+                Err(other) => panic!("{why}: {other}"),
+            };
+            assert_eq!(resolved.is_ok(), resolves, "{why}");
+            assert_eq!(
+                decode_rled_with(&bytes, None, true_colour).map(|sheet| sizes(&sheet)),
+                resolved,
+                "{why}"
+            );
+        }
+    }
+
     #[test]
     fn a_corrupt_sheet_is_a_graphics_error() {
-        let deep = RledBuilder::new(2, 1).depth(32).build();
+        let deep = RledBuilder::new(2, 1).depth(1).build();
         let data = store(&[("Bad Paint", fork(&[(RLED, 2000, deep)]))]);
         let err = data.spin_sheet(3000).expect_err("32-bit");
         assert_eq!(
             err,
             SpinSpriteError::Graphics {
                 image_id: 2000,
-                source: GraphicsError::UnsupportedDepth { depth: 32 },
+                source: GraphicsError::UnsupportedDepth { depth: 1 },
             }
         );
-        assert_eq!(err.to_string(), "rlëD 2000: unsupported rlëD depth 32");
+        assert_eq!(err.to_string(), "rlëD 2000: unsupported rlëD depth 1");
     }
 
     #[test]
@@ -612,7 +654,7 @@ mod tests {
         // With a corrupt `rlëD` 2000 beside it, the `rlëD` is still the
         // sheet (`_ResourceExists` @0x1ebee), and its failure the error.
         let mut resources = pair.to_vec();
-        resources.push((RLED, 2000, RledBuilder::new(2, 1).depth(32).build()));
+        resources.push((RLED, 2000, RledBuilder::new(2, 1).depth(1).build()));
         let err = store(&[("Bad Paint", fork(&resources))])
             .spin_sheet(3000)
             .expect_err("the rlëD fails, not the pair resolves");
@@ -620,7 +662,7 @@ mod tests {
             err,
             SpinSpriteError::Graphics {
                 image_id: 2000,
-                source: GraphicsError::UnsupportedDepth { depth: 32 },
+                source: GraphicsError::UnsupportedDepth { depth: 1 },
             }
         );
     }

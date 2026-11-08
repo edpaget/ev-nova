@@ -365,6 +365,8 @@
 //!   and the outfits it carries: the one place its handling, reserve
 //!   capacities, fuel, shield and armour regeneration and cargo space come
 //!   from.
+//! - [`stellar_frames`]: which frame every other stellar's sprite shows,
+//!   by the sprite tick's sequential branch, which the session steps.
 //! - [`story`]: the story runtime's design, with the original's event
 //!   sources and orderings, and the pure types it names: the
 //!   [`StoryEvent`](story::StoryEvent)s, the
@@ -461,6 +463,7 @@ pub use nova_sim_ai::gate_lanes;
 pub use nova_sim_ai::gate_pilot;
 pub use nova_sim_base::geometry;
 pub use nova_sim_port::gate_sprite;
+pub use nova_sim_port::stellar_frames;
 pub mod glow;
 pub mod key_fade;
 pub mod map_borders;

@@ -55,6 +55,32 @@
 //!   the lights and the weapon glow move by its jitter, and the layers
 //!   are held to its caps or hidden.
 //!
+//! - **An 8-bit sheet** ([`EightBitBlit`]): a hull, alt or layer whose
+//!   `rlëD` is 8-bit goes through the draw proc's depth-8 dispatch with
+//!   its sprite's fields: the hull's translucency (its cloak's
+//!   [`CloakDraw::hull_translucency`], or `BaseTransp`'s or a gate fade's)
+//!   and colorize level, its factors never all 0x20; the alt copies the
+//!   hull's state, its result kept while held ([`AltLayer::shown`]); the
+//!   glow, lights, weapon glow and shield at 0x20, their factors at their
+//!   level and their bias their colorize's. It draws plainly, as a 16-bit
+//!   sheet would, or not at all, its solid runs included.
+//!
+//! - **The world's edge** ([`BoxCut`]): the hull and each layer are
+//!   sprites of their own, so each is cut at the world's edge by its own
+//!   box and sheet, as `_BlitPixieRLETranslucentDrawProc`
+//!   (@0xbb3fc-0xbba11) clips each sprite's box to the world and takes the
+//!   clipped blit for any cut (@0xbb56d-0xbb579, @0xbb770-0xbb789): an
+//!   overhanging sheet cut to its box, a sheet with clip quirks drawing the
+//!   clipped blit's frame. Its solid runs take its decision. A held alt
+//!   of a sheet the ship no longer has is drawn whole.
+//!
+//! - **Its images** ([`SheetImage`](crate::SheetImage)): the hull and each
+//!   layer draw their `rlëD`'s frames, or, for an image cut from its `PICT`
+//!   pair (`nova_data::ShipImage`), the ship's frames of that image
+//!   ([`ImageKey::ship_sheet`](crate::ImageKey::ship_sheet)). A pair has no
+//!   clipped frame and no runs. A held alt takes its sheet's cut only when
+//!   the whole key matches.
+//!
 //! Each layer is added, [`Blend::Or`](crate::draw::Blend::Or) at
 //! [`lights_tint`] of its level; the hull and the alt layer are drawn
 //! plainly, or in their paint. Each one whose sheet holds solid runs draws them raw right
@@ -71,8 +97,10 @@ use super::held_alt::AltLayer;
 use super::paint::{painted_hull, translucency};
 use super::solid_runs::solid_overlay;
 use super::weapon_glow::npc_glow_level;
+use crate::box_cut::BoxCut;
 use crate::draw::lights_tint;
-use crate::{Blend, Color, Colorize, DrawList, ImageKey, Point};
+use crate::eight_bit_blit::{DrawProcState, EightBitBlit, Look};
+use crate::{Blend, Color, Colorize, DrawList, Point};
 
 /// Where a ship's sprite of a frame's size (width, height) is centred on
 /// screen: placed at whole pixels from the player, as the original places
@@ -114,6 +142,27 @@ pub fn lights_murk(murk: u8) -> u8 {
 pub fn npc_glow_rolls(id: NpcId) -> HashedRolls {
     HashedRolls::new(2 + 2 * u64::from(id.0))
 }
+
+/// How a glow, lights, weapon glow or shield `layer` at `level`, whose
+/// 16-bit frame draws as `look`, is drawn: its sprite's +0xa8 is 0x20 and
+/// each channel factor its level (glow @0x2c2b6-0x2c2d6, lights
+/// @0x2c672-0x2c692, weapon glow @0x2c7a6-0x2c7c6, shield
+/// @0x2c87c-0x2c914), its bias `look`'s colorize's level, so an 8-bit
+/// sheet draws only at level 32 uncolorized, the add-over
+/// ([`EightBitBlit`]).
+fn layer_look(layer: LayerSheet, level: u8, look: Look) -> Option<Look> {
+    let state = DrawProcState {
+        translucency: LAYER_TRANSLUCENCY,
+        full_factors: i16::from(level) == LAYER_TRANSLUCENCY,
+        bias: DrawProcState::bias_of(look.1),
+    };
+    EightBitBlit::of_sheet(layer.eight_bit, state).applied(look)
+}
+
+/// The translucency the glow, lights, weapon glow and shield write to their
+/// sprites in the 16-bit world (+0xa8 = 0x20, @0x2c2b6, @0x2c672, @0x2c7a6,
+/// @0x2c87c).
+const LAYER_TRANSLUCENCY: i16 = 0x20;
 
 /// One ship as it is drawn this frame (see the module docs).
 #[derive(Clone, Copy, Debug)]
@@ -177,13 +226,13 @@ impl ShipDraw<'_> {
         turning(self.spec, self.sheet).index(self.drawn.set, self.heading)
     }
 
-    /// The hull's tint, colorize and blend: its unmurked tint drawn
-    /// plainly, or, painted, in its paint at its translucency
-    /// ([`painted_hull`]); or, cloaked, its cloak's tint and blend in place
-    /// of its tint, as the cloak writes the channel factors and leaves the
-    /// colorize (+0xb0 is not touched after @0x2cad1). Its colorize is
-    /// [`ShipDraw::colorize`] in every case.
-    fn hull_tint(&self) -> (Color, Option<Colorize>, Blend) {
+    /// The hull's tint, colorize and blend as a 16-bit sheet draws it: its
+    /// unmurked tint drawn plainly, or, painted, in its paint at its
+    /// translucency ([`painted_hull`]); or, cloaked, its cloak's tint and
+    /// blend in place of its tint, as the cloak writes the channel factors
+    /// and leaves the colorize (+0xb0 is not touched after @0x2cad1). Its
+    /// colorize is [`ShipDraw::colorize`] in every case.
+    fn hull_tint(&self) -> Look {
         if let Some((tint, blend)) = self.cloak.and_then(|cloak| cloak.hull) {
             return (tint, self.colorize, blend);
         }
@@ -192,6 +241,32 @@ impl ShipDraw<'_> {
             None => (self.tint, Blend::Normal),
         };
         (tint, self.colorize, blend)
+    }
+
+    /// The hull's sprite fields that the draw proc's depth-8 dispatch
+    /// reads, which the alt layer copies (@0x2caa6-0x2cb0a): its cloak's
+    /// translucency, or else `BaseTransp`'s or a gate's fade's; and its
+    /// colorize's level. Its channel factors are never all 0x20: they are
+    /// paint − 32 (@0x2be41-0x2beb2), at most −1 for a paint of 31 or
+    /// less and 0 unpainted, and a cloak's are at most 31 fading
+    /// (@0x2d35f-0x2d440) and 2 fully faded.
+    fn hull_state(&self) -> DrawProcState {
+        let translucency = self.cloak.map_or_else(
+            || i16::from(translucency(self.tint.a)),
+            |cloak| cloak.hull_translucency,
+        );
+        DrawProcState {
+            translucency,
+            full_factors: false,
+            bias: DrawProcState::bias_of(self.colorize),
+        }
+    }
+
+    /// How a sheet that is `eight_bit` or not draws in the hull's state
+    /// ([`ShipDraw::hull_state`]): at [`ShipDraw::hull_tint`]'s look,
+    /// plainly, or not at all ([`EightBitBlit`]).
+    fn hull_look(&self, eight_bit: bool) -> Option<Look> {
+        EightBitBlit::of_sheet(eight_bit, self.hull_state()).applied(self.hull_tint())
     }
 
     /// `at` moved by its cloak's jitter, as its hull and the layers that
@@ -206,7 +281,8 @@ impl ShipDraw<'_> {
     /// Its alt layer as drawn this frame, placed by `place` (see
     /// [`ShipDraw::draw`]) by its own frame's size, when its hull is drawn
     /// and the session draws the layer on a set: its own set's frame, with
-    /// the hull's tint and colorize.
+    /// the hull's tint and colorize, through the depth-8 dispatch when its
+    /// own sheet is 8-bit, in the hull's state.
     #[must_use]
     pub fn live_alt(&self, place: Place<'_>) -> Option<AltLayer> {
         let (Some(layer), Alt::Drawn(set), true) = (self.sheet.alt, self.drawn.alt, self.hull)
@@ -214,11 +290,13 @@ impl ShipDraw<'_> {
             return None;
         };
         let frame = turning(self.spec, self.sheet).index(set, self.heading) % layer.frames.get();
-        let (tint, colorize, blend) = self.hull_tint();
+        let look = self.hull_look(layer.eight_bit);
+        let (tint, colorize, blend) = look.unwrap_or_else(|| self.hull_tint());
         let at = self.moved(place(layer.size()));
         Some(AltLayer {
-            image: ImageKey::sprite(layer.image_id, frame),
+            image: layer.image.frame(frame),
             at,
+            shown: look.is_some(),
             tint,
             colorize,
             blend,
@@ -236,13 +314,16 @@ impl ShipDraw<'_> {
     /// @0x2d5ae, @0x2d69e).
     pub fn draw(&self, list: &mut DrawList, place: Place<'_>, alt: Option<AltLayer>) {
         let frame = self.frame();
-        let (hull_tint, colorize, hull_blend) = self.hull_tint();
-        if self.hull {
+        let colorize = self.colorize;
+        if let (true, Some((tint, hull_colorize, blend))) =
+            (self.hull, self.hull_look(self.sheet.eight_bit))
+        {
             let at = self.moved(place(self.sheet.size()));
-            let hull = ImageKey::sprite(self.sheet.image_id, frame);
-            list.mixed_sprite(hull, at, hull_tint, hull_blend, colorize);
+            let cut = BoxCut::of(list.world_clip(), at, self.sheet.edge());
+            let hull = self.sheet.image.frame(frame);
+            cut.mixed_sprite(list, hull, at, (tint, blend, hull_colorize));
             if self.sheet.solid {
-                solid_overlay(list, self.sheet.image_id, frame, at);
+                solid_overlay(list, cut, self.sheet.image, frame, at);
             }
         }
         // A cloak holds the glow and lights to its cap, or hides them, and
@@ -278,14 +359,22 @@ impl ShipDraw<'_> {
         };
         let add =
             |list: &mut DrawList, layer: Option<LayerSheet>, level: Option<u8>, murk, frame| {
-                if let (Some(layer), Some(level)) = (layer, level) {
-                    let frame = frame % layer.frames.get();
-                    let image = ImageKey::sprite(layer.image_id, frame);
-                    let at = self.moved(place(layer.size()));
-                    list.mixed_sprite(image, at, lights_tint(level), Blend::Or, copied(murk));
-                    if layer.solid && level > 0 {
-                        solid_overlay(list, layer.image_id, frame, at);
-                    }
+                let (Some(layer), Some(level)) = (layer, level) else {
+                    return;
+                };
+                let colorize = copied(murk);
+                let Some((tint, colorize, blend)) =
+                    layer_look(layer, level, (lights_tint(level), colorize, Blend::Or))
+                else {
+                    return;
+                };
+                let frame = frame % layer.frames.get();
+                let image = layer.image.frame(frame);
+                let at = self.moved(place(layer.size()));
+                let cut = BoxCut::of(list.world_clip(), at, layer.edge());
+                cut.mixed_sprite(list, image, at, (tint, blend, colorize));
+                if layer.solid && level > 0 {
+                    solid_overlay(list, cut, layer.image, frame, at);
                 }
             };
         let lights_murk = if self.held { lights_murk(murk) } else { 0 };
@@ -298,23 +387,36 @@ impl ShipDraw<'_> {
         let weapon = self.weapon.map(|level| held(level, murk).min(weapon_cap));
         add(list, self.sheet.weapon, weapon, murk, frame);
         let spec = turning(self.spec, self.sheet);
-        if let Some(alt) = alt {
-            list.mixed_sprite(alt.image, alt.at, alt.tint, alt.blend, alt.colorize);
-            let alt_sheet = self.sheet.alt;
-            if alt_sheet.is_some_and(|layer| layer.solid && layer.image_id == alt.image.id) {
-                solid_overlay(list, alt.image.id, alt.image.frame, alt.at);
+        if let Some(alt) = alt.filter(|alt| alt.shown) {
+            // A held alt of a sheet the ship no longer has is drawn whole:
+            // its sheet isn't known. The sheet is matched by its whole key,
+            // so an `rlëD` and a `PICT` pair of one ID never match.
+            let alt_sheet = self
+                .sheet
+                .alt
+                .filter(|layer| layer.image.frame(alt.image.frame) == alt.image);
+            let cut = alt_sheet.map_or(BoxCut::WHOLE, |layer| {
+                BoxCut::of(list.world_clip(), alt.at, layer.edge())
+            });
+            cut.mixed_sprite(list, alt.image, alt.at, (alt.tint, alt.blend, alt.colorize));
+            if let Some(layer) = alt_sheet.filter(|layer| layer.solid) {
+                solid_overlay(list, cut, layer.image, alt.image.frame, alt.at);
             }
         }
         let shield = self
             .shield
             .filter(|_| self.cloak.is_none_or(|cloak| cloak.shield));
-        if let (Some(layer), Some(level)) = (self.sheet.shield, shield) {
+        if let (Some(layer), Some(level)) = (self.sheet.shield, shield)
+            && let Some((tint, colorize, blend)) =
+                layer_look(layer, level, (lights_tint(level), colorize, Blend::Or))
+        {
             let at = place(layer.size());
             let frame = spec.shield_frame(self.drawn.set, self.heading, layer.frames);
-            let image = ImageKey::sprite(layer.image_id, frame);
-            list.mixed_sprite(image, at, lights_tint(level), Blend::Or, colorize);
+            let image = layer.image.frame(frame);
+            let cut = BoxCut::of(list.world_clip(), at, layer.edge());
+            cut.mixed_sprite(list, image, at, (tint, blend, colorize));
             if layer.solid && level > 0 {
-                solid_overlay(list, layer.image_id, frame, at);
+                solid_overlay(list, cut, layer.image, frame, at);
             }
         }
     }
@@ -360,11 +462,14 @@ mod tests {
         /// A layer `rlëD` `image_id` of `width` x `height` frames.
         fn layer(image_id: i16, (frame_width, frame_height): (u32, u32)) -> LayerSheet {
             LayerSheet {
-                image_id,
+                image: crate::SheetImage::Rled(image_id),
                 frames: NonZeroU16::new(36).expect("non-zero"),
                 frame_width,
                 frame_height,
+                image_size: (frame_width, frame_height),
+                clip_quirks: false,
                 solid: false,
+                eight_bit: false,
             }
         }
 
@@ -372,10 +477,12 @@ mod tests {
         /// 1300, alt 1400 and shield 1500 each have a frame of its own.
         fn sheet() -> ShipSheet {
             ShipSheet {
-                image_id: 1000,
+                image: crate::SheetImage::Rled(1000),
                 rotations: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: 7,
                 frame_height: 6,
+                image_size: (7, 6),
+                clip_quirks: false,
                 glow: Some(layer(1100, (5, 4))),
                 lights: Some(layer(1200, (6, 3))),
                 weapon: Some(layer(1300, (7, 2))),
@@ -384,6 +491,7 @@ mod tests {
                 shield: Some(layer(1500, (9, 8))),
                 base_transp: 0,
                 solid: false,
+                eight_bit: false,
             }
         }
 
@@ -447,6 +555,7 @@ mod tests {
         fn a_jitter_moves_the_hull_and_layers_from_their_places_but_not_the_shield() {
             let cloak = CloakDraw {
                 hull: None,
+                hull_translucency: 0,
                 offset: Point::new(2.0, -3.0),
                 layers: Some(32),
                 weapon: 32,
@@ -466,6 +575,641 @@ mod tests {
                     (1500, 9.0),
                 ]
             );
+        }
+    }
+
+    /// A ship whose sheets are 8-bit, through the draw proc's depth-8
+    /// dispatch ([`EightBitBlit`](crate::eight_bit_blit::EightBitBlit)),
+    /// beside the same ship's 16-bit sheets.
+    mod eight_bit {
+        use std::num::NonZeroU16;
+
+        use nova_sim::ShipRef;
+        use nova_sim::cloak::CloakShown;
+        use nova_sim::combat::ship_frames::{Alt, Drawn, FrameSpec};
+
+        use super::super::*;
+        use crate::flight::cloak_fade::CloakDraw;
+        use crate::flight::held_alt::HeldAlts;
+        use crate::{DrawCommand, ImageKey};
+
+        const AT: Point = Point::new(100.0, 50.0);
+
+        const PAINT: Option<Rgb15> = Some(Rgb15 { r: 31, g: 16, b: 4 });
+
+        /// A 4 x 4 layer `rlëD` `image_id` of 36 frames.
+        fn layer(image_id: i16, eight_bit: bool, solid: bool) -> LayerSheet {
+            LayerSheet {
+                image: crate::SheetImage::Rled(image_id),
+                frames: NonZeroU16::new(36).expect("non-zero"),
+                frame_width: 4,
+                frame_height: 4,
+                image_size: (4, 4),
+                clip_quirks: false,
+                solid,
+                eight_bit,
+            }
+        }
+
+        /// A hull 1000 with a glow 1100, alt 1400 and shield 1500, every
+        /// sheet 8-bit or not and holding solid runs or not.
+        fn sheet(eight_bit: bool, solid: bool) -> ShipSheet {
+            ShipSheet {
+                image: crate::SheetImage::Rled(1000),
+                rotations: NonZeroU16::new(36).expect("non-zero"),
+                frame_width: 10,
+                frame_height: 10,
+                image_size: (10, 10),
+                clip_quirks: false,
+                glow: Some(layer(1100, eight_bit, solid)),
+                lights: None,
+                weapon: None,
+                weap_decay: 0,
+                alt: Some(layer(1400, eight_bit, solid)),
+                shield: Some(layer(1500, eight_bit, solid)),
+                base_transp: 0,
+                solid,
+                eight_bit,
+            }
+        }
+
+        /// The player's ship of `sheet`, unpainted, opaque, uncolorized,
+        /// its alt drawn on set 0 and no layer lit.
+        fn ship<'a>(sheet: &'a ShipSheet, spec: &'a FrameSpec) -> ShipDraw<'a> {
+            ShipDraw {
+                sheet,
+                spec,
+                drawn: Drawn {
+                    alt: Alt::Drawn(0),
+                    ..Drawn::default()
+                },
+                heading: 0.0,
+                tint: Color::WHITE,
+                paint: None,
+                cloak: None,
+                hull: true,
+                held: false,
+                glow: None,
+                lights: None,
+                weapon: None,
+                shield: None,
+                colorize: None,
+            }
+        }
+
+        /// `sheet`'s ship cloaked `shown`.
+        fn cloaked<'a>(
+            sheet: &'a ShipSheet,
+            spec: &'a FrameSpec,
+            shown: CloakShown,
+        ) -> ShipDraw<'a> {
+            let cloak = CloakDraw::of(shown, None, 0, &HashedRolls::new(1));
+            ShipDraw {
+                cloak,
+                hull: cloak.is_none_or(|cloak| cloak.hull.is_some()),
+                ..ship(sheet, spec)
+            }
+        }
+
+        /// A hull drawn at `BaseTransp` `base_transp`'s alpha.
+        fn at_base_transp(base_transp: i16) -> Color {
+            Color {
+                a: base_alpha(base_transp),
+                ..Color::WHITE
+            }
+        }
+
+        /// One sprite drawn: its image, tint, blend and colorize.
+        type Sprite = (ImageKey, Color, Blend, Option<Colorize>);
+
+        /// What `ship` draws with its alt `alt`.
+        fn drawn_with(ship: &ShipDraw<'_>, alt: Option<AltLayer>) -> Vec<Sprite> {
+            let mut list = DrawList::new();
+            ship.draw(&mut list, &|_| AT, alt);
+            list.iter()
+                .filter_map(|command| match *command {
+                    DrawCommand::Sprite {
+                        image, tint, blend, ..
+                    } => Some((image, tint, blend, None)),
+                    DrawCommand::Colorized {
+                        image,
+                        tint,
+                        blend,
+                        colorize,
+                        ..
+                    } => Some((image, tint, blend, Some(colorize))),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        /// What `ship` draws, its alt live.
+        fn drawn(ship: &ShipDraw<'_>) -> Vec<Sprite> {
+            drawn_with(ship, ship.live_alt(&|_| AT))
+        }
+
+        /// The sheets of what `ship` draws.
+        fn ids(ship: &ShipDraw<'_>) -> Vec<i16> {
+            drawn(ship).iter().map(|(image, ..)| image.id).collect()
+        }
+
+        const NONE: [i16; 0] = [];
+
+        #[test]
+        fn a_painted_opaque_8_bit_hull_draws_plainly_unpainted() {
+            let spec = FrameSpec::NONE;
+            let (eight, sixteen) = (sheet(true, false), sheet(false, false));
+            let painted = |sheet| ShipDraw {
+                paint: PAINT,
+                ..ship(sheet, &spec)
+            };
+            let look = |sprite: Sprite| (sprite.0.id, sprite.1, sprite.2, sprite.3);
+            // +0xa8 0 and no bias: `_BlitPixieRLE`, the factors ignored.
+            let eight = drawn(&painted(&eight));
+            assert_eq!(look(eight[0]), (1000, Color::WHITE, Blend::Normal, None));
+            // Its alt copies the hull's state, and draws plainly too.
+            assert_eq!(look(eight[1]), (1400, Color::WHITE, Blend::Normal, None));
+            assert_eq!(drawn(&painted(&sixteen))[0].2, Blend::OrTranslucent);
+        }
+
+        #[test]
+        fn a_translucent_or_colorized_8_bit_hull_draws_as_a_16_bit_one_does() {
+            let spec = FrameSpec::NONE;
+            let (eight, sixteen) = (sheet(true, false), sheet(false, false));
+            let faint = |sheet, paint| ShipDraw {
+                tint: at_base_transp(10),
+                paint,
+                ..ship(sheet, &spec)
+            };
+            for paint in [None, PAINT] {
+                let drawn8 = drawn(&faint(&eight, paint));
+                assert_eq!(drawn8, drawn(&faint(&sixteen, paint)), "{paint:?}");
+                assert_eq!(drawn8.len(), 2, "the hull and its alt");
+            }
+            // Colorized, an opaque 8-bit hull is biased: drawn as 16-bit.
+            let colorize = Some(Colorize::toward_pixel(5, 0x1081));
+            let biased = |sheet| ShipDraw {
+                colorize,
+                ..ship(sheet, &spec)
+            };
+            assert_eq!(drawn(&biased(&eight)), drawn(&biased(&sixteen)));
+            assert_eq!(drawn(&biased(&eight))[0].3, colorize);
+        }
+
+        #[test]
+        fn an_8_bit_hull_at_base_transp_32_or_more_draws_nothing() {
+            let spec = FrameSpec::NONE;
+            let eight = sheet(true, false);
+            for base_transp in [32, 40] {
+                let gone = ShipDraw {
+                    tint: at_base_transp(base_transp),
+                    ..ship(&eight, &spec)
+                };
+                assert_eq!(ids(&gone), NONE, "{base_transp}");
+            }
+        }
+
+        #[test]
+        fn a_fading_cloak_hides_an_8_bit_hull_and_its_alt() {
+            let spec = FrameSpec::NONE;
+            let fading = CloakShown::Fading(21.5);
+            assert_eq!(ids(&cloaked(&sheet(true, false), &spec, fading)), NONE);
+            let sixteen: Vec<_> = drawn(&cloaked(&sheet(false, false), &spec, fading))
+                .iter()
+                .map(|(image, _, blend, _)| (image.id, *blend))
+                .collect();
+            assert_eq!(sixteen, [(1000, Blend::Or), (1400, Blend::Or)]);
+        }
+
+        #[test]
+        fn a_full_fade_seen_draws_an_8_bit_hull_as_a_16_bit_one() {
+            let spec = FrameSpec::NONE;
+            let seen = CloakShown::Translucent(0x1e);
+            let eight = drawn(&cloaked(&sheet(true, false), &spec, seen));
+            assert_eq!(eight, drawn(&cloaked(&sheet(false, false), &spec, seen)));
+            assert_eq!(eight[0].2, Blend::OrTranslucent);
+        }
+
+        #[test]
+        fn an_8_bit_glow_draws_only_at_level_32_uncolorized() {
+            let spec = FrameSpec::NONE;
+            let (eight, sixteen) = (sheet(true, false), sheet(false, false));
+            let glowing = |sheet, glow, held, colorize| ShipDraw {
+                hull: false,
+                glow: Some(glow),
+                held,
+                colorize,
+                ..ship(sheet, &spec)
+            };
+            // The add-over: drawn as a 16-bit layer is.
+            let full = drawn(&glowing(&eight, 32, false, None));
+            assert_eq!(full, drawn(&glowing(&sixteen, 32, false, None)));
+            assert_eq!(full[0].1, lights_tint(32));
+            assert_eq!(full[0].2, Blend::Or);
+            // Any other level draws nothing.
+            assert_eq!(ids(&glowing(&eight, 31, false, None)), NONE);
+            assert_eq!(ids(&glowing(&sixteen, 31, false, None)), [1100]);
+            // An NPC's glow copies its murk, and draws nothing.
+            let murk = Some(Colorize::toward_pixel(4, 0x1081));
+            assert_eq!(ids(&glowing(&eight, 32, true, murk)), NONE);
+            // The player's glow takes none of its hull's colorize, so it
+            // draws at 32.
+            assert_eq!(ids(&glowing(&eight, 32, false, murk)), [1100]);
+        }
+
+        #[test]
+        fn an_8_bit_shield_at_32_draws_only_when_its_hull_is_uncolorized() {
+            let spec = FrameSpec::NONE;
+            let eight = sheet(true, false);
+            let flashed = |colorize| ShipDraw {
+                hull: false,
+                shield: Some(32),
+                colorize,
+                ..ship(&eight, &spec)
+            };
+            assert_eq!(ids(&flashed(None)), [1500]);
+            let ionized = Some(Colorize::toward_pixel(10, 0x7C00));
+            assert_eq!(ids(&flashed(ionized)), NONE);
+        }
+
+        #[test]
+        fn an_8_bit_sprite_that_draws_nothing_draws_no_runs() {
+            let spec = FrameSpec::NONE;
+            let (eight, sixteen) = (sheet(true, true), sheet(false, true));
+            let lit = |sheet| ShipDraw {
+                glow: Some(10),
+                shield: Some(10),
+                ..cloaked(sheet, &spec, CloakShown::Fading(21.5))
+            };
+            assert_eq!(ids(&lit(&eight)), NONE);
+            // The 16-bit ship draws each sprite and its runs.
+            let runs: Vec<_> = drawn(&lit(&sixteen))
+                .iter()
+                .filter(|(image, ..)| image.kind == crate::ImageKind::RledSolid)
+                .map(|(image, ..)| image.id)
+                .collect();
+            assert_eq!(runs, [1000, 1100, 1400, 1500]);
+        }
+
+        #[test]
+        fn a_held_alt_keeps_drawing_nothing() {
+            let spec = FrameSpec::NONE;
+            let eight = sheet(true, false);
+            let fading = cloaked(&eight, &spec, CloakShown::Fading(21.5));
+            let mut held = HeldAlts::default();
+            let live = fading.live_alt(&|_| AT);
+            let recorded = held.shown(ShipRef::Player, Alt::Drawn(0), live, true);
+            assert!(recorded.is_some_and(|alt| !alt.shown), "{recorded:?}");
+            // Held, the alt keeps the state it was last drawn in, though
+            // the hull has since stopped fading.
+            let kept = held.shown(ShipRef::Player, Alt::Held, None, true);
+            assert_eq!(kept, recorded);
+            let opaque = ship(&eight, &spec);
+            let ids: Vec<_> = drawn_with(&opaque, kept)
+                .iter()
+                .map(|(image, ..)| image.id)
+                .collect();
+            assert_eq!(ids, [1000]);
+        }
+
+        /// A hull 1000 that is `hull_eight_bit` or not, whose glow 1100,
+        /// alt 1400 and shield 1500 are `layers_eight_bit` or not.
+        fn mixed(hull_eight_bit: bool, layers_eight_bit: bool) -> ShipSheet {
+            ShipSheet {
+                eight_bit: hull_eight_bit,
+                ..sheet(layers_eight_bit, false)
+            }
+        }
+
+        #[test]
+        fn mid_fade_each_sprite_reads_its_own_sheets_flag() {
+            let spec = FrameSpec::NONE;
+            let (hull16, hull8) = (mixed(false, true), mixed(true, false));
+            let lit = |sheet| ShipDraw {
+                glow: Some(10),
+                shield: Some(10),
+                ..cloaked(sheet, &spec, CloakShown::Fading(21.5))
+            };
+            // A 16-bit hull draws; its 8-bit alt, in the hull's state, and
+            // its 8-bit glow and shield draw nothing.
+            assert_eq!(ids(&lit(&hull16)), [1000]);
+            // An 8-bit hull draws nothing; its 16-bit glow, alt and shield
+            // still draw.
+            assert_eq!(ids(&lit(&hull8)), [1100, 1400, 1500]);
+        }
+
+        #[test]
+        fn an_8_bit_glow_at_31_is_dropped_beside_a_16_bit_hull() {
+            let spec = FrameSpec::NONE;
+            let (hull16, hull8) = (mixed(false, true), mixed(true, false));
+            let glowing = |sheet| ShipDraw {
+                glow: Some(31),
+                ..ship(sheet, &spec)
+            };
+            // The opaque hull and its alt draw plainly at either depth.
+            assert_eq!(ids(&glowing(&hull16)), [1000, 1400]);
+            assert_eq!(ids(&glowing(&hull8)), [1000, 1100, 1400]);
+        }
+    }
+
+    /// A ship cut to its box at the world's edge (`box_cut`): each sprite
+    /// by its own box and sheet, its solid runs with it.
+    mod at_the_worlds_edge {
+        use std::num::NonZeroU16;
+
+        use nova_sim::combat::ship_frames::{Alt, Drawn, FrameSpec};
+
+        use super::super::*;
+        use crate::ImageKey;
+        use crate::box_cut::drawn_cuts;
+        use crate::flight::held_alt::AltLayer;
+        use crate::geometry::Bounds;
+
+        /// The world: 200 x 100 from the origin.
+        const WORLD: Bounds = Bounds {
+            min: Point { x: 0.0, y: 0.0 },
+            max: Point { x: 200.0, y: 100.0 },
+        };
+
+        /// A 4 x 4 layer `rlëD` `image_id` of 36 frames, its image `image`.
+        fn layer(image_id: i16, image: (u32, u32)) -> LayerSheet {
+            LayerSheet {
+                image: crate::SheetImage::Rled(image_id),
+                frames: NonZeroU16::new(36).expect("non-zero"),
+                frame_width: 4,
+                frame_height: 4,
+                image_size: image,
+                clip_quirks: false,
+                solid: false,
+                eight_bit: false,
+            }
+        }
+
+        /// A 10 x 10 hull 1000 whose image is `image`, with a box-sized
+        /// glow 1100.
+        fn sheet(image: (u32, u32)) -> ShipSheet {
+            ShipSheet {
+                image: crate::SheetImage::Rled(1000),
+                rotations: NonZeroU16::new(36).expect("non-zero"),
+                frame_width: 10,
+                frame_height: 10,
+                image_size: image,
+                clip_quirks: false,
+                glow: Some(layer(1100, (4, 4))),
+                lights: None,
+                weapon: None,
+                weap_decay: 0,
+                alt: None,
+                shield: None,
+                base_transp: 0,
+                solid: false,
+                eight_bit: false,
+            }
+        }
+
+        /// The player's ship of `sheet`, opaque, its glow lit at 32.
+        fn ship<'a>(sheet: &'a ShipSheet, spec: &'a FrameSpec) -> ShipDraw<'a> {
+            ShipDraw {
+                sheet,
+                spec,
+                drawn: Drawn {
+                    alt: Alt::Drawn(0),
+                    ..Drawn::default()
+                },
+                heading: 0.0,
+                tint: Color::WHITE,
+                paint: None,
+                cloak: None,
+                hull: true,
+                held: false,
+                glow: Some(32),
+                lights: None,
+                weapon: None,
+                shield: None,
+                colorize: None,
+            }
+        }
+
+        /// What `ship` draws centred on `at` in the world: each command's
+        /// image and the box it is cut to, if it is.
+        fn drawn_at(ship: &ShipDraw<'_>, at: Point) -> Vec<(ImageKey, Option<Bounds>)> {
+            let mut list = DrawList::new();
+            list.world_in(WORLD, |list| ship.draw(list, &|_| at, None));
+            drawn_cuts(&list)
+        }
+
+        /// The box of a `side`-square frame centred on `at`.
+        fn box_of(at: Point, side: f32) -> Bounds {
+            crate::box_cut::box_of(at, (side, side))
+        }
+
+        /// Straddling the world's left edge: the hull's box and the glow's.
+        const LEFT: Point = Point::new(1.0, 50.0);
+
+        #[test]
+        fn an_overhanging_hull_straddling_the_worlds_edge_is_cut_to_its_box() {
+            let (sheet, spec) = (sheet((14, 10)), FrameSpec::NONE);
+            assert_eq!(
+                drawn_at(&ship(&sheet, &spec), LEFT),
+                [
+                    (ImageKey::sprite(1000, 0), Some(box_of(LEFT, 10.0))),
+                    (ImageKey::sprite(1100, 0), None),
+                ]
+            );
+        }
+
+        #[test]
+        fn an_overhanging_hull_wholly_inside_the_world_draws_whole() {
+            let (sheet, spec) = (sheet((14, 10)), FrameSpec::NONE);
+            let inside = Point::new(100.0, 50.0);
+            assert_eq!(
+                drawn_at(&ship(&sheet, &spec), inside),
+                [
+                    (ImageKey::sprite(1000, 0), None),
+                    (ImageKey::sprite(1100, 0), None),
+                ]
+            );
+        }
+
+        #[test]
+        fn a_quirky_hull_cut_at_the_left_draws_its_clipped_frame_and_runs() {
+            let sheet = ShipSheet {
+                clip_quirks: true,
+                solid: true,
+                ..sheet((10, 10))
+            };
+            let spec = FrameSpec::NONE;
+            let hull = box_of(LEFT, 10.0);
+            assert_eq!(
+                drawn_at(&ship(&sheet, &spec), LEFT),
+                [
+                    (ImageKey::clipped_sprite(1000, 0, (0, 4)), Some(hull)),
+                    (ImageKey::clipped_solid_runs(1000, 0, (0, 4)), Some(hull)),
+                    (ImageKey::sprite(1100, 0), None),
+                ]
+            );
+        }
+
+        #[test]
+        fn an_overhanging_hulls_solid_runs_are_cut_to_its_box_with_it() {
+            let sheet = ShipSheet {
+                solid: true,
+                ..sheet((14, 10))
+            };
+            let spec = FrameSpec::NONE;
+            let hull = box_of(LEFT, 10.0);
+            assert_eq!(
+                drawn_at(&ship(&sheet, &spec), LEFT)[..2],
+                [
+                    (ImageKey::sprite(1000, 0), Some(hull)),
+                    (ImageKey::solid_runs(1000, 0), Some(hull)),
+                ]
+            );
+        }
+
+        #[test]
+        fn an_overhanging_glow_is_cut_by_its_own_box_not_the_hulls() {
+            let sheet = ShipSheet {
+                glow: Some(layer(1100, (8, 4))),
+                ..sheet((10, 10))
+            };
+            let spec = FrameSpec::NONE;
+            // The hull's box straddles the left edge; the glow's, 4 wide,
+            // is inside.
+            let at = Point::new(3.0, 50.0);
+            assert_eq!(
+                drawn_at(&ship(&sheet, &spec), at),
+                [
+                    (ImageKey::sprite(1000, 0), None),
+                    (ImageKey::sprite(1100, 0), None),
+                ]
+            );
+            // Both straddle it: the glow is cut to its own box.
+            assert_eq!(
+                drawn_at(&ship(&sheet, &spec), LEFT),
+                [
+                    (ImageKey::sprite(1000, 0), None),
+                    (ImageKey::sprite(1100, 0), Some(box_of(LEFT, 4.0))),
+                ]
+            );
+        }
+
+        #[test]
+        fn a_pict_pair_hull_and_layer_at_the_edge_draw_their_frames_cut_to_their_boxes() {
+            use nova_data::ShipImage;
+            let pair = |image| crate::SheetImage::Ship { ship: 128, image };
+            // Even marked quirky and solid, a pair has no clipped frame and
+            // no runs: its 16-bit RLE is cut to its box.
+            let sheet = ShipSheet {
+                image: pair(ShipImage::Base),
+                clip_quirks: true,
+                solid: true,
+                glow: Some(LayerSheet {
+                    image: pair(ShipImage::Glow),
+                    clip_quirks: true,
+                    solid: true,
+                    ..layer(1100, (4, 4))
+                }),
+                ..sheet((10, 10))
+            };
+            let spec = FrameSpec::NONE;
+            assert_eq!(
+                drawn_at(&ship(&sheet, &spec), LEFT),
+                [
+                    (
+                        ImageKey::ship_sheet(128, ShipImage::Base, 0),
+                        Some(box_of(LEFT, 10.0))
+                    ),
+                    (
+                        ImageKey::ship_sheet(128, ShipImage::Glow, 0),
+                        Some(box_of(LEFT, 4.0))
+                    ),
+                ]
+            );
+        }
+
+        #[test]
+        fn a_held_alt_takes_its_sheets_cut_only_when_its_whole_key_matches() {
+            use nova_data::ShipImage;
+            let pair = crate::SheetImage::Ship {
+                ship: 1400,
+                image: ShipImage::Alt,
+            };
+            let sheet = ShipSheet {
+                glow: None,
+                // Overhanging its box, so a cut shows.
+                alt: Some(LayerSheet {
+                    image: pair,
+                    ..layer(1400, (8, 4))
+                }),
+                ..sheet((10, 10))
+            };
+            let spec = FrameSpec::NONE;
+            let held = |image| AltLayer {
+                image,
+                at: LEFT,
+                shown: true,
+                tint: Color::WHITE,
+                colorize: None,
+                blend: Blend::Normal,
+            };
+            let alt_of = |alt: AltLayer| {
+                let mut list = DrawList::new();
+                list.world_in(WORLD, |list| {
+                    ship(&sheet, &spec).draw(list, &|_| LEFT, Some(alt));
+                });
+                drawn_cuts(&list)[1]
+            };
+            // Its own sheet's key: cut by that sheet's box.
+            let own = pair.frame(2);
+            assert_eq!(alt_of(held(own)), (own, Some(box_of(LEFT, 4.0))));
+            // An `rlëD` of the same ID is another sheet: drawn whole.
+            let other = ImageKey::sprite(1400, 2);
+            assert_eq!(alt_of(held(other)), (other, None));
+        }
+
+        #[test]
+        fn every_layer_is_decided_by_its_own_sheet() {
+            let edged = |image_id| LayerSheet {
+                clip_quirks: true,
+                solid: true,
+                ..layer(image_id, (4, 4))
+            };
+            let sheet = ShipSheet {
+                glow: Some(edged(1100)),
+                lights: Some(edged(1200)),
+                weapon: Some(edged(1300)),
+                alt: Some(edged(1400)),
+                shield: Some(edged(1500)),
+                ..sheet((10, 10))
+            };
+            let spec = FrameSpec::NONE;
+            let every_layer = ShipDraw {
+                lights: Some(32),
+                weapon: Some(32),
+                shield: Some(32),
+                ..ship(&sheet, &spec)
+            };
+            let mut list = DrawList::new();
+            list.world_in(WORLD, |list| {
+                every_layer.draw(list, &|_| LEFT, every_layer.live_alt(&|_| LEFT));
+            });
+            let layer_box = box_of(LEFT, 4.0);
+            let cut = (0, 1);
+            let layers: Vec<_> = drawn_cuts(&list)
+                .into_iter()
+                .filter(|(image, _)| image.id != 1000)
+                .collect();
+            let expected: Vec<_> = [1100, 1200, 1300, 1400, 1500]
+                .into_iter()
+                .flat_map(|id| {
+                    [
+                        (ImageKey::clipped_sprite(id, 0, cut), Some(layer_box)),
+                        (ImageKey::clipped_solid_runs(id, 0, cut), Some(layer_box)),
+                    ]
+                })
+                .collect();
+            assert_eq!(layers, expected);
         }
     }
 

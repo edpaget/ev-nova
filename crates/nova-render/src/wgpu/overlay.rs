@@ -166,6 +166,7 @@ mod tests {
             batches: Vec::new(),
             world: Vec::new(),
             world_clip: None,
+            world_tail: None,
         }
     }
 

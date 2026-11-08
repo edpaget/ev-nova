@@ -64,13 +64,16 @@
 //! under way starts again from 32, its timeout still running from the old
 //! stamp. A fade that reached 0 earlier in the same `_HandlePlayer` has
 //! shut the menu already (`jle` @0x6e386, @0x6e444). Each pass records its
-//! escort-menu block ([`Space::escort_menu_block`]): whether an escort flew
-//! as the fade counted them (@0x6df59-0x6dfd0), just before the
-//! bookkeeping, and whether the bookkeeping cleared a class. The step
-//! reports it with the pass
+//! escort-menu block ([`Space::escort_menu_block`]): how many escorts flew
+//! as the fade counted them (@0x6df59-0x6dfa7, [`Space::escorts_intact`]),
+//! just before the bookkeeping, whether the bookkeeping cleared a class,
+//! and the menu's rows as the bookkeeping leaves them, captured after it,
+//! which every redraw of the pass reads (a change in the count's, @0x6dfd0,
+//! and each clear's). The step reports it with the pass
 //! ([`PassReport::escort_menu`](crate::flight_frame::PassReport::escort_menu)),
 //! and the view fades the menu once for each pass reported, showing it again
-//! after a clearing pass's drop. A destroyed player's pass takes the dead
+//! after a clearing pass's drop, and holds the rows it last drew between
+//! the redraws. A destroyed player's pass takes the dead
 //! branch (0x6870d-0x6888c), returning before both (@0x68853, @0x6888c):
 //! it records none and settles nothing. Its rows show each class's kept
 //! order as the bookkeeping leaves it ([`Space::standing_class_order`]).
@@ -164,11 +167,13 @@ impl Space {
     }
 
     /// `_HandlePlayer`'s escort-menu block on the pass under way, recorded
-    /// in `out` for the pass's report (see the module docs): whether an
-    /// escort flies as the fade counts them (@0x6df59-0x6dfd0), then the
+    /// in `out` for the pass's report (see the module docs): how many
+    /// escorts fly as the fade counts them (@0x6df59-0x6dfa7), then the
     /// class-order bookkeeping ([`Space::settle_class_orders`]), the
-    /// escorts' records in `pilot`, their classes read through `statics`.
-    /// A clear the pass's launch reported already stands. A `dead` player
+    /// escorts' records in `pilot`, their classes read through `statics`,
+    /// then the menu's rows as the bookkeeping leaves them
+    /// ([`Space::escort_rows`]). A clear the pass's launch reported
+    /// already stands. A `dead` player
     /// returns before both (@0x68853, @0x6888c), and the pass records
     /// none.
     pub(super) fn escort_menu_block(
@@ -182,10 +187,11 @@ impl Space {
             out.escort_menu = None;
             return;
         }
-        let escorts_flying = self.escorts_flying();
+        let escorts_flying = self.escorts_intact();
         let cleared = self.settle_class_orders(pilot, statics);
         let record = out.escort_menu.get_or_insert_default();
         record.escorts_flying = escorts_flying;
+        record.rows = self.escort_rows();
         record.class_orders_cleared |= cleared;
     }
 
@@ -824,13 +830,9 @@ mod tests {
         session.take_sounds();
         work(&mut session, &catalog, Controls::default());
         assert_eq!(kept(&session, EscortClass::Warship), None);
-        assert_eq!(
-            recorded(&session),
-            Some(EscortMenuPass {
-                escorts_flying: true,
-                class_orders_cleared: true,
-            })
-        );
+        let pass = recorded(&session).expect("recorded");
+        assert_eq!(pass.escorts_flying, 1);
+        assert!(pass.class_orders_cleared);
         assert!(session.take_sounds().is_empty(), "silent");
         // Taken, as the pass's report takes it.
         session.out.escort_menu = None;
@@ -863,10 +865,92 @@ mod tests {
         let catalog = carrying();
         let mut session = flying(&catalog, vec![warship(None)], RuleSource::Engine);
         work(&mut session, &catalog, Controls::default());
-        assert!(recorded(&session).is_some_and(|pass| pass.escorts_flying));
+        assert!(recorded(&session).is_some_and(|pass| pass.escorts_flying > 0));
         session.drop_fleet_escort(0);
         work(&mut session, &catalog, Controls::default());
         assert_eq!(recorded(&session), Some(EscortMenuPass::default()));
+    }
+
+    /// The row of `class` in `pass`'s rows.
+    fn pass_row(pass: &EscortMenuPass, class: EscortClass) -> crate::escort::ClassRow {
+        pass.rows
+            .into_iter()
+            .find(|row| row.class == class)
+            .expect("every class has a row")
+    }
+
+    #[test]
+    fn a_pass_records_the_rows_its_bookkeeping_leaves() {
+        // The redraws read the table as the bookkeeping leaves it
+        // (@0x6e388, @0x6e446).
+        let catalog = carrying();
+        let mut session = flying(&catalog, vec![warship(None)], RuleSource::Engine);
+        command(&mut session, WARSHIPS, EscortCommand::Hold);
+        work(&mut session, &catalog, Controls::default());
+        let held = recorded(&session).expect("recorded");
+        assert_eq!(
+            pass_row(&held, EscortClass::Warship),
+            crate::escort::ClassRow {
+                class: EscortClass::Warship,
+                present: true,
+                order: Some(EscortOrder::Hold),
+            }
+        );
+        assert!(!pass_row(&held, EscortClass::Fighter).present);
+        session.out.escort_menu = None;
+        command(&mut session, WARSHIPS, EscortCommand::Dock);
+        assert_eq!(recorded(&session), None, "the command records no pass");
+        work(&mut session, &catalog, Controls::default());
+        let cleared = recorded(&session).expect("recorded");
+        assert!(cleared.class_orders_cleared);
+        assert_eq!(
+            pass_row(&cleared, EscortClass::Warship),
+            crate::escort::ClassRow {
+                class: EscortClass::Warship,
+                present: true,
+                order: None,
+            }
+        );
+    }
+
+    #[test]
+    fn a_pass_counts_the_escorts_flying_disabled_and_dying_left_out() {
+        // @0x6df59-0x6dfa7: active, the player's, not `_IsDisabled`, not
+        // `_IsDying`.
+        let catalog = carrying();
+        let mut session = flying(
+            &catalog,
+            vec![warship(None), warship(None)],
+            RuleSource::Engine,
+        );
+        work(&mut session, &catalog, Controls::default());
+        assert_eq!(recorded(&session).map(|pass| pass.escorts_flying), Some(2));
+        let id = fleet_ids(&session)[0];
+        session.space.npc_mut(id).expect("there").condition =
+            crate::combat::hull::Condition::Disabled;
+        work(&mut session, &catalog, Controls::default());
+        let pass = recorded(&session).expect("recorded");
+        assert_eq!(pass.escorts_flying, 1);
+        assert!(
+            pass_row(&pass, EscortClass::Warship).present,
+            "a disabled ship keeps its row"
+        );
+        session.drop_fleet_escort(1);
+        session.drop_fleet_escort(0);
+        work(&mut session, &catalog, Controls::default());
+        assert_eq!(recorded(&session).map(|pass| pass.escorts_flying), Some(0));
+    }
+
+    #[test]
+    fn a_fighter_launched_on_a_pass_is_in_its_rows() {
+        // `_FirePlayerWeapon` launches it (@0x62c61) before the block
+        // (@0x6df4a).
+        let catalog = carrying();
+        let mut session = flying(&catalog, Vec::new(), RuleSource::Engine);
+        crate::session::fighters::tests::launch(&mut session, &catalog);
+        let pass = recorded(&session).expect("recorded");
+        assert!(pass_row(&pass, EscortClass::Fighter).present);
+        assert_eq!(pass.escorts_flying, 1);
     }
 
     #[test]

@@ -6,12 +6,13 @@
 
 use crate::catalog::{MaskSheet, PilotCatalog};
 
-/// The most a sheet's frames shift by: 2, a 32-bit sheet's depth >> 4.
-pub const MOST_SHIFT: u8 = 2;
+/// The most a sheet's frames shift by: 31, the most `(depth >> 4) & 31`
+/// gives.
+pub const MOST_SHIFT: u8 = 31;
 
 /// Checks `catalog` against the port: each of `held` answers a sheet with
 /// a frame, a width and a height above 0, a shift of at most
-/// [`MOST_SHIFT`] and every frame start inside its words; each of
+/// [`MOST_SHIFT`] and every frame start inside its bytes; each of
 /// `missing` answers none.
 ///
 /// # Errors
@@ -26,7 +27,7 @@ pub fn check_contract(
         let Some(rle) = catalog.rle_sheet(sheet) else {
             return Err(format!("{sheet:?}: no sheet"));
         };
-        if !rle.starts.iter().any(Option::is_some) {
+        if rle.starts.is_empty() {
             return Err(format!("{sheet:?}: no frame"));
         }
         if rle.width == 0 || rle.height == 0 {
@@ -35,15 +36,10 @@ pub fn check_contract(
         if rle.shift > MOST_SHIFT {
             return Err(format!("{sheet:?}: a shift of {}", rle.shift));
         }
-        if let Some(start) = rle
-            .starts
-            .iter()
-            .flatten()
-            .find(|&&at| at >= rle.words.len())
-        {
+        if let Some(start) = rle.starts.iter().find(|&&at| at >= rle.bytes.len()) {
             return Err(format!(
-                "{sheet:?}: a frame at {start} of {} words",
-                rle.words.len()
+                "{sheet:?}: a frame at {start} of {} bytes",
+                rle.bytes.len()
             ));
         }
     }
@@ -107,10 +103,11 @@ mod tests {
             check_contract(&catalog(), &[STELLAR], &[]).is_err(),
             "none held"
         );
+        assert_eq!(MOST_SHIFT, 31, "the most (depth >> 4) & 31 gives");
         assert!(check_contract(&holding(good.clone()), &[], &[STELLAR]).is_err());
         let broken = [
             RleSheet {
-                starts: vec![None],
+                starts: Vec::new(),
                 ..good.clone()
             },
             RleSheet {
@@ -122,11 +119,11 @@ mod tests {
                 ..good.clone()
             },
             RleSheet {
-                shift: 3,
+                shift: MOST_SHIFT + 1,
                 ..good.clone()
             },
             RleSheet {
-                starts: vec![Some(0), Some(good.words.len())],
+                starts: vec![0, good.bytes.len()],
                 ..good.clone()
             },
         ];
@@ -136,7 +133,7 @@ mod tests {
         }
         let edge = RleSheet {
             shift: MOST_SHIFT,
-            starts: vec![None, Some(good.words.len() - 1)],
+            starts: vec![0, good.bytes.len() - 1],
             ..good
         };
         assert_eq!(check_contract(&holding(edge), &[STELLAR], &[]), Ok(()));

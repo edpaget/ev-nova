@@ -7,31 +7,31 @@
 //! - [`camera`]: the [`Camera`], which part of the system the screen shows,
 //!   at Nova's own scale.
 //! - [`starfield`]: the parallax starfield behind the stellars.
-//! - [`animation`]: a stellar's [`Frames`], which frame of its sheet
-//!   shows, stepped tick by tick from its `spöb`'s animation fields.
 //! - [`scene`]: the [`SystemScene`], the system read once and laid out:
-//!   each stellar's world position, sheet and animation.
-//! - [`kept_frames`]: [`KeptFrames`], each stellar's animation state kept
-//!   across the systems a flight passes through.
+//!   each stellar's world position and sheet, and the frame it shows: the
+//!   one its flight's session reports, or, in the viewer, its own
+//!   animation by the sim's rule (`nova_sim::stellar_frames`).
 //! - [`view`]: the [`SystemView`] screen, which only reads the port.
 
-pub mod animation;
 pub mod camera;
 pub mod catalog;
+#[cfg(test)]
+mod clipped_sheet_tests;
 pub mod data;
-pub mod kept_frames;
+#[cfg(test)]
+mod eight_bit_sheet_tests;
 #[cfg(test)]
 mod pict_pair_tests;
 pub mod scene;
 pub mod starfield;
 pub mod view;
+#[cfg(test)]
+mod wide_sheet_tests;
 
-pub use animation::{Frames, is_animated};
 pub use camera::Camera;
 pub use catalog::{
-    AnimationData, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemContents,
+    StellarAnimation, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemContents,
     SystemId,
 };
-pub use kept_frames::KeptFrames;
-pub use scene::{SceneStellar, StellarLook, SystemScene};
+pub use scene::{SceneStellar, ShownFrame, StellarLook, SystemScene};
 pub use view::SystemView;

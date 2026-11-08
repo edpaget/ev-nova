@@ -339,10 +339,8 @@ pub(super) mod tests {
                 shown: true,
                 destroyed: true,
                 drawn: DrawnSheet::Dead,
-                counted: DrawnSheet::Dead,
                 frozen: true,
-                counts_none: true,
-                gate_frame: Some(9),
+                frame: 7,
             }],
             radar_stellars: vec![crate::flight_frame::FrameRadarStellar {
                 id: StellarId(999),
@@ -833,10 +831,8 @@ pub(super) mod tests {
             shown,
             destroyed: session.galaxy().destroyed(id),
             drawn: session.drawn_sheet(id),
-            counted: session.counted_sheet(id),
             frozen: session.frame_frozen(id),
-            counts_none: session.counts_no_frames(id),
-            gate_frame: session.gate_frame(id),
+            frame: session.stellar_frame(id),
         }
     }
 

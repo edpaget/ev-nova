@@ -7,6 +7,7 @@
 //! components) and indexed pixels packed leftmost-first into bytes.
 
 use super::GraphicsError;
+use super::deep_image::widen_five;
 use super::reader::Reader;
 
 /// `ctFlags` bit 15: a device colour table, indexed by entry position.
@@ -15,11 +16,7 @@ const DEVICE_FLAG: u16 = 0x8000;
 /// An opaque RGBA8 pixel from a 16-bit `xRRRRRGGGGGBBBBB` value; the high
 /// bit is ignored and each 5-bit component is widened by bit replication.
 pub(crate) fn rgb555(value: u16) -> [u8; 4] {
-    let widen = |shift: u16| {
-        let five = ((value >> shift) & 0x1F) as u8;
-        // The two halves share no bits, so `+` is the same as `|`.
-        (five << 3) + (five >> 2)
-    };
+    let widen = |shift: u16| widen_five(((value >> shift) & 0x1F) as u8);
     [widen(10), widen(5), widen(0), 255]
 }
 

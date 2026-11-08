@@ -31,19 +31,30 @@
 //!
 //! The 8-bit blits (`_BlitPixieRLEAddOver8`, `_BlitPixieRLETranslucent8`,
 //! @0xbb85b-0xbb9e7) aren't modelled, as the engine draws at 16-bit only.
-//! A `PICT`-built sprite's runs (`_BlitPixieRLEParsePixels` @0xc2875,
-//! opcode 4 @0xc29c7, for `_SWCreateRLEData` @0xaeeb6) aren't a ship
-//! layer's, and no stock `spïn` `rlëD` holds a run.
+//! A `PICT`-built sprite, a `spïn`'s or a `shän` image's pair
+//! (`_SWCreateRLEData` @0xaeeb6), holds no runs: `_BlitPixieRLEParsePixels`
+//! (@0xc2875) never emits opcode 4 (`nova_data::graphics::sheet_rle_words`),
+//! so its sheet draws no overlay ([`SheetImage::rled`]). No stock `spïn`
+//! `rlëD` holds a run.
 //!
 //! [`LayerSheet::solid`]: super::catalog::LayerSheet::solid
 //! [`ShipSheet::solid`]: super::catalog::ShipSheet::solid
 
-use crate::{Color, DrawList, ImageKey, Point};
+use crate::box_cut::BoxCut;
+use crate::{Blend, Color, DrawList, ImageKey, Point, SheetImage};
 
-/// Draws frame `frame` of `rlëD` `sheet_id`'s solid runs at `at`: plainly,
-/// opaque and uncolorized, over the layer just drawn.
-pub fn solid_overlay(list: &mut DrawList, sheet_id: i16, frame: u16, at: Point) {
-    list.sprite(ImageKey::solid_runs(sheet_id, frame), at, Color::WHITE);
+/// Draws frame `frame` of `sheet`'s solid runs at `at`: plainly, opaque
+/// and uncolorized, over the layer just drawn, and cut at the world's edge
+/// as that layer is (`cut`): to its box, and as the clipped blit fills the
+/// runs ([`ImageKey::clipped_solid_runs`]) where it draws the layer's
+/// clipped frame, as every clipped blit fills a run raw too. Only an
+/// `rlëD` holds runs, so a `PICT` pair's sheet draws nothing.
+pub fn solid_overlay(list: &mut DrawList, cut: BoxCut, sheet: SheetImage, frame: u16, at: Point) {
+    let Some(sheet_id) = sheet.rled() else {
+        return;
+    };
+    let plain = (Color::WHITE, Blend::Normal, None);
+    cut.mixed_sprite(list, ImageKey::solid_runs(sheet_id, frame), at, plain);
 }
 
 #[cfg(test)]
@@ -63,7 +74,7 @@ mod tests {
     #[test]
     fn the_overlay_is_the_runs_frame_drawn_plainly_in_white() {
         let mut list = DrawList::new();
-        solid_overlay(&mut list, 1930, 13, AT);
+        solid_overlay(&mut list, BoxCut::WHOLE, SheetImage::Rled(1930), 13, AT);
         assert_eq!(
             list.iter().collect::<Vec<_>>(),
             [&DrawCommand::Sprite {
@@ -75,13 +86,31 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_pict_pairs_sheet_has_no_runs_to_draw() {
+        let mut list = DrawList::new();
+        let pair = SheetImage::Ship {
+            ship: 128,
+            image: nova_data::ShipImage::Weapon,
+        };
+        solid_overlay(&mut list, BoxCut::WHOLE, pair, 13, AT);
+        solid_overlay(&mut list, BoxCut::WHOLE, SheetImage::Spin(1003), 13, AT);
+        assert_eq!(list.iter().count(), 0);
+    }
+
     fn layer(image_id: i16, solid: bool) -> LayerSheet {
         LayerSheet {
-            image_id,
+            image: crate::SheetImage::Rled(image_id),
             frames: NonZeroU16::new(36).expect("non-zero"),
             frame_width: crate::flight::fake_catalog::LAYER_SIDE,
             frame_height: crate::flight::fake_catalog::LAYER_SIDE,
+            image_size: (
+                crate::flight::fake_catalog::LAYER_SIDE,
+                crate::flight::fake_catalog::LAYER_SIDE,
+            ),
+            clip_quirks: false,
             solid,
+            eight_bit: false,
         }
     }
 
@@ -91,10 +120,12 @@ mod tests {
     fn sheet(solid: &[i16]) -> ShipSheet {
         let has = |id| solid.contains(&id);
         ShipSheet {
-            image_id: 1000,
+            image: crate::SheetImage::Rled(1000),
             rotations: NonZeroU16::new(36).expect("non-zero"),
             frame_width: 10,
             frame_height: 10,
+            image_size: (10, 10),
+            clip_quirks: false,
             glow: Some(layer(1100, has(1100))),
             lights: Some(layer(1200, has(1200))),
             weapon: Some(layer(1930, has(1930))),
@@ -103,6 +134,7 @@ mod tests {
             shield: Some(layer(1500, has(1500))),
             base_transp: 0,
             solid: has(1000),
+            eight_bit: false,
         }
     }
 
@@ -113,6 +145,7 @@ mod tests {
         let alt = AltLayer {
             image: ImageKey::sprite(1400, 0),
             at: AT,
+            shown: true,
             tint: Color::WHITE,
             colorize: None,
             blend: crate::Blend::Normal,
@@ -278,6 +311,7 @@ mod tests {
         let held = AltLayer {
             image: ImageKey::sprite(1400, 7),
             at: Point::new(55.0, 12.0),
+            shown: true,
             tint: Color::WHITE,
             colorize: None,
             blend: crate::Blend::Normal,
@@ -290,6 +324,7 @@ mod tests {
         let other = AltLayer {
             image: ImageKey::sprite(1401, 7),
             at: Point::new(55.0, 12.0),
+            shown: true,
             tint: Color::WHITE,
             colorize: None,
             blend: crate::Blend::Normal,

@@ -112,9 +112,12 @@ impl Session {
     /// `_PlayGame`'s loop, so all three stellar passes (@0x1a359,
     /// @0x1a36c, @0x45834) and the two priming passes of
     /// `_DoPlayGameWork(1)` between them (@0x1a38a, @0x4580c) run at it,
-    /// and the first frame holds it. The system's ships are set up first,
-    /// if still due, and the passes read `collab` as a frame's steps do,
-    /// under no keys and in no time (see the `priming_passes` module).
+    /// and the first frame holds it. So do its two `_PrepareAllSprites`'
+    /// ship displays (@0x1a36c, @0x45834), which step every ship's set,
+    /// lights, ion tint and fade once (see the `prepare_frames` module).
+    /// The system's ships are set up first, if still due, and the passes
+    /// read `collab` as a frame's steps do, under no keys and in no time
+    /// (see the `priming_passes` module).
     pub fn enter_game(&mut self, gain: crate::SpeedMult, collab: &mut StepCollaborators<'_>) {
         self.chart.snapshot_refresh();
         self.enter_time(gain);

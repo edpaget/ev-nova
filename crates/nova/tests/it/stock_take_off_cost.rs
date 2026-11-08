@@ -3,7 +3,9 @@
 //! (from the Open Pilot click to flight), the entry's slowest frame (the
 //! handover's warm-up, which reads the first system's traffic ships'
 //! sheets and target cards under black), flight's first stepped frame,
-//! and each of three take-offs' Leave click plus its next six frames.
+//! each of three take-offs' Leave click plus its next six frames, and a
+//! jump's arrival in a system whose traffic brings ship types not read
+//! yet.
 //!
 //! The tests here are `#[ignore]`d, so CI never runs them; they only read
 //! the clock and print, asserting the flow but no timing. Run them by
@@ -32,6 +34,14 @@
 //!   frame's index, and its first three submits.
 //! - Then each flight and take-off span: its time, the images decoded,
 //!   the atlas pages and uploads, and the submits' time.
+//! - `arrival frame N`: the frame that arrived after the first jump
+//!   (Kania to Tichel) and the ten after it, each as a span, then
+//!   `arrival: slowest frame`, and how many of the arrival's traffic
+//!   ship types the start system's traffic didn't bring.
+//! - `arrival: unread types' cards`: one `CombatLooks::target_cards`
+//!   call over those types on a freshly opened `GameData`, the cards
+//!   without the sheets.
+//! - `SUMMARY`: the headline numbers on one line.
 //!
 //! # Running them safely
 //!
@@ -60,7 +70,13 @@ use nova_render::{
     FontFaces, Frame, Gpu, ImageError, ImageSource, PageId, PixelRect, UpscalerProbe,
 };
 use nova_sim::fixture::MemoryPilots;
-use nova_sim::{Pilot, PilotCatalog, PilotKeeper, PilotStore, is_landable};
+use nova_sim::flight::{heading_of, shortest_turn};
+use nova_sim::hyperspace::MIN_JUMP_DISTANCE;
+use nova_sim::{
+    Pilot, PilotCatalog, PilotKeeper, PilotStore, Session, ShipId, SystemId, is_landable,
+};
+use nova_view::flight::CombatLooks;
+use nova_view::galaxy::dialog::map_area;
 use nova_view::menu::MenuChoice;
 use nova_view::{ImageKind, Key, MouseButton, Showing};
 
@@ -199,6 +215,8 @@ struct Driver<G> {
     submits: Rc<RefCell<Submits>>,
     /// The slowest frame since it was last cleared.
     slowest: Duration,
+    /// The flight keys held.
+    held: Vec<Key>,
 }
 
 impl<G: Gpu> Driver<G> {
@@ -306,6 +324,160 @@ impl<G: Gpu> Driver<G> {
         assert_eq!(self.showing(), Showing::Spaceport, "landed");
     }
 
+    fn session(&self) -> &Session {
+        self.app
+            .screen()
+            .flight_view()
+            .expect("flight entered")
+            .session()
+            .expect("flying")
+    }
+
+    fn key(&mut self, key: Key, pressed: bool) {
+        self.send(WindowEvent::Key {
+            key,
+            pressed,
+            repeat: false,
+        });
+    }
+
+    /// Holds exactly `keys` of the flight keys, pressing and releasing
+    /// only those that change.
+    fn hold(&mut self, keys: &[Key]) {
+        for key in self.held.clone() {
+            if !keys.contains(&key) {
+                self.key(key, false);
+            }
+        }
+        for &key in keys {
+            if !self.held.contains(&key) {
+                self.key(key, true);
+            }
+        }
+        self.held = keys.to_vec();
+    }
+
+    /// Where system `id` is on flight's map, scrolled into item 3 with
+    /// the arrows first.
+    fn on_map(&mut self, id: i16) -> nova_view::Point {
+        let shown = map_area().grown(-12.0);
+        for _ in 0..200 {
+            let map = self
+                .app
+                .screen()
+                .flight_view()
+                .expect("flying")
+                .course_map();
+            let system = map.model().system(SystemId(id)).expect("on the map");
+            let at = map.transform().world_to_screen(system.position());
+            let key = if at.x < shown.min.x {
+                Key::ArrowLeft
+            } else if at.x > shown.max.x {
+                Key::ArrowRight
+            } else if at.y < shown.min.y {
+                Key::ArrowUp
+            } else if at.y > shown.max.y {
+                Key::ArrowDown
+            } else {
+                return at;
+            };
+            self.press(key);
+        }
+        panic!("system {id} never scrolled into item 3");
+    }
+
+    /// Plots a course to the neighbouring system `id` on flight's map: M,
+    /// a Shift-click on it, M.
+    fn plot(&mut self, id: i16) {
+        // Let the take-off settle: M opens no map in its first frames.
+        self.frames(60);
+        self.press(Key::KeyM);
+        assert_eq!(self.showing(), Showing::FlightMap, "the map opened");
+        self.key(Key::ShiftLeft, true);
+        let at = self.on_map(id);
+        self.click_point(at);
+        self.key(Key::ShiftLeft, false);
+        assert_eq!(self.session().course(), [SystemId(id)], "plotted");
+        self.press(Key::KeyM);
+    }
+
+    /// Flies out until the ship is at least the minimum jump distance
+    /// from the centre, then lets go: Down to face away while drifting
+    /// in, otherwise Up.
+    fn fly_out(&mut self) {
+        for _ in 0..1800 {
+            let ship = *self.session().player();
+            if ship.position.length() >= MIN_JUMP_DISTANCE {
+                self.hold(&[]);
+                return;
+            }
+            let outward = ship.position.x * ship.velocity.x + ship.position.y * ship.velocity.y;
+            let drifting_in =
+                outward < -1e-3 && nova_sim::player_turn::reverse_aim(ship.velocity).is_some();
+            let turn = self.session().handling().turn_rate.trunc() + 1.0;
+            let facing = ship.position.length() == 0.0
+                || shortest_turn(ship.heading, heading_of(ship.position)).abs() <= turn;
+            if drifting_in && !facing {
+                self.hold(&[Key::ArrowDown]);
+            } else {
+                self.hold(&[Key::ArrowUp]);
+            }
+            self.redraw();
+        }
+        panic!("never got out: {:?}", self.session().player());
+    }
+
+    /// Plots a course to the neighbouring system `id`, flies out, presses
+    /// J and draws frames until the ship is there; then times that frame
+    /// and the next ten, reporting each, and returns the slowest.
+    fn arrive(&mut self, id: i16) -> Duration {
+        self.plot(id);
+        self.fly_out();
+        self.press(Key::KeyJ);
+        let mut arrived = None;
+        for _ in 0..1800 {
+            self.reset();
+            let took = self.redraw();
+            if self.session().system() == SystemId(id) {
+                arrived = Some(took);
+                break;
+            }
+        }
+        let took = arrived.unwrap_or_else(|| panic!("never arrived in {id}"));
+        self.report("arrival frame 0", took);
+        let mut slowest = took;
+        for i in 1..=10 {
+            self.reset();
+            let took = self.redraw();
+            self.report(&format!("arrival frame {i}"), took);
+            slowest = slowest.max(took);
+        }
+        println!("{:<32} {:>8.1} ms", "arrival: slowest frame", ms(slowest));
+        slowest
+    }
+
+    /// Jumps to [`ARRIVAL`] and times the arrival ([`Driver::arrive`]);
+    /// returns its slowest frame and the arrival's traffic ship types the
+    /// start system's traffic didn't bring, printing how many.
+    fn arrive_among_unread(&mut self, data: &GameData) -> (Duration, Vec<ShipId>) {
+        let from = self.session().system();
+        // The traffic read so far: the start system's.
+        let read = self.session().coming_traffic_ships(data);
+        let slowest = self.arrive(ARRIVAL);
+        let unread: Vec<ShipId> = self
+            .session()
+            .coming_traffic_ships(data)
+            .into_iter()
+            .filter(|ship| !read.contains(ship))
+            .collect();
+        println!(
+            "arrival: {} -> {ARRIVAL}, {} unread ship types",
+            from.0,
+            unread.len()
+        );
+        (slowest, unread)
+    }
+
     /// Clicks Leave, and how long the click took.
     fn click_leave(&mut self) -> Duration {
         let leave = self
@@ -395,8 +567,29 @@ fn ms(d: Duration) -> f64 {
     d.as_secs_f64() * 1000.0
 }
 
+/// Times one `target_cards` call over `ships` on a freshly opened
+/// `GameData`, the cards without the sheets, and prints it.
+fn time_cards(dir: &std::path::Path, ships: &[ShipId]) -> Duration {
+    let fresh = GameData::open(dir, None).expect("the stock data opens");
+    let start = Instant::now();
+    let cards = fresh.target_cards(ships);
+    let took = start.elapsed();
+    assert_eq!(cards.len(), ships.len());
+    println!(
+        "{:<32} {:>8.1} ms",
+        "arrival: unread types' cards",
+        ms(took)
+    );
+    took
+}
+
+/// The system the run jumps to: the first jump from the stock start
+/// system (Kania, 128), Tichel.
+const ARRIVAL: i16 = 129;
+
 /// Opens a fresh stock pilot saved at its first landable stellar, enters
-/// play, then lands and takes off three times, printing each span.
+/// play, then lands and takes off three times, printing each span, then
+/// jumps to [`ARRIVAL`] and times the arrival.
 fn run(gpu: impl Gpu, name: &str) {
     let Some(dir) = common::nova_data() else {
         return;
@@ -440,6 +633,7 @@ fn run(gpu: impl Gpu, name: &str) {
         span,
         submits,
         slowest: Duration::ZERO,
+        held: Vec::new(),
     };
     driver.frames(5);
     driver.enter(Span::Entry);
@@ -476,14 +670,20 @@ fn run(gpu: impl Gpu, name: &str) {
     driver.frames(60);
     driver.land();
     driver.take_off("3rd take-off");
+    let (arrival, unread) = driver.arrive_among_unread(&data);
+    let cards_took = time_cards(&dir, &unread);
     println!(
         "SUMMARY {name}: entry's slowest frame {:.1} ms; first stepped frame {:.1} ms; 1st \
-         take-off {:.1} ms vs 2nd {:.1} ms (difference {:.1} ms)",
+         take-off {:.1} ms vs 2nd {:.1} ms (difference {:.1} ms); arrival's slowest frame \
+         {:.1} ms; its {} unread types' cards {:.1} ms",
         ms(entry),
         ms(first_step),
         ms(first),
         ms(second),
         ms(first) - ms(second),
+        ms(arrival),
+        unread.len(),
+        ms(cards_took),
     );
 }
 
@@ -528,6 +728,16 @@ fn take_offs_cost_with_a_sharp_bilinear_gpu() {
         // The harness never restores the pilot's scaling, so this holds.
         gpu.set_upscaler(Upscaler::SharpBilinear);
         run(gpu, "wgpu sharp-bilinear");
+    }
+}
+
+#[test]
+#[ignore = "reads the clock; run by hand (see the module doc)"]
+fn take_offs_cost_with_an_fsr1_gpu() {
+    if let Some(mut gpu) = offscreen_gpu() {
+        // The harness never restores the pilot's scaling, so this holds.
+        gpu.set_upscaler(Upscaler::Fsr1);
+        run(gpu, "wgpu FSR 1");
     }
 }
 

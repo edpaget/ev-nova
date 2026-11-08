@@ -27,8 +27,10 @@
 //!
 //! The spawns zero it (@0x3c4ff, @0x3ca71, @0x3d949, @0x82ef3, @0x1c4d4)
 //! and the player's resets write it (@0x1d58b, @0x6c587, @0x67002,
-//! @0x7638d): the view clears the glows where it clears the shield
-//! flashes.
+//! @0x7638d): the view lets go of the glows where it lets go of the
+//! shield flashes, and carries a kept escort's into its new NPC with its
+//! flash, as `_RespawnEscort` leaves +0xc8e8 (see the
+//! [`carried_displays`](super::carried_displays) module).
 //!
 //! The Weapon Effects preference, under which alone the weapon sprites
 //! are loaded (`_LoadExtendedShipSprites` @0x2343c-0x2344b), gates the
@@ -163,6 +165,21 @@ impl WeaponGlows {
     /// Puts every glow out.
     pub fn clear(&mut self) {
         self.glows.clear();
+    }
+
+    /// Takes `ship`'s glow out, if it is lit.
+    pub fn take(&mut self, ship: ShipRef) -> Option<WeaponGlow> {
+        self.glows.remove(&ship)
+    }
+
+    /// Takes every glow out, leaving none.
+    pub fn take_all(&mut self) -> BTreeMap<ShipRef, WeaponGlow> {
+        std::mem::take(&mut self.glows)
+    }
+
+    /// Gives `ship` `glow`.
+    pub fn insert(&mut self, ship: ShipRef, glow: WeaponGlow) {
+        self.glows.insert(ship, glow);
     }
 }
 

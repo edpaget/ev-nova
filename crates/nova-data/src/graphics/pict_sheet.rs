@@ -1,5 +1,5 @@
-//! Cutting a `spïn`'s `PICT` pair into sprite frames, as the original does
-//! when the `spïn` has no `rlëD`.
+//! Cutting a `spïn`'s or a `shän`'s `PICT` pair into sprite frames, as the
+//! original does when it has no `rlëD`.
 //!
 //! `_LoadMasterStellarSprite` (@0x1eb72) and `_LoadSprites` read a `spïn`'s
 //! `rlëD` when one exists (@0x1ebee). Otherwise they call
@@ -34,6 +34,17 @@
 //! - **The whole-grid check.** `_ConvertSpriteToRLE` requires the picture's
 //!   area to be the frames' (@0x1e4a0-0x1e4e4): a picture whose width and
 //!   height are not multiples of the frame size gets no RLE data.
+//! - **The frame limit** ([`FrameLimit`]). A `maxFrames` of 0 cuts the
+//!   whole grid (@0xa9caa-0xa9d25), as a `spïn` is cut. A nonzero one
+//!   cuts exactly that many frames, row by row with as many columns as the
+//!   picture's width holds (@0xa9f3c-0xaa045), and fails with 0x6b when
+//!   they run past the picture's bottom (@0xaa04b). A `shän`'s loader
+//!   writes `maxFrames` into the sprite's frame count before converting
+//!   it, and `_ConvertSpriteToRLE` then needs the picture's area to be that
+//!   many frames' (@0x1e4a0-0x1e4e4). So a picture loads under an exact
+//!   limit only when it is a whole grid of exactly that many frames: fewer
+//!   fail the cut, more fail the conversion. The engine reads a limit of
+//!   zero or less given as exact the same way, as no grid holds it.
 //!
 //! Each of the original's failures here ends the game: a picture smaller
 //! than one frame divides by zero (@0xa9f12 → @0xa90e7), a frame size of 0
@@ -65,21 +76,36 @@ pub enum SheetMask<'a> {
     Itself,
 }
 
+/// How many frames a cut must hold: `_SWCreateSpriteFromSinglePictXY`'s
+/// `maxFrames` (see the module docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameLimit {
+    /// A `maxFrames` of 0: every frame of the picture's grid, as a `spïn`
+    /// and a `shän`'s shield are cut.
+    WholeGrid,
+    /// A nonzero `maxFrames`: exactly this many, as a `shän`'s other images
+    /// are cut. The picture must then be a grid of exactly this many frames.
+    Exactly(i32),
+}
+
 /// Cuts `sprites` into `x_size` x `y_size` frames, masked by `mask`, as
 /// the original's `_SWCreateSpriteFromSinglePictXY` and
-/// `_ConvertSpriteToRLE` do (see the module docs), arranged by `layout`
-/// (or [`SheetLayout::DEFAULT`]) when composed.
+/// `_ConvertSpriteToRLE` do (see the module docs), holding as many frames
+/// as `limit` says, arranged by `layout` (or [`SheetLayout::DEFAULT`]) when
+/// composed.
 ///
 /// A frame size of zero or less is [`GraphicsError::BadDimensions`]; a
 /// picture smaller than one frame is [`GraphicsError::NoFrames`]; one that
-/// is not a whole grid of frames is [`GraphicsError::PartialGrid`]; a mask
-/// of another width, or shorter than the sprites, is
-/// [`GraphicsError::MaskSizeMismatch`].
+/// is not a whole grid of frames is [`GraphicsError::PartialGrid`]; a grid
+/// of other than an exact limit's count, or an exact limit of zero or less,
+/// is [`GraphicsError::FrameCountMismatch`]; a mask of another width, or
+/// shorter than the sprites, is [`GraphicsError::MaskSizeMismatch`].
 pub fn cut_pict_sheet(
     sprites: &Image,
     mask: SheetMask<'_>,
     x_size: i16,
     y_size: i16,
+    limit: FrameLimit,
     layout: Option<SheetLayout>,
 ) -> Result<SpriteSheet, GraphicsError> {
     let (Ok(frame_width @ 1..), Ok(frame_height @ 1..)) =
@@ -101,6 +127,14 @@ pub fn cut_pict_sheet(
             height,
             frame_width,
             frame_height,
+        });
+    }
+    if let FrameLimit::Exactly(expected) = limit
+        && i64::from(expected) != i64::from(columns) * i64::from(rows)
+    {
+        return Err(GraphicsError::FrameCountMismatch {
+            frames: columns * rows,
+            expected,
         });
     }
     if let SheetMask::Picture(mask) = mask
@@ -175,7 +209,7 @@ mod tests {
     }
 
     fn cut(sprites: &Image, mask: SheetMask<'_>, x: i16, y: i16) -> SpriteSheet {
-        cut_pict_sheet(sprites, mask, x, y, None).expect("cuts")
+        cut_pict_sheet(sprites, mask, x, y, FrameLimit::WholeGrid, None).expect("cuts")
     }
 
     #[test]
@@ -183,8 +217,15 @@ mod tests {
         let sprites = distinct(6, 4);
         let mask = white(6, 4);
         let two = SheetLayout::new(2).unwrap();
-        let sheet =
-            cut_pict_sheet(&sprites, SheetMask::Picture(&mask), 2, 2, Some(two)).expect("cuts");
+        let sheet = cut_pict_sheet(
+            &sprites,
+            SheetMask::Picture(&mask),
+            2,
+            2,
+            FrameLimit::WholeGrid,
+            Some(two),
+        )
+        .expect("cuts");
         assert_eq!(sheet.frames().len(), 6);
         assert_eq!((sheet.frame_width(), sheet.frame_height()), (2, 2));
         assert_eq!(sheet.layout(), two);
@@ -205,6 +246,14 @@ mod tests {
         let default = cut(&sprites, SheetMask::Picture(&mask), 2, 2);
         assert_eq!(default.layout(), SheetLayout::DEFAULT);
         assert_eq!(default.frames(), sheet.frames());
+    }
+
+    #[test]
+    fn a_cut_sheet_is_16_bit() {
+        // `_ConvertSpriteToRLE` makes it a 16-bit RLE, so the draw proc
+        // takes its 16-bit branches.
+        let sprites = distinct(2, 2);
+        assert_eq!(cut(&sprites, SheetMask::Itself, 2, 2).depth(), 16);
     }
 
     #[test]
@@ -299,8 +348,16 @@ mod tests {
 
     #[test]
     fn a_picture_that_is_not_a_whole_grid_is_an_error() {
-        let partial =
-            |width, height| cut_pict_sheet(&distinct(width, height), SheetMask::Itself, 2, 2, None);
+        let partial = |width, height| {
+            cut_pict_sheet(
+                &distinct(width, height),
+                SheetMask::Itself,
+                2,
+                2,
+                FrameLimit::WholeGrid,
+                None,
+            )
+        };
         assert_eq!(
             partial(5, 4),
             Err(GraphicsError::PartialGrid {
@@ -327,7 +384,14 @@ mod tests {
         let sprites = distinct(2, 2);
         for (x, y) in [(0, 1), (1, 0), (-1, 1), (1, -2)] {
             assert_eq!(
-                cut_pict_sheet(&sprites, SheetMask::Itself, x, y, None),
+                cut_pict_sheet(
+                    &sprites,
+                    SheetMask::Itself,
+                    x,
+                    y,
+                    FrameLimit::WholeGrid,
+                    None
+                ),
                 Err(GraphicsError::BadDimensions {
                     width: i32::from(x),
                     height: i32::from(y),
@@ -342,7 +406,14 @@ mod tests {
         let sprites = distinct(2, 2);
         for (x, y) in [(3, 1), (1, 3)] {
             assert_eq!(
-                cut_pict_sheet(&sprites, SheetMask::Itself, x, y, None),
+                cut_pict_sheet(
+                    &sprites,
+                    SheetMask::Itself,
+                    x,
+                    y,
+                    FrameLimit::WholeGrid,
+                    None
+                ),
                 Err(GraphicsError::NoFrames),
                 "{x}x{y}"
             );
@@ -355,7 +426,14 @@ mod tests {
         for (width, height) in [(3, 2), (1, 2), (2, 1)] {
             let mask = white(width, height);
             assert_eq!(
-                cut_pict_sheet(&sprites, SheetMask::Picture(&mask), 1, 1, None),
+                cut_pict_sheet(
+                    &sprites,
+                    SheetMask::Picture(&mask),
+                    1,
+                    1,
+                    FrameLimit::WholeGrid,
+                    None
+                ),
                 Err(GraphicsError::MaskSizeMismatch {
                     width: 2,
                     height: 2,
@@ -375,5 +453,82 @@ mod tests {
         assert_eq!(frame.pixel(1, 0), Some(CLEAR));
         assert_eq!(frame.pixel(0, 1), Some(CLEAR));
         assert_eq!(frame.pixel(1, 1), Some(drawn([24, 0x40, 0x80])));
+    }
+
+    #[test]
+    fn an_exact_limit_equal_to_the_grid_cuts_it() {
+        let sprites = distinct(6, 4);
+        let exact = cut_pict_sheet(
+            &sprites,
+            SheetMask::Itself,
+            2,
+            2,
+            FrameLimit::Exactly(6),
+            None,
+        )
+        .expect("cuts");
+        let whole = cut(&sprites, SheetMask::Itself, 2, 2);
+        assert_eq!(exact.frames(), whole.frames());
+        assert_eq!(exact.frames().len(), 6);
+    }
+
+    #[test]
+    fn an_exact_limit_other_than_the_grid_is_a_frame_count_mismatch() {
+        let sprites = distinct(6, 4);
+        for expected in [5, 7, 12, 1] {
+            assert_eq!(
+                cut_pict_sheet(
+                    &sprites,
+                    SheetMask::Itself,
+                    2,
+                    2,
+                    FrameLimit::Exactly(expected),
+                    None
+                ),
+                Err(GraphicsError::FrameCountMismatch {
+                    frames: 6,
+                    expected
+                }),
+                "{expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_exact_limit_of_zero_or_less_is_a_frame_count_mismatch() {
+        let sprites = distinct(2, 2);
+        for expected in [0, -1, -36] {
+            assert_eq!(
+                cut_pict_sheet(
+                    &sprites,
+                    SheetMask::Itself,
+                    2,
+                    2,
+                    FrameLimit::Exactly(expected),
+                    None
+                ),
+                Err(GraphicsError::FrameCountMismatch {
+                    frames: 1,
+                    expected
+                }),
+                "{expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_partial_grid_stays_a_partial_grid_under_an_exact_limit() {
+        let sprites = distinct(5, 4);
+        assert!(matches!(
+            cut_pict_sheet(
+                &sprites,
+                SheetMask::Itself,
+                2,
+                2,
+                FrameLimit::Exactly(4),
+                None
+            ),
+            Err(GraphicsError::PartialGrid { .. })
+        ));
     }
 }

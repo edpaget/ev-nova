@@ -5,6 +5,7 @@ use std::num::NonZeroU16;
 use std::rc::Rc;
 
 pub use nova_data::{StellarId, SystemId};
+pub use nova_sim::stellar_frames::StellarAnimation;
 
 use crate::outline::StellarStandIn;
 use crate::sheet_image::SheetImage;
@@ -16,26 +17,29 @@ pub struct StellarSheet {
     /// The image its frames come from: its `rlëD`, or its `spïn`'s `PICT`
     /// pair.
     pub image: SheetImage,
-    /// How many frames it has; never zero.
+    /// How many frames it animates over (`nova_data::store::master_frame_count`:
+    /// the `spïn`'s tiles when fewer than the decoded frames); never zero.
     pub frames: NonZeroU16,
-    /// Each frame's width in pixels.
+    /// Each frame's box's width in pixels: the header's, what the stellar
+    /// is clicked and placed by.
     pub frame_width: u32,
-    /// Each frame's height in pixels.
+    /// Each frame's box's height in pixels.
     pub frame_height: u32,
-}
-
-/// A stellar's animation fields, raw from its `spöb`. The view decides
-/// what they mean.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct AnimationData {
-    /// `AnimDelay`: how many 1/30 s ticks each frame shows for.
-    pub delay: i16,
-    /// `Frame0Bias`: how many times longer frame 0 shows for.
-    pub frame0_bias: i16,
-    /// `Flags2`, raw: the view reads its animation bits (0x0001 alternate
-    /// with frame 0, 0x0002 random next frame, 0x0080 animate only when
-    /// destroyed) and its hypergate bit (0x1000).
-    pub flags2: u16,
+    /// Each frame's image's width and height: the frame's, unless the
+    /// sheet draws past its frame box, as a 32-bit `rlëD` does (see
+    /// `nova_data::graphics::SpriteSheet::box_origin`). Its image is then
+    /// padded to keep the box at its centre.
+    pub image_size: (u32, u32),
+    /// Whether its `rlëD` header says depth 8, so the draw proc takes its
+    /// depth-8 branches (@0xbb5a4, @0xbb792; see `eight_bit_blit`). Never
+    /// for a `PICT` pair, which the original makes a 16-bit RLE.
+    pub eight_bit: bool,
+    /// Whether a frame the world's edge cuts can draw otherwise than its
+    /// image cut to its box (`nova_data::graphics::SpriteSheet::clip_quirks`),
+    /// so the scene draws it through `_BlitPixieRLEClipped`'s port
+    /// ([`ImageKind::RledClipped`](crate::ImageKind::RledClipped)). Never
+    /// for a `PICT` pair, nor for any stock sheet.
+    pub clip_quirks: bool,
 }
 
 /// One stellar object, placed in its system.
@@ -55,8 +59,9 @@ pub struct StellarContents {
     /// cannot be shown; `None` when it draws no different graphic (a
     /// `DeadType` outside 0 to 255).
     pub dead_sprite: Option<Result<StellarSheet, String>>,
-    /// Its animation fields.
-    pub animation: AnimationData,
+    /// Its animation fields, which the sim's rule reads
+    /// (`nova_sim::stellar_frames`).
+    pub animation: StellarAnimation,
     /// What it draws in place of its sprite when the sprite cannot be
     /// shown ([`StellarStandIn`]): only the new game's stellars have one.
     /// `None` draws the crossed box and the reason.
