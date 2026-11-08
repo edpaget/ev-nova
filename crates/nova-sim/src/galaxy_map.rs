@@ -506,10 +506,7 @@ fn closed_lanes(
         .collect();
     let drawn_from =
         std::iter::once(state.current).chain(galaxy.catalog_systems().filter(|&from| {
-            from != state.current
-                && galaxy.visible(from)
-                && state.explored.contains(&from)
-                && state.known.contains(&from)
+            galaxy.visible(from) && state.explored.contains(&from) && state.known.contains(&from)
         }));
     let mut closed = Vec::new();
     for from in drawn_from {

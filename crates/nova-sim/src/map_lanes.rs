@@ -313,6 +313,49 @@ mod tests {
         );
     }
 
+    /// The closed lanes the map draws of [`galaxy`] by the gates, in
+    /// hearth, 2, with `explored` explored and `known` known, as pairs.
+    fn closed_from_hearth(explored: &[i16], known: &[i16]) -> Vec<(SystemId, SystemId)> {
+        let galaxy = galaxy(LinkSource::Gates);
+        let explored: BTreeSet<SystemId> = explored.iter().copied().map(SystemId).collect();
+        let known: BTreeSet<SystemId> = known.iter().copied().map(SystemId).collect();
+        let state = MapState {
+            galaxy: &galaxy,
+            explored: &explored,
+            known: &known,
+            current: SystemId(2),
+            course_start: None,
+            course: &[],
+            hyper_slot: None,
+            hypergate: None,
+            missions: &[],
+            green: None,
+            multi_arrows: true,
+            pairing: RuleSource::Bible,
+            lane_style: RuleSource::Bible,
+        };
+        draw_map(&state, |_| SystemColorCode::Uninhabited)
+            .closed_lanes
+            .iter()
+            .map(|look| (look.from, look.to))
+            .collect()
+    }
+
+    #[test]
+    fn a_closed_lane_from_another_explored_known_system_is_drawn_from_it() {
+        assert_eq!(
+            closed_from_hearth(&[2, 3], &[2, 3]),
+            [(SystemId(3), SystemId(1))],
+            "verge's dead road to drift"
+        );
+    }
+
+    #[test]
+    fn a_closed_lane_from_a_system_known_but_unexplored_or_explored_but_unknown_is_not_drawn() {
+        assert_eq!(closed_from_hearth(&[2], &[2, 3]), [], "unexplored");
+        assert_eq!(closed_from_hearth(&[2, 3], &[2]), [], "unknown");
+    }
+
     #[test]
     fn a_closed_lane_from_an_unknown_system_is_not_drawn() {
         let galaxy = galaxy(LinkSource::Gates);
