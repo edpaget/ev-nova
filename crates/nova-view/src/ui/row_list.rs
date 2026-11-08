@@ -1,7 +1,9 @@
 //! A list of one-line rows in a box, one of them selected and the rows
 //! lit highlighted, with a scroll bar when they don't fit: the mission
 //! computer's and the mission info screen's lists, as the List Manager
-//! runs them ([`RowList`]).
+//! runs them ([`RowList`]). The keys screen's list adds three things the
+//! List Manager's lists don't use: a second column, heading rows and
+//! marked rows.
 
 use std::time::Duration;
 
@@ -21,6 +23,10 @@ pub const ROW_SIZE: f32 = 10.0;
 pub const ROW_COLOR: Color = Color::WHITE;
 /// The selected row's highlight.
 pub const SELECTED: Color = Color::rgba(48, 64, 112, 255);
+/// A heading row's colour ([`RowList::with_headings`]).
+pub const HEADING_COLOR: Color = Color::DIM;
+/// A marked row's colour ([`RowList::set_marked`]).
+pub const MARKED_COLOR: Color = Color::ERROR;
 
 /// How far `_SetupMissionInfoList` narrows the view for its bar
 /// (`rView.right -= 15`, @0x9df84-0x9df90).
@@ -93,6 +99,17 @@ enum Held {
     Thumb { press: Point, at: Point },
 }
 
+/// A part of a [`RowList`] the pad can press ([`RowList::pad_cells`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListCell {
+    /// Row `n` (from 0), shown.
+    Row(usize),
+    /// The bar's up arrow.
+    Up,
+    /// The bar's down arrow.
+    Down,
+}
+
 /// Rows of text a line high each, in a view from the top of a box, run as
 /// the List Manager runs the game's lists (see the
 /// [`list_bar`](super::list_bar) module for the source).
@@ -146,9 +163,23 @@ enum Held {
 ///   as none.
 ///
 /// Nothing is drawn outside the view and the bar.
+///
+/// Three additions serve the keys screen and change nothing for a list
+/// that doesn't use them: a second column of text, drawn at an offset
+/// from each row's left ([`RowList::with_column`]); heading rows, drawn in
+/// [`HEADING_COLOR`], which a press never selects and a step passes over
+/// ([`RowList::with_headings`]); and marked rows, drawn in
+/// [`MARKED_COLOR`] ([`RowList::set_marked`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct RowList {
     rows: Vec<String>,
+    /// The second column, if any: its offset from the view's left and
+    /// each row's text.
+    column: Option<(f32, Vec<String>)>,
+    /// Which rows are headings, by index; none when empty.
+    headings: Vec<bool>,
+    /// Which rows are marked, by index.
+    marked: Vec<bool>,
     view: Bounds,
     bar: Option<ListBar>,
     line_height: f32,
@@ -199,6 +230,9 @@ impl RowList {
         }
         Self {
             extent: rows.len(),
+            column: None,
+            headings: Vec::new(),
+            marked: vec![false; rows.len()],
             lit,
             rows,
             bar: overflows.then(|| ListBar::beside(view)),
@@ -222,10 +256,82 @@ impl RowList {
         self
     }
 
+    /// This list with a second column, `cells` (one a row, the rest
+    /// empty), drawn `at` from the view's left.
+    #[must_use]
+    pub fn with_column(mut self, at: f32, mut cells: Vec<String>) -> Self {
+        cells.resize(self.rows.len(), String::new());
+        self.column = Some((at, cells));
+        self
+    }
+
+    /// This list with the rows at `indices` as headings, and the first row
+    /// that is no heading selected (none when every row is one).
+    #[must_use]
+    pub fn with_headings(mut self, indices: &[usize]) -> Self {
+        self.headings = (0..self.rows.len())
+            .map(|index| indices.contains(&index))
+            .collect();
+        self.selected = (0..self.rows.len()).find(|&index| !self.is_heading(index));
+        self.lit.fill(false);
+        if let Some(index) = self.selected {
+            self.light(index, true);
+        }
+        self
+    }
+
     /// Every row.
     #[must_use]
     pub fn rows(&self) -> &[String] {
         &self.rows
+    }
+
+    /// Sets row `index`'s text; nothing past the rows.
+    pub fn set_row(&mut self, index: usize, text: &str) {
+        if let Some(row) = self.rows.get_mut(index) {
+            text.clone_into(row);
+        }
+    }
+
+    /// Row `index`'s second-column text, if the list has the column and
+    /// the row.
+    #[must_use]
+    pub fn cell(&self, index: usize) -> Option<&str> {
+        self.column
+            .as_ref()
+            .and_then(|(_, cells)| cells.get(index))
+            .map(String::as_str)
+    }
+
+    /// Sets row `index`'s second-column text; nothing without the column
+    /// or past the rows.
+    pub fn set_cell(&mut self, index: usize, text: &str) {
+        if let Some(cell) = self
+            .column
+            .as_mut()
+            .and_then(|(_, cells)| cells.get_mut(index))
+        {
+            text.clone_into(cell);
+        }
+    }
+
+    /// Whether row `index` is a heading.
+    #[must_use]
+    pub fn is_heading(&self, index: usize) -> bool {
+        self.headings.get(index).copied().unwrap_or(false)
+    }
+
+    /// Marks row `index`, or not; nothing past the rows.
+    pub fn set_marked(&mut self, index: usize, marked: bool) {
+        if let Some(mark) = self.marked.get_mut(index) {
+            *mark = marked;
+        }
+    }
+
+    /// Whether row `index` is marked.
+    #[must_use]
+    pub fn is_marked(&self, index: usize) -> bool {
+        self.marked.get(index).copied().unwrap_or(false)
     }
 
     /// The selected index, if any: past the rows when a step over the
@@ -418,10 +524,28 @@ impl RowList {
     /// and the back step the last (@0x9d839, @0x9da60; `_MissionFilter`
     /// @0x9f949, @0x9fcfa). Returns whether the selection changed: never
     /// with nothing to step over, nor from the only one.
+    ///
+    /// A heading is stepped over, as many steps as it takes, so a list of
+    /// headings alone selects nothing.
     pub fn step_wrapping(&mut self, forward: bool) -> bool {
+        let before = self.selected;
+        let lit = self.lit.clone();
+        for _ in 0..self.extent {
+            self.step_once(forward);
+            if !self.selected.is_some_and(|index| self.is_heading(index)) {
+                return self.selected != before;
+            }
+        }
+        self.selected = before;
+        self.lit = lit;
+        false
+    }
+
+    /// One step of [`RowList::step_wrapping`], headings and all.
+    fn step_once(&mut self, forward: bool) {
         let count = self.extent;
         if count == 0 {
-            return false;
+            return;
         }
         let before = self.selected;
         if let Some(index) = before {
@@ -446,7 +570,61 @@ impl RowList {
         self.selected = Some(next);
         self.light(next, true);
         self.auto_scroll();
-        self.selected != before
+    }
+
+    /// What the pad can press in the list, in order: while the bar
+    /// shows, its up and down arrows, then each row shown (clipped to the
+    /// view). The bar's page areas and thumb are left out, as a press
+    /// can't drag.
+    ///
+    /// A pad's focus on a cell is held by its place in this list, so it
+    /// stays on its slot while the rows scroll under it. The arrows come
+    /// first because the rows shown drop by one at the bottom of a list
+    /// whose last row shows partly: after them, each arrow would slide a
+    /// place, and a focused up arrow would turn into the down arrow.
+    #[must_use]
+    pub fn pad_cells(&self) -> Vec<(ListCell, Bounds)> {
+        let rows = (self.first..self.first.saturating_add(self.shown)).filter_map(|index| {
+            self.row_bounds(index).map(|row| {
+                let clipped = Bounds {
+                    min: row.min,
+                    max: Point::new(row.max.x, row.max.y.min(self.view.max.y)),
+                };
+                (ListCell::Row(index), clipped)
+            })
+        });
+        let arrows = self.bar.into_iter().flat_map(|bar| {
+            [(ListCell::Up, BarPart::Up), (ListCell::Down, BarPart::Down)]
+                .into_iter()
+                .filter_map(move |(cell, part)| bar.arrow(part).map(|rect| (cell, rect)))
+        });
+        arrows.chain(rows).collect()
+    }
+
+    /// Presses `cell` by key, as a click (a press and release) on it
+    /// does: a row is picked, lit as `LClick`'s one pick lights it (never
+    /// a heading), and an arrow scrolls a row. As with a click, nothing is
+    /// read back: the host reads the selection back after
+    /// ([`RowList::read_back`]). [`ListPress::Ignored`] while a pointer
+    /// press is held, or for a cell not in [`RowList::pad_cells`].
+    pub fn press_cell(&mut self, cell: ListCell) -> ListPress {
+        if self.held.is_some() || !self.pad_cells().iter().any(|(c, _)| *c == cell) {
+            return ListPress::Ignored;
+        }
+        match cell {
+            ListCell::Row(row) => {
+                // Only rows shown are cells, so `row` is listed.
+                if self.lit.get(row) != Some(&true) {
+                    self.lit.fill(false);
+                }
+                if !self.is_heading(row) {
+                    self.light(row, true);
+                }
+            }
+            ListCell::Up => self.scroll_by(-1),
+            ListCell::Down => self.scroll_by(1),
+        }
+        ListPress::Released
     }
 
     /// The pointer's input: a left press on the bar or in the view starts
@@ -661,7 +839,9 @@ impl RowList {
             None if self.lit.get(row) != Some(&true) => self.lit.fill(false),
             None => {}
         }
-        self.light(row, true);
+        if !self.is_heading(row) {
+            self.light(row, true);
+        }
         *cell = Some(row);
     }
 
@@ -705,18 +885,31 @@ impl RowList {
         }
         for (index, text) in self.rows.iter().enumerate() {
             if let Some(row) = self.row_bounds(index) {
-                let command = DrawCommand::Text {
-                    text: text.clone(),
-                    font: Font::Geneva,
-                    origin: row.min,
-                    size: ROW_SIZE,
-                    wrap_width: None,
-                    color: ROW_COLOR,
-                };
-                if row.max.y > view.max.y {
-                    list.clipped(view, command);
+                let color = if self.is_heading(index) {
+                    HEADING_COLOR
+                } else if self.is_marked(index) {
+                    MARKED_COLOR
                 } else {
-                    list.push(command);
+                    ROW_COLOR
+                };
+                let cell = self
+                    .column
+                    .as_ref()
+                    .map(|(at, cells)| (Point::new(row.min.x + at, row.min.y), &cells[index]));
+                for (origin, text) in std::iter::once((row.min, text)).chain(cell) {
+                    let command = DrawCommand::Text {
+                        text: text.clone(),
+                        font: Font::Geneva,
+                        origin,
+                        size: ROW_SIZE,
+                        wrap_width: None,
+                        color,
+                    };
+                    if row.max.y > view.max.y {
+                        list.clipped(view, command);
+                    } else {
+                        list.push(command);
+                    }
                 }
             }
         }
@@ -932,6 +1125,93 @@ mod tests {
         let over = RowList::new(names(8), TALL, &MonoMetrics, room);
         assert_eq!(over.view(), TALL, "the box itself (@0xa07a6)");
         assert_eq!(over.bar().map(|bar| bar.min.x), Some(110.0), "right of it");
+    }
+
+    /// A click's press and release at `rect`'s centre on `rows`.
+    fn clicked(rows: &mut RowList, rect: Bounds) -> ListPress {
+        rows.input(&press(rect.center()));
+        rows.input(&release(rect.center()))
+    }
+
+    #[test]
+    fn pressing_a_row_by_key_selects_it_as_a_click_does() {
+        for list in [tall(10), list(2), tall(10).with_headings(&[2])] {
+            for (cell, rect) in list.pad_cells() {
+                if !matches!(cell, ListCell::Row(_)) {
+                    continue;
+                }
+                let mut keyed = list.clone();
+                let mut pointed = list.clone();
+                assert_eq!(
+                    keyed.press_cell(cell),
+                    clicked(&mut pointed, rect),
+                    "{cell:?}"
+                );
+                assert_eq!(keyed, pointed, "{cell:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn pressing_the_bar_arrows_by_key_steps_as_a_click_does() {
+        let mut list = tall(10);
+        list.press_cell(ListCell::Down);
+        for cell in [ListCell::Up, ListCell::Down] {
+            let rect = list
+                .pad_cells()
+                .into_iter()
+                .find(|(c, _)| *c == cell)
+                .map(|(_, rect)| rect)
+                .expect("an arrow");
+            let mut keyed = list.clone();
+            let mut pointed = list.clone();
+            assert_eq!(keyed.press_cell(cell), clicked(&mut pointed, rect));
+            assert_eq!(keyed, pointed, "{cell:?}");
+            assert_ne!(keyed.first(), list.first(), "{cell:?} scrolled");
+        }
+    }
+
+    #[test]
+    fn the_visible_rows_and_bar_arrows_are_the_lists_cells() {
+        let cells: Vec<ListCell> = tall(10).pad_cells().into_iter().map(|(c, _)| c).collect();
+        let mut expected = vec![ListCell::Up, ListCell::Down];
+        expected.extend((0..7).map(ListCell::Row));
+        assert_eq!(cells, expected);
+        let mut scrolled = tall(10);
+        scrolled.press_cell(ListCell::Down);
+        assert_eq!(
+            scrolled.pad_cells()[2].0,
+            ListCell::Row(1),
+            "follows a scroll"
+        );
+        let short: Vec<ListCell> = list(2).pad_cells().into_iter().map(|(c, _)| c).collect();
+        assert_eq!(short, [ListCell::Row(0), ListCell::Row(1)], "no bar");
+        // A partly shown last row is clipped to the view.
+        let partly = list(6).pad_cells();
+        assert_eq!(partly[5].1.max.y, BOX.max.y);
+        assert_eq!(partly[5].0, ListCell::Row(3), "after the bar's arrows");
+        assert_eq!(
+            list(6).press_cell(ListCell::Row(5)),
+            ListPress::Ignored,
+            "not shown"
+        );
+    }
+
+    #[test]
+    fn each_bar_arrow_keeps_its_cell_however_far_the_list_scrolls() {
+        // Six rows in three and a bit: at the bottom the partly shown
+        // slot is empty, so the rows shown drop from four to three.
+        let mut rows = list(6);
+        let at_top = rows.pad_cells();
+        for _ in 0..3 {
+            rows.press_cell(ListCell::Down);
+        }
+        let at_bottom = rows.pad_cells();
+        assert_eq!(at_bottom.len() + 1, at_top.len(), "a row slot fewer");
+        for arrow in [ListCell::Up, ListCell::Down] {
+            let index = |cells: &[(ListCell, Bounds)]| cells.iter().position(|(c, _)| *c == arrow);
+            assert_eq!(index(&at_bottom), index(&at_top), "{arrow:?}");
+        }
     }
 
     #[test]
@@ -1305,7 +1585,7 @@ mod tests {
     #[test]
     fn keys_go_to_the_screen_not_the_list() {
         let mut rows = list(3);
-        for key in [Key::Up, Key::Down, Key::Enter] {
+        for key in [Key::ArrowUp, Key::ArrowDown, Key::Enter] {
             let press = Input::Key {
                 key,
                 pressed: true,
@@ -1574,6 +1854,102 @@ mod tests {
         assert_eq!(drawn(&rows).len(), 2, "the two rows' text alone");
     }
 
+    /// Each text drawn, with where and in what colour.
+    fn coloured(rows: &RowList) -> Vec<(String, Point, Color)> {
+        drawn(rows)
+            .into_iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text {
+                    text,
+                    origin,
+                    color,
+                    ..
+                } => Some((text, origin, color)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_second_column_draws_each_row_s_cell_at_its_offset() {
+        let mut rows = list(2).with_column(40.0, vec!["A".into(), "B".into()]);
+        rows.set_cell(1, "C");
+        assert_eq!(rows.cell(1), Some("C"));
+        assert_eq!(rows.cell(2), None);
+        assert_eq!(
+            texts(&rows),
+            [
+                ("Row 0".to_owned(), Point::new(10.0, 20.0)),
+                ("A".to_owned(), Point::new(50.0, 20.0)),
+                ("Row 1".to_owned(), Point::new(10.0, 32.0)),
+                ("C".to_owned(), Point::new(50.0, 32.0)),
+            ]
+        );
+        rows.set_row(0, "Renamed");
+        assert_eq!(rows.rows()[0], "Renamed");
+    }
+
+    #[test]
+    fn a_partly_shown_row_s_cell_is_clipped_to_the_view_too() {
+        let rows = list(4).with_column(40.0, (0..4).map(|n| format!("c{n}")).collect());
+        let clipped = drawn(&rows)
+            .into_iter()
+            .filter(|command| matches!(command, DrawCommand::Clipped { .. }))
+            .count();
+        assert_eq!(clipped, 2, "the fourth row's text and its cell");
+    }
+
+    #[test]
+    fn a_heading_is_drawn_dim_never_selected_and_stepped_over() {
+        let mut rows = list(3).with_headings(&[0, 2]);
+        assert_eq!(rows.selected(), Some(1), "the first row that is no heading");
+        assert!(rows.is_heading(0));
+        assert!(!rows.is_heading(1));
+        assert!(!rows.step_wrapping(true), "the one row left to select");
+        assert_eq!(rows.selected(), Some(1));
+        rows.input(&press(Point::new(20.0, 21.0)));
+        rows.input(&release(Point::new(20.0, 21.0)));
+        rows.read_back();
+        assert_eq!(
+            rows.selected(),
+            None,
+            "a press on a heading selects nothing"
+        );
+        assert_eq!(coloured(&rows)[0].2, HEADING_COLOR);
+        assert_eq!(coloured(&rows)[1].2, ROW_COLOR);
+        let mut all = list(2).with_headings(&[0, 1]);
+        assert_eq!(all.selected(), None);
+        assert!(!all.step_wrapping(true), "nothing to select");
+        assert_eq!(all.selected(), None);
+    }
+
+    #[test]
+    fn stepping_wraps_over_headings_both_ways() {
+        let mut rows = tall(5).with_headings(&[0, 3]);
+        assert_eq!(rows.selected(), Some(1));
+        assert!(rows.step_wrapping(true));
+        assert_eq!(rows.selected(), Some(2));
+        assert!(rows.step_wrapping(true));
+        assert_eq!(rows.selected(), Some(4), "past the heading at 3");
+        assert!(rows.step_wrapping(true));
+        assert_eq!(rows.selected(), Some(1), "round, past the heading at 0");
+        assert!(rows.step_wrapping(false));
+        assert_eq!(rows.selected(), Some(4));
+    }
+
+    #[test]
+    fn a_marked_row_draws_its_text_and_cell_in_the_marked_colour() {
+        let mut rows = list(2).with_column(40.0, vec!["A".into(), "B".into()]);
+        rows.set_marked(1, true);
+        assert!(rows.is_marked(1));
+        let colours: Vec<Color> = coloured(&rows).into_iter().map(|(.., c)| c).collect();
+        assert_eq!(colours, [ROW_COLOR, ROW_COLOR, MARKED_COLOR, MARKED_COLOR]);
+        rows.set_marked(1, false);
+        assert!(!rows.is_marked(1));
+        rows.set_marked(9, true);
+        assert!(!rows.is_marked(9), "no such row");
+    }
+
     /// The rows lit, in order.
     fn lit(rows: &RowList) -> Vec<usize> {
         rows.highlighted().collect()
@@ -1633,7 +2009,7 @@ mod tests {
 
     fn down() -> Input {
         Input::Key {
-            key: Key::Down,
+            key: Key::ArrowDown,
             pressed: true,
             repeat: false,
         }

@@ -1,58 +1,169 @@
 //! Input events, in the core's own terms and logical coordinates.
 
-use crate::geometry::Point;
+use crate::geometry::{Bounds, Point};
 
-/// A keyboard key the screens care about.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Key {
-    /// Left arrow.
-    Left,
-    /// Right arrow.
-    Right,
-    /// Up arrow.
-    Up,
-    /// Down arrow.
-    Down,
-    /// Page Up (fn+Up on a Mac laptop), which the shop grids take as Up.
-    PageUp,
-    /// Page Down (fn+Down on a Mac laptop), which the shop grids take as
-    /// Down.
-    PageDown,
-    /// Home (fn+Left on a Mac laptop, Mac key code 0x73), which takes a
-    /// text dialog's box to the start of its text.
-    Home,
-    /// End (fn+Right on a Mac laptop, Mac key code 0x77), which takes a
-    /// text dialog's box to the end of its text.
-    End,
-    /// Return or Enter.
-    Enter,
-    /// Escape.
-    Escape,
-    /// The space bar.
-    Space,
-    /// Tab.
-    Tab,
-    /// Backspace (Delete on a Mac keyboard), which deletes the character
-    /// before the caret.
-    Backspace,
-    /// Alt (Option on a Mac keyboard), either one, held as a modifier.
-    Alt,
-    /// Control, either one.
-    Control,
-    /// Shift, either one, held as a modifier.
-    Shift,
-    /// Command (the Windows or Super key off a Mac), either one, held as a
-    /// modifier.
-    Command,
-    /// Caps Lock, each press of which turns double time on or off. It is
-    /// no flight key: flight never holds it.
-    CapsLock,
-    /// A key that types a character.
-    Char(char),
-    /// Function key F`n`: F1 is `Function(1)`.
-    Function(u8),
-    /// Any other key.
-    Other,
+mod glyphs;
+mod touch;
+
+pub use glyphs::{pad_axis_name, pad_button_name};
+pub use touch::{FingerId, Pinch, Touch, TouchControl, TouchPhase};
+
+/// A physical key, by its position: `keyboard_types`' `Code`, which names
+/// each key for what it types on a US keyboard. `Key::KeyW` is the key
+/// where a US keyboard has W, whatever the player's layout types there;
+/// [`key_letter`] and [`letter_key`] read that US letter.
+///
+/// A key the platform folds into another arrives as that other key: the
+/// platform adapter's `map_key` says which pair it folds. `MetaLeft` is
+/// Command on a Mac and the Windows or Super key elsewhere, `AltLeft`
+/// Option, and `Backspace` the Mac keyboard's Delete. Page Up, Page Down,
+/// Home and End are fn with an arrow on a Mac laptop. A key the platform
+/// can't identify is `Key::Unidentified`.
+///
+/// `Code` is `#[non_exhaustive]` and grows with the standard it follows,
+/// so every `match` on a `Key` keeps a wildcard arm.
+pub use keyboard_types::Code as Key;
+
+/// The letter keys and the top row's digit keys, each with its lowercase
+/// letter or digit on a US keyboard.
+const LETTER_KEYS: [(Key, char); 36] = [
+    (Key::KeyA, 'a'),
+    (Key::KeyB, 'b'),
+    (Key::KeyC, 'c'),
+    (Key::KeyD, 'd'),
+    (Key::KeyE, 'e'),
+    (Key::KeyF, 'f'),
+    (Key::KeyG, 'g'),
+    (Key::KeyH, 'h'),
+    (Key::KeyI, 'i'),
+    (Key::KeyJ, 'j'),
+    (Key::KeyK, 'k'),
+    (Key::KeyL, 'l'),
+    (Key::KeyM, 'm'),
+    (Key::KeyN, 'n'),
+    (Key::KeyO, 'o'),
+    (Key::KeyP, 'p'),
+    (Key::KeyQ, 'q'),
+    (Key::KeyR, 'r'),
+    (Key::KeyS, 's'),
+    (Key::KeyT, 't'),
+    (Key::KeyU, 'u'),
+    (Key::KeyV, 'v'),
+    (Key::KeyW, 'w'),
+    (Key::KeyX, 'x'),
+    (Key::KeyY, 'y'),
+    (Key::KeyZ, 'z'),
+    (Key::Digit0, '0'),
+    (Key::Digit1, '1'),
+    (Key::Digit2, '2'),
+    (Key::Digit3, '3'),
+    (Key::Digit4, '4'),
+    (Key::Digit5, '5'),
+    (Key::Digit6, '6'),
+    (Key::Digit7, '7'),
+    (Key::Digit8, '8'),
+    (Key::Digit9, '9'),
+];
+
+/// The lowercase letter or digit a letter key or top-row digit key is
+/// named for on a US keyboard, or `None` for any other key (the keypad's
+/// digits included).
+///
+/// This is the key's US position, not what the player's layout types
+/// there: a screen that reads a letter by key code, as the original's
+/// filters read `EventRecord.message`'s key-code byte, reads it this way.
+/// The layout's own names for keys come from the
+/// [`KeyNames`](crate::key_names::KeyNames) port.
+#[must_use]
+pub fn key_letter(key: Key) -> Option<char> {
+    LETTER_KEYS
+        .iter()
+        .find_map(|&(k, letter)| (k == key).then_some(letter))
+}
+
+/// The letter key or top-row digit key a letter, either case, or a digit
+/// is named for on a US keyboard, or `None` for any other character.
+///
+/// It is [`key_letter`] turned around, and reads a US position the same
+/// way.
+#[must_use]
+pub fn letter_key(letter: char) -> Option<Key> {
+    let letter = letter.to_ascii_lowercase();
+    LETTER_KEYS
+        .iter()
+        .find_map(|&(key, l)| (l == letter).then_some(key))
+}
+
+/// Shift's two keys, left first.
+pub const SHIFT_KEYS: [Key; 2] = [Key::ShiftLeft, Key::ShiftRight];
+/// Option's (Alt's) two keys, left first.
+pub const OPTION_KEYS: [Key; 2] = [Key::AltLeft, Key::AltRight];
+/// Control's two keys, left first.
+pub const CONTROL_KEYS: [Key; 2] = [Key::ControlLeft, Key::ControlRight];
+/// Command's two keys (the Windows or Super keys off a Mac), left first.
+pub const COMMAND_KEYS: [Key; 2] = [Key::MetaLeft, Key::MetaRight];
+
+/// Whether a modifier is held, as a screen's original reads it.
+///
+/// The original reads a modifier two ways. A `_KeyCheck` or
+/// `_QuickKeyCheck` poll tests one key code, so one key: build it with
+/// [`ModifierHeld::only`] and the left key. An `EventRecord.modifiers`
+/// bit (`shiftKey`, `optionKey`, `controlKey`, `cmdKey`) is set by either
+/// key, as Mac OS X sets no right-hand bit: build it with
+/// [`ModifierHeld::either`] and the pair ([`SHIFT_KEYS`] and the rest).
+/// Each key is followed on its own, so letting go of one while the other
+/// is down keeps the modifier held.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ModifierHeld {
+    /// The keys read; both the same for one key.
+    keys: [Key; 2],
+    /// Which of them are down.
+    down: [bool; 2],
+}
+
+impl ModifierHeld {
+    /// A modifier read by its bit: held while either of `keys` is.
+    #[must_use]
+    pub const fn either(keys: [Key; 2]) -> Self {
+        Self {
+            keys,
+            down: [false; 2],
+        }
+    }
+
+    /// A modifier polled by `key`'s key code: held while `key` is.
+    #[must_use]
+    pub const fn only(key: Key) -> Self {
+        Self::either([key, key])
+    }
+
+    /// Follows `input`'s presses, repeats and releases of the keys read,
+    /// and says whether it was one of them.
+    pub fn follow(&mut self, input: &Input) -> bool {
+        let Input::Key { key, pressed, .. } = *input else {
+            return false;
+        };
+        let mut read = false;
+        for (each, down) in self.keys.iter().zip(&mut self.down) {
+            if *each == key {
+                *down = pressed;
+                read = true;
+            }
+        }
+        read
+    }
+
+    /// Whether the modifier is held.
+    #[must_use]
+    pub fn held(&self) -> bool {
+        self.down.contains(&true)
+    }
+
+    /// Lets go of both keys, as when the keys are released for the
+    /// screen.
+    pub fn let_go(&mut self) {
+        self.down = [false; 2];
+    }
 }
 
 /// A mouse button.
@@ -66,6 +177,352 @@ pub enum MouseButton {
     Middle,
     /// Any other button.
     Other,
+}
+
+/// The device the player used last, whose input a text names: what a
+/// screen asks its [`CommandReader`](crate::CommandReader) for
+/// ([`device`](crate::CommandReader::device)), which follows the
+/// [`Surroundings`] the app sends, and what every key-naming text passes
+/// to [`name_command`](crate::bound_names::name_command).
+///
+/// The app decides which it is (`nova`'s device-last-used module) and
+/// tells the screens through [`Input::Surroundings`]. A pad is named by
+/// its family ([`pad_button_name`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Device {
+    /// The keyboard: a command is named by its key.
+    #[default]
+    Keyboard,
+    /// The mouse or trackpad: a pointer button, move or scroll.
+    Mouse,
+    /// A finger on a touchscreen: a touch started, moved or lifted. A
+    /// command is named by its key, as for the mouse, since touch has no
+    /// inputs of its own to name; the pad's highlight hides, as for the
+    /// mouse.
+    Touch,
+    /// A gamepad of a family, which names its buttons.
+    Gamepad(ControllerFamily),
+}
+
+/// The family a gamepad belongs to, which names its buttons with that
+/// family's labels ([`pad_button_name`]). `nova` reads it from the pad's
+/// vendor id; a pad of no known family is
+/// [`ControllerFamily::Generic`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ControllerFamily {
+    /// Microsoft's pads: A, B, X, Y.
+    Xbox,
+    /// Sony's pads: Cross, Circle, Square, Triangle.
+    PlayStation,
+    /// Nintendo's pads: B, A, Y, X by position (A on the East).
+    Nintendo,
+    /// A pad named by position alone.
+    #[default]
+    Generic,
+}
+
+impl ControllerFamily {
+    /// Every family, in declaration order.
+    pub const ALL: [Self; 4] = [Self::Xbox, Self::PlayStation, Self::Nintendo, Self::Generic];
+}
+
+/// What the app tells every screen about where it runs, as data: sent as
+/// [`Input::Surroundings`] whenever any field changes (`nova`'s app tells
+/// it after every event and before every frame, only when it differs from
+/// what it last told), and again to a screen the app switches to.
+///
+/// A screen must not take every `Surroundings` as a device switch: a
+/// resize or a safe-area change sends one with the device unchanged.
+/// Every screen reads [`Surroundings::device`]; only flight's touch
+/// controls read the safe area and points per pixel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Surroundings {
+    /// The device the player used last.
+    pub device: Device,
+    /// The part of the canvas the system leaves clear (a notch, the home
+    /// indicator, rounded corners), in the logical space of the shape shown
+    /// now and clipped to its canvas: the whole canvas where the window
+    /// has no inset.
+    pub safe_area: Bounds,
+    /// Points per logical pixel: the window's size in points against the
+    /// logical size it shows, so a size in points `p` is `p /
+    /// points_per_pixel` logical units.
+    pub points_per_pixel: f32,
+    /// Whether the platform shows its own keyboard on screen when text
+    /// entry starts (iOS, Android), as `nova`'s `TextEntry` port reports
+    /// it. Only the text-entry hosts read it
+    /// ([`EntryMode`](crate::text_entry::EntryMode)): with touch, they
+    /// ask for the system's keyboard where there is one, and draw the
+    /// game's own where there is none.
+    pub soft_keyboard: bool,
+}
+
+impl Default for Surroundings {
+    /// The keyboard, the classic canvas (0, 0)-(1024, 768) all clear, at
+    /// one point per logical pixel: a 1024 × 768 pt window, with no soft
+    /// keyboard.
+    fn default() -> Self {
+        Self {
+            device: Device::Keyboard,
+            safe_area: Bounds::at(Point::new(0.0, 0.0), 1024.0, 768.0),
+            points_per_pixel: 1.0,
+            soft_keyboard: false,
+        }
+    }
+}
+
+impl Surroundings {
+    /// The default surroundings with `device` the device used last.
+    #[must_use]
+    pub fn of(device: Device) -> Self {
+        Self {
+            device,
+            ..Self::default()
+        }
+    }
+}
+
+/// A gamepad button, by its position on the pad (SDL's names: South is
+/// the bottom face button, whatever its label), never by its printed
+/// label: [`pad_button_name`] names it by the pad's family. Each stick's four
+/// directions are buttons too, pressed as the stick passes the press
+/// threshold (`nova`'s pad module decides when), so a screen reads a
+/// stick as it reads the d-pad.
+///
+/// A held d-pad or stick direction repeats, as a held arrow key does
+/// ([`PadButton::repeats`]); no other button does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum PadButton {
+    /// The bottom face button (A on an Xbox pad, Cross on a `PlayStation`
+    /// pad).
+    South,
+    /// The right face button.
+    East,
+    /// The left face button.
+    West,
+    /// The top face button.
+    North,
+    /// The left shoulder button.
+    LeftShoulder,
+    /// The right shoulder button.
+    RightShoulder,
+    /// The left trigger, pressed past the press threshold.
+    LeftTrigger,
+    /// The right trigger, pressed past the press threshold.
+    RightTrigger,
+    /// The d-pad's up.
+    DPadUp,
+    /// The d-pad's down.
+    DPadDown,
+    /// The d-pad's left.
+    DPadLeft,
+    /// The d-pad's right.
+    DPadRight,
+    /// Start (Menu, Options, +).
+    Start,
+    /// Select (Back, View, Share, -).
+    Select,
+    /// The left stick, clicked.
+    LeftStick,
+    /// The right stick, clicked.
+    RightStick,
+    /// The left stick pushed up past the press threshold.
+    LeftStickUp,
+    /// The left stick pulled down past the press threshold.
+    LeftStickDown,
+    /// The left stick pushed left past the press threshold.
+    LeftStickLeft,
+    /// The left stick pushed right past the press threshold.
+    LeftStickRight,
+    /// The right stick pushed up past the press threshold.
+    RightStickUp,
+    /// The right stick pulled down past the press threshold.
+    RightStickDown,
+    /// The right stick pushed left past the press threshold.
+    RightStickLeft,
+    /// The right stick pushed right past the press threshold.
+    RightStickRight,
+}
+
+impl PadButton {
+    /// Every button, in declaration order.
+    pub const ALL: [Self; 24] = [
+        Self::South,
+        Self::East,
+        Self::West,
+        Self::North,
+        Self::LeftShoulder,
+        Self::RightShoulder,
+        Self::LeftTrigger,
+        Self::RightTrigger,
+        Self::DPadUp,
+        Self::DPadDown,
+        Self::DPadLeft,
+        Self::DPadRight,
+        Self::Start,
+        Self::Select,
+        Self::LeftStick,
+        Self::RightStick,
+        Self::LeftStickUp,
+        Self::LeftStickDown,
+        Self::LeftStickLeft,
+        Self::LeftStickRight,
+        Self::RightStickUp,
+        Self::RightStickDown,
+        Self::RightStickLeft,
+        Self::RightStickRight,
+    ];
+
+    /// The buttons a gamepad entry may hold as its layer, Select then
+    /// Start: the keys screen catches either as a held layer, and the
+    /// saved form reads no other.
+    pub const LAYERS: [Self; 2] = [Self::Select, Self::Start];
+
+    /// The button named `name` ([`PadButton::name`]), if any.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|button| button.name() == name)
+    }
+
+    /// The button's SDL-style position name (`south`, `leftshoulder`,
+    /// `dpup`, `+lefty`), as the saved pad table holds it. A stick direction is its
+    /// axis's name with the direction's sign, as SDL's mappings write a
+    /// half axis.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::South => "south",
+            Self::East => "east",
+            Self::West => "west",
+            Self::North => "north",
+            Self::LeftShoulder => "leftshoulder",
+            Self::RightShoulder => "rightshoulder",
+            Self::LeftTrigger => "lefttrigger",
+            Self::RightTrigger => "righttrigger",
+            Self::DPadUp => "dpup",
+            Self::DPadDown => "dpdown",
+            Self::DPadLeft => "dpleft",
+            Self::DPadRight => "dpright",
+            Self::Start => "start",
+            Self::Select => "back",
+            Self::LeftStick => "leftstick",
+            Self::RightStick => "rightstick",
+            Self::LeftStickUp => "+lefty",
+            Self::LeftStickDown => "-lefty",
+            Self::LeftStickLeft => "-leftx",
+            Self::LeftStickRight => "+leftx",
+            Self::RightStickUp => "+righty",
+            Self::RightStickDown => "-righty",
+            Self::RightStickLeft => "-rightx",
+            Self::RightStickRight => "+rightx",
+        }
+    }
+
+    /// Whether the button, held, repeats its press as a held key does:
+    /// true for the four d-pad directions and the eight stick directions,
+    /// false for the face buttons, the shoulders, the triggers, Start,
+    /// Select and the stick clicks. `nova`'s pad module repeats only these
+    /// ([`Input::PadButton`]'s `repeat`).
+    #[must_use]
+    pub const fn repeats(self) -> bool {
+        matches!(
+            self,
+            Self::DPadUp
+                | Self::DPadDown
+                | Self::DPadLeft
+                | Self::DPadRight
+                | Self::LeftStickUp
+                | Self::LeftStickDown
+                | Self::LeftStickLeft
+                | Self::LeftStickRight
+                | Self::RightStickUp
+                | Self::RightStickDown
+                | Self::RightStickLeft
+                | Self::RightStickRight
+        )
+    }
+
+    /// The stick axis and its direction (`1` or `-1`) a stick-direction
+    /// button is, `None` for any other button.
+    #[must_use]
+    pub const fn stick_direction(self) -> Option<(PadAxis, i8)> {
+        Some(match self {
+            Self::LeftStickUp => (PadAxis::LeftY, 1),
+            Self::LeftStickDown => (PadAxis::LeftY, -1),
+            Self::LeftStickLeft => (PadAxis::LeftX, -1),
+            Self::LeftStickRight => (PadAxis::LeftX, 1),
+            Self::RightStickUp => (PadAxis::RightY, 1),
+            Self::RightStickDown => (PadAxis::RightY, -1),
+            Self::RightStickLeft => (PadAxis::RightX, -1),
+            Self::RightStickRight => (PadAxis::RightX, 1),
+            _ => return None,
+        })
+    }
+}
+
+/// A stick axis. X is positive to the right and Y positive up (the stick
+/// pushed forward), each from -1 to 1; `nova`'s gamepad adapter gives
+/// them so.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum PadAxis {
+    /// The left stick's X.
+    LeftX,
+    /// The left stick's Y.
+    LeftY,
+    /// The right stick's X.
+    RightX,
+    /// The right stick's Y.
+    RightY,
+}
+
+impl PadAxis {
+    /// Every axis, in declaration order.
+    pub const ALL: [Self; 4] = [Self::LeftX, Self::LeftY, Self::RightX, Self::RightY];
+
+    /// The axis's SDL name (`leftx`, `lefty`, `rightx`, `righty`), as
+    /// the saved pad table holds a binding to it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::LeftX => "leftx",
+            Self::LeftY => "lefty",
+            Self::RightX => "rightx",
+            Self::RightY => "righty",
+        }
+    }
+
+    /// The axis named `name` ([`PadAxis::name`]), if any.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|axis| axis.name() == name)
+    }
+
+    /// The other axis of the same stick: Y for X, X for Y.
+    #[must_use]
+    pub const fn across(self) -> Self {
+        match self {
+            Self::LeftX => Self::LeftY,
+            Self::LeftY => Self::LeftX,
+            Self::RightX => Self::RightY,
+            Self::RightY => Self::RightX,
+        }
+    }
+
+    /// The stick-direction button the axis presses pushed the
+    /// `positive` way (right or up) or the other.
+    #[must_use]
+    pub const fn direction(self, positive: bool) -> PadButton {
+        match (self, positive) {
+            (Self::LeftX, true) => PadButton::LeftStickRight,
+            (Self::LeftX, false) => PadButton::LeftStickLeft,
+            (Self::LeftY, true) => PadButton::LeftStickUp,
+            (Self::LeftY, false) => PadButton::LeftStickDown,
+            (Self::RightX, true) => PadButton::RightStickRight,
+            (Self::RightX, false) => PadButton::RightStickLeft,
+            (Self::RightY, true) => PadButton::RightStickUp,
+            (Self::RightY, false) => PadButton::RightStickDown,
+        }
+    }
 }
 
 /// How far a wheel or trackpad scroll moves the text under the pointer,
@@ -98,7 +555,12 @@ pub enum Input {
     },
     /// A printable character was typed, as the keyboard's layout and
     /// modifiers make it. It follows the [`Input::Key`] press that typed
-    /// it; only text entry acts on it, and every other screen ignores it.
+    /// it. Text entry acts on it, and so does the mission offer
+    /// ([`crate::spaceport::offer`]), which picks a button from the
+    /// character as `_SingleMissionFilter` does, but only from the
+    /// character a fresh press typed, never a repeat's. Every other screen
+    /// ignores it, so an adapter delivers it straight after its press,
+    /// outside text fields too, never dropping or delaying it.
     Text(char),
     /// The pointer moved to a point in the logical space.
     PointerMoved(Point),
@@ -134,11 +596,59 @@ pub enum Input {
         /// Where the pointer was.
         at: Point,
     },
+    /// A gamepad button went down or up: a button by position, a trigger
+    /// or a stick direction past the press threshold. Pads merge: a button
+    /// is down while any pad holds it.
+    ///
+    /// A d-pad or stick direction held past the repeat delay sends further
+    /// presses with `repeat` set, as a held key does ([`Input::Key`]), so
+    /// a screen takes them as it takes a key's repeats; no other button
+    /// repeats ([`PadButton::repeats`]). `nova`'s pad module makes them.
+    PadButton {
+        /// The button.
+        button: PadButton,
+        /// Down (`true`) or up.
+        pressed: bool,
+        /// Whether this press repeats a held direction; never set on a
+        /// release.
+        repeat: bool,
+    },
+    /// A stick axis moved to `value`, -1 to 1 (see [`PadAxis`] for the
+    /// signs), as the pad reports it, before any dead zone: flight reads
+    /// its analog amounts from it.
+    PadAxis {
+        /// The axis.
+        axis: PadAxis,
+        /// Where it is.
+        value: f32,
+    },
+    /// What the app tells the screens about where they run changed, or a
+    /// screen was switched to.
+    Surroundings(Surroundings),
+    /// A finger a claimant claimed ([`crate::touch::TouchClaimant`])
+    /// touched down, moved, lifted or was cancelled. Only the claimant's
+    /// screen acts on it; the primary finger reaches screens as the
+    /// ordinary pointer inputs instead, never as this.
+    Touch(Touch),
+    /// Two free fingers pinched ([`crate::touch`]). Only the galaxy map
+    /// acts on it, zooming in its own steps; every other screen ignores it.
+    Pinch(Pinch),
+    /// Flight's on-screen touch controls, or a touch aid off flight
+    /// (`ui::touch_aids`: a modifier click's toggle, the play keys),
+    /// pressed or let go of a command, or moved their stick: a device of
+    /// its own, which the keymap reads beside the keyboard and the pad,
+    /// so a screen's reader takes it as it takes the key bound to the
+    /// same command. A screen reading no such command ignores it, as it
+    /// ignores a key it has no use for.
+    TouchControl(TouchControl),
 }
 
 impl Input {
-    /// The input with its pointer point moved by `by`, and any other input
-    /// as it is: how a frame drawn moved by `−by` takes the pointer.
+    /// The input with its pointer point moved by `by`, and the safe area
+    /// of [`Input::Surroundings`] moved with it, and any other input as it
+    /// is: how a frame drawn moved by `−by` takes the pointer and reads
+    /// its safe area in its own coordinates (the touch aids place
+    /// themselves by it, `ui::touch_aids`).
     #[must_use]
     pub fn translated(self, by: Point) -> Self {
         let moved = |p: Point| Point::new(p.x + by.x, p.y + by.y);
@@ -158,7 +668,66 @@ impl Input {
                 delta,
                 at: moved(at),
             },
-            Self::Key { .. } | Self::Text(_) | Self::PointerLeft => self,
+            Self::Touch(Touch { finger, phase }) => Self::Touch(Touch {
+                finger,
+                phase: phase.translated(by),
+            }),
+            Self::Pinch(pinch) => Self::Pinch(pinch.translated(by)),
+            Self::Surroundings(told) => Self::Surroundings(Surroundings {
+                safe_area: Bounds {
+                    min: moved(told.safe_area.min),
+                    max: moved(told.safe_area.max),
+                },
+                ..told
+            }),
+            Self::Key { .. }
+            | Self::Text(_)
+            | Self::PointerLeft
+            | Self::PadButton { .. }
+            | Self::PadAxis { .. }
+            | Self::TouchControl(_) => self,
+        }
+    }
+
+    /// Whether `self` and `other` are both a key's press, repeat or
+    /// release, of one key, both a pad button's press or release, of one
+    /// button, or both a touch control's press or release, of one
+    /// command.
+    #[must_use]
+    pub fn same_key(&self, other: &Self) -> bool {
+        match (*self, *other) {
+            (Self::Key { key: a, .. }, Self::Key { key: b, .. }) => a == b,
+            (Self::PadButton { button: a, .. }, Self::PadButton { button: b, .. }) => a == b,
+            (
+                Self::TouchControl(TouchControl::Button { command: a, .. }),
+                Self::TouchControl(TouchControl::Button { command: b, .. }),
+            ) => a == b,
+            _ => false,
+        }
+    }
+
+    /// The release of the key, pad button or touch control button `self`
+    /// presses, repeats or releases; any other input as it is.
+    #[must_use]
+    pub const fn released(self) -> Self {
+        match self {
+            Self::TouchControl(TouchControl::Button { command, .. }) => {
+                Self::TouchControl(TouchControl::Button {
+                    command,
+                    pressed: false,
+                })
+            }
+            Self::Key { key, .. } => Self::Key {
+                key,
+                pressed: false,
+                repeat: false,
+            },
+            Self::PadButton { button, .. } => Self::PadButton {
+                button,
+                pressed: false,
+                repeat: false,
+            },
+            other => other,
         }
     }
 }
@@ -167,6 +736,303 @@ impl Input {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+
+    fn key_input(key: Key, pressed: bool, repeat: bool) -> Input {
+        Input::Key {
+            key,
+            pressed,
+            repeat,
+        }
+    }
+
+    #[test]
+    fn same_key_matches_any_input_of_one_key() {
+        let press = key_input(Key::KeyJ, true, false);
+        assert!(press.same_key(&key_input(Key::KeyJ, false, false)));
+        assert!(press.same_key(&key_input(Key::KeyJ, true, true)));
+        assert!(!press.same_key(&key_input(Key::KeyK, true, false)));
+        assert!(!press.same_key(&Input::Text('j')));
+        assert!(!Input::PointerLeft.same_key(&Input::PointerLeft));
+    }
+
+    fn pad(button: PadButton, pressed: bool) -> Input {
+        Input::PadButton {
+            button,
+            pressed,
+            repeat: false,
+        }
+    }
+
+    #[test]
+    fn same_key_matches_any_input_of_one_pad_button() {
+        let press = pad(PadButton::South, true);
+        assert!(press.same_key(&pad(PadButton::South, false)));
+        assert!(!press.same_key(&pad(PadButton::East, true)));
+        assert!(!press.same_key(&key_input(Key::KeyJ, true, false)));
+        assert!(!key_input(Key::KeyJ, true, false).same_key(&press));
+        let axis = Input::PadAxis {
+            axis: PadAxis::LeftX,
+            value: 0.5,
+        };
+        assert!(!axis.same_key(&axis));
+    }
+
+    #[test]
+    fn released_is_the_release_of_its_pad_button() {
+        assert_eq!(
+            pad(PadButton::DPadUp, true).released(),
+            pad(PadButton::DPadUp, false)
+        );
+        assert_eq!(
+            pad(PadButton::DPadUp, false).released(),
+            pad(PadButton::DPadUp, false)
+        );
+        let axis = Input::PadAxis {
+            axis: PadAxis::RightY,
+            value: -1.0,
+        };
+        assert_eq!(axis.released(), axis);
+        let told = Input::Surroundings(Surroundings::default());
+        assert_eq!(told.released(), told);
+    }
+
+    #[test]
+    fn pad_inputs_are_not_moved_by_a_translation() {
+        let by = Point::new(-170.0, 2.0);
+        for unmoved in [
+            pad(PadButton::Start, true),
+            Input::PadAxis {
+                axis: PadAxis::LeftY,
+                value: 0.25,
+            },
+        ] {
+            assert_eq!(unmoved.translated(by), unmoved);
+        }
+    }
+
+    #[test]
+    fn translating_surroundings_moves_the_safe_area() {
+        let by = Point::new(-170.0, 2.0);
+        let told = Surroundings {
+            device: Device::Gamepad(ControllerFamily::Generic),
+            safe_area: Bounds::at(Point::new(30.0, 20.0), 900.0, 700.0),
+            points_per_pixel: 0.75,
+            soft_keyboard: true,
+        };
+        assert_eq!(
+            Input::Surroundings(told).translated(by),
+            Input::Surroundings(Surroundings {
+                safe_area: Bounds::at(Point::new(-140.0, 22.0), 900.0, 700.0),
+                ..told
+            }),
+            "the device, the points per pixel and the soft keyboard kept"
+        );
+    }
+
+    #[test]
+    fn every_pad_button_has_its_own_position_name() {
+        let names: std::collections::BTreeSet<_> =
+            PadButton::ALL.iter().map(|button| button.name()).collect();
+        assert_eq!(names.len(), PadButton::ALL.len());
+        assert_eq!(PadButton::South.name(), "south");
+        assert_eq!(PadButton::Select.name(), "back");
+        assert_eq!(PadButton::LeftStickDown.name(), "-lefty");
+        assert_eq!(PadButton::RightStickRight.name(), "+rightx");
+        let axes: std::collections::BTreeSet<_> =
+            PadAxis::ALL.iter().map(|axis| axis.name()).collect();
+        assert_eq!(axes.len(), 4);
+        assert_eq!(PadAxis::RightX.name(), "rightx");
+    }
+
+    #[test]
+    fn every_pad_button_and_axis_parses_back_from_its_name() {
+        for button in PadButton::ALL {
+            assert_eq!(PadButton::from_name(button.name()), Some(button));
+        }
+        for axis in PadAxis::ALL {
+            assert_eq!(PadAxis::from_name(axis.name()), Some(axis));
+        }
+        for unknown in ["a", "South", "leftx+", "", "leftx", "back+south"] {
+            assert_eq!(PadButton::from_name(unknown), None, "{unknown}");
+        }
+        for unknown in ["LeftX", "+leftx", "leftx~", ""] {
+            assert_eq!(PadAxis::from_name(unknown), None, "{unknown}");
+        }
+    }
+
+    #[test]
+    fn of_is_the_default_with_that_device() {
+        let pad = Device::Gamepad(ControllerFamily::PlayStation);
+        let of = Surroundings::of(pad);
+        assert_eq!(of.device, pad);
+        assert_eq!(Surroundings::of(Device::Keyboard), Surroundings::default());
+    }
+
+    #[test]
+    fn the_default_surroundings_are_the_classic_canvas_at_one_point_per_pixel() {
+        let told = Surroundings::default();
+        assert_eq!(told.device, Device::Keyboard);
+        assert_eq!(
+            told.safe_area,
+            Bounds::at(Point::new(0.0, 0.0), 1024.0, 768.0)
+        );
+        assert_eq!(told.points_per_pixel, 1.0);
+        assert_eq!(Surroundings::of(Device::Touch).safe_area, told.safe_area);
+        assert_eq!(Surroundings::of(Device::Touch).points_per_pixel, 1.0);
+    }
+
+    #[test]
+    fn the_default_surroundings_have_no_soft_keyboard() {
+        assert!(!Surroundings::default().soft_keyboard);
+        assert!(!Surroundings::of(Device::Touch).soft_keyboard);
+    }
+
+    #[test]
+    fn translating_surroundings_keeps_the_soft_keyboard() {
+        let told = Surroundings {
+            soft_keyboard: true,
+            ..Surroundings::of(Device::Touch)
+        };
+        let Input::Surroundings(moved) = Input::Surroundings(told).translated(Point::new(5.0, 0.0))
+        else {
+            panic!("still the surroundings");
+        };
+        assert!(moved.soft_keyboard);
+    }
+
+    #[test]
+    fn surroundings_compare_by_every_field() {
+        let told = Surroundings::of(Device::Touch);
+        assert_ne!(
+            Surroundings {
+                safe_area: told.safe_area.inset(10.0, 0.0),
+                ..told
+            },
+            told
+        );
+        assert_ne!(
+            Surroundings {
+                points_per_pixel: 2.0,
+                ..told
+            },
+            told
+        );
+        assert_ne!(Surroundings::of(Device::Mouse), told);
+        assert_ne!(
+            Surroundings {
+                soft_keyboard: true,
+                ..told
+            },
+            told
+        );
+    }
+
+    fn button(command: crate::keymap::Command, pressed: bool) -> Input {
+        Input::TouchControl(TouchControl::Button { command, pressed })
+    }
+
+    #[test]
+    fn a_touch_control_button_is_its_own_key_and_releases_to_itself_up() {
+        use crate::keymap::command::{FlightCommand, PlayCommand};
+        let fire = FlightCommand::FirePrimary.into();
+        let map = PlayCommand::GalaxyMap.into();
+        assert!(button(fire, true).same_key(&button(fire, false)));
+        assert!(!button(fire, true).same_key(&button(map, true)));
+        assert!(!button(fire, true).same_key(&key_input(Key::Space, true, false)));
+        assert_eq!(button(fire, true).released(), button(fire, false));
+        assert_eq!(button(fire, false).released(), button(fire, false));
+        let stick = Input::TouchControl(TouchControl::Stick { x: 0.5, y: -0.25 });
+        assert!(!stick.same_key(&stick));
+        assert_eq!(stick.released(), stick);
+    }
+
+    #[test]
+    fn a_touch_control_is_not_translated() {
+        let by = Point::new(-170.0, 2.0);
+        let fire = button(
+            crate::keymap::command::FlightCommand::FirePrimary.into(),
+            true,
+        );
+        assert_eq!(fire.translated(by), fire);
+        let stick = Input::TouchControl(TouchControl::Stick { x: 0.5, y: -0.25 });
+        assert_eq!(stick.translated(by), stick);
+    }
+
+    #[test]
+    fn only_the_dpad_and_the_stick_directions_repeat() {
+        let repeating: Vec<PadButton> = PadButton::ALL
+            .into_iter()
+            .filter(|button| button.repeats())
+            .collect();
+        assert_eq!(
+            repeating,
+            [
+                PadButton::DPadUp,
+                PadButton::DPadDown,
+                PadButton::DPadLeft,
+                PadButton::DPadRight,
+                PadButton::LeftStickUp,
+                PadButton::LeftStickDown,
+                PadButton::LeftStickLeft,
+                PadButton::LeftStickRight,
+                PadButton::RightStickUp,
+                PadButton::RightStickDown,
+                PadButton::RightStickLeft,
+                PadButton::RightStickRight,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_pad_repeats_release_is_no_repeat() {
+        let repeat = Input::PadButton {
+            button: PadButton::DPadDown,
+            pressed: true,
+            repeat: true,
+        };
+        assert_eq!(repeat.released(), pad(PadButton::DPadDown, false));
+        assert!(repeat.same_key(&pad(PadButton::DPadDown, true)));
+    }
+
+    #[test]
+    fn the_layer_buttons_are_select_and_start() {
+        assert_eq!(PadButton::LAYERS, [PadButton::Select, PadButton::Start]);
+    }
+
+    #[test]
+    fn each_stick_direction_is_its_axis_pushed_its_way_and_back() {
+        let mut directions = 0;
+        for button in PadButton::ALL {
+            if let Some((axis, sign)) = button.stick_direction() {
+                assert_eq!(axis.direction(sign > 0), button, "{button:?}");
+                directions += 1;
+            }
+        }
+        assert_eq!(directions, 8);
+        for axis in PadAxis::ALL {
+            for positive in [true, false] {
+                let button = axis.direction(positive);
+                assert_eq!(
+                    button.stick_direction(),
+                    Some((axis, if positive { 1 } else { -1 }))
+                );
+            }
+            assert_eq!(axis.across().across(), axis);
+            assert_ne!(axis.across(), axis);
+        }
+        assert_eq!(PadAxis::LeftY.direction(false), PadButton::LeftStickDown);
+        assert_eq!(PadAxis::RightX.across(), PadAxis::RightY);
+        assert_eq!(PadButton::South.stick_direction(), None);
+    }
+
+    #[test]
+    fn released_is_the_release_of_its_key() {
+        assert_eq!(
+            key_input(Key::KeyJ, true, true).released(),
+            key_input(Key::KeyJ, false, false)
+        );
+        assert_eq!(Input::Text('j').released(), Input::Text('j'));
+    }
 
     #[test]
     fn a_translated_input_moves_its_pointer_point_and_nothing_else() {
@@ -210,6 +1076,222 @@ mod tests {
         };
         for unmoved in [key, Input::Text('a'), Input::PointerLeft] {
             assert_eq!(unmoved.translated(by), unmoved);
+        }
+    }
+
+    fn touch(raw: usize, phase: TouchPhase) -> Input {
+        Input::Touch(Touch {
+            finger: FingerId::new(raw),
+            phase,
+        })
+    }
+
+    #[test]
+    fn a_translated_touch_or_pinch_moves_its_points() {
+        let by = Point::new(-170.0, 2.0);
+        let at = Point::new(300.0, 40.0);
+        let moved = Point::new(130.0, 42.0);
+        for (phase, want) in [
+            (TouchPhase::Started(at), TouchPhase::Started(moved)),
+            (TouchPhase::Moved(at), TouchPhase::Moved(moved)),
+            (TouchPhase::Ended(at), TouchPhase::Ended(moved)),
+            (TouchPhase::Cancelled, TouchPhase::Cancelled),
+        ] {
+            assert_eq!(touch(3, phase).translated(by), touch(3, want), "{phase:?}");
+        }
+        let second = Point::new(400.0, 50.0);
+        for (pinch, want) in [
+            (
+                Pinch::Began {
+                    primary: at,
+                    second,
+                },
+                Pinch::Began {
+                    primary: moved,
+                    second: Point::new(230.0, 52.0),
+                },
+            ),
+            (Pinch::ZoomIn, Pinch::ZoomIn),
+            (Pinch::ZoomOut, Pinch::ZoomOut),
+            (Pinch::Ended, Pinch::Ended),
+        ] {
+            assert_eq!(Input::Pinch(pinch).translated(by), Input::Pinch(want));
+        }
+    }
+
+    #[test]
+    fn touches_and_pinches_are_no_key() {
+        let start = touch(1, TouchPhase::Started(Point::new(1.0, 2.0)));
+        assert!(!start.same_key(&start));
+        assert_eq!(start.released(), start);
+        let pinch = Input::Pinch(Pinch::Ended);
+        assert!(!pinch.same_key(&pinch));
+        assert_eq!(pinch.released(), pinch);
+    }
+
+    fn press(key: Key) -> Input {
+        Input::Key {
+            key,
+            pressed: true,
+            repeat: false,
+        }
+    }
+
+    fn release(key: Key) -> Input {
+        Input::Key {
+            key,
+            pressed: false,
+            repeat: false,
+        }
+    }
+
+    #[test]
+    fn a_modifier_read_by_its_bit_is_held_while_either_key_is() {
+        for (left, right) in [
+            (Key::ShiftLeft, Key::ShiftRight),
+            (Key::AltLeft, Key::AltRight),
+            (Key::ControlLeft, Key::ControlRight),
+            (Key::MetaLeft, Key::MetaRight),
+        ] {
+            let mut held = ModifierHeld::either([left, right]);
+            assert!(!held.held());
+            assert!(held.follow(&press(right)), "{right}");
+            assert!(held.held(), "{right}");
+            assert!(held.follow(&press(left)));
+            assert!(held.follow(&release(right)));
+            assert!(held.held(), "{left} still down");
+            assert!(held.follow(&release(left)));
+            assert!(!held.held(), "both up");
+        }
+    }
+
+    #[test]
+    fn a_modifier_polled_by_its_key_code_is_held_while_that_key_is() {
+        let mut held = ModifierHeld::only(Key::ShiftLeft);
+        assert!(!held.follow(&press(Key::ShiftRight)));
+        assert!(!held.held(), "the other key isn't polled");
+        assert!(held.follow(&press(Key::ShiftLeft)));
+        assert!(held.held());
+        assert!(held.follow(&release(Key::ShiftLeft)));
+        assert!(!held.held());
+    }
+
+    #[test]
+    fn a_held_modifier_follows_repeats_ignores_other_input_and_can_be_let_go() {
+        let mut held = ModifierHeld::either([Key::AltLeft, Key::AltRight]);
+        assert!(held.follow(&Input::Key {
+            key: Key::AltRight,
+            pressed: true,
+            repeat: true,
+        }));
+        assert!(held.held(), "a repeat holds it");
+        assert!(!held.follow(&press(Key::KeyB)));
+        assert!(!held.follow(&Input::Text('b')));
+        assert!(held.held(), "other input changes nothing");
+        held.let_go();
+        assert!(!held.held());
+    }
+
+    #[test]
+    fn the_modifier_pairs_are_their_left_and_right_keys() {
+        assert_eq!(SHIFT_KEYS, [Key::ShiftLeft, Key::ShiftRight]);
+        assert_eq!(OPTION_KEYS, [Key::AltLeft, Key::AltRight]);
+        assert_eq!(CONTROL_KEYS, [Key::ControlLeft, Key::ControlRight]);
+        assert_eq!(COMMAND_KEYS, [Key::MetaLeft, Key::MetaRight]);
+    }
+
+    use keyboard_types::Code;
+
+    const LETTERS: [(Code, char); 26] = [
+        (Code::KeyA, 'a'),
+        (Code::KeyB, 'b'),
+        (Code::KeyC, 'c'),
+        (Code::KeyD, 'd'),
+        (Code::KeyE, 'e'),
+        (Code::KeyF, 'f'),
+        (Code::KeyG, 'g'),
+        (Code::KeyH, 'h'),
+        (Code::KeyI, 'i'),
+        (Code::KeyJ, 'j'),
+        (Code::KeyK, 'k'),
+        (Code::KeyL, 'l'),
+        (Code::KeyM, 'm'),
+        (Code::KeyN, 'n'),
+        (Code::KeyO, 'o'),
+        (Code::KeyP, 'p'),
+        (Code::KeyQ, 'q'),
+        (Code::KeyR, 'r'),
+        (Code::KeyS, 's'),
+        (Code::KeyT, 't'),
+        (Code::KeyU, 'u'),
+        (Code::KeyV, 'v'),
+        (Code::KeyW, 'w'),
+        (Code::KeyX, 'x'),
+        (Code::KeyY, 'y'),
+        (Code::KeyZ, 'z'),
+    ];
+
+    const DIGITS: [(Code, char); 10] = [
+        (Code::Digit0, '0'),
+        (Code::Digit1, '1'),
+        (Code::Digit2, '2'),
+        (Code::Digit3, '3'),
+        (Code::Digit4, '4'),
+        (Code::Digit5, '5'),
+        (Code::Digit6, '6'),
+        (Code::Digit7, '7'),
+        (Code::Digit8, '8'),
+        (Code::Digit9, '9'),
+    ];
+
+    #[test]
+    fn each_letter_and_top_row_digit_key_is_its_lowercase_letter_or_digit() {
+        for (key, letter) in LETTERS.into_iter().chain(DIGITS) {
+            assert_eq!(key_letter(key), Some(letter), "{key}");
+        }
+    }
+
+    #[test]
+    fn each_letter_either_case_and_each_digit_is_its_key() {
+        for (key, letter) in LETTERS.into_iter().chain(DIGITS) {
+            assert_eq!(letter_key(letter), Some(key), "{letter}");
+            assert_eq!(
+                letter_key(letter.to_ascii_uppercase()),
+                Some(key),
+                "{letter}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_letter_and_its_key_turn_into_each_other_and_back() {
+        for (key, letter) in LETTERS.into_iter().chain(DIGITS) {
+            assert_eq!(letter_key(key_letter(key).expect("a letter")), Some(key));
+            for c in [letter, letter.to_ascii_uppercase()] {
+                assert_eq!(
+                    key_letter(letter_key(c).expect("a key")),
+                    Some(c.to_ascii_lowercase())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_key_with_no_letter_and_a_character_with_no_key_are_none() {
+        for key in [
+            Code::Space,
+            Code::Enter,
+            Code::F1,
+            Code::Numpad1,
+            Code::Minus,
+            Code::Comma,
+            Code::ShiftLeft,
+            Code::Unidentified,
+        ] {
+            assert_eq!(key_letter(key), None, "{key}");
+        }
+        for c in [' ', '-', ',', 'é', '!'] {
+            assert_eq!(letter_key(c), None, "{c}");
         }
     }
 }

@@ -4,4 +4,6 @@
 #[cfg(windows)]
 mod console;
 #[cfg(windows)]
+mod key_label;
+#[cfg(windows)]
 mod winsparkle;

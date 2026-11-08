@@ -19,8 +19,9 @@ use std::time::Duration;
 
 use crate::bracket_art;
 use crate::common::{EntryHarness, Frames};
-use nova::app::screen::QUIT_DELAY;
+use nova::app::screen::{AppScreen, QUIT_DELAY};
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
+use nova::gamepad::Gamepads;
 use nova::platform;
 use nova_audio::recording::{AudioLog, RecordingAudio};
 use nova_audio::{
@@ -37,12 +38,13 @@ use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
+use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
 use nova_data::store::fixture::{one_file, one_file_at};
 use nova_data::{GameData, InterfaceData, Record, SoundId};
 use nova_render::recording::RecordingGpu;
 use nova_render::wgpu::GlyphonMetrics;
-use nova_render::{Batch, FontFaces, Frame};
+use nova_render::{Batch, FontFaces, Frame, ImageError};
 use nova_rsrc::ResType;
 use nova_rsrc::fixture::ForkBuilder;
 use nova_sim::fixture::MemoryPilots;
@@ -193,6 +195,34 @@ pub(crate) fn intro_game_data() -> Rc<GameData> {
     game_data_of(
         intro_character(),
         vec![(PICT, INTRO_PICT, pict(8, 4, [0, 0, 90]))],
+    )
+}
+
+/// [`game_data`] for the pad alone: its `STR#` 128 names the default
+/// pilot "Ada Lovelace", nicknamed "Ace", whatever the roll, and its
+/// `chär`'s intro picture never times out, so only a press ends it.
+fn pad_game_data() -> Rc<GameData> {
+    let mut character = intro_character();
+    put_i16s(&mut character, 0x28, &[-1, 0, 0, 0]);
+    let names = [
+        "Ada Lovelace",
+        "Ada Lovelace",
+        "Ada Lovelace",
+        "Ace",
+        "Ace",
+        "Ace",
+    ];
+    let mut list = be(&[names.len() as i16]);
+    for name in names {
+        list.push(name.len() as u8);
+        list.extend(name.as_bytes());
+    }
+    game_data_of(
+        character,
+        vec![
+            (PICT, INTRO_PICT, pict(8, 4, [0, 0, 90])),
+            (StrList::TYPE, 128, list),
+        ],
     )
 }
 
@@ -361,6 +391,10 @@ pub(crate) struct Harness {
     log: AudioLog,
     /// The app's audio, to say what is still playing.
     audio: RecordingAudio,
+    /// Whether a frame may fail to draw pictures the data doesn't hold,
+    /// and draw the main menu's stand-in for want of its colours, as the
+    /// new game's data holds neither.
+    missing_ok: bool,
 }
 
 impl Harness {
@@ -373,6 +407,24 @@ impl Harness {
     /// [`Harness::opening`], its audio on `settings`.
     fn opening_with(store: &MemoryPilots, settings: AudioSettings) -> Self {
         Self::built(store, settings, false)
+    }
+
+    /// [`Harness::opening`] over [`pad_game_data`], reading the pads
+    /// `pads`.
+    pub(crate) fn opening_with_pads(store: &MemoryPilots, pads: Box<dyn Gamepads>) -> Self {
+        let harness = Self::built_on(pad_game_data(), store, AudioSettings::default(), false);
+        Self {
+            app: harness.app.with_gamepads(pads),
+            ..harness
+        }
+    }
+
+    /// The harness's app with the platform's text entry `entry`.
+    pub(crate) fn with_text_entry(self, entry: Box<dyn nova::text_entry::TextEntry>) -> Self {
+        Self {
+            app: self.app.with_text_entry(entry),
+            ..self
+        }
     }
 
     /// The app on the main menu as `main` builds it, keeping pilots in
@@ -427,6 +479,29 @@ impl Harness {
         Self::assembled_from(data, interface(), store, settings, launch, appeared)
     }
 
+    /// The app on the main menu over `data`, past the start-up appear,
+    /// keeping pilots in `store`, its router wired further by `wire` as
+    /// `main` wires it (a rulebook, a dialog loader). Its frames may fail
+    /// to draw pictures the data doesn't hold, and the main menu may draw
+    /// its stand-in.
+    pub(crate) fn wired(
+        data: Rc<GameData>,
+        store: &MemoryPilots,
+        wire: impl FnOnce(AppScreen) -> AppScreen,
+    ) -> Self {
+        let mut harness = Self::assembled_with(
+            data,
+            interface(),
+            store,
+            AudioSettings::default(),
+            false,
+            true,
+            wire,
+        );
+        harness.missing_ok = true;
+        harness
+    }
+
     /// [`Harness::assembled`], its dialogs from `ui`.
     fn assembled_from(
         data: Rc<GameData>,
@@ -436,11 +511,26 @@ impl Harness {
         launch: bool,
         appeared: bool,
     ) -> Self {
+        Self::assembled_with(data, ui, store, settings, launch, appeared, |screen| screen)
+    }
+
+    /// [`Harness::assembled_from`], its router wired further by `wire`
+    /// before the appear.
+    fn assembled_with(
+        data: Rc<GameData>,
+        ui: InterfaceData,
+        store: &MemoryPilots,
+        settings: AudioSettings,
+        launch: bool,
+        appeared: bool,
+        wire: impl FnOnce(AppScreen) -> AppScreen,
+    ) -> Self {
         let metrics = Rc::new(GlyphonMetrics::new(&FontFaces::bundled()));
         let keeper = PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>);
         let mut screen = start_screen(Rc::clone(&data))
             .with_pilots(Some(keeper), metrics.clone())
             .with_dialogs(Rc::new(ui), metrics);
+        screen = wire(screen);
         if launch {
             screen = screen.open_last_pilot();
         }
@@ -457,7 +547,20 @@ impl Harness {
             frames: 0,
             log,
             audio: handle,
+            missing_ok: false,
         }
+    }
+
+    /// Creates a pilot named `name` from the main menu by the keyboard,
+    /// its ship christened with the default, then closes the app, which
+    /// saves it.
+    pub(crate) fn create_and_close(&mut self, name: &str) {
+        let new_pilot = self.menu_button(MenuChoice::NewPilot);
+        self.click(new_pilot);
+        self.type_name(name);
+        self.press(KeyCode::Enter);
+        self.press(KeyCode::Enter);
+        assert_eq!(self.handle(WindowEvent::CloseRequested), Control::Exit);
     }
 
     pub(crate) fn handle(&mut self, event: WindowEvent) -> Control {
@@ -604,8 +707,22 @@ impl Harness {
         self.send(WindowEvent::Redraw {
             elapsed: Duration::from_millis(16 * self.frames),
         });
-        assert_eq!(self.app.take_failures(), []);
-        assert_eq!(self.app.take_warnings(), Vec::<String>::new());
+        let failures: Vec<_> = self
+            .app
+            .take_failures()
+            .into_iter()
+            .filter(|(_, error)| !(self.missing_ok && matches!(error, ImageError::Missing)))
+            .collect();
+        assert_eq!(failures, []);
+        let warnings: Vec<String> = self
+            .app
+            .take_warnings()
+            .into_iter()
+            .filter(|warning| {
+                !(self.missing_ok && warning.starts_with("nova: drawing the stand-in main menu"))
+            })
+            .collect();
+        assert_eq!(warnings, Vec::<String>::new());
         (*self.gpu.submits().last().expect("a frame")).clone()
     }
 
@@ -624,7 +741,7 @@ impl Harness {
     }
 }
 
-fn texts(frame: &Frame) -> Vec<String> {
+pub(crate) fn texts(frame: &Frame) -> Vec<String> {
     frame
         .batches
         .iter()
@@ -983,7 +1100,7 @@ fn in_flight_a_plain_q_or_g_does_nothing_and_command_q_exits() {
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(game.redraw(), Control::Continue);
     game.send(platform::key_event(
-        PhysicalKey::Code(KeyCode::SuperLeft),
+        PhysicalKey::Code(KeyCode::MetaLeft),
         ElementState::Pressed,
         false,
     ));

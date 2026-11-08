@@ -9,6 +9,8 @@ use nova_sim::flight_frame::LoadedDesc;
 use nova_sim::{PilotKeeper, PilotStore, RuleKey, pilot_key};
 use nova_view::fade::{DEATH_FADE_FOR, ScreenFade};
 use nova_view::flight::FlightView;
+use nova_view::input::Input;
+use nova_view::screen::Screen;
 use nova_view::spaceport::SpaceportView;
 use nova_view::spaceport::bar::{BAR_DIALOG, BarTemplates, PICTURE_BAR_DIALOG};
 use nova_view::spaceport::layout::SPACEPORT_DIALOG;
@@ -39,7 +41,8 @@ impl AppScreen {
     /// exchange and outfitter when it has them, its ambient sound's waits
     /// drawn on the router's chance. One already open, for another
     /// stellar the pilot desk moved to, is dropped first
-    /// ([`AppScreen::drop_spaceport`]).
+    /// ([`AppScreen::drop_spaceport`]). The stellar's conversation, if it
+    /// names one, opens over it (see the `conversation` module).
     pub(super) fn show_spaceport(&mut self, stellar: nova_sim::StellarId) {
         let template = |id| match &self.dialogs {
             Some(dialogs) => dialogs
@@ -49,7 +52,8 @@ impl AppScreen {
             None => Err(NO_INTERFACE.to_owned()),
         };
         let mut spaceport =
-            SpaceportView::new(self.data.as_ref(), stellar, template(SPACEPORT_DIALOG));
+            SpaceportView::new(self.data.as_ref(), stellar, template(SPACEPORT_DIALOG))
+                .with_bindings(self.bindings.clone());
         // The exchange, the outfitter, the shipyard and the room to hire,
         // read together as the spaceport opens.
         let shops = self
@@ -133,10 +137,15 @@ impl AppScreen {
         if let Some(flight) = &self.flight {
             spaceport.set_recharge_enabled(flight.recharge_enabled());
         }
+        // Told the device used last before its first frame, as the app
+        // tells it only when the device changes.
+        spaceport.input(&Input::Surroundings(self.surroundings));
         self.drop_spaceport();
         self.spaceport = Some(spaceport);
         self.serve_descriptions();
         self.switch_to(Side::Spaceport);
+        // The stellar's conversation, asked once as the spaceport opens.
+        self.open_conversation();
     }
 
     /// Puts the pilot away and shows `side`: saves it (when ending play
@@ -662,6 +671,7 @@ impl AppScreen {
     /// and its sound with it.
     fn drop_spaceport(&mut self) {
         self.leave_held = false;
+        self.conversation = None;
         if let Some(mut spaceport) = self.spaceport.take() {
             self.sounds.extend(spaceport.close_sounds());
         }

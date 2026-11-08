@@ -56,7 +56,7 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 /// A 1024 x 768 window at scale 1, where window pixels are logical
 /// units, on a monitor named [`MONITOR`] offering [`raw_modes`]; it
 /// records each fullscreen request.
-struct FakeWindow {
+pub(crate) struct FakeWindow {
     fullscreen: Vec<Option<FullscreenKind>>,
 }
 
@@ -204,7 +204,7 @@ fn game_data() -> Rc<GameData> {
 
 /// The settings saved before the game starts: music on, the effects at
 /// level 4 and the music at level 6.
-fn seeded() -> MemorySettings {
+pub(crate) fn seeded() -> MemorySettings {
     let store = MemorySettings::new();
     let (mut keeper, _) = SettingsKeeper::open(store.clone());
     keeper
@@ -228,24 +228,25 @@ fn seeded() -> MemorySettings {
             parallax_starfield: true,
             frame_upscaler: ScalingSetting::default(),
             nova_files: None,
+            bindings: nova_view::Bindings::default(),
         })
         .expect("seeds");
     store
 }
 
-struct Harness {
-    app: App<GameImages<Rc<GameData>>>,
-    window: FakeWindow,
-    gpu: RecordingGpu,
-    log: AudioLog,
-    frames: u64,
+pub(crate) struct Harness {
+    pub(crate) app: App<GameImages<Rc<GameData>>>,
+    pub(crate) window: FakeWindow,
+    pub(crate) gpu: RecordingGpu,
+    pub(crate) log: AudioLog,
+    pub(crate) frames: u64,
 }
 
 impl Harness {
     /// The game started over `store`, as `main` starts it: the settings
     /// read through it start the audio core and the router. It runs as on
     /// Windows, whatever the host, so its monitor offers exclusive modes.
-    fn new(store: &MemorySettings) -> Self {
+    pub(crate) fn new(store: &MemorySettings) -> Self {
         Self::with_table(store, SoundTable::ORIGINAL)
     }
 
@@ -262,7 +263,7 @@ impl Harness {
 
     /// The game started over `store` on the main menu, where the music
     /// plays.
-    fn on_main_menu(store: &MemorySettings) -> Self {
+    pub(crate) fn on_main_menu(store: &MemorySettings) -> Self {
         Self::build(store, SoundTable::ORIGINAL, true, Os::Windows)
     }
 
@@ -306,7 +307,7 @@ impl Harness {
         }
     }
 
-    fn send(&mut self, event: WindowEvent) {
+    pub(crate) fn send(&mut self, event: WindowEvent) {
         let control = self.app.handle(event, &mut self.window, &mut self.gpu);
         assert_eq!(control, Control::Continue, "{event:?}");
     }
@@ -337,7 +338,7 @@ impl Harness {
     /// Presses Command+comma through winit's translation, as the player
     /// opens the Preferences in flight, where P is the player info.
     fn command_comma(&mut self) {
-        let super_key = PhysicalKey::Code(KeyCode::SuperLeft);
+        let super_key = PhysicalKey::Code(KeyCode::MetaLeft);
         self.send(platform::key_event(super_key, ElementState::Pressed, false));
         self.press_physical(KeyCode::Comma);
         self.send(platform::key_event(
@@ -368,11 +369,11 @@ impl Harness {
         }
     }
 
-    fn showing(&self) -> Showing {
+    pub(crate) fn showing(&self) -> Showing {
         self.app.screen().showing()
     }
 
-    fn dialog(&self) -> &PrefsDialog {
+    pub(crate) fn dialog(&self) -> &PrefsDialog {
         self.app.screen().preferences().expect("open")
     }
 
@@ -479,7 +480,7 @@ fn command_comma_opens_the_preferences_and_their_changes_play_and_survive_a_rest
         }
     );
     let mut again = Harness::new(&store);
-    again.press(Key::Char('p'));
+    again.press(Key::KeyP);
     assert_eq!(
         again.dialog().prefs().sound,
         nova_view::SoundPrefs {
@@ -509,7 +510,7 @@ fn the_preferences_over_the_main_menu_set_the_music_playing_there() {
     );
 
     // A lower music level turns the music down.
-    harness.press(Key::Char('p'));
+    harness.press(Key::KeyP);
     assert_eq!(harness.showing(), Showing::Preferences);
     // Past Ship Animations, Engine Glows, Running Lights, Weapon Effects,
     // Smoke Trails, Parallax Starfield, the display picker and the Scaling
@@ -517,7 +518,7 @@ fn the_preferences_over_the_main_menu_set_the_music_playing_there() {
     for _ in 0..14 {
         harness.press(Key::Tab);
     }
-    harness.press(Key::Down);
+    harness.press(Key::ArrowDown);
     assert_eq!(harness.dialog().prefs().sound.music_level, 5);
     harness.press(Key::Enter);
     assert_eq!(harness.showing(), Showing::MainMenu);
@@ -541,7 +542,7 @@ fn the_preferences_over_the_main_menu_set_the_music_playing_there() {
     );
 
     // The Music checkbox off stops it.
-    harness.press(Key::Char('p'));
+    harness.press(Key::KeyP);
     let music = harness.dialog().music().rect().center();
     harness.click(music);
     assert!(!harness.dialog().prefs().sound.music);
@@ -562,7 +563,7 @@ fn the_preferences_over_the_main_menu_set_the_music_playing_there() {
 fn a_failed_save_is_a_warning_and_the_change_still_applies() {
     let store = seeded();
     let mut harness = Harness::new(&store);
-    harness.press(Key::Char('f'));
+    harness.press(Key::KeyF);
     harness.played();
     harness.command_comma();
     store.fail_writes(true);
@@ -596,10 +597,10 @@ fn the_preferences_pause_flight_and_stop_the_engine_until_a_fresh_thrust() {
         sound: SoundId(ENGINE),
         volume: effects,
     };
-    harness.press(Key::Char('f'));
+    harness.press(Key::KeyF);
     harness.fly();
     harness.played();
-    harness.key(Key::Up, true);
+    harness.key(Key::ArrowUp, true);
     harness.fly();
     assert_eq!(harness.played(), [engine], "thrusting");
 
@@ -611,13 +612,13 @@ fn the_preferences_pause_flight_and_stop_the_engine_until_a_fresh_thrust() {
         [AudioCommand::StopLoop],
         "flight is paused, the music plays on"
     );
-    harness.key(Key::Up, false);
+    harness.key(Key::ArrowUp, false);
     harness.press(Key::Enter);
     assert_eq!(harness.showing(), Showing::Flight);
     harness.fly();
     assert_eq!(harness.played(), [], "no thrust on return");
 
-    harness.key(Key::Up, true);
+    harness.key(Key::ArrowUp, true);
     harness.fly();
     assert_eq!(harness.played(), [engine], "a fresh thrust");
 }
@@ -664,7 +665,7 @@ fn saved(store: &MemorySettings) -> serde_json::Value {
 fn hyperspace_effects_clicked_off_is_saved_and_survives_a_restart() {
     let store = seeded();
     let mut harness = Harness::new(&store);
-    harness.press(Key::Char('p'));
+    harness.press(Key::KeyP);
     assert_eq!(harness.showing(), Showing::Preferences);
     assert!(harness.dialog().hyperspace_effects().on(), "on at first");
 
@@ -695,7 +696,7 @@ fn hyperspace_effects_clicked_off_is_saved_and_survives_a_restart() {
     assert_eq!(harness.app.take_warnings(), Vec::<String>::new());
 
     let mut again = Harness::new(&store);
-    again.press(Key::Char('p'));
+    again.press(Key::KeyP);
     assert!(
         !again.dialog().hyperspace_effects().on(),
         "off after a restart"
@@ -706,7 +707,7 @@ fn hyperspace_effects_clicked_off_is_saved_and_survives_a_restart() {
 fn parallax_starfield_clicked_off_is_saved_and_survives_a_restart() {
     let store = seeded();
     let mut harness = Harness::new(&store);
-    harness.press(Key::Char('p'));
+    harness.press(Key::KeyP);
     assert!(harness.dialog().parallax_starfield().on(), "on at first");
     let box_at = harness.dialog().parallax_starfield().rect().center();
     harness.click(box_at);
@@ -717,7 +718,7 @@ fn parallax_starfield_clicked_off_is_saved_and_survives_a_restart() {
     assert_eq!(harness.app.take_warnings(), Vec::<String>::new());
 
     let mut again = Harness::new(&store);
-    again.press(Key::Char('p'));
+    again.press(Key::KeyP);
     assert!(
         !again.dialog().parallax_starfield().on(),
         "off after a restart"
@@ -728,7 +729,7 @@ fn parallax_starfield_clicked_off_is_saved_and_survives_a_restart() {
 fn quicktime_movies_clicked_off_is_saved_and_survives_a_restart() {
     let store = seeded();
     let mut harness = Harness::new(&store);
-    harness.press(Key::Char('p'));
+    harness.press(Key::KeyP);
     assert!(harness.dialog().quicktime_movies().on(), "on at first");
     let box_at = harness.dialog().quicktime_movies().rect().center();
     harness.click(box_at);
@@ -738,7 +739,7 @@ fn quicktime_movies_clicked_off_is_saved_and_survives_a_restart() {
     assert_eq!(harness.app.take_warnings(), Vec::<String>::new());
 
     let mut again = Harness::new(&store);
-    again.press(Key::Char('p'));
+    again.press(Key::KeyP);
     assert!(
         !again.dialog().quicktime_movies().on(),
         "off after a restart"
@@ -755,7 +756,7 @@ fn smoke_trails_and_weapon_effects_clicked_off_in_flight_are_saved_and_the_glow_
  {
     let store = seeded();
     let mut harness = Harness::new(&store);
-    harness.press(Key::Char('f'));
+    harness.press(Key::KeyF);
     harness.settle();
     assert!(flight(&harness).smoke_trails() && flight(&harness).weapon_effects());
     harness.command_comma();
@@ -784,7 +785,7 @@ fn smoke_trails_and_weapon_effects_clicked_off_in_flight_are_saved_and_the_glow_
     assert_eq!(harness.app.take_warnings(), Vec::<String>::new());
 
     let mut again = Harness::new(&store);
-    again.press(Key::Char('f'));
+    again.press(Key::KeyF);
     again.settle();
     assert!(!flight(&again).weapon_effects(), "off after a restart");
     assert!(!flight(&again).smoke_trails());
@@ -794,7 +795,7 @@ fn smoke_trails_and_weapon_effects_clicked_off_in_flight_are_saved_and_the_glow_
 fn the_ship_drawing_boxes_clicked_off_in_flight_are_saved_and_wait_for_a_restart() {
     let store = seeded();
     let mut harness = Harness::new(&store);
-    harness.press(Key::Char('f'));
+    harness.press(Key::KeyF);
     harness.settle();
     let launched = flight(&harness).sprite_load();
     assert!(launched.ship_animations && launched.running_lights);
@@ -829,7 +830,7 @@ fn the_ship_drawing_boxes_clicked_off_in_flight_are_saved_and_wait_for_a_restart
     assert_eq!(harness.app.take_warnings(), Vec::<String>::new());
 
     let mut again = Harness::new(&store);
-    again.press(Key::Char('f'));
+    again.press(Key::KeyF);
     again.settle();
     let load = flight(&again).sprite_load();
     assert!(
@@ -853,7 +854,7 @@ fn cursor(harness: &Harness) -> Option<Point> {
 fn the_cursor_comes_back_under_the_pointer_when_the_preferences_close() {
     let store = seeded();
     let mut harness = Harness::new(&store);
-    harness.press(Key::Char('f'));
+    harness.press(Key::KeyF);
     let a = Point::new(100.0, 600.0);
     harness.send(WindowEvent::PointerMoved {
         px: (f64::from(a.x), f64::from(a.y)),
@@ -965,7 +966,7 @@ impl Harness {
             self.press(Key::Tab);
         }
         for &down in steps {
-            self.press(if down { Key::Down } else { Key::Up });
+            self.press(if down { Key::ArrowDown } else { Key::ArrowUp });
         }
         self.press(Key::Enter);
         assert_ne!(self.showing(), Showing::Preferences, "closed");
@@ -1088,7 +1089,7 @@ impl Harness {
     /// Opens the Preferences, tabs to the Scaling list and steps it down
     /// `downs` times.
     fn step_scaling(&mut self, downs: usize) {
-        self.step_scaling_by(Key::Down, downs);
+        self.step_scaling_by(Key::ArrowDown, downs);
     }
 
     /// Opens the Preferences, tabs to the Scaling list and presses `key`
@@ -1131,7 +1132,7 @@ impl Harness {
 fn the_preferences_draw_the_interface_files_arrow_pictures() {
     let store = seeded();
     let mut harness = Harness::new(&store);
-    harness.press(Key::Char('p'));
+    harness.press(Key::KeyP);
     assert_eq!(harness.showing(), Showing::Preferences);
     let calls = harness.frame_calls();
     assert!(uploads(&calls).contains(&(11, 9)), "{:?}", uploads(&calls));
@@ -1259,7 +1260,7 @@ fn choosing_super_xbr_in_flight_or_leaving_it_rebuilds_the_atlas_when_the_dialog
     assert_eq!(saved(&store)["frame_upscaler"], "super_xbr");
     assert_eq!(harness.app.take_warnings(), Vec::<String>::new());
 
-    harness.step_scaling_by(Key::Up, 1);
+    harness.step_scaling_by(Key::ArrowUp, 1);
     harness.ok();
     let back = harness.frame_calls();
     assert_eq!(back[0], GpuCall::ClearPages, "leaving it rebuilds too");
@@ -1278,7 +1279,7 @@ fn super_xbr_draws_with_no_upscaler_and_a_per_frame_scaler_with_native_sprites()
     assert_eq!(world_space(&enlarged), WorldSpace::Target);
     assert!(uploads_enlarged(&enlarged), "{:?}", uploads(&enlarged));
 
-    harness.step_scaling_by(Key::Up, 1);
+    harness.step_scaling_by(Key::ArrowUp, 1);
     assert_eq!(
         harness.dialog().scaling().selected(),
         Scaling::SharpBilinear
@@ -1400,7 +1401,7 @@ fn a_stored_upscaler_unknown_or_unavailable_starts_native_with_one_warning_and_i
         assert_eq!((store.text(), store.writes()), (before, writes), "{name}");
 
         // A later change of another preference keeps it.
-        harness.press(Key::Char('p'));
+        harness.press(Key::KeyP);
         assert_eq!(
             harness.dialog().scaling().selected(),
             Scaling::Native,

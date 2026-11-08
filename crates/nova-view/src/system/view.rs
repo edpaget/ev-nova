@@ -6,20 +6,27 @@
 //!
 //! Input:
 //!
-//! - The arrow keys, or `w`, `a`, `s` and `d`, move the camera at
-//!   [`CAMERA_SPEED`] while held: a press (or its key repeats) holds the
-//!   key and its release lets it go. Opposite keys cancel.
-//! - Space recentres the camera on the system's centre.
+//! - The shared arrows ([`UiCommand::Left`] and its kin), or their fixed
+//!   twins `w`, `a`, `s` and `d`, move the camera at [`CAMERA_SPEED`]
+//!   while held: a press (or its key repeats) holds the command and its
+//!   release lets it go. Opposite ways cancel.
+//! - The shared Activate (Space) recentres the camera on the system's
+//!   centre.
 //! - Escape is the navigator's, which goes back to the galaxy map.
+//!
+//! Each key is read through the view's bindings
+//! ([`SystemView::with_bindings`]), and the help line ([`help_line`])
+//! names the keys bound, through the player's layout.
 
-use std::collections::HashSet;
 use std::time::Duration;
 
 use super::camera::{CAMERA_SPEED, Camera};
 use super::catalog::{SystemCatalog, SystemId};
 use super::scene::{self, SystemScene};
 use super::starfield;
+use crate::bound_names::{Spelling, group, name_read};
 use crate::flight::SharedChance;
+use crate::keymap::{Command, CommandInput, CommandReader, SharedBindings, UiCommand, contexts};
 use crate::time::ticks;
 use crate::{Color, DrawList, Input, Key, Point, Screen, ScreenAction};
 
@@ -35,8 +42,46 @@ const PROBLEMS: Point = Point::new(16.0, 98.0);
 const PROBLEMS_WRAP: f32 = 992.0;
 const HELP_AT: Point = Point::new(16.0, 744.0);
 const OVERLAY_SIZE: f32 = 14.0;
-/// The help line.
-pub const HELP: &str = "Arrows or WASD: move   Space: centre   Esc: back to the map";
+/// The help line, naming the keys `keys` reads for the device it reads,
+/// through the one naming function ([`name_read`]): "Arrows or WASD:
+/// move   Space: centre   Esc: back to the map" under the defaults and a
+/// US layout. WASD is the movement's fixed twins
+/// ([`KeyMap::TWINS`](crate::keymap::KeyMap::TWINS)), named through the
+/// layout, so AZERTY reads ZQSD. An unbound command's key is left out,
+/// and its entry with it when it was the only one.
+#[must_use]
+pub fn help_line(keys: &CommandReader) -> String {
+    let named = |command: UiCommand| name_read(keys, command, Spelling::Bound);
+    let arrows = group(
+        [
+            UiCommand::Up,
+            UiCommand::Down,
+            UiCommand::Left,
+            UiCommand::Right,
+        ]
+        .map(named),
+        "/",
+    );
+    let twins = group(
+        [
+            (UiCommand::Up, Key::KeyW),
+            (UiCommand::Left, Key::KeyA),
+            (UiCommand::Down, Key::KeyS),
+            (UiCommand::Right, Key::KeyD),
+        ]
+        .map(|(command, twin)| name_read(keys, command, Spelling::Twin(twin))),
+        "",
+    );
+    let movement: Vec<String> = [arrows, twins].into_iter().flatten().collect();
+    let movement = (!movement.is_empty()).then(|| format!("{}: move", movement.join(" or ")));
+    let centre = named(UiCommand::Activate).map(|key| format!("{key}: centre"));
+    let back = named(UiCommand::Back).map(|key| format!("{key}: back to the map"));
+    [movement, centre, back]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("   ")
+}
 
 /// A system's view.
 #[derive(Clone, Debug)]
@@ -45,8 +90,9 @@ pub struct SystemView {
     camera: Camera,
     /// Time since the view opened, which drives the animations.
     elapsed: Duration,
-    /// The movement keys held down.
-    held: HashSet<Key>,
+    /// Its keys, as commands ([`contexts::SYSTEM_VIEW`]): the movement
+    /// commands held among them.
+    keys: CommandReader,
     /// What a stellar's random next frame (`Flags2` 0x0002) is drawn on.
     chance: SharedChance,
 }
@@ -63,7 +109,7 @@ impl SystemView {
             scene,
             camera,
             elapsed: Duration::ZERO,
-            held: HashSet::new(),
+            keys: CommandReader::new(contexts::SYSTEM_VIEW),
             chance: SharedChance::default(),
         }
     }
@@ -72,6 +118,13 @@ impl SystemView {
     #[must_use]
     pub fn with_chance(self, chance: SharedChance) -> Self {
         Self { chance, ..self }
+    }
+
+    /// The view reading its keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.keys.set_bindings(bindings);
+        self
     }
 
     /// The system, as laid out.
@@ -94,14 +147,10 @@ impl SystemView {
         stellar.sprite.as_ref().ok().map(|_| stellar.frames.shown())
     }
 
-    /// Whether either key for one way is held.
-    fn holding(&self, keys: [Key; 2]) -> bool {
-        keys.iter().any(|key| self.held.contains(key))
-    }
-
-    /// The camera's velocity on one axis, from the keys held for each way.
-    fn velocity(&self, back: [Key; 2], forward: [Key; 2]) -> f32 {
-        let way = i8::from(self.holding(forward)) - i8::from(self.holding(back));
+    /// The camera's velocity on one axis, from the commands held for each
+    /// way.
+    fn velocity(&self, back: UiCommand, forward: UiCommand) -> f32 {
+        let way = i8::from(self.keys.held(forward)) - i8::from(self.keys.held(back));
         f32::from(way) * CAMERA_SPEED
     }
 
@@ -142,30 +191,28 @@ impl SystemView {
                 Color::ERROR,
             );
         }
-        list.text(HELP, HELP_AT, OVERLAY_SIZE, None, Color::DIM);
+        list.text(
+            help_line(&self.keys),
+            HELP_AT,
+            OVERLAY_SIZE,
+            None,
+            Color::DIM,
+        );
     }
 }
 
-/// The keys that move the camera each way.
-const LEFT: [Key; 2] = [Key::Left, Key::Char('a')];
-const RIGHT: [Key; 2] = [Key::Right, Key::Char('d')];
-const UP: [Key; 2] = [Key::Up, Key::Char('w')];
-const DOWN: [Key; 2] = [Key::Down, Key::Char('s')];
-
 impl Screen for SystemView {
-    /// Never quits, nor goes back: Escape is the navigator's.
+    /// Never quits, nor goes back: Escape is the navigator's. The
+    /// movement commands are held as their keys are; Activate's press or
+    /// repeat recentres.
     fn input(&mut self, input: &Input) -> ScreenAction {
-        if let Input::Key { key, pressed, .. } = *input {
-            let moves = [LEFT, RIGHT, UP, DOWN].iter().flatten().any(|&k| k == key);
-            if moves {
-                if pressed {
-                    self.held.insert(key);
-                } else {
-                    self.held.remove(&key);
-                }
-            } else if key == Key::Space && pressed {
-                self.camera.recentre();
-            }
+        if let Some(CommandInput {
+            command: Command::Ui(UiCommand::Activate),
+            pressed: true,
+            ..
+        }) = self.keys.follow(input)
+        {
+            self.camera.recentre();
         }
         ScreenAction::None
     }
@@ -177,7 +224,10 @@ impl Screen for SystemView {
         self.scene
             .step(ticks(self.elapsed) - before, &mut self.chance);
         let seconds = dt.as_secs_f32();
-        let (vx, vy) = (self.velocity(LEFT, RIGHT), self.velocity(UP, DOWN));
+        let (vx, vy) = (
+            self.velocity(UiCommand::Left, UiCommand::Right),
+            self.velocity(UiCommand::Up, UiCommand::Down),
+        );
         self.camera.move_by(vx * seconds, vy * seconds);
     }
 
@@ -187,9 +237,9 @@ impl Screen for SystemView {
         self.draw_overlay(list);
     }
 
-    /// Lets go of every movement key, so the camera stops.
+    /// Lets go of every movement command, so the camera stops.
     fn release_keys(&mut self) {
-        self.held.clear();
+        self.keys.let_go();
     }
 }
 
@@ -199,7 +249,6 @@ mod tests {
     use std::num::NonZeroU16;
 
     use super::*;
-    use crate::ImageKey;
     use crate::draw::crossed_box;
     use crate::system::camera::{CAMERA_MARGIN, VIEW_CENTER};
     use crate::system::catalog::{
@@ -207,6 +256,82 @@ mod tests {
     };
     use crate::system::scene::PLACEHOLDER;
     use crate::{DrawCommand, Font, MouseButton};
+    use crate::{ImageKey, Key};
+
+    /// The help line under the default keys and a US layout.
+    const HELP: &str = "Arrows or WASD: move   Space: centre   Esc: back to the map";
+
+    /// The help line a view of Sol draws with `bindings`, named through
+    /// `names`, for the device its keys read.
+    fn help_drawn(
+        bindings: crate::keymap::Bindings,
+        names: crate::key_names::fixture::FakeKeyNames,
+    ) -> String {
+        let shared = SharedBindings::new(bindings).with_key_names(std::rc::Rc::new(names));
+        let list = drawn(&sol().with_bindings(shared));
+        texts(&list).last().cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn the_help_line_names_the_movement_twins_through_the_layout() {
+        use crate::key_names::fixture::FakeKeyNames;
+        use crate::keymap::Bindings;
+        assert_eq!(help_drawn(Bindings::default(), FakeKeyNames::new()), HELP);
+        assert_eq!(
+            help_drawn(Bindings::default(), FakeKeyNames::azerty()),
+            "Arrows or ZQSD: move   Space: centre   Esc: back to the map"
+        );
+    }
+
+    /// The help line drawn over `bindings`, told an Xbox pad was used
+    /// last.
+    fn help_on_pad(bindings: crate::keymap::Bindings) -> String {
+        let mut view = sol().with_bindings(SharedBindings::new(bindings));
+        view.input(&Input::Surroundings(crate::input::Surroundings::of(
+            crate::input::Device::Gamepad(crate::input::ControllerFamily::Xbox),
+        )));
+        texts(&drawn(&view)).last().cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn with_a_pad_last_used_the_help_line_names_its_buttons_and_drops_the_twins() {
+        use crate::keymap::Bindings;
+        assert_eq!(
+            help_on_pad(Bindings::default()),
+            "L Stick Up/L Stick Down/L Stick Left/L Stick Right: move   A: centre   \
+             B: back to the map"
+        );
+        let mut unbound = Bindings::default();
+        unbound.gamepad.unbind(UiCommand::Activate.into());
+        assert_eq!(
+            help_on_pad(unbound),
+            "L Stick Up/L Stick Down/L Stick Left/L Stick Right: move   Space: centre   \
+             B: back to the map",
+            "unbound on the pad, its key"
+        );
+    }
+
+    #[test]
+    fn the_help_line_names_a_rebound_command_and_drops_an_unbound_one() {
+        use crate::key_names::fixture::FakeKeyNames;
+        use crate::keymap::{Bindings, KeyCombo};
+        assert_eq!(
+            help_drawn(
+                Bindings::default()
+                    .rebound(UiCommand::Activate, KeyCombo::key(Key::KeyC))
+                    .unbound(UiCommand::Back),
+                FakeKeyNames::new()
+            ),
+            "Arrows or WASD: move   C: centre"
+        );
+        assert_eq!(
+            help_drawn(
+                Bindings::default().rebound(UiCommand::Right, KeyCombo::key(Key::KeyL)),
+                FakeKeyNames::new()
+            ),
+            "Up Arrow/Down Arrow/Left Arrow/L or WASD: move   Space: centre   Esc: back to the map"
+        );
+    }
 
     /// Canned systems.
     struct FakeCatalog(Vec<SystemContents>);
@@ -350,7 +475,7 @@ mod tests {
     #[test]
     fn holding_right_moves_the_camera_at_its_speed() {
         let mut view = sol();
-        assert_eq!(view.input(&key(Key::Right, true)), ScreenAction::None);
+        assert_eq!(view.input(&key(Key::ArrowRight, true)), ScreenAction::None);
         ticks_of(&mut view, 4);
         assert_eq!(center(&view), at(CAMERA_SPEED, 0.0));
         assert_eq!(CAMERA_SPEED, 960.0);
@@ -359,14 +484,14 @@ mod tests {
     #[test]
     fn each_movement_key_moves_its_way() {
         let cases = [
-            (Key::Left, at(-480.0, 0.0)),
-            (Key::Char('a'), at(-480.0, 0.0)),
-            (Key::Right, at(480.0, 0.0)),
-            (Key::Char('d'), at(480.0, 0.0)),
-            (Key::Up, at(0.0, -480.0)),
-            (Key::Char('w'), at(0.0, -480.0)),
-            (Key::Down, at(0.0, 480.0)),
-            (Key::Char('s'), at(0.0, 480.0)),
+            (Key::ArrowLeft, at(-480.0, 0.0)),
+            (Key::KeyA, at(-480.0, 0.0)),
+            (Key::ArrowRight, at(480.0, 0.0)),
+            (Key::KeyD, at(480.0, 0.0)),
+            (Key::ArrowUp, at(0.0, -480.0)),
+            (Key::KeyW, at(0.0, -480.0)),
+            (Key::ArrowDown, at(0.0, 480.0)),
+            (Key::KeyS, at(0.0, 480.0)),
         ];
         for (pressed, expected) in cases {
             let mut view = sol();
@@ -379,14 +504,14 @@ mod tests {
     #[test]
     fn opposite_keys_cancel_and_a_diagonal_is_not_normalised() {
         let mut view = sol();
-        view.input(&key(Key::Left, true));
-        view.input(&key(Key::Char('d'), true));
+        view.input(&key(Key::ArrowLeft, true));
+        view.input(&key(Key::KeyD, true));
         ticks_of(&mut view, 2);
         assert_eq!(center(&view), at(0.0, 0.0));
-        view.input(&key(Key::Up, true));
+        view.input(&key(Key::ArrowUp, true));
         ticks_of(&mut view, 1);
         assert_eq!(center(&view), at(0.0, -240.0));
-        view.input(&key(Key::Left, false));
+        view.input(&key(Key::ArrowLeft, false));
         ticks_of(&mut view, 1);
         assert_eq!(center(&view), at(240.0, -480.0));
     }
@@ -394,14 +519,14 @@ mod tests {
     #[test]
     fn two_keys_for_one_way_keep_moving_until_both_are_released() {
         let mut view = sol();
-        view.input(&key(Key::Right, true));
-        view.input(&key(Key::Char('d'), true));
+        view.input(&key(Key::ArrowRight, true));
+        view.input(&key(Key::KeyD, true));
         ticks_of(&mut view, 1);
         assert_eq!(center(&view), at(240.0, 0.0), "not twice as fast");
-        view.input(&key(Key::Right, false));
+        view.input(&key(Key::ArrowRight, false));
         ticks_of(&mut view, 1);
         assert_eq!(center(&view), at(480.0, 0.0));
-        view.input(&key(Key::Char('d'), false));
+        view.input(&key(Key::KeyD, false));
         ticks_of(&mut view, 2);
         assert_eq!(center(&view), at(480.0, 0.0), "stopped");
     }
@@ -409,26 +534,50 @@ mod tests {
     #[test]
     fn repeats_hold_the_key_without_speeding_it_up() {
         let mut view = sol();
-        view.input(&key(Key::Down, true));
+        view.input(&key(Key::ArrowDown, true));
         for _ in 0..5 {
-            view.input(&held(Key::Down));
+            view.input(&held(Key::ArrowDown));
         }
         ticks_of(&mut view, 1);
         assert_eq!(center(&view), at(0.0, 240.0));
         // A repeat alone holds the key too, as when the press went elsewhere.
         let mut view = sol();
-        view.input(&held(Key::Char('a')));
+        view.input(&held(Key::KeyA));
         ticks_of(&mut view, 1);
         assert_eq!(center(&view), at(-240.0, 0.0));
     }
 
     #[test]
+    fn a_rebound_right_and_activate_act_on_their_new_keys_alone() {
+        use crate::keymap::{Bindings, KeyCombo, SharedBindings, UiCommand};
+        let bindings = SharedBindings::new(
+            Bindings::default()
+                .rebound(UiCommand::Right, KeyCombo::key(Key::KeyL))
+                .rebound(UiCommand::Activate, KeyCombo::key(Key::KeyC)),
+        );
+        let mut view = sol().with_bindings(bindings);
+        view.input(&key(Key::ArrowRight, true));
+        ticks_of(&mut view, 1);
+        assert_eq!(center(&view), at(0.0, 0.0), "Right no longer pans");
+        view.input(&key(Key::KeyL, true));
+        ticks_of(&mut view, 1);
+        assert_eq!(center(&view), at(240.0, 0.0), "L, held, does");
+        view.input(&key(Key::KeyL, false));
+        ticks_of(&mut view, 1);
+        assert_eq!(center(&view), at(240.0, 0.0), "let go of");
+        view.input(&key(Key::Space, true));
+        assert_eq!(center(&view), at(240.0, 0.0), "Space no longer recentres");
+        view.input(&key(Key::KeyC, true));
+        assert_eq!(center(&view), at(0.0, 0.0), "C does");
+    }
+
+    #[test]
     fn a_release_without_a_press_does_nothing() {
         let mut view = sol();
-        view.input(&key(Key::Right, false));
+        view.input(&key(Key::ArrowRight, false));
         ticks_of(&mut view, 2);
         assert_eq!(center(&view), at(0.0, 0.0));
-        view.input(&key(Key::Right, true));
+        view.input(&key(Key::ArrowRight, true));
         ticks_of(&mut view, 1);
         assert_eq!(center(&view), at(240.0, 0.0));
     }
@@ -436,8 +585,8 @@ mod tests {
     #[test]
     fn releasing_the_keys_stops_the_camera() {
         let mut view = sol();
-        view.input(&key(Key::Right, true));
-        view.input(&key(Key::Char('s'), true));
+        view.input(&key(Key::ArrowRight, true));
+        view.input(&key(Key::KeyS, true));
         view.release_keys();
         ticks_of(&mut view, 2);
         assert_eq!(center(&view), at(0.0, 0.0));
@@ -446,13 +595,13 @@ mod tests {
     #[test]
     fn space_recentres() {
         let mut view = sol();
-        view.input(&key(Key::Right, true));
+        view.input(&key(Key::ArrowRight, true));
         ticks_of(&mut view, 3);
-        view.input(&key(Key::Right, false));
+        view.input(&key(Key::ArrowRight, false));
         assert_eq!(view.input(&key(Key::Space, true)), ScreenAction::None);
         assert_eq!(center(&view), at(0.0, 0.0));
         // Its release does nothing more.
-        view.input(&key(Key::Down, true));
+        view.input(&key(Key::ArrowDown, true));
         ticks_of(&mut view, 1);
         view.input(&key(Key::Space, false));
         assert_eq!(center(&view), at(0.0, 240.0));
@@ -461,8 +610,8 @@ mod tests {
     #[test]
     fn the_camera_stops_at_the_scenes_bounds() {
         let mut view = sol();
-        view.input(&key(Key::Right, true));
-        view.input(&key(Key::Up, true));
+        view.input(&key(Key::ArrowRight, true));
+        view.input(&key(Key::ArrowUp, true));
         ticks_of(&mut view, 100);
         assert_eq!(
             center(&view),
@@ -477,8 +626,8 @@ mod tests {
             key(Key::Escape, true),
             key(Key::Enter, true),
             key(Key::Tab, true),
-            key(Key::Char('x'), true),
-            key(Key::Other, true),
+            key(Key::KeyX, true),
+            key(Key::Unidentified, true),
             Input::PointerMoved(at(1.0, 2.0)),
             Input::PointerButton {
                 button: MouseButton::Left,
@@ -556,11 +705,11 @@ mod tests {
                 (ImageKey::sprite(1059, 0), at(2512.0, 384.0)),
             ]
         );
-        view.input(&key(Key::Right, true));
-        view.input(&key(Key::Down, true));
+        view.input(&key(Key::ArrowRight, true));
+        view.input(&key(Key::ArrowDown, true));
         view.tick(QUARTER);
-        view.input(&key(Key::Right, false));
-        view.input(&key(Key::Down, false));
+        view.input(&key(Key::ArrowRight, false));
+        view.input(&key(Key::ArrowDown, false));
         let moved: Vec<Point> = sprites(&drawn(&view)).into_iter().map(|(_, p)| p).collect();
         assert_eq!(
             moved,
@@ -676,14 +825,14 @@ mod tests {
             (at(16.0, 32.0), at(16.0, 58.0), at(16.0, 744.0))
         );
         // Just under a unit to the left: the camera line rounds.
-        view.input(&key(Key::Left, true));
+        view.input(&key(Key::ArrowLeft, true));
         view.tick(Duration::from_millis(1));
-        view.input(&key(Key::Left, false));
-        view.input(&key(Key::Up, true));
+        view.input(&key(Key::ArrowLeft, false));
+        view.input(&key(Key::ArrowUp, true));
         view.tick(Duration::from_millis(250));
         assert!(texts(&drawn(&view)).contains(&"Camera (-1, -240)".to_owned()));
-        view.input(&key(Key::Up, false));
-        view.input(&key(Key::Down, true));
+        view.input(&key(Key::ArrowUp, false));
+        view.input(&key(Key::ArrowDown, true));
         // Back to just above 0, which shows as 0, not -0.
         view.tick(Duration::from_micros(249_600));
         assert!(

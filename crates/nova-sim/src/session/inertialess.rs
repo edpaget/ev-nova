@@ -76,11 +76,12 @@ impl Session {
         }
         let flight = self.setup.flight_rules();
         let gain = self.speed_mult();
+        let held = self.ship.held_at(controls);
         inertialess_player_step(
             &mut self.ship.player,
             &mut self.ship.player_speed,
             &handling,
-            controls,
+            held,
             aim,
             caps,
             flight,

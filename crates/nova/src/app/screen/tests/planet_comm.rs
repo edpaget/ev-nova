@@ -92,9 +92,9 @@ fn tap(screen: &mut AppScreen, k: Key) {
 /// Flies `screen`, then selects and hails Alpha Prime, taking the sounds.
 fn hail_alpha(screen: &mut AppScreen) {
     fly(screen);
-    tap(screen, Key::Char('1'));
+    tap(screen, Key::Digit1);
     screen.tick(TICK);
-    tap(screen, Key::Char('y'));
+    tap(screen, Key::KeyY);
     let _ = screen.take_sounds();
 }
 
@@ -128,13 +128,13 @@ fn the_planet_comm_dialog_and_its_haggle_open_with_the_rulebooks_focus_ring() {
                 .map(|dialog| dialog.dialog().focus_ring())
         };
         assert_eq!(focus(screen), Some(ring), "planet comm");
-        tap(screen, Key::Char('o'));
+        tap(screen, Key::KeyO);
         assert_eq!(
             screen.haggle().map(|dialog| dialog.dialog().focus_ring()),
             Some(ring),
             "haggle"
         );
-        tap(screen, Key::Char('l'));
+        tap(screen, Key::KeyL);
         assert_eq!(screen.showing(), Showing::Comm, "a lost haggle returns");
         assert_eq!(focus(screen), Some(ring), "laid out afresh");
     }
@@ -180,7 +180,7 @@ fn offer_bribe_opens_the_haggle_dialog_and_accepting_pays_closing_both() {
     let screen = &mut hailing(1);
     let dialog = screen.planet_comm().expect("open");
     assert_eq!(dialog.view().second, PlanetCommButton::OfferBribe);
-    tap(screen, Key::Char('o'));
+    tap(screen, Key::KeyO);
     assert_eq!(screen.showing(), Showing::Haggle);
     assert_eq!(
         screen.haggle().expect("open").asking(),
@@ -197,9 +197,9 @@ fn offer_bribe_opens_the_haggle_dialog_and_accepting_pays_closing_both() {
 #[test]
 fn a_lost_bribe_haggle_returns_to_the_planet_comm_dialog() {
     let screen = &mut hailing(1);
-    tap(screen, Key::Char('b'));
+    tap(screen, Key::KeyB);
     assert_eq!(screen.showing(), Showing::Haggle);
-    tap(screen, Key::Char('l'));
+    tap(screen, Key::KeyL);
     assert!(screen.haggle().is_none(), "a lost roll declines");
     assert_eq!(screen.showing(), Showing::Comm);
     assert_eq!(
@@ -213,12 +213,12 @@ fn a_lost_bribe_haggle_returns_to_the_planet_comm_dialog() {
 #[test]
 fn a_won_lower_price_keeps_the_haggle_dialog_open_on_the_lowered_price() {
     let screen = &mut hailing_by(1, Haggles);
-    tap(screen, Key::Char('o'));
+    tap(screen, Key::KeyO);
     assert_eq!(
         screen.haggle().expect("open").asking(),
         "Pay us 3,000 credits."
     );
-    tap(screen, Key::Char('l'));
+    tap(screen, Key::KeyL);
     assert_eq!(screen.showing(), Showing::Haggle, "the haggle goes on");
     assert_eq!(
         screen.haggle().expect("still open").asking(),

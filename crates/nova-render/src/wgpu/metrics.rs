@@ -6,8 +6,13 @@
 //! advance rounded ([`lay_out_text`]), with no kerning or ligature. So a
 //! width is proportional to the size only within a unit a character,
 //! which the port's contract allows.
+//!
+//! Each width is kept once measured ([`KEPT_WIDTHS`] at most): a screen
+//! wraps the same text again every frame it draws it, and shaping it
+//! afresh each time cost more than the rest of the frame.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt;
 
 use glyphon::FontSystem;
@@ -27,7 +32,14 @@ pub struct GlyphonMetrics {
     /// what it measures.
     font_system: RefCell<FontSystem>,
     families: Families,
+    /// The widths measured so far, by font, size (its bits) and text;
+    /// forgotten all at once when [`KEPT_WIDTHS`] are kept.
+    widths: RefCell<HashMap<(Font, u32, String), f32>>,
 }
+
+/// How many widths [`GlyphonMetrics`] keeps before it forgets them: far
+/// more than a screen measures in a frame.
+const KEPT_WIDTHS: usize = 1024;
 
 impl GlyphonMetrics {
     /// Metrics over `faces` alone: no system font is loaded.
@@ -37,6 +49,7 @@ impl GlyphonMetrics {
         Self {
             font_system: RefCell::new(font_system),
             families,
+            widths: RefCell::new(HashMap::new()),
         }
     }
 }
@@ -55,6 +68,27 @@ impl TextMetrics for GlyphonMetrics {
     /// a size that is not a positive, finite number (which the shaper
     /// cannot take), and a font with no face are 0 wide.
     fn width(&self, font: Font, size: f32, text: &str) -> f32 {
+        let key = (font, size.to_bits(), text.to_owned());
+        if let Some(&width) = self.widths.borrow().get(&key) {
+            return width;
+        }
+        let width = self.measure(font, size, text);
+        let mut widths = self.widths.borrow_mut();
+        if widths.len() >= KEPT_WIDTHS {
+            widths.clear();
+        }
+        widths.insert(key, width);
+        width
+    }
+
+    fn line_height(&self, _font: Font, size: f32) -> f32 {
+        LINE_HEIGHT * size
+    }
+}
+
+impl GlyphonMetrics {
+    /// [`TextMetrics::width`] measured afresh, by shaping `text`.
+    fn measure(&self, font: Font, size: f32, text: &str) -> f32 {
         let line_height = self.line_height(font, size);
         if text.is_empty() || !(line_height.is_finite() && line_height > 0.0) {
             return 0.0;
@@ -70,10 +104,6 @@ impl TextMetrics for GlyphonMetrics {
             .layout_runs()
             .map(|run| run.line_w.round())
             .fold(0.0, f32::max)
-    }
-
-    fn line_height(&self, _font: Font, size: f32) -> f32 {
-        LINE_HEIGHT * size
     }
 }
 
@@ -287,6 +317,35 @@ mod tests {
     fn several_lines_measure_the_widest() {
         let metrics = both();
         assert_eq!(metrics.width(Font::Charcoal, 10.0, "MM\nMMMM\nM"), 40.0);
+    }
+
+    #[test]
+    fn a_text_measured_again_is_answered_from_its_first_measure() {
+        let metrics = both();
+        let first = metrics.width(Font::Geneva, 10.0, "Kestrel");
+        assert_eq!(metrics.width(Font::Geneva, 10.0, "Kestrel"), first);
+        assert_eq!(metrics.widths.borrow().len(), 1, "measured once");
+        // Each of the font, the size and the text is its own measure.
+        metrics.width(Font::Charcoal, 10.0, "Kestrel");
+        metrics.width(Font::Geneva, 12.0, "Kestrel");
+        metrics.width(Font::Geneva, 10.0, "Kestrels");
+        assert_eq!(metrics.widths.borrow().len(), 4);
+        assert_eq!(metrics.width(Font::Charcoal, 10.0, "MMM"), 30.0);
+    }
+
+    #[test]
+    fn the_widths_kept_are_forgotten_once_they_reach_their_cap() {
+        let metrics = both();
+        for n in 0..KEPT_WIDTHS {
+            metrics.width(Font::Geneva, 10.0, &n.to_string());
+        }
+        assert_eq!(metrics.widths.borrow().len(), KEPT_WIDTHS, "up to the cap");
+        metrics.width(Font::Geneva, 10.0, "Kestrel");
+        assert_eq!(metrics.widths.borrow().len(), 1, "forgotten, then kept");
+        assert!(
+            metrics.width(Font::Geneva, 10.0, "0") > 0.0,
+            "measured anew"
+        );
     }
 
     #[test]

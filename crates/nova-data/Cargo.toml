@@ -46,8 +46,9 @@ tempfile.workspace = true
 # builders; the store's shared fake (`store::fixture::FakeTree`, over
 # nova-rsrc's `MemForks`) with the `DirLister` port's `check_contract` and
 # the one-file stores (`one_file`, `store_of`); and the `shän`/`shïp` byte
-# builders (`records::fixture`); and the new game's checked-in folder
-# (`new_game::fixture::folder`).
+# builders (`records::fixture`); the new game's checked-in folder
+# (`new_game::fixture::folder`); and the `DialogCheck` port's fake and
+# contract (`new_game::dialogs::fixture`), which nova's Ink check passes.
 fixture = ["nova-rsrc/fixture"]
 
 [lints]

@@ -73,7 +73,7 @@ fn a_hails_comm_dialog_over_widened_flight_is_overlay() {
         if let Some(upscaler) = upscaler {
             game.upscale_with(upscaler);
         }
-        for key in [Key::Tab, Key::Tab, Key::Char('y')] {
+        for key in [Key::Tab, Key::Tab, Key::KeyY] {
             game.tap(key);
             game.settle();
         }
@@ -141,7 +141,7 @@ fn with_a_message(store: &MemoryPilots, upscaler: Option<Upscaler>) -> (Game, St
     if let Some(upscaler) = upscaler {
         game.upscale_with(upscaler);
     }
-    game.tap(Key::Char('l'));
+    game.tap(Key::KeyL);
     game.settle_until("a message on the line", |game| {
         game.app
             .screen()
@@ -194,11 +194,11 @@ fn under_a_texture_upscaler_flights_message_text_is_overlay_and_its_box_world() 
 fn the_spaceport_draws_no_world() {
     let store = MemoryPilots::new();
     let mut game = flying((1920, 1080), &store);
-    game.tap(Key::Char('l'));
+    game.tap(Key::KeyL);
     game.settle_until("the dock approach's clearance", |game| {
         game.session().dock_cleared()
     });
-    game.tap(Key::Char('l'));
+    game.tap(Key::KeyL);
     assert_eq!(game.showing(), Showing::Spaceport);
     let frame = game.frame();
     assert_eq!(frame.world, [0_usize; 0]);

@@ -45,10 +45,11 @@ use super::update::MapUpdate;
 use super::view::{Bounds, Transform};
 use crate::draw::fill_rect;
 use crate::flight::radar::IRect;
+use crate::keymap::{Command, MapCommand, UiCommand};
 use crate::text::TextMetrics;
 use crate::ui::button::ButtonStyle;
 use crate::ui::dialog::center_window;
-use crate::{Color, DrawList, ImageKey, Key, Point};
+use crate::{Color, DrawList, ImageKey, Point};
 
 /// The map's `DLOG` and `DITL`, "Map" (`_DoSystemMap`'s `GetNewDialog`,
 /// @0x121e5).
@@ -151,7 +152,7 @@ fn whole_pixel(at: Point) -> (i32, i32) {
 /// ([`MapPlace`]), the buttons' trackers, the borders setting their
 /// Borders button reads, `showClearRouteButton`, which enables Clear
 /// Route, a drag in progress, and which update item 3 shows.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct MapDialog {
     place: MapPlace,
     buttons: MapButtons,
@@ -249,21 +250,22 @@ impl MapDialog {
         self.place.transform(port, MAP_ITEM_CENTRE)
     }
 
-    /// A key press or repeat (`_MapFilter`): the arrows scroll
-    /// [`ARROW_STEP`] units (@0x142a3, @0x142c3, @0x14370, @0x14417),
-    /// `-` is item 4 and `=` or `+` item 5, each stepping only while its
-    /// flag allows (@0x14271-0x14293). Each arrow redraws item 3 (left and
-    /// right @0x142fc, up @0x143aa, down @0x1445a), and so does a zoom
+    /// A command's press or repeat (`_MapFilter`): the shared arrows
+    /// scroll [`ARROW_STEP`] units (@0x142a3, @0x142c3, @0x14370,
+    /// @0x14417), and the map's zoom out (`-`) is item 4 and its zoom in
+    /// (`=`, or the keypad's `+`) item 5, each stepping only while its
+    /// flag allows (@0x14271-0x14293). Each arrow redraws item 3 (left
+    /// and right @0x142fc, up @0x143aa, down @0x1445a), and so does a zoom
     /// step taken (@0x128d9, @0x12b0c); a refused one redraws nothing
-    /// (@0x12803-0x12816). Whether it took the key.
-    pub fn key(&mut self, key: Key) -> bool {
-        let redraw = match key {
-            Key::Left => self.scroll_by(-ARROW_STEP, 0),
-            Key::Right => self.scroll_by(ARROW_STEP, 0),
-            Key::Up => self.scroll_by(0, -ARROW_STEP),
-            Key::Down => self.scroll_by(0, ARROW_STEP),
-            Key::Char('-') => self.place.zoom_out(),
-            Key::Char('=' | '+') => self.place.zoom_in(),
+    /// (@0x12803-0x12816). Whether it took the command.
+    pub fn command(&mut self, command: Command) -> bool {
+        let redraw = match command {
+            Command::Ui(UiCommand::Left) => self.scroll_by(-ARROW_STEP, 0),
+            Command::Ui(UiCommand::Right) => self.scroll_by(ARROW_STEP, 0),
+            Command::Ui(UiCommand::Up) => self.scroll_by(0, -ARROW_STEP),
+            Command::Ui(UiCommand::Down) => self.scroll_by(0, ARROW_STEP),
+            Command::Map(MapCommand::ZoomOut) => self.place.zoom_out(),
+            Command::Map(MapCommand::ZoomIn) => self.place.zoom_in(),
             _ => return false,
         };
         if redraw {
@@ -381,11 +383,11 @@ impl MapDialog {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::DrawCommand;
     use crate::galaxy::buttons::{MapButton, ORDER};
     use crate::geometry::intersection;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{Placement, SCREEN};
+    use crate::{DrawCommand, Key};
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
@@ -541,30 +543,33 @@ mod tests {
     }
 
     #[test]
-    fn the_arrows_scroll_10_units_and_the_zoom_keys_step_with_the_limits() {
+    fn the_arrows_scroll_10_units_and_the_zoom_commands_step_with_the_limits() {
         let mut dialog = MapDialog::new((0, 0));
-        for (key, scroll) in [
-            (Key::Right, (10, 0)),
-            (Key::Down, (10, 10)),
-            (Key::Left, (0, 10)),
-            (Key::Up, (0, 0)),
+        for (command, scroll) in [
+            (UiCommand::Right, (10, 0)),
+            (UiCommand::Down, (10, 10)),
+            (UiCommand::Left, (0, 10)),
+            (UiCommand::Up, (0, 0)),
         ] {
-            assert!(dialog.key(key));
-            assert_eq!(dialog.place().scroll(), scroll, "{key:?}");
+            assert!(dialog.command(command.into()));
+            assert_eq!(dialog.place().scroll(), scroll, "{command:?}");
         }
-        assert!(dialog.key(Key::Char('=')));
+        assert!(dialog.command(MapCommand::ZoomIn.into()));
         assert_eq!(dialog.place().zoom(), 0.421_875);
-        assert!(dialog.key(Key::Char('+')), "taken, though refused");
+        assert!(
+            dialog.command(MapCommand::ZoomIn.into()),
+            "taken, though refused"
+        );
         assert_eq!(dialog.place().zoom(), 0.421_875);
         let mut zooms = Vec::new();
         for _ in 0..8 {
-            dialog.key(Key::Char('-'));
+            dialog.command(MapCommand::ZoomOut.into());
             zooms.push(dialog.place().zoom());
         }
         assert!(zooms[6] > 2.0 && zooms[6] < 3.0, "{zooms:?}");
         assert_eq!(zooms[7], zooms[6], "refused past 2.0");
-        assert!(!dialog.key(Key::Char('x')));
-        assert!(!dialog.key(Key::Tab));
+        assert!(!dialog.command(MapCommand::Borders.into()));
+        assert!(!dialog.command(UiCommand::Tab.into()));
     }
 
     #[test]
@@ -669,19 +674,25 @@ mod tests {
             assert_eq!(dialog.update(), MapUpdate::Partial);
             dialog
         };
-        for key in [Key::Left, Key::Right, Key::Up, Key::Down, Key::Char('-')] {
+        for command in [
+            Command::Ui(UiCommand::Left),
+            Command::Ui(UiCommand::Right),
+            Command::Ui(UiCommand::Up),
+            Command::Ui(UiCommand::Down),
+            Command::Map(MapCommand::ZoomOut),
+        ] {
             let mut dialog = partial();
-            dialog.key(key);
-            assert_eq!(dialog.update(), MapUpdate::Full, "{key:?}");
+            dialog.command(command);
+            assert_eq!(dialog.update(), MapUpdate::Full, "{command:?}");
         }
         let mut dialog = partial();
-        dialog.key(Key::Char('='));
+        dialog.command(MapCommand::ZoomIn.into());
         assert_eq!(dialog.update(), MapUpdate::Full, "a step in taken");
         let mut dialog = partial();
         dialog.place_mut().zoom_in();
-        dialog.key(Key::Char('+'));
+        dialog.command(MapCommand::ZoomIn.into());
         assert_eq!(dialog.update(), MapUpdate::Partial, "refused at the limit");
-        dialog.key(Key::Char('x'));
+        dialog.command(MapCommand::Borders.into());
         assert_eq!(dialog.update(), MapUpdate::Partial, "not taken");
     }
 
@@ -692,7 +703,7 @@ mod tests {
         dialog.redraw();
         assert!(dialog.take_fresh());
         assert!(!dialog.take_fresh(), "taken");
-        dialog.key(Key::Left);
+        dialog.command(UiCommand::Left.into());
         assert!(dialog.take_fresh(), "an arrow redraws");
         dialog.press(at(400.0, 300.0));
         dialog.pointer_moved(at(380.0, 300.0));
@@ -751,8 +762,11 @@ mod tests {
     use crate::galaxy::buttons::{CLEAR_ROUTE_LABEL, HIDE_BORDERS_LABEL, SHOW_BORDERS_LABEL};
     use crate::galaxy::catalog::SystemId;
     use crate::galaxy::click::PressAnswer;
-    use crate::galaxy::map::{BUTTON, ENTER_BUTTON, ENTER_LABEL, GalaxyMap, PANEL};
+    use crate::galaxy::map::{BUTTON, ENTER_BUTTON, GalaxyMap, PANEL};
     use crate::galaxy::testkit::{FakeCatalog, galaxy, system};
+
+    /// The viewer's Enter button's label under the default keys.
+    const ENTER_LABEL: &str = "Enter system (Return)";
     use crate::galaxy::view::{MapView, PAN_STEP, SCALES};
     use crate::ui::button::ButtonSkin;
     use crate::{Font, Input, MouseButton, Screen};
@@ -899,7 +913,7 @@ mod tests {
     #[test]
     fn the_zoom_buttons_are_disabled_at_their_limits() {
         let mut map = course_map();
-        map.input(&press(Key::Char('=')));
+        map.input(&press(Key::Equal));
         assert_eq!(zoom(&map), 0.421_875);
         // Their labels are pen glyphs: read the state off their left caps.
         let enabled = |map: &GalaxyMap| {
@@ -917,10 +931,38 @@ mod tests {
         };
         assert_eq!(enabled(&map), [true, false], "+ at 0.421875");
         for _ in 0..6 {
-            map.input(&press(Key::Char('-')));
+            map.input(&press(Key::Minus));
         }
         assert!(zoom(&map) > 2.0);
         assert_eq!(enabled(&map), [false, true], "- past 2.0");
+    }
+
+    #[test]
+    fn a_rebound_zoom_out_and_up_step_on_their_new_keys_alone() {
+        use crate::keymap::{Bindings, KeyCombo, MapCommand, SharedBindings, UiCommand};
+        let bindings = SharedBindings::new(
+            Bindings::default()
+                .rebound(MapCommand::ZoomOut, KeyCombo::key(Key::KeyQ))
+                .rebound(UiCommand::Up, KeyCombo::key(Key::KeyJ)),
+        );
+        let mut map = course_map().with_bindings(bindings);
+        let (zoomed, scroll) = (zoom(&map), map.place().expect("in flight").scroll());
+        map.input(&press(Key::Minus));
+        assert_eq!(zoom(&map), zoomed, "- no longer steps out");
+        map.input(&press(Key::KeyQ));
+        assert!(zoom(&map) > zoomed, "Q does");
+        map.input(&press(Key::ArrowUp));
+        assert_eq!(
+            map.place().expect("in flight").scroll(),
+            scroll,
+            "Up no longer scrolls"
+        );
+        map.input(&press(Key::KeyJ));
+        assert_eq!(
+            map.place().expect("in flight").scroll(),
+            (scroll.0, scroll.1 - ARROW_STEP),
+            "J does"
+        );
     }
 
     /// In Alpha, with the course to Beta, every system drawn and named.
@@ -1051,17 +1093,17 @@ mod tests {
     #[test]
     fn equals_plus_and_minus_zoom_within_the_limits_their_repeats_too() {
         let mut map = course_map();
-        map.input(&press(Key::Char('-')));
+        map.input(&press(Key::Minus));
         assert_eq!(zoom(&map), 0.749_999_812_5);
-        map.input(&held(Key::Char('=')));
+        map.input(&held(Key::Equal));
         assert_eq!(zoom(&map), 0.749_999_812_5 * 0.75, "a repeat steps again");
-        map.input(&press(Key::Char('+')));
+        map.input(&press(Key::NumpadAdd));
         assert!(!map.place().expect("in flight").can_zoom_in());
         let at_limit = zoom(&map);
-        map.input(&held(Key::Char('+')));
+        map.input(&held(Key::NumpadAdd));
         assert_eq!(zoom(&map), at_limit, "refused below 0.5");
         for _ in 0..10 {
-            map.input(&held(Key::Char('-')));
+            map.input(&held(Key::Minus));
         }
         assert!(!map.place().expect("in flight").can_zoom_out());
         assert_eq!(scroll(&map), (0, 0), "zooming keeps the scroll");
@@ -1111,16 +1153,12 @@ mod tests {
         for enabled in [false, true] {
             let mut map = course_map();
             map.set_clear_route(enabled);
-            for key in [
-                press(Key::Char('c')),
-                press(Key::Char('C')),
-                held(Key::Char('c')),
-            ] {
+            for key in [press(Key::KeyC), press(Key::KeyC), held(Key::KeyC)] {
                 map.input(&key);
                 assert!(map.take_clear_route(), "{key:?}, enabled {enabled}");
             }
             map.input(&Input::Key {
-                key: Key::Char('c'),
+                key: Key::KeyC,
                 pressed: false,
                 repeat: false,
             });
@@ -1128,10 +1166,10 @@ mod tests {
         }
         let mut gate = course_map();
         gate.offer_gates(vec![SystemId(129)]);
-        gate.input(&press(Key::Char('c')));
+        gate.input(&press(Key::KeyC));
         assert!(gate.take_clear_route(), "the hypergate map too");
         let mut viewer = viewer();
-        viewer.input(&press(Key::Char('c')));
+        viewer.input(&press(Key::KeyC));
         assert!(!viewer.take_clear_route(), "never the viewer");
     }
 
@@ -1173,15 +1211,15 @@ mod tests {
         for zoom_in in [false, true] {
             let mut map = course_map();
             if zoom_in {
-                map.input(&press(Key::Char('=')));
+                map.input(&press(Key::Equal));
             }
-            map.input(&press(Key::Right));
-            map.input(&held(Key::Right));
-            map.input(&press(Key::Down));
+            map.input(&press(Key::ArrowRight));
+            map.input(&held(Key::ArrowRight));
+            map.input(&press(Key::ArrowDown));
             assert_eq!(scroll(&map), (20, 10), "zoomed in: {zoom_in}");
-            map.input(&held(Key::Left));
-            map.input(&press(Key::Up));
-            map.input(&held(Key::Up));
+            map.input(&held(Key::ArrowLeft));
+            map.input(&press(Key::ArrowUp));
+            map.input(&held(Key::ArrowUp));
             assert_eq!(scroll(&map), (10, -10), "zoomed in: {zoom_in}");
         }
     }
@@ -1244,7 +1282,7 @@ mod tests {
         map.take_ui_sounds();
         // Far past every system: nothing clamps.
         for _ in 0..100 {
-            map.input(&held(Key::Left));
+            map.input(&held(Key::ArrowLeft));
         }
         assert_eq!(scroll(&map), (-1000, 0));
         map.preselect(Some(SystemId(130)));
@@ -1312,17 +1350,17 @@ mod tests {
     fn the_viewer_pans_and_zooms_its_own_way() {
         let mut map = viewer();
         let fitted = *map.view().expect("the viewer");
-        map.input(&press(Key::Right));
+        map.input(&press(Key::ArrowRight));
         let moved = *map.view().expect("the viewer");
         let step = PAN_STEP / fitted.scale();
         assert!((moved.center().x - fitted.center().x - step).abs() < 1e-3);
-        map.input(&press(Key::Char('-')));
+        map.input(&press(Key::Minus));
         assert_eq!(
             map.view().expect("the viewer").scale(),
             SCALES[fitted.zoom() - 1]
         );
-        map.input(&press(Key::Char('=')));
-        map.input(&press(Key::Char('=')));
+        map.input(&press(Key::Equal));
+        map.input(&press(Key::Equal));
         assert_eq!(
             map.view().expect("the viewer").scale(),
             SCALES[fitted.zoom() + 1]

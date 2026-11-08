@@ -31,7 +31,7 @@ use crate::flight::catalog::ShipSprites;
 use crate::flight::catalog::{
     Blink, BoomLook, GovtId, LayerSheet, StarSheet, StatusBarLayout, WeaponLook,
 };
-use crate::flight::escorts::{GROUP_KEYS, MENU_KEY, NO_ESCORTS};
+use crate::flight::escorts::NO_ESCORTS;
 use crate::flight::hud::{self, HudState, NavDisplay, StatusBar};
 use crate::flight::jump::JumpPhase;
 use crate::flight::radar::RadarStellar;
@@ -42,13 +42,13 @@ use crate::flight::sprite::rotation_frame;
 use crate::flight::target::Tag;
 use crate::flight::weapons;
 use crate::galaxy::MapMode;
+use crate::keymap::test_keys::MISSION_INFO_KEY;
+use crate::keymap::test_keys::PLAYER_INFO_KEY;
 use crate::sound::Sound;
 use crate::spaceport::PortDialog;
 use crate::system::scene::PLACEHOLDER;
 use crate::system::{scene, starfield};
-use crate::ui::mission_info::MISSION_INFO_KEY;
-use crate::ui::player_info::PLAYER_INFO_KEY;
-use crate::{DrawList, ImageKey, Input, MouseButton, Screen, ScreenAction};
+use crate::{DrawList, ImageKey, Input, Key, MouseButton, Screen, ScreenAction};
 use nova_sim::ShipIff;
 use nova_sim::flight_frame::{
     Answer, FlightCommand, FlightFrame, MapClick, MapOpen, MapScreen, MarksFrom, Names,
@@ -84,6 +84,7 @@ mod faded_keys;
 mod faked_board;
 mod faked_carried_displays;
 mod faked_combat;
+mod faked_conversation;
 mod faked_desk;
 mod faked_docked;
 mod faked_escorts;
@@ -109,23 +110,30 @@ mod frames;
 mod hyperspace;
 mod kept_frame;
 mod key_fades;
+mod keys;
 mod landing;
 mod layers;
 mod leaving_cursor;
 mod live_keys;
 mod map_borders;
+mod map_covered;
 mod map_find;
 mod map_key_wait;
 mod map_opening;
+mod map_safe_area;
 mod maps;
 mod missions;
 mod murk_sprites;
 mod nav;
 mod outputs;
+mod pad_flight;
+mod pad_live;
+mod pad_map;
 mod painted_ships;
 mod particle_pixels;
 mod pict_pair_ships;
 mod port_screen_map;
+mod rebinding;
 mod rescue;
 mod ship_drawing;
 mod ship_outlines;
@@ -134,6 +142,8 @@ mod stars;
 mod stellar_looks;
 mod stellars;
 mod stepping;
+mod touch_flight;
+mod touch_hover;
 mod whole_pixels;
 mod widescreen;
 mod world_layers;
@@ -142,6 +152,7 @@ use crate::flight::fake_catalog::*;
 // The fixture's `look`, not the view's.
 use crate::flight::fake_catalog::look;
 use frames::*;
+use keys::*;
 
 /// Where flight draws the player's ship in Nova's own 1024 x 768 by the
 /// original's reading of [`RuleKey::FlightAnchor`]: the play area's
@@ -175,6 +186,27 @@ fn drawn(view: &FlightView<FakeCatalog, impl FlightSim>) -> DrawList {
     let mut list = DrawList::new();
     view.draw(&mut list);
     list
+}
+
+/// Flight's help line ([`help_line`]) as the keys of `bindings`, named
+/// through `names`, give it, on the keyboard (`help_on_pad` in the
+/// flying tests reads it with a pad used last).
+fn help_with(
+    bindings: crate::keymap::Bindings,
+    names: Rc<dyn crate::key_names::KeyNames>,
+) -> String {
+    let shared = crate::keymap::SharedBindings::new(bindings).with_key_names(names);
+    help_line(
+        &crate::keymap::CommandReader::new(crate::keymap::contexts::FLIGHT).with_bindings(shared),
+    )
+}
+
+/// Flight's help line under the default bindings and a US layout.
+fn default_help() -> String {
+    help_with(
+        crate::keymap::Bindings::default(),
+        Rc::new(crate::key_names::NoKeyNames),
+    )
 }
 
 fn overlay(text: &str, origin: Point, size: f32, color: Color) -> DrawCommand {
@@ -337,7 +369,7 @@ fn governed(mut catalog: FakeCatalog, ship: i16, interface: i16) -> FakeCatalog 
     catalog.other_bars = vec![(129, bar_129())];
     catalog
 }
-const LAND: Key = Key::Char('l');
+const LAND: Key = Key::KeyL;
 
 /// Where the message's first line is drawn: the message box's
 /// top-left.
@@ -357,7 +389,7 @@ fn message_drawn(text: &str) -> DrawCommand {
     }
 }
 
-const JUMP: Key = Key::Char('j');
+const JUMP: Key = Key::KeyJ;
 
 fn ms(millis: u64) -> Duration {
     Duration::from_millis(millis)
@@ -500,9 +532,9 @@ fn faked_map_click(view: &mut Faked, at: Point) -> bool {
 
 /// Shift-clicks at `at` on `view`'s open course map.
 fn faked_map_shift_click(view: &mut Faked, at: Point) {
-    faked_map_input(view, &key(Key::Shift, true));
+    faked_map_input(view, &key(Key::ShiftLeft, true));
     faked_map_click(view, at);
-    faked_map_input(view, &key(Key::Shift, false));
+    faked_map_input(view, &key(Key::ShiftLeft, false));
 }
 
 /// Where system `id` is on `view`'s course map, brought into item 3
@@ -837,7 +869,7 @@ fn corners_at(first: i16, centre: Point, half: f32) -> Vec<(i16, Point)> {
 fn now_tick(view: &FlightView<FakeCatalog, impl FlightSim>) -> u64 {
     u64::try_from(crate::time::ticks(view.elapsed)).expect("in range")
 }
-const HYPER_SELECT: Key = Key::Char('\\');
+const HYPER_SELECT: Key = Key::Backslash;
 
 use nova_sim::GateKind;
 

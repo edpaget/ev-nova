@@ -24,7 +24,7 @@
 //!   `_HandlePlayer` doesn't run under the modal dialog, so each latched
 //!   key's latch is what `_HandlePlayer`'s last poll before it left: one
 //!   down then waits for its release, its latch set
-//!   ([`FlightView::latch_key`]), even if it was let go and pressed
+//!   ([`FlightView::latch_command`]), even if it was let go and pressed
 //!   again under the dialog, which no poll saw. One that went down
 //!   since and is still down acts on the next pass, and one let go does
 //!   nothing. These
@@ -49,99 +49,148 @@
 //! rather than the poll's
 //! (rdm:phase/flight-controls-2/phase-6-what-flight-controls-phase-16-left-out).
 //!
-//! Under either rule B, L and the escort commands F, D, V and C
-//! ([`OWN_LATCH_KEYS`]) are read as the unlatched keys are: held whenever
-//! down, their own latches deciding at the next pass, as no site sets
-//! them. A latched key waiting for its
-//! release still reads down past its latch (the `latched_reads` module).
+//! Under either rule Board, Land and the escort commands ([`OWN_LATCH`])
+//! are read as the unlatched keys are: held whenever down, their own
+//! latches deciding at the next pass, as no site sets them. A latched key
+//! waiting for its release still reads down past its latch (the
+//! `latched_reads` module).
 
-use super::map_wait::{OWN_LATCH_KEYS, UNLATCHED_KEYS, reads_live};
-use super::{
-    BOARD_KEY, ESCORT_ATTACK_KEY, ESCORT_DEFEND_KEY, ESCORT_HOLD_KEY, ESCORT_RECALL_KEY,
-    FRAME_RATE_KEY, FlightView, HAIL_KEY, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY, JUMP_KEY,
-    LAND_KEY, MAP_KEY, MENU_CLOSE_KEY, NAV_OFF_KEY, NEAREST_KEY, NEAREST_STELLAR_COMMAND_KEY,
-    NEAREST_STELLAR_KEY, SELECT_KEY, STELLAR_SLOT_KEYS, TARGET_KEY, ZOOM_IN_KEY,
-    ZOOM_IN_KEYPAD_KEY, ZOOM_OUT_KEY,
-};
+use super::map_wait::OWN_LATCH;
+#[cfg(doc)]
+use super::map_wait::UNLATCHED;
+use super::{FlightView, slot_block};
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
-use crate::flight::escorts::{EscortMenuLooks, GROUP_KEYS, MENU_KEY};
+use crate::flight::escorts::EscortMenuLooks;
 use crate::flight::sim_port::FlightSim;
 use crate::galaxy::GalaxyCatalog;
+use crate::input::PadButton;
+use crate::keymap::{
+    Command, Devices, EscortMenuCommand, FlightCommand as F, Gamepad, KeysDown, PlayCommand,
+    is_modifier_input,
+};
 use crate::system::catalog::SystemCatalog;
 use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
-use crate::ui::mission_info::MISSION_INFO_KEY;
-use crate::ui::player_info::PLAYER_INFO_KEY;
-use crate::{Input, Key, Screen as _};
+use crate::{Input, Screen as _};
 
 /// What is physically down as the last dialog over flight closes, as the
 /// router saw it: the keys down now, those down at flight's last poll,
-/// and whether the primary button is down. The router passes the physical
-/// state; flight knows which latched keys it read on their press since
-/// that poll ([`FlightView::note_read_on_press`]).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// whether the primary button is down, and the pad's buttons and sticks
+/// now and at that poll, with the press the closing dialog took. The
+/// router passes the physical state; flight knows which latched keys it
+/// read on their press since that poll
+/// ([`FlightView::note_read_on_press`]).
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct LiveKeys {
     /// The keys down now.
-    pub down: Vec<Key>,
+    pub down: KeysDown,
     /// The keys down at flight's last poll (a tick it had its input, or
     /// the last hand-back), whatever happened to them after: a latched
     /// one read its latch set, as the original's poll before the dialog
     /// would, and no poll saw its release since. A key pressed after that
     /// poll and before the dialog opened, in the same frame, isn't here:
     /// flight says itself whether it read it on its press.
-    pub down_before: Vec<Key>,
+    pub down_before: KeysDown,
     /// Whether the primary button is down now.
     pub button: bool,
+    /// The pad now: each button down with the layer it went down under
+    /// and whether that layer is still held, in the order pressed, and
+    /// each stick axis's value (the `pad_hand_back` module).
+    pub pad: Gamepad,
+    /// The pad at flight's last poll, as
+    /// [`LiveKeys::down_before`] is the keys.
+    pub pad_before: Gamepad,
+    /// The pad button whose press the closing dialog took, still down:
+    /// flight lets it go rather than take it back.
+    pub pad_taken: Option<PadButton>,
 }
 
-/// The latched keys in the order `_HandlePlayer` polls them, each with its
-/// read and its latch test (rdm:phase/play-feel-8/phase-19-latched-keys-under-unlatching-dialogs
-/// records them): Option-\` and \` (@0x69a23, @0x69aa1), H (@0x69ac1),
-/// `\` (@0x69bbe), the stellar slot block's 1-4, F1-F4, F5 and Command-5
-/// (@0x69d3f-0x69dd3, the escort menu's 1-5 too, @0x6e08c), Tab (@0x69df6),
-/// M (@0x6a778), L (@0x6a8b8), B (@0x6a98b), R (@0x6a9b7), W (@0x6ac1d),
-/// J (@0x6b0e6), Return (@0x6dd00), E (@0x6dda9), the escort commands F,
-/// D, V and C (@0x6e1b6), F12 (@0x6e460), P (@0x702cb), Y (@0x703d8),
-/// I (@0x70411), U (@0x705c3), then the zoom keys against their shared
-/// latch `_mapZoomFlag` (@0x70fdb): `-` (@0x70fc2) before `=` and keypad
-/// `+` (@0x71046-0x710f8). Exactly [`every_key`](super::every_key) less
-/// [`UNLATCHED_KEYS`], plus `-`, which is both: the self-destruct key,
-/// held for its chord with no latch, and the zoom out.
-pub(super) const POLL_ORDER: [Key; 34] = [
-    NAV_OFF_KEY,
-    HYPERSPACE_MODE_KEY,
-    HYPER_SELECT_KEY,
-    STELLAR_SLOT_KEYS[0][0],
-    STELLAR_SLOT_KEYS[1][0],
-    STELLAR_SLOT_KEYS[2][0],
-    STELLAR_SLOT_KEYS[3][0],
-    STELLAR_SLOT_KEYS[0][1],
-    STELLAR_SLOT_KEYS[1][1],
-    STELLAR_SLOT_KEYS[2][1],
-    STELLAR_SLOT_KEYS[3][1],
-    NEAREST_STELLAR_KEY,
-    NEAREST_STELLAR_COMMAND_KEY,
-    TARGET_KEY,
-    MAP_KEY,
-    LAND_KEY,
-    BOARD_KEY,
-    NEAREST_KEY,
-    SELECT_KEY,
-    JUMP_KEY,
-    MENU_CLOSE_KEY,
-    MENU_KEY,
-    ESCORT_ATTACK_KEY,
-    ESCORT_DEFEND_KEY,
-    ESCORT_HOLD_KEY,
-    ESCORT_RECALL_KEY,
-    FRAME_RATE_KEY,
-    PLAYER_INFO_KEY,
-    HAIL_KEY,
-    MISSION_INFO_KEY,
-    super::CLOAK_KEY,
-    ZOOM_OUT_KEY,
-    ZOOM_IN_KEY,
-    ZOOM_IN_KEYPAD_KEY,
+/// Where an entry of the hand-back's poll order came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Held {
+    /// A key, still to be sorted into waiting and fresh.
+    Key,
+    /// A pad button, sorted already by its exact layer
+    /// ([`FlightView::take_back_pad`]).
+    Pad,
+}
+
+/// A flight command, for the const table.
+const fn flight(command: F) -> Command {
+    Command::Flight(command)
+}
+
+/// A group of the escort menu, for the const table.
+const fn group(command: EscortMenuCommand) -> Command {
+    Command::EscortMenu(command)
+}
+
+/// The latched commands and the press commands, in the order
+/// `_HandlePlayer` polls their keys, each with its read and its latch
+/// test (rdm:phase/play-feel-8/phase-19-latched-keys-under-unlatching-dialogs
+/// records them), each Option or Shift variant beside its base: Nav Off
+/// with Option and without (@0x69a23, @0x69aa1), Hyperspace Mode
+/// (@0x69ac1), Hyper Select (@0x69bbe), the stellar slot block's slots
+/// and nearest stellar (@0x69d3f-0x69dd3) with the escort menu's groups
+/// on the same keys (@0x6e08c), Target Select (@0x69df6), the map key
+/// (@0x6a778), Land (@0x6a8b8), Board (@0x6a98b), Closest Target
+/// (@0x6a9b7), Select Secondary (@0x6ac1d), Hyper Jump (@0x6b0e6),
+/// Acknowledge (@0x6dd00), the escort menu key (@0x6dda9), the escort
+/// commands (@0x6e1b6), Show Framerate (@0x6e460), Player Info
+/// (@0x702cb), Communicate (@0x703d8), Mission Info (@0x70411), Engage
+/// Cloak (@0x705c3), then the zooms against their shared latch
+/// `_mapZoomFlag` (@0x70fdb): Zoom Out (@0x70fc2) before Zoom In
+/// (@0x71046-0x710f8). Exactly the commands of flight's contexts less
+/// [`UNLATCHED`] and Pause, which is the router's. Zoom Out's key is
+/// Self-Destruct's, held for its chord with no latch, and is read as the
+/// zoom out by its press.
+pub(super) const POLL_ORDER: [Command; 41] = [
+    flight(F::ClearTarget),
+    flight(F::NavOff),
+    flight(F::HyperspaceMode),
+    flight(F::HyperSelect),
+    flight(F::StellarSlot1),
+    flight(F::StellarSlot2),
+    flight(F::StellarSlot3),
+    flight(F::StellarSlot4),
+    flight(F::NearestStellar),
+    group(EscortMenuCommand::Group1),
+    group(EscortMenuCommand::Group2),
+    group(EscortMenuCommand::Group3),
+    group(EscortMenuCommand::Group4),
+    group(EscortMenuCommand::Group5),
+    flight(F::TargetSelect),
+    flight(F::TargetSelectBack),
+    flight(F::TargetEscort),
+    flight(F::TargetEscortBack),
+    Command::Play(PlayCommand::GalaxyMap),
+    flight(F::LandDock),
+    flight(F::Board),
+    flight(F::ClosestTarget),
+    flight(F::ClosestShip),
+    flight(F::SelectSecondary),
+    flight(F::SelectSecondaryBack),
+    flight(F::HyperJump),
+    flight(F::Acknowledge),
+    flight(F::EscortMenu),
+    flight(F::AttackTarget),
+    flight(F::DefendMe),
+    flight(F::HoldPosition),
+    flight(F::Recall),
+    flight(F::RecallToHangar),
+    flight(F::ShowFramerate),
+    Command::Play(PlayCommand::PlayerInfo),
+    flight(F::Communicate),
+    flight(F::HailStellar),
+    Command::Play(PlayCommand::MissionInfo),
+    flight(F::EngageCloak),
+    flight(F::ZoomOut),
+    flight(F::ZoomIn),
 ];
+
+/// `command`'s place in [`POLL_ORDER`], if it is polled there.
+pub(super) fn poll_index(command: Command) -> Option<usize> {
+    POLL_ORDER.iter().position(|&polled| polled == command)
+}
 
 impl<C, S: FlightSim> FlightView<C, S> {
     /// Marks that a `_SetAllKeyCmdFlags` site ran on this pass, so the
@@ -184,41 +233,39 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.latched_at_site = true;
     }
 
-    /// A key `input` presses or repeats after a site that opened no dialog
-    /// ([`FlightView::latch_at_site`]), up to the next poll, flight
-    /// keeping its input meanwhile: whether it was taken here. A latched
-    /// key's latch is set (`_SetAllKeyCmdFlags` @0x61e6d), and only a poll
-    /// that reads it up
-    /// clears it, so one pressed now reads down with its latch set at that
-    /// poll and waits for its release: it is noted latched
-    /// ([`FlightView::latch_held_keys`]) and not acted on. `-` is held
-    /// for the self-destruct chord, which reads it with no latch
-    /// (@0x6fdb4-0x6fdfc), but doesn't zoom, as `_mapZoomFlag` is set
-    /// (@0x61ef8); a zoom in key is dropped. The keys flight reads live
-    /// ([`UNLATCHED_KEYS`], [`OWN_LATCH_KEYS`]) pass. A dialog over
-    /// flight ends it ([`FlightView::let_go_of_input`]): what is pressed
-    /// between its close and the next poll, the router's replays of what
-    /// was queued under it among them, acts on its press
+    /// A key or pad button `input` presses or repeats after a site that
+    /// opened no dialog ([`FlightView::latch_at_site`]), up to the next
+    /// poll, flight keeping its input meanwhile: whether it was taken
+    /// here. A latched command's latch is set (`_SetAllKeyCmdFlags`
+    /// @0x61e6d), and only a poll that reads it up clears it, so one
+    /// pressed now reads down with its latch set at that poll and waits
+    /// for its release: it is noted latched ([`FlightView::latch_keys`])
+    /// and not acted on. Zoom Out's key is held for the self-destruct
+    /// chord, which reads it with no latch (@0x6fdb4-0x6fdfc), but doesn't
+    /// zoom, as `_mapZoomFlag` is set (@0x61ef8); a Zoom In is dropped.
+    /// The commands flight reads live ([`UNLATCHED`], [`OWN_LATCH`]) pass.
+    /// A dialog over flight ends it ([`FlightView::let_go_of_input`]):
+    /// what is pressed between its close and the next poll, the router's
+    /// replays of what was queued under it among them, acts on its press
     /// (rdm:phase/flight-controls-2/phase-6-what-flight-controls-phase-16-left-out).
     pub(super) fn wait_after_site(&mut self, input: &Input) -> bool {
-        let Input::Key {
-            key, pressed: true, ..
-        } = *input
-        else {
-            return false;
-        };
-        if !self.latched_at_site {
+        if !self.latched_at_site
+            || !crate::keymap::Devices::change(input).is_some_and(|change| change.pressed)
+        {
             return false;
         }
-        if key == ZOOM_OUT_KEY {
+        let Some(command) = self.keys.peek(input) else {
+            return false;
+        };
+        if command == Command::Flight(F::ZoomOut) {
             self.track_held(input);
             return true;
         }
-        if !POLL_ORDER.contains(&key) || OWN_LATCH_KEYS.contains(&key) {
+        if !POLL_ORDER.contains(&command) || OWN_LATCH.contains(&command) {
             return false;
         }
-        // The zoom in keys are no flight keys: dropped.
-        self.latch_held_keys([key]);
+        // A Zoom In is no held command: dropped.
+        self.latch_keys([*input]);
         true
     }
 
@@ -252,12 +299,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// (`_QuickKeyCheck` @0xa0f5) and `_HandleMouse` reads `_Button`
     /// (@0x3801c-0x3803b) each frame, so what is down reads as down
     /// whenever it went down. The unlatched keys held, and those with
-    /// latches of their own (B, L and the escort commands), become exactly
-    /// those of `live.down` ([`UNLATCHED_KEYS`], [`OWN_LATCH_KEYS`]), none
-    /// flight holds of the rest is let go, and a button still down keeps
-    /// the cursor whole. The own-latch keys are never handed back as
-    /// presses: held, the next pass reads them by their own latches. The
-    /// latched keys follow the close's rule (see the module docs), the mark taken:
+    /// latches of their own (Board, Land and the escort commands), become
+    /// exactly those of `live.down` ([`UNLATCHED`], [`OWN_LATCH`], and the
+    /// modifier keys; [`FlightView::key_reads_live`]), none flight holds
+    /// of the rest is let go, and a button still down keeps the cursor
+    /// whole. The own-latch keys are never handed back as presses: held,
+    /// the next pass reads them by their own latches. The latched
+    /// keys follow the close's rule (see the module docs), the mark taken:
     ///
     /// - With a site marked, every latched key of `live.down` waits for
     ///   its release ([`FlightView::latched_down`]), every latch set
@@ -270,121 +318,163 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// - With none, those also down at flight's last poll
     ///   (`live.down_before`), or whose press flight read since
     ///   ([`FlightView::note_read_on_press`]), wait, and every other
-    ///   latched key of
-    ///   `live.down` is read as a fresh press, in `_HandlePlayer`'s poll
-    ///   order (the module's `POLL_ORDER`). One flight still holds is no
-    ///   fresh press, but `-`, which it holds for the self-destruct chord
-    ///   and reads as the zoom out by `_mapZoomFlag` (@0x70fdb): it comes
-    ///   back as a press, its zoom held back by Command or any other key
-    ///   down ([`FlightView::zoom_floating_map`]). Most act on their
-    ///   press in ours, so they come back for the router to give flight
-    ///   as it gives any key. The slot
-    ///   block's keys and the cloak act only at the next poll, as do B, L
-    ///   and the escort commands (@0x6e1b6, before F12, P, Y, I and the
-    ///   zooms) with their latches clear, so a press key after the first
+    ///   latched key of `live.down` is read as a fresh press, in
+    ///   `_HandlePlayer`'s poll order (the module's `POLL_ORDER`). One
+    ///   flight still holds is no fresh press, but Zoom Out's, which it
+    ///   holds for the self-destruct chord and reads as the zoom out by
+    ///   `_mapZoomFlag` (@0x70fdb): it comes back as a press, its zoom held
+    ///   back by Command or any other key down
+    ///   ([`FlightView::zoom_floating`]). Most act on their press in ours,
+    ///   so they come back for the router to give flight as it gives any
+    ///   key. The slot block's keys and the cloak act only at the next
+    ///   poll, as do Board, Land and the escort commands (@0x6e1b6, before
+    ///   F12, P, Y, I and the zooms) with their latches clear, so a press
+    ///   key after the first
     ///   of them in the order (Tab, M, J, Y, P and the rest after the
     ///   block @0x69d3f; R, W, J and on after L @0x6a8b8) is kept for that
     ///   poll instead
     ///   (`FlightView::read_after_poll`): the block picks first, and a
     ///   dialog the later key opens latches the keys after it, as P's
     ///   `_SetAllKeyCmdFlags` (@0x70393) does.
+    ///
+    /// A key's place in that order is its command's, as a press of it
+    /// would mean now, its key read through flight's reader; keys of one
+    /// command (a slot's number and its F-key twin) go in key order.
+    ///
+    /// The pad comes back by the same rules, each button read under the
+    /// layer it went down under only ([`FlightView::take_back_pad`]; the
+    /// `pad_hand_back` module): every button adopted with that layer, its
+    /// sticks as they stand, and the press the closing dialog took let go.
+    /// Its own-latch entries and fresh presses join the keys' in one poll
+    /// order, sorted already, so a pad press and a key press come back in
+    /// `_HandlePlayer`'s order between them.
     #[must_use]
     pub fn take_back_live_input(&mut self, live: LiveKeys) -> Vec<Input> {
+        let LiveKeys {
+            down,
+            down_before,
+            button,
+            pad,
+            pad_before,
+            pad_taken,
+        } = live;
         let latch_all = std::mem::take(&mut self.latch_at_close) || self.map_open;
-        self.held.retain(|&key| !reads_live(key));
-        self.latched_down.clear();
-        for &key in &live.down {
-            self.hold_live_key(key);
+        self.sync_escort_keys();
+        for press in self.keys.down() {
+            // The pad's are the pad hand-back's, by their exact layers.
+            if !matches!(press, Input::PadButton { .. }) && self.key_reads_live(&press) {
+                self.keys.follow(&press.released());
+            }
         }
-        self.cursor.button(live.button);
+        self.latched_down.clear();
+        // The modifiers first, so each other key reads as it would with
+        // them down.
+        let (modifiers, keys): (Vec<Input>, Vec<Input>) =
+            down.presses().partition(is_modifier_input);
+        for press in modifiers.iter().chain(&keys) {
+            self.hold_live_key(press);
+        }
+        self.cursor.button(button);
+        let read_so_far = self.read_on_press.clone();
+        let pad_entries = self.take_back_pad(&pad, &pad_before, pad_taken, latch_all, &read_so_far);
         if latch_all {
-            self.latch_held_keys(live.down);
+            self.latch_keys(keys);
             self.set_every_latch();
             return Vec::new();
         }
         let read = std::mem::take(&mut self.read_on_press);
-        let waits = |key: &Key| live.down_before.contains(key) || read.contains(key);
-        let waiting: Vec<Key> = live.down.iter().copied().filter(waits).collect();
-        self.latch_held_keys(waiting);
+        let waits = |press: &Input| {
+            down_before.holds(press) || read.iter().any(|taken| taken.same_key(press))
+        };
+        let waiting: Vec<Input> = keys.iter().copied().filter(waits).collect();
+        self.latch_keys(waiting);
+        let mut ordered: Vec<(usize, Command, Input, Held)> = keys
+            .iter()
+            .filter_map(|&press| {
+                let command = self
+                    .keys
+                    .peek(&press)
+                    .or_else(|| self.keys.bound_to(&press).first().copied())?;
+                let at = poll_index(command)?;
+                Some((at, command, press, Held::Key))
+            })
+            .chain(
+                pad_entries
+                    .into_iter()
+                    .map(|(at, command, press)| (at, command, press, Held::Pad)),
+            )
+            .collect();
+        ordered.sort_by_key(|&(at, ..)| at);
         let mut presses = Vec::new();
         let mut polled_before = false;
         self.after_poll.clear();
-        for key in POLL_ORDER.into_iter().filter(|key| live.down.contains(key)) {
-            if OWN_LATCH_KEYS.contains(&key) {
+        for (_, command, press, held) in ordered {
+            if OWN_LATCH.contains(&command) {
                 // Held, and read by its own latch at the next poll.
-                polled_before |= !self.own_latch(key);
+                polled_before |= !self.own_latch(command);
                 continue;
             }
-            // `-` is held for its chord whatever its zoom's latch says.
-            let still_held = self.held.contains(&key) && !UNLATCHED_KEYS.contains(&key);
-            if waits(&key) || still_held {
+            // Zoom Out's key is held for its chord whatever its zoom's
+            // latch says. A pad entry comes sorted.
+            let still_held = self.keys.is_down(&press) && !self.key_reads_live(&press);
+            if held == Held::Key && (waits(&press) || still_held) {
                 continue;
             }
-            let at_poll = self.acts_at_the_poll(key);
+            let at_poll = Self::acts_at_the_poll(command);
             if polled_before && !at_poll {
-                self.after_poll.push(key);
+                self.after_poll.push(press);
             } else {
-                presses.push(press(key));
+                presses.push(press);
             }
             polled_before |= at_poll;
         }
         presses
     }
 
-    /// Notes that flight took a press of `key` since its last key poll: a
-    /// latched key ours acts on at its press, as the original's poll reads
-    /// it, its latch set, so one still down at the close of a dialog no
-    /// site follows waits for its release (`live.down_before`'s keys
-    /// aside, [`FlightView::take_back_live_input`]). Not the keys read only
+    /// Notes that flight took `input`, a fresh press of `command`, since
+    /// its last key poll: a latched command ours acts on at its press, as
+    /// the original's poll reads it, its latch set, so its key still down
+    /// at the close of a dialog no site follows waits for its release
+    /// (`live.down_before`'s keys aside,
+    /// [`FlightView::take_back_live_input`]). Not the commands read only
     /// at the poll ([`FlightView::acts_at_the_poll`]) nor those with
-    /// latches of their own ([`OWN_LATCH_KEYS`]): a press of one after the
+    /// latches of their own ([`OWN_LATCH`]): a press of one after the
     /// poll and before an input's dialog in the same frame (Preferences
     /// by Command-`,`, About) leaves its latch clear. The next key poll
     /// forgets them ([`FlightView::settle_dialog_latch`]), as does the
     /// hand-back that reads them.
-    pub(super) fn note_read_on_press(&mut self, key: Key) {
-        if POLL_ORDER.contains(&key)
-            && !OWN_LATCH_KEYS.contains(&key)
-            && !self.acts_at_the_poll(key)
+    pub(super) fn note_read_on_press(&mut self, command: Command, input: &Input) {
+        if POLL_ORDER.contains(&command)
+            && !OWN_LATCH.contains(&command)
+            && !Self::acts_at_the_poll(command)
+            && let Some(press) = Devices::fresh_press(input)
         {
-            self.read_on_press.insert(key);
+            self.read_on_press.push(press);
         }
     }
 
-    /// Whether `key`'s own latch is set, one of [`OWN_LATCH_KEYS`]: L's
+    /// Whether `command`'s own latch is set, one of [`OWN_LATCH`]: L's
     /// (the `faded_keys` module's), B's ([`FlightView::board_latch`]) or an
     /// escort command's (`FlightView::escort_commands`).
-    fn own_latch(&self, key: Key) -> bool {
-        match key {
-            LAND_KEY => self.faded_keys.land_latched(),
-            BOARD_KEY => self.board_latch,
-            _ => super::cockpit::ESCORT_COMMAND_KEYS
-                .iter()
-                .position(|&command| command == key)
+    fn own_latch(&self, command: Command) -> bool {
+        match command {
+            Command::Flight(F::LandDock) => self.faded_keys.land_latched(),
+            Command::Flight(F::Board) => self.board_latch,
+            _ => super::cockpit::escort_command_index(command)
                 .is_some_and(|index| self.escort_commands.is_set(index)),
         }
     }
 
-    /// Whether flight acts on `key` only at its next key poll or step,
-    /// not on its press: the slot block's keys
-    /// ([`FlightView::slot_keys_frame`]), but 1-5 while the escort menu
-    /// takes them as its groups, which act on the press, and the cloak,
-    /// whose edge the step reads. B, L and the escort commands, which also
-    /// act at the poll while their latches are clear, are the hand-back's
-    /// own test
+    /// Whether flight acts on `command` only at its next key poll or step,
+    /// not on its press: the slot block's commands
+    /// ([`FlightView::slot_keys_frame`]), but not the escort menu's groups
+    /// on their keys, which act on the press, and Engage Cloak, whose edge
+    /// the step reads. Board, Land and the escort commands, which also act
+    /// at the poll while their latches are clear, are the hand-back's own
+    /// test
     /// ([`FlightView::own_latch`]).
-    fn acts_at_the_poll(&self, key: Key) -> bool {
-        let group = self.escort_menu.is_open() && GROUP_KEYS.contains(&key);
-        (super::slot_block::is_block_key(key) && !group) || key == super::CLOAK_KEY
-    }
-}
-
-/// A fresh press of `key`.
-fn press(key: Key) -> Input {
-    Input::Key {
-        key,
-        pressed: true,
-        repeat: false,
+    fn acts_at_the_poll(command: Command) -> bool {
+        slot_block::is_block_command(command) || command == Command::Flight(F::EngageCloak)
     }
 }
 
@@ -413,8 +503,8 @@ impl<
             // The poll's own read opened it: B's board, its key held.
             return true;
         }
-        for key in kept {
-            let _ = self.input(&press(key));
+        for press in kept {
+            let _ = self.input(&press);
             if self.opened_something() {
                 return true;
             }

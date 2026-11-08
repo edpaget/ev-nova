@@ -414,8 +414,9 @@
 //! - `port: port::Port` (`port` module; phase 7, done): the landing,
 //!   take-off and spaceport visit under way (the dock request and land
 //!   key, the take-off grace and touchdown, the stay, the bar's news, the
-//!   outfitter visit, the day's rolls, the ranks' port prices and the
-//!   bar's race); landing
+//!   outfitter visit, the day's rolls, the ranks' port prices, the
+//!   bar's race, the conversation open, `conversation` module, and the
+//!   scenes the visit has shown, `storylines` module); landing
 //!   and take-off themselves (`land`, `dock`, `take_off`) coordinate and
 //!   stay on `Session`.
 //! - `run: mission_run::MissionRun` (`mission_run` module; phase 7, done):
@@ -437,6 +438,7 @@
 mod afterburner;
 mod afterburner_roll;
 mod ai_gain;
+mod analog;
 mod answer_flag;
 mod apply;
 mod arrival_system;
@@ -475,6 +477,7 @@ mod comm_calls;
 mod command_word;
 mod contact_masks;
 mod control;
+mod conversation;
 mod course;
 mod crons;
 mod deadly_masks;
@@ -694,6 +697,7 @@ mod stellars;
 mod step;
 mod stock_fold;
 mod story;
+mod storylines;
 mod stray_words;
 mod swarm_formation;
 mod switched_out;
@@ -1419,6 +1423,8 @@ impl Session {
             slot_stellars: crate::traffic::slot_stellars::ids()
                 .filter_map(|id| catalog.landing_site(id))
                 .collect(),
+            stellar_dialogs: catalog.stellar_dialogs(),
+            storylines: catalog.storylines(),
         };
         let mut session = Self {
             mode: Mode::Flying,
@@ -1449,6 +1455,7 @@ impl Session {
         // slots at once (@0x759af-0x75b91; see the `loaded_berths` module).
         session.space.hold_loaded_berths(&mut session.pilot);
         session.run.register_offer_roll();
+        session.run.register_storylines(&session.statics);
         session.run.register_nebulae(&session.statics);
         session.run.register_slots(&session.pilot);
         session.set_player_system(system, here, Dock::AsItWas);
@@ -1859,10 +1866,11 @@ impl Session {
                     }
                     let flight = self.setup.flight_rules();
                     let caps = self.player_caps();
+                    let held = self.ship.held_at(controls);
                     player_step(
                         &mut self.ship.player,
                         &handling,
-                        controls,
+                        held,
                         aim,
                         caps,
                         flight,
@@ -4260,6 +4268,8 @@ impl Session {
         self.land_escorts(catalog, chance);
         let stellar = self.mode.take_landed()?;
         self.port.escorts_landed = false;
+        self.port.close_conversation();
+        self.port.forget_scenes();
         // `_playerIsLanded` stays set to @0x6358e: the moves until then
         // are landed ones (see the `take_off_moves` module). The window
         // `land_escorts` opened stays open.

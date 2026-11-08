@@ -1,0 +1,7 @@
+/fixture/EV Nova:
+Contents of (__TEXT,__cstring) section
+000d8200  Hello world
+000d820c  \005Pilot
+000d8220  Line\n
+000d8230  \aCommand
+000d8240  !Thirty-three bytes after the bang

@@ -181,6 +181,12 @@ pub struct Stellar {
     /// station or outpost).
     #[serde(default)]
     pub visual: Option<Visual>,
+    /// The conversation a landed pilot is offered here
+    /// (`dialog/<file>.ink#knot` or `dialog/<file>.ink#knot.stitch`). The
+    /// game reads the compiled `dialog/<file>.ink.json` and opens the
+    /// knot on landing. Omit if the stellar has nothing to say.
+    #[serde(default)]
+    pub dialog: Option<DialogRef>,
 }
 
 /// How a stellar looks: one or the other.
@@ -587,6 +593,16 @@ pub struct Effects {
     /// from its `from` system.
     #[serde(default)]
     pub news: Vec<Id>,
+    /// Outfits given to the player (`outfits/<id>.md`), one for each
+    /// entry, so an id listed twice gives two. They are given after the
+    /// flags, points and news, and before any removal.
+    #[serde(default)]
+    pub grant_outfits: Vec<Id>,
+    /// Outfits taken from the player (`outfits/<id>.md`), one for each
+    /// entry, after the grants. Taking an outfit the player doesn't own
+    /// does nothing.
+    #[serde(default)]
+    pub remove_outfits: Vec<Id>,
 }
 
 /// A piece of news (`news/<id>.md`), released by a mission's effects. The
@@ -939,6 +955,34 @@ mod tests {
     }
 
     #[test]
+    fn an_effect_grants_and_removes_outfits() {
+        let mission: Mission = read(&format!(
+            "{MISSION}on_accept:\n  grant_outfits: [dock-pass, dock-pass]\n\
+             on_success:\n  remove_outfits: [dock-pass]\n"
+        ))
+        .unwrap();
+        let granted: Vec<_> = (mission.on_accept.grant_outfits.iter())
+            .map(Id::as_str)
+            .collect();
+        assert_eq!(granted, ["dock-pass", "dock-pass"]);
+        let removed: Vec<_> = (mission.on_success.remove_outfits.iter())
+            .map(Id::as_str)
+            .collect();
+        assert_eq!(removed, ["dock-pass"]);
+        assert!(mission.on_accept.remove_outfits.is_empty());
+        assert!(mission.on_success.grant_outfits.is_empty());
+        assert!(mission.on_offer.grant_outfits.is_empty());
+        assert!(mission.on_offer.remove_outfits.is_empty());
+    }
+
+    #[test]
+    fn an_effect_still_refuses_an_unknown_field() {
+        let err =
+            read::<Mission>(&format!("{MISSION}on_accept:\n  outfits: [dock-pass]\n")).unwrap_err();
+        assert!(err.contains("outfits"), "{err}");
+    }
+
+    #[test]
     fn conditions_group_with_any_and_none() {
         let mission: Mission = read(&format!(
             "{MISSION}requires:\n  flags: [x]\n  any:\n    - flags: [a]\n    - missions_done: [m]\n\
@@ -1033,6 +1077,25 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(station.visual, Some(Visual::Asset(id)) if id.as_str() == "station-hub"));
+    }
+
+    #[test]
+    fn a_stellar_may_name_its_conversation() {
+        let stellar: Stellar = read(
+            "name: S\nkind: station\nsystem: s\nposition: [0, 0]\n\
+             dialog: dialog/dock-job.ink#job_offer\n",
+        )
+        .unwrap();
+        assert_eq!(
+            stellar.dialog.map(|d| d.as_str().to_owned()).as_deref(),
+            Some("dialog/dock-job.ink#job_offer")
+        );
+        let silent: Stellar = read("name: S\nkind: moon\nsystem: s\nposition: [0, 0]\n").unwrap();
+        assert!(silent.dialog.is_none());
+        let bad = read::<Stellar>(
+            "name: S\nkind: moon\nsystem: s\nposition: [0, 0]\ndialog: dialog/a.ink\n",
+        );
+        assert!(bad.is_err());
     }
 
     #[test]

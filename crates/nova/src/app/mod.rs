@@ -17,7 +17,7 @@
 //! every key and pointer event, and the screen sees none of them.
 //! [`App::handle_routed`] says where each event went, and
 //! [`App::overlay_wants`] whether the overlay's drawing (egui, in the
-//! `dev-tools` build) should see the raw event too. Without an overlay,
+//! `dev-tools` build) should see the event too. Without an overlay,
 //! every event goes to the game as before. Each frame of the overlay's
 //! drawing runs through [`App::pilot_desk_frame`], which hands it the
 //! pilot flying to edit, and catches the game up after an edit.
@@ -164,31 +164,42 @@ use std::time::Duration;
 use nova_audio::{Audio, AudioCore};
 use nova_render::{Gpu, ImageError, ImageSource, Renderer, Viewport};
 use nova_view::devtools::{DevOverlay, PilotDesk, Routing};
+use nova_view::touch::TouchRouter;
 use nova_view::view_shape::widened_size;
 use nova_view::{
-    DrawList, FullscreenKind, ImageKey, Input, Key, MenuCommand, MonitorMode, MouseButton, Point,
-    Screen, ScreenAction, ViewShape,
+    DrawList, FingerId, FullscreenKind, ImageKey, Input, Key, MenuCommand, MonitorMode,
+    MouseButton, Point, Screen, ScreenAction, Surroundings, TouchPhase, ViewShape,
 };
 
 mod fullscreen;
 pub mod keyboard_access;
+pub mod last_device;
 mod loop_event;
 mod menu;
+mod pads;
+mod px_rect;
+mod safe_area;
 mod scaling;
 pub mod screen;
+pub mod text_entry;
+mod touch;
 mod updates;
 mod wheel;
 
 pub use keyboard_access::{KeyboardAccess, NoKeyboardAccessSetting};
 pub use loop_event::LoopEvent;
 pub use menu::{MenuPick, MenuPort, MenuSync};
+pub use px_rect::PxRect;
 pub use screen::{AppScreen, Showing, start_screen};
 pub use updates::{Chosen, NoUpdater, Updater, UpdaterSource, choose};
 pub use wheel::WheelDelta;
 
 use crate::config::Os;
+use crate::gamepad::Gamepads;
+use crate::gamepad::inputs::PadInputs;
 use crate::settings::{FullscreenSetting, GameKeeper, GameSettings, ScalingSetting};
 use fullscreen::{Fullscreen, Shortcut};
+use last_device::LastDevice;
 use scaling::ScalingChoice;
 
 /// The widened view's size, in logical units, for a window `window_px`
@@ -241,6 +252,20 @@ pub trait WindowPort {
     fn request_inner_size(&mut self, size_px: (u32, u32)) {
         let _ = size_px;
     }
+    /// The part of the window the game may draw controls in: what no
+    /// notch, rounded corner or system bar covers. It is in physical
+    /// pixels from the window's top-left, as [`WindowPort::size_px`]. The
+    /// platform announces no change to it, so a reader asks again on each
+    /// resize or redraw. The whole window by default.
+    fn safe_area(&self) -> PxRect {
+        let (width, height) = self.size_px();
+        PxRect {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        }
+    }
 }
 
 /// A window event, in the core's terms.
@@ -266,6 +291,11 @@ pub enum WindowEvent {
     /// A printable character was typed: it follows the [`WindowEvent::Key`]
     /// press that typed it.
     Text(char),
+    /// A character the input method committed (an IME's composition, or
+    /// a soft keyboard's text): no key press goes with it, so it goes
+    /// wherever keys go now, the developer overlay while it shows and the
+    /// screen otherwise, as [`Input::Text`]. It counts as the keyboard's.
+    Committed(char),
     /// The pointer moved to a window position in physical pixels.
     PointerMoved {
         /// Where, in physical pixels from the window's top-left.
@@ -285,6 +315,34 @@ pub enum WindowEvent {
     Scroll {
         /// How far, toward the text's end for positive.
         delta: WheelDelta,
+    },
+    /// A finger touched down at a window position in physical pixels.
+    TouchStarted {
+        /// The finger, valid until its touch ends or is cancelled.
+        finger: FingerId,
+        /// Where, in physical pixels from the window's top-left.
+        px: (f64, f64),
+    },
+    /// A finger down moved.
+    TouchMoved {
+        /// The finger.
+        finger: FingerId,
+        /// Where to, in physical pixels from the window's top-left.
+        px: (f64, f64),
+    },
+    /// A finger lifted.
+    TouchEnded {
+        /// The finger.
+        finger: FingerId,
+        /// Where, in physical pixels from the window's top-left.
+        px: (f64, f64),
+    },
+    /// The system stopped following a finger. winit also sends one after
+    /// every lift, for a finger already ended, which the app ignores (the
+    /// touch router knows no such finger).
+    TouchCancelled {
+        /// The finger.
+        finger: FingerId,
     },
     /// Time to draw. The clock is read at the edge and passed in.
     Redraw {
@@ -364,6 +422,9 @@ pub struct App<S, C = AppScreen> {
     /// went down, and the screen is never sent the moves outside it
     /// would need to tell.
     left_held: bool,
+    /// Where the last key went: the text a key press types follows its
+    /// key there ([`App::handle_routed`]).
+    last_key: Routing,
     failures: Vec<(ImageKey, ImageError)>,
     overlay: Option<DevOverlay>,
     audio: Option<AudioCore<Box<dyn Audio>>>,
@@ -385,6 +446,25 @@ pub struct App<S, C = AppScreen> {
     /// Whether the screen has been told the app is quitting: it is told
     /// once, however many ways the quit arrives ([`App::exiting`]).
     quit: bool,
+    /// The gamepads, polled once a frame ([`App::with_gamepads`]); none
+    /// until given.
+    gamepads: Option<Box<dyn Gamepads>>,
+    /// What the pads hold, and what their events mean for the screen.
+    pad_inputs: PadInputs,
+    /// The device the player used last, told to the screen as it changes.
+    last_device: LastDevice,
+    /// Where each finger goes ([`touch`]).
+    touch: TouchRouter,
+    /// The window's safe area as last read ([`safe_area`]).
+    safe_px: PxRect,
+    /// The surroundings the screen was told last ([`safe_area`]).
+    told: Surroundings,
+    /// The platform's text entry ([`App::with_text_entry`]);
+    /// [`NoTextEntry`](crate::text_entry::NoTextEntry) until one is given.
+    text_entry: Box<dyn crate::text_entry::TextEntry>,
+    /// The field and focus count entry was last started at, while started
+    /// ([`text_entry`]).
+    told_entry: Option<(PxRect, u32)>,
 }
 
 impl<S: ImageSource, C: Screen> App<S, C> {
@@ -405,6 +485,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             pointer_hidden: false,
             cursor_synced: false,
             left_held: false,
+            last_key: Routing::Game,
             failures: Vec::new(),
             overlay: None,
             audio: None,
@@ -417,6 +498,14 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             display_offered: false,
             scaling: ScalingChoice::default(),
             quit: false,
+            gamepads: None,
+            pad_inputs: PadInputs::new(),
+            last_device: LastDevice::new(),
+            touch: TouchRouter::default(),
+            safe_px: window.safe_area(),
+            told: Surroundings::default(),
+            text_entry: Box::new(crate::text_entry::NoTextEntry),
+            told_entry: None,
         }
     }
 
@@ -570,9 +659,11 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// kind the player picked ([`Screen::take_display_choice`]) is held, to
     /// be entered and saved once the event is handled, which has the
     /// window; then a galaxy map borders setting
-    /// its map's close reports ([`Screen::take_map_borders_save`]) is
-    /// saved through the keeper with the other settings as they are. A
-    /// failed save is kept as a warning.
+    /// its map's close reports ([`Screen::take_map_borders_save`]), and
+    /// the key bindings the keys screen's OK accepted
+    /// ([`Screen::take_bindings`]), are each saved through the keeper with
+    /// the other settings as they are. A failed save is kept as a
+    /// warning.
     ///
     /// Then, unless the core is still waiting on a keyed click (its 600
     /// playing, [`AudioCore::click_waiting`]), the screen is told the
@@ -619,6 +710,17 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 self.warnings.push(warning);
             }
         }
+        if let Some(bindings) = self.screen.take_bindings()
+            && let Some(keeper) = &mut self.settings
+        {
+            let settings = GameSettings {
+                bindings,
+                ..keeper.settings()
+            };
+            if let Err(warning) = keeper.change(settings) {
+                self.warnings.push(warning);
+            }
+        }
         self.update_audio();
         if !self.audio.as_ref().is_some_and(AudioCore::click_waiting) {
             self.screen.keyed_click_ended();
@@ -653,8 +755,8 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         self.overlay.as_ref()
     }
 
-    /// Whether the overlay's drawing should see the raw window event that
-    /// was `handled` as given, or `None` for one the app does not take: true
+    /// Whether the overlay's drawing should see the window event that was
+    /// `handled` as given, or `None` for one the app does not take: true
     /// while the overlay shows, unless the event was its toggle key's.
     pub fn overlay_wants(&self, handled: Option<&Handled>) -> bool {
         self.overlay.as_ref().is_some_and(DevOverlay::visible)
@@ -698,7 +800,8 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// the screen keeps it open, to quit later if it asks to, or at once
     /// if the feed after the close asks ([`Screen::take_quit`]). A screen
     /// asking to quit exits. On Windows Alt+F4 arrives as that same close:
-    /// winit 0.30 passes `WM_SYSKEYDOWN` with `VK_F4` to `DefWindowProc`,
+    /// winit (winit-win32 since 0.31) passes `WM_SYSKEYDOWN` with `VK_F4`
+    /// to `DefWindowProc`,
     /// which turns it into `SC_CLOSE` and `WM_CLOSE`, which winit sends as
     /// `CloseRequested`; the keys themselves quit nothing.
     ///
@@ -729,10 +832,14 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     ///
     /// With a developer overlay, keys go through it first: its toggle key
     /// shows or hides it and goes nowhere else, and opening it makes the
-    /// screen abandon its pointer gesture and let go of its keys. While it
-    /// shows, every other key, pointer and scroll event goes to it alone, wherever
+    /// screen abandon its pointer gesture, its fingers and its keys. While
+    /// it shows, every other key, pointer, touch and scroll event goes to it alone, wherever
     /// the pointer is, though the pointer's position is still recorded. Every
-    /// redraw also gives the overlay its time.
+    /// redraw also gives the overlay its time. The text a key press types
+    /// goes where its key went, and is handled as that key was: to the
+    /// overlay with a key it took, and nowhere ([`Routing::Toggle`]) with
+    /// its toggle key's, so the backquote is typed neither into the panel
+    /// it opens nor into the screen it gives the keys back to.
     ///
     /// After the event, a fullscreen kind the Preferences dialog chose is
     /// entered, and a Preferences dialog just opened is offered the display
@@ -772,8 +879,10 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     fn focus_lost(&mut self, window: &mut impl WindowPort) {
         self.fullscreen.focus_lost(window);
         self.left_held = false;
+        self.cancel_touches();
         self.screen.cancel_pointer();
         self.screen.release_keys();
+        self.stop_gamepad_repeat();
         self.screen.focus_lost();
         self.feed_audio();
         self.background = true;
@@ -783,7 +892,11 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// The window came back to the front: an exclusive mode left on
     /// losing focus is entered again, the screen is told, and a redraw is
     /// asked for, which starts the redraws again.
+    ///
+    /// What the gamepads did while away is drained unrouted
+    /// ([`App::drain_gamepads`]).
     fn focus_gained(&mut self, window: &mut impl WindowPort) {
+        self.drain_gamepads();
         self.fullscreen.focus_gained(window);
         self.screen.focus_gained();
         self.background = false;
@@ -802,7 +915,44 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// pointer as `_DoSystemMap`'s `_GetMouse`/`_StillDown` loop does
     /// (@0x137e9-0x138d8). A left release outside the game ends the press
     /// with [`Screen::cancel_pointer`] instead of a release.
+    ///
+    /// A key's press or any pointer event also tells the device used last
+    /// ([`LastDevice`]). A finger's start, move or end tells it too,
+    /// wherever the finger is. After every event the screen is told the
+    /// surroundings ([`App::tell_surroundings`]) when they differ from what
+    /// it was told last: a device switch, a resize or a shape change
+    /// reaches it as [`Input::Surroundings`] after the event itself.
+    ///
+    /// Touches go through the touch router ([`touch`]), its primary finger
+    /// as the mouse under these same rules; while a finger is down, the
+    /// mouse's moves, buttons and leaves reach no screen and switch no
+    /// device ([`App::drops_mouse`]).
     fn dispatch(
+        &mut self,
+        event: WindowEvent,
+        window: &mut impl WindowPort,
+        gpu: &mut impl Gpu,
+    ) -> Handled {
+        if self.drops_mouse(&event) {
+            return Handled {
+                control: Control::Continue,
+                routing: Routing::Game,
+            };
+        }
+        if let Some(used) = device_input(&event) {
+            self.note_device(&used);
+        }
+        let mut handled = self.dispatch_event(event, window, gpu);
+        // The screen hears of the device after the input that switched it,
+        // and of a resize or a shape change after the event that made it.
+        if handled.control != Control::Exit {
+            handled.control = self.tell_surroundings();
+        }
+        handled
+    }
+
+    /// [`App::dispatch`]'s event itself.
+    fn dispatch_event(
         &mut self,
         event: WindowEvent,
         window: &mut impl WindowPort,
@@ -824,6 +974,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 self.fullscreen.resized(size_px);
                 self.screen.set_widened_size(widened_logical(size_px));
                 self.viewport = Viewport::for_shape(self.shape, size_px, scale_factor);
+                self.read_safe_area(window);
                 self.refit_shape();
                 game(Control::Continue)
             }
@@ -860,14 +1011,25 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 key,
                 pressed,
                 repeat,
-            } => self.handle_key(key, pressed, repeat, window),
-            WindowEvent::Text(_) if self.fullscreen.drops_text() => game(Control::Continue),
-            WindowEvent::Text(c) => {
-                if self.overlay.as_ref().is_some_and(DevOverlay::visible) {
-                    return overlay;
-                }
-                game(self.route(Input::Text(c)))
+            } => {
+                let handled = self.handle_key(key, pressed, repeat, window);
+                self.last_key = handled.routing;
+                handled
             }
+            WindowEvent::Text(_) if self.fullscreen.drops_text() => game(Control::Continue),
+            WindowEvent::Text(c) => match self.last_key {
+                Routing::Game => game(self.route(Input::Text(c))),
+                routing => Handled {
+                    control: Control::Continue,
+                    routing,
+                },
+            },
+            // macOS sends no key with a committing keystroke, so a commit
+            // can't follow `last_key`: it may be the overlay's toggle.
+            WindowEvent::Committed(_) if self.overlay.as_ref().is_some_and(DevOverlay::visible) => {
+                overlay
+            }
+            WindowEvent::Committed(c) => game(self.route(Input::Text(c))),
             WindowEvent::PointerMoved { px } => self.pointer_moved(px),
             WindowEvent::PointerLeft => {
                 self.pointer = None;
@@ -877,36 +1039,52 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 game(self.route(Input::PointerLeft))
             }
             WindowEvent::Scroll { delta } => self.scroll(delta),
-            WindowEvent::PointerButton { button, pressed } => {
-                if self.pointer_routing() == Routing::Overlay {
-                    return overlay;
-                }
-                if button == MouseButton::Left {
-                    // Held only by a press routed to the screen; any
-                    // release ends it.
-                    self.left_held = pressed && self.pointer_at().is_some();
-                }
-                game(match self.pointer_at() {
-                    Some(at) => self.route(Input::PointerButton {
-                        button,
-                        pressed,
-                        at,
-                    }),
-                    // The primary button let go of outside the game, in a
-                    // bar or off the window, ends the screen's press there,
-                    // as `_TrackMainScreenButtons` ends on `Button()` going
-                    // false wherever the pointer is: on no button, so it is
-                    // abandoned.
-                    None if button == MouseButton::Left && !pressed => {
-                        self.screen.cancel_pointer();
-                        Control::Continue
-                    }
-                    None => Control::Continue,
-                })
-            }
+            WindowEvent::TouchStarted { .. }
+            | WindowEvent::TouchMoved { .. }
+            | WindowEvent::TouchEnded { .. }
+            | WindowEvent::TouchCancelled { .. } => self.touch_event(event),
+            WindowEvent::PointerButton { button, pressed } => self.pointer_button(button, pressed),
             WindowEvent::Redraw { elapsed } => game(self.redraw(elapsed, window, gpu)),
             WindowEvent::Menu(command) => game(self.route_menu(command, window)),
             WindowEvent::CheckForUpdates => game(self.check_for_updates()),
+        }
+    }
+
+    /// `button` went down or up at the pointer: the overlay's alone while
+    /// it takes the pointer, else the screen's at the pointer's point, a
+    /// left release outside the game abandoning the screen's press.
+    fn pointer_button(&mut self, button: MouseButton, pressed: bool) -> Handled {
+        if self.pointer_routing() == Routing::Overlay {
+            return Handled {
+                control: Control::Continue,
+                routing: Routing::Overlay,
+            };
+        }
+        if button == MouseButton::Left {
+            // Held only by a press routed to the screen; any
+            // release ends it.
+            self.left_held = pressed && self.pointer_at().is_some();
+        }
+        let control = match self.pointer_at() {
+            Some(at) => self.route(Input::PointerButton {
+                button,
+                pressed,
+                at,
+            }),
+            // The primary button let go of outside the game, in a
+            // bar or off the window, ends the screen's press there,
+            // as `_TrackMainScreenButtons` ends on `Button()` going
+            // false wherever the pointer is: on no button, so it is
+            // abandoned.
+            None if button == MouseButton::Left && !pressed => {
+                self.screen.cancel_pointer();
+                Control::Continue
+            }
+            None => Control::Continue,
+        };
+        Handled {
+            control,
+            routing: Routing::Game,
         }
     }
 
@@ -968,6 +1146,10 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         if let Some(overlay) = &mut self.overlay {
             overlay.frame(elapsed);
         }
+        self.read_safe_area(window);
+        if self.poll_gamepads(elapsed.saturating_sub(self.last_redraw)) == Control::Exit {
+            return Control::Exit;
+        }
         self.screen.tick(elapsed.saturating_sub(self.last_redraw));
         self.forget_sync_unless_drawing();
         self.feed_audio();
@@ -980,12 +1162,18 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         // A tick can change the shape, as death's fade ends flight on the
         // main menu: this frame draws in the new one.
         self.refit_shape();
+        // A safe area read this redraw, or the shape's change, reaches the
+        // screen before the frame that shows it.
+        if self.tell_surroundings() == Control::Exit {
+            return Control::Exit;
+        }
         let resync = self.resync_pointer();
         // A dialog a keyed click opened shows its modes from its first
         // frame.
         self.offer_display(window);
         let mut list = DrawList::new();
         self.screen.draw(&mut list);
+        self.tell_text_entry(list.text_entry());
         // An upscaler picked since the last frame draws this one.
         self.switch_upscaler(gpu);
         let report = self.renderer.render(&list, &self.viewport, gpu);
@@ -1047,6 +1235,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         let routing = overlay.key(key, pressed, repeat);
         if overlay.visible() && !was_visible {
             self.left_held = false;
+            self.cancel_touches();
             self.screen.cancel_pointer();
             self.screen.release_keys();
         }
@@ -1223,6 +1412,37 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     }
 }
 
+/// The screen input a window event says the player used, for the device
+/// used last: a key's press, or any pointer event, wherever the pointer
+/// is.
+fn device_input(event: &WindowEvent) -> Option<Input> {
+    match *event {
+        WindowEvent::Key {
+            key, pressed: true, ..
+        } => Some(Input::Key {
+            key,
+            pressed: true,
+            repeat: false,
+        }),
+        WindowEvent::Committed(_) => Some(Input::Key {
+            key: Key::Unidentified,
+            pressed: true,
+            repeat: false,
+        }),
+        WindowEvent::PointerMoved { .. }
+        | WindowEvent::PointerButton { .. }
+        | WindowEvent::Scroll { .. } => Some(Input::PointerMoved(Point::new(0.0, 0.0))),
+        // A cancel is the system's, not the player's.
+        WindowEvent::TouchStarted { finger, .. }
+        | WindowEvent::TouchMoved { finger, .. }
+        | WindowEvent::TouchEnded { finger, .. } => Some(Input::Touch(nova_view::Touch {
+            finger,
+            phase: TouchPhase::Started(Point::new(0.0, 0.0)),
+        })),
+        _ => None,
+    }
+}
+
 impl<S: ImageSource> App<S, AppScreen> {
     /// Runs one frame of the developer tools: `frame` sees the overlay and
     /// the pilot flying as a desk (none before flight), and says whether it
@@ -1279,6 +1499,8 @@ mod tests {
         size_requests: Vec<(u32, u32)>,
         modes: Vec<MonitorMode>,
         monitor: Option<String>,
+        /// The safe area it reports; the whole window when unset.
+        safe_area: Option<PxRect>,
     }
 
     impl FakeWindow {
@@ -1292,6 +1514,7 @@ mod tests {
                 size_requests: Vec::new(),
                 modes: Vec::new(),
                 monitor: None,
+                safe_area: None,
             }
         }
     }
@@ -1328,6 +1551,15 @@ mod tests {
         fn request_inner_size(&mut self, size_px: (u32, u32)) {
             self.size_requests.push(size_px);
         }
+
+        fn safe_area(&self) -> PxRect {
+            self.safe_area.unwrap_or(PxRect {
+                x: 0,
+                y: 0,
+                width: self.size_px.0,
+                height: self.size_px.1,
+            })
+        }
     }
 
     /// No images at all.
@@ -1345,6 +1577,8 @@ mod tests {
     #[derive(Default)]
     struct RecordingScreen {
         inputs: Vec<Input>,
+        /// The surroundings it was told, in order.
+        surroundings: Vec<nova_view::Surroundings>,
         ticks: Vec<Duration>,
         quit_on: Option<Key>,
         releases: usize,
@@ -1365,6 +1599,8 @@ mod tests {
         closes: usize,
         /// How many inputs had arrived at each draw.
         drawn_after: std::cell::RefCell<Vec<usize>>,
+        /// The surroundings it was told last at each draw.
+        drawn_told: std::cell::RefCell<Vec<Option<nova_view::Surroundings>>>,
         /// The shape it draws in.
         shape: ViewShape,
         /// Each widened size it was told, in order.
@@ -1373,10 +1609,36 @@ mod tests {
         shape_on_input: Option<ViewShape>,
         /// The shape to switch to on its next tick, if any.
         shape_on_tick: Option<ViewShape>,
+        /// It claims a touch starting left of this logical x, if set.
+        claims_left_of: Option<f32>,
+        /// It claims a touch on a control flight's touch controls place
+        /// with the menu so, in the surroundings it was told last, if set.
+        claims_menu: Option<nova_view::flight::touch_controls::layout::MenuView>,
+        /// What each frame it draws asks of text entry, if anything.
+        entry_ask: Option<nova_view::EntryAsk>,
+    }
+
+    impl RecordingScreen {
+        /// The region flight's touch controls take in the surroundings it
+        /// was told last, in its own view: the widened size it was told
+        /// last while widened, else the classic canvas.
+        fn touch_region(&self) -> nova_view::flight::touch_controls::layout::Region {
+            let told = self.surroundings.last().copied().unwrap_or_default();
+            let view = match self.shape {
+                ViewShape::Widened => self.widened.last().copied().unwrap_or((1024.0, 768.0)),
+                ViewShape::Classic => (1024.0, 768.0),
+            };
+            nova_view::flight::touch_controls::layout::Region::for_flight(&told, view)
+        }
     }
 
     impl Screen for RecordingScreen {
         fn input(&mut self, input: &Input) -> ScreenAction {
+            // Kept apart, so the inputs the tests list are the device's.
+            if let Input::Surroundings(told) = *input {
+                self.surroundings.push(told);
+                return ScreenAction::None;
+            }
             self.inputs.push(*input);
             if let Some(shape) = self.shape_on_input.take() {
                 self.shape = shape;
@@ -1396,7 +1658,13 @@ mod tests {
 
         fn draw(&self, list: &mut DrawList) {
             self.drawn_after.borrow_mut().push(self.inputs.len());
+            self.drawn_told
+                .borrow_mut()
+                .push(self.surroundings.last().copied());
             list.sprite(ImageKey::sprite(1, 0), Point::new(0.0, 0.0), Color::WHITE);
+            if let Some(ask) = self.entry_ask {
+                list.ask_text_entry(ask);
+            }
         }
 
         fn release_keys(&mut self) {
@@ -1433,6 +1701,15 @@ mod tests {
             self.hides_pointer
         }
 
+        fn claims_touch(&self, at: Point) -> bool {
+            let on_control = self.claims_menu.is_some_and(|menu| {
+                let shown =
+                    nova_view::flight::touch_controls::layout::layout(&self.touch_region(), menu);
+                shown.hit(at).is_some()
+            });
+            on_control || self.claims_left_of.is_some_and(|x| at.x < x)
+        }
+
         fn take_quit(&mut self) -> bool {
             std::mem::take(&mut self.asks_quit)
         }
@@ -1457,9 +1734,14 @@ mod tests {
     mod background;
     mod display_shapes;
     mod exiting;
+    mod gamepads;
     mod menu;
     mod pointer_outside;
     mod pointer_release;
+    mod safe_area;
+    mod text_entry;
+    mod touch;
+    mod touch_controls;
     mod updates;
     mod wheel;
 
@@ -1511,6 +1793,20 @@ mod tests {
     }
 
     #[test]
+    fn a_window_s_safe_area_is_the_whole_window_by_default() {
+        let window = FakeWindow::new((800, 600), 2.0);
+        assert_eq!(
+            window.safe_area(),
+            PxRect {
+                x: 0,
+                y: 0,
+                width: 800,
+                height: 600
+            }
+        );
+    }
+
+    #[test]
     fn each_diagnostic_is_written_as_a_line_after_a_frame_or_an_input() {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let written = Written::default();
@@ -1534,7 +1830,7 @@ mod tests {
             )
         );
         app.screen.diagnostics = vec![Diagnostic::Sim(unflown(167))];
-        handle(&mut app, &mut window, key(Key::Up, true));
+        handle(&mut app, &mut window, key(Key::ArrowUp, true));
         assert!(
             written
                 .text()
@@ -1550,11 +1846,11 @@ mod tests {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut app = app(&window);
         app.screen.diagnostics = vec![Diagnostic::Sim(unflown(181))];
-        handle(&mut app, &mut window, key(Key::Up, true));
+        handle(&mut app, &mut window, key(Key::ArrowUp, true));
         assert_eq!(app.screen.diagnostics, [], "taken all the same");
         let mut broken = self::app(&window).with_diagnostics(Box::new(Broken));
         broken.screen.diagnostics = vec![Diagnostic::Sim(unflown(181))];
-        handle(&mut broken, &mut window, key(Key::Up, true));
+        handle(&mut broken, &mut window, key(Key::ArrowUp, true));
         assert_eq!(broken.screen.diagnostics, []);
         assert_eq!(broken.take_warnings(), Vec::<String>::new());
     }
@@ -1613,32 +1909,32 @@ mod tests {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut app = app(&window);
         assert_eq!(
-            handle(&mut app, &mut window, key(Key::Up, true)),
+            handle(&mut app, &mut window, key(Key::ArrowUp, true)),
             Control::Continue
         );
         let held = WindowEvent::Key {
-            key: Key::Up,
+            key: Key::ArrowUp,
             pressed: true,
             repeat: true,
         };
         handle(&mut app, &mut window, held);
-        handle(&mut app, &mut window, key(Key::Up, false));
+        handle(&mut app, &mut window, key(Key::ArrowUp, false));
         handle(&mut app, &mut window, key(Key::Escape, false));
         assert_eq!(
             app.screen().inputs,
             [
                 Input::Key {
-                    key: Key::Up,
+                    key: Key::ArrowUp,
                     pressed: true,
                     repeat: false
                 },
                 Input::Key {
-                    key: Key::Up,
+                    key: Key::ArrowUp,
                     pressed: true,
                     repeat: true
                 },
                 Input::Key {
-                    key: Key::Up,
+                    key: Key::ArrowUp,
                     pressed: false,
                     repeat: false
                 },
@@ -1677,7 +1973,7 @@ mod tests {
             ..RecordingScreen::default()
         };
         let mut app = App::new(&window, NoImages, screen);
-        handle(&mut app, &mut window, key(Key::Up, true));
+        handle(&mut app, &mut window, key(Key::ArrowUp, true));
         assert_eq!(app.screen().quits, 0);
         assert_eq!(
             handle(&mut app, &mut window, key(Key::Enter, true)),
@@ -1693,10 +1989,10 @@ mod tests {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut app = app(&window);
         for (which, pressed) in [
-            (Key::Alt, true),
-            (Key::Function(4), true),
-            (Key::Function(4), false),
-            (Key::Alt, false),
+            (Key::AltLeft, true),
+            (Key::F4, true),
+            (Key::F4, false),
+            (Key::AltLeft, false),
         ] {
             assert_eq!(
                 handle(&mut app, &mut window, key(which, pressed)),
@@ -1716,7 +2012,7 @@ mod tests {
             NoImages,
             RecordingScreen {
                 keeps_open: true,
-                quit_on: Some(Key::Char('y')),
+                quit_on: Some(Key::KeyY),
                 ..RecordingScreen::default()
             },
         );
@@ -1727,7 +2023,7 @@ mod tests {
         assert_eq!(app.screen().quits, 0, "not quitting");
         assert_eq!(app.take_warnings(), ["close 1"], "what it reported");
         assert_eq!(
-            handle(&mut app, &mut window, key(Key::Char('y'), true)),
+            handle(&mut app, &mut window, key(Key::KeyY, true)),
             Control::Exit,
             "the answer quits"
         );
@@ -1761,7 +2057,7 @@ mod tests {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut app = app(&window);
         assert_eq!(
-            handle(&mut app, &mut window, key(Key::Char('p'), true)),
+            handle(&mut app, &mut window, key(Key::KeyP, true)),
             Control::Continue
         );
         assert_eq!(
@@ -1772,7 +2068,7 @@ mod tests {
             app.screen().inputs,
             [
                 Input::Key {
-                    key: Key::Char('p'),
+                    key: Key::KeyP,
                     pressed: true,
                     repeat: false
                 },
@@ -1816,7 +2112,7 @@ mod tests {
         };
         let mut app = App::new(&window, NoImages, screen);
         assert_eq!(app.take_warnings(), Vec::<String>::new(), "none taken yet");
-        handle(&mut app, &mut window, key(Key::Up, true));
+        handle(&mut app, &mut window, key(Key::ArrowUp, true));
         assert_eq!(app.take_warnings(), ["first"]);
         app.screen.warnings.push("second".to_owned());
         handle(
@@ -1843,7 +2139,7 @@ mod tests {
     fn losing_focus_releases_the_screens_keys_and_carries_on() {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut app = app(&window);
-        handle(&mut app, &mut window, key(Key::Right, true));
+        handle(&mut app, &mut window, key(Key::ArrowRight, true));
         assert_eq!(app.screen().releases, 0);
         assert_eq!(
             handle(&mut app, &mut window, WindowEvent::FocusLost),
@@ -1965,8 +2261,12 @@ mod tests {
     fn a_screen_quit_on_a_pointer_event_exits() {
         struct QuitOnPointer;
         impl Screen for QuitOnPointer {
-            fn input(&mut self, _input: &Input) -> ScreenAction {
-                ScreenAction::Quit
+            fn input(&mut self, input: &Input) -> ScreenAction {
+                if matches!(input, Input::Surroundings(_)) {
+                    ScreenAction::None
+                } else {
+                    ScreenAction::Quit
+                }
             }
             fn tick(&mut self, _dt: Duration) {}
             fn draw(&self, _list: &mut DrawList) {}
@@ -2044,7 +2344,7 @@ mod tests {
         Handled { control, routing }
     }
 
-    const BACKQUOTE: Key = Key::Char('`');
+    const BACKQUOTE: Key = Key::Backquote;
 
     fn visible(app: &TestApp) -> bool {
         app.dev_overlay().expect("an overlay").visible()
@@ -2105,7 +2405,7 @@ mod tests {
             "shown from the start"
         );
         app.screen.hides_pointer = true;
-        handle(&mut app, &mut window, key(Key::Up, true));
+        handle(&mut app, &mut window, key(Key::ArrowUp, true));
         assert_eq!(
             window.pointer_shown,
             Vec::<bool>::new(),
@@ -2246,7 +2546,7 @@ mod tests {
         }
         assert_eq!(app.screen().inputs.len(), 1, "no resync");
         app.screen.hides_pointer = false;
-        handle(&mut app, &mut window, key(Key::Up, true));
+        handle(&mut app, &mut window, key(Key::ArrowUp, true));
         app.screen.hides_pointer = true;
         redraw_plain(&mut app, &mut window);
         redraw_plain(&mut app, &mut window);
@@ -2254,7 +2554,7 @@ mod tests {
             app.screen().inputs[1..],
             [
                 Input::Key {
-                    key: Key::Up,
+                    key: Key::ArrowUp,
                     pressed: true,
                     repeat: false,
                 },
@@ -2271,7 +2571,7 @@ mod tests {
         handle(&mut app, &mut window, moved(100.0, 50.0));
         redraw_plain(&mut app, &mut window);
         app.screen.hides_pointer = true;
-        handle(&mut app, &mut window, key(Key::Up, true));
+        handle(&mut app, &mut window, key(Key::ArrowUp, true));
         redraw_plain(&mut app, &mut window);
         assert_eq!(
             app.screen().inputs.last(),
@@ -2340,7 +2640,7 @@ mod tests {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut app = overlay_app(&window);
         routed(&mut app, &mut window, key(BACKQUOTE, true));
-        for k in [Key::Escape, Key::Tab, Key::Right, Key::Char('d')] {
+        for k in [Key::Escape, Key::Tab, Key::ArrowRight, Key::KeyD] {
             for pressed in [true, false] {
                 assert_eq!(
                     routed(&mut app, &mut window, key(k, pressed)),
@@ -2357,16 +2657,49 @@ mod tests {
     fn typed_text_goes_to_the_overlay_alone_while_it_shows() {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut app = overlay_app(&window);
+        routed(&mut app, &mut window, key(Key::KeyA, true));
         assert_eq!(
             routed(&mut app, &mut window, WindowEvent::Text('a')),
             handled(Control::Continue, Routing::Game)
         );
         routed(&mut app, &mut window, key(BACKQUOTE, true));
+        routed(&mut app, &mut window, key(Key::KeyB, true));
         assert_eq!(
             routed(&mut app, &mut window, WindowEvent::Text('b')),
             handled(Control::Continue, Routing::Overlay)
         );
-        assert_eq!(app.screen().inputs, [Input::Text('a')]);
+        assert_eq!(
+            app.screen().inputs,
+            [
+                Input::Key {
+                    key: Key::KeyA,
+                    pressed: true,
+                    repeat: false
+                },
+                Input::Text('a')
+            ]
+        );
+    }
+
+    #[test]
+    fn the_toggle_keys_text_goes_where_the_key_went_nowhere() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = overlay_app(&window);
+        let toggle = handled(Control::Continue, Routing::Toggle);
+        // Opening: the overlay shows, but the backquote isn't typed into it.
+        routed(&mut app, &mut window, key(BACKQUOTE, true));
+        let typed = routed(&mut app, &mut window, WindowEvent::Text('`'));
+        assert_eq!(typed, toggle);
+        assert!(visible(&app));
+        assert!(!app.overlay_wants(Some(&typed)));
+        // Closing: nor into the screen the overlay gives the keys back to.
+        routed(&mut app, &mut window, key(BACKQUOTE, true));
+        assert_eq!(
+            routed(&mut app, &mut window, WindowEvent::Text('`')),
+            toggle
+        );
+        assert!(!visible(&app));
+        assert_eq!(app.screen().inputs, []);
     }
 
     #[test]
@@ -2525,6 +2858,9 @@ mod tests {
 
     impl Screen for SoundingScreen {
         fn input(&mut self, input: &Input) -> ScreenAction {
+            if matches!(input, Input::Surroundings(_)) {
+                return ScreenAction::None;
+            }
             if let Input::Key { key: Key::Tab, .. } = input {
                 self.showing = Showing::ShipBrowser;
             }
@@ -2613,7 +2949,7 @@ mod tests {
         let (mut app, log) = sounding(&window);
         log.borrow_mut().clear();
         let mut gpu = RecordingGpu::new();
-        app.handle(key(Key::Up, true), &mut window, &mut gpu);
+        app.handle(key(Key::ArrowUp, true), &mut window, &mut gpu);
         assert_eq!(*log.borrow(), [cued(DOWN)]);
         app.handle(
             WindowEvent::Redraw {
@@ -2651,7 +2987,7 @@ mod tests {
         };
         let mut app = App::new(&window, NoImages, screen);
         let mut gpu = RecordingGpu::new();
-        app.handle(key(Key::Up, true), &mut window, &mut gpu);
+        app.handle(key(Key::ArrowUp, true), &mut window, &mut gpu);
         assert_eq!(app.screen().sounds, [], "not left to pile up");
         let redraw = WindowEvent::Redraw {
             elapsed: Duration::from_millis(16),
@@ -2728,14 +3064,14 @@ mod tests {
         let (mut app, log, audio) = keyed(&window);
         let mut gpu = RecordingGpu::new();
         audio.set_playing(cue_of(DOWN).sound, true);
-        app.handle(key(Key::Up, true), &mut window, &mut gpu);
+        app.handle(key(Key::ArrowUp, true), &mut window, &mut gpu);
         assert_eq!(*log.borrow(), [cued(DOWN)]);
         assert_eq!(app.screen().ran, 0, "600 playing");
         let redraw = |ms| WindowEvent::Redraw {
             elapsed: Duration::from_millis(ms),
         };
         app.handle(redraw(16), &mut window, &mut gpu);
-        app.handle(key(Key::Up, false), &mut window, &mut gpu);
+        app.handle(key(Key::ArrowUp, false), &mut window, &mut gpu);
         assert_eq!(app.screen().ran, 0, "still playing");
         audio.set_playing(cue_of(DOWN).sound, false);
         app.handle(redraw(32), &mut window, &mut gpu);
@@ -2761,7 +3097,7 @@ mod tests {
         let (mut app, log, audio) = keyed(&window);
         audio.set_playing(cue_of(DOWN).sound, true);
         app.audio.as_mut().expect("audio").set_sound(false);
-        app.handle(key(Key::Up, true), &mut window, &mut gpu);
+        app.handle(key(Key::ArrowUp, true), &mut window, &mut gpu);
         assert_eq!(app.screen().ran, 1, "sound off");
         assert_eq!(*log.borrow(), [AudioCommand::StopEffects], "nothing played");
 
@@ -2773,7 +3109,7 @@ mod tests {
             sounds: Vec::new(),
         };
         let mut app = App::new(&window, NoImages, screen);
-        app.handle(key(Key::Up, true), &mut window, &mut gpu);
+        app.handle(key(Key::ArrowUp, true), &mut window, &mut gpu);
         assert_eq!(app.screen().ran, 1, "no audio");
         assert_eq!(app.screen().sounds, [], "the sounds let go");
     }
@@ -2799,12 +3135,12 @@ mod tests {
         let mut app = app(&window);
         app.screen.asks_quit = true;
         assert_eq!(
-            handle(&mut app, &mut window, key(Key::Up, true)),
+            handle(&mut app, &mut window, key(Key::ArrowUp, true)),
             Control::Exit
         );
         assert_eq!(app.screen.quits, 1);
         assert_eq!(
-            handle(&mut app, &mut window, key(Key::Up, false)),
+            handle(&mut app, &mut window, key(Key::ArrowUp, false)),
             Control::Continue,
             "asked once"
         );
@@ -2955,6 +3291,7 @@ mod tests {
                 parallax_starfield: true,
                 frame_upscaler: crate::settings::ScalingSetting::default(),
                 nova_files: None,
+                bindings: nova_view::Bindings::default(),
             }
         );
         let saved: serde_json::Value =
@@ -2985,7 +3322,7 @@ mod tests {
         .with_audio(core);
         log.borrow_mut().clear();
         let mut gpu = RecordingGpu::new();
-        app.handle(key(Key::Up, true), &mut window, &mut gpu);
+        app.handle(key(Key::ArrowUp, true), &mut window, &mut gpu);
         assert_eq!(
             *log.borrow(),
             [
@@ -3027,7 +3364,11 @@ mod tests {
         )
         .with_audio(core);
         log.borrow_mut().clear();
-        app.handle(key(Key::Up, true), &mut window, &mut RecordingGpu::new());
+        app.handle(
+            key(Key::ArrowUp, true),
+            &mut window,
+            &mut RecordingGpu::new(),
+        );
         assert_eq!(
             *log.borrow(),
             [
@@ -3114,6 +3455,7 @@ mod tests {
     struct BordersScreen {
         save: Option<bool>,
         prefs: Option<Prefs>,
+        bindings: Option<nova_view::Bindings>,
     }
 
     impl Screen for BordersScreen {
@@ -3132,12 +3474,17 @@ mod tests {
         fn take_map_borders_save(&mut self) -> Option<bool> {
             self.save.take()
         }
+
+        fn take_bindings(&mut self) -> Option<nova_view::Bindings> {
+            self.bindings.take()
+        }
     }
 
     fn borders_app(window: &FakeWindow, store: &MemorySettings) -> App<NoImages, BordersScreen> {
         let screen = BordersScreen {
             save: None,
             prefs: None,
+            bindings: None,
         };
         App::new(window, NoImages, screen).with_settings(keeper(store))
     }
@@ -3168,6 +3515,42 @@ mod tests {
             "a later Preferences change keeps it"
         );
         assert_eq!(app.take_warnings(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_keys_screen_s_bindings_are_saved_with_the_other_settings_kept() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let store = MemorySettings::holding(r#"{"music": false, "show_map_borders": false}"#);
+        let mut app = borders_app(&window, &store);
+        let mut gpu = RecordingGpu::new();
+        app.handle(key(Key::Space, true), &mut window, &mut gpu);
+        assert_eq!(store.writes(), 0, "none reported, none written");
+        app.screen.bindings = Some(nova_view::Bindings::default().rebound(
+            nova_view::keymap::FlightCommand::Accelerate,
+            nova_view::KeyCombo::key(Key::KeyT),
+        ));
+        app.handle(key(Key::Space, true), &mut window, &mut gpu);
+        assert_eq!(store.writes(), 1);
+        let saved = saved_json(&store);
+        assert_eq!(saved["bindings"]["keyboard"]["Flight.Accelerate"], "KeyT");
+        assert_eq!(saved["music"], false, "kept");
+        assert_eq!(saved["show_map_borders"], false, "kept");
+        assert_eq!(app.take_warnings(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_failed_bindings_save_is_a_warning() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let store = MemorySettings::new();
+        let mut app = borders_app(&window, &store);
+        store.fail_writes(true);
+        app.screen.bindings =
+            Some(nova_view::Bindings::default().unbound(nova_view::keymap::FlightCommand::Board));
+        app.handle(key(Key::Space, true), &mut window, &mut RecordingGpu::new());
+        assert_eq!(
+            app.take_warnings(),
+            ["nova: cannot save the settings: the disk is full".to_owned()]
+        );
     }
 
     #[test]
@@ -3205,11 +3588,11 @@ mod tests {
     use crate::config::Os;
 
     /// The Windows shortcut, Alt+Enter.
-    const SHORTCUT: [Key; 2] = [Key::Alt, Key::Enter];
+    const SHORTCUT: [Key; 2] = [Key::AltLeft, Key::Enter];
 
     /// macOS's Control+Command+F, which its View menu's key equivalent
     /// takes before the window.
-    const MAC_FULL_SCREEN: [Key; 3] = [Key::Control, Key::Command, Key::Char('f')];
+    const MAC_FULL_SCREEN: [Key; 3] = [Key::ControlLeft, Key::MetaLeft, Key::KeyF];
 
     const BORDERLESS: Option<FullscreenKind> = Some(FullscreenKind::Borderless);
 
@@ -3278,14 +3661,14 @@ mod tests {
         assert_eq!(window.fullscreen, [BORDERLESS]);
         assert_eq!(
             app.screen().inputs,
-            [key_input(Key::Alt, true)],
+            [key_input(Key::AltLeft, true)],
             "the modifier only"
         );
-        handle(&mut app, &mut window, key(Key::Alt, false));
+        handle(&mut app, &mut window, key(Key::AltLeft, false));
         handle(&mut app, &mut window, WindowEvent::Text('g'));
         assert_eq!(
             app.screen().inputs[1..],
-            [key_input(Key::Alt, false), Input::Text('g')],
+            [key_input(Key::AltLeft, false), Input::Text('g')],
             "later text arrives"
         );
     }
@@ -3306,13 +3689,13 @@ mod tests {
         assert_eq!(
             app.screen().inputs,
             [
-                key_input(Key::Control, true),
-                key_input(Key::Command, true),
-                key_input(Key::Char('f'), true),
+                key_input(Key::ControlLeft, true),
+                key_input(Key::MetaLeft, true),
+                key_input(Key::KeyF, true),
                 Input::Text('f'),
-                key_input(Key::Char('f'), false),
-                key_input(Key::Command, false),
-                key_input(Key::Control, false),
+                key_input(Key::KeyF, false),
+                key_input(Key::MetaLeft, false),
+                key_input(Key::ControlLeft, false),
             ]
         );
     }
@@ -3349,12 +3732,15 @@ mod tests {
     fn alt_enter_and_f11_toggle_on_windows() {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut app = app(&window).with_os(Os::Windows);
-        chord(&mut app, &mut window, &[Key::Alt, Key::Enter]);
-        chord(&mut app, &mut window, &[Key::Function(11)]);
+        chord(&mut app, &mut window, &[Key::AltLeft, Key::Enter]);
+        chord(&mut app, &mut window, &[Key::F11]);
         assert_eq!(window.fullscreen, [BORDERLESS, None]);
         assert_eq!(
             app.screen().inputs,
-            [key_input(Key::Alt, true), key_input(Key::Alt, false)]
+            [
+                key_input(Key::AltLeft, true),
+                key_input(Key::AltLeft, false)
+            ]
         );
     }
 
@@ -3450,7 +3836,7 @@ mod tests {
             key(nova_view::devtools::TOGGLE_KEY, true),
         );
         assert!(visible(&app));
-        chord(&mut app, &mut window, &[Key::Function(11)]);
+        chord(&mut app, &mut window, &[Key::F11]);
         assert_eq!(window.fullscreen, [BORDERLESS]);
     }
 
@@ -3458,7 +3844,7 @@ mod tests {
     fn losing_focus_forgets_the_shortcuts_modifiers() {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut app = app(&window).with_os(Os::Windows);
-        handle(&mut app, &mut window, key(Key::Alt, true));
+        handle(&mut app, &mut window, key(Key::AltLeft, true));
         handle(&mut app, &mut window, WindowEvent::FocusLost);
         handle(&mut app, &mut window, key(Key::Enter, true));
         assert_eq!(window.fullscreen, NOT_FULLSCREEN);
@@ -3469,7 +3855,7 @@ mod tests {
     fn without_a_keeper_the_shortcut_still_toggles_and_a_failed_save_is_a_warning() {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut app = app(&window).with_os(Os::Windows);
-        chord(&mut app, &mut window, &[Key::Function(11)]);
+        chord(&mut app, &mut window, &[Key::F11]);
         assert_eq!(window.fullscreen, [BORDERLESS]);
         assert_eq!(app.take_warnings(), Vec::<String>::new());
         let store = MemorySettings::new();
@@ -3477,7 +3863,7 @@ mod tests {
             .with_os(Os::Windows)
             .with_settings(keeper(&store));
         store.fail_writes(true);
-        chord(&mut app, &mut window, &[Key::Function(11)]);
+        chord(&mut app, &mut window, &[Key::F11]);
         handle(&mut app, &mut window, reported(false));
         let message = "nova: cannot save the settings: the disk is full".to_owned();
         assert_eq!(app.take_warnings(), [message.clone(), message]);
@@ -3639,10 +4025,10 @@ mod tests {
             .with_settings(keeper(&store));
         app.restore_window(&mut window);
         assert_eq!(window.fullscreen, NOT_FULLSCREEN);
-        chord(&mut app, &mut window, &[Key::Function(11)]);
+        chord(&mut app, &mut window, &[Key::F11]);
         assert_eq!(window.fullscreen, [exclusive(fhd())]);
         assert!(stored(&store).fullscreen);
-        chord(&mut app, &mut window, &[Key::Function(11)]);
+        chord(&mut app, &mut window, &[Key::F11]);
         assert_eq!(window.fullscreen, [exclusive(fhd()), None]);
         assert_eq!(window.size_requests, [(1024, 768)]);
         let saved = stored(&store);
@@ -3677,7 +4063,7 @@ mod tests {
         fn input(&mut self, input: &Input) -> ScreenAction {
             match *input {
                 Input::Key {
-                    key: Key::Char('p'),
+                    key: Key::KeyP,
                     pressed: true,
                     ..
                 } => self.open = true,
@@ -3753,7 +4139,7 @@ mod tests {
         let mut app = display_app(&window, &[]);
         handle_display(&mut app, &mut window, WindowEvent::FocusGained);
         assert_eq!(app.screen().offers, [], "not open");
-        press_on(&mut app, &mut window, Key::Char('p'));
+        press_on(&mut app, &mut window, Key::KeyP);
         let listed = vec![qhd(), fhd()];
         assert_eq!(
             app.screen().offers,
@@ -3763,7 +4149,7 @@ mod tests {
                 FullscreenKind::Borderless
             )]
         );
-        press_on(&mut app, &mut window, Key::Up);
+        press_on(&mut app, &mut window, Key::ArrowUp);
         handle_display(
             &mut app,
             &mut window,
@@ -3775,7 +4161,7 @@ mod tests {
         press_on(&mut app, &mut window, Key::Escape);
         app.fullscreen.set_kind(fhd_on(DELL));
         window.modes.clear();
-        press_on(&mut app, &mut window, Key::Char('p'));
+        press_on(&mut app, &mut window, Key::KeyP);
         assert_eq!(
             app.screen().offers[1],
             (
@@ -3792,7 +4178,7 @@ mod tests {
         let mut window = on_monitor();
         let mut app = display_app(&window, &[]).with_os(Os::MacOs);
         app.fullscreen.set_kind(fhd_on(DELL));
-        press_on(&mut app, &mut window, Key::Char('p'));
+        press_on(&mut app, &mut window, Key::KeyP);
         assert_eq!(
             app.screen().offers,
             [(
@@ -3855,7 +4241,7 @@ mod tests {
         let store = MemorySettings::new();
         let mut app = display_app(&window, &[choosing(FullscreenKind::Exclusive(qhd()))])
             .with_settings(keeper(&store));
-        press_on(&mut app, &mut window, Key::Char('p'));
+        press_on(&mut app, &mut window, Key::KeyP);
         press_on(&mut app, &mut window, Key::Space);
         assert_eq!(window.fullscreen, [exclusive(qhd())]);
         let saved = stored(&store);
@@ -3901,7 +4287,7 @@ mod tests {
             .with_settings(keeper(&store));
         app.restore_window(&mut window);
         app.take_warnings();
-        press_on(&mut app, &mut window, Key::Char('p'));
+        press_on(&mut app, &mut window, Key::KeyP);
         assert_eq!(
             app.screen().offers,
             [(
@@ -3943,7 +4329,7 @@ mod tests {
             .with_settings(keeper(&store));
         app.restore_window(&mut window);
         assert_eq!(app.take_warnings().len(), 1);
-        press_on(&mut app, &mut window, Key::Char('p'));
+        press_on(&mut app, &mut window, Key::KeyP);
         let (_, current, chosen) = &app.screen().offers[0];
         assert_eq!(
             (*current, *chosen),
@@ -3966,7 +4352,7 @@ mod tests {
             .with_settings(keeper(&store));
         app.restore_window(&mut window);
         assert_eq!(app.take_warnings().len(), 1);
-        press_on(&mut app, &mut window, Key::Char('p'));
+        press_on(&mut app, &mut window, Key::KeyP);
         press_on(&mut app, &mut window, Key::Space);
         let saved = stored(&store);
         assert!(saved.fullscreen);
@@ -3988,7 +4374,7 @@ mod tests {
             .with_os(Os::Windows)
             .with_settings(keeper(&store));
         app.restore_window(&mut window);
-        chord(&mut app, &mut window, &[Key::Function(11)]);
+        chord(&mut app, &mut window, &[Key::F11]);
         assert_eq!(window.fullscreen, [BORDERLESS]);
         let warnings = app.take_warnings();
         assert_eq!(warnings.len(), 1, "{warnings:?}");
@@ -4004,7 +4390,7 @@ mod tests {
         let store = MemorySettings::new();
         let mut app = display_app(&window, &[choosing(FullscreenKind::Exclusive(qhd()))])
             .with_settings(keeper(&store));
-        press_on(&mut app, &mut window, Key::Char('p'));
+        press_on(&mut app, &mut window, Key::KeyP);
         window.modes.clear();
         press_on(&mut app, &mut window, Key::Space);
         assert_eq!(window.fullscreen, [BORDERLESS]);
@@ -4018,8 +4404,8 @@ mod tests {
         type Quit = fn(&mut TestApp, &mut FakeWindow) -> Control;
         let close: Quit = |app, window| handle(app, window, WindowEvent::CloseRequested);
         let screen_quit: Quit = |app, window| {
-            app.screen.quit_on = Some(Key::Char('q'));
-            handle(app, window, key(Key::Char('q'), true))
+            app.screen.quit_on = Some(Key::KeyQ);
+            handle(app, window, key(Key::KeyQ, true))
         };
         let quit_on_tick: Quit = |app, window| {
             app.screen.asks_quit = true;
@@ -4050,7 +4436,7 @@ mod tests {
         let mut app = app(&window).with_os(Os::Windows);
         handle(&mut app, &mut window, WindowEvent::CloseRequested);
         let mut borderless = self::app(&window).with_os(Os::Windows);
-        chord(&mut borderless, &mut window, &[Key::Function(11)]);
+        chord(&mut borderless, &mut window, &[Key::F11]);
         handle(&mut borderless, &mut window, WindowEvent::CloseRequested);
         assert_eq!(window.fullscreen, [BORDERLESS]);
     }

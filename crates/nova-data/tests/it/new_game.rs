@@ -13,6 +13,7 @@ use nova_data::records::character::Character;
 use nova_data::records::desc::Desc;
 use nova_data::records::dude::Dude;
 use nova_data::records::govt::Govt;
+use nova_data::records::outfit::Outfit;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::stellar::{Stellar, flags2};
@@ -31,8 +32,11 @@ use nova_galaxy_media::BARE;
 /// none; and `verge-camp`, a warden outpost with a bar and no fuel; jump
 /// points two of which lead from `hearth` to `verge`, a dead pair between
 /// `verge` and `drift`, and `drift`'s one-way back door to `verge`; the
-/// civilian hull `hauler` and the crown hull `cutter`; and the start
-/// `dock-hand`, in the hauler in `hearth`.
+/// civilian hull `hauler` and the crown hull `cutter`; the outfit
+/// `dock-pass`; the start `dock-hand`, in the hauler in `hearth`; the
+/// storyline `dock-work`,
+/// whose four missions and two news items run over the conversations of
+/// `dialog/dock-job.ink`, compiled, whose greeting `verge-camp` names.
 fn fixture() -> PathBuf {
     new_game::fixture::folder()
 }
@@ -41,6 +45,11 @@ fn fixture() -> PathBuf {
 fn named<T: Registered + Clone>(data: &GameData, id: i16) -> (String, T) {
     let entry = data.get::<T>(id).expect("present").expect("decoded");
     (entry.name.expect("named").to_owned(), entry.record.clone())
+}
+
+/// The bible id `text`.
+fn id(text: &str) -> nova_galaxy_format::id::Id {
+    nova_galaxy_format::id::Id::try_from(text.to_owned()).expect("an id")
 }
 
 /// `table` as `(id, nova)` pairs.
@@ -71,6 +80,77 @@ fn the_fixture_folder_loads_without_problems_or_pointers() {
 }
 
 #[test]
+fn verge_camp_names_the_fixture_s_one_stellar_conversation() {
+    let game = new_game::open(&fixture()).expect("lists");
+    let camp = StellarId(game.ids.stellars[&id("verge-camp")]);
+    let dialogs = game.data.dialogs();
+    let places: Vec<_> = dialogs
+        .stellars
+        .iter()
+        .map(|(&stellar, place)| (stellar, place.as_ref_text()))
+        .collect();
+    assert_eq!(
+        places,
+        [(camp, "dialog/dock-job.ink#camp_greeting".to_owned())],
+        "the dock's job is a mission's, and the moon names none"
+    );
+    let (_, compiled) = dialogs.stellar(camp).expect("its compiled story");
+    assert_eq!(
+        &**compiled,
+        nova_data::new_game::dialogs::fixture::DOCK_JOB_JSON
+    );
+}
+
+#[test]
+fn the_fixture_maps_four_missions_two_news_items_and_nine_jump_points() {
+    let game = new_game::open(&fixture()).expect("lists");
+    let storylines = game.data.storylines();
+    let keys = |ids: Vec<&String>| ids.into_iter().cloned().collect::<Vec<_>>();
+    assert_eq!(
+        keys(storylines.missions.keys().collect()),
+        [
+            "clear-the-road",
+            "dock-job",
+            "side-road-closes",
+            "warden-toll"
+        ]
+    );
+    assert_eq!(
+        keys(storylines.news.keys().collect()),
+        ["plate-arrives", "side-road-closes"]
+    );
+    assert_eq!(storylines.points.len(), 9);
+    let dock = StellarId(game.ids.stellars[&id("hearth-dock")]);
+    let camp = StellarId(game.ids.stellars[&id("verge-camp")]);
+    let job = &storylines.missions["dock-job"];
+    let offer = job.offer.as_ref().expect("offered");
+    assert_eq!(
+        (offer.at, offer.dialog.as_ref_text()),
+        (dock, "dialog/dock-job.ink#job_offer".to_owned()),
+        "the dock job is offered at Hearth Dock"
+    );
+    assert_eq!(
+        job.objective,
+        Some(nova_data::MissionObjective::Deliver {
+            cargo: "Hull plate".to_owned(),
+            tons: 10,
+            to: camp,
+        })
+    );
+    assert_eq!(
+        storylines.missions["side-road-closes"].offer, None,
+        "an event"
+    );
+    assert_eq!(
+        storylines.news["side-road-closes"].from,
+        SystemId(game.ids.systems[&id("hearth")])
+    );
+    let road = &storylines.points["verge/hearth-road"];
+    assert_eq!(road.owner.as_deref(), Some("warden"));
+    assert_eq!(road.stability, nova_data::GateStability::Unstable);
+}
+
+#[test]
 fn the_fixture_folder_holds_a_record_for_each_thing_it_maps() {
     let data = new_game::open(&fixture()).expect("lists").data;
     assert_eq!(data.ids(Govt::TYPE), [128, 129]);
@@ -85,6 +165,7 @@ fn the_fixture_folder_holds_a_record_for_each_thing_it_maps() {
     assert_eq!(data.ids(ShipAnim::TYPE), [128, 129]);
     assert_eq!(data.ids(Dude::TYPE), [128], "the civilian traffic");
     assert_eq!(data.ids(Character::TYPE), [128], "the start");
+    assert_eq!(data.ids(Outfit::TYPE), [128], "the dock pass");
     let [file] = data.files() else {
         panic!("one file: {:?}", data.files());
     };
@@ -301,6 +382,20 @@ fn a_stellar_s_body_is_its_landing_text() {
         dock.text.as_str(),
         "The Guild's great dock.\n\nShips are built and sold here."
     );
+}
+
+#[test]
+fn the_dock_pass_is_an_outfit_the_dock_job_lends_and_takes_back() {
+    let game = new_game::open(&fixture()).expect("lists");
+    assert_eq!(pairs(&game.ids.outfits), [("dock-pass".to_owned(), 128)]);
+    let (name, pass) = named::<Outfit>(&game.data, 128);
+    assert_eq!(name, "Dock pass");
+    assert_eq!(pass.cost, 0);
+    let job = &game.data.storylines().missions["dock-job"];
+    assert_eq!(job.on_accept.grant_outfits, [nova_data::OutfitId(128)]);
+    assert_eq!(job.on_accept.remove_outfits, []);
+    assert_eq!(job.on_success.grant_outfits, []);
+    assert_eq!(job.on_success.remove_outfits, [nova_data::OutfitId(128)]);
 }
 
 #[test]

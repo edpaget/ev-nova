@@ -407,9 +407,9 @@ pub(super) fn close_on(view: &mut Faked, pick: Option<SystemId>, answer: Answer)
 fn closing_the_hypergate_map_on_a_pick_comes_out_of_its_gate_fading_in_from_white() {
     let mut view = at_the_hypergate();
     view.map.centre_on_system(SystemId(132));
-    view.track_held(&key(Key::Up, true));
-    view.held.insert(JUMP_KEY);
-    view.held.insert(BOARD_KEY);
+    view.track_held(&key(Key::ArrowUp, true));
+    view.hold_key(JUMP_KEY);
+    view.hold_key(BOARD_KEY);
     came_out_in_alpha(&mut view, SimMessage::ExitedHypergate(SystemId(131)));
     close_on(&mut view, Some(SystemId(131)), arrived());
     assert_eq!(
@@ -429,8 +429,8 @@ fn closing_the_hypergate_map_on_a_pick_comes_out_of_its_gate_fading_in_from_whit
         Some(JumpPhase::FadeIn(0.0))
     );
     assert_eq!(
-        view.held,
-        [Key::Up, BOARD_KEY].into_iter().collect(),
+        view.held_keys(),
+        [Key::ArrowUp, BOARD_KEY].into_iter().collect(),
         "the latched keys let go (@0x6387a, @0x639f2), Up and B polled"
     );
     assert_eq!(view.ui_sounds, [], "closed in silence");
@@ -544,7 +544,7 @@ fn closing_the_hypergate_map_redraws_the_radar_at_once_leaving_the_cadence() {
 fn l_at_a_wormhole_passes_through_it_with_a_flash_whatever_the_preference() {
     for effects in [true, false] {
         let mut view = faked(sol()).with_hyperspace_effects(effects);
-        view.track_held(&key(Key::Up, true));
+        view.track_held(&key(Key::ArrowUp, true));
         view.track_held(&key(JUMP_KEY, true));
         view.track_held(&key(BOARD_KEY, true));
         view.sim.queue_answer(at_gate(GateKind::Wormhole));
@@ -563,8 +563,8 @@ fn l_at_a_wormhole_passes_through_it_with_a_flash_whatever_the_preference() {
             "effects {effects}"
         );
         assert_eq!(
-            view.held,
-            [Key::Up, BOARD_KEY].into_iter().collect(),
+            view.held_keys(),
+            [Key::ArrowUp, BOARD_KEY].into_iter().collect(),
             "the latched keys let go (@0x6429c), Up and B polled"
         );
         let passed = "Passing through a wormhole into the Alpha Centauri system on June 23rd, 1177 NC. No stellar objects present.";
@@ -748,7 +748,7 @@ fn b_then_a_close_in_flight_saves_the_borders_off_once_and_twice_saves_nothing()
     let mut view = faked(sol());
     view.open_map();
     assert!(view.map_borders_shown());
-    view.map_input(&key(Key::Char('b'), true));
+    view.map_input(&key(Key::KeyB, true));
     assert!(!view.map_borders_shown());
     assert_eq!(view.take_map_borders_save(), None, "not until the close");
     view.close_map();
@@ -756,8 +756,8 @@ fn b_then_a_close_in_flight_saves_the_borders_off_once_and_twice_saves_nothing()
     assert_eq!(view.take_map_borders_save(), None, "taken");
     view.open_map();
     assert!(!view.course_map().borders_shown(), "the next open keeps it");
-    view.map_input(&key(Key::Char('b'), true));
-    view.map_input(&key(Key::Char('b'), true));
+    view.map_input(&key(Key::KeyB, true));
+    view.map_input(&key(Key::KeyB, true));
     view.close_map();
     assert_eq!(view.take_map_borders_save(), None, "b twice");
 }
@@ -765,7 +765,7 @@ fn b_then_a_close_in_flight_saves_the_borders_off_once_and_twice_saves_nothing()
 #[test]
 fn a_borders_change_on_the_hypergate_map_saves_but_one_docked_is_kept_unsaved() {
     let mut view = at_the_hypergate();
-    view.map_input(&key(Key::Char('b'), true));
+    view.map_input(&key(Key::KeyB, true));
     close_on(&mut view, None, Answer::GateRefused(GateRefusal::Cancelled));
     assert_eq!(
         view.take_map_borders_save(),
@@ -777,7 +777,7 @@ fn a_borders_change_on_the_hypergate_map_saves_but_one_docked_is_kept_unsaved() 
         ..sol()
     });
     docked.open_bar_map();
-    docked.port_map_input(&key(Key::Char('b'), true));
+    docked.port_map_input(&key(Key::KeyB, true));
     docked.close_map();
     assert_eq!(docked.take_map_borders_save(), None, "docked");
     assert!(!docked.map_borders_shown(), "kept for the run");

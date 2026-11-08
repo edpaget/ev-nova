@@ -1,4 +1,21 @@
 //! The screen trait: what every game screen does.
+//!
+//! # Where additions go
+//!
+//! The app asks a screen things through the [`Screen`] trait, and grows it
+//! with data, not a method per question:
+//!
+//! - **A readout the app needs only at a frame** is a field of the
+//!   [`DrawList`] the screen fills in [`Screen::draw`]. The text-entry ask
+//!   ([`DrawList::ask_text_entry`],
+//!   rdm:phase/key-bindings/phase-17-text-entry-port) is the first.
+//! - **The readouts the app reads between frames** ([`Screen::hides_pointer`],
+//!   [`Screen::view_shape`], [`Screen::claims_touch`],
+//!   [`Screen::holds_back_keys`]) stay methods for now: the app reads them
+//!   after each input, before the next frame, so a frame's field would
+//!   come too late. Folding them into one readout, and the `take_*`
+//!   one-shot outputs into one batch, is filed as a task
+//!   (`screen-readouts-as-one-report`).
 
 use std::fmt;
 use std::time::Duration;
@@ -6,7 +23,9 @@ use std::time::Duration;
 use nova_sim::SimDiagnostic;
 
 use crate::draw::DrawList;
+use crate::geometry::Point;
 use crate::input::Input;
+use crate::keymap::Bindings;
 use crate::menu_command::MenuCommand;
 use crate::preferences::Prefs;
 use crate::scaling::Scaling;
@@ -140,6 +159,14 @@ pub trait Screen {
     /// it. A screen that acts on held keys over time stops acting on them.
     /// Does nothing by default.
     fn release_keys(&mut self) {}
+    /// Whether something its holder shows over it covers it now, so it
+    /// isn't the screen in front. A touch aid it hosts
+    /// ([`crate::ui::touch_aids`]) shows, takes taps and stays armed only
+    /// while its host is in front: covered, it hides, lets go and
+    /// disarms. A holder tells each screen it holds whenever what covers
+    /// it may have changed, and passes it on to the screens it holds in
+    /// turn. Does nothing by default.
+    fn set_covered(&mut self, _covered: bool) {}
     /// The window has come back to the front: the original's resume or
     /// activate event, which runs `_SwitchedIn` (@0x513cc-0x513dc). Called
     /// on the screen shown, and on any screen held under it that keeps
@@ -185,6 +212,13 @@ pub trait Screen {
     /// The preferences the player has chosen since they were last taken,
     /// if they changed: each change is reported once. None by default.
     fn take_prefs(&mut self) -> Option<Prefs> {
+        None
+    }
+    /// The key bindings the player accepted on the keys screen since they
+    /// were last taken, if they changed: each change is reported once.
+    /// A [`Bindings`] holds every device family's table, so a later
+    /// family's edit rides in it. None by default.
+    fn take_bindings(&mut self) -> Option<Bindings> {
         None
     }
     /// The display modes the current monitor offers for exclusive
@@ -258,6 +292,16 @@ pub trait Screen {
     /// drawing its own in its place (flight's cursor sprite). `false` by
     /// default.
     fn hides_pointer(&self) -> bool {
+        false
+    }
+    /// Whether a touch starting at `at` (logical) falls on controls of
+    /// the screen's own that take fingers (phase 15's touch overlay), so
+    /// the touch router ([`crate::touch`]) hands that finger to the screen
+    /// as [`Input::Touch`] rather than making it the pointer. Asked only
+    /// as a touch starts; the finger stays the screen's until it ends or
+    /// is cancelled. `false` by default.
+    fn claims_touch(&self, at: Point) -> bool {
+        let _ = at;
         false
     }
     /// Whether keys typed now would come after keys the screen holds back
@@ -377,6 +421,7 @@ mod tests {
         let screen: &mut dyn Screen = &mut counter;
         assert_eq!(screen.take_sounds(), []);
         assert_eq!(screen.take_prefs(), None);
+        assert_eq!(screen.take_bindings(), None);
         assert_eq!(screen.now_showing(), None);
     }
 
@@ -384,6 +429,12 @@ mod tests {
     fn a_screen_leaves_the_system_pointer_shown_by_default() {
         let screen: &dyn Screen = &Counter::default();
         assert!(!screen.hides_pointer());
+    }
+
+    #[test]
+    fn a_screen_claims_no_touch_by_default() {
+        let screen: &dyn Screen = &Counter::default();
+        assert!(!screen.claims_touch(Point::new(10.0, 10.0)));
     }
 
     #[test]
@@ -499,6 +550,18 @@ mod tests {
         let mut counter = Counter::default();
         let screen: &mut dyn Screen = &mut counter;
         screen.release_keys();
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        assert_eq!(list.len(), 1);
+        assert_eq!(counter.elapsed, Duration::ZERO);
+    }
+
+    #[test]
+    fn being_covered_does_nothing_by_default() {
+        let mut counter = Counter::default();
+        let screen: &mut dyn Screen = &mut counter;
+        screen.set_covered(true);
+        screen.set_covered(false);
         let mut list = DrawList::new();
         screen.draw(&mut list);
         assert_eq!(list.len(), 1);

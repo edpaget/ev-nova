@@ -30,10 +30,13 @@
 //!   click, which its gate then ignores and which only redraws; here a
 //!   greyed button takes no click, which shows the same.
 //!
-//! **Keys** (`_EscortFilter`): a key press, never its repeat, whatever
-//! modifiers are held: Return, Enter, Escape and C close the channel, R
-//! releases, U upgrades and S sells, either case. A key is passed on even
-//! for a greyed button, as the original's is, and the session ignores it.
+//! **Keys** (`_EscortFilter`, by key code): a key press, never its
+//! repeat, whatever modifiers are held, read as commands through the key
+//! map ([`command_press`]): Confirm (Return, Enter), Back (Escape) and the
+//! escort dialog context's Close (C) close the channel, Release (R)
+//! releases, Upgrade (U) upgrades and Sell (S) sells. A key is passed on
+//! even for a greyed button, as the original's is, and the session
+//! ignores it.
 //!
 //! Without the interface file, [`EscortDialog::fallback`] lays out the
 //! same items itself, over a dark backdrop.
@@ -54,7 +57,10 @@ use crate::color::Color;
 use crate::draw::DrawList;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
-use crate::input::{Input, Key};
+use crate::input::Input;
+use crate::keymap::{
+    Command, CommandReader, EscortDialogCommand, SharedBindings, UiCommand, contexts,
+};
 use crate::screen::{Screen, ScreenAction};
 use crate::spaceport::credits::comma_number;
 use crate::text::TextMetrics;
@@ -216,18 +222,15 @@ pub fn mark_labels(mark: Option<EscortMark>) -> (&'static str, &'static str) {
     )
 }
 
-/// The press a key is, if any (see the module docs).
+/// The press a command is, if any (see the module docs).
 #[must_use]
-pub fn key_press(key: Key) -> Option<EscortButton> {
-    match key {
-        Key::Enter | Key::Escape => Some(EscortButton::Close),
-        Key::Char(c) => match c.to_ascii_lowercase() {
-            'c' => Some(EscortButton::Close),
-            'r' => Some(EscortButton::Release),
-            'u' => Some(EscortButton::Upgrade),
-            's' => Some(EscortButton::Sell),
-            _ => None,
-        },
+pub fn command_press(command: Command) -> Option<EscortButton> {
+    match command {
+        Command::Ui(UiCommand::Confirm | UiCommand::Back)
+        | Command::EscortDialog(EscortDialogCommand::Close) => Some(EscortButton::Close),
+        Command::EscortDialog(EscortDialogCommand::Release) => Some(EscortButton::Release),
+        Command::EscortDialog(EscortDialogCommand::Upgrade) => Some(EscortButton::Upgrade),
+        Command::EscortDialog(EscortDialogCommand::Sell) => Some(EscortButton::Sell),
         _ => None,
     }
 }
@@ -242,6 +245,8 @@ pub struct EscortDialog {
     view: EscortDialogView,
     dialog: Dialog,
     press: Option<EscortButton>,
+    /// Its keys, as commands ([`contexts::ESCORT_DIALOG`]).
+    reader: CommandReader,
 }
 
 impl std::fmt::Debug for EscortDialog {
@@ -305,13 +310,23 @@ impl EscortDialog {
             view: view.clone(),
             dialog,
             press: None,
+            reader: CommandReader::new(contexts::ESCORT_DIALOG),
         })
     }
 
-    /// Shows `view`: its lines and its buttons' labels and greying.
+    /// The escort dialog reading its keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.dialog.set_bindings(bindings.clone());
+        self.reader.set_bindings(bindings);
+        self
+    }
+
+    /// Shows `view`: its lines and its buttons' labels and greying,
+    /// keeping the focus ring and the pad's device and focused item.
     pub fn set_view(&mut self, view: &EscortDialogView) {
-        let ring = self.dialog.focus_ring();
-        self.dialog = layout(&self.template, view, self.style, &self.metrics).with_focus_ring(ring);
+        self.dialog
+            .lay_out_again(layout(&self.template, view, self.style, &self.metrics));
         self.view = view.clone();
     }
 
@@ -427,14 +442,11 @@ impl Screen for EscortDialog {
     /// event goes to the dialog, and a button activated is its press. It
     /// never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
-        if let Input::Key {
-            key,
-            pressed: true,
-            repeat,
-        } = *input
-            && let Some(press) = key_press(key)
+        if let Some(command) = self.reader.follow(input)
+            && command.pressed
+            && let Some(press) = command_press(command.command)
         {
-            if !repeat {
+            if !command.repeat {
                 self.press = Some(press);
             }
             return ScreenAction::None;
@@ -475,13 +487,17 @@ impl Screen for EscortDialog {
 }
 
 #[cfg(test)]
+pub(crate) use tests::pad_probe;
+
+#[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
     use nova_sim::ShipId;
 
     use super::*;
     use crate::draw::DrawCommand;
-    use crate::input::MouseButton;
+    use crate::input::{Key, MouseButton};
+    use crate::keymap::{Bindings, KeyCombo};
     use crate::text::fixture::MonoMetrics;
 
     /// A hired Cruiser (ship 129), upgradable for 6,000, paid 1,000 a day.
@@ -515,6 +531,86 @@ mod tests {
             can_sell: true,
             mark: None,
         }
+    }
+
+    fn pad(button: crate::input::PadButton, pressed: bool) -> Input {
+        Input::PadButton {
+            button,
+            pressed,
+            repeat: false,
+        }
+    }
+
+    fn tap(screen: &mut impl Screen, button: crate::input::PadButton) {
+        screen.input(&pad(button, true));
+        screen.input(&pad(button, false));
+    }
+
+    const PAD: crate::input::Device =
+        crate::input::Device::Gamepad(crate::input::ControllerFamily::Generic);
+
+    fn told(device: crate::input::Device) -> Input {
+        Input::Surroundings(crate::input::Surroundings::of(device))
+    }
+
+    #[test]
+    fn east_closes_the_channel_as_escape_does() {
+        let mut escaped = dialog(&hired());
+        escaped.input(&Input::Key {
+            key: Key::Escape,
+            pressed: true,
+            repeat: false,
+        });
+        let mut padded = dialog(&hired());
+        padded.input(&told(PAD));
+        tap(&mut padded, crate::input::PadButton::East);
+        assert_eq!(padded.take_press(), Some(EscortButton::Close));
+        assert_eq!(escaped.take_press(), Some(EscortButton::Close));
+    }
+
+    #[test]
+    fn a_new_view_keeps_the_pads_focus_and_device() {
+        let mut dialog = dialog(&hired());
+        dialog.input(&told(PAD));
+        tap(&mut dialog, crate::input::PadButton::RightShoulder);
+        let focused = dialog.dialog().focus();
+        assert!(focused.is_some());
+        dialog.set_view(&hired());
+        assert_eq!(dialog.dialog().device(), PAD);
+        assert_eq!(dialog.dialog().focus(), focused);
+        assert_eq!(dialog.dialog().pad_highlight(), focused);
+    }
+
+    struct Probe(EscortDialog);
+
+    impl crate::ui::pad_focus::every_screen::PadProbe for Probe {
+        fn screen(&mut self) -> &mut dyn Screen {
+            &mut self.0
+        }
+
+        fn controls(&self) -> Vec<(&'static str, Bounds)> {
+            let at = |item| self.0.dialog().item_bounds(item).expect("item");
+            vec![
+                ("Close", at(CLOSE_ITEM)),
+                ("Release", at(RELEASE_ITEM)),
+                ("Upgrade", at(UPGRADE_ITEM)),
+            ]
+        }
+
+        fn outcome(&mut self) -> String {
+            format!("{:?}", self.0.take_press())
+        }
+
+        fn set_ring(&mut self, ring: FocusRing) -> bool {
+            self.0 = self.0.clone().with_focus_ring(ring);
+            true
+        }
+    }
+
+    /// The escort dialog's row in the pad's every-screen table: a hired
+    /// escort that can be upgraded, not sold.
+    pub(crate) fn pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        Box::new(Probe(dialog(&hired())))
     }
 
     /// Stock `DLOG` 1022's items, fixed at (0, 0).
@@ -701,27 +797,40 @@ mod tests {
     }
 
     #[test]
-    fn its_keys_press_once_whatever_the_case_and_never_on_a_repeat() {
+    fn its_keys_press_once_and_never_on_a_repeat() {
         let mut open = dialog(&captured());
         for (pressed, press) in [
             (Key::Enter, EscortButton::Close),
+            (Key::NumpadEnter, EscortButton::Close),
             (Key::Escape, EscortButton::Close),
-            (Key::Char('c'), EscortButton::Close),
-            (Key::Char('C'), EscortButton::Close),
-            (Key::Char('r'), EscortButton::Release),
-            (Key::Char('R'), EscortButton::Release),
-            (Key::Char('u'), EscortButton::Upgrade),
-            (Key::Char('U'), EscortButton::Upgrade),
-            (Key::Char('s'), EscortButton::Sell),
-            (Key::Char('S'), EscortButton::Sell),
+            (Key::KeyC, EscortButton::Close),
+            (Key::KeyR, EscortButton::Release),
+            (Key::KeyU, EscortButton::Upgrade),
+            (Key::KeyS, EscortButton::Sell),
         ] {
             open.input(&key(pressed, false));
             assert_eq!(open.take_press(), Some(press), "{pressed:?}");
             open.input(&key(pressed, true));
             assert_eq!(open.take_press(), None, "{pressed:?} repeating");
         }
-        open.input(&key(Key::Char('x'), false));
+        open.input(&key(Key::KeyX, false));
         assert_eq!(open.take_press(), None);
+    }
+
+    /// The dialog reads its keys through the key map it is given: Sell
+    /// rebound to Q sells on Q and no longer on S, also once the dialog
+    /// is laid out again for a new view.
+    #[test]
+    fn a_rebound_sell_sells_on_its_new_key_alone() {
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(EscortDialogCommand::Sell, KeyCombo::key(Key::KeyQ)),
+        );
+        let mut open = dialog(&captured()).with_bindings(bindings);
+        open.set_view(&captured());
+        open.input(&key(Key::KeyS, false));
+        assert_eq!(open.take_press(), None, "S no longer sells");
+        open.input(&key(Key::KeyQ, false));
+        assert_eq!(open.take_press(), Some(EscortButton::Sell));
     }
 
     #[test]

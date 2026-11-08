@@ -48,7 +48,8 @@ use crate::draw::{DrawList, fill_rect};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
-use crate::input::{Input, Key, MouseButton};
+use crate::input::{Input, MouseButton};
+use crate::keymap::{AssignmentCommand, Command, CommandReader, SharedBindings, contexts};
 use crate::screen::{Screen, ScreenAction};
 use crate::spaceport::credits::{OF, TON, TONS, comma_number};
 use crate::spaceport::shipyard::{ENERGY_LABEL, LABEL_COLOR as MED_GREY, NONE};
@@ -348,6 +349,13 @@ impl PlunderDialog {
         Ok(plunder)
     }
 
+    /// The plunder dialog reading its keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.dialog.set_bindings(bindings);
+        self
+    }
+
     /// Shows `shown`: item 5's rows, and each button greyed while what
     /// it takes is not on board.
     pub fn set_plunder(&mut self, shown: &PlunderShown) {
@@ -465,6 +473,8 @@ pub struct AssignmentDialog {
     dialog: Dialog,
     picture: Option<ImageKey>,
     choice: Option<Assignment>,
+    /// Its keys, as commands ([`contexts::ASSIGNMENT`]).
+    reader: CommandReader,
 }
 
 impl AssignmentDialog {
@@ -530,7 +540,16 @@ impl AssignmentDialog {
             dialog,
             picture,
             choice: None,
+            reader: CommandReader::new(contexts::ASSIGNMENT),
         })
+    }
+
+    /// The assignment dialog reading its keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.dialog.set_bindings(bindings.clone());
+        self.reader.set_bindings(bindings);
+        self
     }
 
     /// What the player chose, once.
@@ -574,24 +593,21 @@ fn assignment_template() -> DialogTemplate {
 }
 
 impl Screen for AssignmentDialog {
-    /// A press (not a repeat) of M, either case, is Use As My Ship, and of
-    /// E Use As Escort, as `_CapturedAssignmentFilter` has them; every
-    /// other event goes to the dialog, and a button activated is its
-    /// choice. It never quits.
+    /// A press (not a repeat) of the assignment context's My Ship (M) is
+    /// Use As My Ship, and of Escort (E) Use As Escort, as
+    /// `_CapturedAssignmentFilter` has them; every other event goes to the
+    /// dialog, and a button activated is its choice. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
-        if let Input::Key {
-            key: Key::Char(letter),
-            pressed: true,
-            repeat,
-        } = *input
+        if let Some(command) = self.reader.follow(input)
+            && command.pressed
         {
-            let choice = match letter.to_ascii_lowercase() {
-                'm' => Some(Assignment::MyShip),
-                'e' => Some(Assignment::Escort),
+            let choice = match command.command {
+                Command::Assignment(AssignmentCommand::MyShip) => Some(Assignment::MyShip),
+                Command::Assignment(AssignmentCommand::Escort) => Some(Assignment::Escort),
                 _ => None,
             };
             if let Some(choice) = choice {
-                if !repeat {
+                if !command.repeat {
                     self.choice = Some(choice);
                 }
                 return ScreenAction::None;
@@ -620,12 +636,16 @@ impl Screen for AssignmentDialog {
 }
 
 #[cfg(test)]
+pub(crate) use tests::{assignment_pad_probe, plunder_pad_probe};
+
+#[cfg(test)]
 mod tests {
     use nova_sim::{Good, NpcId, OutfitId, ShipId};
 
     use super::*;
     use crate::draw::{DrawCommand, fill_command};
     use crate::input::{Key, MouseButton, ScrollDelta};
+    use crate::keymap::{Bindings, KeyCombo, UiCommand};
     use crate::sound::Sound;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::ScrollText;
@@ -980,7 +1000,7 @@ mod tests {
             Rc::new(MonoMetrics),
         )
         .expect("builds");
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         assert_eq!(scrolled(&dialog), Some(1));
         let shown_rows: Vec<String> = placed(&dialog).into_iter().map(|run| run.0).collect();
         assert_eq!(
@@ -993,7 +1013,7 @@ mod tests {
             at: center(dialog.dialog(), TEXT_ITEM),
         });
         assert_eq!(scrolled(&dialog), Some(2));
-        dialog.input(&key(Key::Up));
+        dialog.input(&key(Key::ArrowUp));
         assert_eq!(scrolled(&dialog), Some(1));
         assert_eq!(dialog.take_take(), None, "scrolling takes nothing");
     }
@@ -1002,7 +1022,7 @@ mod tests {
     fn on_stock_item_5_its_rows_fit_and_nothing_moves_them() {
         let mut dialog = dialog(loaded());
         let before = placed(&dialog);
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         dialog.input(&Input::Scroll {
             delta: ScrollDelta::Lines(1.0),
             at: center(dialog.dialog(), TEXT_ITEM),
@@ -1257,6 +1277,68 @@ mod tests {
         .expect("builds")
     }
 
+    struct PlunderProbe(PlunderDialog);
+
+    impl crate::ui::pad_focus::every_screen::PadProbe for PlunderProbe {
+        fn screen(&mut self) -> &mut dyn Screen {
+            &mut self.0
+        }
+
+        fn controls(&self) -> Vec<(&'static str, Bounds)> {
+            TAKE_BUTTONS
+                .iter()
+                .map(|&(item, name, _)| (name, self.0.dialog().item_bounds(item).expect("item")))
+                .collect()
+        }
+
+        fn outcome(&mut self) -> String {
+            format!("{:?}", self.0.take_take())
+        }
+
+        fn default_control(&self) -> Option<&'static str> {
+            Some("Abort")
+        }
+
+        fn set_ring(&mut self, ring: FocusRing) -> bool {
+            self.0 = self.0.clone().with_focus_ring(ring);
+            true
+        }
+    }
+
+    /// The plunder dialog's row in the pad's every-screen table: a trader
+    /// with something of everything, so every button is enabled.
+    pub(crate) fn plunder_pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        Box::new(PlunderProbe(dialog(loaded())))
+    }
+
+    struct AssignmentProbe(AssignmentDialog);
+
+    impl crate::ui::pad_focus::every_screen::PadProbe for AssignmentProbe {
+        fn screen(&mut self) -> &mut dyn Screen {
+            &mut self.0
+        }
+
+        fn controls(&self) -> Vec<(&'static str, Bounds)> {
+            let at = |item| self.0.dialog().item_bounds(item).expect("item");
+            vec![("My Ship", at(MY_SHIP_ITEM)), ("Escort", at(ESCORT_ITEM))]
+        }
+
+        fn outcome(&mut self) -> String {
+            format!("{:?}", self.0.take_choice())
+        }
+
+        fn set_ring(&mut self, ring: FocusRing) -> bool {
+            self.0 = self.0.clone().with_focus_ring(ring);
+            true
+        }
+    }
+
+    /// The captured ship's assignment's row in the pad's every-screen
+    /// table.
+    pub(crate) fn assignment_pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        Box::new(AssignmentProbe(assignment()))
+    }
+
     #[test]
     fn the_assignment_dialog_asks_the_originals_question() {
         let dialog = assignment();
@@ -1316,9 +1398,9 @@ mod tests {
             .expect("builds");
         let first =
             |dialog: &AssignmentDialog| dialog.dialog().text(QUESTION_ITEM).map(ScrollText::first);
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         assert_eq!(first(&dialog), Some(1));
-        dialog.input(&key(Key::Up));
+        dialog.input(&key(Key::ArrowUp));
         assert_eq!(first(&dialog), Some(0));
     }
 
@@ -1459,16 +1541,42 @@ mod tests {
         assert_eq!(off.dialog().focus(), None);
     }
 
+    /// The assignment dialog reads its keys through the key map it is
+    /// given: My Ship rebound to Q chooses on Q and no longer on M.
+    #[test]
+    fn a_rebound_my_ship_chooses_on_its_new_key_alone() {
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(AssignmentCommand::MyShip, KeyCombo::key(Key::KeyQ)),
+        );
+        let mut dialog = assignment().with_bindings(bindings);
+        dialog.input(&key(Key::KeyM));
+        assert_eq!(dialog.take_choice(), None, "M no longer chooses");
+        dialog.input(&key(Key::KeyQ));
+        assert_eq!(dialog.take_choice(), Some(Assignment::MyShip));
+    }
+
+    /// The plunder dialog hands the bindings it is given to its buttons:
+    /// Confirm rebound to F6 aborts on F6 and no longer on Return.
+    #[test]
+    fn a_rebound_confirm_aborts_the_plunder_on_its_new_key_alone() {
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::F6)),
+        );
+        let mut dialog = dialog(loaded()).with_bindings(bindings);
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_take(), None, "Return no longer aborts");
+        dialog.input(&key(Key::F6));
+        assert_eq!(dialog.take_take(), Some(Take::Abort));
+    }
+
     /// `_CapturedAssignmentFilter` @0x51782: M is Use As My Ship
     /// (@0x51799, @0x517e4), E Use As Escort (@0x5179f-0x517ac), on a
     /// keyDown only, and Return, Enter and Escape are nothing.
     #[test]
     fn m_and_e_choose_and_return_and_escape_do_not() {
         for (pressed, choice) in [
-            (Key::Char('m'), Assignment::MyShip),
-            (Key::Char('M'), Assignment::MyShip),
-            (Key::Char('e'), Assignment::Escort),
-            (Key::Char('E'), Assignment::Escort),
+            (Key::KeyM, Assignment::MyShip),
+            (Key::KeyE, Assignment::Escort),
         ] {
             let mut dialog = assignment();
             dialog.input(&Input::Key {
@@ -1482,7 +1590,7 @@ mod tests {
             assert_eq!(dialog.take_sounds(), [], "{pressed:?}");
         }
         let mut dialog = assignment();
-        for pressed in [Key::Enter, Key::Escape, Key::Char('x')] {
+        for pressed in [Key::Enter, Key::Escape, Key::KeyX] {
             dialog.input(&key(pressed));
             assert_eq!(dialog.take_choice(), None, "{pressed:?}");
         }

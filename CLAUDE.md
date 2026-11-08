@@ -101,6 +101,11 @@ of the phase: find it in the binary (`EV Nova.app`, i386 with symbols), record
 the finding and its addresses in the phase body, and branch the later steps on
 the answer. Before disassembling a function, run `rdm search <symbol>
 --project ev-nova`: earlier phases record what they found, with addresses.
+Then query the binary with `mise run disasm -- <fn|callers|callees|find>
+<symbol|address>`: one function, its callers or callees, or a symbol's
+address range, with calls, strings and globals named. It is cached under
+`target/` per binary hash. Don't run `otool -tV` yourself, and never dump
+the whole disassembly into context.
 
 ### When the original and another reading disagree
 
@@ -356,11 +361,21 @@ down, stay links.
 
 ## Mutation testing
 
-After finishing a piece of work, run `cargo-mutants` once over the branch
-(`mise run mutants -- --in-diff <(git diff main...HEAD)`) to check that the tests
-catch broken code. Read `.claude/rules/mutants.md` before starting a run: it
-covers flags, running in the background, one session at a time, and what to
-do with missed mutants.
+Run `cargo-mutants` once over each phase (or task), as part of that phase's
+own work and before it goes to needs-review, to check that its tests catch
+broken code. Scope the run to that phase's commits, starting from the commit
+it began at (the phase's `started_head`, or the commit before its first one):
+
+```sh
+mise run mutants -- --in-diff <(git diff <previous commit>...HEAD)
+```
+
+On a roadmap's shared worktree, `main...HEAD` would also take in every earlier
+phase's changes, so don't use it there. Every phase runs mutants, including
+one dispatched by autopilot: an agent told to skip heavy jobs during its test
+loop still runs mutants once at the end. Read `.claude/rules/mutants.md`
+before starting a run: it covers flags, running in the background, one
+session at a time, and what to do with missed mutants.
 
 ## Conventional commits
 

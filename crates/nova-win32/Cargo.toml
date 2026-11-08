@@ -1,6 +1,6 @@
 [package]
 name = "nova-win32"
-description = "The Win32 calls the game makes (the console, and WinSparkle loaded at run time), behind a safe API, for Windows only"
+description = "The Win32 calls the game makes (the console, the keyboard layout's key names, and WinSparkle loaded at run time), behind a safe API, for Windows only"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,9 +9,11 @@ publish.workspace = true
 
 # Every dependency is Windows-only: on any other target the crate is empty.
 [target.'cfg(windows)'.dependencies]
-# The version rfd and winit already lock; only the console calls and the
-# handle's file type.
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Console"] }
+# The version rfd and winit already lock; only the console calls, the
+# handle's file type, and the keyboard layout's calls
+# (`Win32_UI_Input_KeyboardAndMouse`: `GetKeyboardLayout`,
+# `MapVirtualKeyExW` and `ToUnicodeEx`, for the key names).
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_UI_Input_KeyboardAndMouse"] }
 # Loads WinSparkle.dll from beside nova.exe at run time, with the search
 # flags that keep the current directory out. The version wgpu-hal already
 # locks.

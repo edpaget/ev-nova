@@ -5,8 +5,9 @@ use super::*;
 #[test]
 fn the_help_line_names_the_escort_keys() {
     assert!(
-        HELP.contains("F/D/V/C: escorts   Alt-C: dock   E: escort menu"),
-        "{HELP}"
+        default_help().contains("F/D/V/C: escorts   Alt-C: dock   E: escort menu"),
+        "{}",
+        default_help()
     );
 }
 

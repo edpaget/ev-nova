@@ -6,6 +6,38 @@
 //! forward to the app. A key press that types a character becomes two
 //! events: the key ([`key_event`]), then its text ([`text_event`]).
 //!
+//! winit 0.31 sends the mouse, touches and pens as one set of pointer
+//! events. [`translate`] keeps the mouse's as they were under 0.30's
+//! `CursorMoved`, `CursorLeft` and `MouseInput`: a move, and the enter
+//! (0.31 sends no move after it), are [`WindowEvent::PointerMoved`], a
+//! leave [`WindowEvent::PointerLeft`], and a button
+//! [`WindowEvent::PointerButton`] ([`map_button`]; X11's and Wayland's
+//! extra buttons arrive as winit's `ButtonSource::Unknown`, and are
+//! `MouseButton::Other`). A pointer of unknown kind is the mouse: winit
+//! counts it as primary, and on Windows it is a real pointing device. The
+//! click that activates a window on macOS is a click, as 0.30 delivered
+//! it.
+//!
+//! A finger is its own events, in physical pixels with the finger's id:
+//! winit's touch press is [`WindowEvent::TouchStarted`] (the enter before
+//! it is dropped), a touch move [`WindowEvent::TouchMoved`], a touch
+//! release [`WindowEvent::TouchEnded`], and a touch leave
+//! [`WindowEvent::TouchCancelled`]: a leave without a release is the
+//! system cancelling the touch, and the leave after every release is a
+//! cancel of a finger already ended, which the app ignores. winit's
+//! `primary` flag isn't read: `UIKit` and Wayland keep the first finger
+//! primary until every finger lifts, Android until it lifts, and Windows
+//! and X11 ask the system, so the touch router (`nova_view::touch`) picks
+//! the primary finger itself. Pens are dropped; 0.30 delivered a pen on
+//! Windows as a touch, and dropped it too.
+//!
+//! The input method's commits are [`WindowEvent::Committed`], one a
+//! character ([`ime_events`]); its composition, which no field draws yet,
+//! and its other events are dropped. The iPad's soft keyboard sends its
+//! characters as keys, and its Return as an unidentified key whose
+//! logical key is a newline, which [`keyboard_event`] makes Return.
+//! [`text_entry`] starts and stops the IME, and the soft keyboard with it.
+//!
 //! The system can make the window fullscreen, or a window again, without
 //! the app asking, and winit sends no event for it. So [`window_events`]
 //! reports the window's state, [`WindowEvent::FullscreenChanged`], ahead
@@ -14,16 +46,24 @@
 
 pub mod console;
 pub mod dialogs;
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+pub mod gamepads;
+mod key_names;
 mod keyboard_access;
+mod loop_sender;
 #[cfg(target_os = "macos")]
 mod menu_bar;
+mod run_end;
 mod runner;
+pub mod text_entry;
 #[cfg(any(target_os = "macos", windows))]
 mod updater;
 mod window;
 
 pub use dialogs::Dialogs;
+pub use key_names::system_key_names;
 pub use keyboard_access::system_keyboard_access;
+pub use loop_sender::{LoopEvents, LoopSender, loop_channel};
 pub use runner::{Runner, event_loop};
 #[cfg(target_os = "macos")]
 pub use updater::SparkleSource;
@@ -41,8 +81,11 @@ pub const APP_ID: &str = env!("NOVA_APP_ID");
 
 use std::time::Duration;
 
-use winit::event::{ElementState, MouseScrollDelta, WindowEvent as WinitEvent};
-use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::event::{
+    ButtonSource, ElementState, Ime, MouseScrollDelta, PointerKind, PointerSource,
+    WindowEvent as WinitEvent,
+};
+use winit::keyboard::{Key as LogicalKey, KeyCode, PhysicalKey};
 
 use crate::app::{WheelDelta, WindowEvent, WindowPort};
 use nova_view::{Key, MouseButton};
@@ -53,7 +96,7 @@ use nova_view::{Key, MouseButton};
 /// not carry one.
 pub fn translate(event: &WinitEvent, window: &impl WindowPort) -> Option<WindowEvent> {
     Some(match event {
-        WinitEvent::Resized(size) => WindowEvent::Resized {
+        WinitEvent::SurfaceResized(size) => WindowEvent::Resized {
             size_px: (size.width, size.height),
             scale_factor: window.scale_factor(),
         },
@@ -61,16 +104,78 @@ pub fn translate(event: &WinitEvent, window: &impl WindowPort) -> Option<WindowE
             size_px: window.size_px(),
             scale_factor: *scale_factor,
         },
-        WinitEvent::KeyboardInput { event, .. } => {
-            key_event(event.physical_key, event.state, event.repeat)
+        WinitEvent::KeyboardInput { event, .. } => keyboard_event(
+            event.physical_key,
+            &event.logical_key,
+            event.state,
+            event.repeat,
+        ),
+        // winit 0.31 sends no move after the pointer comes in, where 0.30
+        // did: the game learns where it is from the enter.
+        WinitEvent::PointerMoved {
+            position,
+            source: PointerSource::Mouse | PointerSource::Unknown,
+            ..
         }
-        WinitEvent::CursorMoved { position, .. } => WindowEvent::PointerMoved {
+        | WinitEvent::PointerEntered {
+            position,
+            kind: PointerKind::Mouse | PointerKind::Unknown,
+            ..
+        } => WindowEvent::PointerMoved {
             px: (position.x, position.y),
         },
-        WinitEvent::CursorLeft { .. } => WindowEvent::PointerLeft,
-        WinitEvent::MouseInput { state, button, .. } => WindowEvent::PointerButton {
+        WinitEvent::PointerLeft {
+            kind: PointerKind::Mouse | PointerKind::Unknown,
+            ..
+        } => WindowEvent::PointerLeft,
+        WinitEvent::PointerButton {
+            state,
+            button: ButtonSource::Mouse(button),
+            ..
+        } => WindowEvent::PointerButton {
             button: map_button(*button),
             pressed: state.is_pressed(),
+        },
+        // X11 and Wayland send the mouse's extra buttons this way.
+        WinitEvent::PointerButton {
+            state,
+            button: ButtonSource::Unknown(_),
+            ..
+        } => WindowEvent::PointerButton {
+            button: MouseButton::Other,
+            pressed: state.is_pressed(),
+        },
+        // A touch starts at its press: the enter before it is dropped.
+        // winit's `primary` isn't read, as each backend means something
+        // else by it; the touch router picks the primary finger.
+        WinitEvent::PointerButton {
+            state,
+            position,
+            button: ButtonSource::Touch { finger_id, .. },
+            ..
+        } => {
+            let finger = core_finger(*finger_id);
+            let px = (position.x, position.y);
+            if state.is_pressed() {
+                WindowEvent::TouchStarted { finger, px }
+            } else {
+                WindowEvent::TouchEnded { finger, px }
+            }
+        }
+        WinitEvent::PointerMoved {
+            position,
+            source: PointerSource::Touch { finger_id, .. },
+            ..
+        } => WindowEvent::TouchMoved {
+            finger: core_finger(*finger_id),
+            px: (position.x, position.y),
+        },
+        // A cancel, or the leave winit sends after every lift.
+        WinitEvent::PointerLeft {
+            kind: PointerKind::Touch(finger_id),
+            ..
+        } => WindowEvent::TouchCancelled {
+            finger: core_finger(*finger_id),
         },
         WinitEvent::MouseWheel { delta, .. } => WindowEvent::Scroll {
             delta: wheel_delta(*delta)?,
@@ -82,14 +187,21 @@ pub fn translate(event: &WinitEvent, window: &impl WindowPort) -> Option<WindowE
     })
 }
 
+/// The core's finger for winit's.
+fn core_finger(finger: winit::event::FingerId) -> nova_view::FingerId {
+    nova_view::FingerId::new(finger.into_raw())
+}
+
 /// The vertical part of winit's wheel `delta`, toward the text's end for
 /// positive, or `None` for one only across. winit's positive y scrolls
 /// toward the top (the wheel turned away from the user, or a trackpad
-/// swiped down with natural scrolling), so the sign flips.
+/// swiped down with natural scrolling), so the sign flips. A kind of
+/// delta a later winit adds is `None` until the game reads it.
 fn wheel_delta(delta: MouseScrollDelta) -> Option<WheelDelta> {
     match delta {
         MouseScrollDelta::LineDelta(_, y) => (y != 0.0).then(|| WheelDelta::Lines(-y)),
         MouseScrollDelta::PixelDelta(at) => (at.y != 0.0).then(|| WheelDelta::Px(-at.y)),
+        _ => None,
     }
 }
 
@@ -109,16 +221,61 @@ pub fn window_events(
 ) -> impl Iterator<Item = WindowEvent> {
     let fullscreen = matches!(
         event,
-        WinitEvent::Resized(_) | WinitEvent::Occluded(_) | WinitEvent::RedrawRequested
+        WinitEvent::SurfaceResized(_) | WinitEvent::Occluded(_) | WinitEvent::RedrawRequested
     )
     .then(|| WindowEvent::FullscreenChanged {
         fullscreen: window.is_fullscreen(),
     });
+    let commits = match event {
+        WinitEvent::Ime(ime) => ime_events(ime),
+        _ => Vec::new(),
+    };
     let event = match event {
         WinitEvent::RedrawRequested => Some(WindowEvent::Redraw { elapsed }),
         other => translate(other, window),
     };
-    fullscreen.into_iter().chain(event)
+    fullscreen.into_iter().chain(event).chain(commits)
+}
+
+/// The app's events for an input method's `ime` event: a commit is one
+/// [`WindowEvent::Committed`] for each character, control characters
+/// dropped as [`text_event`] drops them; the composition (`Preedit`, which
+/// no field draws yet), `Enabled`, `Disabled` and `DeleteSurrounding` (the
+/// game sends no surrounding text) are nothing.
+#[must_use]
+pub fn ime_events(ime: &Ime) -> Vec<WindowEvent> {
+    match ime {
+        Ime::Commit(text) => text
+            .chars()
+            .filter(|c| !c.is_control())
+            .map(WindowEvent::Committed)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// A key going down or up, as [`key_event`] makes it, but for the iPad's
+/// soft keyboard's Return: winit's `UIKit` backend sends it as a key it
+/// can't identify, whose logical key is a newline, which is Return here,
+/// so it presses a dialog's default as Return does. Every other key is
+/// [`key_event`]'s.
+#[must_use]
+pub fn keyboard_event(
+    key: PhysicalKey,
+    logical: &LogicalKey,
+    state: ElementState,
+    repeat: bool,
+) -> WindowEvent {
+    let soft_return = matches!(key, PhysicalKey::Unidentified(_))
+        && matches!(logical, LogicalKey::Character(c) if c == "\n" || c == "\r");
+    if soft_return {
+        return WindowEvent::Key {
+            key: Key::Enter,
+            pressed: state.is_pressed(),
+            repeat,
+        };
+    }
+    key_event(key, state, repeat)
 }
 
 /// A key going down or up; `repeat` is winit's flag for a press the OS
@@ -147,152 +304,136 @@ pub fn text_event(text: Option<&str>, state: ElementState) -> Option<WindowEvent
     (chars.next().is_none() && !c.is_control()).then_some(WindowEvent::Text(c))
 }
 
-/// The game's key for a physical key; keys it does not use are
-/// [`Key::Other`].
+/// Calls `$then!` with `$args`, then every key winit and `Key` name
+/// alike: the one list [`map_key`] and `key_code` are both built from,
+/// so the two directions can't drift apart.
+macro_rules! same_names {
+    ($then:ident!($($args:tt)*)) => {
+        $then!($($args)*;
+            Backquote, Backslash, BracketLeft, BracketRight, Comma, Digit0, Digit1, Digit2,
+            Digit3, Digit4, Digit5, Digit6, Digit7, Digit8, Digit9, Equal, IntlBackslash, IntlRo,
+            IntlYen, KeyA, KeyB, KeyC, KeyD, KeyE, KeyF, KeyG, KeyH, KeyI, KeyJ, KeyK, KeyL,
+            KeyM, KeyN, KeyO, KeyP, KeyQ, KeyR, KeyS, KeyT, KeyU, KeyV, KeyW, KeyX, KeyY, KeyZ,
+            Minus, Period, Quote, Semicolon, Slash, AltLeft, AltRight, Backspace, CapsLock,
+            ContextMenu, ControlLeft, ControlRight, Enter, MetaLeft, MetaRight, ShiftLeft,
+            ShiftRight, Space, Tab,
+            Convert, KanaMode, Lang1, Lang2, Lang3, Lang4, Lang5, NonConvert, Delete, End, Help,
+            Home, Insert, PageDown, PageUp, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, NumLock,
+            Numpad0, Numpad1, Numpad2, Numpad3, Numpad4, Numpad5, Numpad6, Numpad7, Numpad8,
+            Numpad9, NumpadAdd, NumpadBackspace, NumpadClear, NumpadClearEntry, NumpadComma,
+            NumpadDecimal, NumpadDivide, NumpadEnter, NumpadEqual, NumpadHash, NumpadMemoryAdd,
+            NumpadMemoryClear, NumpadMemoryRecall, NumpadMemoryStore, NumpadMemorySubtract,
+            NumpadMultiply, NumpadParenLeft, NumpadParenRight, NumpadStar, Escape, Fn, FnLock,
+            PrintScreen, ScrollLock, Pause, BrowserBack, BrowserFavorites, BrowserForward,
+            BrowserHome, BrowserRefresh, BrowserSearch, BrowserStop, Eject, LaunchApp1,
+            LaunchApp2, LaunchMail, MediaPlayPause, MediaSelect, MediaStop, MediaTrackNext,
+            MediaTrackPrevious, Power, Sleep, AudioVolumeDown, AudioVolumeMute, AudioVolumeUp,
+            WakeUp, Abort, Resume, Suspend, Again, Copy, Cut, Find, Open, Paste, Props, Select,
+            Undo, Hiragana, Katakana, F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12, F13,
+            F14, F15, F16, F17, F18, F19, F20, F21, F22, F23, F24, F25, F26, F27, F28, F29, F30,
+            F31, F32, F33, F34, F35
+        )
+    };
+}
+
+/// The game's key for a physical key, by its position: each key winit
+/// names is the `Key` of the same name, so every letter, digit,
+/// punctuation, function, keypad, navigation and editing key reaches the
+/// game. One pair is folded, the keypad's `-` arriving as `-`
+/// (`Key::Minus`): every site in the original reads the two key codes
+/// (0x1B and 0x4E) together, `_HandlePlayer` polling both and `_MapFilter`
+/// comparing the key code with both, so no screen tells them apart. Every
+/// other key is its own key, the right modifiers and the keypad's Enter
+/// included. A key winit can't identify, and the legacy `Hyper`, `Super`
+/// and `Turbo` (deprecated names in `Key`, which winit's `KeyCode` is),
+/// are [`Key::Unidentified`].
+///
+/// Which screen reads which key, where it isn't plain:
+/// - Page Up and Page Down (Mac key codes 0x74 and 0x79, fn+Up and fn+Down
+///   on a Mac laptop) are the shop grids'; Home and End (0x73 and 0x77,
+///   fn+Left and fn+Right) a text dialog's.
+/// - Backspace deletes the character before a text field's caret: Delete
+///   on a Mac keyboard.
+/// - `=` is the unshifted `+` key on a US keyboard: with the keypad's `+`,
+///   the map's zoom in, where `-` and the keypad's `-` (the folded pair)
+///   are its zoom out. The letter keys are read by position, as the
+///   original's `_PortFilter` and dialog filters read the Mac key code:
+///   W, A, S and D move the system view whatever letters another layout
+///   puts there.
+/// - `\` is Hyper Select, the original's default, and the key under
+///   Escape (`` ` ``) the developer tools' toggle, or flight's Nav Off
+///   without them.
+/// - Caps Lock toggles double time on each press, an accepted difference
+///   from the original's following the lock state. winit 0.31.0-beta.4
+///   sends no Caps Lock key on macOS (winit-appkit's `key_to_modifier`
+///   maps Alt, Control, Meta and Shift alone), so there it never arrives.
+/// - The right Shift is its own key: flight and the map's click poll the
+///   left Shift's key code alone, where the trade, the player info and
+///   the map's Tab take either.
+/// - The right Option (Alt) is its own key: flight and the race poll the
+///   left Option's key code alone, where the exchange's and the
+///   outfitter's counts take either, as does Alt-Enter.
+/// - The right Control is its own key: flight polls the left Control's
+///   key code alone (its secondary fire key).
+/// - The keypad's Enter is its own key: the intro and flight's `ackComm`
+///   poll Return's key code alone, where the dialogs take both.
+/// - F11 is the fullscreen shortcut off a Mac. F12 is flight's frame-rate
+///   key: macOS keeps it for itself unless "Use F1, F2, etc. keys as
+///   standard function keys" is set, and fn-F12 reaches the game
+///   otherwise.
+/// - Command is winit's Meta (the Windows key off a Mac), so it arrives
+///   as `Key::MetaLeft` or `Key::MetaRight`. Flight polls the left
+///   Command's key code alone, where the menus' chords take either.
 #[must_use]
 pub fn map_key(key: PhysicalKey) -> Key {
-    match key {
-        PhysicalKey::Code(KeyCode::ArrowLeft) => Key::Left,
-        PhysicalKey::Code(KeyCode::ArrowRight) => Key::Right,
-        PhysicalKey::Code(KeyCode::ArrowUp) => Key::Up,
-        PhysicalKey::Code(KeyCode::ArrowDown) => Key::Down,
-        // The shop grids' Page Up and Page Down, Mac key codes 0x74 and
-        // 0x79, fn+Up and fn+Down on a Mac laptop.
-        PhysicalKey::Code(KeyCode::PageUp) => Key::PageUp,
-        PhysicalKey::Code(KeyCode::PageDown) => Key::PageDown,
-        // A text dialog's Home and End, Mac key codes 0x73 and 0x77,
-        // fn+Left and fn+Right on a Mac laptop.
-        PhysicalKey::Code(KeyCode::Home) => Key::Home,
-        PhysicalKey::Code(KeyCode::End) => Key::End,
-        PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => Key::Enter,
-        PhysicalKey::Code(KeyCode::Escape) => Key::Escape,
-        PhysicalKey::Code(KeyCode::Space) => Key::Space,
-        PhysicalKey::Code(KeyCode::Tab) => Key::Tab,
-        // Deletes the character before the caret in a text field: Delete on
-        // a Mac keyboard.
-        PhysicalKey::Code(KeyCode::Backspace) => Key::Backspace,
-        // The map's zoom keys, by position: `=` is the unshifted `+` key on
-        // US-layout keyboards.
-        PhysicalKey::Code(KeyCode::Equal) => Key::Char('='),
-        PhysicalKey::Code(KeyCode::NumpadAdd) => Key::Char('+'),
-        PhysicalKey::Code(KeyCode::Minus | KeyCode::NumpadSubtract) => Key::Char('-'),
-        // The system view's movement keys, by position: W, A, S and D on a
-        // US-layout keyboard, wherever another layout puts those letters.
-        // S is also the spaceport's Shipyard key.
-        PhysicalKey::Code(KeyCode::KeyW) => Key::Char('w'),
-        PhysicalKey::Code(KeyCode::KeyA) => Key::Char('a'),
-        PhysicalKey::Code(KeyCode::KeyS) => Key::Char('s'),
-        PhysicalKey::Code(KeyCode::KeyD) => Key::Char('d'),
-        // E, by position: flight's escort menu key, the comm dialog's
-        // close key, and the main menu's E, which waits for this key's
-        // release as `_QuickKeyCheck(0x0e)` does.
-        PhysicalKey::Code(KeyCode::KeyE) => Key::Char('e'),
-        // Flight's key and the spaceport's other Recharge key, by
-        // position: F on a US-layout keyboard.
-        PhysicalKey::Code(KeyCode::KeyF) => Key::Char('f'),
-        // The About text's key, by position: I on a US-layout keyboard.
-        PhysicalKey::Code(KeyCode::KeyI) => Key::Char('i'),
-        // Landing's key, by position: L on a US-layout keyboard.
-        PhysicalKey::Code(KeyCode::KeyL) => Key::Char('l'),
-        // The flight map's key, by position: M on a US-layout keyboard.
-        PhysicalKey::Code(KeyCode::KeyM) => Key::Char('m'),
-        // The jump key, by position: J on a US-layout keyboard.
-        PhysicalKey::Code(KeyCode::KeyJ) => Key::Char('j'),
-        // Flight's Hyperspace Mode key and the bar's hire key, by position:
-        // H on a US-layout keyboard.
-        PhysicalKey::Code(KeyCode::KeyH) => Key::Char('h'),
-        // Hyper Select, by position: `\` on a US-layout keyboard; the
-        // original's default.
-        PhysicalKey::Code(KeyCode::Backslash) => Key::Char('\\'),
-        // The player info key in flight and the spaceport, and the
-        // Preferences dialog's elsewhere, by position: P on a US-layout
-        // keyboard.
-        PhysicalKey::Code(KeyCode::KeyP) => Key::Char('p'),
-        // Command+comma opens the Preferences, by position: the comma on a
-        // US-layout keyboard.
-        PhysicalKey::Code(KeyCode::Comma) => Key::Char(','),
-        // The Trade Center's buy key and the spaceport's Bar key, by
-        // position: B on a US-layout keyboard. Its sell key is S, above.
-        PhysicalKey::Code(KeyCode::KeyB) => Key::Char('b'),
-        // Flight's nearest target key and the spaceport's Recharge key,
-        // by position: R on a US-layout keyboard.
-        PhysicalKey::Code(KeyCode::KeyR) => Key::Char('r'),
-        // The spaceport's letter keys, by position, as `_PortFilter` reads
-        // the Mac key code: C (also flight's escort recall key) and T the
-        // Trade Center, O the Outfitter, and N the Mission BBS (also the
-        // bar's news key and an offer's refuse key).
-        PhysicalKey::Code(KeyCode::KeyC) => Key::Char('c'),
-        PhysicalKey::Code(KeyCode::KeyT) => Key::Char('t'),
-        PhysicalKey::Code(KeyCode::KeyO) => Key::Char('o'),
-        PhysicalKey::Code(KeyCode::KeyN) => Key::Char('n'),
-        // Either Alt (Option on a Mac), which makes a trade the most
-        // possible, and flight's weapon select go back, while held.
-        PhysicalKey::Code(KeyCode::AltLeft | KeyCode::AltRight) => Key::Alt,
-        // Either Shift, which turns flight's target select key back while
-        // held, and the player info's Tab to the previous tab.
-        PhysicalKey::Code(KeyCode::ShiftLeft | KeyCode::ShiftRight) => Key::Shift,
-        // Either Control: flight's secondary fire key.
-        PhysicalKey::Code(KeyCode::ControlLeft | KeyCode::ControlRight) => Key::Control,
-        // Either Command (Super, the Windows key, off a Mac): what flight's
-        // jettison and eject keys need held.
-        PhysicalKey::Code(KeyCode::SuperLeft | KeyCode::SuperRight) => Key::Command,
-        // Flight's jettison key, by position: K on a US-layout keyboard.
-        PhysicalKey::Code(KeyCode::KeyK) => Key::Char('k'),
-        // Flight's eject key, by position: X on a US-layout keyboard, the
-        // original's default (keycode 0x07).
-        PhysicalKey::Code(KeyCode::KeyX) => Key::Char('x'),
-        // Flight's hail key, by position: Y on a US-layout keyboard, the
-        // original's default.
-        PhysicalKey::Code(KeyCode::KeyY) => Key::Char('y'),
-        // Flight's cloak key and the comm and escort dialogs' U, by
-        // position: U on a US-layout keyboard.
-        PhysicalKey::Code(KeyCode::KeyU) => Key::Char('u'),
-        // Flight's escort hold key, by position: V on a US-layout keyboard.
-        PhysicalKey::Code(KeyCode::KeyV) => Key::Char('v'),
-        // Flight's afterburner key, by position: Z on a US-layout keyboard,
-        // the original's default (keycode 0x06).
-        PhysicalKey::Code(KeyCode::KeyZ) => Key::Char('z'),
-        // The comm and planet comm dialogs' Greetings key and the bar's
-        // Gamble key, by position: G on a US-layout keyboard.
-        PhysicalKey::Code(KeyCode::KeyG) => Key::Char('g'),
-        // Command-Q where no menu bar takes it, and an offer button's key
-        // when its label starts with Q, by position: Q on a US-layout
-        // keyboard. No screen acts on a plain Q's key: the main menu's Quit
-        // reads the typed text.
-        PhysicalKey::Code(KeyCode::KeyQ) => Key::Char('q'),
-        // Double time's key: each press toggles it, an accepted difference
-        // from the original's following the lock state. winit 0.30.13
-        // sends no Caps Lock key on macOS (its `key_to_modifier` maps Alt,
-        // Control, Super and Shift alone), so there it never arrives.
-        PhysicalKey::Code(KeyCode::CapsLock) => Key::CapsLock,
-        // The developer tools' toggle, by position: the key under Escape on
-        // a US-layout keyboard. Without the developer tools, it reaches
-        // flight as Nav Off, the original's default.
-        PhysicalKey::Code(KeyCode::Backquote) => Key::Char('`'),
-        // Flight's stellar slot keys, by position: 1-4 on the top row (the
-        // keypad's are not the original's).
-        PhysicalKey::Code(KeyCode::Digit1) => Key::Char('1'),
-        PhysicalKey::Code(KeyCode::Digit2) => Key::Char('2'),
-        PhysicalKey::Code(KeyCode::Digit3) => Key::Char('3'),
-        PhysicalKey::Code(KeyCode::Digit4) => Key::Char('4'),
-        // The top-row 5: the escort menu's Freighters key, and with
-        // Command flight's second nearest-stellar key. 6-0 stay unmapped.
-        PhysicalKey::Code(KeyCode::Digit5) => Key::Char('5'),
-        // F1-F4, flight's other stellar slot keys, and F5, its nearest
-        // stellar key.
-        PhysicalKey::Code(KeyCode::F1) => Key::Function(1),
-        PhysicalKey::Code(KeyCode::F2) => Key::Function(2),
-        PhysicalKey::Code(KeyCode::F3) => Key::Function(3),
-        PhysicalKey::Code(KeyCode::F4) => Key::Function(4),
-        PhysicalKey::Code(KeyCode::F5) => Key::Function(5),
-        // The fullscreen shortcut off a Mac.
-        PhysicalKey::Code(KeyCode::F11) => Key::Function(11),
-        // Flight's frame-rate key. macOS keeps F12 for itself unless "Use
-        // F1, F2, etc. keys as standard function keys" is set; fn-F12
-        // reaches the game otherwise. The key-bindings roadmap makes it
-        // rebindable.
-        PhysicalKey::Code(KeyCode::F12) => Key::Function(12),
-        _ => Key::Other,
+    /// The arms for keys winit and `Key` name alike.
+    macro_rules! from_winit {
+        ($key:expr; $($name:ident),* $(,)?) => {
+            match $key {
+                $(PhysicalKey::Code(KeyCode::$name) => Key::$name,)*
+                // `-` or the keypad's: the map's zoom out.
+                PhysicalKey::Code(KeyCode::NumpadSubtract) => Key::Minus,
+                // winit's `KeyCode` is `#[non_exhaustive]`; the legacy
+                // `Hyper`, `Super` and `Turbo` land here too.
+                _ => Key::Unidentified,
+            }
+        };
+    }
+    same_names!(from_winit!(key))
+}
+
+/// Winit's key for `key`, which the platform's layout is asked about
+/// through `to_scancode`: [`map_key`] the other way. The keypad's minus,
+/// which `map_key` folds into `-`, is its own key here, so the layout is
+/// asked about the key the player sees. `None` for
+/// [`Key::Unidentified`] and any key winit doesn't name.
+#[cfg(any(target_os = "macos", windows))]
+pub(crate) fn key_code(key: Key) -> Option<KeyCode> {
+    /// The arms for keys winit and `Key` name alike.
+    macro_rules! to_winit {
+        ($key:expr; $($name:ident),* $(,)?) => {
+            match $key {
+                $(Key::$name => Some(KeyCode::$name),)*
+                Key::NumpadSubtract => Some(KeyCode::NumpadSubtract),
+                _ => None,
+            }
+        };
+    }
+    same_names!(to_winit!(key))
+}
+
+/// The running platform's menu bar key equivalents, as key combos, which
+/// the keys screen binds to nothing beside the game's own menu chords:
+/// the macOS menu bar's, and none elsewhere.
+#[must_use]
+pub fn menu_key_equivalents() -> Vec<nova_view::KeyCombo> {
+    #[cfg(target_os = "macos")]
+    {
+        menu_bar::key_equivalent_combos()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Vec::new()
     }
 }
 
@@ -312,7 +453,10 @@ mod tests {
     use std::time::Duration;
     use winit::dpi::{PhysicalPosition, PhysicalSize};
 
-    use winit::event::{DeviceId, MouseButton as WinitButton, TouchPhase};
+    use winit::event::{
+        FingerId, MouseButton as WinitButton, ScrollSource, TabletToolButton, TabletToolData,
+        TabletToolKind, TouchPhase,
+    };
 
     use super::*;
 
@@ -342,81 +486,447 @@ mod tests {
     #[test]
     fn the_keys_the_game_uses_map_to_its_keys() {
         let cases = [
-            (KeyCode::ArrowLeft, Key::Left),
-            (KeyCode::ArrowRight, Key::Right),
-            (KeyCode::ArrowUp, Key::Up),
-            (KeyCode::ArrowDown, Key::Down),
+            (KeyCode::ArrowLeft, Key::ArrowLeft),
+            (KeyCode::ArrowRight, Key::ArrowRight),
+            (KeyCode::ArrowUp, Key::ArrowUp),
+            (KeyCode::ArrowDown, Key::ArrowDown),
             (KeyCode::PageUp, Key::PageUp),
             (KeyCode::PageDown, Key::PageDown),
             (KeyCode::Home, Key::Home),
             (KeyCode::End, Key::End),
             (KeyCode::Enter, Key::Enter),
-            (KeyCode::NumpadEnter, Key::Enter),
+            (KeyCode::NumpadEnter, Key::NumpadEnter),
             (KeyCode::Escape, Key::Escape),
             (KeyCode::Space, Key::Space),
             (KeyCode::Tab, Key::Tab),
             (KeyCode::Backspace, Key::Backspace),
-            (KeyCode::Equal, Key::Char('=')),
-            (KeyCode::NumpadAdd, Key::Char('+')),
-            (KeyCode::Minus, Key::Char('-')),
-            (KeyCode::NumpadSubtract, Key::Char('-')),
-            (KeyCode::KeyW, Key::Char('w')),
-            (KeyCode::KeyA, Key::Char('a')),
-            (KeyCode::KeyS, Key::Char('s')),
-            (KeyCode::KeyD, Key::Char('d')),
-            (KeyCode::KeyF, Key::Char('f')),
-            (KeyCode::KeyI, Key::Char('i')),
-            (KeyCode::KeyL, Key::Char('l')),
-            (KeyCode::KeyM, Key::Char('m')),
-            (KeyCode::KeyJ, Key::Char('j')),
-            (KeyCode::KeyH, Key::Char('h')),
-            (KeyCode::KeyP, Key::Char('p')),
-            (KeyCode::KeyB, Key::Char('b')),
-            (KeyCode::AltLeft, Key::Alt),
-            (KeyCode::AltRight, Key::Alt),
-            (KeyCode::ControlLeft, Key::Control),
-            (KeyCode::ControlRight, Key::Control),
-            (KeyCode::ShiftLeft, Key::Shift),
-            (KeyCode::ShiftRight, Key::Shift),
-            (KeyCode::KeyR, Key::Char('r')),
-            (KeyCode::KeyK, Key::Char('k')),
-            (KeyCode::KeyX, Key::Char('x')),
-            (KeyCode::KeyY, Key::Char('y')),
-            (KeyCode::KeyU, Key::Char('u')),
-            (KeyCode::KeyV, Key::Char('v')),
-            (KeyCode::KeyZ, Key::Char('z')),
-            (KeyCode::KeyE, Key::Char('e')),
-            (KeyCode::KeyC, Key::Char('c')),
-            (KeyCode::KeyT, Key::Char('t')),
-            (KeyCode::KeyO, Key::Char('o')),
-            (KeyCode::KeyN, Key::Char('n')),
-            (KeyCode::KeyG, Key::Char('g')),
-            (KeyCode::KeyQ, Key::Char('q')),
-            (KeyCode::SuperLeft, Key::Command),
-            (KeyCode::SuperRight, Key::Command),
+            (KeyCode::Equal, Key::Equal),
+            (KeyCode::NumpadAdd, Key::NumpadAdd),
+            (KeyCode::Minus, Key::Minus),
+            (KeyCode::NumpadSubtract, Key::Minus),
+            (KeyCode::KeyW, Key::KeyW),
+            (KeyCode::KeyA, Key::KeyA),
+            (KeyCode::KeyS, Key::KeyS),
+            (KeyCode::KeyD, Key::KeyD),
+            (KeyCode::KeyF, Key::KeyF),
+            (KeyCode::KeyI, Key::KeyI),
+            (KeyCode::KeyL, Key::KeyL),
+            (KeyCode::KeyM, Key::KeyM),
+            (KeyCode::KeyJ, Key::KeyJ),
+            (KeyCode::KeyH, Key::KeyH),
+            (KeyCode::KeyP, Key::KeyP),
+            (KeyCode::KeyB, Key::KeyB),
+            (KeyCode::AltLeft, Key::AltLeft),
+            (KeyCode::AltRight, Key::AltRight),
+            (KeyCode::ControlLeft, Key::ControlLeft),
+            (KeyCode::ControlRight, Key::ControlRight),
+            (KeyCode::ShiftLeft, Key::ShiftLeft),
+            (KeyCode::ShiftRight, Key::ShiftRight),
+            (KeyCode::KeyR, Key::KeyR),
+            (KeyCode::KeyK, Key::KeyK),
+            (KeyCode::KeyX, Key::KeyX),
+            (KeyCode::KeyY, Key::KeyY),
+            (KeyCode::KeyU, Key::KeyU),
+            (KeyCode::KeyV, Key::KeyV),
+            (KeyCode::KeyZ, Key::KeyZ),
+            (KeyCode::KeyE, Key::KeyE),
+            (KeyCode::KeyC, Key::KeyC),
+            (KeyCode::KeyT, Key::KeyT),
+            (KeyCode::KeyO, Key::KeyO),
+            (KeyCode::KeyN, Key::KeyN),
+            (KeyCode::KeyG, Key::KeyG),
+            (KeyCode::KeyQ, Key::KeyQ),
+            (KeyCode::MetaLeft, Key::MetaLeft),
+            (KeyCode::MetaRight, Key::MetaRight),
             (KeyCode::CapsLock, Key::CapsLock),
-            (KeyCode::Backquote, Key::Char('`')),
-            (KeyCode::Backslash, Key::Char('\\')),
-            (KeyCode::Digit1, Key::Char('1')),
-            (KeyCode::Digit2, Key::Char('2')),
-            (KeyCode::Digit3, Key::Char('3')),
-            (KeyCode::Digit4, Key::Char('4')),
-            (KeyCode::Digit5, Key::Char('5')),
-            (KeyCode::F1, Key::Function(1)),
-            (KeyCode::F2, Key::Function(2)),
-            (KeyCode::F3, Key::Function(3)),
-            (KeyCode::F4, Key::Function(4)),
-            (KeyCode::F5, Key::Function(5)),
-            (KeyCode::F11, Key::Function(11)),
-            (KeyCode::F12, Key::Function(12)),
-            (KeyCode::Digit6, Key::Other),
-            (KeyCode::F6, Key::Other),
+            (KeyCode::Backquote, Key::Backquote),
+            (KeyCode::Backslash, Key::Backslash),
+            (KeyCode::Digit1, Key::Digit1),
+            (KeyCode::Digit2, Key::Digit2),
+            (KeyCode::Digit3, Key::Digit3),
+            (KeyCode::Digit4, Key::Digit4),
+            (KeyCode::Digit5, Key::Digit5),
+            (KeyCode::F1, Key::F1),
+            (KeyCode::F2, Key::F2),
+            (KeyCode::F3, Key::F3),
+            (KeyCode::F4, Key::F4),
+            (KeyCode::F5, Key::F5),
+            (KeyCode::F11, Key::F11),
+            (KeyCode::F12, Key::F12),
         ];
         for (code, key) in cases {
             assert_eq!(map_key(PhysicalKey::Code(code)), key, "{code:?}");
         }
+    }
+
+    #[test]
+    fn a_key_winit_cannot_identify_or_name_is_unidentified() {
         let unknown = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
-        assert_eq!(map_key(unknown), Key::Other);
+        assert_eq!(map_key(unknown), Key::Unidentified);
+        let mac = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::MacOS(0x7f));
+        assert_eq!(map_key(mac), Key::Unidentified);
+        #[expect(deprecated, reason = "the legacy codes the test is about")]
+        for legacy in [KeyCode::Hyper, KeyCode::Super, KeyCode::Turbo] {
+            assert_eq!(
+                map_key(PhysicalKey::Code(legacy)),
+                Key::Unidentified,
+                "{legacy:?}"
+            );
+        }
+    }
+
+    /// Every letter key winit defines, and the key it is.
+    const LETTER_CODES: [(KeyCode, Key); 26] = [
+        (KeyCode::KeyA, Key::KeyA),
+        (KeyCode::KeyB, Key::KeyB),
+        (KeyCode::KeyC, Key::KeyC),
+        (KeyCode::KeyD, Key::KeyD),
+        (KeyCode::KeyE, Key::KeyE),
+        (KeyCode::KeyF, Key::KeyF),
+        (KeyCode::KeyG, Key::KeyG),
+        (KeyCode::KeyH, Key::KeyH),
+        (KeyCode::KeyI, Key::KeyI),
+        (KeyCode::KeyJ, Key::KeyJ),
+        (KeyCode::KeyK, Key::KeyK),
+        (KeyCode::KeyL, Key::KeyL),
+        (KeyCode::KeyM, Key::KeyM),
+        (KeyCode::KeyN, Key::KeyN),
+        (KeyCode::KeyO, Key::KeyO),
+        (KeyCode::KeyP, Key::KeyP),
+        (KeyCode::KeyQ, Key::KeyQ),
+        (KeyCode::KeyR, Key::KeyR),
+        (KeyCode::KeyS, Key::KeyS),
+        (KeyCode::KeyT, Key::KeyT),
+        (KeyCode::KeyU, Key::KeyU),
+        (KeyCode::KeyV, Key::KeyV),
+        (KeyCode::KeyW, Key::KeyW),
+        (KeyCode::KeyX, Key::KeyX),
+        (KeyCode::KeyY, Key::KeyY),
+        (KeyCode::KeyZ, Key::KeyZ),
+    ];
+
+    /// Every top-row digit key winit defines, and the key it is.
+    const DIGIT_CODES: [(KeyCode, Key); 10] = [
+        (KeyCode::Digit0, Key::Digit0),
+        (KeyCode::Digit1, Key::Digit1),
+        (KeyCode::Digit2, Key::Digit2),
+        (KeyCode::Digit3, Key::Digit3),
+        (KeyCode::Digit4, Key::Digit4),
+        (KeyCode::Digit5, Key::Digit5),
+        (KeyCode::Digit6, Key::Digit6),
+        (KeyCode::Digit7, Key::Digit7),
+        (KeyCode::Digit8, Key::Digit8),
+        (KeyCode::Digit9, Key::Digit9),
+    ];
+
+    /// Every punctuation key winit defines, and the key it is.
+    const PUNCTUATION_CODES: [(KeyCode, Key); 14] = [
+        (KeyCode::Backquote, Key::Backquote),
+        (KeyCode::Backslash, Key::Backslash),
+        (KeyCode::BracketLeft, Key::BracketLeft),
+        (KeyCode::BracketRight, Key::BracketRight),
+        (KeyCode::Comma, Key::Comma),
+        (KeyCode::Equal, Key::Equal),
+        (KeyCode::IntlBackslash, Key::IntlBackslash),
+        (KeyCode::IntlRo, Key::IntlRo),
+        (KeyCode::IntlYen, Key::IntlYen),
+        (KeyCode::Minus, Key::Minus),
+        (KeyCode::Period, Key::Period),
+        (KeyCode::Quote, Key::Quote),
+        (KeyCode::Semicolon, Key::Semicolon),
+        (KeyCode::Slash, Key::Slash),
+    ];
+
+    /// Every function key winit defines, F1 to F35, and the key it is.
+    const FUNCTION_CODES: [(KeyCode, Key); 35] = [
+        (KeyCode::F1, Key::F1),
+        (KeyCode::F2, Key::F2),
+        (KeyCode::F3, Key::F3),
+        (KeyCode::F4, Key::F4),
+        (KeyCode::F5, Key::F5),
+        (KeyCode::F6, Key::F6),
+        (KeyCode::F7, Key::F7),
+        (KeyCode::F8, Key::F8),
+        (KeyCode::F9, Key::F9),
+        (KeyCode::F10, Key::F10),
+        (KeyCode::F11, Key::F11),
+        (KeyCode::F12, Key::F12),
+        (KeyCode::F13, Key::F13),
+        (KeyCode::F14, Key::F14),
+        (KeyCode::F15, Key::F15),
+        (KeyCode::F16, Key::F16),
+        (KeyCode::F17, Key::F17),
+        (KeyCode::F18, Key::F18),
+        (KeyCode::F19, Key::F19),
+        (KeyCode::F20, Key::F20),
+        (KeyCode::F21, Key::F21),
+        (KeyCode::F22, Key::F22),
+        (KeyCode::F23, Key::F23),
+        (KeyCode::F24, Key::F24),
+        (KeyCode::F25, Key::F25),
+        (KeyCode::F26, Key::F26),
+        (KeyCode::F27, Key::F27),
+        (KeyCode::F28, Key::F28),
+        (KeyCode::F29, Key::F29),
+        (KeyCode::F30, Key::F30),
+        (KeyCode::F31, Key::F31),
+        (KeyCode::F32, Key::F32),
+        (KeyCode::F33, Key::F33),
+        (KeyCode::F34, Key::F34),
+        (KeyCode::F35, Key::F35),
+    ];
+
+    /// Every keypad key winit defines, and the key it is.
+    const KEYPAD_CODES: [(KeyCode, Key); 30] = [
+        (KeyCode::Numpad0, Key::Numpad0),
+        (KeyCode::Numpad1, Key::Numpad1),
+        (KeyCode::Numpad2, Key::Numpad2),
+        (KeyCode::Numpad3, Key::Numpad3),
+        (KeyCode::Numpad4, Key::Numpad4),
+        (KeyCode::Numpad5, Key::Numpad5),
+        (KeyCode::Numpad6, Key::Numpad6),
+        (KeyCode::Numpad7, Key::Numpad7),
+        (KeyCode::Numpad8, Key::Numpad8),
+        (KeyCode::Numpad9, Key::Numpad9),
+        (KeyCode::NumpadAdd, Key::NumpadAdd),
+        (KeyCode::NumpadBackspace, Key::NumpadBackspace),
+        (KeyCode::NumpadClear, Key::NumpadClear),
+        (KeyCode::NumpadClearEntry, Key::NumpadClearEntry),
+        (KeyCode::NumpadComma, Key::NumpadComma),
+        (KeyCode::NumpadDecimal, Key::NumpadDecimal),
+        (KeyCode::NumpadDivide, Key::NumpadDivide),
+        (KeyCode::NumpadEnter, Key::NumpadEnter),
+        (KeyCode::NumpadEqual, Key::NumpadEqual),
+        (KeyCode::NumpadHash, Key::NumpadHash),
+        (KeyCode::NumpadMemoryAdd, Key::NumpadMemoryAdd),
+        (KeyCode::NumpadMemoryClear, Key::NumpadMemoryClear),
+        (KeyCode::NumpadMemoryRecall, Key::NumpadMemoryRecall),
+        (KeyCode::NumpadMemoryStore, Key::NumpadMemoryStore),
+        (KeyCode::NumpadMemorySubtract, Key::NumpadMemorySubtract),
+        (KeyCode::NumpadMultiply, Key::NumpadMultiply),
+        (KeyCode::NumpadParenLeft, Key::NumpadParenLeft),
+        (KeyCode::NumpadParenRight, Key::NumpadParenRight),
+        (KeyCode::NumpadStar, Key::NumpadStar),
+        (KeyCode::NumpadSubtract, Key::Minus),
+    ];
+
+    /// Every navigation and editing key winit defines, and the key it is.
+    const NAVIGATION_CODES: [(KeyCode, Key); 11] = [
+        (KeyCode::ArrowDown, Key::ArrowDown),
+        (KeyCode::ArrowLeft, Key::ArrowLeft),
+        (KeyCode::ArrowRight, Key::ArrowRight),
+        (KeyCode::ArrowUp, Key::ArrowUp),
+        (KeyCode::End, Key::End),
+        (KeyCode::Home, Key::Home),
+        (KeyCode::PageDown, Key::PageDown),
+        (KeyCode::PageUp, Key::PageUp),
+        (KeyCode::Delete, Key::Delete),
+        (KeyCode::Insert, Key::Insert),
+        (KeyCode::Help, Key::Help),
+    ];
+
+    /// Asserts that each of `codes` maps to its key, never to
+    /// `Key::Unidentified`.
+    fn assert_maps(codes: &[(KeyCode, Key)]) {
+        for &(code, key) in codes {
+            assert_ne!(key, Key::Unidentified, "{code:?}");
+            assert_eq!(map_key(PhysicalKey::Code(code)), key, "{code:?}");
+        }
+    }
+
+    #[test]
+    fn every_letter_key_maps_to_its_key() {
+        assert_maps(&LETTER_CODES);
+    }
+
+    #[test]
+    fn every_digit_key_maps_to_its_key() {
+        assert_maps(&DIGIT_CODES);
+    }
+
+    #[test]
+    fn every_punctuation_key_maps_to_its_key() {
+        assert_maps(&PUNCTUATION_CODES);
+    }
+
+    #[test]
+    fn every_function_key_maps_to_its_key() {
+        assert_maps(&FUNCTION_CODES);
+    }
+
+    #[test]
+    fn every_keypad_key_maps_to_its_key() {
+        assert_maps(&KEYPAD_CODES);
+    }
+
+    #[test]
+    fn every_navigation_and_editing_key_maps_to_its_key() {
+        assert_maps(&NAVIGATION_CODES);
+    }
+
+    #[test]
+    fn the_menu_bar_s_key_equivalents_are_the_mac_s_and_none_elsewhere() {
+        let equivalents = menu_key_equivalents();
+        let command_h = nova_view::KeyCombo::with(Key::KeyH, nova_view::Modifiers::COMMAND);
+        assert_eq!(
+            equivalents.contains(&command_h),
+            cfg!(target_os = "macos"),
+            "Hide"
+        );
+        if !cfg!(target_os = "macos") {
+            assert_eq!(equivalents, []);
+        }
+    }
+
+    #[test]
+    fn every_key_map_key_produces_has_a_name_and_only_a_printing_one_asks_the_layout() {
+        use nova_view::key_names::fixture::FakeKeyNames;
+        use nova_view::key_names::{key_name, prints};
+        let others = [
+            KeyCode::ShiftLeft,
+            KeyCode::ShiftRight,
+            KeyCode::AltLeft,
+            KeyCode::AltRight,
+            KeyCode::ControlLeft,
+            KeyCode::ControlRight,
+            KeyCode::MetaLeft,
+            KeyCode::MetaRight,
+            KeyCode::Enter,
+            KeyCode::Escape,
+            KeyCode::Space,
+            KeyCode::Tab,
+            KeyCode::Backspace,
+            KeyCode::CapsLock,
+            KeyCode::Fn,
+            KeyCode::ContextMenu,
+            KeyCode::MediaPlayPause,
+        ];
+        let codes = [
+            &LETTER_CODES[..],
+            &DIGIT_CODES,
+            &PUNCTUATION_CODES,
+            &FUNCTION_CODES,
+            &KEYPAD_CODES,
+            &NAVIGATION_CODES,
+        ]
+        .concat()
+        .into_iter()
+        .map(|(code, _)| PhysicalKey::Code(code))
+        .chain(others.map(PhysicalKey::Code))
+        .chain([PhysicalKey::Unidentified(
+            winit::keyboard::NativeKeyCode::Unidentified,
+        )]);
+        for physical in codes {
+            let key = map_key(physical);
+            let names = FakeKeyNames::new();
+            assert!(!key_name(&names, key).is_empty(), "{physical:?}");
+            let asked = !names.asked().is_empty();
+            assert_eq!(asked, prints(key), "{physical:?}");
+        }
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
+    #[test]
+    fn every_printing_key_maps_back_to_the_winit_key_it_came_from() {
+        for key in nova_view::key_names::PRINTING_KEYS {
+            let code = key_code(key).unwrap_or_else(|| panic!("{key:?} has a winit key"));
+            if key == Key::NumpadSubtract {
+                // `map_key` folds it into `-`, but the layout is asked about
+                // the keypad's own key.
+                assert_eq!(code, KeyCode::NumpadSubtract);
+            } else {
+                assert_eq!(map_key(PhysicalKey::Code(code)), key, "{key:?}");
+            }
+        }
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
+    #[test]
+    fn every_key_map_key_names_maps_back_but_an_unidentified_one() {
+        assert_eq!(key_code(Key::MetaLeft), Some(KeyCode::MetaLeft));
+        assert_eq!(key_code(Key::MetaRight), Some(KeyCode::MetaRight));
+        assert_eq!(key_code(Key::F35), Some(KeyCode::F35));
+        assert_eq!(key_code(Key::ArrowUp), Some(KeyCode::ArrowUp));
+        assert_eq!(key_code(Key::Unidentified), None);
+    }
+
+    /// The Mac key code `nova_view` names a key's `STR#` 129 entry by is
+    /// the one winit reports the key at, for every key winit gives one.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn every_key_s_str_129_code_is_the_mac_code_winit_reports_it_at() {
+        use winit::platform::scancode::PhysicalKeyExtScancode;
+        /// Every key `map_key` names alike, and the one it folds.
+        macro_rules! every_key {
+            ($_unused:tt; $($name:ident),* $(,)?) => {
+                [$(Key::$name,)* Key::NumpadSubtract]
+            };
+        }
+        let mut checked = 0;
+        for key in same_names!(every_key!(())) {
+            if let Some(code) = key_code(key).and_then(PhysicalKeyExtScancode::to_scancode) {
+                let named = nova_view::bound_names::mac_code(key).map(u32::from);
+                assert_eq!(named, Some(code), "{key:?}");
+                checked += 1;
+            }
+        }
+        assert!(checked > 100, "{checked}");
+    }
+
+    /// The pairs `map_key` folds: the second key arrives as the first's.
+    const FOLDS: [(KeyCode, KeyCode); 1] = [(KeyCode::NumpadSubtract, KeyCode::Minus)];
+
+    #[test]
+    fn two_keys_are_one_key_only_where_map_key_folds_them() {
+        let modifiers = [
+            KeyCode::ShiftLeft,
+            KeyCode::ShiftRight,
+            KeyCode::AltLeft,
+            KeyCode::AltRight,
+            KeyCode::ControlLeft,
+            KeyCode::ControlRight,
+            KeyCode::MetaLeft,
+            KeyCode::MetaRight,
+        ];
+        let others = [
+            KeyCode::Enter,
+            KeyCode::Escape,
+            KeyCode::Space,
+            KeyCode::Tab,
+            KeyCode::Backspace,
+            KeyCode::CapsLock,
+        ];
+        let codes: Vec<KeyCode> = [
+            &LETTER_CODES[..],
+            &DIGIT_CODES,
+            &PUNCTUATION_CODES,
+            &FUNCTION_CODES,
+            &KEYPAD_CODES,
+            &NAVIGATION_CODES,
+        ]
+        .concat()
+        .into_iter()
+        .map(|(code, _)| code)
+        .chain(modifiers)
+        .chain(others)
+        .collect();
+        for (i, &a) in codes.iter().enumerate() {
+            for &b in &codes[i + 1..] {
+                let folded = FOLDS.contains(&(a, b)) || FOLDS.contains(&(b, a));
+                assert_eq!(
+                    map_key(PhysicalKey::Code(a)) == map_key(PhysicalKey::Code(b)),
+                    folded,
+                    "{a:?} and {b:?}"
+                );
+            }
+        }
+        for (folded, into) in FOLDS {
+            assert_eq!(
+                map_key(PhysicalKey::Code(folded)),
+                map_key(PhysicalKey::Code(into)),
+                "{folded:?}"
+            );
+        }
     }
 
     /// Character keys that screens other than flight react to, from the
@@ -426,141 +936,154 @@ mod tests {
     /// and a screen's other keys may be missing. A screen test that sends
     /// one of these directly never crosses `map_key`, so this is what keeps
     /// each one reachable from a real keyboard.
-    const GAME_CHARACTER_KEYS: [Key; 30] = [
-        Key::Char('f'),
-        Key::Char('i'),
-        Key::Char('p'),
-        nova_view::ui::player_info::PLAYER_INFO_KEY,
+    const GAME_CHARACTER_KEYS: [Key; 27] = [
+        Key::KeyF,
+        Key::KeyI,
+        Key::KeyP,
+        // The player info key's default.
+        Key::KeyP,
         crate::app::screen::PREFERENCES_KEY,
-        Key::Char('w'),
-        Key::Char('a'),
-        Key::Char('s'),
-        Key::Char('d'),
-        Key::Char('='),
-        Key::Char('+'),
-        Key::Char('-'),
+        Key::KeyW,
+        Key::KeyA,
+        Key::KeyS,
+        Key::KeyD,
+        Key::Equal,
+        Key::NumpadAdd,
+        Key::Minus,
         nova_view::devtools::TOGGLE_KEY,
-        nova_view::spaceport::trade::BUY_KEY,
-        nova_view::spaceport::trade::SELL_KEY,
-        nova_view::spaceport::outfitter::BUY_KEY,
-        nova_view::spaceport::outfitter::SELL_KEY,
-        nova_view::spaceport::shipyard::BUY_KEY,
-        nova_view::ui::mission_info::MISSION_INFO_KEY,
-        nova_view::spaceport::bar::NEWS_KEYS[0],
-        nova_view::spaceport::bar::GAMBLE_KEYS[0],
-        nova_view::spaceport::bar::GAMBLE_KEYS[1],
-        nova_view::spaceport::PORT_KEYS[0].0,
-        nova_view::spaceport::PORT_KEYS[1].0,
-        nova_view::spaceport::PORT_KEYS[2].0,
-        nova_view::spaceport::PORT_KEYS[3].0,
-        nova_view::spaceport::PORT_KEYS[4].0,
-        nova_view::spaceport::PORT_KEYS[5].0,
-        nova_view::spaceport::PORT_KEYS[6].0,
-        nova_view::spaceport::PORT_KEYS[7].0,
+        // The trade center's, the outfitter's and the shipyard's Buy and
+        // Sell defaults.
+        Key::KeyB,
+        Key::KeyS,
+        // The mission info key's default.
+        Key::KeyI,
+        // The bar's Holovid and Gamble, and Gamble's twin.
+        Key::KeyN,
+        Key::KeyG,
+        Key::KeyR,
+        // The spaceport's letters and their twins.
+        Key::KeyR,
+        Key::KeyF,
+        Key::KeyC,
+        Key::KeyT,
+        Key::KeyO,
+        Key::KeyS,
+        Key::KeyN,
+        Key::KeyB,
     ];
-
-    /// The physical key that types `c` on a US-layout keyboard.
-    fn us_position(c: char) -> KeyCode {
-        match c {
-            'a' => KeyCode::KeyA,
-            'b' => KeyCode::KeyB,
-            'c' => KeyCode::KeyC,
-            'd' => KeyCode::KeyD,
-            'e' => KeyCode::KeyE,
-            'f' => KeyCode::KeyF,
-            'g' => KeyCode::KeyG,
-            'h' => KeyCode::KeyH,
-            'i' => KeyCode::KeyI,
-            'j' => KeyCode::KeyJ,
-            'k' => KeyCode::KeyK,
-            'l' => KeyCode::KeyL,
-            'm' => KeyCode::KeyM,
-            'n' => KeyCode::KeyN,
-            'o' => KeyCode::KeyO,
-            'p' => KeyCode::KeyP,
-            'q' => KeyCode::KeyQ,
-            'r' => KeyCode::KeyR,
-            's' => KeyCode::KeyS,
-            't' => KeyCode::KeyT,
-            'w' => KeyCode::KeyW,
-            'u' => KeyCode::KeyU,
-            'v' => KeyCode::KeyV,
-            'x' => KeyCode::KeyX,
-            'y' => KeyCode::KeyY,
-            'z' => KeyCode::KeyZ,
-            '1' => KeyCode::Digit1,
-            '2' => KeyCode::Digit2,
-            '3' => KeyCode::Digit3,
-            '4' => KeyCode::Digit4,
-            '5' => KeyCode::Digit5,
-            '=' => KeyCode::Equal,
-            '+' => KeyCode::NumpadAdd,
-            '-' => KeyCode::Minus,
-            '`' => KeyCode::Backquote,
-            '\\' => KeyCode::Backslash,
-            ',' => KeyCode::Comma,
-            other => panic!("no physical key listed for {other:?}"),
-        }
-    }
 
     #[test]
     fn the_listed_character_keys_come_from_their_physical_keys() {
         for key in GAME_CHARACTER_KEYS {
-            let Key::Char(c) = key else {
-                panic!("{key:?} is not a character key");
-            };
-            assert_eq!(map_key(PhysicalKey::Code(us_position(c))), key, "{c:?}");
+            assert_eq!(map_key(PhysicalKey::Code(us_key(key))), key, "{key:?}");
         }
     }
 
     /// The physical key that sends `key` on a US-layout keyboard.
     fn us_key(key: Key) -> KeyCode {
         match key {
-            Key::Char(c) => us_position(c),
-            Key::Left => KeyCode::ArrowLeft,
-            Key::Right => KeyCode::ArrowRight,
-            Key::Up => KeyCode::ArrowUp,
-            Key::Down => KeyCode::ArrowDown,
+            Key::KeyA => KeyCode::KeyA,
+            Key::KeyB => KeyCode::KeyB,
+            Key::KeyC => KeyCode::KeyC,
+            Key::KeyD => KeyCode::KeyD,
+            Key::KeyE => KeyCode::KeyE,
+            Key::KeyF => KeyCode::KeyF,
+            Key::KeyG => KeyCode::KeyG,
+            Key::KeyH => KeyCode::KeyH,
+            Key::KeyI => KeyCode::KeyI,
+            Key::KeyJ => KeyCode::KeyJ,
+            Key::KeyK => KeyCode::KeyK,
+            Key::KeyL => KeyCode::KeyL,
+            Key::KeyM => KeyCode::KeyM,
+            Key::KeyN => KeyCode::KeyN,
+            Key::KeyO => KeyCode::KeyO,
+            Key::KeyP => KeyCode::KeyP,
+            Key::KeyQ => KeyCode::KeyQ,
+            Key::KeyR => KeyCode::KeyR,
+            Key::KeyS => KeyCode::KeyS,
+            Key::KeyT => KeyCode::KeyT,
+            Key::KeyU => KeyCode::KeyU,
+            Key::KeyV => KeyCode::KeyV,
+            Key::KeyW => KeyCode::KeyW,
+            Key::KeyX => KeyCode::KeyX,
+            Key::KeyY => KeyCode::KeyY,
+            Key::KeyZ => KeyCode::KeyZ,
+            Key::Digit1 => KeyCode::Digit1,
+            Key::Digit2 => KeyCode::Digit2,
+            Key::Digit3 => KeyCode::Digit3,
+            Key::Digit4 => KeyCode::Digit4,
+            Key::Digit5 => KeyCode::Digit5,
+            Key::Equal => KeyCode::Equal,
+            Key::NumpadAdd => KeyCode::NumpadAdd,
+            Key::Minus => KeyCode::Minus,
+            Key::Backquote => KeyCode::Backquote,
+            Key::Backslash => KeyCode::Backslash,
+            Key::Comma => KeyCode::Comma,
+            Key::ArrowLeft => KeyCode::ArrowLeft,
+            Key::ArrowRight => KeyCode::ArrowRight,
+            Key::ArrowUp => KeyCode::ArrowUp,
+            Key::ArrowDown => KeyCode::ArrowDown,
             Key::Enter => KeyCode::Enter,
             Key::Space => KeyCode::Space,
             Key::Tab => KeyCode::Tab,
-            Key::Alt => KeyCode::AltLeft,
-            Key::Control => KeyCode::ControlLeft,
-            Key::Shift => KeyCode::ShiftLeft,
-            Key::Command => KeyCode::SuperLeft,
-            Key::Function(1) => KeyCode::F1,
-            Key::Function(2) => KeyCode::F2,
-            Key::Function(3) => KeyCode::F3,
-            Key::Function(4) => KeyCode::F4,
-            Key::Function(5) => KeyCode::F5,
-            Key::Function(12) => KeyCode::F12,
+            Key::AltLeft => KeyCode::AltLeft,
+            Key::ControlLeft => KeyCode::ControlLeft,
+            Key::ShiftLeft => KeyCode::ShiftLeft,
+            Key::MetaLeft => KeyCode::MetaLeft,
+            Key::F1 => KeyCode::F1,
+            Key::F2 => KeyCode::F2,
+            Key::F3 => KeyCode::F3,
+            Key::F4 => KeyCode::F4,
+            Key::F5 => KeyCode::F5,
+            Key::F12 => KeyCode::F12,
+            Key::Escape => KeyCode::Escape,
+            Key::Home => KeyCode::Home,
+            Key::End => KeyCode::End,
+            Key::PageUp => KeyCode::PageUp,
+            Key::PageDown => KeyCode::PageDown,
+            Key::NumpadEnter => KeyCode::NumpadEnter,
+            Key::AltRight => KeyCode::AltRight,
+            Key::CapsLock => KeyCode::CapsLock,
             other => panic!("no physical key listed for {other:?}"),
         }
     }
 
     #[test]
-    fn every_key_flight_reads_comes_from_its_physical_key() {
-        for key in nova_view::flight::view::every_key() {
+    fn every_key_the_key_map_binds_comes_from_its_physical_key() {
+        let defaults = nova_view::KeyMap::default();
+        let bound = nova_view::Command::all()
+            .filter_map(|command| defaults.combo(command))
+            .map(|combo| combo.key);
+        let twins = nova_view::KeyMap::TWINS.iter().map(|twin| twin.key);
+        for key in bound.chain(twins) {
             assert_eq!(map_key(PhysicalKey::Code(us_key(key))), key, "{key:?}");
         }
     }
 
-    /// Asserts that `letter`'s physical key sends it. The dialogs take
-    /// either case and a physical key sends the lower.
+    /// Asserts that `letter`'s physical key sends its key. The dialogs take
+    /// either case, and one key sends both.
     fn assert_physical(letter: char) {
-        let sent = letter.to_ascii_lowercase();
-        assert_eq!(
-            map_key(PhysicalKey::Code(us_position(sent))),
-            Key::Char(sent),
-            "{letter:?}"
-        );
+        let key = nova_view::letter_key(letter).expect("a letter key");
+        assert_eq!(map_key(PhysicalKey::Code(us_key(key))), key, "{letter:?}");
     }
 
     #[test]
     fn every_letter_the_comm_dialog_and_its_haggle_read_comes_from_its_physical_key() {
-        use nova_view::ui::comm::{ACCEPT_KEY, CLOSE_KEY, LOWER_KEY};
+        use nova_view::keymap::{CommCommand, HaggleCommand};
+        let defaults = nova_view::KeyMap::default();
+        let letters = [
+            CommCommand::Close.into(),
+            HaggleCommand::Accept.into(),
+            HaggleCommand::Lower.into(),
+        ]
+        .map(|command| {
+            defaults
+                .combo(command)
+                .and_then(|combo| nova_view::key_letter(combo.key))
+                .expect("a letter by default")
+        });
         let options = nova_sim::HailOptions::nova(&nova_sim::Rulebook::default());
-        for letter in options.keys().chain([CLOSE_KEY, ACCEPT_KEY, LOWER_KEY]) {
+        for letter in options.keys().chain(letters) {
             assert_physical(letter);
         }
     }
@@ -588,28 +1111,51 @@ mod tests {
             status: None,
             asking: None,
         });
+        // What a press of `key` means on `screen` with the default keys.
+        let means = |screen, key| {
+            nova_view::CommandReader::new(screen).peek(&nova_view::Input::Key {
+                key,
+                pressed: true,
+                repeat: false,
+            })
+        };
         for c in ' '..='~' {
-            let key = Key::Char(c);
-            let planet = views
-                .iter()
-                .any(|view| planet_comm::key_press(key, view).is_some());
-            if planet || escort_dialog::key_press(key).is_some() {
+            let Some(key) = nova_view::letter_key(c) else {
+                continue;
+            };
+            let planet = views.iter().any(|view| {
+                means(nova_view::keymap::contexts::PLANET_COMM, key)
+                    .and_then(|command| planet_comm::command_press(command, view))
+                    .is_some()
+            });
+            let escort = means(nova_view::keymap::contexts::ESCORT_DIALOG, key)
+                .and_then(escort_dialog::command_press)
+                .is_some();
+            if planet || escort {
                 assert_physical(c);
             }
         }
     }
 
-    /// An offer button's key is its label's first letter, so every
-    /// character a label can start with is a key: `offer_labels` keeps a
-    /// mission's own label only when it starts with a letter. P, I and M
-    /// ask for their screens before an offer reads the labels' letters.
+    /// An offer button's key is the character typed that its label starts
+    /// with, as `_SingleMissionFilter` reads the event's character
+    /// (@0x98e4a), so every character a label can start with reaches the
+    /// app as text, whatever key the layout types it with:
+    /// `offer_labels` keeps a mission's own label only when it starts with
+    /// a letter.
     #[test]
-    fn every_letter_an_offer_label_can_start_with_comes_from_its_physical_key() {
+    fn every_letter_an_offer_label_can_start_with_reaches_the_app_as_typed() {
         use nova_sim::mission::offer_labels;
         for c in ' '..='~' {
             let label = offer_labels(&c.to_string(), "", false).accept;
             if label.starts_with(c) {
-                assert_physical(c);
+                for typed in [c, c.to_ascii_uppercase(), c.to_ascii_lowercase()] {
+                    assert_eq!(
+                        text_event(Some(&typed.to_string()), ElementState::Pressed),
+                        Some(WindowEvent::Text(typed)),
+                        "{typed:?}"
+                    );
+                }
             }
         }
     }
@@ -619,26 +1165,23 @@ mod tests {
     /// sends it.
     const GAME_NAMED_KEYS: [(Key, KeyCode); 12] = [
         (nova_view::ui::text_field::DELETE_KEY, KeyCode::Backspace),
-        (nova_view::spaceport::shipyard::INFO_KEY, KeyCode::Space),
-        (nova_view::spaceport::trade::MAX_LOT_KEY, KeyCode::AltLeft),
-        (nova_view::spaceport::trade::MAX_LOT_KEY, KeyCode::AltRight),
+        // The shipyard's Info, the shared Activate.
+        (Key::Space, KeyCode::Space),
+        // The trade center's Option and its right twin.
+        (Key::AltLeft, KeyCode::AltLeft),
+        (Key::AltRight, KeyCode::AltRight),
         // The outfitter's grid selection.
-        (Key::Left, KeyCode::ArrowLeft),
-        (Key::Right, KeyCode::ArrowRight),
-        (Key::Up, KeyCode::ArrowUp),
-        (Key::Down, KeyCode::ArrowDown),
-        // Flight's jettison key's modifier.
-        (Key::Command, KeyCode::SuperLeft),
-        (Key::Command, KeyCode::SuperRight),
+        (Key::ArrowLeft, KeyCode::ArrowLeft),
+        (Key::ArrowRight, KeyCode::ArrowRight),
+        (Key::ArrowUp, KeyCode::ArrowUp),
+        (Key::ArrowDown, KeyCode::ArrowDown),
+        // Flight's jettison key's modifier, and the menus' Command.
+        (Key::MetaLeft, KeyCode::MetaLeft),
+        // The menus' Command.
+        (Key::MetaRight, KeyCode::MetaRight),
         // The player info's Tab goes back with Shift held.
-        (
-            nova_view::ui::player_info::BACKWARDS_KEY,
-            KeyCode::ShiftLeft,
-        ),
-        (
-            nova_view::ui::player_info::BACKWARDS_KEY,
-            KeyCode::ShiftRight,
-        ),
+        (Key::ShiftLeft, KeyCode::ShiftLeft),
+        (Key::ShiftRight, KeyCode::ShiftRight),
     ];
 
     #[test]
@@ -657,7 +1200,7 @@ mod tests {
                 false
             ),
             WindowEvent::Key {
-                key: Key::Up,
+                key: Key::ArrowUp,
                 pressed: true,
                 repeat: false
             }
@@ -722,12 +1265,66 @@ mod tests {
         assert_eq!(map_button(WinitButton::Right), MouseButton::Right);
         assert_eq!(map_button(WinitButton::Middle), MouseButton::Middle);
         assert_eq!(map_button(WinitButton::Back), MouseButton::Other);
-        assert_eq!(map_button(WinitButton::Other(7)), MouseButton::Other);
+        assert_eq!(map_button(WinitButton::Button8), MouseButton::Other);
+    }
+
+    /// winit's key event for `code` going down or up, typing `text`.
+    fn raw_key(code: KeyCode, state: ElementState, repeat: bool, text: Option<&str>) -> WinitEvent {
+        let text = text.map(winit::keyboard::SmolStr::new);
+        WinitEvent::KeyboardInput {
+            device_id: None,
+            event: winit::event::KeyEvent {
+                physical_key: PhysicalKey::Code(code),
+                logical_key: winit::keyboard::Key::Character("q".into()),
+                text: text.clone(),
+                location: winit::keyboard::KeyLocation::Standard,
+                state,
+                repeat,
+                text_with_all_modifiers: text,
+                key_without_modifiers: winit::keyboard::Key::Character("q".into()),
+            },
+            is_synthetic: false,
+        }
+    }
+
+    #[test]
+    fn a_key_from_winit_is_its_physical_key_state_and_repeat() {
+        let cases = [
+            (ElementState::Pressed, false),
+            (ElementState::Pressed, true),
+            (ElementState::Released, false),
+        ];
+        for (state, repeat) in cases {
+            assert_eq!(
+                translate(&raw_key(KeyCode::KeyA, state, repeat, Some("q")), &WINDOWED),
+                Some(WindowEvent::Key {
+                    key: Key::KeyA,
+                    pressed: state.is_pressed(),
+                    repeat
+                }),
+                "{state:?} {repeat}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_scale_change_is_a_resize_to_the_window_s_size_at_the_new_scale() {
+        let raw = WinitEvent::ScaleFactorChanged {
+            scale_factor: 1.5,
+            surface_size_writer: winit::event::SurfaceSizeWriter::new(std::sync::Weak::new()),
+        };
+        assert_eq!(
+            translate(&raw, &WINDOWED),
+            Some(WindowEvent::Resized {
+                size_px: (800, 600),
+                scale_factor: 1.5
+            })
+        );
     }
 
     #[test]
     fn a_resize_carries_the_windows_scale_factor() {
-        let event = WinitEvent::Resized(PhysicalSize::new(1280, 960));
+        let event = WinitEvent::SurfaceResized(PhysicalSize::new(1280, 960));
         assert_eq!(
             translate(&event, &WINDOWED),
             Some(WindowEvent::Resized {
@@ -737,51 +1334,506 @@ mod tests {
         );
     }
 
+    // The mouse's scenarios: each builder gives the raw events winit sends
+    // for one thing the player does, and a scenario's events are
+    // translated in order. Only how the raw events are built depends on
+    // winit's version; what each scenario translates to is the game's.
+
+    /// The pointer moving to `(x, y)` in physical pixels.
+    fn moved_to(x: f64, y: f64) -> Vec<WinitEvent> {
+        vec![WinitEvent::PointerMoved {
+            device_id: None,
+            position: PhysicalPosition::new(x, y),
+            primary: true,
+            source: PointerSource::Mouse,
+        }]
+    }
+
+    /// The pointer coming into the window at `(x, y)`: winit 0.31 sends
+    /// only `PointerEntered`, where 0.30 sent a move there after it.
+    fn entered_at(x: f64, y: f64) -> Vec<WinitEvent> {
+        vec![WinitEvent::PointerEntered {
+            device_id: None,
+            position: PhysicalPosition::new(x, y),
+            primary: true,
+            kind: PointerKind::Mouse,
+        }]
+    }
+
+    /// The pointer leaving the window.
+    fn left() -> Vec<WinitEvent> {
+        vec![WinitEvent::PointerLeft {
+            device_id: None,
+            position: None,
+            primary: true,
+            kind: PointerKind::Mouse,
+        }]
+    }
+
+    fn mouse_input(button: WinitButton, state: ElementState) -> Vec<WinitEvent> {
+        vec![WinitEvent::PointerButton {
+            device_id: None,
+            state,
+            position: PhysicalPosition::new(0.0, 0.0),
+            primary: true,
+            button: ButtonSource::Mouse(button),
+            is_macos_activation_click: false,
+        }]
+    }
+
+    /// `button` going down.
+    fn pressed(button: WinitButton) -> Vec<WinitEvent> {
+        mouse_input(button, ElementState::Pressed)
+    }
+
+    /// `button` going up.
+    fn released(button: WinitButton) -> Vec<WinitEvent> {
+        mouse_input(button, ElementState::Released)
+    }
+
+    /// The wheel turning by `delta`.
+    fn scrolled(delta: MouseScrollDelta) -> Vec<WinitEvent> {
+        vec![wheel(delta)]
+    }
+
+    /// The app's events for `scenario`'s raw events, in order.
+    fn translated(scenario: &[Vec<WinitEvent>]) -> Vec<WindowEvent> {
+        scenario
+            .iter()
+            .flatten()
+            .filter_map(|event| translate(event, &WINDOWED))
+            .collect()
+    }
+
     #[test]
     fn pointer_events_are_in_physical_pixels() {
-        let moved = WinitEvent::CursorMoved {
-            device_id: DeviceId::dummy(),
-            position: PhysicalPosition::new(12.5, 40.0),
-        };
         assert_eq!(
-            translate(&moved, &WINDOWED),
-            Some(WindowEvent::PointerMoved { px: (12.5, 40.0) })
+            translated(&[
+                moved_to(12.5, 40.0),
+                pressed(WinitButton::Right),
+                released(WinitButton::Left),
+                left(),
+            ]),
+            [
+                WindowEvent::PointerMoved { px: (12.5, 40.0) },
+                WindowEvent::PointerButton {
+                    button: MouseButton::Right,
+                    pressed: true
+                },
+                WindowEvent::PointerButton {
+                    button: MouseButton::Left,
+                    pressed: false
+                },
+                WindowEvent::PointerLeft,
+            ]
         );
-        let left = WinitEvent::CursorLeft {
-            device_id: DeviceId::dummy(),
+    }
+
+    #[test]
+    fn a_mouse_entering_the_window_is_a_move_to_where_it_entered() {
+        assert_eq!(
+            translated(&[entered_at(30.0, 420.5)]),
+            [WindowEvent::PointerMoved { px: (30.0, 420.5) }]
+        );
+    }
+
+    #[test]
+    fn a_click_and_a_turn_of_the_wheel_where_the_pointer_is() {
+        assert_eq!(
+            translated(&[
+                entered_at(100.0, 200.0),
+                pressed(WinitButton::Left),
+                released(WinitButton::Left),
+                moved_to(101.0, 203.0),
+                scrolled(MouseScrollDelta::LineDelta(0.0, -2.0)),
+                pressed(WinitButton::Middle),
+                released(WinitButton::Middle),
+            ]),
+            [
+                WindowEvent::PointerMoved { px: (100.0, 200.0) },
+                WindowEvent::PointerButton {
+                    button: MouseButton::Left,
+                    pressed: true
+                },
+                WindowEvent::PointerButton {
+                    button: MouseButton::Left,
+                    pressed: false
+                },
+                WindowEvent::PointerMoved { px: (101.0, 203.0) },
+                WindowEvent::Scroll {
+                    delta: WheelDelta::Lines(2.0)
+                },
+                WindowEvent::PointerButton {
+                    button: MouseButton::Middle,
+                    pressed: true
+                },
+                WindowEvent::PointerButton {
+                    button: MouseButton::Middle,
+                    pressed: false
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn extra_mouse_buttons_are_other() {
+        assert_eq!(
+            translated(&[
+                pressed(WinitButton::Back),
+                released(WinitButton::Back),
+                pressed(WinitButton::Forward),
+                pressed(WinitButton::Button8),
+            ]),
+            [
+                WindowEvent::PointerButton {
+                    button: MouseButton::Other,
+                    pressed: true
+                },
+                WindowEvent::PointerButton {
+                    button: MouseButton::Other,
+                    pressed: false
+                },
+                WindowEvent::PointerButton {
+                    button: MouseButton::Other,
+                    pressed: true
+                },
+                WindowEvent::PointerButton {
+                    button: MouseButton::Other,
+                    pressed: true
+                },
+            ]
+        );
+    }
+
+    // Pointers that aren't the mouse: of unknown kind, a finger and a pen.
+
+    /// A pointer of `source` moving to `(x, y)`.
+    fn source_moved(source: PointerSource, x: f64, y: f64) -> WinitEvent {
+        WinitEvent::PointerMoved {
+            device_id: None,
+            position: PhysicalPosition::new(x, y),
+            primary: true,
+            source,
+        }
+    }
+
+    /// A pointer of `kind` coming in at `(x, y)`.
+    fn kind_entered(kind: PointerKind, x: f64, y: f64) -> WinitEvent {
+        WinitEvent::PointerEntered {
+            device_id: None,
+            position: PhysicalPosition::new(x, y),
+            primary: true,
+            kind,
+        }
+    }
+
+    /// A pointer of `kind` leaving.
+    fn kind_left(kind: PointerKind) -> WinitEvent {
+        WinitEvent::PointerLeft {
+            device_id: None,
+            position: None,
+            primary: true,
+            kind,
+        }
+    }
+
+    /// `button` going down or up.
+    fn source_button(button: ButtonSource, state: ElementState) -> WinitEvent {
+        WinitEvent::PointerButton {
+            device_id: None,
+            state,
+            position: PhysicalPosition::new(1.0, 2.0),
+            primary: true,
+            button,
+            is_macos_activation_click: false,
+        }
+    }
+
+    #[test]
+    fn a_pointer_of_unknown_kind_is_the_mouse() {
+        let raw = [
+            kind_entered(PointerKind::Unknown, 3.0, 4.0),
+            source_moved(PointerSource::Unknown, 5.0, 6.5),
+            source_button(ButtonSource::Unknown(7), ElementState::Pressed),
+            source_button(ButtonSource::Unknown(7), ElementState::Released),
+            kind_left(PointerKind::Unknown),
+        ];
+        let events: Vec<WindowEvent> = raw
+            .iter()
+            .filter_map(|event| translate(event, &WINDOWED))
+            .collect();
+        assert_eq!(
+            events,
+            [
+                WindowEvent::PointerMoved { px: (3.0, 4.0) },
+                WindowEvent::PointerMoved { px: (5.0, 6.5) },
+                WindowEvent::PointerButton {
+                    button: MouseButton::Other,
+                    pressed: true
+                },
+                WindowEvent::PointerButton {
+                    button: MouseButton::Other,
+                    pressed: false
+                },
+                WindowEvent::PointerLeft,
+            ]
+        );
+    }
+
+    // A finger's scenarios, as every backend sends them (winit-core's
+    // `PointerSource::Touch` docs): an enter then a press to start, moves,
+    // a release then a leave to lift, and a leave alone to cancel.
+
+    /// winit's finger `f`.
+    fn finger(f: usize) -> FingerId {
+        FingerId::from_raw(f)
+    }
+
+    /// The core's finger `f`.
+    fn core_finger(f: usize) -> nova_view::FingerId {
+        nova_view::FingerId::new(f)
+    }
+
+    fn touch_button(f: usize, state: ElementState, x: f64, y: f64, primary: bool) -> WinitEvent {
+        WinitEvent::PointerButton {
+            device_id: None,
+            state,
+            position: PhysicalPosition::new(x, y),
+            primary,
+            button: ButtonSource::Touch {
+                finger_id: finger(f),
+                force: None,
+            },
+            is_macos_activation_click: false,
+        }
+    }
+
+    fn touch_left(f: usize, primary: bool) -> WinitEvent {
+        WinitEvent::PointerLeft {
+            device_id: None,
+            position: None,
+            primary,
+            kind: PointerKind::Touch(finger(f)),
+        }
+    }
+
+    /// Finger `f` touching down at `(x, y)`.
+    fn touch_down_as(f: usize, x: f64, y: f64, primary: bool) -> Vec<WinitEvent> {
+        vec![
+            WinitEvent::PointerEntered {
+                device_id: None,
+                position: PhysicalPosition::new(x, y),
+                primary,
+                kind: PointerKind::Touch(finger(f)),
+            },
+            touch_button(f, ElementState::Pressed, x, y, primary),
+        ]
+    }
+
+    fn touch_down(f: usize, x: f64, y: f64) -> Vec<WinitEvent> {
+        touch_down_as(f, x, y, true)
+    }
+
+    /// Finger `f` moving to `(x, y)`.
+    fn touch_moved_as(f: usize, x: f64, y: f64, primary: bool) -> Vec<WinitEvent> {
+        vec![WinitEvent::PointerMoved {
+            device_id: None,
+            position: PhysicalPosition::new(x, y),
+            primary,
+            source: PointerSource::Touch {
+                finger_id: finger(f),
+                force: None,
+            },
+        }]
+    }
+
+    fn touch_moved(f: usize, x: f64, y: f64) -> Vec<WinitEvent> {
+        touch_moved_as(f, x, y, true)
+    }
+
+    /// Finger `f` lifting at `(x, y)`.
+    fn touch_up_as(f: usize, x: f64, y: f64, primary: bool) -> Vec<WinitEvent> {
+        vec![
+            touch_button(f, ElementState::Released, x, y, primary),
+            touch_left(f, primary),
+        ]
+    }
+
+    fn touch_up(f: usize, x: f64, y: f64) -> Vec<WinitEvent> {
+        touch_up_as(f, x, y, true)
+    }
+
+    /// The system cancelling finger `f`.
+    fn touch_cancelled(f: usize) -> Vec<WinitEvent> {
+        vec![touch_left(f, true)]
+    }
+
+    #[test]
+    fn a_touch_is_its_fingers_start_moves_and_end_in_physical_pixels() {
+        let f = core_finger(7);
+        assert_eq!(
+            translated(&[
+                touch_down(7, 10.5, 20.0),
+                touch_moved(7, 30.0, 40.25),
+                touch_up(7, 50.0, 60.0),
+            ]),
+            [
+                WindowEvent::TouchStarted {
+                    finger: f,
+                    px: (10.5, 20.0)
+                },
+                WindowEvent::TouchMoved {
+                    finger: f,
+                    px: (30.0, 40.25)
+                },
+                WindowEvent::TouchEnded {
+                    finger: f,
+                    px: (50.0, 60.0)
+                },
+                WindowEvent::TouchCancelled { finger: f },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_touch_the_system_cancels_is_a_leave_without_a_release() {
+        let f = core_finger(2);
+        assert_eq!(
+            translated(&[touch_down(2, 1.0, 2.0), touch_cancelled(2)]),
+            [
+                WindowEvent::TouchStarted {
+                    finger: f,
+                    px: (1.0, 2.0)
+                },
+                WindowEvent::TouchCancelled { finger: f },
+            ]
+        );
+    }
+
+    #[test]
+    fn two_fingers_keep_their_own_ids() {
+        assert_eq!(
+            translated(&[
+                touch_down(1, 1.0, 1.0),
+                touch_down_as(2, 2.0, 2.0, false),
+                touch_moved_as(2, 3.0, 3.0, false),
+                touch_moved(1, 4.0, 4.0),
+            ]),
+            [
+                WindowEvent::TouchStarted {
+                    finger: core_finger(1),
+                    px: (1.0, 1.0)
+                },
+                WindowEvent::TouchStarted {
+                    finger: core_finger(2),
+                    px: (2.0, 2.0)
+                },
+                WindowEvent::TouchMoved {
+                    finger: core_finger(2),
+                    px: (3.0, 3.0)
+                },
+                WindowEvent::TouchMoved {
+                    finger: core_finger(1),
+                    px: (4.0, 4.0)
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn winits_primary_flag_changes_nothing() {
+        let scenario = |primary| {
+            translated(&[
+                touch_down_as(3, 1.0, 2.0, primary),
+                touch_moved_as(3, 3.0, 4.0, primary),
+                touch_up_as(3, 5.0, 6.0, primary),
+            ])
         };
-        assert_eq!(translate(&left, &WINDOWED), Some(WindowEvent::PointerLeft));
-        let pressed = WinitEvent::MouseInput {
-            device_id: DeviceId::dummy(),
+        assert_eq!(scenario(true), scenario(false));
+    }
+
+    #[test]
+    fn the_enter_before_a_touchs_press_is_dropped() {
+        let enter = &touch_down(4, 9.0, 9.0)[0];
+        assert!(matches!(enter, WinitEvent::PointerEntered { .. }));
+        assert_eq!(translate(enter, &WINDOWED), None);
+    }
+
+    #[test]
+    fn pens_are_not_translated() {
+        let pen = TabletToolKind::Pen;
+        for raw in [
+            kind_entered(PointerKind::TabletTool(pen), 3.0, 4.0),
+            source_moved(
+                PointerSource::TabletTool {
+                    kind: pen,
+                    data: TabletToolData::default(),
+                },
+                5.0,
+                6.0,
+            ),
+            source_button(
+                ButtonSource::TabletTool {
+                    kind: pen,
+                    button: TabletToolButton::Contact,
+                    data: TabletToolData::default(),
+                },
+                ElementState::Pressed,
+            ),
+            kind_left(PointerKind::TabletTool(pen)),
+        ] {
+            assert_eq!(translate(&raw, &WINDOWED), None, "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn the_click_that_activates_the_window_is_a_click() {
+        let activating = WinitEvent::PointerButton {
+            device_id: None,
             state: ElementState::Pressed,
-            button: WinitButton::Right,
+            position: PhysicalPosition::new(10.0, 10.0),
+            primary: true,
+            button: ButtonSource::Mouse(WinitButton::Left),
+            is_macos_activation_click: true,
         };
         assert_eq!(
-            translate(&pressed, &WINDOWED),
-            Some(WindowEvent::PointerButton {
-                button: MouseButton::Right,
-                pressed: true
-            })
-        );
-        let released = WinitEvent::MouseInput {
-            device_id: DeviceId::dummy(),
-            state: ElementState::Released,
-            button: WinitButton::Left,
-        };
-        assert_eq!(
-            translate(&released, &WINDOWED),
+            translate(&activating, &WINDOWED),
             Some(WindowEvent::PointerButton {
                 button: MouseButton::Left,
-                pressed: false
+                pressed: true
             })
         );
     }
 
+    #[test]
+    fn a_mouse_wheel_s_source_does_not_matter() {
+        for source in [
+            ScrollSource::Unknown,
+            ScrollSource::Wheel,
+            ScrollSource::Finger,
+        ] {
+            let raw = WinitEvent::MouseWheel {
+                device_id: None,
+                delta: MouseScrollDelta::LineDelta(0.0, 1.0),
+                phase: TouchPhase::Moved,
+                source,
+            };
+            assert_eq!(
+                translate(&raw, &WINDOWED),
+                Some(WindowEvent::Scroll {
+                    delta: WheelDelta::Lines(-1.0)
+                }),
+                "{source:?}"
+            );
+        }
+    }
+
     fn wheel(delta: MouseScrollDelta) -> WinitEvent {
         WinitEvent::MouseWheel {
-            device_id: DeviceId::dummy(),
+            device_id: None,
             delta,
             phase: TouchPhase::Moved,
+            source: ScrollSource::Wheel,
         }
     }
 
@@ -861,7 +1913,7 @@ mod tests {
 
     #[test]
     fn a_resize_reports_the_windows_fullscreen_state_before_the_new_size() {
-        let raw = WinitEvent::Resized(PhysicalSize::new(3024, 1964));
+        let raw = WinitEvent::SurfaceResized(PhysicalSize::new(3024, 1964));
         for fullscreen in [true, false] {
             assert_eq!(
                 events(&raw, fullscreen),
@@ -905,11 +1957,74 @@ mod tests {
     }
 
     #[test]
+    fn an_ime_commit_becomes_one_committed_event_per_character() {
+        let commit = WinitEvent::Ime(Ime::Commit("日本".to_owned()));
+        assert_eq!(
+            events(&commit, false),
+            [WindowEvent::Committed('日'), WindowEvent::Committed('本')]
+        );
+    }
+
+    #[test]
+    fn an_ime_commit_drops_control_characters() {
+        assert_eq!(
+            ime_events(&Ime::Commit("a\nb\u{7f}".to_owned())),
+            [WindowEvent::Committed('a'), WindowEvent::Committed('b')]
+        );
+    }
+
+    #[test]
+    fn preedit_and_the_ime_s_other_events_become_nothing() {
+        for ime in [
+            Ime::Preedit("にほ".to_owned(), Some((0, 6))),
+            Ime::Enabled,
+            Ime::Disabled,
+            Ime::DeleteSurrounding {
+                before_bytes: 1,
+                after_bytes: 0,
+            },
+        ] {
+            assert_eq!(events(&WinitEvent::Ime(ime.clone()), true), [], "{ime:?}");
+        }
+    }
+
+    #[test]
+    fn the_soft_keyboard_s_return_is_return() {
+        let unknown = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
+        for newline in ["\n", "\r"] {
+            let logical = LogicalKey::Character(newline.into());
+            for state in [ElementState::Pressed, ElementState::Released] {
+                assert_eq!(
+                    keyboard_event(unknown, &logical, state, false),
+                    WindowEvent::Key {
+                        key: Key::Enter,
+                        pressed: state.is_pressed(),
+                        repeat: false
+                    },
+                    "{newline:?} {state:?}"
+                );
+            }
+        }
+        let letter = LogicalKey::Character("a".into());
+        assert_eq!(
+            keyboard_event(unknown, &letter, ElementState::Pressed, false),
+            key_event(unknown, ElementState::Pressed, false),
+            "a soft keyboard's letter is the unidentified key it was"
+        );
+        let return_key = PhysicalKey::Code(KeyCode::KeyA);
+        let newline = LogicalKey::Character("\n".into());
+        assert_eq!(
+            keyboard_event(return_key, &newline, ElementState::Pressed, true),
+            key_event(return_key, ElementState::Pressed, true),
+            "a key the keyboard names is its own key"
+        );
+    }
+
+    #[test]
     fn other_events_report_no_fullscreen_state() {
-        let left = WinitEvent::CursorLeft {
-            device_id: DeviceId::dummy(),
-        };
-        assert_eq!(events(&left, true), [WindowEvent::PointerLeft]);
+        for left in left() {
+            assert_eq!(events(&left, true), [WindowEvent::PointerLeft]);
+        }
         assert_eq!(
             events(&WinitEvent::Focused(false), true),
             [WindowEvent::FocusLost]

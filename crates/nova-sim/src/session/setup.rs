@@ -62,13 +62,17 @@ pub(super) struct Setup {
     /// Whether the data turns on the `l33t` mode (`_leetMode`; see
     /// [`Session::with_strings`]); never saved.
     pub(super) leet: bool,
+    /// What opens the stellars' compiled conversations (see
+    /// [`Session::with_dialog_loader`]): none until the game wires one, so
+    /// a conversation shows that it can't open.
+    pub(super) dialogs: Option<super::conversation::Loader>,
 }
 
 impl Default for Setup {
     /// What a session starts with: each rule's default, Nova's hire terms,
     /// control bits, persons and disable rule, no set-op observer, no
     /// string lists, the default rule set, sound effects not quiet, every
-    /// sprite loaded, and the `l33t` mode off.
+    /// sprite loaded, the `l33t` mode off, and no dialog loader.
     fn default() -> Self {
         Self {
             multi_jump: MultiJumpRule::default(),
@@ -87,6 +91,7 @@ impl Default for Setup {
             strings: ship_change::Strings::none(),
             rules: Rulebook::default(),
             leet: false,
+            dialogs: None,
         }
     }
 }

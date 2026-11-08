@@ -1,6 +1,4 @@
 use super::*;
-use nova_view::ui::mission_info::MISSION_INFO_KEY;
-use nova_view::ui::player_info::PLAYER_INFO_KEY;
 
 // The keys typed while a map over a screen waits for M's release, replayed
 // to the screen under it at the close: the wiring of the flight's queue
@@ -10,6 +8,16 @@ use nova_view::ui::player_info::PLAYER_INFO_KEY;
 /// Presses and lets go of `k`.
 pub(super) fn tap(screen: &mut AppScreen, k: Key) {
     screen.input(&key(k, true));
+    screen.input(&key(k, false));
+}
+
+/// Taps the letter key `k` as the platform sends it: its press, the
+/// character it types, its release.
+pub(super) fn type_tap(screen: &mut AppScreen, k: Key) {
+    screen.input(&key(k, true));
+    screen.input(&Input::Text(
+        nova_view::key_letter(k).expect("a letter key"),
+    ));
     screen.input(&key(k, false));
 }
 
@@ -107,7 +115,7 @@ fn a_key_tapped_during_a_wait_on_the_exchanges_map_acts_on_it_after_the_close() 
     };
     let before = free(&screen);
     start_the_wait(&mut screen);
-    tap(&mut screen, Key::Char('b'));
+    tap(&mut screen, Key::KeyB);
     assert_eq!(free(&screen), before, "not yet");
     end_the_wait(&mut screen);
     assert!(free(&screen) < before, "bought");
@@ -121,15 +129,15 @@ fn a_count_typed_during_a_wait_on_the_exchanges_map_is_ordered_after_the_close()
     let mut screen = landed_trader(&store);
     click_port_item(&mut screen, 7);
     start_the_wait(&mut screen);
-    screen.input(&key(Key::Alt, true));
-    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::AltLeft, true));
+    screen.input(&key(Key::KeyB, true));
     screen.input(&Input::Text('b'));
-    screen.input(&key(Key::Char('b'), false));
-    screen.input(&key(Key::Char('5'), true));
+    screen.input(&key(Key::KeyB, false));
+    screen.input(&key(Key::Digit5, true));
     screen.input(&Input::Text('5'));
-    screen.input(&key(Key::Char('5'), false));
+    screen.input(&key(Key::Digit5, false));
     tap(&mut screen, Key::Enter);
-    screen.input(&key(Key::Alt, false));
+    screen.input(&key(Key::AltLeft, false));
     assert_eq!(pilot(&screen).held(FOOD), 0, "nothing bought yet");
     end_the_wait(&mut screen);
     assert_eq!(pilot(&screen).held(FOOD), 5, "the count typed, not 10");
@@ -168,7 +176,7 @@ fn an_offers_refuse_key_tapped_during_its_maps_wait_answers_after_the_close() {
     screen.input(&key(MAP, true));
     screen.input(&key(Key::Escape, true));
     screen.input(&key(Key::Escape, false));
-    tap(&mut screen, Key::Char('n'));
+    type_tap(&mut screen, Key::KeyN);
     end_the_wait(&mut screen);
     assert!(spaceport(&screen).offer_dialog().is_none(), "answered");
 }
@@ -244,7 +252,7 @@ fn a_key_that_opens_the_exchange_passes_the_next_on_to_it_as_it_flushes_nothing(
     let store = MemoryPilots::new();
     let mut screen = landed_trader(&store);
     start_the_wait(&mut screen);
-    tap(&mut screen, Key::Char('c'));
+    tap(&mut screen, Key::KeyC);
     tap(&mut screen, Key::Escape);
     end_the_wait(&mut screen);
     assert_eq!(screen.showing(), Showing::Spaceport, "not left");
@@ -259,7 +267,7 @@ fn a_key_that_opens_a_flushing_screen_drops_those_behind_it() {
     let store = MemoryPilots::new();
     let mut screen = landed_at_venues(&store, game_data_fork_loaded());
     start_the_wait(&mut screen);
-    tap(&mut screen, Key::Char('b'));
+    tap(&mut screen, Key::KeyB);
     tap(&mut screen, Key::Escape);
     end_the_wait(&mut screen);
     assert!(
@@ -293,7 +301,7 @@ pub(super) fn offer_map_waiting() -> AppScreen {
 #[test]
 fn a_key_that_answers_an_offer_over_flight_leaves_the_next_unread_by_flight() {
     let mut screen = offer_map_waiting();
-    tap(&mut screen, Key::Char('n'));
+    type_tap(&mut screen, Key::KeyN);
     tap(&mut screen, LAND);
     end_the_wait(&mut screen);
     assert_eq!(screen.showing(), Showing::Flight, "refused");
@@ -310,8 +318,8 @@ fn a_key_that_answers_an_offer_over_flight_leaves_the_next_unread_by_flight() {
 fn an_unlatched_key_tapped_behind_the_answer_does_nothing_in_flight() {
     let mut screen = offer_map_waiting();
     let still = ship(&screen);
-    tap(&mut screen, Key::Char('n'));
-    tap(&mut screen, Key::Up);
+    type_tap(&mut screen, Key::KeyN);
+    tap(&mut screen, Key::ArrowUp);
     end_the_wait(&mut screen);
     screen.tick(TICK * 3);
     assert_eq!(ship(&screen), still, "no thrust");
@@ -322,12 +330,12 @@ fn an_unlatched_key_still_down_as_the_last_dialog_closes_reads_down_in_flight() 
     // `_HandlePlayer` polls it (`_QuickKeyCheck` @0xa0f5).
     let mut screen = offer_map_waiting();
     let still = ship(&screen);
-    tap(&mut screen, Key::Char('n'));
-    screen.input(&key(Key::Up, true));
+    type_tap(&mut screen, Key::KeyN);
+    screen.input(&key(Key::ArrowUp, true));
     end_the_wait(&mut screen);
     screen.tick(TICK * 3);
     assert_ne!(ship(&screen), still, "thrust");
-    screen.input(&key(Key::Up, false));
+    screen.input(&key(Key::ArrowUp, false));
     let velocity = |screen: &AppScreen| ship(screen).velocity.length();
     let coasting = velocity(&screen);
     screen.tick(TICK * 3);
@@ -338,8 +346,8 @@ fn an_unlatched_key_still_down_as_the_last_dialog_closes_reads_down_in_flight() 
 fn an_unlatched_key_replayed_to_the_offer_and_still_down_reads_down_in_flight() {
     let mut screen = offer_map_waiting();
     let still = ship(&screen);
-    screen.input(&key(Key::Up, true));
-    tap(&mut screen, Key::Char('n'));
+    screen.input(&key(Key::ArrowUp, true));
+    type_tap(&mut screen, Key::KeyN);
     end_the_wait(&mut screen);
     screen.tick(TICK * 3);
     assert_ne!(ship(&screen), still, "thrust");
@@ -349,7 +357,7 @@ fn an_unlatched_key_replayed_to_the_offer_and_still_down_reads_down_in_flight() 
 fn an_unlatched_key_let_go_under_the_player_info_a_replay_opened_reads_up_in_flight() {
     let mut screen = offer_map_waiting();
     let still = ship(&screen);
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     screen.input(&key(PLAYER_INFO_KEY, true));
     end_the_wait(&mut screen);
     assert_eq!(
@@ -357,10 +365,10 @@ fn an_unlatched_key_let_go_under_the_player_info_a_replay_opened_reads_up_in_fli
         Showing::PlayerInfo,
         "opened by the replay"
     );
-    screen.input(&key(Key::Up, false));
+    screen.input(&key(Key::ArrowUp, false));
     screen.input(&key(PLAYER_INFO_KEY, false));
     tap(&mut screen, Key::Enter);
-    tap(&mut screen, Key::Char('n'));
+    type_tap(&mut screen, Key::KeyN);
     assert_eq!(screen.showing(), Showing::Flight, "both closed");
     screen.tick(TICK * 3);
     assert_eq!(ship(&screen).velocity, still.velocity, "no thrust");
@@ -372,7 +380,7 @@ fn an_unlatched_key_still_down_at_a_take_off_reads_down_in_flight() {
     land(&mut screen);
     start_the_wait(&mut screen);
     tap(&mut screen, Key::Escape);
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     end_the_wait(&mut screen);
     assert_eq!(screen.showing(), Showing::Flight);
     screen.tick(TICK * 3);
@@ -437,10 +445,15 @@ fn a_key_that_opens_a_flushing_screen_takes_its_release_along() {
     let store = MemoryPilots::new();
     let mut screen = landed_shipyard(&store);
     start_the_wait(&mut screen);
-    tap(&mut screen, Key::Char('s'));
+    tap(&mut screen, Key::KeyS);
     end_the_wait(&mut screen);
     assert!(spaceport(&screen).open_shipyard().is_some(), "opened");
-    assert!(!screen.keys_held.s, "S isn't left down");
+    assert!(
+        !screen
+            .keys
+            .held(nova_view::keymap::MainMenuCommand::OpenGuardS),
+        "S isn't left down"
+    );
 }
 
 #[test]
@@ -512,13 +525,13 @@ fn command_down_across_a_key_that_flushes_is_let_go_with_it() {
     let store = MemoryPilots::new();
     let mut screen = landed_at_venues(&store, game_data_fork_loaded());
     start_the_wait(&mut screen);
-    screen.input(&key(Key::Command, true));
-    tap(&mut screen, Key::Char('b'));
-    screen.input(&key(Key::Command, false));
+    screen.input(&key(Key::MetaLeft, true));
+    tap(&mut screen, Key::KeyB);
+    screen.input(&key(Key::MetaLeft, false));
     end_the_wait(&mut screen);
     assert!(spaceport(&screen).open_bar().is_some(), "the bar opened");
     assert_eq!(
-        screen.input(&key(Key::Char('q'), true)),
+        screen.input(&key(Key::KeyQ, true)),
         ScreenAction::None,
         "a plain Q, no Command-Q"
     );
@@ -529,13 +542,13 @@ fn command_down_across_escape_taking_off_is_let_go_with_it() {
     let mut screen = with_dialogs(data());
     land(&mut screen);
     start_the_wait(&mut screen);
-    screen.input(&key(Key::Command, true));
+    screen.input(&key(Key::MetaLeft, true));
     tap(&mut screen, Key::Escape);
-    screen.input(&key(Key::Command, false));
+    screen.input(&key(Key::MetaLeft, false));
     end_the_wait(&mut screen);
     assert_eq!(screen.showing(), Showing::Flight, "took off");
     assert_eq!(
-        screen.input(&key(Key::Char('q'), true)),
+        screen.input(&key(Key::KeyQ, true)),
         ScreenAction::None,
         "a plain Q, no Command-Q"
     );
@@ -546,17 +559,17 @@ fn a_press_dropped_by_a_flush_leaves_no_key_down_and_its_key_still_lets_go_live(
     let store = MemoryPilots::new();
     let mut screen = landed_at_venues(&store, game_data_fork_loaded());
     start_the_wait(&mut screen);
-    tap(&mut screen, Key::Char('b'));
-    screen.input(&key(Key::Command, true));
+    tap(&mut screen, Key::KeyB);
+    screen.input(&key(Key::MetaLeft, true));
     end_the_wait(&mut screen);
     assert_eq!(
-        screen.input(&key(Key::Char('q'), true)),
+        screen.input(&key(Key::KeyQ, true)),
         ScreenAction::Quit,
         "Command is physically down, so Command-Q stands"
     );
-    screen.input(&key(Key::Char('q'), false));
-    screen.input(&key(Key::Command, false));
-    assert_eq!(screen.input(&key(Key::Char('q'), true)), ScreenAction::None);
+    screen.input(&key(Key::KeyQ, false));
+    screen.input(&key(Key::MetaLeft, false));
+    assert_eq!(screen.input(&key(Key::KeyQ, true)), ScreenAction::None);
 }
 
 #[test]
@@ -565,14 +578,14 @@ fn alt_down_across_a_refused_sale_is_let_go_with_it() {
     let mut screen = landed_outfitter_over(&store, pod_data());
     click_port_item(&mut screen, 8);
     select_first_outfit(&mut screen);
-    screen.input(&key(Key::Char('b'), true));
-    screen.input(&key(Key::Right, true));
-    screen.input(&key(Key::Char('b'), true));
-    screen.input(&key(Key::Left, true));
+    screen.input(&key(Key::KeyB, true));
+    screen.input(&key(Key::ArrowRight, true));
+    screen.input(&key(Key::KeyB, true));
+    screen.input(&key(Key::ArrowLeft, true));
     start_the_wait(&mut screen);
-    screen.input(&key(Key::Alt, true));
-    tap(&mut screen, Key::Char('s'));
-    screen.input(&key(Key::Alt, false));
+    screen.input(&key(Key::AltLeft, true));
+    tap(&mut screen, Key::KeyS);
+    screen.input(&key(Key::AltLeft, false));
     end_the_wait(&mut screen);
     let open = spaceport(&screen).open_outfitter().expect("outfitting");
     assert!(open.alert_dialog().is_some(), "the sale refused");
@@ -680,9 +693,9 @@ fn a_key_known_only_by_its_repeats_and_let_go_isnt_held_past_the_last_dialog() {
     // The press went to the map; only its repeats and release came after.
     let mut screen = offer_map_waiting();
     let still = ship(&screen);
-    screen.input(&held(Key::Up));
-    screen.input(&key(Key::Up, false));
-    tap(&mut screen, Key::Char('n'));
+    screen.input(&held(Key::ArrowUp));
+    screen.input(&key(Key::ArrowUp, false));
+    type_tap(&mut screen, Key::KeyN);
     end_the_wait(&mut screen);
     assert_eq!(screen.showing(), Showing::Flight, "refused");
     screen.tick(TICK * 3);
@@ -693,8 +706,8 @@ fn a_key_known_only_by_its_repeats_and_let_go_isnt_held_past_the_last_dialog() {
 fn a_key_known_only_by_its_repeats_and_still_down_reads_down_past_the_last_dialog() {
     let mut screen = offer_map_waiting();
     let still = ship(&screen);
-    screen.input(&held(Key::Up));
-    tap(&mut screen, Key::Char('n'));
+    screen.input(&held(Key::ArrowUp));
+    type_tap(&mut screen, Key::KeyN);
     end_the_wait(&mut screen);
     screen.tick(TICK * 3);
     assert_ne!(ship(&screen), still, "thrust");

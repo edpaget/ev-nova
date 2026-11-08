@@ -6,6 +6,11 @@
 //! and Return or Open opens it. Cancel or Escape closes the list. An empty
 //! list says so, and the router can show a line in the error colour, such
 //! as why a pilot could not be opened.
+//!
+//! The pad reaches each pilot shown, Cancel and Open, starting on the
+//! selected pilot, as Navigation Services' file list starts with the
+//! keyboard focus; South presses as a click does, silently (the `pad`
+//! module; rdm:phase/key-bindings/phase-11-gamepad-menus).
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -13,12 +18,18 @@ use std::time::Duration;
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
 use crate::geometry::{Bounds, Point};
-use crate::input::{Input, Key};
+use crate::input::Input;
+use crate::keymap::{Command, CommandInput, CommandReader, SharedBindings, UiCommand, contexts};
 use crate::screen::{Screen, ScreenAction};
 use crate::text::TextMetrics;
 use crate::ui::dialog::outline;
+use crate::ui::pad_focus::{self, FocusState};
 use crate::ui::prefs::{BACKDROP, BORDER};
 use crate::ui::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
+
+pub(crate) mod pad;
+
+pub use pad::PadTarget;
 
 /// The panel's title.
 pub const TITLE: &str = "Open Pilot";
@@ -81,6 +92,11 @@ pub struct PilotList {
     tracked: Option<Target>,
     tracker: ButtonTracker,
     outcome: Option<PilotListOutcome>,
+    /// Its keys, the shared arrows, Confirm and Back, as commands
+    /// ([`contexts::PILOT_LIST`]).
+    reader: CommandReader,
+    /// The pad's focus (the `pad` module).
+    focus: FocusState<PadTarget>,
 }
 
 impl std::fmt::Debug for PilotList {
@@ -122,7 +138,16 @@ impl PilotList {
             tracked: None,
             tracker: ButtonTracker::default(),
             outcome: None,
+            reader: CommandReader::new(contexts::PILOT_LIST),
+            focus: FocusState::default(),
         }
+    }
+
+    /// The list reading its keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.reader.set_bindings(bindings);
+        self
     }
 
     /// The pilots' keys, in order.
@@ -200,13 +225,15 @@ impl PilotList {
             .clamp((index + 1).saturating_sub(VISIBLE_ROWS), index);
     }
 
-    fn key(&mut self, key: Key, repeat: bool) {
+    /// A command's press or repeat: Down and Up move the selection, their
+    /// repeats too; Confirm opens it and Back cancels, on a press alone.
+    fn command(&mut self, command: UiCommand, repeat: bool) {
         let last = self.keys.len().checked_sub(1);
-        match (key, self.selected, last) {
-            (Key::Down, Some(at), Some(last)) => self.select((at + 1).min(last)),
-            (Key::Up, Some(at), _) => self.select(at.saturating_sub(1)),
-            (Key::Enter, ..) if !repeat => self.open_selected(),
-            (Key::Escape, ..) if !repeat => self.outcome = Some(PilotListOutcome::Cancel),
+        match (command, self.selected, last) {
+            (UiCommand::Down, Some(at), Some(last)) => self.select((at + 1).min(last)),
+            (UiCommand::Up, Some(at), _) => self.select(at.saturating_sub(1)),
+            (UiCommand::Confirm, ..) if !repeat => self.open_selected(),
+            (UiCommand::Back, ..) if !repeat => self.outcome = Some(PilotListOutcome::Cancel),
             _ => {}
         }
     }
@@ -268,16 +295,32 @@ impl PilotList {
 impl Screen for PilotList {
     /// The list is modal: it takes every input, and never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        let meant = self.reader.follow(input);
+        if let Some(meant) = meant
+            && pad_focus::from_pad(input)
+            && self.pad_command(meant)
+        {
+            return ScreenAction::None;
+        }
+        if let Some(CommandInput {
+            command: Command::Ui(command),
+            pressed: true,
+            repeat,
+        }) = meant
+        {
+            self.command(command, repeat);
+        }
         match *input {
-            Input::Key {
-                key,
-                pressed: true,
-                repeat,
-            } => self.key(key, repeat),
+            Input::Surroundings(surroundings) => self.pad_surroundings(surroundings.device),
             Input::Key { .. }
             | Input::Text(_)
             | Input::PointerLeft
             | Input::PointerMovedOutside(_)
+            | Input::PadButton { .. }
+            | Input::PadAxis { .. }
+            | Input::Touch(_)
+            | Input::Pinch(_)
+            | Input::TouchControl(_)
             | Input::Scroll { .. } => {}
             Input::PointerButton { .. } | Input::PointerMoved(_) => self.pointer(input),
         }
@@ -340,6 +383,7 @@ impl Screen for PilotList {
             let pressed = self.tracked == Some(target) && self.tracker.pressed();
             button.draw(pressed, &ButtonSkin::NOVA, &self.style, &self.metrics, list);
         }
+        self.draw_pad_highlight(list);
     }
 
     fn cancel_pointer(&mut self) {
@@ -353,7 +397,7 @@ impl Screen for PilotList {
 mod tests {
     use super::*;
     use crate::draw::DrawCommand;
-    use crate::input::MouseButton;
+    use crate::input::{Key, MouseButton};
     use crate::sound::Sound;
     use crate::text::fixture::MonoMetrics;
 
@@ -411,24 +455,27 @@ mod tests {
         pilots.input(&key(Key::Enter, false));
         assert_eq!(pilots.take_outcome(), open("Ada"));
         assert_eq!(pilots.take_outcome(), None, "once");
+        let mut pilots = list(&["Ada", "Bob"]);
+        pilots.input(&key(Key::NumpadEnter, false));
+        assert_eq!(pilots.take_outcome(), open("Ada"), "the keypad's Enter");
     }
 
     #[test]
     fn up_and_down_move_the_selection_within_the_list() {
         let mut pilots = list(&["Ada", "Bob", "Cy"]);
-        pilots.input(&key(Key::Down, false));
-        pilots.input(&key(Key::Down, true));
+        pilots.input(&key(Key::ArrowDown, false));
+        pilots.input(&key(Key::ArrowDown, true));
         assert_eq!(pilots.selected(), Some(2));
-        pilots.input(&key(Key::Down, false));
+        pilots.input(&key(Key::ArrowDown, false));
         assert_eq!(pilots.selected(), Some(2), "the last");
-        pilots.input(&key(Key::Up, true));
+        pilots.input(&key(Key::ArrowUp, true));
         assert_eq!(pilots.selected(), Some(1));
         pilots.input(&key(Key::Enter, true));
         assert_eq!(pilots.take_outcome(), None, "a repeat opens nothing");
         pilots.input(&key(Key::Enter, false));
         assert_eq!(pilots.take_outcome(), open("Bob"));
-        pilots.input(&key(Key::Up, false));
-        pilots.input(&key(Key::Up, false));
+        pilots.input(&key(Key::ArrowUp, false));
+        pilots.input(&key(Key::ArrowUp, false));
         assert_eq!(pilots.selected(), Some(0), "the first");
     }
 
@@ -479,7 +526,7 @@ mod tests {
     #[test]
     fn open_opens_the_selection_and_cancel_or_escape_cancels() {
         let mut pilots = list(&["Ada", "Bob"]);
-        pilots.input(&key(Key::Down, false));
+        pilots.input(&key(Key::ArrowDown, false));
         let open_at = pilots.open_button().rect.center();
         assert_eq!(click(&mut pilots, open_at), []);
         assert_eq!(pilots.take_outcome(), open("Bob"));
@@ -499,7 +546,7 @@ mod tests {
         assert!(texts(&pilots).contains(&(NO_PILOTS.to_owned(), Color::DIM)));
         assert_eq!(NO_PILOTS, "No saved pilots.");
         pilots.input(&key(Key::Enter, false));
-        pilots.input(&key(Key::Down, false));
+        pilots.input(&key(Key::ArrowDown, false));
         assert!(!pilots.open_button().enabled);
         let open_at = pilots.open_button().rect.center();
         click(&mut pilots, open_at);
@@ -552,7 +599,7 @@ mod tests {
         assert!(pilots.row(VISIBLE_ROWS - 1).is_some());
         assert!(pilots.row(VISIBLE_ROWS).is_none(), "below the list");
         for _ in 0..12 {
-            pilots.input(&key(Key::Down, true));
+            pilots.input(&key(Key::ArrowDown, true));
         }
         assert_eq!(pilots.selected(), Some(12));
         assert!(pilots.row(12).is_some());
@@ -566,7 +613,7 @@ mod tests {
         assert_eq!(shown.first().map(String::as_str), Some("P03"));
         assert_eq!(shown.len(), VISIBLE_ROWS);
         for _ in 0..12 {
-            pilots.input(&key(Key::Up, true));
+            pilots.input(&key(Key::ArrowUp, true));
         }
         assert_eq!(pilots.row(0), Some(pilots.row_rect(0)), "back at the top");
     }
@@ -689,13 +736,40 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_rebound_down_confirm_and_back_act_on_their_new_keys_alone() {
+        use crate::keymap::{Bindings, KeyCombo, SharedBindings, UiCommand};
+        let bindings = SharedBindings::new(
+            Bindings::default()
+                .rebound(UiCommand::Down, KeyCombo::key(Key::KeyJ))
+                .rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyO))
+                .rebound(UiCommand::Back, KeyCombo::key(Key::KeyQ)),
+        );
+        let mut pilots = list(&["Ada", "Bob"]).with_bindings(bindings.clone());
+        pilots.input(&key(Key::ArrowDown, false));
+        pilots.input(&key(Key::Enter, false));
+        assert_eq!(pilots.take_outcome(), None, "Down and Return no longer act");
+        pilots.input(&key(Key::KeyJ, false));
+        pilots.input(&key(Key::KeyO, false));
+        assert_eq!(pilots.take_outcome(), open("Bob"), "J and O do");
+        let mut pilots = list(&["Ada"]).with_bindings(bindings);
+        pilots.input(&key(Key::Escape, false));
+        assert_eq!(pilots.take_outcome(), None, "Escape no longer cancels");
+        pilots.input(&key(Key::KeyQ, false));
+        assert_eq!(
+            pilots.take_outcome(),
+            Some(PilotListOutcome::Cancel),
+            "Q does"
+        );
+    }
+
     /// `_OpenPilotFile` @0x76644 opens the system's open panel, whose keys
     /// play no sound.
     #[test]
     fn keyboard_activation_is_silent_as_the_original() {
-        for k in [Key::Up, Key::Down, Key::Enter, Key::Escape] {
+        for k in [Key::ArrowUp, Key::ArrowDown, Key::Enter, Key::Escape] {
             let mut pilots = list(&["Ada", "Bob"]);
-            pilots.input(&key(Key::Down, false));
+            pilots.input(&key(Key::ArrowDown, false));
             pilots.input(&key(k, false));
             pilots.input(&Input::Key {
                 key: k,

@@ -318,9 +318,9 @@ impl<G: Gpu> Driver<G> {
     }
 
     fn land(&mut self) {
-        self.press(Key::Char('l'));
+        self.press(Key::KeyL);
         self.frames(4);
-        self.press(Key::Char('l'));
+        self.press(Key::KeyL);
         assert_eq!(self.showing(), Showing::Spaceport, "landed");
     }
 
@@ -371,13 +371,13 @@ impl<G: Gpu> Driver<G> {
             let system = map.model().system(SystemId(id)).expect("on the map");
             let at = map.transform().world_to_screen(system.position());
             let key = if at.x < shown.min.x {
-                Key::Left
+                Key::ArrowLeft
             } else if at.x > shown.max.x {
-                Key::Right
+                Key::ArrowRight
             } else if at.y < shown.min.y {
-                Key::Up
+                Key::ArrowUp
             } else if at.y > shown.max.y {
-                Key::Down
+                Key::ArrowDown
             } else {
                 return at;
             };
@@ -391,14 +391,14 @@ impl<G: Gpu> Driver<G> {
     fn plot(&mut self, id: i16) {
         // Let the take-off settle: M opens no map in its first frames.
         self.frames(60);
-        self.press(Key::Char('m'));
+        self.press(Key::KeyM);
         assert_eq!(self.showing(), Showing::FlightMap, "the map opened");
-        self.key(Key::Shift, true);
+        self.key(Key::ShiftLeft, true);
         let at = self.on_map(id);
         self.click_point(at);
-        self.key(Key::Shift, false);
+        self.key(Key::ShiftLeft, false);
         assert_eq!(self.session().course(), [SystemId(id)], "plotted");
-        self.press(Key::Char('m'));
+        self.press(Key::KeyM);
     }
 
     /// Flies out until the ship is at least the minimum jump distance
@@ -418,9 +418,9 @@ impl<G: Gpu> Driver<G> {
             let facing = ship.position.length() == 0.0
                 || shortest_turn(ship.heading, heading_of(ship.position)).abs() <= turn;
             if drifting_in && !facing {
-                self.hold(&[Key::Down]);
+                self.hold(&[Key::ArrowDown]);
             } else {
-                self.hold(&[Key::Up]);
+                self.hold(&[Key::ArrowUp]);
             }
             self.redraw();
         }
@@ -433,7 +433,7 @@ impl<G: Gpu> Driver<G> {
     fn arrive(&mut self, id: i16) -> Duration {
         self.plot(id);
         self.fly_out();
-        self.press(Key::Char('j'));
+        self.press(Key::KeyJ);
         let mut arrived = None;
         for _ in 0..1800 {
             self.reset();

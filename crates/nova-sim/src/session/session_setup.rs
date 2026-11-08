@@ -15,6 +15,7 @@ use std::rc::Rc;
 use crate::catalog::CommCatalog;
 use crate::combat::hull::DisableRule;
 use crate::control::{ControlBits, NovaBits};
+use crate::dialog::DialogLoader;
 use crate::hire::{HireTerms, NovaHire};
 use crate::person::{NovaPersons, PersonRules};
 use crate::rulebook::Rulebook;
@@ -48,6 +49,10 @@ pub struct SessionSetup {
     /// The string lists `T` names the ship from
     /// ([`Session::with_strings`]); none leaves the session's own.
     pub strings: Option<Rc<dyn CommCatalog>>,
+    /// What opens the stellars' compiled conversations
+    /// ([`Session::with_dialog_loader`]); none leaves the session's own,
+    /// which opens nothing.
+    pub dialogs: Option<Rc<dyn DialogLoader>>,
     /// What the run carried over from the flights before.
     pub carry: CarryOver,
 }
@@ -61,6 +66,7 @@ impl Default for SessionSetup {
             control_bits: Rc::new(NovaBits),
             person_rules: Rc::new(NovaPersons::default()),
             strings: None,
+            dialogs: None,
             carry: CarryOver::default(),
         }
     }
@@ -75,6 +81,7 @@ impl fmt::Debug for SessionSetup {
             .field("control_bits", &self.control_bits)
             .field("person_rules", &self.person_rules)
             .field("strings", &self.strings.as_ref().map(|_| "Strings"))
+            .field("dialogs", &self.dialogs.as_ref().map(|_| "DialogLoader"))
             .field("carry", &self.carry)
             .finish()
     }
@@ -123,7 +130,7 @@ impl Session {
     /// order the app's edge chained them: the disable rule, the rule set,
     /// the slot sprites, the stellar sprite pool, the kept berths and the
     /// comm dialog's release flag when carried, the hire terms, the control bits, the persons, the string
-    /// lists when given, and a new pilot's last refresh when carried.
+    /// lists and the dialog loader when given, and a new pilot's last refresh when carried.
     #[must_use]
     pub fn set_up(self, setup: SessionSetup) -> Self {
         let SessionSetup {
@@ -133,6 +140,7 @@ impl Session {
             control_bits,
             person_rules,
             strings,
+            dialogs,
             carry,
         } = setup;
         let mut session = self.with_disable_rule(disable_rule).with_rules(rules);
@@ -154,6 +162,9 @@ impl Session {
             .with_person_rules(person_rules);
         if let Some(strings) = strings {
             session = session.with_strings(strings);
+        }
+        if let Some(dialogs) = dialogs {
+            session = session.with_dialog_loader(dialogs);
         }
         match carry.last_refresh {
             Some(carried) => session.with_last_refresh(carried),
@@ -229,6 +240,7 @@ mod tests {
             control_bits: Rc::new(NovaBits),
             person_rules: Rc::new(NovaPersons::default()),
             strings: Some(Rc::new(Lists)),
+            dialogs: Some(Rc::new(crate::dialog::fake::FakeLoader::default())),
             carry: CarryOver {
                 slot_sprites: Some(slot_sprites),
                 stellar_sprite_pool: Some(stellar_sprite_pool),
@@ -255,7 +267,8 @@ mod tests {
             .with_hire_terms(setup.hire_terms)
             .with_control_bits(setup.control_bits)
             .with_person_rules(setup.person_rules)
-            .with_strings(setup.strings.expect("lists"));
+            .with_strings(setup.strings.expect("lists"))
+            .with_dialog_loader(setup.dialogs.expect("a loader"));
         session.with_last_refresh(carry.last_refresh.expect("a refresh"))
     }
 
@@ -284,6 +297,7 @@ mod tests {
             let mut set_up = built.clone().set_up(SessionSetup::default());
             assert_eq!(set_up.setup.strings, built.setup.strings, "its own lists");
             assert_eq!(set_up.chart.carried_refresh, None, "no refresh carried");
+            assert_eq!(set_up.setup.dialogs, None, "no dialog loader");
             // The ports are Nova's afresh, and compare by their handle.
             set_up.setup.disable_rule = built.setup.disable_rule.clone();
             set_up.setup.hire_terms = built.setup.hire_terms.clone();
@@ -303,11 +317,13 @@ mod tests {
             "hire_terms",
             "carry",
             "Some(\"Strings\")",
+            "Some(\"DialogLoader\")",
         ] {
             assert!(shown.contains(part), "{part}: {shown}");
         }
         let none = format!("{:?}", SessionSetup::default());
         assert!(none.contains("strings: None"), "{none}");
+        assert!(none.contains("dialogs: None"), "{none}");
     }
 
     #[test]

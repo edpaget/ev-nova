@@ -151,7 +151,7 @@ fn course_pictures(data: &GameData, steps_out: usize, source: RuleSource) -> Vec
             map.set_nebula_pick(source);
             for _ in 0..steps_out {
                 map.input(&Input::Key {
-                    key: Key::Char('-'),
+                    key: Key::Minus,
                     pressed: true,
                     repeat: false,
                 });
@@ -356,7 +356,7 @@ fn the_stock_map_draws_every_system_in_its_governments_colour() {
     assert_eq!(names(&map), 0, "at 75%, above a zoom of 1.1, none selected");
     let mut map = map;
     map.input(&Input::Key {
-        key: nova_view::Key::Char('='),
+        key: nova_view::Key::Equal,
         pressed: true,
         repeat: false,
     });
@@ -472,7 +472,7 @@ fn found(map: &mut GalaxyMap, query: &str) -> Option<SystemId> {
         pressed,
         repeat: false,
     };
-    map.input(&key(nova_view::Key::Char('s'), true));
+    map.input(&key(nova_view::Key::KeyS, true));
     map.input(&Input::Text('s'));
     for c in query.chars() {
         map.input(&Input::Text(c));

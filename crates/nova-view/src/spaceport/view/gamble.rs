@@ -129,6 +129,7 @@ impl SpaceportView {
                 self.settle_gamble();
             }
         }
+        self.settle_cover();
     }
 
     /// The racer and the bet the bar's race asked for since this was last
@@ -153,6 +154,7 @@ impl SpaceportView {
         }
         self.gambling.after = Some(AfterTexts::Winnings);
         self.settle_gamble();
+        self.settle_cover();
     }
 
     /// Whether the race's Help has asked for its text since this was last
@@ -173,6 +175,7 @@ impl SpaceportView {
                 movie: after,
             }]);
         }
+        self.settle_cover();
     }
 
     /// Whether the race's result text has closed since this was last
@@ -225,7 +228,7 @@ impl SpaceportView {
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::spaceport) mod tests {
     use std::rc::Rc;
     use std::time::Duration;
 
@@ -235,13 +238,13 @@ mod tests {
     use crate::movie::fixture::{Call, MockMoviePlayer};
     use crate::movie::{MoviePlayer, Movies};
     use crate::screen::Screen;
-    use crate::spaceport::bar::{GAMBLE_ITEM, GAMBLE_KEYS};
+    use crate::spaceport::bar::GAMBLE_ITEM;
     use crate::spaceport::race::{FIRST_RACER_ITEM, HELP_ITEM, RaceScreen, RacerLook};
     use crate::spaceport::view::tests::{click_item, key, venues};
     use crate::ui::dialog::{Dialog, ItemSpec, ItemTemplate, Placement};
 
     /// Stock `DITL` 1023's frame and items, enough to lay the race out.
-    fn race_template() -> DialogTemplate {
+    pub(in crate::spaceport) fn race_template() -> DialogTemplate {
         let item = |x, y, w, h| ItemTemplate {
             bounds: Bounds::at(Point::new(x, y), w, h),
             enabled: false,
@@ -337,7 +340,7 @@ mod tests {
         click(&mut view, gamble);
         assert!(view.take_gamble_request());
         assert!(!view.take_gamble_request(), "once");
-        for pressed in GAMBLE_KEYS {
+        for pressed in [Key::KeyG, Key::KeyR] {
             view.input(&key(pressed));
             assert!(view.take_gamble_request(), "{pressed:?}");
         }
@@ -393,7 +396,7 @@ mod tests {
         view.open_gamble(GambleOpening::Race { asked_max: 5_000 });
         // `_DoRaceDialog` @0x48ad0; `_DoQuantityDialog` has no flush.
         assert_eq!(view.flushing_layers(), 2);
-        view.input(&key(Key::Alt));
+        view.input(&key(Key::AltLeft));
         let racer = race_item(&view, FIRST_RACER_ITEM);
         click(&mut view, racer);
         assert!(
@@ -449,7 +452,7 @@ mod tests {
         assert!(view.take_winnings_due());
         view.race_winnings_collected(4_000);
         click(&mut view, racer);
-        view.input(&key(Key::Alt));
+        view.input(&key(Key::AltLeft));
         click(&mut view, racer);
         let field = race_open(&view)
             .and_then(RaceScreen::quantity)
@@ -510,7 +513,7 @@ mod tests {
         let _ = view.take_offer_request();
         click_item(&mut view, 11);
         view.open_gamble(GambleOpening::Race { asked_max: 5_000 });
-        view.input(&key(Key::Alt));
+        view.input(&key(Key::AltLeft));
         let racer = race_item(&view, FIRST_RACER_ITEM);
         click(&mut view, racer);
         let at = race_open(&view)

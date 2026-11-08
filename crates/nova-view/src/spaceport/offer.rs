@@ -69,19 +69,27 @@
 //! and so flushes nothing, with no mission listed
 //! ([`OfferDialog::set_missions_listed`]). See the `held_keys` module.
 //!
-//! Keys (`_SingleMissionFilter` @0x98d9a): Return and Enter accept; the
-//! accept label's first letter accepts and, when the mission can be
-//! refused, the refuse label's refuses, unless both start with the same
-//! letter. Escape does nothing. Up and Down scroll the text 10 px, repeats
+//! Keys (`_SingleMissionFilter` @0x98d9a), read through the key map
+//! ([`contexts::OFFER`]): Return and Enter accept (the shared Confirm,
+//! Enter its twin; the characters 0x0D and 0x03, @0x98e62-0x98e6e). The
+//! labels' letters are
+//! read from the character typed ([`Input::Text`]), as the filter folds the
+//! event's character with `tolower` (@0x98e4a-0x98eea), not from the key
+//! that typed it, and only from a press's, never a repeat's, as it takes
+//! them on `keyDown` alone (@0x98e56): the accept label's first letter
+//! accepts and, when the mission can be refused, the refuse label's
+//! refuses, unless both start with the same letter. The character follows
+//! its key's press, which the dialog notes; a press the map, player info
+//! or mission info key took types nothing it reads. Escape does nothing. Up and Down scroll the text 10 px, repeats
 //! included, and Home, End, Page Up and Page Down as the text dialog's do
-//! (`ui::desc`'s `page_key`), on the press alone by the user's
+//! (`ui::desc`'s `page_command`), on the press alone by the user's
 //! standing decision, though the filter reads auto-key too
 //! (@0x98efd-0x98fdf). The choice is taken once
 //! ([`OfferDialog::take_choice`]), and the dialog is then answered. P
-//! ([`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY), a press) asks for the player info screen
+//! ([the player info key](crate::keymap::PlayCommand::PlayerInfo), a press) asks for the player info screen
 //! ([`OfferDialog::take_player_info_request`], @0xa3215), before the
 //! labels' letters are read; the dialog stays open under it. I
-//! ([`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY), a
+//! ([the mission info key](crate::keymap::PlayCommand::MissionInfo), a
 //! press) asks for the mission info screen
 //! ([`OfferDialog::take_info_request`], @0x98e0c-0x98e2a, opened by
 //! `_OfferOneMission` @0xa3344), also before the letters; the dialog
@@ -92,7 +100,7 @@
 //! covered and leaves its movie the last loaded again: the spaceport asks
 //! for that reload as the screen closes
 //! ([`SpaceportView::take_offer_reload`](super::SpaceportView::take_offer_reload)).
-//! M ([`MAP_KEY`](crate::flight::view::MAP_KEY), a press, never a
+//! M ([the map key](crate::keymap::PlayCommand::GalaxyMap), a press, never a
 //! repeat), the filter's first check (@0x98dab-0x98dd3), asks for the
 //! course map before anything else ([`OfferDialog::take_map_request`]),
 //! marked with the offer's destination; the dialog stays open under it,
@@ -137,25 +145,29 @@ use std::time::Duration;
 use nova_sim::{MissionId, OfferPrompt, RuleSource};
 
 mod close;
+#[cfg(test)]
+pub(crate) mod pad;
 
 use super::offer_arrows::arrow_roles;
 use super::offer_buttons::widen_to_labels;
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
+use crate::bound_names::press_clause;
 use crate::color::Color;
 use crate::draw::DrawList;
-use crate::flight::view::is_map_press;
 use crate::image::ImageKey;
-use crate::input::{Input, Key};
+use crate::input::Input;
+use crate::keymap::{
+    Command, CommandReader, PlayCommand, SharedBindings, UiCommand, contexts, is_modifier_input,
+};
 use crate::movie::{MovieStage, Movies};
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
-use crate::ui::desc::{BODY_COLOR, BODY_FONT, BODY_SIZE, page_key, shown_graphic};
+use crate::ui::desc::{BODY_COLOR, BODY_FONT, BODY_SIZE, page_command, shown_graphic};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogFrame, DialogTemplate, FocusRing, Role};
-use crate::ui::mission_info::is_mission_info_press;
+use crate::ui::pad_focus::Told;
 use crate::ui::picture_variant::VariantTemplates;
-use crate::ui::player_info::is_player_info_press;
 use crate::ui::text_shrink::{shrink_after_placing, wrapped_height};
 
 /// The offer dialog's `DLOG` (and `DITL`) ID.
@@ -255,13 +267,13 @@ pub enum OfferChoice {
 /// What the offer dialog's keys asked for, each until it is taken.
 #[derive(Clone, Copy, Debug, Default)]
 struct OfferAsks {
-    /// [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY): the
+    /// [the player info key](crate::keymap::PlayCommand::PlayerInfo): the
     /// player info screen.
     player_info: bool,
-    /// [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY):
+    /// [the mission info key](crate::keymap::PlayCommand::MissionInfo):
     /// the mission info screen.
     mission_info: bool,
-    /// [`MAP_KEY`](crate::flight::view::MAP_KEY): the map.
+    /// [the map key](crate::keymap::PlayCommand::GalaxyMap): the map.
     map: bool,
 }
 
@@ -285,11 +297,19 @@ pub struct OfferDialog {
     /// ([`OfferDialog::take_unclaimed`]).
     unclaimed: Vec<Input>,
     /// Whether the mission info screen lists a mission, so that
-    /// [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// [the mission info key](crate::keymap::PlayCommand::MissionInfo)
     /// opens it ([`OfferDialog::set_missions_listed`]).
     missions_listed: bool,
+    /// Whether the last key input was a press, not a repeat, that reached
+    /// the labels' letters, so that the character it types
+    /// ([`Input::Text`], which follows it) is read as a `keyDown`'s.
+    letter_pressed: bool,
     /// Its close: hidden, waiting or disposed of (the `close` module).
     close: close::Close,
+    /// Its keys, as commands ([`contexts::OFFER`]), followed as its own
+    /// input takes them: after the movie and the dialog's held keys
+    /// replay them.
+    keys: CommandReader,
 }
 
 impl OfferDialog {
@@ -372,7 +392,24 @@ impl OfferDialog {
             unclaimed: Vec::new(),
             close: close::Close::default(),
             missions_listed: true,
+            letter_pressed: false,
+            keys: CommandReader::new(contexts::OFFER),
         }
+    }
+
+    /// This dialog reading its keys through `bindings`, its dialog's and
+    /// its close wait's too.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        if let Ok(dialog) = &mut self.laid {
+            dialog.set_bindings(bindings.clone());
+        }
+        self.close.set_bindings(&bindings);
+        if let Some(stage) = &mut self.before {
+            stage.set_bindings(bindings.clone());
+        }
+        self.keys.set_bindings(bindings);
+        self
     }
 
     /// This dialog told whether the mission info screen lists a mission
@@ -385,7 +422,7 @@ impl OfferDialog {
 
     /// Tells the dialog whether the mission info screen lists a mission:
     /// an active one that isn't hidden. With none, `_OfferOneMission`'s
-    /// arm for [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// arm for [the mission info key](crate::keymap::PlayCommand::MissionInfo)
     /// does nothing (the count @0xa32c1-0xa32ee), so the key asks for
     /// nothing, flushes nothing, and the offer takes the next event, a key
     /// held back by a press among them. Its holder says so as the dialog
@@ -419,7 +456,10 @@ impl OfferDialog {
             return self;
         };
         let mut dialog = self;
-        dialog.before = movies.stage(&movie);
+        let bindings = dialog.keys.bindings().clone();
+        dialog.before = movies
+            .stage(&movie)
+            .map(|stage| stage.with_bindings(bindings));
         dialog
     }
 
@@ -509,19 +549,19 @@ impl OfferDialog {
         }
     }
 
-    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen since
+    /// Whether [the player info key](crate::keymap::PlayCommand::PlayerInfo) asked for the player info screen since
     /// this was last taken, once.
     pub fn take_player_info_request(&mut self) -> bool {
         std::mem::take(&mut self.asks.player_info)
     }
 
-    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// Whether [the mission info key](crate::keymap::PlayCommand::MissionInfo)
     /// asked for the mission info screen since this was last taken, once.
     pub fn take_info_request(&mut self) -> bool {
         std::mem::take(&mut self.asks.mission_info)
     }
 
-    /// Whether [`MAP_KEY`](crate::flight::view::MAP_KEY) asked for the
+    /// Whether [the map key](crate::keymap::PlayCommand::GalaxyMap) asked for the
     /// map since this was last taken, once: `_SingleMissionFilter`'s first
     /// check gives item 4 (@0x98dab-0x98dd3), and `_OfferOneMission` opens
     /// the course map over the dialog (@0xa2ffe-0xa3119; see
@@ -567,18 +607,18 @@ impl OfferDialog {
         }
     }
 
-    /// What key `key` chooses: Return accepts, and each label's first
-    /// letter, either case, chooses it, unless both start with the same
-    /// letter.
-    fn key_choice(&self, key: Key) -> Option<OfferChoice> {
+    /// What the character `typed` chooses: each label's first letter,
+    /// either case, chooses it, unless both start with the same letter.
+    /// `_SingleMissionFilter` folds the event's character and each label's
+    /// first with `tolower` (@0x98e4a-0x98eea), which folds ASCII alone.
+    fn letter_choice(&self, typed: char) -> Option<OfferChoice> {
         let first = |label: &str| label.chars().next().map(|c| c.to_ascii_lowercase());
         let accept = first(&self.prompt.labels.accept);
         let refuse = self.prompt.labels.refuse.as_deref().and_then(first);
-        let letter = match key {
-            Key::Enter => return Some(OfferChoice::Accept),
-            Key::Char(c) if accept != refuse => Some(c.to_ascii_lowercase()),
-            _ => return None,
-        };
+        if accept == refuse {
+            return None;
+        }
+        let letter = Some(typed.to_ascii_lowercase());
         if letter == accept {
             Some(OfferChoice::Accept)
         } else if letter == refuse {
@@ -605,34 +645,53 @@ impl OfferDialog {
             self.choose_from(event);
             return;
         }
-        if is_map_press(input) {
-            self.asks.map = true;
-            return;
+        let letter_pressed = std::mem::take(&mut self.letter_pressed);
+        let command = self.keys.follow(input);
+        let fresh = command
+            .filter(|command| command.pressed && !command.repeat)
+            .map(|command| command.command);
+        match fresh {
+            Some(Command::Play(PlayCommand::GalaxyMap)) => {
+                self.asks.map = true;
+                return;
+            }
+            Some(Command::Play(PlayCommand::PlayerInfo)) => {
+                self.asks.player_info = true;
+                return;
+            }
+            Some(Command::Play(PlayCommand::MissionInfo)) => {
+                self.asks.mission_info |= self.missions_listed;
+                return;
+            }
+            Some(Command::Ui(UiCommand::Confirm)) => {
+                self.choose(OfferChoice::Accept);
+                return;
+            }
+            _ => {}
         }
-        if is_player_info_press(input) {
-            self.asks.player_info = true;
-            return;
-        }
-        if is_mission_info_press(input) {
-            self.asks.mission_info |= self.missions_listed;
-            return;
-        }
-        if let Input::Key {
-            key,
-            pressed: true,
-            repeat: false,
-        } = *input
-            && let Some(choice) = self.key_choice(key)
-        {
-            self.choose(choice);
-            return;
+        match *input {
+            // Any other key's press: the character it types, which
+            // follows, is a `keyDown`'s.
+            Input::Key {
+                pressed: true,
+                repeat: false,
+                ..
+            } => self.letter_pressed = true,
+            Input::Text(typed) if letter_pressed => {
+                if let Some(choice) = self.letter_choice(typed) {
+                    self.choose(choice);
+                }
+                return;
+            }
+            _ => {}
         }
         let Ok(dialog) = &mut self.laid else {
             return;
         };
-        if dialog
-            .scroll_text_mut()
-            .is_some_and(|text| page_key(text, input))
+        if let Some(command) = command
+            && dialog
+                .scroll_text_mut()
+                .is_some_and(|text| page_command(text, command))
         {
             return;
         }
@@ -665,6 +724,17 @@ impl Screen for OfferDialog {
     /// shows next ([`OfferDialog::take_unclaimed`]). See the `held_keys`
     /// module.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        // The surroundings are no player input: they reach the dialog
+        // and begin no movie, which waits for its first tick or input.
+        // The reader takes them too, so the prompt drawn with no layout
+        // names the device's inputs.
+        if let Input::Surroundings(_) = input {
+            self.keys.follow(input);
+            if let Ok(dialog) = &mut self.laid {
+                dialog.input(input);
+            }
+            return ScreenAction::None;
+        }
         if self.close_input(input) {
             return ScreenAction::None;
         }
@@ -730,7 +800,10 @@ impl Screen for OfferDialog {
             }
             Err(reason) => {
                 list.text(
-                    format!("Cannot show the mission offer: {reason}. Press Return to accept it."),
+                    format!(
+                        "Cannot show the mission offer: {reason}.{}",
+                        press_clause(&self.keys, &[Command::Ui(UiCommand::Confirm)], "accept it")
+                    ),
                     PROBLEM_AT,
                     PROBLEM_SIZE,
                     None,
@@ -798,6 +871,11 @@ pub(crate) struct VenueOffers {
     /// What the answered dialog's replay queued after its answering key
     /// ([`OfferDialog::take_unclaimed`]), until taken.
     unclaimed: Vec<Input>,
+    /// The bindings each offer dialog opened reads its keys through.
+    bindings: SharedBindings,
+    /// The surroundings the venue was told last, which each offer dialog
+    /// is told as it opens (rdm:phase/key-bindings/phase-9-gamepad-spaceport).
+    told: Told,
 }
 
 impl VenueOffers {
@@ -818,7 +896,26 @@ impl VenueOffers {
             since_ask: Duration::ZERO,
             restarted: false,
             unclaimed: Vec::new(),
+            bindings: SharedBindings::default(),
+            told: Told::default(),
         }
+    }
+
+    /// These offers' dialogs reading their keys through `bindings`
+    /// ([`VenueOffers::set_bindings`]).
+    #[must_use]
+    pub(crate) fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.set_bindings(bindings);
+        self
+    }
+
+    /// Hands `bindings` to the offer dialog open, and to each opened
+    /// after it.
+    pub(crate) fn set_bindings(&mut self, bindings: SharedBindings) {
+        if let Some(dialog) = self.dialog.take() {
+            self.dialog = Some(dialog.with_bindings(bindings.clone()));
+        }
+        self.bindings = bindings;
     }
 
     /// These offers with their timer running as `clock` reads
@@ -879,11 +976,12 @@ impl VenueOffers {
             .templates
             .layout(prompt.graphic)
             .map(|template| (template, metrics));
-        self.dialog = Some(
-            OfferDialog::new(layout, prompt, style)
-                .with_focus_ring(self.focus_ring)
-                .with_movies(&self.movies),
-        );
+        let mut dialog = OfferDialog::new(layout, prompt, style)
+            .with_focus_ring(self.focus_ring)
+            .with_bindings(self.bindings.clone())
+            .with_movies(&self.movies);
+        self.told.tell(&mut dialog);
+        self.dialog = Some(dialog);
     }
 
     /// The offer dialog, while it is open.
@@ -962,7 +1060,17 @@ impl VenueOffers {
     /// Gives `input` to the offer dialog, if it is open, adding its sounds,
     /// and any it made as it ticked, to `sounds`; answered, it closes.
     /// Whether it took the input.
+    ///
+    /// The surroundings are kept, and told the dialog open and the one
+    /// answered, but never taken: the venue's holder tells its own screens
+    /// too.
     pub(crate) fn input(&mut self, input: &Input, sounds: &mut Vec<Sound>) -> bool {
+        if self.told.keep(input) {
+            for dialog in self.dialog.iter_mut().chain(self.answered.iter_mut()) {
+                dialog.input(input);
+            }
+            return false;
+        }
         sounds.append(&mut self.sounds);
         if self.answer_input(input) {
             return true;
@@ -1103,13 +1211,7 @@ impl VenueOffers {
 /// event for.
 fn queues_an_event(input: &Input) -> bool {
     match *input {
-        Input::Key { key, pressed, .. } => {
-            pressed
-                && !matches!(
-                    key,
-                    Key::Alt | Key::Control | Key::Shift | Key::Command | Key::CapsLock
-                )
-        }
+        Input::Key { pressed, .. } => pressed && !is_modifier_input(input),
         _ => true,
     }
 }
@@ -1255,7 +1357,7 @@ mod tests {
     use super::*;
     use crate::draw::DrawCommand;
     use crate::geometry::{Bounds, Point};
-    use crate::input::MouseButton;
+    use crate::input::{Key, MouseButton};
     use crate::movie::fixture::{Call, MockMoviePlayer};
     use crate::movie::{MOVIE_FADE_FOR, MoviePlayer};
     use crate::spaceport::offer_buttons::{LABEL_FONT, LABEL_PADDING, LABEL_SIZE};
@@ -1373,7 +1475,7 @@ mod tests {
         assert!(!dialog.holds_back_keys(), "before the press");
         press_item(&mut dialog, ACCEPT_ITEM, true);
         assert!(dialog.holds_back_keys(), "during it");
-        dialog.input(&key(Key::Char('z')));
+        dialog.input(&key(Key::KeyZ));
         press_item(&mut dialog, ACCEPT_ITEM, false);
         assert!(dialog.answered());
         assert!(!dialog.holds_back_keys(), "answered");
@@ -1407,28 +1509,32 @@ mod tests {
         };
         offers.input(&left(true), &mut Vec::new());
         assert!(offers.holds_back_keys(), "during the press");
-        offers.input(&key(Key::Char('z')), &mut Vec::new());
+        offers.input(&key(Key::KeyZ), &mut Vec::new());
         offers.input(&left(false), &mut Vec::new());
         assert!(offers.dialog().is_none(), "answered");
         assert!(offers.holds_back_keys(), "Z waits for its holder");
         offers.take_choice();
         assert!(offers.holds_back_keys(), "until its holder runs it");
-        assert_eq!(offers.take_unclaimed(), [key(Key::Char('z'))]);
+        assert_eq!(offers.take_unclaimed(), [key(Key::KeyZ)]);
         assert!(!offers.holds_back_keys(), "once it has");
     }
 
     #[test]
     fn modifiers_and_releases_left_by_an_answer_hold_back_nothing() {
         let released = Input::Key {
-            key: Key::Char('z'),
+            key: Key::KeyZ,
             pressed: false,
             repeat: false,
         };
         let modifiers = [
-            Key::Alt,
-            Key::Control,
-            Key::Shift,
-            Key::Command,
+            Key::AltLeft,
+            Key::AltRight,
+            Key::ControlLeft,
+            Key::ControlRight,
+            Key::ShiftLeft,
+            Key::ShiftRight,
+            Key::MetaLeft,
+            Key::MetaRight,
             Key::CapsLock,
         ];
         for left in modifiers.map(key).into_iter().chain([released]) {
@@ -1510,6 +1616,28 @@ mod tests {
         assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
     }
 
+    /// The offer reads its keys through the key map it is given: Confirm
+    /// rebound to F1 accepts on F1 and no longer on Return, and Mission
+    /// Info rebound to F2 asks on F2 and no longer on I.
+    #[test]
+    fn a_rebound_confirm_and_mission_info_act_on_their_new_keys_alone() {
+        use crate::keymap::{Bindings, KeyCombo, PlayCommand, SharedBindings, UiCommand};
+        let bindings = SharedBindings::new(
+            Bindings::default()
+                .rebound(UiCommand::Confirm, KeyCombo::key(Key::F1))
+                .rebound(PlayCommand::MissionInfo, KeyCombo::key(Key::F2)),
+        );
+        let mut dialog = offer().with_bindings(bindings);
+        dialog.input(&key(Key::KeyI));
+        assert!(!dialog.take_info_request(), "I no longer asks");
+        dialog.input(&key(Key::F2));
+        assert!(dialog.take_info_request());
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_choice(), None, "Return no longer accepts");
+        dialog.input(&key(Key::F1));
+        assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
+    }
+
     #[test]
     fn return_and_enter_accept_and_escape_does_nothing() {
         let mut dialog = offer();
@@ -1524,34 +1652,124 @@ mod tests {
         assert_eq!(dialog.take_choice(), None, "a repeat does nothing");
         dialog.input(&key(Key::Enter));
         assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
+        let mut dialog = offer();
+        dialog.input(&key(Key::NumpadEnter));
+        assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
+    }
+
+    /// Types `typed` as a Mac sends it: `key`'s press, then the character
+    /// it types.
+    fn typed(dialog: &mut OfferDialog, key: Key, typed: char) {
+        dialog.input(&Input::Key {
+            key,
+            pressed: true,
+            repeat: false,
+        });
+        dialog.input(&Input::Text(typed));
+    }
+
+    /// `_SingleMissionFilter` compares the event's character, case folded,
+    /// with each label's first (@0x98e4a-0x98eea).
+    #[test]
+    fn each_labels_first_letter_typed_either_case_chooses_it() {
+        for c in ['n', 'N'] {
+            let mut dialog = offer();
+            typed(&mut dialog, Key::KeyN, c);
+            assert_eq!(dialog.take_choice(), Some(OfferChoice::Refuse), "{c}");
+        }
+        let mut dialog = offer();
+        typed(&mut dialog, Key::KeyX, 'x');
+        assert_eq!(dialog.take_choice(), None);
+        let mut cannot = dialog_of(prompt("Okay", None));
+        typed(&mut cannot, Key::KeyN, 'n');
+        assert_eq!(cannot.take_choice(), None, "no refuse label");
+        typed(&mut cannot, Key::KeyO, 'O');
+        assert_eq!(cannot.take_choice(), Some(OfferChoice::Accept));
     }
 
     #[test]
-    fn each_labels_first_letter_chooses_it() {
-        let mut dialog = offer();
-        dialog.input(&key(Key::Char('n')));
-        assert_eq!(dialog.take_choice(), Some(OfferChoice::Refuse));
-        let mut dialog = offer();
-        dialog.input(&key(Key::Char('I')));
+    fn the_character_typed_chooses_wherever_the_layout_puts_it() {
+        let mut dialog = dialog_of(prompt("Accept", Some("Refuse")));
+        typed(&mut dialog, Key::KeyQ, 'a');
         assert_eq!(
             dialog.take_choice(),
             Some(OfferChoice::Accept),
-            "either case"
+            "AZERTY's A, where a US keyboard has Q"
         );
+        let mut dialog = dialog_of(prompt("Accept", Some("Refuse")));
+        typed(&mut dialog, Key::KeyA, 'q');
+        assert_eq!(dialog.take_choice(), None, "the US A typing Q");
+    }
+
+    #[test]
+    fn a_letter_keys_press_alone_chooses_nothing() {
         let mut dialog = offer();
-        dialog.input(&key(Key::Char('x')));
+        dialog.input(&key(Key::KeyN));
+        assert_eq!(dialog.take_choice(), None, "no character typed");
+        dialog.input(&Input::Key {
+            key: Key::KeyN,
+            pressed: false,
+            repeat: false,
+        });
+        dialog.input(&Input::Text('n'));
+        assert_eq!(dialog.take_choice(), None, "not typed by a press");
+    }
+
+    /// The filter takes a letter on `keyDown` alone, never `autoKey`
+    /// (@0x98e56).
+    #[test]
+    fn a_character_a_repeat_types_chooses_nothing() {
+        let mut dialog = offer();
+        dialog.input(&Input::Key {
+            key: Key::KeyN,
+            pressed: true,
+            repeat: true,
+        });
+        dialog.input(&Input::Text('n'));
         assert_eq!(dialog.take_choice(), None);
-        let mut cannot = dialog_of(prompt("Okay", None));
-        cannot.input(&key(Key::Char('n')));
-        assert_eq!(cannot.take_choice(), None, "no refuse label");
-        cannot.input(&key(Key::Char('o')));
-        assert_eq!(cannot.take_choice(), Some(OfferChoice::Accept));
+        typed(&mut dialog, Key::KeyN, 'n');
+        assert_eq!(dialog.take_choice(), Some(OfferChoice::Refuse), "a press");
+    }
+
+    /// A wait on M, P or I closed with its key held, Shift tapped and the
+    /// held key's repeat typing its letter meanwhile, leaves Shift alone:
+    /// the letter never chooses, as the filter takes a letter on `keyDown`
+    /// alone (@0x98e56).
+    #[test]
+    fn a_letter_the_waited_keys_repeat_typed_chooses_nothing_after_the_wait() {
+        const MAP_KEY: crate::Key = crate::Key::KeyM;
+        use crate::keymap::test_keys::MISSION_INFO_KEY;
+        use crate::keymap::test_keys::PLAYER_INFO_KEY;
+        use crate::ui::key_wait::WaitKeys;
+        for (waited, letter, label) in [
+            (MAP_KEY, 'm', "Move it"),
+            (PLAYER_INFO_KEY, 'p', "Proceed"),
+            (MISSION_INFO_KEY, 'i', "I'm in"),
+        ] {
+            let mut queue = WaitKeys::new(waited);
+            for input in [
+                key(Key::ShiftLeft),
+                Input::Key {
+                    key: waited,
+                    pressed: true,
+                    repeat: true,
+                },
+                Input::Text(letter),
+            ] {
+                queue.take(&input);
+            }
+            let mut dialog = dialog_of(prompt(label, Some("No")));
+            for input in queue.finish() {
+                dialog.input(&input);
+            }
+            assert_eq!(dialog.take_choice(), None, "{waited:?}");
+        }
     }
 
     #[test]
     fn labels_starting_with_the_same_letter_take_no_letter() {
         let mut dialog = dialog_of(prompt("Sure", Some("Scram")));
-        dialog.input(&key(Key::Char('s')));
+        typed(&mut dialog, Key::KeyS, 's');
         assert_eq!(dialog.take_choice(), None);
         dialog.input(&key(Key::Enter));
         assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
@@ -1563,7 +1781,7 @@ mod tests {
             text: "line\r".repeat(40),
             ..prompt("Yes", Some("No"))
         });
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         assert_eq!(scrolled(&dialog), Some(crate::ui::desc::ARROW_UNITS));
         assert!(!dialog.answered());
     }
@@ -1627,14 +1845,14 @@ mod tests {
         let laid = dialog.dialog().expect("laid out");
         assert_eq!(laid.bounds(), Bounds::at(ORIGIN, 441.0, 317.0));
         assert_eq!(local(&dialog, ACCEPT_ITEM), Point::new(225.0, 285.0));
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         assert_eq!(scrolled(&dialog), Some(crate::ui::desc::ARROW_UNITS));
     }
 
     #[test]
     fn a_shrunk_text_has_nothing_to_scroll() {
         let mut dialog = offer();
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         assert_eq!(scrolled(&dialog), Some(0.0));
     }
 
@@ -1767,6 +1985,40 @@ mod tests {
         dialog.input(&key(Key::Enter));
         assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
         assert_eq!(dialog.prompt().mission, MissionId(141));
+    }
+
+    #[test]
+    fn without_its_dialog_it_names_the_key_bound_to_accept_it() {
+        use crate::keymap::{Bindings, KeyCombo};
+        let dialog = OfferDialog::new(
+            Err("no DLOG 1016".to_owned()),
+            prompt("Yes", Some("No")),
+            ButtonStyle::STOCK,
+        )
+        .with_bindings(SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyQ)),
+        ));
+        assert_eq!(
+            texts(&dialog),
+            ["Cannot show the mission offer: no DLOG 1016. Press Q to accept it."]
+        );
+    }
+
+    #[test]
+    fn without_its_dialog_it_names_the_button_with_a_pad_last_used() {
+        use crate::input::{ControllerFamily, Device, Surroundings};
+        let mut dialog = OfferDialog::new(
+            Err("no DLOG 1016".to_owned()),
+            prompt("Yes", Some("No")),
+            ButtonStyle::STOCK,
+        );
+        dialog.input(&Input::Surroundings(Surroundings::of(Device::Gamepad(
+            ControllerFamily::Xbox,
+        ))));
+        assert_eq!(
+            texts(&dialog),
+            ["Cannot show the mission offer: no DLOG 1016. Press A to accept it."]
+        );
     }
 
     /// `_TrackSingleMissionButtons` @0x28188 plays nothing under the pointer.
@@ -2022,9 +2274,11 @@ mod tests {
             "nothing open takes nothing"
         );
         opened(&mut offers);
-        assert!(offers.input(&key(Key::Char('x')), &mut sounds));
+        assert!(offers.input(&key(Key::KeyX), &mut sounds));
+        assert!(offers.input(&Input::Text('x'), &mut sounds));
         assert!(offers.dialog().is_some(), "x chooses nothing");
-        assert!(offers.input(&key(Key::Char('n')), &mut sounds));
+        assert!(offers.input(&key(Key::KeyN), &mut sounds));
+        assert!(offers.input(&Input::Text('n'), &mut sounds));
         assert!(offers.dialog().is_none(), "answered, it closes");
         assert_eq!(
             offers.take_choice(),
@@ -2286,7 +2540,7 @@ mod tests {
 
     #[test]
     fn the_mission_info_key_asks_for_mission_info_before_the_labels_letters() {
-        let i = crate::ui::mission_info::MISSION_INFO_KEY;
+        let i = crate::keymap::test_keys::MISSION_INFO_KEY;
         let mut dialog = offer();
         assert!(!dialog.take_info_request());
         dialog.input(&Input::Key {
@@ -2295,7 +2549,7 @@ mod tests {
             repeat: true,
         });
         assert!(!dialog.take_info_request(), "not a repeat");
-        dialog.input(&key(i));
+        typed(&mut dialog, i, 'i');
         assert!(dialog.take_info_request());
         assert!(!dialog.take_info_request(), "once");
         assert_eq!(dialog.take_choice(), None, "not I'm in's letter");
@@ -2313,9 +2567,9 @@ mod tests {
     /// read before the labels' letters, so it doesn't choose I'm in.
     #[test]
     fn with_no_mission_listed_the_mission_info_key_asks_and_chooses_nothing() {
-        let i = crate::ui::mission_info::MISSION_INFO_KEY;
+        let i = crate::keymap::test_keys::MISSION_INFO_KEY;
         let mut dialog = offer().with_missions_listed(false);
-        dialog.input(&key(i));
+        typed(&mut dialog, i, 'i');
         assert!(!dialog.take_info_request());
         assert_eq!(dialog.take_choice(), None);
         dialog.set_missions_listed(true);
@@ -2331,7 +2585,7 @@ mod tests {
 
     #[test]
     fn the_map_key_asks_for_the_map_before_the_labels_letters_on_a_press() {
-        let m = crate::flight::view::MAP_KEY;
+        let m = crate::Key::KeyM;
         let mut dialog = dialog_of(prompt("Move it", Some("No thanks")));
         for (input, what) in [
             (
@@ -2354,7 +2608,7 @@ mod tests {
             dialog.input(&input);
             assert!(!dialog.take_map_request(), "{what}");
         }
-        dialog.input(&key(m));
+        typed(&mut dialog, m, 'm');
         assert!(dialog.take_map_request());
         assert!(!dialog.take_map_request(), "once");
         assert_eq!(dialog.take_choice(), None, "not Move it's letter");
@@ -2376,7 +2630,7 @@ mod tests {
         let mut dialog = offer();
         dialog.input(&key(Key::Enter));
         assert!(dialog.answered());
-        dialog.input(&key(crate::flight::view::MAP_KEY));
+        dialog.input(&key(crate::Key::KeyM));
         assert!(!dialog.take_map_request());
     }
 
@@ -2411,7 +2665,8 @@ mod tests {
             texts(&dialog)
         );
         assert_eq!(player.drawn().len(), 1, "the movie is");
-        dialog.input(&key(Key::Char('n')));
+        dialog.input(&key(Key::KeyN));
+        dialog.input(&Input::Text('n'));
         assert!(!dialog.answered(), "the dialog takes no input yet");
         dialog.tick(TICK);
         dialog.tick(TICK);
@@ -2425,10 +2680,24 @@ mod tests {
     }
 
     #[test]
+    fn the_surroundings_begin_no_movie_and_reach_the_dialog() {
+        use crate::input::{ControllerFamily, Device, Surroundings};
+        let pad = Device::Gamepad(ControllerFamily::Generic);
+        let player = MockMoviePlayer::playing((160, 120), 2);
+        let mut dialog = dialog_of(filmed(0)).with_movies(&movies(&player));
+        dialog.input(&Input::Surroundings(Surroundings::of(pad)));
+        assert!(player.calls().is_empty(), "{:?}", player.calls());
+        let mut plain = offer();
+        plain.input(&Input::Surroundings(Surroundings::of(pad)));
+        assert_eq!(plain.laid.as_ref().expect("laid out").device(), pad);
+    }
+
+    #[test]
     fn a_skipped_offer_movie_opens_the_dialog_with_nothing_queued() {
         let player = MockMoviePlayer::playing((160, 120), 20);
         let mut dialog = dialog_of(filmed(0)).with_movies(&movies(&player));
-        dialog.input(&key(Key::Char('n')));
+        dialog.input(&key(Key::KeyN));
+        dialog.input(&Input::Text('n'));
         click_at(&mut dialog, Point::new(500.0, 520.0));
         assert!(texts(&dialog).contains(&"Ferry this to Mars.".to_owned()));
         assert!(
@@ -2471,6 +2740,9 @@ mod tests {
         );
         dialog.input(&key(Key::Enter));
         assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
+        let mut dialog = offer();
+        dialog.input(&key(Key::NumpadEnter));
+        assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
     }
 
     #[test]
@@ -2479,8 +2751,8 @@ mod tests {
         let mut dialog = dialog_of(filmed(0x0004)).with_movies(&movies(&player));
         dialog.tick(MOVIE_FADE_FOR);
         assert!(dialog.hides_pointer());
-        dialog.input(&key(Key::Char('p')));
-        dialog.input(&key(Key::Char('i')));
+        dialog.input(&key(Key::KeyP));
+        dialog.input(&key(Key::KeyI));
         assert!(!dialog.take_player_info_request());
         assert!(!dialog.take_info_request());
         dialog.cancel_pointer();
@@ -2517,7 +2789,8 @@ mod tests {
         offers.set_movies(movies(&player));
         offers.open(filmed(0x0000), Rc::new(MonoMetrics), ButtonStyle::STOCK);
         let mut sounds = Vec::new();
-        offers.input(&key(Key::Char('n')), &mut sounds);
+        offers.input(&key(Key::KeyN), &mut sounds);
+        offers.input(&Input::Text('n'), &mut sounds);
         assert_eq!(offers.take_choice(), None, "not while the movie plays");
         offers.tick(TICK, false);
         assert_eq!(
@@ -2539,7 +2812,8 @@ mod tests {
         assert_eq!(player.calls()[0], Call::Start("Offer.mov".to_owned()));
         let player = MockMoviePlayer::playing((160, 120), 2);
         let mut dialog = dialog_of(filmed(0)).with_movies(&movies(&player));
-        dialog.input(&key(Key::Char('n')));
+        dialog.input(&key(Key::KeyN));
+        dialog.input(&Input::Text('n'));
         assert_eq!(player.calls(), [Call::Start("Offer.mov".to_owned())]);
         dialog.tick(TICK);
         dialog.tick(TICK);
@@ -2554,6 +2828,9 @@ mod tests {
     fn a_before_movie_that_cannot_start_gives_its_first_input_to_the_dialog() {
         let mut dialog = dialog_of(filmed(0)).with_movies(&movies(&MockMoviePlayer::refusing()));
         dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
+        let mut dialog = offer();
+        dialog.input(&key(Key::NumpadEnter));
         assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
     }
 
@@ -2625,6 +2902,9 @@ mod tests {
     /// Answers `offers`' open dialog with `key`, taking the choice.
     fn answer(offers: &mut VenueOffers, key_pressed: Key) -> Option<(MissionId, OfferChoice)> {
         offers.input(&key(key_pressed), &mut Vec::new());
+        if let Some(typed) = crate::input::key_letter(key_pressed) {
+            offers.input(&Input::Text(typed), &mut Vec::new());
+        }
         offers.take_choice()
     }
 
@@ -2644,7 +2924,7 @@ mod tests {
         let mut offers = VenueOffers::asking(plain_only(Ok(template())));
         opened(&mut offers);
         assert_eq!(
-            answer(&mut offers, Key::Char('n')),
+            answer(&mut offers, Key::KeyN),
             Some((MissionId(141), OfferChoice::Refuse))
         );
         assert!(offers.dialog().is_none(), "answered");
@@ -2681,10 +2961,10 @@ mod tests {
         for k in [
             Key::Enter,
             Key::Escape,
-            crate::ui::player_info::PLAYER_INFO_KEY,
+            crate::keymap::test_keys::PLAYER_INFO_KEY,
         ]
         .into_iter()
-        .chain(('a'..='z').map(Key::Char))
+        .chain(('a'..='z').filter_map(crate::input::letter_key))
         {
             let mut dialog = offer();
             for pressed in [true, false] {
@@ -2695,6 +2975,11 @@ mod tests {
                 });
             }
             assert_eq!(dialog.take_sounds(), [], "{k:?}");
+        }
+        for c in ['n', 'N', 'i'] {
+            let mut dialog = offer();
+            typed(&mut dialog, Key::KeyN, c);
+            assert_eq!(dialog.take_sounds(), [], "{c}");
         }
     }
 

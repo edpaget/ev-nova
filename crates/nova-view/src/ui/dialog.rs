@@ -32,6 +32,21 @@
 //! [`TradeScreen`](crate::spaceport::trade::TradeScreen),
 //! [`MissionComputerScreen`](crate::spaceport::missions::MissionComputerScreen)
 //! and [`MissionInfoScreen`](crate::spaceport::missions::MissionInfoScreen)).
+//!
+//! # Pad focus
+//!
+//! A pad moves the same focus (the `pad` child module): the d-pad picks
+//! the nearest item that way and the shoulders step it in item order,
+//! under either [`FocusRing`] reading; South presses the focused item as a
+//! click does, on its release; East does what Escape does. The pad's
+//! highlight, a two-unit ring outside the item, shows only while the pad
+//! was the device used last ([`Input::Surroundings`]), and the keyboard's
+//! outline only a focus the keyboard placed, so a keyboard-only session
+//! draws what it always did. Until the dialog is told the pad was the
+//! device used last, the d-pad, the shoulders and South do nothing, so the
+//! pad never presses an item it can't show (the spaceport's dialogs, which
+//! nothing tells yet). The original has no focus here, so this is a new
+//! feature with no `Rulebook` key.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -43,14 +58,19 @@ use crate::draw::{DrawCommand, DrawList, fill_rect};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
-use crate::input::{Input, Key, MouseButton};
+use crate::input::{Input, MouseButton};
+use crate::keymap::{Command, CommandInput, CommandReader, SharedBindings, UiCommand, contexts};
 use crate::text::TextMetrics;
 
 use super::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
 use super::held_keys::HeldKeys;
+use super::pad_focus::FocusState;
 use super::scroll_arrows::{ArrowHold, ScrollArrow};
 use super::scroll_text::{ScrollText, TextRow};
 use super::slice::{Axis, three_slice};
+use pad::PadSpot;
+
+mod pad;
 
 /// The logical screen dialogs are placed on: Nova's 1024 x 768.
 pub const SCREEN: (f32, f32) = (1024.0, 768.0);
@@ -323,6 +343,10 @@ pub struct DialogFrame {
 pub enum DialogEvent {
     /// Item `n` (from 1) was activated: clicked, or chosen with a key.
     Item(usize),
+    /// The pad's South pressed cell `n` (from 0) of the cells its host
+    /// gave ([`Dialog::set_pad_cells`]), as a click on it would; the host
+    /// acts on it as on its own hit test's.
+    Cell(usize),
 }
 
 /// What an item does on screen.
@@ -360,6 +384,9 @@ struct Item {
     /// clicks and keys, but draws nothing and takes no focus
     /// ([`Dialog::set_drawn`]).
     drawn: bool,
+    /// Whether the template makes it a user item: a role-less one is a
+    /// click area, which the pad's focus can rest on.
+    user: bool,
     widget: Widget,
 }
 
@@ -419,8 +446,18 @@ pub struct Dialog {
     metrics: Rc<dyn TextMetrics>,
     default_item: Option<usize>,
     cancel_item: Option<usize>,
-    /// The focused button's index in `items`.
-    focus: Option<usize>,
+    /// The focused item or cell, and who placed it: the keyboard's Tab,
+    /// or the pad (the `pad` module).
+    focus: FocusState<PadSpot>,
+    /// The cells standing in for an item among the pad's targets, by item
+    /// number (from 1), as the host draws them ([`Dialog::set_pad_cells`]).
+    pad_cells: Option<(usize, Vec<Bounds>)>,
+    /// The items the host takes out of the pad's targets, the whole set
+    /// it gave last ([`Dialog::set_pad_left_out`]).
+    left_out: Vec<usize>,
+    /// The items the host takes into the pad's targets though they are
+    /// no buttons, the whole set it gave last ([`Dialog::set_pad_included`]).
+    included: Vec<usize>,
     /// Whether Tab and Space move and press a focus.
     focus_ring: FocusRing,
     /// The item a press is held on, by index, and its tracking.
@@ -430,10 +467,16 @@ pub struct Dialog {
     held: Option<usize>,
     /// The press held on a scroll arrow, if any.
     hold: Option<ArrowHold>,
+    /// Whether that press is the pad's South, which only South's release
+    /// ends (the `pad` module).
+    pad_hold: bool,
     /// The keys held back while a press is held, when the dialog holds
     /// them ([`Dialog::with_held_keys`]); none when keys act at once.
     /// Boxed, as most dialogs leave it out.
     held_keys: Option<Box<HeldKeys>>,
+    /// Its keys, read as the shared UI context's commands
+    /// ([`contexts::DIALOG`]).
+    keys: CommandReader,
 }
 
 impl std::fmt::Debug for Dialog {
@@ -441,7 +484,7 @@ impl std::fmt::Debug for Dialog {
         f.debug_struct("Dialog")
             .field("bounds", &self.bounds)
             .field("items", &self.items)
-            .field("focus", &self.focus)
+            .field("focus", &self.focus())
             .finish_non_exhaustive()
     }
 }
@@ -503,6 +546,7 @@ impl Dialog {
                     template_enabled,
                     shown,
                     drawn: true,
+                    user: item.kind == ItemSpec::User,
                     widget: widget(&item.kind, role, bounds, enabled, &metrics),
                 }
             })
@@ -516,14 +560,38 @@ impl Dialog {
             metrics,
             default_item: Some(1),
             cancel_item: None,
-            focus: None,
+            focus: FocusState::default(),
+            pad_cells: None,
+            left_out: Vec::new(),
+            included: Vec::new(),
             focus_ring: FocusRing::default(),
             tracked: None,
             tracker: ButtonTracker::default(),
             held: None,
             hold: None,
+            pad_hold: false,
             held_keys: None,
+            keys: CommandReader::new(contexts::DIALOG),
         }
+    }
+
+    /// The dialog reading its keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.set_bindings(bindings);
+        self
+    }
+
+    /// Reads its keys through `bindings` from the next input on.
+    pub fn set_bindings(&mut self, bindings: SharedBindings) {
+        self.keys.set_bindings(bindings);
+    }
+
+    /// The bindings it reads its keys through, for a host that builds it
+    /// again to hand on.
+    #[must_use]
+    pub fn bindings(&self) -> &SharedBindings {
+        self.keys.bindings()
     }
 
     /// The dialog with `frame` drawn under its items.
@@ -562,11 +630,12 @@ impl Dialog {
     }
 
     /// Makes the buttons take the keyboard focus as `ring` says. Turning
-    /// the ring off drops any focus.
+    /// the ring off drops the keyboard's focus; the pad's stays, as the
+    /// pad keeps a focus under either reading.
     pub fn set_focus_ring(&mut self, ring: FocusRing) {
         self.focus_ring = ring;
-        if ring == FocusRing::Off {
-            self.focus = None;
+        if ring == FocusRing::Off && !self.focus.pad_moved() {
+            self.focus.set_by_keys(None);
         }
     }
 
@@ -749,10 +818,11 @@ impl Dialog {
         self.item(item).is_some_and(|item| item.shown)
     }
 
-    /// The focused button's item number (from 1), if any.
+    /// The focused item's number (from 1), if any, whether the keyboard
+    /// or the pad placed it.
     #[must_use]
     pub fn focus(&self) -> Option<usize> {
-        self.focus.map(|index| index + 1)
+        self.focus.get().and_then(PadSpot::item)
     }
 
     /// The first scrolling text, if any.
@@ -805,10 +875,14 @@ impl Dialog {
     ///   other press on one is tracked as a button's is, and its click is
     ///   one step of [`ARROW_UNITS`](super::scroll_text::ARROW_UNITS), while
     ///   its flag is set. An arrow reports no item.
-    /// - Return activates the default item, and Escape the cancel item.
+    /// - Its keys are the shared UI context's commands, read through the
+    ///   bindings it is given ([`Self::with_bindings`]; see
+    ///   [`Self::command`]). Confirm (Return, keypad Enter its twin)
+    ///   activates the default item, and Back (Escape) the cancel item.
     /// - Under [`FocusRing::Tab`], the default, Tab moves the focus to the
-    ///   next enabled button, and Space activates the focused one. Under
-    ///   [`FocusRing::Off`], the original's reading, they do nothing.
+    ///   next enabled button, and Activate (Space) presses the focused
+    ///   one. Under [`FocusRing::Off`], the original's reading, they do
+    ///   nothing.
     /// - Up and Down, repeats included, scroll the first scrolling text: a
     ///   line, or [`ARROW_UNITS`](super::scroll_text::ARROW_UNITS) when it
     ///   is pixel-scrolled.
@@ -829,11 +903,10 @@ impl Dialog {
             return None;
         }
         match *input {
-            Input::Key {
-                key,
-                pressed: true,
-                repeat,
-            } => self.key(key, repeat),
+            Input::Key { .. } => self
+                .keys
+                .follow(input)
+                .and_then(|command| self.command(command)),
             Input::Scroll { at, .. } => {
                 if self.bounds.contains(at) {
                     self.items.iter_mut().any(|item| match &mut item.widget {
@@ -847,36 +920,66 @@ impl Dialog {
                 }
                 None
             }
-            Input::Key { .. }
-            | Input::Text(_)
+            Input::PadButton { .. } => self
+                .keys
+                .follow(input)
+                .and_then(|command| self.pad_command(command)),
+            Input::Surroundings(surroundings) => {
+                self.keys.follow(input);
+                self.surroundings(surroundings.device);
+                None
+            }
+            Input::Text(_)
             | Input::PointerLeft
-            | Input::PointerMovedOutside(_) => None,
+            | Input::PointerMovedOutside(_)
+            | Input::PadAxis { .. }
+            | Input::Touch(_)
+            | Input::Pinch(_)
+            | Input::TouchControl(_) => None,
             Input::PointerButton { .. } | Input::PointerMoved(_) => self.pointer(input),
         }
     }
 
-    fn key(&mut self, key: Key, repeat: bool) -> Option<DialogEvent> {
-        match key {
-            Key::Up | Key::Down => {
+    /// Acts on a shared UI command its host read, as [`Self::input`] acts
+    /// on its key: Up and Down, repeats included, scroll the first
+    /// scrolling text; Confirm activates the default item and Back the
+    /// cancel item; under [`FocusRing::Tab`], Tab moves the focus and
+    /// Activate presses the focused button. A repeat activates nothing,
+    /// and a release does nothing.
+    pub fn command(&mut self, input: CommandInput) -> Option<DialogEvent> {
+        let Command::Ui(command) = input.command else {
+            return None;
+        };
+        if !input.pressed {
+            return None;
+        }
+        match command {
+            UiCommand::Up | UiCommand::Down => {
                 if let Some(text) = self.scroll_text_mut() {
-                    text.input(&Input::Key {
-                        key,
-                        pressed: true,
-                        repeat,
-                    });
+                    text.command(input);
                 }
                 None
             }
-            _ if repeat => None,
-            Key::Enter => self.activate(self.default_item),
-            Key::Escape => self.activate(self.cancel_item),
-            Key::Tab if self.focus_ring == FocusRing::Tab => {
+            _ if input.repeat => None,
+            UiCommand::Confirm => self.activate(self.default_item),
+            UiCommand::Back => self.activate(self.cancel_item),
+            // Under `FocusRing::Off` the keyboard keeps no focus: Tab,
+            // Activate and the pad's focus moves bound to keys do nothing,
+            // even over a focus the pad placed.
+            _ if self.focus_ring == FocusRing::Off => None,
+            UiCommand::Tab => {
                 self.focus_next();
                 None
             }
-            // Under `FocusRing::Off` nothing is ever focused, so Space
-            // activates nothing.
-            Key::Space => self.activate(self.focus.map(|index| index + 1)),
+            UiCommand::Activate => self.activate(self.focus()),
+            UiCommand::FocusUp
+            | UiCommand::FocusDown
+            | UiCommand::FocusLeft
+            | UiCommand::FocusRight
+            | UiCommand::PrevFocus => {
+                self.keyed_focus_move(Command::Ui(command));
+                None
+            }
             _ => None,
         }
     }
@@ -887,13 +990,21 @@ impl Dialog {
     /// nothing would draw what the original never does.
     fn focus_next(&mut self) {
         let count = self.items.len();
-        let start = self.focus.map_or(0, |index| index + 1);
-        self.focus = (0..count)
+        // The focus is an item number, so it is the next one's index.
+        // From a cell the pad placed, it goes on from the cells' item.
+        let start = match self.focus.get() {
+            Some(PadSpot::Item(item)) => item,
+            Some(PadSpot::Cell(_)) => self.pad_cells.as_ref().map_or(0, |(item, _)| *item),
+            None => 0,
+        };
+        let next = (0..count)
             .map(|step| (start + step) % count)
             .find(|&index| {
                 let item = &self.items[index];
                 item.active() && item.drawn && item.is_button()
             });
+        self.focus
+            .set_by_keys(next.map(|index| PadSpot::Item(index + 1)));
     }
 
     /// Picks the item under a press and tracks it. The pick and the
@@ -1076,6 +1187,7 @@ impl Dialog {
         self.tracker.cancel_pointer();
         self.tracked = None;
         self.hold = None;
+        self.pad_hold = false;
     }
 
     /// Draws the frame, if there is one, then each shown and drawn item in
@@ -1113,7 +1225,7 @@ impl Dialog {
                 Widget::Button(button) => {
                     let pressed = tracked || self.held == Some(index);
                     button.draw(pressed, &self.skin, &self.style, &self.metrics, list);
-                    if self.focus == Some(index) {
+                    if self.focus.keyboard_ring() == Some(PadSpot::Item(index + 1)) {
                         outline(list, item.bounds, self.style.up);
                     }
                 }
@@ -1140,6 +1252,7 @@ impl Dialog {
                 Widget::Blank => {}
             }
         }
+        self.draw_pad_highlight(list);
     }
 }
 
@@ -1221,7 +1334,8 @@ pub(crate) fn outline(list: &mut DrawList, rect: Bounds, color: Color) {
 mod tests {
     use super::*;
     use crate::draw::fill_command;
-    use crate::input::{MouseButton, ScrollDelta};
+    use crate::input::{Key, MouseButton, ScrollDelta};
+    use crate::keymap::{Bindings, KeyCombo};
     use crate::text::fixture::MonoMetrics;
     use crate::ui::scroll_text::{ARROW_UNITS, TextRun};
 
@@ -1926,10 +2040,40 @@ mod tests {
     fn return_activates_the_default_item() {
         let mut dialog = dialog(&yes_no(), &[]);
         assert_eq!(dialog.input(&key(Key::Enter)), Some(DialogEvent::Item(1)));
+        assert_eq!(
+            dialog.input(&key(Key::NumpadEnter)),
+            Some(DialogEvent::Item(1))
+        );
         let mut dialog = dialog.with_default(Some(5));
         assert_eq!(dialog.input(&key(Key::Enter)), Some(DialogEvent::Item(5)));
         let mut dialog = dialog.with_default(None);
         assert_eq!(dialog.input(&key(Key::Enter)), None);
+    }
+
+    /// The dialog reads its keys through the key map it is given: Confirm
+    /// rebound to T activates the default item on T and no longer on
+    /// Return, and keypad Enter, a fixed twin, still confirms.
+    #[test]
+    fn a_rebound_confirm_activates_the_default_on_its_new_key_alone() {
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyT)),
+        );
+        let mut dialog = dialog(&yes_no(), &[]).with_bindings(bindings);
+        assert_eq!(dialog.input(&key(Key::KeyT)), Some(DialogEvent::Item(1)));
+        assert_eq!(dialog.input(&key(Key::Enter)), None);
+        assert_eq!(
+            dialog.input(&key(Key::NumpadEnter)),
+            Some(DialogEvent::Item(1))
+        );
+    }
+
+    #[test]
+    fn its_bindings_are_the_ones_it_was_given() {
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyT)),
+        );
+        let dialog = dialog(&yes_no(), &[]).with_bindings(bindings.clone());
+        assert_eq!(dialog.bindings().get(), bindings.get());
     }
 
     #[test]
@@ -2113,7 +2257,7 @@ mod tests {
     #[test]
     fn set_text_rewraps_a_text_item_and_nothing_else() {
         let mut dialog = dialog(&desc_like(), &desc_roles("l0\rl1\rl2\rl3\rl4"));
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         dialog.set_text(3, "new");
         let text = dialog.scroll_text().expect("scrolling text");
         assert_eq!((text.lines(), text.first()), (&["new".to_owned()][..], 0));
@@ -2142,13 +2286,13 @@ mod tests {
                 .collect()
         };
         let mut dialog = dialog(&desc_like(), &desc_roles("l0\rl1\rl2\rl3\rl4"));
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         dialog.set_rows(3, rows(&["a", "b", "c", "d"]));
         let text = dialog.scroll_text().expect("scrolling text");
         assert_eq!(text.first(), 0);
         assert_eq!(text.lines(), ["a", "b", "c", "d"]);
         assert_eq!(text.rect(), rect(10.0, 10.0, 40.0, 36.0));
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         assert_eq!(
             dialog.scroll_text().expect("scrolling text").first(),
             1,
@@ -2164,15 +2308,15 @@ mod tests {
     #[test]
     fn up_and_down_reach_the_scroll_text_with_repeats() {
         let mut dialog = dialog(&desc_like(), &desc_roles("l0\rl1\rl2\rl3\rl4"));
-        assert_eq!(dialog.input(&key(Key::Down)), None);
-        assert_eq!(dialog.input(&held(Key::Down)), None);
+        assert_eq!(dialog.input(&key(Key::ArrowDown)), None);
+        assert_eq!(dialog.input(&held(Key::ArrowDown)), None);
         assert_eq!(dialog.scroll_text().expect("text").first(), 2);
-        dialog.input(&held(Key::Down));
+        dialog.input(&held(Key::ArrowDown));
         assert_eq!(dialog.scroll_text().expect("text").first(), 2, "clamped");
-        dialog.input(&key(Key::Up));
+        dialog.input(&key(Key::ArrowUp));
         assert_eq!(dialog.scroll_text().expect("text").first(), 1);
         let release = Input::Key {
-            key: Key::Up,
+            key: Key::ArrowUp,
             pressed: false,
             repeat: false,
         };
@@ -2185,10 +2329,10 @@ mod tests {
         let text = |dialog: &Dialog| dialog.scroll_text().expect("text").offset();
         let mut pixels =
             dialog(&desc_like(), &desc_roles("l0\rl1\rl2\rl3\rl4")).with_pixel_scroll();
-        pixels.input(&key(Key::Down));
+        pixels.input(&key(Key::ArrowDown));
         assert_eq!(text(&pixels), ARROW_UNITS);
         let mut lines = dialog(&desc_like(), &desc_roles("l0\rl1\rl2\rl3\rl4"));
-        lines.input(&key(Key::Down));
+        lines.input(&key(Key::ArrowDown));
         assert_eq!(text(&lines), 12.0);
     }
 
@@ -2202,7 +2346,7 @@ mod tests {
     fn set_text_keeps_a_dialogs_pixel_scroll() {
         let mut dialog = dialog(&desc_like(), &desc_roles("l0")).with_pixel_scroll();
         dialog.set_text(3, "l0\rl1\rl2\rl3\rl4");
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         assert_eq!(dialog.scroll_text().expect("text").offset(), ARROW_UNITS);
     }
 
@@ -2269,7 +2413,7 @@ mod tests {
         assert_eq!((first(&dialog, 3), first(&dialog, 4)), (0, 1));
         dialog.input(&wheel(at(20.0, 20.0)));
         assert_eq!((first(&dialog, 3), first(&dialog, 4)), (1, 1));
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         assert_eq!(
             (first(&dialog, 3), first(&dialog, 4)),
             (2, 1),
@@ -2305,7 +2449,7 @@ mod tests {
         let mut dialog = dialog(&template, &[]);
         assert!(dialog.scroll_text().is_none());
         let before = drawn(&dialog);
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         assert_eq!(drawn(&dialog), before);
     }
 
@@ -2396,9 +2540,9 @@ mod tests {
     #[test]
     fn up_and_down_still_scroll_a_backed_text() {
         let mut dialog = dialog(&desc_like(), &backed_roles("l0\rl1\rl2\rl3\rl4", INSET));
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         assert_eq!(dialog.text(3).expect("text").first(), 1);
-        dialog.input(&key(Key::Up));
+        dialog.input(&key(Key::ArrowUp));
         assert_eq!(dialog.text(3).expect("text").first(), 0);
     }
 

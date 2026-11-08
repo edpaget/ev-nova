@@ -45,9 +45,10 @@ use crate::combat::report::SimDiagnostic;
 use crate::combat::ship_frames::{Drawn, FrameSpec};
 use crate::combat::shot_layer::ShotLayer;
 use crate::combat::{CombatEvent, ShipRef};
+use crate::dialog::conversation::ConversationPage;
 use crate::escort::{ClassRow, Commanded, EscortClass, EscortCommand, EscortGroup};
 use crate::escort_dialog::{EscortButton, EscortDialogView};
-use crate::flight::{Controls, ShipState};
+use crate::flight::{Amounts, Controls, ShipState};
 use crate::gamble::{Bet, RaceRun};
 use crate::gate::{GateKind, GateRefusal};
 use crate::geometry::Vec2;
@@ -1137,6 +1138,28 @@ pub enum FlightCommand {
     /// run's rank governments and its last movie and draw on the chance,
     /// none of which a frame shows.
     LoadPortDescription,
+    /// The landed stellar's conversation: open it, take a choice on its
+    /// page, or close it (see [`Converse`]), answered
+    /// [`Answer::Conversation`] with the page to show, or
+    /// [`Answer::Refused`].
+    Converse(Converse),
+}
+
+/// What a [`FlightCommand::Converse`] does with the landed stellar's
+/// conversation (see the `nova_sim_story::dialog::conversation` module).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Converse {
+    /// Opens the next conversation the landed stellar has for this visit,
+    /// from its knot: a mission's completion due there, then an offer
+    /// that holds there, then the stellar's own, each once a visit.
+    /// Refused in flight, or with none left.
+    Open,
+    /// Takes the choice at this index on the open page: refused with no
+    /// conversation open, on an ended page, or past its choices.
+    Choose(usize),
+    /// Closes the open conversation: [`Answer::Done`], or refused with
+    /// none open.
+    Close,
 }
 
 impl FlightCommand {
@@ -1277,7 +1300,8 @@ impl FlightCommand {
             | Self::SetSpriteLoad(_)
             | Self::Hover { .. }
             | Self::LoadDescription { .. }
-            | Self::LoadPortDescription => None,
+            | Self::LoadPortDescription
+            | Self::Converse(_) => None,
         }
     }
 
@@ -1514,6 +1538,9 @@ pub enum Answer {
     /// [`FlightCommand::LoadPortDescription`] loaded, empty for a missing
     /// `dësc`.
     Description(String),
+    /// The page of the conversation a [`FlightCommand::Converse`] opened or
+    /// took a choice in.
+    Conversation(ConversationPage),
 }
 
 impl Answer {
@@ -1627,6 +1654,10 @@ pub struct CarriedDisplay {
 pub struct StepInput {
     /// The player's steering, thrust and afterburner.
     pub controls: Controls,
+    /// How far a stick holds the player's turn and thrust, which its step
+    /// scales them by (see `Session`'s `analog` module): full, the
+    /// default, with keys only.
+    pub amounts: Amounts,
     /// The play area about the ship, in world units
     /// ([`Session::set_play_area`](crate::Session::set_play_area)).
     pub play_area: Area,
@@ -2498,6 +2529,9 @@ mod tests {
             C::Assign(crate::Assignment::Escort),
             C::NameCapture(None),
             C::MarkIntroSeen,
+            C::Converse(crate::flight_frame::Converse::Open),
+            C::Converse(crate::flight_frame::Converse::Choose(1)),
+            C::Converse(crate::flight_frame::Converse::Close),
         ];
         for command in port {
             assert_eq!(command.gate(), None, "{command:?}");

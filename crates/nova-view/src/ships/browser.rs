@@ -19,9 +19,11 @@ use std::time::Duration;
 use nova_sim::{HashedRolls, lights_level};
 
 use super::catalog::{SheetInfo, ShipCatalog, ShipEntry, ShipId};
+use crate::bound_names::{Spelling, group, name_read};
 use crate::draw::{crossed_box, lights_tint};
+use crate::keymap::{Command, CommandInput, CommandReader, SharedBindings, UiCommand, contexts};
 use crate::time::ticks;
-use crate::{Color, DrawList, Font, Input, Key, Point, Screen, ScreenAction};
+use crate::{Color, DrawList, Font, Input, Point, Screen, ScreenAction};
 
 /// Where the ship's centre goes, in the 1024x768 logical space. The base,
 /// glow and lights frames are all centred here: a layer frame is often
@@ -74,6 +76,9 @@ pub struct ShipBrowser<C> {
     elapsed: Duration,
     /// What random running lights roll on.
     blink_rolls: HashedRolls,
+    /// Its keys, the shared arrows, as commands
+    /// ([`contexts::SHIP_BROWSER`]).
+    keys: CommandReader,
 }
 
 impl<C: ShipCatalog> ShipBrowser<C> {
@@ -88,7 +93,15 @@ impl<C: ShipCatalog> ShipBrowser<C> {
             current,
             elapsed: Duration::ZERO,
             blink_rolls: HashedRolls::new(0),
+            keys: CommandReader::new(contexts::SHIP_BROWSER),
         }
+    }
+
+    /// The browser reading its keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.keys.set_bindings(bindings);
+        self
     }
 
     /// The selected ship, if there are any.
@@ -219,22 +232,29 @@ fn draw_text(ship: &ShipEntry, list: &mut DrawList) {
 }
 
 impl<C: ShipCatalog> Screen for ShipBrowser<C> {
-    /// Right or Down shows the next ship and Left or Up the previous one,
-    /// wrapping round; holding the key keeps stepping, once per key repeat.
-    /// Everything else, and every key release, is ignored; the browser never
-    /// quits (Escape is the app's).
+    /// The shared Right or Down shows the next ship and Left or Up the
+    /// previous one, wrapping round; holding the key keeps stepping, once
+    /// per key repeat. Everything else, and every key release, is
+    /// ignored; the browser never quits (Escape is the app's).
     fn input(&mut self, input: &Input) -> ScreenAction {
-        if let Input::Key {
-            key, pressed: true, ..
-        } = input
+        if let Some(CommandInput {
+            command: Command::Ui(command),
+            pressed: true,
+            ..
+        }) = self.keys.follow(input)
         {
-            match key {
-                Key::Right | Key::Down => self.select(true),
-                Key::Left | Key::Up => self.select(false),
+            match command {
+                UiCommand::Right | UiCommand::Down => self.select(true),
+                UiCommand::Left | UiCommand::Up => self.select(false),
                 _ => {}
             }
         }
         ScreenAction::None
+    }
+
+    /// Lets go of the keys held.
+    fn release_keys(&mut self) {
+        self.keys.let_go();
     }
 
     fn tick(&mut self, dt: Duration) {
@@ -254,9 +274,16 @@ impl<C: ShipCatalog> Screen for ShipBrowser<C> {
         };
         self.draw_ship(ship, list);
         draw_text(ship, list);
+        let browse = group(
+            [UiCommand::Left, UiCommand::Right]
+                .map(|command| name_read(&self.keys, command, Spelling::Bound)),
+            "/",
+        )
+        .map(|keys| format!(" - {keys} to browse"))
+        .unwrap_or_default();
         list.text(
             format!(
-                "Ship {} of {} (shïp {}) - Left/Right to browse",
+                "Ship {} of {} (shïp {}){browse}",
                 self.selected + 1,
                 self.ids.len(),
                 ship.id.0
@@ -448,7 +475,13 @@ mod tests {
         let catalog = three_ships();
         let mut browser = ShipBrowser::new(&catalog);
         let mut visited = Vec::new();
-        for key in [Key::Right, Key::Right, Key::Right, Key::Left, Key::Left] {
+        for key in [
+            Key::ArrowRight,
+            Key::ArrowRight,
+            Key::ArrowRight,
+            Key::ArrowLeft,
+            Key::ArrowLeft,
+        ] {
             assert_eq!(browser.input(&press(key)), ScreenAction::None);
             visited.push(browser.selected().expect("a ship").0);
         }
@@ -462,7 +495,11 @@ mod tests {
         let catalog = three_ships();
         let mut browser = ShipBrowser::new(&catalog);
         let mut visited = Vec::new();
-        for input in [press(Key::Right), held(Key::Right), held(Key::Left)] {
+        for input in [
+            press(Key::ArrowRight),
+            held(Key::ArrowRight),
+            held(Key::ArrowLeft),
+        ] {
             assert_eq!(browser.input(&input), ScreenAction::None);
             visited.push(browser.selected().expect("a ship").0);
         }
@@ -470,13 +507,52 @@ mod tests {
     }
 
     #[test]
+    fn a_rebound_right_steps_on_its_new_key_alone() {
+        use crate::keymap::{Bindings, KeyCombo, SharedBindings, UiCommand};
+        let catalog = three_ships();
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Right, KeyCombo::key(Key::KeyL)),
+        );
+        let mut browser = ShipBrowser::new(&catalog).with_bindings(bindings);
+        browser.input(&press(Key::ArrowRight));
+        assert_eq!(
+            browser.selected(),
+            Some(ShipId(128)),
+            "Right no longer steps"
+        );
+        browser.input(&press(Key::KeyL));
+        assert_eq!(browser.selected(), Some(ShipId(129)), "L does");
+    }
+
+    /// Letting go of the keys forgets a modifier held: Right on Shift-L
+    /// no longer steps on L once the keys are let go of.
+    #[test]
+    fn releasing_the_keys_forgets_a_modifier_held() {
+        use crate::keymap::{Bindings, KeyCombo, Modifiers, SharedBindings, UiCommand};
+        let catalog = three_ships();
+        let bindings = SharedBindings::new(Bindings::default().rebound(
+            UiCommand::Right,
+            KeyCombo::with(Key::KeyL, Modifiers::SHIFT),
+        ));
+        let mut browser = ShipBrowser::new(&catalog).with_bindings(bindings.clone());
+        browser.input(&press(Key::ShiftLeft));
+        browser.release_keys();
+        browser.input(&press(Key::KeyL));
+        assert_eq!(browser.selected(), Some(ShipId(128)), "Shift was let go of");
+        let mut held = ShipBrowser::new(&catalog).with_bindings(bindings);
+        held.input(&press(Key::ShiftLeft));
+        held.input(&press(Key::KeyL));
+        assert_eq!(held.selected(), Some(ShipId(129)), "with Shift held");
+    }
+
+    #[test]
     fn down_and_up_mirror_right_and_left() {
         let catalog = three_ships();
         let mut browser = ShipBrowser::new(&catalog);
-        browser.input(&press(Key::Up));
+        browser.input(&press(Key::ArrowUp));
         assert_eq!(browser.selected(), Some(ShipId(130)));
-        browser.input(&press(Key::Down));
-        browser.input(&press(Key::Down));
+        browser.input(&press(Key::ArrowDown));
+        browser.input(&press(Key::ArrowDown));
         assert_eq!(browser.selected(), Some(ShipId(129)));
         assert_eq!(catalog.calls().len(), 4);
     }
@@ -487,10 +563,10 @@ mod tests {
         let mut browser = ShipBrowser::new(&catalog);
         browser.tick(tick() * 3);
         assert_eq!(browser.frame(), Some(3));
-        browser.input(&press(Key::Right));
+        browser.input(&press(Key::ArrowRight));
         assert_eq!(browser.frame(), Some(0));
         browser.tick(tick() * 2);
-        browser.input(&press(Key::Left));
+        browser.input(&press(Key::ArrowLeft));
         assert_eq!(browser.frame(), Some(0));
     }
 
@@ -501,20 +577,20 @@ mod tests {
         browser.tick(tick() * 2);
         let others = [
             Input::Key {
-                key: Key::Right,
+                key: Key::ArrowRight,
                 pressed: false,
                 repeat: false,
             },
             Input::Key {
-                key: Key::Left,
+                key: Key::ArrowLeft,
                 pressed: false,
                 repeat: false,
             },
             press(Key::Enter),
             press(Key::Escape),
             press(Key::Space),
-            press(Key::Char('d')),
-            press(Key::Other),
+            press(Key::KeyD),
+            press(Key::Unidentified),
             Input::PointerMoved(Point::new(1.0, 2.0)),
             Input::PointerButton {
                 button: MouseButton::Left,
@@ -779,7 +855,7 @@ mod tests {
         let mut browser = ShipBrowser::new(&catalog);
         browser.tick(tick());
         assert_eq!(lights_alphas(&browser), [255], "tick 1");
-        browser.input(&press(Key::Right));
+        browser.input(&press(Key::ArrowRight));
         assert_eq!(lights_alphas(&browser), [0_u8; 0], "tick 0 again");
         browser.tick(tick());
         assert_eq!(lights_alphas(&browser), [255]);
@@ -830,11 +906,66 @@ mod tests {
         assert_eq!(text_color(&list, "Shuttle"), Color::WHITE);
     }
 
+    /// The footer a browser of three ships draws, its keys read through
+    /// `bindings`, for the device its keys read.
+    fn footer_with(bindings: crate::keymap::Bindings) -> String {
+        let catalog = three_ships();
+        let browser = ShipBrowser::new(&catalog).with_bindings(SharedBindings::new(bindings));
+        texts(&drawn(&browser))
+            .into_iter()
+            .find(|text| text.starts_with("Ship 1 of 3"))
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn the_footer_names_the_browse_keys_bound() {
+        use crate::keymap::{Bindings, KeyCombo};
+        assert_eq!(
+            footer_with(Bindings::default().rebound(UiCommand::Left, KeyCombo::key(Key::KeyA))),
+            "Ship 1 of 3 (shïp 128) - A/Right Arrow to browse"
+        );
+        assert_eq!(
+            footer_with(
+                Bindings::default()
+                    .unbound(UiCommand::Left)
+                    .unbound(UiCommand::Right)
+            ),
+            "Ship 1 of 3 (shïp 128)"
+        );
+    }
+
+    #[test]
+    fn with_a_pad_last_used_the_footer_names_its_stick_and_an_unbound_one_its_key() {
+        use crate::keymap::Bindings;
+        let on_pad = |bindings: Bindings| {
+            let catalog = three_ships();
+            let mut browser =
+                ShipBrowser::new(&catalog).with_bindings(SharedBindings::new(bindings));
+            browser.input(&Input::Surroundings(crate::input::Surroundings::of(
+                crate::input::Device::Gamepad(crate::input::ControllerFamily::Xbox),
+            )));
+            texts(&drawn(&browser))
+                .into_iter()
+                .find(|text| text.starts_with("Ship 1 of 3"))
+                .unwrap_or_default()
+        };
+        assert_eq!(
+            on_pad(Bindings::default()),
+            "Ship 1 of 3 (shïp 128) - L Stick Left/L Stick Right to browse"
+        );
+        let mut unbound = Bindings::default();
+        unbound.gamepad.unbind(UiCommand::Left.into());
+        assert_eq!(
+            on_pad(unbound),
+            "Ship 1 of 3 (shïp 128) - Left Arrow/L Stick Right to browse"
+        );
+    }
+
     #[test]
     fn the_footer_counts_from_the_selected_ship() {
         let catalog = three_ships();
         let mut browser = ShipBrowser::new(&catalog);
-        browser.input(&press(Key::Left));
+        browser.input(&press(Key::ArrowLeft));
         let texts = texts(&drawn(&browser));
         assert!(
             texts.contains(&"Ship 3 of 3 (shïp 130) - Left/Right to browse".to_owned()),
@@ -1033,7 +1164,12 @@ mod tests {
     fn an_empty_catalog_says_so_and_ignores_keys() {
         let catalog = FakeCatalog::default();
         let mut browser = ShipBrowser::new(&catalog);
-        for key in [Key::Right, Key::Left, Key::Up, Key::Down] {
+        for key in [
+            Key::ArrowRight,
+            Key::ArrowLeft,
+            Key::ArrowUp,
+            Key::ArrowDown,
+        ] {
             assert_eq!(browser.input(&press(key)), ScreenAction::None);
         }
         browser.tick(tick());

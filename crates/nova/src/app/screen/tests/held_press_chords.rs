@@ -1,17 +1,17 @@
 use super::live_keys::texted_and_held;
 use super::map_wait_keys::{offered_docked, offered_over_flight};
 use super::*;
-use nova_view::flight::view::MAP_KEY;
 use nova_view::spaceport::offer::ACCEPT_ITEM;
-use nova_view::ui::player_info::PLAYER_INFO_KEY;
 
+/// The map key's default.
+const MAP_KEY: Key = Key::KeyM;
 // The menu chords typed during a press a dialog holds keys back for act
 // at its release, after its replay (the `held_chords` module): wiring
 // through the real router, views and flight. Which keys a dialog holds
 // back, and when its replay runs, is nova-view's (`ui::held_keys`).
 
 pub(super) fn command(pressed: bool) -> Input {
-    key(Key::Command, pressed)
+    key(Key::MetaLeft, pressed)
 }
 
 fn left(pressed: bool, at: Point) -> Input {
@@ -69,7 +69,7 @@ const OFF: Point = Point::new(1.0, 1.0);
 fn command_q_during_a_click_held_on_a_texts_okay_quits_at_the_release() {
     let mut screen = texted_and_held();
     let at = okay(&screen);
-    assert_eq!(chord(&mut screen, Key::Char('q')), [ScreenAction::None; 3]);
+    assert_eq!(chord(&mut screen, Key::KeyQ), [ScreenAction::None; 3]);
     assert!(!screen.take_quit(), "not at the press");
     assert_eq!(screen.showing(), Showing::MissionText, "still shown");
     screen.input(&command(false));
@@ -81,7 +81,7 @@ fn command_q_during_a_click_held_on_a_docked_offers_accept_quits_after_it_answer
     let mut screen = offered_docked();
     let at = docked_accept(&screen);
     screen.input(&left(true, at));
-    assert_eq!(chord(&mut screen, Key::Char('q')), [ScreenAction::None; 3]);
+    assert_eq!(chord(&mut screen, Key::KeyQ), [ScreenAction::None; 3]);
     assert!(!screen.take_quit());
     assert!(
         spaceport(&screen).offer_dialog().is_some(),
@@ -189,7 +189,7 @@ fn player_info_opened_before_a_held_command_q_drops_it() {
     screen.input(&left(true, at));
     screen.input(&key(PLAYER_INFO_KEY, true));
     screen.input(&key(PLAYER_INFO_KEY, false));
-    chord(&mut screen, Key::Char('q'));
+    chord(&mut screen, Key::KeyQ);
     screen.input(&command(false));
     assert_eq!(screen.input(&left(false, OFF)), ScreenAction::None);
     assert!(!screen.take_quit(), "flushed");
@@ -202,7 +202,7 @@ fn the_map_opened_before_a_held_command_q_drops_it() {
     let at = flight_accept(&screen);
     screen.input(&left(true, at));
     screen.input(&key(MAP_KEY, true));
-    chord(&mut screen, Key::Char('q'));
+    chord(&mut screen, Key::KeyQ);
     screen.input(&command(false));
     assert_eq!(screen.input(&left(false, OFF)), ScreenAction::None);
     assert!(!screen.take_quit(), "flushed");
@@ -212,7 +212,7 @@ fn the_map_opened_before_a_held_command_q_drops_it() {
 #[test]
 fn a_held_command_q_whose_press_is_released_outside_the_game_quits_on_the_next_tick() {
     let mut screen = texted_and_held();
-    chord(&mut screen, Key::Char('q'));
+    chord(&mut screen, Key::KeyQ);
     screen.cancel_pointer();
     assert!(!screen.take_quit(), "not at the cancel");
     screen.tick(TICK);
@@ -244,7 +244,7 @@ fn a_key_pressed_after_a_held_chord_and_let_go_of_with_the_window_isnt_left_down
     screen.release_keys();
     screen.input(&left(false, OFF));
     assert!(screen.preferences().is_some(), "the chord ran");
-    assert_eq!(screen.input(&key(Key::Char('q'), true)), ScreenAction::None);
+    assert_eq!(screen.input(&key(Key::KeyQ, true)), ScreenAction::None);
     assert!(!screen.take_quit());
 }
 
@@ -256,7 +256,7 @@ fn an_answer_that_shows_a_text_drops_the_held_command_q() {
     let mut screen = super::missions::hailing_briefer(Rc::new(super::missions::PictureDialogs));
     let at = flight_accept(&screen);
     screen.input(&left(true, at));
-    assert_eq!(chord(&mut screen, Key::Char('q')), [ScreenAction::None; 3]);
+    assert_eq!(chord(&mut screen, Key::KeyQ), [ScreenAction::None; 3]);
     screen.input(&command(false));
     assert_eq!(screen.input(&left(false, at)), ScreenAction::None);
     screen.tick(TICK);
@@ -282,7 +282,7 @@ fn a_press_replayed_before_a_flush_still_gets_its_queued_release() {
     screen.input(&left(false, OFF));
     assert_eq!(screen.showing(), Showing::MissionText, "the brief");
     assert_eq!(
-        screen.input(&key(Key::Char('q'), true)),
+        screen.input(&key(Key::KeyQ, true)),
         ScreenAction::None,
         "Command let go of"
     );
@@ -304,7 +304,7 @@ fn a_let_go_after_a_flush_still_lets_go_of_the_presses_replayed() {
     screen.tick(TICK);
     assert_eq!(screen.showing(), Showing::MissionText, "the brief");
     assert_eq!(
-        screen.input(&key(Key::Char('q'), true)),
+        screen.input(&key(Key::KeyQ, true)),
         ScreenAction::None,
         "Command let go of"
     );

@@ -8,6 +8,7 @@ use crate::records::character::Character;
 use crate::records::desc::Desc;
 use crate::records::dude::Dude;
 use crate::records::govt::Govt;
+use crate::records::outfit::Outfit;
 use crate::records::ship::Ship;
 use crate::records::ship_anim::ShipAnim;
 use crate::records::stellar::{Stellar, flags};
@@ -293,6 +294,50 @@ pub fn neutral_character() -> Character {
         date_prefix: MacString::default(),
         date_suffix: MacString::default(),
         unknown_0x15a: RawArray::default(),
+    }
+}
+
+/// The `oütf` `TechLevel` no outfitter lists, under either reading of the
+/// tech level rule: 0x7fff, which the original's
+/// `_SetupPortAvailableItems` skips (@0xbf93).
+pub const OUTFIT_TECH_NEVER: i16 = 0x7fff;
+
+/// An `oütf` that does nothing and is never sold: no mass, price, flags,
+/// names, scripts, requirements or contribution; every `ModType` slot
+/// unused (-1, with a `ModVal` of 0, as the stock data leaves an empty
+/// slot); no limit on how many are owned (`Max` `i16::MAX`); never listed
+/// ([`OUTFIT_TECH_NEVER`]) and never offered (`BuyRandom` 0); for every
+/// government (`RequireGovt` -1).
+#[must_use]
+pub fn neutral_outfit() -> Outfit {
+    Outfit {
+        disp_weight: 0,
+        mass: 0,
+        tech_level: OUTFIT_TECH_NEVER,
+        mod_type: -1,
+        mod_val: 0,
+        max: i16::MAX,
+        flags: Flags16::default(),
+        cost: 0,
+        mod_type2: -1,
+        mod_val2: 0,
+        mod_type3: -1,
+        mod_val3: 0,
+        mod_type4: -1,
+        mod_val4: 0,
+        contribute: Flags64::default(),
+        require: Flags64::default(),
+        availability: MacString::default(),
+        on_purchase: MacString::default(),
+        on_sell: MacString::default(),
+        short_name: MacString::default(),
+        lc_name: MacString::default(),
+        lc_plural: MacString::default(),
+        item_class: 0,
+        scan_mask: Flags16::default(),
+        buy_random: 0,
+        require_govt: -1,
+        unknown_0x3f4: RawArray::default(),
     }
 }
 

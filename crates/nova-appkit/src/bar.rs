@@ -17,7 +17,8 @@ use objc2_foundation::{NSObject, NSString};
 
 use crate::items::{Action, Command, Item, MENUS, Role, Shortcut};
 
-/// Why the menu bar or the Apple event handlers could not be installed.
+/// Why the menu bar, the Apple event handlers or the will-terminate
+/// observer could not be installed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InstallError {
     /// They were asked for off the main thread, where `AppKit` can't be
@@ -108,7 +109,8 @@ impl MenuBar {
     /// It turns off automatic window tabbing first, so `AppKit` adds no tab
     /// items to View, and sets the Window and Services menus as `AppKit`'s.
     /// It needs the main thread, after `NSApplication` has finished
-    /// launching (winit's `resumed`); off it, it builds nothing.
+    /// launching (winit's `can_create_surfaces`); off it, it builds
+    /// nothing.
     ///
     /// `on_command` runs inside `AppKit`'s menu handling: it should only
     /// pass the command on (to an event loop proxy, say), never run the

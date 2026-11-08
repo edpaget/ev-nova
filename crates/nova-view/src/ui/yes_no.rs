@@ -16,6 +16,7 @@ use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
 use crate::font::Font;
 use crate::input::Input;
+use crate::keymap::SharedBindings;
 use crate::screen::{Screen, ScreenAction};
 use crate::text::TextMetrics;
 
@@ -110,6 +111,13 @@ impl YesNoDialog {
         self
     }
 
+    /// The question reading its keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.dialog.set_bindings(bindings);
+        self
+    }
+
     /// The dialog itself, for its layout.
     #[must_use]
     pub fn dialog(&self) -> &Dialog {
@@ -143,6 +151,9 @@ impl Screen for YesNoDialog {
         self.dialog.cancel_pointer();
     }
 }
+
+#[cfg(test)]
+pub(crate) use tests::pad_probe;
 
 #[cfg(test)]
 mod tests {
@@ -193,6 +204,37 @@ mod tests {
         )
     }
 
+    struct Probe(YesNoDialog);
+
+    impl crate::ui::pad_focus::every_screen::PadProbe for Probe {
+        fn screen(&mut self) -> &mut dyn Screen {
+            &mut self.0
+        }
+
+        fn controls(&self) -> Vec<(&'static str, Bounds)> {
+            let at = |item| self.0.dialog().item_bounds(item).expect("item");
+            vec![("OK", at(YES_ITEM)), ("Cancel", at(NO_ITEM))]
+        }
+
+        fn outcome(&mut self) -> String {
+            format!("answer {:?}", self.0.take_answer())
+        }
+
+        fn default_control(&self) -> Option<&'static str> {
+            Some("OK")
+        }
+
+        fn set_ring(&mut self, ring: FocusRing) -> bool {
+            self.0 = self.0.clone().with_focus_ring(ring);
+            true
+        }
+    }
+
+    /// The Yes/No dialog's row in the pad's every-screen table.
+    pub(crate) fn pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        Box::new(Probe(asking()))
+    }
+
     fn key(key: Key) -> Input {
         Input::Key {
             key,
@@ -214,6 +256,21 @@ mod tests {
                 at,
             });
         }
+    }
+
+    /// The question reads its keys through the key map it is given:
+    /// Confirm rebound to F6 answers yes on F6 and no longer on Return.
+    #[test]
+    fn a_rebound_confirm_answers_yes_on_its_new_key_alone() {
+        let bindings = SharedBindings::new(crate::keymap::Bindings::default().rebound(
+            crate::keymap::UiCommand::Confirm,
+            crate::keymap::KeyCombo::key(Key::F6),
+        ));
+        let mut dialog = asking().with_bindings(bindings);
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_answer(), None, "Return no longer answers");
+        dialog.input(&key(Key::F6));
+        assert_eq!(dialog.take_answer(), Some(true));
     }
 
     #[test]
@@ -240,7 +297,7 @@ mod tests {
         for input in [
             key(Key::Escape),
             key(Key::Tab),
-            key(Key::Char('y')),
+            key(Key::KeyY),
             Input::Text('y'),
         ] {
             dialog.input(&input);

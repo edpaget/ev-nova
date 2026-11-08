@@ -31,7 +31,9 @@
 //! - **Help** asks for `dësc` 32764's text
 //!   ([`RaceScreen::take_help_request`]), which whoever holds the session
 //!   loads and shows over it (@0x48b89-0x48bd3).
-//! - **A racer** (@0x48bdc-0x48e7b): with Option (Alt) held, the quantity
+//! - **A racer** (@0x48bdc-0x48e7b): with the left Option (Alt) held
+//!   ([`RaceCommand::Ask`] through the key map, whose default is the key
+//!   code `_KeyCheck(0x3a)` polls), the quantity
 //!   dialog asks for the bet ([`Purpose::Bet`], opening at the asked
 //!   bet's most), asked even when a winner is shown, and Cancel gives 0;
 //!   otherwise the house bet. Then, with a winner shown or an asked 0, the
@@ -55,10 +57,12 @@ use nova_sim::gamble::{Bet, RACERS};
 use super::layout::DONE_LABEL;
 use super::quantity_ask::{Purpose, QuantityAsk};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
+use crate::bound_names::{CONFIRM_OR_BACK, press_clause};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
 use crate::image::ImageKey;
-use crate::input::{Input, Key};
+use crate::input::Input;
+use crate::keymap::{Command, RaceCommand, SharedBindings, UiCommand, contexts};
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
 use crate::text::TextMetrics;
@@ -134,9 +138,6 @@ pub struct RaceScreen {
     /// The dialog, or why it cannot be shown.
     laid: Result<Laid, String>,
     style: ButtonStyle,
-    /// Whether its buttons take the keyboard focus, kept across each
-    /// relabel that lays it out again.
-    focus_ring: FocusRing,
     /// The asked bet's dialog, and whether Alt is held.
     quantity: QuantityAsk<u8>,
     /// The most an asked bet can stake.
@@ -155,6 +156,8 @@ pub struct RaceScreen {
     help: bool,
     closed: bool,
     sounds: Vec<Sound>,
+    /// Ask Bet's touch toggle (the `touch` module).
+    toggle: crate::ui::touch_aids::ModifierToggle,
 }
 
 impl RaceScreen {
@@ -197,10 +200,10 @@ impl RaceScreen {
             }
         });
         Self {
+            toggle: touch::toggle(laid.as_ref().ok().map(|laid| laid.dialog.bounds())),
             laid,
             style,
-            focus_ring: FocusRing::default(),
-            quantity: QuantityAsk::new(quantity, style),
+            quantity: QuantityAsk::new(quantity, style, contexts::RACE, RaceCommand::Ask),
             asked_max,
             shown: None,
             chosen: None,
@@ -217,10 +220,22 @@ impl RaceScreen {
     /// (the `dialog_focus_ring` rule).
     #[must_use]
     pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
-        self.focus_ring = ring;
         if let Ok(laid) = &mut self.laid {
             laid.dialog.set_focus_ring(ring);
         }
+        self
+    }
+
+    /// The race reading its keys through `bindings`: its Option
+    /// ([`RaceCommand::Ask`], held as a racer is clicked, asks for the bet:
+    /// the left Option alone by default, as `_DoRaceDialog` polls its key
+    /// code, `_KeyCheck(0x3a)` @0x48be9), and its dialogs'.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.set_bindings(bindings.clone());
+        }
+        self.quantity.set_bindings(bindings);
         self
     }
 
@@ -355,13 +370,15 @@ impl RaceScreen {
         }
     }
 
-    /// Rebuilds the dialog when Leave's label changes.
+    /// Rebuilds the dialog when Leave's label changes, keeping its focus
+    /// ring, its bindings and the pad's device and focused item
+    /// ([`Dialog::lay_out_again`]).
     fn relabel(&mut self) {
         let label = self.leave_label();
         let style = self.style;
         if let Ok(laid) = &mut self.laid {
-            laid.dialog = laid_dialog(&laid.template, label, &laid.metrics.0, style);
-            laid.dialog.set_focus_ring(self.focus_ring);
+            let relabelled = laid_dialog(&laid.template, label, &laid.metrics.0, style);
+            laid.dialog.lay_out_again(relabelled);
         }
     }
 }
@@ -389,19 +406,32 @@ impl Screen for RaceScreen {
     /// Enter and Escape press Leave, and a click presses the button it is
     /// released on; nothing else does anything. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if let Some(action) = crate::ui::touch_aids::host::intercept(self, input) {
+            return action;
+        }
+        // The surroundings are no player input: they reach the dialog and
+        // the bet's, open or opened later, and do nothing else.
+        if self.quantity.follow_surroundings(input) {
+            if let Ok(laid) = &mut self.laid {
+                laid.dialog.input(input);
+            }
+            return ScreenAction::None;
+        }
         if self.quantity.is_open() {
             if let Some((racer, asked)) = self.quantity.answer(input, &mut self.sounds) {
                 self.place(racer, Bet::Asked(i64::from(asked)));
             }
             return ScreenAction::None;
         }
-        self.quantity.follow_alt(input);
+        let command = self.quantity.follow_alt(input);
         let Ok(laid) = &mut self.laid else {
-            if let Input::Key {
-                key: Key::Enter | Key::Escape,
-                pressed: true,
-                repeat: false,
-            } = *input
+            if let Some(command) = command
+                && command.pressed
+                && !command.repeat
+                && matches!(
+                    command.command,
+                    Command::Ui(UiCommand::Confirm | UiCommand::Back)
+                )
             {
                 self.closed = true;
             }
@@ -444,7 +474,10 @@ impl Screen for RaceScreen {
             }
             Err(reason) => {
                 list.text(
-                    format!("Cannot show the race: {reason}. Press Return or Escape to leave it."),
+                    format!(
+                        "Cannot show the race: {reason}.{}",
+                        press_clause(self.quantity.keys(), &CONFIRM_OR_BACK, "leave it")
+                    ),
                     PROBLEM_AT,
                     PROBLEM_SIZE,
                     None,
@@ -453,9 +486,19 @@ impl Screen for RaceScreen {
             }
         }
         self.quantity.draw(list);
+        crate::ui::touch_aids::host::draw(self, list);
+    }
+
+    /// Its toggle hides and disarms while something the spaceport shows
+    /// covers it ([`crate::ui::touch_aids::host::cover`]), and its bet's
+    /// dialog asks for no text entry.
+    fn set_covered(&mut self, covered: bool) {
+        crate::ui::touch_aids::host::cover(self, covered);
+        self.quantity.set_covered(covered);
     }
 
     fn cancel_pointer(&mut self) {
+        crate::ui::touch_aids::host::cancel(self);
         if self.quantity.cancel_pointer() {
             return;
         }
@@ -474,12 +517,17 @@ impl Screen for RaceScreen {
     }
 }
 
+pub(crate) mod touch;
+
+#[cfg(test)]
+pub(crate) use tests::pad_probe;
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::draw::DrawCommand;
     use crate::geometry::{Bounds, Point};
-    use crate::input::MouseButton;
+    use crate::input::{Key, MouseButton};
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::ItemTemplate;
     use crate::ui::quantity::{CANCEL_ITEM, OK_ITEM};
@@ -547,7 +595,7 @@ mod tests {
     /// Where the dialog goes: (1024 - 470) / 2 and (768 - 230) / 2.
     const ORIGIN: Point = Point::new(277.0, 269.0);
 
-    fn open() -> RaceScreen {
+    pub(super) fn open() -> RaceScreen {
         RaceScreen::new(
             Ok((template(), Rc::new(MonoMetrics))),
             Some(quantity_template()),
@@ -556,7 +604,7 @@ mod tests {
         )
     }
 
-    fn key(key: Key, pressed: bool, repeat: bool) -> Input {
+    pub(super) fn key(key: Key, pressed: bool, repeat: bool) -> Input {
         Input::Key {
             key,
             pressed,
@@ -572,7 +620,7 @@ mod tests {
         }
     }
 
-    fn centre(screen: &RaceScreen, item: usize) -> Point {
+    pub(super) fn centre(screen: &RaceScreen, item: usize) -> Point {
         screen
             .dialog()
             .expect("laid out")
@@ -582,13 +630,13 @@ mod tests {
     }
 
     /// Clicks `item`, down and up on it.
-    fn click(screen: &mut RaceScreen, item: usize) {
+    pub(super) fn click(screen: &mut RaceScreen, item: usize) {
         let at = centre(screen, item);
         screen.input(&pointer(true, at));
         screen.input(&pointer(false, at));
     }
 
-    fn racer_item(racer: u8) -> usize {
+    pub(super) fn racer_item(racer: u8) -> usize {
         FIRST_RACER_ITEM + usize::from(racer)
     }
 
@@ -706,6 +754,132 @@ mod tests {
         }
     }
 
+    struct Probe(RaceScreen);
+
+    impl crate::ui::pad_focus::every_screen::PadProbe for Probe {
+        fn screen(&mut self) -> &mut dyn Screen {
+            &mut self.0
+        }
+
+        fn controls(&self) -> Vec<(&'static str, Bounds)> {
+            const NAMES: [&str; 6] = ["Leave", "Help", "racer 0", "racer 1", "racer 2", "racer 3"];
+            let dialog = self.0.dialog().expect("laid out");
+            let mut items = vec![LEAVE_ITEM, HELP_ITEM];
+            items.extend((0..usize::from(RACERS)).map(|racer| FIRST_RACER_ITEM + racer));
+            NAMES
+                .into_iter()
+                .zip(items)
+                .map(|(name, item)| (name, dialog.item_bounds(item).expect("an item")))
+                .collect()
+        }
+
+        fn outcome(&mut self) -> String {
+            format!(
+                "closed {} help {} bet {:?}",
+                self.0.closed, self.0.help, self.0.bet
+            )
+        }
+
+        fn default_control(&self) -> Option<&'static str> {
+            Some("Leave")
+        }
+
+        fn touch_aids_drawn(&mut self) -> Vec<crate::draw::DrawCommand> {
+            let mut list = crate::draw::DrawList::new();
+            crate::ui::touch_aids::host::draw(&self.0, &mut list);
+            list.iter().cloned().collect()
+        }
+    }
+
+    /// The race's row in the pad's every-screen table.
+    pub(crate) fn pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        Box::new(Probe(open()))
+    }
+
+    #[test]
+    fn the_bet_dialog_opens_told_the_device_the_race_was_told() {
+        use crate::input::{ControllerFamily, Device, Surroundings};
+        let pad = Device::Gamepad(ControllerFamily::Generic);
+        let mut screen = open();
+        screen.input(&Input::Surroundings(Surroundings::of(pad)));
+        screen.input(&key(Key::AltLeft, true, false));
+        let racer = centre(&screen, FIRST_RACER_ITEM);
+        screen.input(&pointer(true, racer));
+        screen.input(&pointer(false, racer));
+        let bet = screen
+            .quantity()
+            .and_then(QuantityAsk::dialog)
+            .expect("asking");
+        assert_eq!(bet.dialog().device(), pad);
+        assert_eq!(bet.dialog().pad_highlight(), Some(OK_ITEM), "on OK");
+    }
+
+    /// The pad alone asks a bet as the left Option and a click do: told
+    /// the pad, the d-pad onto a racer, then South tapped with West held
+    /// opens the bet's dialog at the asked most, and South on its OK bets
+    /// it.
+    #[test]
+    fn a_pad_alone_asks_the_bet_with_west_held_and_bets_its_count() {
+        use crate::input::{ControllerFamily, Device, PadButton, Surroundings};
+        let pad = |button, pressed| Input::PadButton {
+            button,
+            pressed,
+            repeat: false,
+        };
+        let tap = |screen: &mut RaceScreen, button| {
+            screen.input(&pad(button, true));
+            screen.input(&pad(button, false));
+        };
+        let mut padded = open();
+        padded.input(&Input::Surroundings(Surroundings::of(Device::Gamepad(
+            ControllerFamily::Generic,
+        ))));
+        tap(&mut padded, PadButton::DPadUp);
+        let racer = padded
+            .dialog()
+            .and_then(Dialog::pad_highlight)
+            .and_then(|item| item.checked_sub(FIRST_RACER_ITEM))
+            .and_then(|racer| u8::try_from(racer).ok())
+            .filter(|&racer| racer < RACERS)
+            .expect("the d-pad on a racer");
+        padded.input(&pad(PadButton::West, true));
+        tap(&mut padded, PadButton::South);
+        padded.input(&pad(PadButton::West, false));
+        let mut keyed = open();
+        keyed.input(&key(Key::AltLeft, true, false));
+        click(&mut keyed, racer_item(racer));
+        let field = |screen: &RaceScreen| {
+            screen
+                .quantity()
+                .and_then(QuantityAsk::dialog)
+                .map(|dialog| dialog.field().text().to_owned())
+        };
+        assert_eq!(
+            field(&padded),
+            Some("5000".to_owned()),
+            "asked, at the most"
+        );
+        assert_eq!(field(&padded), field(&keyed), "as Option and a click ask");
+        for bet in [Purpose::Bet.title(), Purpose::Bet.prompt()] {
+            assert!(texts(&padded).contains(&bet.to_owned()), "a bet: {bet}");
+        }
+        assert_eq!(padded.take_bet(), None, "asked first");
+        tap(&mut padded, PadButton::South);
+        assert!(padded.quantity().is_none(), "OK closes it");
+        assert_eq!(padded.take_bet(), Some((racer, Bet::Asked(5_000))));
+    }
+
+    #[test]
+    fn a_relabel_keeps_the_device_it_was_told() {
+        use crate::input::{ControllerFamily, Device, Surroundings};
+        let pad = Device::Gamepad(ControllerFamily::Generic);
+        let mut screen = open();
+        screen.input(&Input::Surroundings(Surroundings::of(pad)));
+        screen.show_result(0, 5_000);
+        assert_eq!(screen.dialog().map(Dialog::device), Some(pad));
+        assert!(screen.dialog().and_then(Dialog::pad_highlight).is_some());
+    }
+
     #[test]
     fn it_draws_black_its_picture_the_racers_then_cancel_and_help() {
         let screen = open();
@@ -813,10 +987,33 @@ mod tests {
         assert_eq!(screen.leave_label(), CANCEL_LABEL, "no race ran");
     }
 
+    /// `_DoRaceDialog` polls the left Option's key code alone
+    /// (`_KeyCheck(0x3a)` @0x48be9).
+    #[test]
+    fn with_the_right_option_held_a_racer_bets_the_house_bet() {
+        let mut screen = open();
+        screen.input(&key(Key::AltRight, true, false));
+        click(&mut screen, racer_item(1));
+        assert!(screen.quantity().is_none(), "nothing asked");
+        assert_eq!(screen.take_bet(), Some((1, Bet::House)));
+    }
+
+    #[test]
+    fn a_covered_race_s_bet_dialog_asks_nothing() {
+        let mut screen = open();
+        screen.input(&key(Key::AltLeft, true, false));
+        click(&mut screen, racer_item(1));
+        assert!(
+            screen.quantity().and_then(QuantityAsk::dialog).is_some(),
+            "asking"
+        );
+        crate::ui::edit_dialog::pad_entry::covering_stops_its_entry(&mut screen, "race");
+    }
+
     #[test]
     fn with_alt_held_a_racer_asks_the_bet_titled_bet_at_the_asked_most() {
         let mut screen = open();
-        screen.input(&key(Key::Alt, true, false));
+        screen.input(&key(Key::AltLeft, true, false));
         click(&mut screen, racer_item(1));
         assert_eq!(screen.take_bet(), None, "asked first");
         let asking = screen.quantity().expect("asking");
@@ -829,6 +1026,28 @@ mod tests {
         assert_eq!(screen.take_bet(), Some((1, Bet::Asked(5_000))));
     }
 
+    /// The race reads its Option through the key map it is given: Ask
+    /// rebound to Q asks on Q held and no longer on the left Option.
+    #[test]
+    fn a_rebound_ask_asks_on_its_new_key_alone() {
+        use crate::keymap::{Bindings, KeyCombo, RaceCommand, SharedBindings};
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(RaceCommand::Ask, KeyCombo::key(Key::KeyQ)),
+        );
+        let mut screen = open().with_bindings(bindings);
+        screen.input(&key(Key::AltLeft, true, false));
+        click(&mut screen, racer_item(1));
+        assert!(
+            screen.quantity().is_none(),
+            "the left Option no longer asks"
+        );
+        assert_eq!(screen.take_bet(), Some((1, Bet::House)));
+        screen.input(&key(Key::AltLeft, false, false));
+        screen.input(&key(Key::KeyQ, true, false));
+        click(&mut screen, racer_item(2));
+        assert!(screen.quantity().is_some(), "Q asks");
+    }
+
     #[test]
     fn an_asked_count_over_the_most_beeps_through_the_race() {
         let mut screen = RaceScreen::new(
@@ -837,7 +1056,7 @@ mod tests {
             ButtonStyle::STOCK,
             5,
         );
-        screen.input(&key(Key::Alt, true, false));
+        screen.input(&key(Key::AltLeft, true, false));
         click(&mut screen, racer_item(0));
         let _ = screen.take_sounds();
         screen.input(&Input::Text('9'));
@@ -852,7 +1071,7 @@ mod tests {
     #[test]
     fn letting_go_of_the_keys_lets_go_of_alt() {
         let mut screen = open();
-        screen.input(&key(Key::Alt, true, false));
+        screen.input(&key(Key::AltLeft, true, false));
         screen.release_keys();
         click(&mut screen, racer_item(0));
         assert!(screen.quantity().is_none(), "no ask");
@@ -878,7 +1097,7 @@ mod tests {
     #[test]
     fn an_asked_cancel_bets_nothing_and_lets_the_racer_go() {
         let mut screen = open();
-        screen.input(&key(Key::Alt, true, false));
+        screen.input(&key(Key::AltLeft, true, false));
         click(&mut screen, racer_item(0));
         click_quantity(&mut screen, CANCEL_ITEM);
         assert_eq!(screen.take_bet(), None);
@@ -892,7 +1111,7 @@ mod tests {
         let _ = screen.take_bet();
         screen.show_result(0, 4_000);
         screen.reveal();
-        screen.input(&key(Key::Alt, true, false));
+        screen.input(&key(Key::AltLeft, true, false));
         click(&mut screen, racer_item(2));
         assert!(screen.quantity().is_some(), "asked");
         click_quantity(&mut screen, OK_ITEM);
@@ -908,7 +1127,7 @@ mod tests {
         screen.show_result(1, 70);
         screen.reveal();
         click(&mut screen, racer_item(0));
-        screen.input(&key(Key::Alt, true, false));
+        screen.input(&key(Key::AltLeft, true, false));
         click(&mut screen, racer_item(0));
         let field = screen
             .quantity()
@@ -926,7 +1145,7 @@ mod tests {
         screen.reveal();
         screen.winnings_collected(4_000);
         click(&mut screen, racer_item(0));
-        screen.input(&key(Key::Alt, true, false));
+        screen.input(&key(Key::AltLeft, true, false));
         click(&mut screen, racer_item(0));
         let field = screen
             .quantity()
@@ -960,7 +1179,7 @@ mod tests {
         let mut screen = open();
         click(&mut screen, LEAVE_ITEM);
         assert!(screen.closed());
-        for leave in [Key::Enter, Key::Escape] {
+        for leave in [Key::Enter, Key::NumpadEnter, Key::Escape] {
             let mut screen = open();
             screen.input(&key(leave, true, true));
             assert!(!screen.closed(), "{leave:?} repeating");
@@ -973,11 +1192,11 @@ mod tests {
     fn the_bars_keys_do_nothing_in_the_race() {
         let mut screen = open();
         for pressed in [
-            Key::Char('g'),
-            Key::Char('r'),
-            crate::flight::view::MAP_KEY,
-            crate::ui::mission_info::MISSION_INFO_KEY,
-            crate::ui::player_info::PLAYER_INFO_KEY,
+            Key::KeyG,
+            Key::KeyR,
+            crate::Key::KeyM,
+            crate::keymap::test_keys::MISSION_INFO_KEY,
+            crate::keymap::test_keys::PLAYER_INFO_KEY,
         ] {
             screen.input(&key(pressed, true, false));
         }
@@ -989,15 +1208,42 @@ mod tests {
 
     #[test]
     fn without_its_dialog_it_says_why_and_return_or_escape_leaves() {
-        for leave in [Key::Enter, Key::Escape] {
+        for leave in [Key::Enter, Key::NumpadEnter, Key::Escape] {
             let mut screen =
                 RaceScreen::new(Err("no DLOG 1023".to_owned()), None, ButtonStyle::STOCK, 5);
             assert_eq!(screen.problem(), Some("no DLOG 1023"));
             assert!(texts(&screen)[0].contains("no DLOG 1023"));
-            screen.input(&key(Key::Char('g'), true, false));
+            screen.input(&key(Key::KeyG, true, false));
             assert!(!screen.closed());
             screen.input(&key(leave, true, false));
             assert!(screen.closed(), "{leave:?}");
         }
+    }
+
+    #[test]
+    fn without_its_dialog_it_names_the_keys_bound_to_leave_it() {
+        use crate::keymap::{Bindings, KeyCombo};
+        let screen = RaceScreen::new(Err("no DLOG 1023".to_owned()), None, ButtonStyle::STOCK, 5)
+            .with_bindings(SharedBindings::new(
+                Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyQ)),
+            ));
+        assert_eq!(
+            texts(&screen),
+            ["Cannot show the race: no DLOG 1023. Press Q or Escape to leave it."]
+        );
+    }
+
+    #[test]
+    fn without_its_dialog_it_names_the_buttons_with_a_pad_last_used() {
+        use crate::input::{ControllerFamily, Device, Surroundings};
+        let mut screen =
+            RaceScreen::new(Err("no DLOG 1023".to_owned()), None, ButtonStyle::STOCK, 5);
+        screen.input(&Input::Surroundings(Surroundings::of(Device::Gamepad(
+            ControllerFamily::Generic,
+        ))));
+        assert_eq!(
+            texts(&screen),
+            ["Cannot show the race: no DLOG 1023. Press South or East to leave it."]
+        );
     }
 }

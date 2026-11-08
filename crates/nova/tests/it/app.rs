@@ -360,7 +360,7 @@ fn clicks_in_fullscreen_land_where_they_land_in_a_window_and_the_bars_take_none(
 
     harness.send_all([
         WindowEvent::Key {
-            key: Key::Alt,
+            key: Key::AltLeft,
             pressed: true,
             repeat: false,
         },
@@ -473,7 +473,7 @@ fn session_on_os(
 #[test]
 fn a_game_quit_fullscreen_opens_fullscreen_and_one_quit_windowed_opens_windowed() {
     let store = MemorySettings::new();
-    let f11 = press(Key::Function(11));
+    let f11 = press(Key::F11);
     assert_eq!(
         session(&store, &f11),
         [BORDERLESS],
@@ -584,7 +584,7 @@ fn an_exclusive_mode_reopens_falls_back_when_gone_and_survives_a_windowed_launch
         modes: vec![qhd, fhd()],
         name: Some("DELL U2720Q"),
     };
-    let f11 = press(Key::Function(11));
+    let f11 = press(Key::F11);
     assert_eq!(
         session_on(&store, &dell, &f11),
         (vec![exclusive, None], vec![]),

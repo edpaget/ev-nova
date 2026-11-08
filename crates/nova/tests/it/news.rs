@@ -469,7 +469,7 @@ impl Game {
     /// Lands at the pad: L requests clearance, the dock approach clears
     /// it, and a second L lands.
     fn land(&mut self) {
-        self.tap(Key::Char('l'));
+        self.tap(Key::KeyL);
         self.settle();
         self.settle_until("the dock approach's clearance", |game| {
             game.app
@@ -478,7 +478,7 @@ impl Game {
                 .and_then(|flight| flight.session().ok())
                 .is_some_and(nova_sim::Session::dock_cleared)
         });
-        self.tap(Key::Char('l'));
+        self.tap(Key::KeyL);
         assert_eq!(self.showing(), Showing::Spaceport);
     }
 
@@ -531,7 +531,7 @@ fn n_in_the_bar_opens_the_news_drawn_by_the_routers_chance_and_escape_closes_it(
     game.land();
     game.dial.set(1);
     game.open_bar();
-    game.tap(Key::Char('n'));
+    game.tap(Key::KeyN);
     assert!(game.reading());
     let shown = texts(&game.frame()).join(" ");
     assert!(shown.contains(COMMERCIALS[1]), "the dial's draw: {shown}");
@@ -581,7 +581,7 @@ fn the_news_picture_the_game_data_holds_reaches_the_gpu() {
     let mut game = Game::flying_at(128);
     game.land();
     game.open_bar();
-    game.tap(Key::Char('n'));
+    game.tap(Key::KeyN);
     let frame = game.frame();
     assert!(news_backdrop(&game, &frame).is_some());
 }

@@ -52,6 +52,9 @@
 //!   graphics, scrolling text) and modal dialogs laid out from the
 //!   interface file's `DLOG`/`DITL`s, such as the "Desc Dialog"
 //!   ([`ui::DescDialog`]).
+//! - [`text_entry`]: what a focused text field asks of the platform's
+//!   text entry ([`EntryAsk`], a field of the frame), and who enters the
+//!   text for the device used last ([`EntryMode`]).
 //!
 //! # Sounds
 //!
@@ -74,6 +77,7 @@
 //! - [`devtools`]: the developer tools overlay's model, which `nova`
 //!   draws with egui only in its `dev-tools` build.
 
+pub mod bound_names;
 pub mod box_cut;
 pub mod color;
 pub mod colorize;
@@ -87,6 +91,8 @@ pub mod galaxy;
 pub mod geometry;
 pub mod image;
 pub mod input;
+pub mod key_names;
+pub mod keymap;
 pub mod menu;
 pub mod menu_command;
 pub mod movie;
@@ -104,7 +110,9 @@ pub mod spaceport;
 pub mod system;
 pub mod target_picture;
 pub mod text;
+pub mod text_entry;
 mod time;
+pub mod touch;
 pub mod ui;
 mod ui_sound_cue;
 pub mod upscaler;
@@ -117,7 +125,16 @@ pub use draw::{Blend, DrawCommand, DrawLayer, DrawList};
 pub use font::Font;
 pub use geometry::Point;
 pub use image::{ImageKey, ImageKind};
-pub use input::{Input, Key, MouseButton, ScrollDelta};
+pub use input::{
+    COMMAND_KEYS, CONTROL_KEYS, ControllerFamily, Device, FingerId, Input, Key, ModifierHeld,
+    MouseButton, OPTION_KEYS, PadAxis, PadButton, Pinch, SHIFT_KEYS, ScrollDelta, Surroundings,
+    Touch, TouchControl, TouchPhase, key_letter, letter_key,
+};
+pub use key_names::{KeyNames, NoKeyNames, combo_name, key_name};
+pub use keymap::{
+    Bindings, Command, CommandInput, CommandReader, Context, KeyCombo, KeyMap, Modifiers,
+    SharedBindings,
+};
 pub use menu_command::MenuCommand;
 pub use movie_frame::{MovieFrame, MovieScreen, StreamId};
 pub use navigator::Navigator;
@@ -126,6 +143,7 @@ pub use scaling::{Enlargement, Scaling};
 pub use screen::{Diagnostic, Screen, ScreenAction, Showing};
 pub use sheet_image::SheetImage;
 pub use sound::{CombatSound, Sound, SoundPrefs, UiSound};
+pub use text_entry::{EntryAsk, EntryMode};
 pub use upscaler::Upscaler;
 pub use video_mode::{FullscreenKind, MonitorMode, VideoMode, listed_modes};
 pub use view_shape::ViewShape;

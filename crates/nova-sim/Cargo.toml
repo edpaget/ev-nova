@@ -63,7 +63,8 @@ nova-sim-combat = { workspace = true, features = ["fixture"] }
 # `cache_odds` and `take_pirate_events`.
 nova-sim-ai = { workspace = true, features = ["fixture"] }
 # The story layer's test support: `mission::fixture::carrying`, which
-# `testkit` re-exports.
+# `testkit` re-exports, and the dialog port's fake the conversation tests
+# open.
 nova-sim-story = { workspace = true, features = ["fixture"] }
 # This crate's own `fixture` module, for its integration tests under
 # `tests/`, which build the library without `cfg(test)`: the storyline
@@ -76,9 +77,15 @@ nova-sim = { workspace = true, features = ["fixture"] }
 # tests and this crate's `tests/`. It re-exports the catalog's
 # `listed_stellars`, `list_also` and `bits_allowing`, so it turns on the
 # catalog's `fixture` too; the AI's, whose `Traffic` setters build the
-# berths a traffic hands on; and nova-sim-base's, whose `Chance` contract
-# it re-exports as `fixture::chance`.
-fixture = ["nova-sim-base/fixture", "nova-sim-catalog/fixture", "nova-sim-ai/fixture"]
+# berths a traffic hands on; nova-sim-base's, whose `Chance` contract
+# it re-exports as `fixture::chance`; and the story layer's, whose dialog
+# fake (`dialog::fake`) the game's router tests hand a session.
+fixture = [
+    "nova-sim-base/fixture",
+    "nova-sim-catalog/fixture",
+    "nova-sim-ai/fixture",
+    "nova-sim-story/fixture",
+]
 
 [lints]
 workspace = true

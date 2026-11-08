@@ -1,0 +1,104 @@
+/fixture/EV Nova:
+Load command 0
+      cmd LC_SEGMENT
+  cmdsize 56
+  segname __PAGEZERO
+   vmaddr 0x00000000
+   vmsize 0x00001000
+  fileoff 0
+ filesize 0
+  maxprot 0x00000000
+ initprot 0x00000000
+   nsects 0
+    flags 0x0
+Load command 1
+      cmd LC_SEGMENT
+  cmdsize 260
+  segname __TEXT
+   vmaddr 0x00001000
+   vmsize 0x000dd000
+  fileoff 0
+ filesize 905216
+  maxprot 0x00000007
+ initprot 0x00000005
+   nsects 3
+    flags 0x0
+Section
+  sectname __text
+   segname __TEXT
+      addr 0x00003000
+      size 0x000000a2
+    offset 8192
+     align 2^4 (16)
+    reloff 0
+    nreloc 0
+     flags 0x00000000
+ reserved1 0
+ reserved2 0
+Section
+  sectname __cstring
+   segname __TEXT
+      addr 0x000d8200
+      size 0x00000060
+    offset 880000
+     align 2^4 (16)
+    reloff 0
+    nreloc 0
+     flags 0x00000000
+ reserved1 0
+ reserved2 0
+Section
+  sectname __const
+   segname __TEXT
+      addr 0x000dd060
+      size 0x00000008
+    offset 901184
+     align 2^4 (16)
+    reloff 0
+    nreloc 0
+     flags 0x00000000
+ reserved1 0
+ reserved2 0
+Load command 2
+      cmd LC_SEGMENT
+  cmdsize 260
+  segname __DATA
+   vmaddr 0x000dd068
+   vmsize 0x002d6000
+  fileoff 905216
+ filesize 8192
+  maxprot 0x00000007
+ initprot 0x00000003
+   nsects 2
+    flags 0x0
+Section
+  sectname __cfstring
+   segname __DATA
+      addr 0x000dd068
+      size 0x00000008
+    offset 905224
+     align 2^4 (16)
+    reloff 0
+    nreloc 0
+     flags 0x00000000
+ reserved1 0
+ reserved2 0
+Section
+  sectname __data
+   segname __DATA
+      addr 0x000dd070
+      size 0x000a97b8
+    offset 905232
+     align 2^4 (16)
+    reloff 0
+    nreloc 0
+     flags 0x00000000
+ reserved1 0
+ reserved2 0
+Load command 3
+     cmd LC_SYMTAB
+ cmdsize 24
+  symoff 1000000
+   nsyms 12
+  stroff 1100000
+ strsize 400

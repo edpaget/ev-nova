@@ -91,6 +91,7 @@ use crate::flight::radar::RadarScene;
 use crate::flight::rescue_screen::{FirstText, Repaint, RescueScreen, RescueStage};
 use crate::flight::sim_port::FlightSim;
 use crate::input::Input;
+use crate::keymap::Context;
 use crate::system::catalog::SystemCatalog;
 use crate::system::scene;
 use crate::{Color, DrawList, Key};
@@ -98,22 +99,6 @@ use crate::{Color, DrawList, Key};
 use super::cockpit::BarParts;
 use super::world::message_background;
 use super::{FlightView, radar_ships};
-
-/// Whether flight drops `input` when the rescue hands it back at its end:
-/// a key flight reads ([`every_key`](super::every_key)), pressed, repeated
-/// or let go. The rescue leaves by `jmp 0x71113` (@0x692ce) for the pass
-/// loop, where `_IterateInGameEventLoop` drops every queued key-down
-/// without Command (@0x56a6b, @0x56cec) and `_HandlePlayer` polls the keys
-/// live; one still down comes back through the hand-back
-/// ([`FlightView::take_back_live_input`]). Option, Command and Shift stay,
-/// for the router's chords, which the hand-back sets anyway, and so do the
-/// keys flight doesn't read (Escape, Caps Lock, the menu chords'
-/// characters), which the router acts on.
-fn flight_drops(input: &Input) -> bool {
-    matches!(*input, Input::Key { key, .. }
-        if !matches!(key, Key::Alt | Key::Command | Key::Shift)
-            && super::every_key().any(|flight| flight == key))
-}
 
 /// What the rescue keeps of the frame the pod showed last
 /// ([`FlightView::pod_frame`]).
@@ -253,8 +238,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
             hud::or_message_background(&mut list, self.view, background);
             hud::draw_message_text(&mut list, message, self.view, metrics);
         }
-        self.escort_menu
-            .draw(&mut list, self.menu_rows(rows), self.escort_colors, metrics);
+        self.escort_menu.draw(
+            &mut list,
+            self.menu_rows(rows),
+            self.escort_colors,
+            metrics,
+            &self.keys,
+        );
         list
     }
 
@@ -377,6 +367,40 @@ impl<C, S: FlightSim> FlightView<C, S> {
         std::mem::take(&mut self.rescue_replay)
     }
 
+    /// Whether flight drops `input` when the rescue hands it back at its
+    /// end: a key or pad button bound to a command flight reads (its own,
+    /// the escort menu's or the shared play keys'), pressed, repeated or
+    /// let go. The rescue leaves by `jmp 0x71113` (@0x692ce) for the pass
+    /// loop, where `_IterateInGameEventLoop` drops every queued key-down
+    /// without Command (@0x56a6b, @0x56cec) and `_HandlePlayer` polls the
+    /// keys live; one still down comes back through the hand-back
+    /// ([`FlightView::take_back_live_input`]). Option, Command and Shift
+    /// stay, for the router's chords, which the hand-back sets anyway, and
+    /// so do the keys flight doesn't read (Escape, Caps Lock's double
+    /// time, Pause, the menu chords' characters), which the router acts
+    /// on.
+    fn flight_drops(&self, input: &Input) -> bool {
+        if let Input::Key {
+            key:
+                Key::AltLeft
+                | Key::AltRight
+                | Key::MetaLeft
+                | Key::MetaRight
+                | Key::ShiftLeft
+                | Key::ShiftRight,
+            ..
+        } = *input
+        {
+            return false;
+        }
+        self.keys.bound_to(input).iter().any(|command| {
+            matches!(
+                command.context(),
+                Context::Flight | Context::EscortMenu | Context::Play
+            )
+        })
+    }
+
     /// Whether the rescue shows the system's pointer.
     pub(super) fn rescue_shows_pointer(&self) -> bool {
         self.rescue
@@ -426,7 +450,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
         if entered.contains(&RescueStage::Done) {
             // Every stage that hands back stops its tick, so all of it
             // came back at the end, for flight.
-            replay.retain(|input| !flight_drops(input));
+            replay.retain(|input| !self.flight_drops(input));
         }
         self.rescue_replay.extend(replay);
         for stage in entered {

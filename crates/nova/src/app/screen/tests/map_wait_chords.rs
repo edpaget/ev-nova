@@ -1,7 +1,7 @@
 use super::held_press_chords::{chord, command, preferences_state};
 use super::map_wait_keys::{
     end_the_wait, game_data_fork_loaded, offer_map_waiting, offered_over_flight, start_the_wait,
-    tap,
+    tap, type_tap,
 };
 use super::*;
 
@@ -94,7 +94,7 @@ fn command_let_go_before_the_close_still_makes_the_chord() {
 #[test]
 fn keys_before_the_chord_go_to_the_screen_and_after_it_to_the_preferences() {
     let mut screen = offer_map_waiting();
-    tap(&mut screen, Key::Char('n'));
+    type_tap(&mut screen, Key::KeyN);
     command_comma(&mut screen);
     tap(&mut screen, Key::Tab);
     end_the_wait(&mut screen);
@@ -102,7 +102,7 @@ fn keys_before_the_chord_go_to_the_screen_and_after_it_to_the_preferences() {
     assert!(screen.preferences().is_some(), "then opened");
 
     let mut typed = offered_over_flight();
-    tap(&mut typed, Key::Char('n'));
+    type_tap(&mut typed, Key::KeyN);
     command_comma(&mut typed);
     tap(&mut typed, Key::Tab);
     assert_eq!(
@@ -117,7 +117,7 @@ fn a_key_before_the_chord_that_opens_a_flushing_screen_drops_it() {
     let store = MemoryPilots::new();
     let mut screen = landed_at_venues(&store, game_data_fork_loaded());
     start_the_wait(&mut screen);
-    tap(&mut screen, Key::Char('b'));
+    tap(&mut screen, Key::KeyB);
     command_comma(&mut screen);
     end_the_wait(&mut screen);
     assert!(spaceport(&screen).open_bar().is_some(), "the bar opened");
@@ -132,7 +132,7 @@ fn command_q_during_a_maps_wait_quits_at_ms_release() {
     let mut screen = with_dialogs(data());
     land(&mut screen);
     start_the_wait(&mut screen);
-    assert_eq!(chord(&mut screen, Key::Char('q')), [ScreenAction::None; 3]);
+    assert_eq!(chord(&mut screen, Key::KeyQ), [ScreenAction::None; 3]);
     screen.input(&command(false));
     assert!(!screen.take_quit(), "not at the chord");
     assert!(flight(&screen).map_waiting(), "still waiting");

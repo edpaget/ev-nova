@@ -82,12 +82,19 @@ use nova_view::ui::Dialog;
 use nova_view::ui::comm::{CLOSE_ITEM, COMM_DIALOG, HAGGLE_DIALOG, LOWER_ITEM};
 use nova_view::ui::new_pilot::{NAME_TAKEN, NEW_PILOT_DIALOG};
 use nova_view::ui::note::{LOAD_FALLBACK_NOTE, NOTE_DIALOG};
-use nova_view::ui::player_info::{PLAYER_INFO_KEY, PlayerInfoButton, Tab};
+use nova_view::ui::player_info::{PlayerInfoButton, Tab};
 use nova_view::ui::plunder::{
     ASSIGNMENT_DIALOG, ESCORT_ITEM, MY_SHIP_ITEM, PLUNDER_DIALOG, PLUNDER_PICTURE,
 };
 use std::cell::RefCell;
 use std::collections::VecDeque;
+
+/// Player Info's default key, as the tests press it (the key map's
+/// default, pinned in nova-view).
+const PLAYER_INFO_KEY: Key = Key::KeyP;
+
+/// Mission Info's default key, as the tests press it.
+const MISSION_INFO_KEY: Key = Key::KeyI;
 
 mod about_movies;
 mod appear;
@@ -95,6 +102,8 @@ mod background;
 mod capture_naming;
 mod christening;
 mod close_waits;
+mod conversation;
+mod covered_aids;
 mod death;
 mod desc_load_order;
 mod dialog_maps;
@@ -107,6 +116,7 @@ mod game;
 mod held_press_chords;
 mod info_dialog_gain;
 mod jump_white;
+mod keys_screen;
 mod landing_texts_after_movie;
 mod launch;
 mod live_keys;
@@ -118,12 +128,19 @@ mod menu_commands;
 mod missions;
 mod new_pilot;
 mod overlays;
+mod pad_live_keys;
+mod pad_map;
 mod planet_comm;
 mod port;
 mod quit_question;
+mod rebinding;
 mod ship_movies;
 mod shop_text_movies;
 mod stellar_movies;
+mod surroundings;
+mod text_entry_covers;
+mod touch_controls;
+mod touch_map;
 mod wheel;
 mod widescreen;
 
@@ -691,11 +708,11 @@ fn a_held_tab_reaches_neither_screen() {
 #[test]
 fn held_keys_reach_the_screen_shown() {
     let mut screen = AppScreen::new(data());
-    screen.input(&held(Key::Right));
+    screen.input(&held(Key::ArrowRight));
     assert_eq!(screen.ship_browser().selected(), Some(ShipId(129)));
     screen.input(&key(Key::Tab, true));
     let fitted = *screen.galaxy_map().view().expect("the viewer");
-    screen.input(&held(Key::Right));
+    screen.input(&held(Key::ArrowRight));
     assert_ne!(
         *screen.galaxy_map().view().expect("the viewer"),
         fitted,
@@ -707,7 +724,10 @@ fn held_keys_reach_the_screen_shown() {
 fn keys_reach_only_the_screen_shown() {
     let mut screen = AppScreen::new(data());
     let fitted = *screen.galaxy_map().view().expect("the viewer");
-    assert_eq!(screen.input(&key(Key::Right, true)), ScreenAction::None);
+    assert_eq!(
+        screen.input(&key(Key::ArrowRight, true)),
+        ScreenAction::None
+    );
     assert_eq!(screen.ship_browser().selected(), Some(ShipId(129)));
     assert_eq!(
         *screen.galaxy_map().view().expect("the viewer"),
@@ -716,7 +736,7 @@ fn keys_reach_only_the_screen_shown() {
     );
 
     screen.input(&key(Key::Tab, true));
-    screen.input(&key(Key::Right, true));
+    screen.input(&key(Key::ArrowRight, true));
     assert_ne!(
         *screen.galaxy_map().view().expect("the viewer"),
         fitted,
@@ -728,10 +748,10 @@ fn keys_reach_only_the_screen_shown() {
 #[test]
 fn each_screen_keeps_its_state_across_a_round_trip() {
     let mut screen = AppScreen::new(data());
-    screen.input(&key(Key::Right, true));
+    screen.input(&key(Key::ArrowRight, true));
     screen.input(&key(Key::Tab, true));
     click_system(&mut screen, 129);
-    screen.input(&key(Key::Char('='), true));
+    screen.input(&key(Key::Equal, true));
     let (view, selected) = (
         *screen.galaxy_map().view().expect("the viewer"),
         screen.galaxy_map().selected(),
@@ -857,9 +877,9 @@ fn escape_goes_back_to_the_map_then_quits() {
 fn tab_from_a_system_goes_to_the_ships_and_back_to_it_as_it_was() {
     let mut screen = AppScreen::new(data());
     enter(&mut screen, 128);
-    screen.input(&key(Key::Right, true));
+    screen.input(&key(Key::ArrowRight, true));
     screen.tick(Duration::from_millis(250));
-    screen.input(&key(Key::Right, false));
+    screen.input(&key(Key::ArrowRight, false));
     let moved = camera(&screen);
     assert_eq!(moved, Point::new(240.0, 0.0));
 
@@ -875,10 +895,10 @@ fn tab_from_a_system_goes_to_the_ships_and_back_to_it_as_it_was() {
 fn a_tab_switch_lets_go_of_the_keys_held_in_a_system() {
     let mut screen = AppScreen::new(data());
     enter(&mut screen, 128);
-    screen.input(&key(Key::Down, true));
+    screen.input(&key(Key::ArrowDown, true));
     screen.input(&key(Key::Tab, true));
     // Down's release goes to the ship browser.
-    screen.input(&key(Key::Down, false));
+    screen.input(&key(Key::ArrowDown, false));
     screen.input(&key(Key::Tab, true));
     screen.tick(Duration::from_millis(250));
     assert_eq!(camera(&screen), Point::new(0.0, 0.0), "no drift");
@@ -888,7 +908,7 @@ fn a_tab_switch_lets_go_of_the_keys_held_in_a_system() {
 fn releasing_the_keys_reaches_the_screen_shown() {
     let mut screen = AppScreen::new(data());
     enter(&mut screen, 128);
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     screen.release_keys();
     screen.tick(Duration::from_millis(250));
     assert_eq!(camera(&screen), Point::new(0.0, 0.0));
@@ -949,6 +969,14 @@ fn only_the_screen_shown_ticks() {
     assert_eq!(screen.ship_browser().frame(), Some(3));
 }
 
+/// The router's hints under the default keys and a US layout: over the
+/// ships and the map with dialogs and without, and over the main menu
+/// with and without.
+const HINT: &str = "Tab: ships / galaxy map   F: fly   I: about   P: preferences";
+const HINT_WITHOUT_DIALOGS: &str = "Tab: ships / galaxy map   F: fly";
+const MENU_HINT: &str = "Tab: ships / galaxy map   I: about   P: preferences";
+const MENU_HINT_WITHOUT_DIALOGS: &str = "Tab: ships / galaxy map";
+
 /// The hint line of a router with no dialogs.
 fn hint() -> DrawCommand {
     DrawCommand::Text {
@@ -992,7 +1020,7 @@ fn it_draws_the_screen_shown_then_the_hint() {
 
 /// Enters flight with an F press and checks it shows.
 fn fly(screen: &mut AppScreen) {
-    assert_eq!(screen.input(&key(Key::Char('f'), true)), ScreenAction::None);
+    assert_eq!(screen.input(&key(Key::KeyF, true)), ScreenAction::None);
     assert_eq!(screen.showing(), Showing::Flight);
 }
 
@@ -1011,7 +1039,7 @@ fn ship(screen: &AppScreen) -> nova_sim::ShipState {
 
 const TICK: Duration = nova_sim::TICK;
 
-const MAP: Key = Key::Char('m');
+const MAP: Key = Key::KeyM;
 
 // The About dialog.
 
@@ -1232,7 +1260,7 @@ fn with_dialogs(data: Rc<GameData>) -> AppScreen {
 }
 
 fn open_about(screen: &mut AppScreen) {
-    assert_eq!(screen.input(&key(Key::Char('i'), true)), ScreenAction::None);
+    assert_eq!(screen.input(&key(Key::KeyI, true)), ScreenAction::None);
     assert_eq!(screen.showing(), Showing::About);
 }
 
@@ -1258,7 +1286,7 @@ fn spaceport_template() -> DialogTemplate {
     }
 }
 
-const LAND: Key = Key::Char('l');
+const LAND: Key = Key::KeyL;
 
 /// Presses L twice in flight: the first requests clearance, a tick
 /// lets the dock approach clear it, and the second lands.
@@ -1307,17 +1335,17 @@ fn halted() -> Sound {
 
 // The Preferences dialog.
 
-const PREFS: Key = Key::Char('p');
+const PREFS: Key = Key::KeyP;
 
 /// Presses Command+comma, letting go of Command once it is done.
 fn command_comma(screen: &mut AppScreen) {
-    screen.input(&key(Key::Command, true));
+    screen.input(&key(Key::MetaLeft, true));
     assert_eq!(
         screen.input(&key(PREFERENCES_KEY, true)),
         ScreenAction::None
     );
     screen.input(&key(PREFERENCES_KEY, false));
-    screen.input(&key(Key::Command, false));
+    screen.input(&key(Key::MetaLeft, false));
 }
 
 /// Opens the Preferences as the player does on the side shown: P on
@@ -1513,7 +1541,7 @@ pub(crate) fn through_entry(screen: &mut AppScreen) {
             return;
         }
         let tap = match screen.showing() {
-            Showing::Intro => Some(nova_view::menu::intro::SKIP_KEY),
+            Showing::Intro => Some(nova_view::Key::Escape),
             Showing::IntroText => Some(Key::Enter),
             _ => None,
         };
@@ -1882,16 +1910,16 @@ fn landed_shipyard(store: &MemoryPilots) -> AppScreen {
 /// (`_DoShipyardDialog` @0x5e6d8-0x5e705, `_ShipyardFilter`
 /// @0x60734-0x607b7).
 fn select_first_ship(screen: &mut AppScreen) {
-    screen.input(&key(Key::Right, true));
-    screen.input(&key(Key::Right, false));
+    screen.input(&key(Key::ArrowRight, true));
+    screen.input(&key(Key::ArrowRight, false));
 }
 
 /// Selects the open outfitter's first cell, as Right picks it from none:
 /// by the engine the outfitter opens with nothing selected
 /// (`_DoOutfitDialog` @0x5bb19-0x5bb54, `_OutfitFilter` @0x583bd-0x58440).
 fn select_first_outfit(screen: &mut AppScreen) {
-    screen.input(&key(Key::Right, true));
-    screen.input(&key(Key::Right, false));
+    screen.input(&key(Key::ArrowRight, true));
+    screen.input(&key(Key::ArrowRight, false));
 }
 
 /// [`landed_shipyard`], on `data`.
@@ -1927,8 +1955,8 @@ fn hail(screen: &mut AppScreen) {
     screen.input(&key(Key::Tab, false));
     // Tab's beep, so a test hears only what follows.
     screen.take_sounds();
-    screen.input(&key(Key::Char('y'), true));
-    screen.input(&key(Key::Char('y'), false));
+    screen.input(&key(Key::KeyY, true));
+    screen.input(&key(Key::KeyY, false));
 }
 
 fn cash(screen: &AppScreen) -> i64 {

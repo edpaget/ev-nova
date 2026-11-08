@@ -233,6 +233,9 @@ fn fallback_template() -> DialogTemplate {
 }
 
 #[cfg(test)]
+pub(crate) use tests::{bet_pad_probe, pad_probe};
+
+#[cfg(test)]
 mod tests {
     use std::time::Duration;
 
@@ -304,6 +307,82 @@ mod tests {
         dialog_of(12, "Buy")
     }
 
+    /// Its row in the pad's every-screen table.
+    pub(crate) fn pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        Box::new(crate::ui::edit_dialog::EditProbe(dialog()))
+    }
+
+    /// The race's bet's row: the quantity dialog titled Bet.
+    pub(crate) fn bet_pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        Box::new(crate::ui::edit_dialog::EditProbe(dialog_of(
+            40,
+            nova_sim::gamble::BET,
+        )))
+    }
+
+    /// AC 2 of rdm:phase/key-bindings/phase-17-text-entry-port for the
+    /// exchange's and the outfitter's count, which share the dialog
+    /// titled Buy or Sell (`quantity_ask::Purpose`): it asks for the
+    /// system's entry as it opens with the keyboard, and from pad inputs
+    /// alone the on-screen keyboard types a count that OK confirms.
+    #[test]
+    fn the_pad_alone_types_a_count_and_confirms_it() {
+        use crate::text_entry::EntryAsk;
+        use crate::ui::edit_dialog::pad_entry::{asked_at_open, pad_types};
+        use crate::ui::entry_keyboard::KeyId;
+        for title in ["Buy", "Sell"] {
+            let mut dialog = dialog_of(12, title);
+            assert_eq!(
+                asked_at_open(&dialog),
+                Some(EntryAsk {
+                    field: dialog.field().rect(),
+                    focused: 1,
+                }),
+                "{title}: asks for text entry when it opens"
+            );
+            pad_types(&mut dialog, &[KeyId::Char('5'), KeyId::Done]);
+            assert_eq!(dialog.take_outcome(), Some(5), "{title}");
+        }
+    }
+
+    /// AC 2 for the race's bet: the dialog titled Bet.
+    #[test]
+    fn the_pad_alone_types_a_bet_and_confirms_it() {
+        use crate::text_entry::EntryAsk;
+        use crate::ui::edit_dialog::pad_entry::{asked_at_open, pad_types};
+        use crate::ui::entry_keyboard::KeyId;
+        let mut dialog = dialog_of(40, nova_sim::gamble::BET);
+        assert_eq!(
+            asked_at_open(&dialog),
+            Some(EntryAsk {
+                field: dialog.field().rect(),
+                focused: 1,
+            }),
+            "asks for text entry when it opens"
+        );
+        pad_types(
+            &mut dialog,
+            &[KeyId::Char('2'), KeyId::Char('5'), KeyId::Done],
+        );
+        assert_eq!(dialog.take_outcome(), Some(25));
+    }
+
+    /// The surroundings are no player input: the flush of the opening
+    /// key's character waits past them.
+    #[test]
+    fn the_surroundings_are_no_player_input() {
+        use crate::input::{ControllerFamily, Device, Surroundings};
+        let mut dialog = dialog();
+        let before = dialog.field().text().to_owned();
+        dialog.flush_typed_key();
+        dialog.input(&Input::Surroundings(Surroundings::of(Device::Gamepad(
+            ControllerFamily::Generic,
+        ))));
+        dialog.input(&Input::Text('7'));
+        assert_eq!(dialog.field().text(), before, "still flushed");
+        assert_eq!(dialog.take_outcome(), None);
+    }
+
     fn key(key: Key) -> Input {
         Input::Key {
             key,
@@ -315,7 +394,9 @@ mod tests {
     fn typed(dialog: &mut QuantityDialog, text: &str) {
         for c in text.chars() {
             // As the platform sends them: the key, then its character.
-            dialog.input(&key(Key::Char(c.to_ascii_lowercase())));
+            dialog.input(&key(
+                crate::input::letter_key(c).unwrap_or(Key::Unidentified)
+            ));
             dialog.input(&Input::Text(c));
         }
     }
@@ -433,6 +514,22 @@ mod tests {
         typed(&mut dialog, "7");
         dialog.input(&key(Key::Enter));
         assert_eq!(dialog.take_outcome(), Some(7));
+    }
+
+    /// The quantity dialog reads its keys through the key map it is
+    /// given: Confirm rebound to F6 confirms on F6 and no longer on Return.
+    #[test]
+    fn a_rebound_confirm_confirms_on_its_new_key_alone() {
+        let bindings =
+            crate::keymap::SharedBindings::new(crate::keymap::Bindings::default().rebound(
+                crate::keymap::UiCommand::Confirm,
+                crate::keymap::KeyCombo::key(Key::F6),
+            ));
+        let mut dialog = dialog().with_bindings(bindings);
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_outcome(), None, "Return no longer confirms");
+        dialog.input(&key(Key::F6));
+        assert_eq!(dialog.take_outcome(), Some(12));
     }
 
     #[test]
@@ -587,7 +684,7 @@ mod tests {
     }
 
     #[test]
-    fn it_draws_a_backdrop_the_dialog_and_the_field() {
+    fn it_draws_a_backdrop_the_dialog_and_the_field_and_asks_for_entry_at_it() {
         let dialog = dialog();
         let mut list = DrawList::new();
         dialog.draw(&mut list);
@@ -597,6 +694,10 @@ mod tests {
         outline(&mut expected, bounds, BORDER);
         dialog.dialog().draw(&mut expected);
         dialog.field().draw(&MonoMetrics, &mut expected);
+        expected.ask_text_entry(crate::text_entry::EntryAsk {
+            field: dialog.field().rect(),
+            focused: 1,
+        });
         assert_eq!(list, expected);
     }
 

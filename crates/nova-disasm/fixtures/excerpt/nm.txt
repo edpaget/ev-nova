@@ -1,0 +1,12 @@
+         U _SysBeep
+         U _errno
+00001000 A __mh_execute_header
+00003000 t _Alpha
+00003050 t _Beta
+00003080 t _Gamma
+000030a0 T _Delta
+000dd060 s _kScale
+000dd070 d _gTable
+00186820 s _otherStatic
+00231790 b _quickKeyCheckResult
+00231798 S _gLast

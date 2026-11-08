@@ -4,6 +4,7 @@
 use crate::draw::DrawList;
 use crate::geometry::{Bounds, Point};
 use crate::input::Input;
+use crate::keymap::{CommandInput, SharedBindings};
 use crate::video_mode::{FullscreenKind, VideoMode};
 
 use super::picker::Picker;
@@ -71,6 +72,30 @@ impl ModePicker {
         self.0.input(input)
     }
 
+    /// Steps it on the shared UI context's Up or Down ([`Picker::command`]).
+    pub fn command(&mut self, input: CommandInput) -> bool {
+        self.0.command(input)
+    }
+
+    /// The picker reading the keys sent straight to it through
+    /// `bindings`.
+    #[must_use]
+    pub fn with_bindings(self, bindings: SharedBindings) -> Self {
+        Self(self.0.with_bindings(bindings))
+    }
+
+    /// A pad button presses `arrow` as a click does, drawn pressed until
+    /// its release ([`Picker::press_keyed`]).
+    pub fn press_keyed(&mut self, arrow: Arrow) {
+        self.0.press_keyed(arrow);
+    }
+
+    /// The pad button's release: steps as a click on the arrow pressed
+    /// does ([`Picker::release_keyed`]); `true` when it changes.
+    pub fn release_keyed(&mut self) -> bool {
+        self.0.release_keyed()
+    }
+
     /// Abandons a click in progress without stepping.
     pub fn cancel_pointer(&mut self) {
         self.0.cancel_pointer();
@@ -91,6 +116,7 @@ mod tests {
     use crate::font::Font;
     use crate::image::ImageKey;
     use crate::input::{Key, MouseButton};
+    use crate::keymap::{Bindings, KeyCombo, UiCommand};
     use crate::ui::dialog::outline;
     use crate::ui::volume::{COLOR, TEXT_SIZE};
 
@@ -146,6 +172,17 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_keyed_press_on_an_arrow_steps_it_as_a_click_does() {
+        let mut picker = picker(FullscreenKind::Borderless);
+        picker.press_keyed(Arrow::Down);
+        assert!(picker.pressed(Arrow::Down));
+        assert_eq!(picker.selected(), FullscreenKind::Borderless);
+        assert!(picker.release_keyed());
+        assert_eq!(picker.selected(), exclusive(modes()[0]));
+        assert!(!picker.release_keyed());
+    }
+
     fn click(picker: &mut ModePicker, at: Point) -> bool {
         assert!(!picker.input(&button(true, at)), "a press never steps");
         picker.input(&button(false, at))
@@ -157,6 +194,27 @@ mod tests {
             pressed: true,
             repeat,
         }
+    }
+
+    /// The picker reads the keys sent to it through the key map it is
+    /// given: Down rebound to J steps it on J and no longer on the down
+    /// arrow, and a command steps it as its key does.
+    #[test]
+    fn a_rebound_down_steps_the_mode_on_its_new_key_alone() {
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Down, KeyCombo::key(Key::KeyJ)),
+        );
+        let mut picker = picker(FullscreenKind::Borderless).with_bindings(bindings);
+        assert!(!picker.input(&key(Key::ArrowDown, false)));
+        assert_eq!(picker.selected(), FullscreenKind::Borderless);
+        assert!(picker.input(&key(Key::KeyJ, false)));
+        assert_ne!(picker.selected(), FullscreenKind::Borderless);
+        assert!(picker.command(CommandInput {
+            command: UiCommand::Up.into(),
+            pressed: true,
+            repeat: true,
+        }));
+        assert_eq!(picker.selected(), FullscreenKind::Borderless);
     }
 
     fn drawn(picker: &ModePicker, focused: bool) -> Vec<DrawCommand> {
@@ -257,22 +315,22 @@ mod tests {
     fn up_and_down_step_it_repeats_included() {
         let [large, medium, _] = modes();
         let mut picker = picker(FullscreenKind::Borderless);
-        assert!(!picker.input(&key(Key::Up, false)));
-        assert!(picker.input(&key(Key::Down, false)));
-        assert!(picker.input(&key(Key::Down, true)));
+        assert!(!picker.input(&key(Key::ArrowUp, false)));
+        assert!(picker.input(&key(Key::ArrowDown, false)));
+        assert!(picker.input(&key(Key::ArrowDown, true)));
         assert_eq!(picker.selected(), exclusive(medium));
-        assert!(picker.input(&key(Key::Up, true)));
+        assert!(picker.input(&key(Key::ArrowUp, true)));
         assert_eq!(picker.selected(), exclusive(large));
         let release = Input::Key {
-            key: Key::Down,
+            key: Key::ArrowDown,
             pressed: false,
             repeat: false,
         };
         for other in [
             release,
             key(Key::Space, false),
-            key(Key::Left, false),
-            key(Key::Right, false),
+            key(Key::ArrowLeft, false),
+            key(Key::ArrowRight, false),
             key(Key::Enter, false),
             Input::Text('d'),
             Input::PointerLeft,

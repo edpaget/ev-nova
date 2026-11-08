@@ -134,6 +134,24 @@ pub fn turn(
     rule: PlayerTurn,
     gain: SpeedMult,
 ) -> (f32, Turn) {
+    turn_by(heading, rate, aim, keys, 1.0, rule, gain)
+}
+
+/// [`turn`], with the turn keys `keys` held `amount` of the way, 0 to 1:
+/// a stick's turn, which turns `amount` of the step × the gain in its
+/// way. The auto-turn turns its full step whatever the amount, as it
+/// holds the keys off. At 1 it is [`turn`] exactly, which the turn keys
+/// always are.
+#[must_use]
+pub fn turn_by(
+    heading: f32,
+    rate: f32,
+    aim: Option<i16>,
+    keys: Turn,
+    amount: f32,
+    rule: PlayerTurn,
+    gain: SpeedMult,
+) -> (f32, Turn) {
     let step = step_of(rate, rule);
     let way = match aim {
         Some(aim) if rule == PlayerTurn::Full => {
@@ -158,6 +176,7 @@ pub fn turn(
         Some(_) => Turn::None,
         None => keys,
     };
+    let step = if aim.is_none() { step * amount } else { step };
     let heading = match way {
         Turn::Left => normalized(gain.add_times(heading, -step)),
         Turn::Right => normalized(gain.add_times(heading, step)),
@@ -460,6 +479,73 @@ mod tests {
         assert_eq!(
             turn(90.0, 3.0, None, Turn::Right, WHOLE, none),
             (90.0, Turn::Right)
+        );
+    }
+
+    // A stick's turn amount.
+
+    #[test]
+    fn a_half_turn_turns_half_the_players_turn_step_times_the_gain() {
+        for (rule, rate) in [(WHOLE, 4.0), (WHOLE, 4.5), (FULL, 4.5)] {
+            let step = step_of(rate, rule);
+            for gain in [G, HALF, SpeedMult::new(0.3)] {
+                let half = gain.times(step) * 0.5;
+                let (right, way) = turn_by(90.0, rate, None, Turn::Right, 0.5, rule, gain);
+                assert!(
+                    (right - (90.0 + half)).abs() < 1e-4,
+                    "{rule:?} {rate} {gain:?}"
+                );
+                assert_eq!(way, Turn::Right);
+                let (left, way) = turn_by(90.0, rate, None, Turn::Left, 0.5, rule, gain);
+                assert!(
+                    (left - (90.0 - half)).abs() < 1e-4,
+                    "{rule:?} {rate} {gain:?}"
+                );
+                assert_eq!(way, Turn::Left);
+            }
+        }
+        // 4.5 is 4 whole degrees: half of that, not of 4.5.
+        assert_eq!(turn_by(90.0, 4.5, None, Turn::Right, 0.5, WHOLE, G).0, 92.0);
+    }
+
+    #[test]
+    fn a_full_turn_amount_turns_exactly_as_the_keys() {
+        for keys in [Turn::Left, Turn::Right, Turn::None] {
+            for aim in [None, Some(30), Some(300)] {
+                for rule in [WHOLE, FULL] {
+                    for gain in [G, HALF, SpeedMult::new(0.3)] {
+                        assert_eq!(
+                            turn_by(91.3, 2.5, aim, keys, 1.0, rule, gain),
+                            turn(91.3, 2.5, aim, keys, rule, gain)
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_turn_amount_of_none_leaves_the_heading() {
+        assert_eq!(
+            turn_by(90.0, 3.0, None, Turn::Right, 0.0, WHOLE, G),
+            (90.0, Turn::Right)
+        );
+    }
+
+    #[test]
+    fn the_auto_turn_holds_the_stick_off() {
+        for rule in [WHOLE, FULL] {
+            for keys in [Turn::Left, Turn::Right] {
+                assert_eq!(
+                    turn_by(0.0, 3.0, Some(90), keys, 0.5, rule, G),
+                    turn(0.0, 3.0, Some(90), Turn::None, rule, G),
+                    "a full step toward the aim, the stick held off"
+                );
+            }
+        }
+        assert_eq!(
+            turn_by(0.0, 3.0, Some(90), Turn::Left, 0.5, WHOLE, G).0,
+            3.0
         );
     }
 

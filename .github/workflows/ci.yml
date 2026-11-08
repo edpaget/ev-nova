@@ -68,9 +68,10 @@ jobs:
       # desktop-file-utils and appstream are the validators the Linux
       # desktop file and metainfo test runs (NOVA_LINUX_VALIDATORS below).
       # libclang-dev is for bindgen, which binds the FFmpeg nova-movie
-      # builds (third_party/ffmpeg-sys-next).
+      # builds (third_party/ffmpeg-sys-next). libudev-dev is for gilrs,
+      # nova's gamepads, which links libudev through pkg-config.
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config desktop-file-utils appstream libclang-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config desktop-file-utils appstream libclang-dev libudev-dev
       # FFmpeg's configure and make run in MSYS2 (preinstalled at
       # C:\msys64), with MSVC's compiler; bindgen uses the preinstalled
       # LLVM's libclang.
@@ -94,6 +95,18 @@ jobs:
         with:
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The FFmpeg source tarball ffmpeg-sys-next's build script keeps in
+      # $CARGO_HOME/nova-ffmpeg (third_party/ffmpeg-sys-next/build.rs, which
+      # checks its SHA-256 against third_party/ffmpeg-source.toml).
+      # rust-cache saves only Cargo's registry and git directories, so
+      # without this every job downloaded it from ffmpeg.org, which often
+      # resets or refuses the connection. Keyed on the record, so a new
+      # FFmpeg version is a new entry; it is saved from any ref because it is
+      # small (about 11 MB) and a branch only saves it while main has none.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/nova-ffmpeg
+          key: nova-ffmpeg-${{ runner.os }}-${{ hashFiles('third_party/ffmpeg-source.toml') }}
       # The Linux leg runs the desktop file and metainfo through the
       # validators it installed (crates/nova-bundle/tests/it/linux_desktop.rs);
       # elsewhere the value is empty and that test skips.
@@ -151,6 +164,11 @@ jobs:
         with:
           key: build-id
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The FFmpeg source tarball, as in ci.yml's `ci` job.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/nova-ffmpeg
+          key: nova-ffmpeg-${{ runner.os }}-${{ hashFiles('third_party/ffmpeg-source.toml') }}
       - id: build-id
         run: |
           set -euo pipefail
@@ -198,10 +216,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # xvfb gives the installed app's zenity a display for the test.
       # ostree is for the Flatpak repo test, which publishes this bundle
-      # into a repo of its own.
+      # into a repo of its own. flatpak and flatpak-builder come from the
+      # Flatpak PPA: the finish-args' --device=input (gilrs's gamepads)
+      # needs flatpak 1.15.6 or newer, and Ubuntu 24.04's 1.14 refuses it
+      # in build-finish ("Unknown device type input").
       - run: |
+          sudo add-apt-repository -y ppa:flatpak/stable
           sudo apt-get update
           sudo apt-get install -y flatpak flatpak-builder desktop-file-utils xvfb ostree
+          flatpak --version
+          flatpak-builder --version
       # Ubuntu 24.04 restricts unprivileged user namespaces through
       # AppArmor, which bubblewrap needs for every build and run sandbox.
       - name: Allow bubblewrap's user namespaces
@@ -221,6 +245,11 @@ jobs:
         with:
           key: flatpak
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The FFmpeg source tarball, as in ci.yml's `ci` job.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/nova-ffmpeg
+          key: nova-ffmpeg-${{ runner.os }}-${{ hashFiles('third_party/ffmpeg-source.toml') }}
       - name: Package (Flatpak)
         run: mise run flatpak -- dist
       # Installs the bundle with --user into a home the test owns, checks

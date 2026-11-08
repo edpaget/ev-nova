@@ -37,6 +37,20 @@
 //!   steps only in a tick and the close's tick steps none, so this
 //!   crosses no boundary the player sees. A held-polled key acts on the
 //!   first step.
+//! - The pad is noted beside the keys, as `Gamepad` state: each button
+//!   with the layer it went down under and whether that layer is still
+//!   held, and the stick axes, which the pad reports only when they move
+//!   (`PadInputs::route`), so flight's let-go would leave a stick held
+//!   still centred. Flight reads each button by its exact layer (the
+//!   `pad_hand_back` module of `nova_view::flight`). The pad has no
+//!   original, and one rule is its own: the press that closed the dialogs
+//!   is let go, not handed back. East closes the comm, planet comm,
+//!   escort and player info dialogs and the plain dialogs on its press,
+//!   and is Land in flight. That press is the last fresh press since
+//!   flight's input went away, if it was the pad's and is still down
+//!   ([`LiveKeys::pad_taken`]); the press that took the input away (Select
+//!   and West's hail) never is. A South that pressed a dialog's button did
+//!   so on its release, so it is up by then.
 //! - Only live input is noted, at [`Screen::input`](nova_view::Screen::input)
 //!   past the background's gate: the router's replays (a map's wait, a
 //!   movie's queue, the appear's and the menu's holds) went down or up
@@ -58,23 +72,32 @@
 //!
 //! [`FlightView::take_back_live_input`]: nova_view::flight::FlightView::take_back_live_input
 
-use std::collections::HashSet;
-
 use nova_view::flight::LiveKeys;
-use nova_view::{Input, Key, MouseButton};
+use nova_view::keymap::{Command, Gamepad, KeysDown, contexts};
+use nova_view::{CommandReader, Input, MouseButton, PadButton, SharedBindings};
 
 use super::{AppScreen, Side};
 
-/// The keys and the primary button physically down, as live input has
-/// told, the keys down at flight's last poll
-/// ([`LiveKeys::down_before`]), and whether flight's input was away when
-/// last settled.
+/// The keys, the primary button and the pad physically down, as live
+/// input has told, the keys and the pad down at flight's last poll
+/// ([`LiveKeys::down_before`], [`LiveKeys::pad_before`]), the last fresh
+/// press under the dialogs if it was the pad's, and whether flight's input
+/// was away when last settled.
 #[derive(Clone, Debug, Default)]
 pub(super) struct LiveInput {
-    keys: HashSet<Key>,
+    keys: KeysDown,
     button: bool,
     away: bool,
-    down_before: HashSet<Key>,
+    down_before: KeysDown,
+    /// The pad, each button with the layer it went down under, and its
+    /// sticks.
+    pad: Gamepad,
+    /// The pad at flight's last poll.
+    pad_before: Gamepad,
+    /// The pad button of the last fresh press since flight's input went
+    /// away, if that press was the pad's: what a dialog that closed on a
+    /// press took ([`LiveKeys::pad_taken`]).
+    pad_closing: Option<PadButton>,
 }
 
 /// Where flight's input is, for [`LiveInput::settle`].
@@ -92,37 +115,70 @@ pub(super) enum FlightInput {
 impl LiveInput {
     /// Notes what `input` puts down or lets up: a key, repeats as down,
     /// or the primary button; the pointer leaving lets the button go, as
-    /// its release won't come.
-    pub(super) fn note(&mut self, input: &Input) {
+    /// its release won't come. A pad button, its repeats as down, and its
+    /// stick axes are noted as `Gamepad` state through `bindings`' pad
+    /// table, each button with the layer it went down under and whether
+    /// that layer is still held, so flight reads each one by its exact
+    /// layer at the hand-back. A pad button's fresh press is noted as the
+    /// press a closing dialog may take ([`LiveKeys::pad_taken`]); a key's
+    /// or any pointer button's fresh press clears it, as then the last
+    /// press wasn't the pad's.
+    pub(super) fn note(&mut self, input: &Input, bindings: &SharedBindings) {
         match *input {
-            Input::Key { key, pressed, .. } => {
-                if pressed {
-                    self.keys.insert(key);
-                } else {
-                    self.keys.remove(&key);
+            Input::Key {
+                pressed, repeat, ..
+            } => {
+                self.keys.follow(input);
+                if pressed && !repeat {
+                    self.pad_closing = None;
                 }
             }
             Input::PointerButton {
-                button: MouseButton::Left,
-                pressed,
-                ..
-            } => self.button = pressed,
+                button, pressed, ..
+            } => {
+                if button == MouseButton::Left {
+                    self.button = pressed;
+                }
+                if pressed {
+                    self.pad_closing = None;
+                }
+            }
             Input::PointerLeft => self.button = false,
+            Input::PadButton {
+                button,
+                pressed,
+                repeat,
+            } => {
+                bindings.with(|b| self.pad.follow(input, &b.gamepad));
+                if pressed && !repeat {
+                    self.pad_closing = Some(button);
+                }
+            }
+            Input::PadAxis { .. } => {
+                bindings.with(|b| self.pad.follow(input, &b.gamepad));
+            }
             _ => {}
         }
     }
 
-    /// Whether `key` is physically down, as live input has told.
-    pub(super) fn is_down(&self, key: Key) -> bool {
-        self.keys.contains(&key)
+    /// Whether the keys physically down, as live input has told, hold
+    /// `command` of the shared play keys (`contexts::KEY_WAIT`'s list)
+    /// through `bindings`: a key a close waits on.
+    pub(super) fn holds(&self, command: impl Into<Command>, bindings: &SharedBindings) -> bool {
+        let mut reader = CommandReader::new(contexts::KEY_WAIT).with_bindings(bindings.clone());
+        for press in self.keys.presses() {
+            reader.follow(&press);
+        }
+        reader.held(command)
     }
 
     /// Forgets everything down: the input is lost, and the releases may
     /// never come. What was down at flight's last poll stays, as a
     /// latched key down then read its latch set, whatever happened after.
     pub(super) fn forget(&mut self) {
-        self.keys.clear();
+        self.keys.let_go();
         self.button = false;
+        self.pad.let_go();
     }
 
     /// Notes what is down as flight polls it: `_HandlePlayer` reads every
@@ -130,6 +186,7 @@ impl LiveInput {
     /// next close no site follows, until a poll sees it let go.
     pub(super) fn poll(&mut self) {
         self.down_before.clone_from(&self.keys);
+        self.pad_before.clone_from(&self.pad);
     }
 
     /// Takes where flight's input is `now`: whether it has just come back
@@ -137,19 +194,30 @@ impl LiveInput {
     /// into away doesn't join what the last poll read: of the latched
     /// keys pressed since, flight knows which it read on their press
     /// (`FlightView::take_back_live_input`), and the router passes the
-    /// physical state only.
+    /// physical state only. The step into away forgets the pad's last
+    /// press: the press that took flight's input away (Select and West's
+    /// hail) is no dialog's closing press.
     pub(super) fn settle(&mut self, now: FlightInput) -> bool {
         let back = self.away && now == FlightInput::Back;
-        self.away = now == FlightInput::Away;
+        let away = now == FlightInput::Away;
+        if away && !self.away {
+            self.pad_closing = None;
+        }
+        self.away = away;
         back
     }
 
-    /// What is down for flight to take back ([`LiveKeys`]).
+    /// What is down for flight to take back ([`LiveKeys`]), the pad's
+    /// last fresh press as the closing dialog's if it was the last press
+    /// and is still down.
     pub(super) fn taken(&self) -> LiveKeys {
         LiveKeys {
-            down: self.keys.iter().copied().collect(),
-            down_before: self.down_before.iter().copied().collect(),
+            down: self.keys.clone(),
+            down_before: self.down_before.clone(),
             button: self.button,
+            pad: self.pad.clone(),
+            pad_before: self.pad_before.clone(),
+            pad_taken: self.pad_closing.filter(|&button| self.pad.is_down(button)),
         }
     }
 }
@@ -221,6 +289,20 @@ impl AppScreen {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nova_view::keymap::Gamepad;
+    use nova_view::{Key, PadAxis, PadButton};
+
+    impl LiveInput {
+        /// Notes `input` through the default bindings.
+        fn note_key(&mut self, input: &Input) {
+            self.note(input, &SharedBindings::default());
+        }
+
+        /// Whether `key` is physically down, as live input has told.
+        fn is_down(&self, key: Key) -> bool {
+            self.keys.is_down(key)
+        }
+    }
 
     fn key(key: Key, pressed: bool) -> Input {
         Input::Key {
@@ -239,7 +321,7 @@ mod tests {
     }
 
     fn down(live: &LiveInput) -> Vec<Key> {
-        let mut keys: Vec<Key> = live.keys.iter().copied().collect();
+        let mut keys: Vec<Key> = live.keys.keys().collect();
         keys.sort_by_key(|key| format!("{key:?}"));
         keys
     }
@@ -265,55 +347,55 @@ mod tests {
     #[test]
     fn it_notes_keys_down_and_up_repeats_as_down() {
         let mut live = LiveInput::default();
-        live.note(&key(Key::Up, true));
-        live.note(&key(Key::Left, true));
-        live.note(&key(Key::Left, false));
-        live.note(&Input::Key {
-            key: Key::Right,
+        live.note_key(&key(Key::ArrowUp, true));
+        live.note_key(&key(Key::ArrowLeft, true));
+        live.note_key(&key(Key::ArrowLeft, false));
+        live.note_key(&Input::Key {
+            key: Key::ArrowRight,
             pressed: true,
             repeat: true,
         });
-        assert_eq!(down(&live), [Key::Right, Key::Up]);
+        assert_eq!(down(&live), [Key::ArrowRight, Key::ArrowUp]);
     }
 
     #[test]
     fn it_notes_the_primary_button_and_lets_it_go_as_the_pointer_leaves() {
         let mut live = LiveInput::default();
-        live.note(&button(true));
+        live.note_key(&button(true));
         assert!(live.button);
-        live.note(&Input::PointerButton {
+        live.note_key(&Input::PointerButton {
             button: MouseButton::Right,
             pressed: false,
             at: nova_view::Point::new(1.0, 2.0),
         });
         assert!(live.button, "another button");
-        live.note(&button(false));
+        live.note_key(&button(false));
         assert!(!live.button);
-        live.note(&button(true));
-        live.note(&Input::PointerLeft);
+        live.note_key(&button(true));
+        live.note_key(&Input::PointerLeft);
         assert!(!live.button, "its release won't come");
     }
 
     /// What `live` holds of `keys` as down before flight's input went
     /// away, in order.
     fn down_before(live: &LiveInput) -> Vec<Key> {
-        let mut keys = live.taken().down_before;
+        let mut keys: Vec<Key> = live.taken().down_before.keys().collect();
         keys.sort_by_key(|key| format!("{key:?}"));
         keys
     }
 
     #[test]
     fn it_keeps_what_was_down_at_flights_last_poll() {
-        let (j, one, two) = (Key::Char('j'), Key::Char('1'), Key::Char('2'));
+        let (j, one, two) = (Key::KeyJ, Key::Digit1, Key::Digit2);
         let mut live = LiveInput::default();
-        live.note(&key(j, true));
-        assert_eq!(down_before(&live), [], "not polled yet");
+        live.note_key(&key(j, true));
+        assert_eq!(down_before(&live), [] as [Key; 0], "not polled yet");
         live.poll();
-        live.note(&key(j, false));
-        live.note(&key(one, true));
+        live.note_key(&key(j, false));
+        live.note_key(&key(one, true));
         live.settle(FlightInput::Away);
         assert_eq!(down_before(&live), [j], "the poll's, not the step's");
-        live.note(&key(two, true));
+        live.note_key(&key(two, true));
         live.settle(FlightInput::Away);
         assert_eq!(down_before(&live), [j], "not while away");
         assert_eq!(down(&live), [one, two]);
@@ -321,28 +403,210 @@ mod tests {
         assert_eq!(down_before(&live), [j], "kept");
         live.settle(FlightInput::Back);
         live.poll();
-        assert_eq!(down_before(&live), [], "the next poll's");
+        assert_eq!(down_before(&live), [] as [Key; 0], "the next poll's");
     }
 
     #[test]
     fn is_down_reads_what_is_down() {
         let mut live = LiveInput::default();
-        assert!(!live.is_down(Key::Up));
-        live.note(&key(Key::Up, true));
-        assert!(live.is_down(Key::Up));
-        assert!(!live.is_down(Key::Down));
-        live.note(&key(Key::Up, false));
-        assert!(!live.is_down(Key::Up));
+        assert!(!live.is_down(Key::ArrowUp));
+        live.note_key(&key(Key::ArrowUp, true));
+        assert!(live.is_down(Key::ArrowUp));
+        assert!(!live.is_down(Key::ArrowDown));
+        live.note_key(&key(Key::ArrowUp, false));
+        assert!(!live.is_down(Key::ArrowUp));
+    }
+
+    fn pad(button: PadButton, pressed: bool) -> Input {
+        Input::PadButton {
+            button,
+            pressed,
+            repeat: false,
+        }
+    }
+
+    fn pad_repeat(button: PadButton) -> Input {
+        Input::PadButton {
+            button,
+            pressed: true,
+            repeat: true,
+        }
+    }
+
+    fn stick(value: f32) -> Input {
+        Input::PadAxis {
+            axis: PadAxis::LeftY,
+            value,
+        }
+    }
+
+    /// A pad that followed `inputs` through `bindings`, as flight's
+    /// reader would.
+    fn followed(inputs: &[Input], bindings: &SharedBindings) -> Gamepad {
+        let mut pad = Gamepad::default();
+        for input in inputs {
+            bindings.with(|b| pad.follow(input, &b.gamepad));
+        }
+        pad
+    }
+
+    /// `live` with each of `inputs` noted through `bindings`.
+    fn noted(live: &mut LiveInput, inputs: &[Input], bindings: &SharedBindings) {
+        for input in inputs {
+            live.note(input, bindings);
+        }
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp, reason = "the value noted, unchanged")]
+    fn it_notes_pad_buttons_repeats_and_axes_as_the_pad_follows_them() {
+        let bindings = SharedBindings::default();
+        let inputs = [
+            pad(PadButton::West, true),
+            pad(PadButton::Select, true),
+            pad(PadButton::South, true),
+            pad_repeat(PadButton::DPadUp),
+            stick(0.7),
+            pad(PadButton::Select, false),
+        ];
+        let mut live = LiveInput::default();
+        noted(&mut live, &inputs, &bindings);
+        let pad = live.taken().pad;
+        assert_eq!(pad, followed(&inputs, &bindings));
+        assert!(pad.is_down(PadButton::DPadUp), "a repeat counts as down");
+        assert_eq!(pad.axis(PadAxis::LeftY), 0.7);
+        assert_ne!(pad, Gamepad::default());
+    }
+
+    #[test]
+    fn it_keeps_the_pad_down_at_flights_last_poll() {
+        let bindings = SharedBindings::default();
+        let mut live = LiveInput::default();
+        let south = pad(PadButton::South, true);
+        live.note(&south, &bindings);
+        assert_eq!(live.taken().pad_before, Gamepad::default(), "not polled");
+        live.poll();
+        noted(
+            &mut live,
+            &[pad(PadButton::South, false), pad(PadButton::West, true)],
+            &bindings,
+        );
+        live.settle(FlightInput::Away);
+        assert_eq!(live.taken().pad_before, followed(&[south], &bindings));
+    }
+
+    #[test]
+    fn a_pad_press_still_down_at_the_close_is_taken() {
+        let bindings = SharedBindings::default();
+        let mut live = LiveInput::default();
+        live.settle(FlightInput::Away);
+        live.note(&pad(PadButton::East, true), &bindings);
+        assert_eq!(live.taken().pad_taken, Some(PadButton::East));
+        live.note(&pad_repeat(PadButton::DPadUp), &bindings);
+        live.settle(FlightInput::Away);
+        assert_eq!(
+            live.taken().pad_taken,
+            Some(PadButton::East),
+            "a repeat is no press, and still away"
+        );
+    }
+
+    #[test]
+    fn a_pad_press_let_go_before_the_close_isnt_taken() {
+        let bindings = SharedBindings::default();
+        let mut live = LiveInput::default();
+        live.settle(FlightInput::Away);
+        noted(
+            &mut live,
+            &[pad(PadButton::South, true), pad(PadButton::South, false)],
+            &bindings,
+        );
+        assert_eq!(live.taken().pad_taken, None);
+    }
+
+    #[test]
+    fn the_press_that_took_flights_input_away_is_never_taken() {
+        let bindings = SharedBindings::default();
+        let mut live = LiveInput::default();
+        // Select and West hail, opening the comm dialog.
+        noted(
+            &mut live,
+            &[pad(PadButton::Select, true), pad(PadButton::West, true)],
+            &bindings,
+        );
+        live.settle(FlightInput::Away);
+        assert_eq!(live.taken().pad_taken, None);
+    }
+
+    #[test]
+    fn a_key_or_click_after_the_pad_press_clears_the_taken_press() {
+        let bindings = SharedBindings::default();
+        let east = pad(PadButton::East, true);
+        let mut live = LiveInput::default();
+        noted(&mut live, &[east, key(Key::ArrowUp, true)], &bindings);
+        assert_eq!(live.taken().pad_taken, None, "a key's press");
+        let mut live = LiveInput::default();
+        noted(&mut live, &[east, button(true)], &bindings);
+        assert_eq!(live.taken().pad_taken, None, "a click");
+        let mut live = LiveInput::default();
+        let right_click = Input::PointerButton {
+            button: MouseButton::Right,
+            pressed: true,
+            at: nova_view::Point::new(1.0, 2.0),
+        };
+        noted(&mut live, &[east, right_click], &bindings);
+        assert_eq!(live.taken().pad_taken, None, "any button's");
+        let mut live = LiveInput::default();
+        let up_repeat = Input::Key {
+            key: Key::ArrowUp,
+            pressed: true,
+            repeat: true,
+        };
+        noted(
+            &mut live,
+            &[east, key(Key::ArrowUp, false), up_repeat, button(false)],
+            &bindings,
+        );
+        assert_eq!(
+            live.taken().pad_taken,
+            Some(PadButton::East),
+            "no press: a release or a repeat"
+        );
+    }
+
+    #[test]
+    fn forget_lets_go_of_the_pad_and_its_axes() {
+        let bindings = SharedBindings::default();
+        let mut live = LiveInput::default();
+        noted(
+            &mut live,
+            &[pad(PadButton::East, true), stick(1.0)],
+            &bindings,
+        );
+        live.forget();
+        let taken = live.taken();
+        assert_eq!(taken.pad, Gamepad::default());
+        assert_eq!(taken.pad_taken, None);
+    }
+
+    #[test]
+    fn it_hands_back_no_pad_when_flight_was_left_another_way() {
+        let bindings = SharedBindings::default();
+        let mut live = LiveInput::default();
+        live.settle(FlightInput::Away);
+        live.note(&pad(PadButton::DPadUp, true), &bindings);
+        assert!(!live.settle(FlightInput::Gone));
+        assert!(!live.settle(FlightInput::Back), "a new flight");
     }
 
     #[test]
     fn forget_lets_go_of_everything_but_keeps_flights_input_away() {
         let mut live = LiveInput::default();
         live.settle(FlightInput::Away);
-        live.note(&key(Key::Up, true));
-        live.note(&button(true));
+        live.note_key(&key(Key::ArrowUp, true));
+        live.note_key(&button(true));
         live.forget();
-        assert_eq!(down(&live), []);
+        assert_eq!(down(&live), [] as [Key; 0]);
         assert!(!live.button);
         assert!(live.settle(FlightInput::Back), "still handed back, empty");
     }

@@ -221,8 +221,8 @@ pub(super) fn board(screen: &mut AppScreen) {
     screen.input(&key(Key::Tab, false));
     // Tab's beep, so a test hears only what follows.
     screen.take_sounds();
-    screen.input(&key(Key::Char('b'), true));
-    screen.input(&key(Key::Char('b'), false));
+    screen.input(&key(Key::KeyB, true));
+    screen.input(&key(Key::KeyB, false));
 }
 
 /// The router over [`boarding_data`] with dialogs, in the developer's
@@ -320,7 +320,7 @@ fn b_held_before_a_target_is_taken_opens_the_plunder_dialog_on_the_next_frame() 
     let mut screen = boardable(with_dialogs(boarding_data()));
     fly(&mut screen);
     screen.tick(TICK);
-    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::KeyB, true));
     screen.tick(TICK);
     assert_eq!(screen.showing(), Showing::Flight, "no target");
     screen.input(&key(Key::Tab, true));
@@ -742,10 +742,7 @@ fn tab_then_space_closes_the_channel_only_with_the_focus_ring() {
 fn a_plain_q_over_the_comm_dialog_does_nothing() {
     let screen = &mut hailing();
     for pressed in [true, false] {
-        assert_eq!(
-            screen.input(&key(Key::Char('q'), pressed)),
-            ScreenAction::None
-        );
+        assert_eq!(screen.input(&key(Key::KeyQ, pressed)), ScreenAction::None);
     }
     assert_eq!(screen.input(&Input::Text('q')), ScreenAction::None);
     assert_eq!(screen.showing(), Showing::Comm, "still open");
@@ -755,7 +752,7 @@ fn a_plain_q_over_the_comm_dialog_does_nothing() {
 #[test]
 fn each_press_goes_through_the_flight_and_refreshes_the_dialog() {
     let screen = &mut hailing();
-    tap(screen, Key::Char('g'));
+    tap(screen, Key::KeyG);
     assert_eq!(screen.showing(), Showing::Comm, "still open");
     assert_eq!(reply(screen), "Greetings.", "the trader's advice: none");
     let shown: Vec<String> = drawn(screen)
@@ -771,7 +768,7 @@ fn each_press_goes_through_the_flight_and_refreshes_the_dialog() {
 #[test]
 fn a_price_asked_opens_the_haggle_dialog_whose_choice_settles_it() {
     let screen = &mut hailing();
-    tap(screen, Key::Char('s'));
+    tap(screen, Key::KeyS);
     assert_eq!(screen.showing(), Showing::Haggle);
     assert_eq!(reply(screen), "Pay up.");
     let dialog = screen.haggle().expect("open");
@@ -795,7 +792,7 @@ fn haggling(roll: u32) -> AppScreen {
     hail(&mut screen);
     assert_eq!(screen.showing(), Showing::Comm);
     script.borrow_mut().0 = [roll].into();
-    tap(&mut screen, Key::Char('s'));
+    tap(&mut screen, Key::KeyS);
     assert_eq!(screen.showing(), Showing::Haggle);
     let dialog = screen.haggle().expect("open");
     assert_eq!(dialog.asking(), "Pay me 3,000 credits.");
@@ -805,7 +802,7 @@ fn haggling(roll: u32) -> AppScreen {
 #[test]
 fn a_won_haggle_keeps_the_haggle_dialog_open_at_the_lowered_price() {
     let screen = &mut haggling(35);
-    tap(screen, Key::Char('l'));
+    tap(screen, Key::KeyL);
     assert_eq!(screen.showing(), Showing::Haggle, "still haggling");
     let dialog = screen.haggle().expect("open");
     assert_eq!(
@@ -843,9 +840,9 @@ fn a_lost_haggle_declines_and_the_comm_dialog_takes_the_next_press() {
     assert!(screen.haggle().is_none());
     assert_eq!(reply(screen), "Declined.");
     assert_eq!(cash(screen), 10_000, "nothing paid");
-    tap(screen, Key::Char('g'));
+    tap(screen, Key::KeyG);
     assert_eq!(reply(screen), "Greetings.", "not stuck");
-    tap(screen, Key::Char('s'));
+    tap(screen, Key::KeyS);
     assert_eq!(screen.showing(), Showing::Haggle);
     let dialog = screen.haggle().expect("open");
     assert_eq!(dialog.asking(), "Pay me 4,000 credits.", "raised");
@@ -962,7 +959,7 @@ fn the_comm_dialogs_come_from_the_interface_file_when_there_is_one() {
         "{:?}",
         pictures(&screen)
     );
-    tap(&mut screen, Key::Char('s'));
+    tap(&mut screen, Key::KeyS);
     assert!(
         pictures(&screen).contains(&(nova_view::ui::comm::HAGGLE_PICTURE, Point::new(0.0, 0.0))),
         "{:?}",
@@ -1157,7 +1154,7 @@ fn haggle_plunder_and_assignment_open_with_the_rulebooks_focus_ring() {
         let mut screen = hailable(with_dialogs(boarding_data()).with_rules(rules));
         fly(&mut screen);
         hail(&mut screen);
-        tap(&mut screen, Key::Char('s'));
+        tap(&mut screen, Key::KeyS);
         assert_eq!(
             screen.haggle().map(|dialog| dialog.dialog().focus_ring()),
             Some(ring),

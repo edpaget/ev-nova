@@ -358,6 +358,9 @@ mod tests {
     };
 
     use super::*;
+    use crate::app::{WheelDelta, WindowEvent};
+    use crate::devtools::input::EguiInput;
+    use nova_view::MouseButton;
 
     const SPIN: ResType = ResType::new([b's', b'p', 0x95, b'n']);
 
@@ -548,13 +551,23 @@ mod tests {
         }
     }
 
-    struct Harness {
-        panel: DevPanel<Catalog>,
+    /// The window the harness's window frames come from: 2048 × 1536
+    /// pixels at two pixels a point, the 1024 × 768 points of [`input`].
+    const WINDOW_PX: (u32, u32) = (2048, 1536);
+    const WINDOW_SCALE: f64 = 2.0;
+
+    struct Harness<C = Catalog> {
+        panel: DevPanel<C>,
         overlay: DevOverlay,
         /// The pilot flying, if any.
         desk: Option<MockDesk>,
         /// Whether any frame so far said it edited the pilot.
         edited: bool,
+        /// The game's window events as egui's input, for the window
+        /// frames.
+        glue: EguiInput,
+        /// How many window frames have run, a sixtieth of a second apart.
+        window_frames: u32,
     }
 
     impl Harness {
@@ -565,11 +578,21 @@ mod tests {
 
         /// [`Harness::new`] over `desk`.
         fn with_desk(desk: Option<MockDesk>) -> Self {
+            Harness::over(Catalog, desk)
+        }
+    }
+
+    impl<C: ResourceCatalog> Harness<C> {
+        /// A panel over `catalog` and `desk`, run twice, so its new window
+        /// is laid out and shows.
+        fn over(catalog: C, desk: Option<MockDesk>) -> Self {
             let mut harness = Self {
-                panel: DevPanel::new(Catalog),
+                panel: DevPanel::new(catalog),
                 overlay: DevOverlay::new(),
                 desk,
                 edited: false,
+                glue: EguiInput::new(WINDOW_SCALE, false),
+                window_frames: 0,
             };
             harness.frame(Vec::new());
             harness.frame(Vec::new());
@@ -582,8 +605,85 @@ mod tests {
         }
 
         fn frame(&mut self, events: Vec<Event>) -> Drawn {
+            self.run(input(events))
+        }
+
+        /// A frame of the game's window `events`, through the overlay's
+        /// glue, as the runner gives them.
+        fn window_frame(&mut self, events: &[WindowEvent]) -> Drawn {
+            for event in events {
+                self.glue.on_event(event);
+            }
+            self.window_frames += 1;
+            let elapsed = Duration::from_secs(1) * self.window_frames / 60;
+            let input = self.glue.take(WINDOW_PX, WINDOW_SCALE, elapsed);
+            self.run(input)
+        }
+
+        fn window_idle(&mut self) -> Drawn {
+            self.window_frame(&[])
+        }
+
+        /// A move of the pointer to `at`, in points, as the window's
+        /// pixels.
+        fn px(at: Pos2) -> WindowEvent {
+            WindowEvent::PointerMoved {
+                px: (
+                    f64::from(at.x) * WINDOW_SCALE,
+                    f64::from(at.y) * WINDOW_SCALE,
+                ),
+            }
+        }
+
+        fn left_button(pressed: bool) -> WindowEvent {
+            WindowEvent::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+            }
+        }
+
+        /// Clicks the middle of `rect` through the window: a move, a press
+        /// and a release, each in its own frame.
+        fn window_click(&mut self, rect: Rect) -> Drawn {
+            self.window_frame(&[Self::px(rect.center())]);
+            self.window_frame(&[Self::left_button(true)]);
+            self.window_frame(&[Self::left_button(false)]);
+            self.window_idle()
+        }
+
+        /// Clicks the text `label` through the window, wherever it was last
+        /// drawn.
+        fn window_click_text(&mut self, label: &str) -> Drawn {
+            let rect = self.window_idle().rect(label);
+            self.window_click(rect)
+        }
+
+        /// Clicks the field drawn showing `shown` through the window and
+        /// types `text` into it, a character a key press.
+        fn window_type(&mut self, shown: &str, text: &str) -> Drawn {
+            let field = self.window_idle().rect(shown);
+            self.window_click(field);
+            for c in text.chars() {
+                self.window_frame(&[WindowEvent::Text(c)]);
+            }
+            self.window_idle()
+        }
+
+        /// Presses and releases `key` through the window.
+        fn window_press(&mut self, key: nova_view::Key) -> Drawn {
+            let event = |pressed| WindowEvent::Key {
+                key,
+                pressed,
+                repeat: false,
+            };
+            self.window_frame(&[event(true)]);
+            self.window_frame(&[event(false)]);
+            self.window_idle()
+        }
+
+        fn run(&mut self, input: RawInput) -> Drawn {
             let desk = self.desk.as_mut().map(|desk| desk as &mut dyn PilotDesk);
-            let (output, edited) = self.panel.run(input(events), &self.overlay, desk);
+            let (output, edited) = self.panel.run(input, &self.overlay, desk);
             self.edited |= edited;
             let mut drawn = Drawn {
                 texts: Vec::new(),
@@ -766,6 +866,132 @@ mod tests {
         assert_eq!(selection.frame(), 2, "{:?}", drawn.all());
         assert!(harness.idle().has("frame 3 of 3, 6 × 5 pixels"));
         assert_eq!(harness.texture("rlëD 200 frame 2"), Some([6, 5]));
+    }
+
+    // The same interactions through the game's window events, as the
+    // runner hands them to the overlay.
+
+    #[test]
+    fn typing_narrows_the_results_through_the_window() {
+        let mut harness = Harness::new();
+        let drawn = harness.window_type(HINT, "rled");
+        assert_eq!(harness.panel.browser().query(), "rled");
+        assert!(drawn.has("rlëD 200 Shuttle"), "{:?}", drawn.all());
+        assert!(!drawn.has("PICT 128 Planet"), "{:?}", drawn.all());
+        assert!(drawn.has("1 of 3 resources"), "{:?}", drawn.all());
+    }
+
+    #[test]
+    fn clicking_a_result_shows_it_through_the_window() {
+        let mut harness = Harness::new();
+        let drawn = harness.window_click_text("spïn 300 Spinner");
+        let selection = harness.panel.browser().selection().expect("selected");
+        assert_eq!(selection.summary().id, 300);
+        for text in [
+            selection.heading(),
+            selection.file_line(),
+            selection.size_line(),
+        ] {
+            assert!(drawn.has(&text), "{text:?} in {:?}", drawn.all());
+        }
+        assert!(drawn.contains("\"x_tiles\": 6"), "{:?}", drawn.all());
+    }
+
+    #[test]
+    fn typing_credits_and_enter_sets_them_through_the_window() {
+        let mut harness = Harness::with_desk(Some(MockDesk::new()));
+        let field = harness.window_idle().rect("12345");
+        harness.window_click(field);
+        harness.window_press(nova_view::Key::End);
+        harness.window_frame(&[WindowEvent::Text('6')]);
+        harness.window_press(nova_view::Key::Enter);
+        assert_eq!(harness.edits(), [PilotEdit::Credits(123_456)]);
+        assert!(harness.edited);
+        assert!(harness.window_idle().has("Credits set to 123456"));
+    }
+
+    #[test]
+    fn the_frame_slider_steps_the_sheet_through_the_window() {
+        let mut harness = Harness::new();
+        let drawn = harness.window_click_text("rlëD 200 Shuttle");
+        // The slider's rail ends left of its label; its handle starts at
+        // the rail's other end.
+        let label = drawn.rect(SLIDER);
+        let rail_end = Pos2::new(label.left() - 12.0, label.center().y);
+        let handle = drawn
+            .fills
+            .iter()
+            .map(|(rect, _)| *rect)
+            .filter(|rect| (rect.center().y - label.center().y).abs() < 4.0)
+            .filter(|rect| rect.right() < label.left())
+            .map(|rect| rect.left())
+            .fold(f32::INFINITY, f32::min);
+        let rail_start = Pos2::new(handle + 2.0, label.center().y);
+        assert!(rail_start.x < rail_end.x, "{rail_start:?} {rail_end:?}");
+        // A drag: down on the rail's start, across to its end, and up.
+        harness.window_frame(&[Harness::<Catalog>::px(rail_start)]);
+        harness.window_frame(&[Harness::<Catalog>::left_button(true)]);
+        harness.window_frame(&[Harness::<Catalog>::px(rail_end)]);
+        harness.window_frame(&[Harness::<Catalog>::left_button(false)]);
+        harness.window_idle();
+        let selection = harness.panel.browser().selection().expect("selected");
+        assert_eq!(selection.frame(), 2);
+        assert!(harness.window_idle().has("frame 3 of 3, 6 × 5 pixels"));
+    }
+
+    /// 40 pictures, PICT 1000 to 1039: more than the results list shows.
+    struct LongCatalog;
+
+    impl ResourceCatalog for LongCatalog {
+        fn resources(&self) -> Vec<ResourceSummary> {
+            (0..40)
+                .map(|n| ResourceSummary {
+                    ty: PICT,
+                    id: 1000 + n,
+                    name: Some(format!("Picture {n}")),
+                })
+                .collect()
+        }
+
+        fn inspect(&self, _ty: ResType, _id: i16) -> Option<ResourceDetail> {
+            None
+        }
+    }
+
+    /// The results drawn, top to bottom.
+    fn results_shown(drawn: &Drawn) -> Vec<String> {
+        let mut rows: Vec<(String, Rect)> = drawn
+            .texts
+            .iter()
+            .filter(|(text, _)| text.starts_with("PICT "))
+            .cloned()
+            .collect();
+        rows.sort_by(|a, b| a.1.top().total_cmp(&b.1.top()));
+        rows.into_iter().map(|(text, _)| text).collect()
+    }
+
+    #[test]
+    fn the_wheel_scrolls_the_results_through_the_window() {
+        let mut harness = Harness::over(LongCatalog, None);
+        let before = results_shown(&harness.window_idle());
+        assert_eq!(
+            before.first().map(String::as_str),
+            Some("PICT 1000 Picture 0")
+        );
+        assert!(before.len() < 40, "{before:?}");
+        let over = harness.window_idle().rect("PICT 1001 Picture 1").center();
+        harness.window_frame(&[
+            Harness::<LongCatalog>::px(over),
+            WindowEvent::Scroll {
+                delta: WheelDelta::Lines(3.0),
+            },
+        ]);
+        for _ in 0..30 {
+            harness.window_idle();
+        }
+        let after = results_shown(&harness.window_idle());
+        assert_ne!(after.first(), before.first(), "{after:?}");
+        assert!(!after.contains(&before[0]), "{after:?}");
     }
 
     // The Pilot window.

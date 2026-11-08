@@ -238,7 +238,7 @@ fn a_clear_route_on_a_port_screens_map_is_undone() {
     for screen in SCREENS {
         let mut view = faked_docked();
         view.open_port_screen_map(screen);
-        view.port_map_input(&key(Key::Char('c'), true));
+        view.port_map_input(&key(Key::KeyC, true));
         assert_eq!(sent(&view), [FlightCommand::ClearRoute], "{screen:?}");
         faked_press_map(&mut view);
         assert_eq!(

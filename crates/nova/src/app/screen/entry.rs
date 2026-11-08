@@ -121,7 +121,7 @@ impl AppScreen {
         self.appear = None;
         let intro = self.entry_intro();
         self.entry = Some(Entering {
-            core: Entry::new(intro),
+            core: Entry::new(intro).with_bindings(self.bindings.clone()),
             text: None,
         });
     }
@@ -172,7 +172,7 @@ impl AppScreen {
         self.entry.as_ref()?;
         self.note_pointer(input);
         self.note_keys(input);
-        let command_held = self.command_held;
+        let command_held = self.command_held.held();
         let entering = self.entry.as_mut()?;
         if entering.core.input(input, command_held) == Verdict::Text
             && let Some(text) = &mut entering.text
@@ -231,8 +231,7 @@ impl AppScreen {
         if let Some(text) = &mut entering.text {
             text.release_keys();
         }
-        self.command_held = false;
-        self.keys_held = super::MenuKeys::default();
+        self.let_go_of_noted_keys();
         true
     }
 
@@ -299,6 +298,19 @@ impl AppScreen {
         entering.core.draw_over(list, view);
     }
 
+    /// Tells the intro's text, while it is open, the app's surroundings
+    /// `told`: as it opens, and on each change while it shows, as the
+    /// router tells its overlays, which the text is not.
+    pub(super) fn tell_intro_text(&mut self, told: &Input) {
+        if let Some(text) = self
+            .entry
+            .as_mut()
+            .and_then(|entering| entering.text.as_mut())
+        {
+            text.input(told);
+        }
+    }
+
     /// The intro's text, once it and its movies are done: dropped, its
     /// sounds kept, and the entry told. What was pressed under its last
     /// movie is dropped, as the flush after the text drops it
@@ -335,6 +347,7 @@ impl AppScreen {
             };
             entering.core.text_opened(text.is_some());
             entering.text = text;
+            self.tell_intro_text(&Input::Surroundings(self.surroundings));
         }
         let Some(entering) = &mut self.entry else {
             return;

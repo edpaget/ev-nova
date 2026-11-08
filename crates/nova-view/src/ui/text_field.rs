@@ -20,6 +20,27 @@ use super::dialog::outline;
 /// (Delete on a Mac keyboard).
 pub const DELETE_KEY: Key = Key::Backspace;
 
+/// The key that types a space into the field, which its host keeps from
+/// the shared UI context's Activate while the field has the focus.
+pub const SPACE_KEY: Key = Key::Space;
+
+/// Whether `input` is text entry for a focused field: a typed character,
+/// or anything of [`DELETE_KEY`] or [`SPACE_KEY`]. Text entry is no
+/// command (rdm:phase/key-bindings/phase-2-command-key-map's fixed keys):
+/// its keys stay put whatever the key map binds, and a field's host sends
+/// them to the field before reading its own commands.
+#[must_use]
+pub fn is_text_entry(input: &Input) -> bool {
+    matches!(
+        *input,
+        Input::Text(_)
+            | Input::Key {
+                key: DELETE_KEY | SPACE_KEY,
+                ..
+            }
+    )
+}
+
 /// The text's size, in Geneva.
 pub const TEXT_SIZE: f32 = 12.0;
 /// The text's colour.
@@ -83,6 +104,13 @@ impl TextField {
     pub fn select_first(&mut self, chars: usize) {
         self.selection = chars.min(self.text.chars().count());
         self.caret = self.selection;
+    }
+
+    /// Empties it: no text, nothing selected, the caret at the start.
+    pub fn clear(&mut self) {
+        self.text.clear();
+        self.selection = 0;
+        self.caret = 0;
     }
 
     /// Ends any selection, with the caret after the last character: where
@@ -246,6 +274,19 @@ mod tests {
     }
 
     #[test]
+    fn typed_characters_and_backspace_s_and_space_s_keys_are_text_entry() {
+        assert!(is_text_entry(&Input::Text('a')));
+        for (pressed, repeat) in [(true, false), (true, true), (false, false)] {
+            assert!(is_text_entry(&key(Key::Backspace, pressed, repeat)));
+            assert!(is_text_entry(&key(Key::Space, pressed, repeat)));
+        }
+        for other in [Key::Enter, Key::Tab, Key::KeyA, Key::ArrowLeft] {
+            assert!(!is_text_entry(&key(other, true, false)), "{other:?}");
+        }
+        assert!(!is_text_entry(&Input::PointerLeft));
+    }
+
+    #[test]
     fn it_starts_empty_where_it_is_put() {
         let field = field(31);
         assert_eq!(field.text(), "");
@@ -299,8 +340,8 @@ mod tests {
         let mut field = field(31);
         typed(&mut field, "Ada");
         for input in [
-            key(Key::Char('x'), true, false),
-            key(Key::Left, true, false),
+            key(Key::KeyX, true, false),
+            key(Key::ArrowLeft, true, false),
             key(Key::Enter, true, false),
             Input::PointerMoved(Point::new(110.0, 55.0)),
         ] {
@@ -342,7 +383,7 @@ mod tests {
         let mut field = selected("Ship");
         for input in [
             key(Key::Backspace, false, false),
-            key(Key::Left, true, false),
+            key(Key::ArrowLeft, true, false),
             Input::PointerMoved(Point::new(110.0, 55.0)),
         ] {
             assert!(!field.input(&input), "{input:?}");
@@ -398,6 +439,20 @@ mod tests {
         assert_eq!(field.text(), "cdef");
         typed(&mut field, "ab");
         assert_eq!(field.text(), "abcdef");
+    }
+
+    #[test]
+    fn clear_empties_it_whatever_is_selected() {
+        let mut field = selected("abcdef");
+        field.select_first(2);
+        field.clear();
+        assert_eq!((field.text(), field.selection()), ("", 0));
+        typed(&mut field, "Zo");
+        assert_eq!(field.text(), "Zo", "the caret at the start");
+        field.clear();
+        assert_eq!(field.text(), "", "with nothing selected too");
+        typed(&mut field, "e");
+        assert_eq!(field.text(), "e");
     }
 
     #[test]

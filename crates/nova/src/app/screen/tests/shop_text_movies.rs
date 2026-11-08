@@ -153,11 +153,11 @@ fn a_sale_alert_plays_the_selected_outfits_after_movie_once_it_closes() {
     land_twice(&mut screen);
     click_port_item(&mut screen, 8);
     select_first_outfit(&mut screen);
-    screen.input(&key(Key::Char('b'), true));
-    screen.input(&key(Key::Right, true));
-    screen.input(&key(Key::Char('b'), true));
-    screen.input(&key(Key::Left, true));
-    screen.input(&key(Key::Char('s'), true));
+    screen.input(&key(Key::KeyB, true));
+    screen.input(&key(Key::ArrowRight, true));
+    screen.input(&key(Key::KeyB, true));
+    screen.input(&key(Key::ArrowLeft, true));
+    screen.input(&key(Key::KeyS, true));
     let open = spaceport(&screen).open_outfitter().expect("outfitting");
     assert!(open.alert_dialog().is_some(), "the sale refused");
     assert_eq!(reeled(&reel), [], "not under the alert");
@@ -189,7 +189,7 @@ fn hire_with_nothing_for_hire(rules: Rulebook) -> Vec<Call> {
     let (mut screen, reel) = empty_shops_with(rules, filmed_bar, |_| {});
     click_port_item(&mut screen, 11);
     assert!(spaceport(&screen).open_bar().is_some(), "the bar");
-    screen.input(&key(Key::Char('h'), true));
+    screen.input(&key(Key::KeyH, true));
     assert_eq!(
         spaceport(&screen)
             .mission_text()

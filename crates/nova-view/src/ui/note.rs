@@ -16,6 +16,7 @@ use std::time::Duration;
 use crate::draw::{DrawList, fill_rect};
 use crate::font::Font;
 use crate::input::Input;
+use crate::keymap::SharedBindings;
 use crate::screen::{Screen, ScreenAction};
 use crate::text::TextMetrics;
 
@@ -119,6 +120,13 @@ impl NoteDialog {
         self
     }
 
+    /// The note reading its keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.dialog.set_bindings(bindings);
+        self
+    }
+
     /// The dialog itself, for its layout.
     #[must_use]
     pub fn dialog(&self) -> &Dialog {
@@ -151,6 +159,9 @@ impl Screen for NoteDialog {
         self.dialog.cancel_pointer();
     }
 }
+
+#[cfg(test)]
+pub(crate) use tests::pad_probe;
 
 #[cfg(test)]
 mod tests {
@@ -205,6 +216,41 @@ mod tests {
         template
     }
 
+    struct Probe(NoteDialog);
+
+    impl crate::ui::pad_focus::every_screen::PadProbe for Probe {
+        fn screen(&mut self) -> &mut dyn Screen {
+            &mut self.0
+        }
+
+        fn controls(&self) -> Vec<(&'static str, Bounds)> {
+            vec![("OK", self.0.dialog().item_bounds(OK_ITEM).expect("OK"))]
+        }
+
+        fn outcome(&mut self) -> String {
+            format!("closed {}", self.0.closed())
+        }
+
+        fn default_control(&self) -> Option<&'static str> {
+            Some("OK")
+        }
+
+        fn set_ring(&mut self, ring: FocusRing) -> bool {
+            self.0 = self.0.clone().with_focus_ring(ring);
+            true
+        }
+    }
+
+    /// The note's row in the pad's every-screen table.
+    pub(crate) fn pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        Box::new(Probe(NoteDialog::new(
+            &template(),
+            "A note.",
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )))
+    }
+
     fn note(template: &DialogTemplate) -> NoteDialog {
         NoteDialog::new(
             template,
@@ -233,6 +279,21 @@ mod tests {
         }
     }
 
+    /// The note reads its keys through the key map it is given: Back
+    /// rebound to F6 closes it on F6 and no longer on Escape.
+    #[test]
+    fn a_rebound_back_closes_the_note_on_its_new_key_alone() {
+        let bindings = SharedBindings::new(crate::keymap::Bindings::default().rebound(
+            crate::keymap::UiCommand::Back,
+            crate::keymap::KeyCombo::key(Key::F6),
+        ));
+        let mut note = note(&template()).with_bindings(bindings);
+        note.input(&key(Key::Escape));
+        assert!(!note.closed(), "Escape no longer closes it");
+        note.input(&key(Key::F6));
+        assert!(note.closed());
+    }
+
     #[test]
     fn return_escape_or_a_click_on_ok_closes_the_note() {
         for template in [template(), user_template()] {
@@ -251,7 +312,7 @@ mod tests {
     #[test]
     fn other_input_leaves_it_open() {
         let mut note = note(&template());
-        for input in [key(Key::Space), key(Key::Tab), key(Key::Char('f'))] {
+        for input in [key(Key::Space), key(Key::Tab), key(Key::KeyF)] {
             note.input(&input);
         }
         note.tick(Duration::from_secs(1));
@@ -350,6 +411,42 @@ mod tests {
         note.cancel_pointer();
         note.input(&button(false));
         assert!(!note.closed());
+    }
+
+    #[test]
+    fn a_tap_on_ok_closes_the_note_as_a_click_does_with_its_sounds() {
+        let mut clicked = note(&template());
+        let ok = clicked.dialog().item_bounds(OK_ITEM).expect("OK").center();
+        clicked.input(&Input::PointerMoved(ok));
+        click(&mut clicked);
+        let mut tapped = note(&template());
+        crate::touch::testkit::tap(&mut tapped, ok);
+        assert!(tapped.closed());
+        assert_eq!(tapped.closed(), clicked.closed());
+        assert_eq!(tapped.take_sounds(), clicked.take_sounds());
+    }
+
+    #[test]
+    fn a_cancelled_touch_on_ok_leaves_it_unpressed_and_unfired() {
+        let mut note = note(&template());
+        let ok = note.dialog().item_bounds(OK_ITEM).expect("OK").center();
+        let mut untouched = DrawList::new();
+        note.draw(&mut untouched);
+        {
+            let mut fingers = crate::touch::testkit::Fingers::on(&mut note);
+            fingers.down(1, ok);
+            fingers.cancel(1);
+            fingers.up(1, ok);
+        }
+        assert!(!note.closed(), "nothing answered");
+        let mut drawn = DrawList::new();
+        note.draw(&mut drawn);
+        assert_eq!(
+            drawn.iter().collect::<Vec<_>>(),
+            untouched.iter().collect::<Vec<_>>(),
+            "OK isn't drawn pressed"
+        );
+        assert_eq!(note.take_sounds(), [], "the cancel is silent");
     }
 
     #[test]

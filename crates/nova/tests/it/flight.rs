@@ -242,7 +242,7 @@ impl Harness {
     /// frame.
     fn flying(fps: u64) -> Self {
         let mut harness = Self::new(fps, true);
-        harness.press(Key::Char('f'));
+        harness.press(Key::KeyF);
         assert_eq!(harness.showing(), Showing::Flight);
         harness
     }
@@ -361,11 +361,11 @@ fn f_enters_flight_and_its_frame_reaches_the_gpu() {
 fn scripted(fps: u64) -> ShipState {
     let mut harness = Harness::flying(fps);
     let script: [&[Key]; 6] = [
-        &[Key::Up],
-        &[Key::Up, Key::Left],
-        &[Key::Left],
-        &[Key::Down],
-        &[Key::Down],
+        &[Key::ArrowUp],
+        &[Key::ArrowUp, Key::ArrowLeft],
+        &[Key::ArrowLeft],
+        &[Key::ArrowDown],
+        &[Key::ArrowDown],
         &[],
     ];
     for keys in script {
@@ -389,7 +389,7 @@ fn escape_goes_back_to_where_flight_was_entered_and_then_quits_as_before() {
     let mut harness = Harness::new(60, true);
     harness.press(Key::Tab);
     assert_eq!(harness.showing(), Showing::GalaxyMap);
-    harness.press(Key::Char('f'));
+    harness.press(Key::KeyF);
     assert_eq!(harness.showing(), Showing::Flight);
     harness.frame();
     harness.press(Key::Escape);
@@ -413,7 +413,7 @@ fn escape_goes_back_to_where_flight_was_entered_and_then_quits_as_before() {
 #[test]
 fn losing_focus_while_holding_up_stops_the_thrust() {
     let mut harness = Harness::flying(60);
-    harness.key(Key::Up, true);
+    harness.key(Key::ArrowUp, true);
     harness.settle_until("Up's thrust", |harness| {
         harness.ship().velocity.length() > 0.0
     });
@@ -432,11 +432,11 @@ fn losing_focus_while_holding_up_stops_the_thrust() {
 #[test]
 fn the_game_stands_still_while_the_app_is_in_the_background() {
     let mut harness = Harness::flying(60);
-    harness.key(Key::Up, true);
+    harness.key(Key::ArrowUp, true);
     harness.settle_until("Up's thrust", |harness| {
         harness.ship().velocity.length() > 0.0
     });
-    harness.key(Key::Up, false);
+    harness.key(Key::ArrowUp, false);
     harness.frame();
     harness.send(WindowEvent::FocusLost);
     let away = harness.ship();
@@ -451,7 +451,7 @@ fn the_game_stands_still_while_the_app_is_in_the_background() {
 #[test]
 fn without_a_chär_f_still_enters_flight_and_escape_goes_back() {
     let mut harness = Harness::new(60, false);
-    harness.press(Key::Char('f'));
+    harness.press(Key::KeyF);
     assert_eq!(harness.showing(), Showing::Flight);
     let frame = harness.frame();
     assert!(harness.flight().session().is_err(), "no session");

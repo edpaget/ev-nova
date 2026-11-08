@@ -378,7 +378,7 @@ fn vikings_shipyard_lists_its_ships_in_the_shipyard_dialog() {
         // Right picks the first cell.
         assert_eq!(screen.selected(), None, "nothing selected as it opens");
         screen.input(&nova_view::Input::Key {
-            key: nova_view::Key::Right,
+            key: nova_view::Key::ArrowRight,
             pressed: true,
             repeat: false,
         });
@@ -438,7 +438,7 @@ fn the_shuttles_info_is_the_picture_panel(screen: &mut nova_view::spaceport::Shi
         PANEL_GRAPHIC_ITEM, PANEL_WEAPONS_ITEM, PICTURE_INFO_BACKGROUND,
     };
     screen.input(&nova_view::Input::Key {
-        key: nova_view::spaceport::shipyard::INFO_KEY,
+        key: nova_view::Key::Space,
         pressed: true,
         repeat: false,
     });
@@ -516,8 +516,8 @@ fn option_buy_at_port_kane_asks_how_many_in_the_stock_quantity_dialog() {
             market,
             data.button_style(),
         );
-        screen.input(&press(nova_view::Key::Alt));
-        screen.input(&press(nova_view::Key::Char('b')));
+        screen.input(&press(nova_view::Key::AltLeft));
+        screen.input(&press(nova_view::Key::KeyB));
         let dialog = screen.quantity().expect("asking");
         let bounds = dialog.dialog().bounds();
         assert_eq!(bounds, Bounds::at(Point::new(426.0, 348.0), 172.0, 72.0));

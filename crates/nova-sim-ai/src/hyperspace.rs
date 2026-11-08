@@ -530,7 +530,11 @@ impl StarMap {
     /// reads. Its [`StarMap::listed_links`], jumps, neighbours, links and
     /// routes follow the lanes; its [`StarMap::con_slots`] and
     /// [`StarMap::usable_con_slots`] stay the systems' own Con slots, so no
-    /// lane is ever a hyperspace link.
+    /// lane is ever a hyperspace link. The mission ship pickers that read
+    /// those by the engine's reading of their keys read
+    /// [`StarMap::listed_links`] by the other
+    /// ([`RuleKey::MissionShipLinks`](crate::RuleKey::MissionShipLinks),
+    /// [`RuleKey::AuxShipLinks`](crate::RuleKey::AuxShipLinks)).
     #[must_use]
     pub fn with_lanes(
         systems: Vec<StarSystem>,

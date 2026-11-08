@@ -77,9 +77,10 @@ use std::time::Duration;
 use super::intro::{Intro, IntroEnd, IntroKeys};
 use crate::draw::fill_rect;
 use crate::fade::{DEATH_FADE_FOR, ScreenFade, whole_view};
+use crate::keymap::SharedBindings;
 use crate::screen::Showing;
 use crate::sound::UiSound;
-use crate::{Color, DrawList, Input, Key};
+use crate::{COMMAND_KEYS, Color, DrawList, Input, Key};
 
 /// What an [`Entry`] does with an input or a close.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -157,6 +158,14 @@ impl Entry {
         }
     }
 
+    /// The entry reading the intro's keys through `bindings`: the ones it
+    /// tracks for the intro, which the intro takes up as it begins.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.keys = self.keys.with_bindings(bindings);
+        self
+    }
+
     /// `dt` passes: the fade or the intro moves on.
     pub fn tick(&mut self, dt: Duration) {
         let faded = match &mut self.stage {
@@ -179,7 +188,7 @@ impl Entry {
         self.stage = match self.stage {
             Stage::FadingOut(_) => match &mut self.intro {
                 Some(intro) => {
-                    intro.begin(self.keys);
+                    intro.begin(self.keys.clone());
                     self.stage = Stage::Intro;
                     self.poll_intro();
                     return;
@@ -369,7 +378,7 @@ impl Entry {
                 key,
                 pressed: true,
                 repeat: false,
-            } if command_held && key != Key::Command => {
+            } if command_held && !COMMAND_KEYS.contains(&key) => {
                 self.held.push(Deferred::Command(key));
                 Verdict::Held
             }
@@ -392,7 +401,7 @@ impl Entry {
     /// The keys and the button were let go of outside the game (the
     /// window losing focus).
     pub fn release_keys(&mut self) {
-        self.keys = IntroKeys::default();
+        self.keys.let_go();
         if let Some(intro) = &mut self.intro
             && self.stage == Stage::Intro
         {
@@ -456,7 +465,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::menu::intro::{CharacterIntro, INTRO_SOUND, IntroPicture, IntroSource, SKIP_KEY};
+    use crate::menu::intro::{CharacterIntro, INTRO_SOUND, IntroPicture, IntroSource};
     use crate::sound::SoundId;
     use crate::{DrawCommand, MouseButton, Point};
 
@@ -659,8 +668,8 @@ mod tests {
         let mut entry = unseen(&pictures(Some(128)));
         entry.tick(SECOND);
         entry.tick(SECOND);
-        entry.input(&key(SKIP_KEY, true), false);
-        entry.input(&key(SKIP_KEY, false), false);
+        entry.input(&key(Key::Escape, true), false);
+        entry.input(&key(Key::Escape, false), false);
         entry.tick(SECOND);
         assert!(entry.handover_due());
         assert_eq!(entry.take_text_due(), None);
@@ -670,14 +679,36 @@ mod tests {
     #[test]
     fn the_skip_key_down_as_the_fade_ends_skips_after_the_first_picture() {
         let mut entry = unseen(&pictures(Some(128)));
-        entry.input(&key(SKIP_KEY, true), false);
+        entry.input(&key(Key::Escape, true), false);
         entry.tick(SECOND);
         assert_eq!(picture(&entry), Some(8200));
         entry.tick(SECOND);
         entry.tick(Duration::from_secs(10));
-        entry.input(&key(SKIP_KEY, false), false);
+        entry.input(&key(Key::Escape, false), false);
         entry.tick(SECOND);
         assert!(entry.handover_due());
+    }
+
+    #[test]
+    fn the_intro_reads_the_bindings_the_entry_was_given() {
+        use crate::keymap::{Bindings, KeyCombo, PauseCommand, SharedBindings};
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(PauseCommand::Pause, KeyCombo::key(Key::KeyQ)),
+        );
+        let mut entry = unseen(&pictures(Some(128))).with_bindings(bindings.clone());
+        entry.input(&key(Key::KeyQ, true), false);
+        entry.tick(SECOND);
+        entry.input(&key(Key::KeyQ, false), false);
+        entry.tick(SECOND);
+        entry.tick(SECOND);
+        assert!(entry.handover_due(), "Q down as the fade ends skips");
+        let mut entry = unseen(&pictures(Some(128))).with_bindings(bindings);
+        entry.input(&key(Key::Escape, true), false);
+        entry.tick(SECOND);
+        entry.input(&key(Key::Escape, false), false);
+        entry.tick(SECOND);
+        entry.tick(SECOND);
+        assert!(!entry.handover_due(), "Escape no longer does");
     }
 
     #[test]
@@ -733,7 +764,7 @@ mod tests {
     fn plain_keys_and_clicks_are_dropped_and_their_state_still_read() {
         let mut entry = unseen(&pictures(None));
         for input in [
-            key(Key::Up, true),
+            key(Key::ArrowUp, true),
             key(Key::Space, true),
             Input::Text(' '),
             click(true),
@@ -755,42 +786,58 @@ mod tests {
     #[test]
     fn command_chords_and_the_close_are_held_for_the_handover() {
         let mut entry = Entry::new(None);
-        assert_eq!(entry.input(&key(Key::Command, true), false), Verdict::Drop);
-        assert_eq!(entry.input(&key(Key::Char('q'), true), true), Verdict::Held);
+        assert_eq!(entry.input(&key(Key::MetaLeft, true), false), Verdict::Drop);
+        assert_eq!(entry.input(&key(Key::KeyQ, true), true), Verdict::Held);
         assert_eq!(entry.input(&Input::Text('q'), true), Verdict::Drop);
         assert_eq!(entry.close(), Verdict::Held);
-        assert_eq!(
-            entry.input(&key(Key::Char('q'), false), true),
-            Verdict::Drop
-        );
-        assert_eq!(entry.input(&key(Key::Command, false), true), Verdict::Drop);
+        assert_eq!(entry.input(&key(Key::KeyQ, false), true), Verdict::Drop);
+        assert_eq!(entry.input(&key(Key::MetaLeft, false), true), Verdict::Drop);
         entry.tick(SECOND);
         assert_eq!(
             entry.handed_over(),
-            [Deferred::Command(Key::Char('q')), Deferred::Close]
+            [Deferred::Command(Key::KeyQ), Deferred::Close]
         );
+    }
+
+    #[test]
+    fn the_right_command_is_a_command_key_and_no_chord() {
+        let mut entry = Entry::new(None);
+        assert_eq!(
+            entry.input(&key(Key::MetaRight, true), false),
+            Verdict::Drop
+        );
+        assert_eq!(entry.input(&key(Key::MetaRight, true), true), Verdict::Drop);
+        assert_eq!(entry.input(&key(Key::KeyQ, true), true), Verdict::Held);
+        entry.tick(SECOND);
+        assert_eq!(entry.handed_over(), [Deferred::Command(Key::KeyQ)]);
     }
 
     #[test]
     fn a_chords_repeats_and_releases_are_dropped_command_up_first_or_not() {
         let mut entry = Entry::new(None);
-        assert_eq!(entry.input(&key(Key::Up, true), true), Verdict::Held);
-        assert_eq!(entry.input(&held(Key::Up), true), Verdict::Drop);
-        assert_eq!(entry.input(&key(Key::Up, false), true), Verdict::Drop);
+        assert_eq!(entry.input(&key(Key::ArrowUp, true), true), Verdict::Held);
+        assert_eq!(entry.input(&held(Key::ArrowUp), true), Verdict::Drop);
+        assert_eq!(entry.input(&key(Key::ArrowUp, false), true), Verdict::Drop);
         assert_eq!(entry.input(&key(Key::Escape, true), true), Verdict::Held);
-        assert_eq!(entry.input(&key(Key::Command, false), false), Verdict::Drop);
+        assert_eq!(
+            entry.input(&key(Key::MetaLeft, false), false),
+            Verdict::Drop
+        );
         assert_eq!(entry.input(&key(Key::Escape, false), false), Verdict::Drop);
         entry.tick(SECOND);
         assert_eq!(
             entry.handed_over(),
-            [Deferred::Command(Key::Up), Deferred::Command(Key::Escape)],
+            [
+                Deferred::Command(Key::ArrowUp),
+                Deferred::Command(Key::Escape)
+            ],
             "as commands, never as keys down or up"
         );
     }
 
     /// Whether a Command chord typed into `entry` now is held.
     fn chord_held(entry: &Entry) -> bool {
-        entry.clone().input(&key(Key::Char(','), true), true) == Verdict::Held
+        entry.clone().input(&key(Key::Comma, true), true) == Verdict::Held
     }
 
     #[test]
@@ -825,7 +872,7 @@ mod tests {
             text: Some(5),
             ..CharacterIntro::EMPTY
         });
-        assert_eq!(entry.input(&key(Key::Char('q'), true), true), Verdict::Held);
+        assert_eq!(entry.input(&key(Key::KeyQ, true), true), Verdict::Held);
         entry.tick(SECOND);
         entry.text_opened(true);
         entry.tick(SECOND);
@@ -838,13 +885,13 @@ mod tests {
     fn a_close_is_dropped_once_an_intro_ran_and_while_its_text_shows() {
         let mut entry = unseen(&pictures(None));
         assert_eq!(entry.close(), Verdict::Held);
-        assert_eq!(entry.input(&key(Key::Char(','), true), true), Verdict::Held);
+        assert_eq!(entry.input(&key(Key::Comma, true), true), Verdict::Held);
         entry.tick(SECOND);
         assert_eq!(entry.close(), Verdict::Held, "during the pictures");
         through_pictures(&mut entry);
         assert_eq!(
             entry.handed_over(),
-            [Deferred::Command(Key::Char(','))],
+            [Deferred::Command(Key::Comma)],
             "the closes dropped, the Command chord kept"
         );
         let mut texted = unseen(&CharacterIntro {
@@ -887,7 +934,7 @@ mod tests {
         assert_eq!(entry.take_for_text(), [], "once");
         let typed = key(Key::Enter, false);
         assert_eq!(entry.input(&typed, false), Verdict::Text);
-        assert_eq!(entry.input(&key(Key::Char('q'), true), true), Verdict::Text);
+        assert_eq!(entry.input(&key(Key::KeyQ, true), true), Verdict::Text);
     }
 
     #[test]
@@ -895,16 +942,16 @@ mod tests {
         let mut entry = Entry::new(None);
         entry.tick(SECOND);
         entry.handed_over();
-        let command_q = key(Key::Char('q'), true);
+        let command_q = key(Key::KeyQ, true);
         assert_eq!(entry.input(&command_q, true), Verdict::Held);
-        assert_eq!(entry.input(&key(Key::Up, true), false), Verdict::Drop);
+        assert_eq!(entry.input(&key(Key::ArrowUp, true), false), Verdict::Drop);
         assert_eq!(entry.close(), Verdict::Held);
         entry.tick(ms(999));
         assert_eq!(entry.take_held(), []);
         entry.tick(ms(1));
         assert_eq!(
             entry.take_held(),
-            [Deferred::Command(Key::Char('q')), Deferred::Close]
+            [Deferred::Command(Key::KeyQ), Deferred::Close]
         );
         assert_eq!(entry.input(&command_q, true), Verdict::Drop, "done");
         assert_eq!(entry.close(), Verdict::Drop);

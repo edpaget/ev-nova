@@ -720,7 +720,7 @@ mod on_the_maps {
         // One step out, 0.5625 × 1.333333, unclamped: r 40, so 1600 ×
         // 0.2 × 0.7499998 = 239.99 at Alpha's own cell, and less, 237 or
         // 236, at the cells a wrong offset would put it in.
-        map.input(&press(Key::Char('-')));
+        map.input(&press(Key::Minus));
         map.tick(TICK);
         let centre = map
             .border_cells()
@@ -814,28 +814,28 @@ mod on_the_maps {
             (
                 "left",
                 |map| {
-                    map.input(&press(Key::Left));
+                    map.input(&press(Key::ArrowLeft));
                 },
                 true,
             ),
             (
                 "up, repeated",
                 |map| {
-                    map.input(&repeat(Key::Up));
+                    map.input(&repeat(Key::ArrowUp));
                 },
                 true,
             ),
             (
                 "- key",
                 |map| {
-                    map.input(&press(Key::Char('-')));
+                    map.input(&press(Key::Minus));
                 },
                 true,
             ),
             (
                 "= key",
                 |map| {
-                    map.input(&press(Key::Char('=')));
+                    map.input(&press(Key::Equal));
                 },
                 true,
             ),
@@ -885,7 +885,7 @@ mod on_the_maps {
     fn a_refused_zoom_or_a_hit_press_runs_no_pass() {
         let refused: [(&str, Done); 3] = [
             ("= at the limit", |map| {
-                map.input(&press(Key::Char('=')));
+                map.input(&press(Key::Equal));
             }),
             ("+ at the limit", |map| click(map, on(MapButton::ZoomIn))),
             ("a press the owner accepts", |map| {
@@ -901,7 +901,7 @@ mod on_the_maps {
         ];
         for (name, done) in refused {
             let mut map = flown();
-            map.input(&press(Key::Char('=')));
+            map.input(&press(Key::Equal));
             settled(&mut map);
             done(&mut map);
             assert_eq!(map.border_passes().next(), Next::Idle, "{name}");
@@ -1001,7 +1001,7 @@ mod on_the_maps {
     #[test]
     fn the_fine_pass_waits_while_find_is_open() {
         let mut map = flown();
-        map.input(&press(Key::Char('f')));
+        map.input(&press(Key::KeyF));
         assert!(map.finding());
         map.tick(TICK);
         assert_eq!(map.border_passes().next(), Next::Unstarted);
@@ -1029,7 +1029,7 @@ mod on_the_maps {
     }
 
     fn find_gamma(map: &mut GalaxyMap) {
-        map.input(&press(Key::Char('f')));
+        map.input(&press(Key::KeyF));
         map.input(&Input::Text('f'));
         map.input(&Input::Text('G'));
         map.input(&press(Key::Enter));
@@ -1078,7 +1078,7 @@ mod on_the_maps {
 
     #[test]
     fn b_and_its_repeats_flip_the_borders_and_the_label() {
-        for key in [Key::Char('b'), Key::Char('B')] {
+        for key in [Key::KeyB, Key::KeyB] {
             let mut map = flown();
             settled(&mut map);
             assert!(label_shown(&map, HIDE_BORDERS_LABEL));
@@ -1116,15 +1116,15 @@ mod on_the_maps {
     #[test]
     fn b_is_ignored_while_find_is_open() {
         let mut map = flown();
-        map.input(&press(Key::Char('f')));
-        map.input(&press(Key::Char('b')));
+        map.input(&press(Key::KeyF));
+        map.input(&press(Key::KeyB));
         assert!(map.borders_shown());
     }
 
     #[test]
     fn the_open_keeps_the_setting_it_opened_with() {
         let mut map = flown();
-        map.input(&press(Key::Char('b')));
+        map.input(&press(Key::KeyB));
         assert!(map.borders_changed_since_open());
         map.opened();
         assert!(!map.borders_changed_since_open(), "opened off");
@@ -1252,24 +1252,24 @@ mod on_the_maps {
     fn a_pan_of_the_viewer_reruns_the_coarse_pass() {
         let mut map = viewer();
         map.tick(TICK);
-        map.input(&press(Key::Right));
+        map.input(&press(Key::ArrowRight));
         assert_eq!(steps(&map), [8]);
         map.tick(TICK);
         assert_eq!(steps(&map), [1]);
-        map.input(&press(Key::Char('x')));
+        map.input(&press(Key::KeyX));
         assert_eq!(steps(&map), [1], "the view unchanged: no pass");
     }
 
     #[test]
     fn b_toggles_the_viewers_borders_and_saves_nothing() {
         let mut map = viewer();
-        map.input(&press(Key::Char('b')));
+        map.input(&press(Key::KeyB));
         assert!(!map.borders_shown());
         assert_eq!(map.border_cells(), []);
         map.tick(TICK);
         assert_eq!(map.border_cells(), []);
         assert!(!map.borders_changed_since_open(), "nothing to save");
-        map.input(&press(Key::Char('B')));
+        map.input(&press(Key::KeyB));
         assert!(map.borders_shown());
         assert_eq!(steps(&map), [8]);
         assert!(!map.borders_changed_since_open());

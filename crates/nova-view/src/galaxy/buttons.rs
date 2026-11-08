@@ -210,6 +210,32 @@ impl MapButtons {
         activated
     }
 
+    /// The tracker of `button`.
+    fn tracker_mut(&mut self, button: MapButton) -> &mut ButtonTracker {
+        let at = ORDER
+            .iter()
+            .position(|&which| which == button)
+            .expect("ORDER lists every button");
+        &mut self.trackers[at]
+    }
+
+    /// A pad button's press on `button`, as `state` has it: armed and
+    /// drawn pressed while enabled; a disabled one arms nothing. Silent,
+    /// as `_TrackMapButtons` is.
+    pub fn press_keyed(&mut self, button: MapButton, state: &ButtonState) {
+        let tracker = self.tracker_mut(button);
+        tracker.press_keyed(state.enabled(button));
+        tracker.take_sound();
+    }
+
+    /// That press's release: `button`, when its press armed it. Silent.
+    pub fn release_keyed(&mut self, button: MapButton) -> Option<MapButton> {
+        let tracker = self.tracker_mut(button);
+        let activated = tracker.release_keyed();
+        tracker.take_sound();
+        activated.then_some(button)
+    }
+
     /// Abandons a press on any, silently.
     pub fn cancel_pointer(&mut self) {
         for tracker in &mut self.trackers {
@@ -493,6 +519,63 @@ mod tests {
             buttons.input(&button(false, plus), &ALL),
             None,
             "enabled only by the release"
+        );
+    }
+
+    #[test]
+    fn a_keyed_press_draws_its_button_pressed_and_its_release_activates_it() {
+        let normal = ids(&ButtonSkin::NOVA.normal);
+        let pressed = ids(&ButtonSkin::NOVA.pressed);
+        for (at, which) in ORDER.into_iter().enumerate() {
+            let mut buttons = MapButtons::new(ORIGIN);
+            buttons.press_keyed(which, &ALL);
+            let mut list = DrawList::new();
+            buttons.draw(&ALL, &ButtonStyle::STOCK, Some(&MonoMetrics), &mut list);
+            let mut expected = vec![normal; 6];
+            expected[at] = pressed;
+            assert_eq!(pictures(&list), expected, "{which:?} drawn pressed");
+            assert_eq!(buttons.release_keyed(which), Some(which), "{which:?}");
+            assert_eq!(buttons.release_keyed(which), None, "{which:?} once");
+            let mut list = DrawList::new();
+            buttons.draw(&ALL, &ButtonStyle::STOCK, Some(&MonoMetrics), &mut list);
+            assert_eq!(pictures(&list), vec![normal; 6], "{which:?} let go");
+        }
+    }
+
+    #[test]
+    fn a_keyed_release_of_a_button_not_pressed_or_after_a_cancel_activates_nothing() {
+        let mut buttons = MapButtons::new(ORIGIN);
+        assert_eq!(
+            buttons.release_keyed(MapButton::Done),
+            None,
+            "never pressed"
+        );
+        buttons.press_keyed(MapButton::Done, &ALL);
+        assert_eq!(buttons.release_keyed(MapButton::Find), None, "another");
+        buttons.cancel_pointer();
+        assert_eq!(buttons.release_keyed(MapButton::Done), None, "cancelled");
+    }
+
+    #[test]
+    fn a_keyed_press_on_a_disabled_button_arms_nothing() {
+        let mut buttons = MapButtons::new(ORIGIN);
+        for which in [MapButton::ZoomOut, MapButton::ZoomIn, MapButton::ClearRoute] {
+            buttons.press_keyed(which, &NONE);
+            assert_eq!(buttons.release_keyed(which), None, "{which:?}");
+        }
+    }
+
+    #[test]
+    fn a_keyed_press_is_silent() {
+        let mut buttons = MapButtons::new(ORIGIN);
+        buttons.press_keyed(MapButton::Done, &ALL);
+        buttons.release_keyed(MapButton::Done);
+        assert!(
+            buttons
+                .trackers
+                .iter_mut()
+                .all(|t| t.take_sound().is_none()),
+            "no sound left for anyone"
         );
     }
 

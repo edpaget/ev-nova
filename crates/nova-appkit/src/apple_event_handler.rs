@@ -95,7 +95,8 @@ impl AppleEvents {
     /// `on_command` with each event's command.
     ///
     /// It needs the main thread. For the whole run, install it after
-    /// `NSApplication` has finished launching (winit's `resumed`):
+    /// `NSApplication` has finished launching (winit's
+    /// `can_create_surfaces`):
     /// `finishLaunching` installs `AppKit`'s own handlers, the quit
     /// event's calling `terminate:`, so one registered before then is
     /// replaced. Before launch there are no handlers at all, so one

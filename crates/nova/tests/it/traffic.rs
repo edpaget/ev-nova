@@ -329,7 +329,7 @@ impl Harness {
     /// The app in flight, entered from the ship browser with F.
     fn flying(behaviour: Option<Rc<dyn Behaviour>>) -> Self {
         let mut harness = Self::new(behaviour);
-        harness.press(Key::Char('f'));
+        harness.press(Key::KeyF);
         assert_eq!(harness.showing(), Showing::Flight);
         harness
     }
@@ -475,7 +475,7 @@ fn the_routers_behaviour_decides_for_a_new_pilots_flight() {
 fn the_routers_disable_rule_decides_for_a_flight_entered_with_f() {
     let rule = Rc::new(Counting::default());
     let mut harness = Harness::built(None, Some(rule.clone()), None);
-    harness.press(Key::Char('f'));
+    harness.press(Key::KeyF);
     assert_eq!(harness.showing(), Showing::Flight);
     assert_eq!(rule.asked.get(), 0);
     harness.settle_until("the router's disable rule asked", |_| rule.asked.get() > 0);
@@ -485,7 +485,7 @@ fn the_routers_disable_rule_decides_for_a_flight_entered_with_f() {
 fn a_flights_diagnostics_reach_the_apps_writer_as_lines() {
     let written = Written::default();
     let mut harness = Harness::built(None, None, Some(written.clone()));
-    harness.press(Key::Char('f'));
+    harness.press(Key::KeyF);
     harness.settle_until("a diagnostic written", |_| !written.0.borrow().is_empty());
     let text = String::from_utf8(written.0.borrow().clone()).expect("UTF-8");
     assert!(text.ends_with('\n'), "{text:?}");

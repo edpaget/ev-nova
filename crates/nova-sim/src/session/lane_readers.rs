@@ -17,17 +17,31 @@
 //! By [`RuleKey::GateLanes`]' other reading each reads the gate lanes
 //! instead (see the `story` module's `galaxy_links`), and J never jumps:
 //! each test of that reading stands beside the engine's.
+//!
+//! Two mission pickers read the raw Con slots under either reading of
+//! [`RuleKey::GateLanes`], so over [`laned`] they find nothing by the
+//! engine's reading of their own keys: a mission's `ShipSyst` -5 ships
+//! (`_SelectMissionSystem` @0x9ba70-0x9bac7) and its `AuxShipSyst`
+//! 5000-9998 auxiliary ships (`_ValidAuxShipSystem` @0x99363-0x993ac). By
+//! the other reading of [`RuleKey::MissionShipLinks`] and
+//! [`RuleKey::AuxShipLinks`] they read the map's links, which here are
+//! the lanes.
 
 use super::Session;
 use super::map_click::MapPress;
-use crate::catalog::SystemId;
+use super::mission_ships::tests::{
+    aux_ships, settle, shipping, ships_catalog, ships_of, take_off, ticks, with_aux,
+};
+use crate::catalog::{AuxShip, MissionId, MissionShip, StellarId, SystemId};
 use crate::chance::NeverFires;
 use crate::galaxy_map::MapMarks;
+use crate::geometry::Vec2;
 use crate::hyperspace::{JumpReadiness, JumpRefusal, RouteError};
+use crate::mission::ships::ShipSystem;
 use crate::navigation::NavMode;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::sound::SimSound;
-use crate::testkit::{DRIFT, HEARTH, VERGE, laned};
+use crate::testkit::{DRIFT, FakePilotCatalog, HEARTH, VERGE, land_now, laned, planet};
 
 /// A new pilot over [`laned`], in drift, by the original's readings.
 fn started() -> Session {
@@ -297,4 +311,83 @@ fn the_map_drawing_reads_the_lane_style_key() {
         };
         assert_eq!(to_verge, expected, "{style:?}");
     }
+}
+
+/// Where [`laned_mission`]'s planet 128 sits in drift, away from its
+/// gates.
+const PORT: (f32, f32) = (600.0, 600.0);
+
+/// [`laned`] with planet 128 in drift at [`PORT`] and mission 140, offered
+/// anywhere: its special ships as `ships` says and its auxiliary ships as
+/// `aux` says (see the `mission_ships` tests' `ships_catalog` and
+/// `with_aux`).
+fn laned_mission(ships: MissionShip, aux: AuxShip) -> FakePilotCatalog {
+    let shipping = ships_catalog(ships);
+    let mut catalog = FakePilotCatalog {
+        ship_records: shipping.ship_records,
+        dudes: shipping.dudes,
+        missions: shipping.missions,
+        ..laned()
+    };
+    for (system, sites) in &mut catalog.sites {
+        if *system == DRIFT {
+            sites.push(planet(128, PORT.0, PORT.1));
+        }
+    }
+    with_aux(catalog, aux, 0)
+}
+
+/// A session over `catalog`, by [`RuleKey::GateLanes`]' other reading and
+/// `key` read as `reading`, docked in drift with mission 140 accepted.
+fn accepted_in_drift(catalog: &FakePilotCatalog, key: RuleKey, reading: RuleSource) -> Session {
+    let rules = Rulebook::default()
+        .with_override(RuleKey::GateLanes, RuleSource::Bible)
+        .with_override(key, reading);
+    let mut session = Session::start_ruled(catalog, &rules).expect("starts");
+    session.ship.player.position = Vec2::new(PORT.0, PORT.1);
+    assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+    settle(&mut session, catalog);
+    assert_eq!(
+        session.accept_mission(MissionId(140), &mut NeverFires),
+        Ok(0)
+    );
+    settle(&mut session, catalog);
+    assert_eq!(session.pilot().system, DRIFT);
+    session
+}
+
+#[test]
+fn by_the_lanes_mission_ships_of_minus_5_go_to_a_lane_neighbour_by_mission_ship_links() {
+    let catalog = laned_mission(shipping(-5, 0), AuxShip::NONE);
+    let by = |reading| {
+        let session = accepted_in_drift(&catalog, RuleKey::MissionShipLinks, reading);
+        ships_of(&session).system
+    };
+    assert_eq!(
+        by(RuleSource::Engine),
+        ShipSystem::Nowhere,
+        "drift has no Con slot"
+    );
+    let ShipSystem::At(system) = by(RuleSource::Bible) else {
+        panic!("drawn somewhere");
+    };
+    assert!([HEARTH, VERGE].contains(&system), "{system:?}");
+}
+
+#[test]
+fn by_the_lanes_aux_ships_of_5003_come_into_drift_by_aux_ship_links() {
+    // 5003 names hearth (131), whose lanes reach drift.
+    let catalog = laned_mission(MissionShip::NONE, aux_ships(2, HEARTH.0 + 4872));
+    let by = |reading| {
+        let mut session = accepted_in_drift(&catalog, RuleKey::AuxShipLinks, reading);
+        take_off(&mut session, &catalog);
+        ticks(&mut session, &catalog, 300);
+        session
+            .npcs()
+            .iter()
+            .filter(|npc| npc.aux == Some(0))
+            .count()
+    };
+    assert_eq!(by(RuleSource::Engine), 0, "hearth has no Con slot");
+    assert_eq!(by(RuleSource::Bible), 2);
 }

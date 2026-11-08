@@ -42,7 +42,8 @@ use crate::draw::DrawList;
 #[cfg(doc)]
 use crate::flight::FlightView;
 use crate::flight::MapOpener;
-use crate::input::Input;
+use crate::input::{Device, Input, Surroundings};
+use crate::keymap::SharedBindings;
 use crate::movie::{MovieStage, Movies};
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
@@ -144,6 +145,13 @@ pub struct MissionDialogs {
     /// Whether the screen under them is faded, and the front text's
     /// fade-in.
     screen: FadedScreen,
+    /// The bindings each text reads its keys through.
+    bindings: SharedBindings,
+    /// What the app last told them about where they run: each text is
+    /// told as it comes to the front ([`MissionDialogs::ready_front`]),
+    /// and the mission info screen as it opens
+    /// ([`MissionDialogs::open_info_with_map`]).
+    surroundings: Surroundings,
 }
 
 impl std::fmt::Debug for MissionDialogs {
@@ -183,7 +191,34 @@ impl MissionDialogs {
             left: Vec::new(),
             texts_closed: 0,
             screen: FadedScreen::default(),
+            bindings: SharedBindings::default(),
+            surroundings: Surroundings::default(),
         }
+    }
+
+    /// The device the player used last, as the app last told them; the
+    /// keyboard before any.
+    #[must_use]
+    pub fn device(&self) -> Device {
+        self.surroundings.device
+    }
+
+    /// These dialogs reading their keys through `bindings`: each text and
+    /// movie queued, and each queued after it.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        for stage in &mut self.texts {
+            match stage {
+                Stage::Text(dialog) => dialog.set_bindings(bindings.clone()),
+                Stage::Movie(movie) => movie.set_bindings(bindings.clone()),
+                _ => {}
+            }
+        }
+        if let Some(screen) = &mut self.info {
+            screen.set_bindings(bindings.clone());
+        }
+        self.bindings = bindings;
+        self
     }
 
     /// The screen under these dialogs is faded, as its holder's fade
@@ -314,7 +349,10 @@ impl MissionDialogs {
             Rc::clone(&self.metrics),
         ) {
             self.texts.push_back(Stage::Text(Box::new(
-                dialog.with_map(map).with_focus_ring(self.focus_ring),
+                dialog
+                    .with_map(map)
+                    .with_focus_ring(self.focus_ring)
+                    .with_bindings(self.bindings.clone()),
             )));
         }
         if let Some(after) = movie(true) {
@@ -325,18 +363,22 @@ impl MissionDialogs {
     /// Queues `movie` after whatever is queued, while movies are on.
     fn queue_movie(&mut self, movie: &DescMovie) {
         if let Some(stage) = self.movies.stage(movie) {
-            self.texts.push_back(Stage::Movie(stage));
+            self.texts
+                .push_back(Stage::Movie(stage.with_bindings(self.bindings.clone())));
         }
     }
 
     /// Readies what is in front, other than a movie: lets go of the marks
     /// of the texts done, drops an empty text on an unfaded screen, and
     /// begins the fade-in of a text, or an empty one, on a faded screen.
+    /// A text in front is told the device the player used last, so the
+    /// pad's highlight shows on it at once.
     fn ready_front(&mut self) {
         loop {
             self.pop_closed();
             match self.texts.front() {
                 Some(Stage::Text(_)) => {
+                    self.tell_front();
                     self.screen.show_text();
                     return;
                 }
@@ -348,6 +390,16 @@ impl MissionDialogs {
                 }
                 _ => return,
             }
+        }
+    }
+
+    /// Tells the text in front, if one is, the device the player used
+    /// last, unless it knows it.
+    fn tell_front(&mut self) {
+        if let Some(Stage::Text(text)) = self.texts.front_mut()
+            && text.dialog().device() != self.surroundings.device
+        {
+            text.input(&Input::Surroundings(self.surroundings));
         }
     }
 
@@ -469,7 +521,8 @@ impl MissionDialogs {
     /// [`MissionDialogs::open_info`], its map key opening the map when
     /// `map_allowed`: not when it opens over an offer or the mission
     /// computer, as `_missionDialog` is set then
-    /// ([`MissionInfoScreen::with_map_allowed`]).
+    /// ([`MissionInfoScreen::with_map_allowed`]). It opens told the
+    /// device the player used last, so the pad's highlight shows at once.
     pub fn open_info_with_map(&mut self, info: MissionInfo, map_allowed: bool) {
         if info.rows.is_empty() {
             return;
@@ -480,7 +533,11 @@ impl MissionDialogs {
             .map(|template| (template, Rc::clone(&self.metrics)));
         let mut screen = MissionInfoScreen::new(layout, info, self.style)
             .with_map_allowed(map_allowed)
-            .with_focus_ring(self.focus_ring);
+            .with_focus_ring(self.focus_ring)
+            .with_bindings(self.bindings.clone());
+        // Told as it opens, as each text is: the app tells the dialogs
+        // only when the device changes, or as they open.
+        screen.input(&Input::Surroundings(self.surroundings));
         self.sounds.extend(screen.take_sounds());
         self.info = Some(screen);
     }
@@ -628,8 +685,18 @@ impl MissionDialogs {
 
 impl Screen for MissionDialogs {
     /// The movie or text shown takes every input until it ends or Done
-    /// closes it; otherwise the mission info screen does. It never quits.
+    /// closes it; otherwise the mission info screen does. The
+    /// surroundings are kept for each text to come, and reach the text in
+    /// front and the mission info screen beneath. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if let Input::Surroundings(surroundings) = *input {
+            self.surroundings = surroundings;
+            if let Some(info) = &mut self.info {
+                info.input(input);
+            }
+            self.tell_front();
+            return ScreenAction::None;
+        }
         self.front_input(input);
         self.settle();
         ScreenAction::None
@@ -742,6 +809,9 @@ impl Screen for MissionDialogs {
 }
 
 #[cfg(test)]
+pub(crate) use tests::pad_probe;
+
+#[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
     use nova_sim::{InfoRow, MapMarks, MissionId, MissionText, MissionTextKind};
@@ -752,6 +822,7 @@ mod tests {
     use crate::flight::MapOpener;
     use crate::geometry::{Bounds, Point};
     use crate::input::{Key, MouseButton};
+    use crate::keymap::test_keys::MISSION_INFO_KEY;
     use crate::movie::fixture::{Call, MockMoviePlayer};
     use crate::movie::{MOVIE_FADE_FOR, MoviePlayer};
     use crate::sound::UiSound;
@@ -759,7 +830,6 @@ mod tests {
     use crate::text::fixture::MonoMetrics;
     use crate::ui::desc::{DONE_ITEM, SCROLL_DOWN_ITEM};
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
-    use crate::ui::mission_info::MISSION_INFO_KEY;
     use crate::ui::row_list::RowList;
     use nova_sim::DescMovie;
 
@@ -894,6 +964,103 @@ mod tests {
         }
     }
 
+    const PAD: crate::input::Device =
+        crate::input::Device::Gamepad(crate::input::ControllerFamily::Generic);
+
+    fn told(device: crate::input::Device) -> Input {
+        Input::Surroundings(crate::input::Surroundings::of(device))
+    }
+
+    fn tap(dialogs: &mut MissionDialogs, button: crate::input::PadButton) {
+        for pressed in [true, false] {
+            dialogs.input(&Input::PadButton {
+                button,
+                pressed,
+                repeat: false,
+            });
+        }
+    }
+
+    #[test]
+    fn each_text_brought_to_the_front_is_told_the_device() {
+        let mut dialogs = dialogs();
+        dialogs.show_texts([brief(128, "First."), brief(129, "Second.")]);
+        dialogs.input(&told(PAD));
+        let front = |dialogs: &MissionDialogs| dialogs.text().expect("a text").dialog().clone();
+        assert_eq!(front(&dialogs).pad_highlight(), Some(DONE_ITEM));
+        tap(&mut dialogs, crate::input::PadButton::South);
+        assert_eq!(dialogs.take_texts_closed(), 1);
+        let second = front(&dialogs);
+        assert_eq!(second.device(), PAD);
+        assert_eq!(second.pad_highlight(), Some(DONE_ITEM), "at once");
+    }
+
+    #[test]
+    fn the_dialogs_keep_the_device_for_each_text_to_come() {
+        let mut dialogs = dialogs();
+        assert_eq!(dialogs.device(), crate::input::Device::Keyboard);
+        dialogs.open_info(info());
+        dialogs.input(&told(PAD));
+        assert_eq!(dialogs.device(), PAD);
+        dialogs.input(&told(crate::input::Device::Mouse));
+        assert_eq!(dialogs.device(), crate::input::Device::Mouse);
+    }
+
+    #[test]
+    fn the_mission_info_screen_opens_told_the_device() {
+        let mut dialogs = dialogs();
+        dialogs.input(&told(PAD));
+        dialogs.open_info(info());
+        let screen = dialogs.info().expect("open");
+        assert_eq!(
+            screen.dialog().map(crate::ui::dialog::Dialog::device),
+            Some(PAD)
+        );
+        assert!(
+            screen
+                .dialog()
+                .and_then(crate::ui::dialog::Dialog::pad_highlight)
+                .is_some()
+        );
+    }
+
+    struct Probe(MissionDialogs);
+
+    impl crate::ui::pad_focus::every_screen::PadProbe for Probe {
+        fn screen(&mut self) -> &mut dyn Screen {
+            &mut self.0
+        }
+
+        fn controls(&self) -> Vec<(&'static str, Bounds)> {
+            let dialog = self.0.text().expect("a text").dialog();
+            let at = |item| dialog.item_bounds(item).expect("item");
+            vec![("Done", at(DONE_ITEM))]
+        }
+
+        fn outcome(&mut self) -> String {
+            format!("closed {}", self.0.take_texts_closed())
+        }
+
+        fn default_control(&self) -> Option<&'static str> {
+            Some("Done")
+        }
+
+        fn set_ring(&mut self, ring: FocusRing) -> bool {
+            let mut dialogs = dialogs().with_focus_ring(ring);
+            dialogs.show_texts([brief(128, "A mission.")]);
+            self.0 = dialogs;
+            true
+        }
+    }
+
+    /// The mission texts' row in the pad's every-screen table, over
+    /// flight: the front text's Done.
+    pub(crate) fn pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        let mut dialogs = dialogs();
+        dialogs.show_texts([brief(128, "A mission.")]);
+        Box::new(Probe(dialogs))
+    }
+
     fn click(dialogs: &mut MissionDialogs, at: Point) {
         for pressed in [true, false] {
             dialogs.input(&Input::PointerButton {
@@ -921,7 +1088,7 @@ mod tests {
 
     #[test]
     fn the_briefings_map_key_asks_for_its_marked_map_and_another_texts_none() {
-        let m = crate::flight::view::MAP_KEY;
+        let m = crate::Key::KeyM;
         let marks = MapMarks {
             green: Some(nova_sim::SystemId(131)),
             multi_arrows: true,
@@ -970,6 +1137,30 @@ mod tests {
         assert!(dialogs.text().is_some(), "still open");
     }
 
+    /// The texts read their keys through the key map the dialogs are
+    /// given, one queued before it as one queued after: Confirm rebound to
+    /// F6 closes each on F6 and no longer on Return.
+    #[test]
+    fn a_rebound_confirm_closes_each_text_on_its_new_key_alone() {
+        let mut dialogs = dialogs();
+        dialogs.show_texts(vec![brief(128, "One.")]);
+        let bindings =
+            crate::keymap::SharedBindings::new(crate::keymap::Bindings::default().rebound(
+                crate::keymap::UiCommand::Confirm,
+                crate::keymap::KeyCombo::key(Key::F6),
+            ));
+        let mut dialogs = dialogs.with_bindings(bindings);
+        dialogs.show_texts(vec![brief(129, "Two.")]);
+        dialogs.input(&key(Key::Enter));
+        assert_eq!(dialogs.text_stages(), 2, "Return no longer closes");
+        dialogs.input(&key(Key::F6));
+        assert_eq!(dialogs.text_stages(), 1, "F6 closes the first");
+        dialogs.input(&key(Key::Enter));
+        assert_eq!(dialogs.text_stages(), 1);
+        dialogs.input(&key(Key::F6));
+        assert!(!dialogs.is_open(), "and the second");
+    }
+
     /// `_ShowTextDialog`'s Up and Down reach a mission text (@0x5b0af-0x5b130).
     #[test]
     fn a_mission_text_scrolls_ten_pixels_with_up_and_down() {
@@ -977,9 +1168,9 @@ mod tests {
         let mut dialogs = dialogs();
         dialogs.show_texts(vec![brief(128, &long.join("\r"))]);
         let at = |dialogs: &MissionDialogs| dialogs.text().expect("open").scroll_offset();
-        dialogs.input(&key(Key::Down));
+        dialogs.input(&key(Key::ArrowDown));
         assert_eq!(at(&dialogs), crate::ui::desc::ARROW_UNITS);
-        dialogs.input(&key(Key::Up));
+        dialogs.input(&key(Key::ArrowUp));
         assert_eq!(at(&dialogs), 0.0);
     }
 
@@ -1121,10 +1312,10 @@ mod tests {
         let at = done_at(&dialogs);
         dialogs.input(&left(true, at));
         dialogs.input(&key(Key::Enter));
-        dialogs.input(&key(Key::Char('b')));
+        dialogs.input(&key(Key::KeyB));
         dialogs.input(&left(false, Point::new(0.0, 0.0)));
         assert!(!dialogs.is_open());
-        assert_eq!(dialogs.take_left(), [key(Key::Char('b'))]);
+        assert_eq!(dialogs.take_left(), [key(Key::KeyB)]);
         assert_eq!(dialogs.take_left(), [], "once");
         assert_eq!(dialogs.take_unclaimed(), [], "kept apart from a movie's");
     }
@@ -1145,7 +1336,7 @@ mod tests {
 
     #[test]
     fn mission_infos_map_key_asks_for_the_map_of_its_selected_slot_unless_refused() {
-        let m = crate::flight::view::MAP_KEY;
+        let m = crate::Key::KeyM;
         let mut dialogs = dialogs();
         dialogs.open_info(info());
         dialogs.input(&key(m));
@@ -1194,12 +1385,12 @@ mod tests {
     fn the_info_screens_rest_after_a_held_close_is_left_for_what_is_beneath() {
         let mut dialogs = dialogs();
         dialogs.open_info(info());
-        let at = held_on_info(&mut dialogs, &[key(Key::Escape), key(Key::Down)]);
+        let at = held_on_info(&mut dialogs, &[key(Key::Escape), key(Key::ArrowDown)]);
         assert!(dialogs.info().is_some(), "it waits");
         dialogs.input(&left(false, at));
         assert!(dialogs.info().is_none());
         assert!(dialogs.take_info_closed());
-        assert_eq!(dialogs.take_left(), [key(Key::Down)], "@0x9e744");
+        assert_eq!(dialogs.take_left(), [key(Key::ArrowDown)], "@0x9e744");
         assert_eq!(dialogs.take_unclaimed(), []);
     }
 
@@ -1221,14 +1412,14 @@ mod tests {
     fn a_tick_replay_that_closes_the_info_screen_closes_it() {
         let mut dialogs = dialogs();
         dialogs.open_info(info());
-        held_on_info(&mut dialogs, &[key(Key::Escape), key(Key::Down)]);
+        held_on_info(&mut dialogs, &[key(Key::Escape), key(Key::ArrowDown)]);
         dialogs.cancel_pointer();
         assert!(dialogs.info().is_some());
         dialogs.tick(Duration::ZERO);
         assert!(dialogs.info().is_none(), "closed by the tick");
         assert!(dialogs.take_info_closed());
         assert!(dialogs.take_info_closed_laid_out());
-        assert_eq!(dialogs.take_left(), [key(Key::Down)]);
+        assert_eq!(dialogs.take_left(), [key(Key::ArrowDown)]);
     }
 
     #[test]
@@ -1251,7 +1442,7 @@ mod tests {
             .center();
         dialogs.input(&left(true, abort));
         dialogs.input(&key(Key::Escape));
-        dialogs.input(&key(Key::Down));
+        dialogs.input(&key(Key::ArrowDown));
         dialogs.input(&left(false, abort));
         assert_eq!(dialogs.take_abort(), Some(2));
         assert!(dialogs.info().is_some(), "the Escape waits for the answer");
@@ -1262,7 +1453,7 @@ mod tests {
             "the Escape ran on the rebuilt list"
         );
         assert!(dialogs.take_info_closed());
-        assert_eq!(dialogs.take_left(), [key(Key::Down)]);
+        assert_eq!(dialogs.take_left(), [key(Key::ArrowDown)]);
     }
 
     #[test]
@@ -1427,13 +1618,29 @@ mod tests {
         assert_eq!(text, "Loaded.");
     }
 
+    /// The info screen opened after the dialogs are given their bindings
+    /// reads them: Mission Info rebound to Q closes it on Q, not on I.
+    #[test]
+    fn the_info_screen_reads_the_bindings_the_dialogs_were_given() {
+        use crate::keymap::{Bindings, KeyCombo, PlayCommand, SharedBindings};
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(PlayCommand::MissionInfo, KeyCombo::key(Key::KeyQ)),
+        );
+        let mut dialogs = dialogs().with_bindings(bindings);
+        dialogs.open_info(info());
+        dialogs.input(&key(Key::KeyI));
+        assert!(dialogs.info().is_some(), "I no longer closes it");
+        dialogs.input(&key(Key::KeyQ));
+        assert!(dialogs.take_info_closed_laid_out(), "Q closes it");
+    }
+
     #[test]
     fn the_info_screens_close_is_told_once_when_it_was_laid_out() {
         let mut dialogs = dialogs();
         assert!(!dialogs.take_info_closed_laid_out(), "nothing open");
         dialogs.open_info(info());
         assert!(!dialogs.take_info_closed_laid_out(), "opening");
-        dialogs.input(&key(Key::Down));
+        dialogs.input(&key(Key::ArrowDown));
         assert!(!dialogs.take_info_closed_laid_out(), "still open");
         dialogs.input(&key(Key::Enter));
         assert!(dialogs.take_info_closed_laid_out(), "Done (@0x9e769)");
@@ -1746,7 +1953,7 @@ mod tests {
         assert_eq!(shown(&dialogs), None, "no text while the movie plays");
         assert!(drawn(&dialogs).is_empty(), "the text is not drawn");
         assert_eq!(player.drawn().len(), 1, "the movie is");
-        dialogs.input(&key(Key::Char('q')));
+        dialogs.input(&key(Key::KeyQ));
         assert_eq!(shown(&dialogs), None, "the movie swallows input");
         dialogs.tick(TICK);
         dialogs.tick(TICK);
@@ -1762,6 +1969,33 @@ mod tests {
                 Call::Stop
             ]
         );
+    }
+
+    /// A movie queued before the dialogs are given their bindings, or
+    /// after, reads its skip keys through them: Activate rebound to Q
+    /// skips it on Q and no longer on Space.
+    #[test]
+    fn a_movie_skips_on_the_rebound_activate_alone() {
+        use crate::keymap::{Bindings, KeyCombo, SharedBindings, UiCommand};
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Activate, KeyCombo::key(Key::KeyQ)),
+        );
+        let player = MockMoviePlayer::playing((160, 120), 30);
+        let mut dialogs = playing(&player);
+        dialogs.show_texts(vec![filmed("Before.", 0)]);
+        let mut dialogs = dialogs.with_bindings(bindings);
+        dialogs.input(&key(Key::Space));
+        assert!(dialogs.playing(), "Space no longer skips it");
+        dialogs.input(&key(Key::KeyQ));
+        assert_eq!(shown(&dialogs).as_deref(), Some("Before."), "Q does");
+        dialogs.show_texts(vec![filmed("After.", 0x0001)]);
+        dialogs.input(&key(Key::Enter));
+        dialogs.input(&key(Key::Enter));
+        assert!(dialogs.playing(), "the movie after it");
+        dialogs.input(&key(Key::Space));
+        assert!(dialogs.playing(), "Space no longer skips it");
+        dialogs.input(&key(Key::KeyQ));
+        assert!(!dialogs.playing(), "Q does");
     }
 
     #[test]

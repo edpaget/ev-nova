@@ -23,6 +23,14 @@ pub(super) fn free_cargo_in(holds: u32, pilot: &Pilot) -> i64 {
 }
 
 impl PlayerShip {
+    /// The ship's own holds, which [`PlayerShip::free_cargo`] measures
+    /// against: what a caller passes on when the room must be measured
+    /// after the cargo changes (an offer decided as its conversation
+    /// opens, see the `storylines` module).
+    pub(super) fn holds(&self) -> u32 {
+        self.fit.stats.capacity
+    }
+
     /// The fleet's free cargo, as the plunder's cargo take reads it (see
     /// the module docs): the fleet's holds
     /// ([`PlayerShip::capacity`]) less every ton carried.

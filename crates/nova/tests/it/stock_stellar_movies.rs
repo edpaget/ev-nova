@@ -191,10 +191,10 @@ impl Driver {
 
     /// L, two redraws for the dock approach to clear it, and L.
     fn land_twice(&mut self) {
-        self.press(Key::Char('l'));
+        self.press(Key::KeyL);
         self.redraw();
         self.redraw();
-        self.press(Key::Char('l'));
+        self.press(Key::KeyL);
     }
 }
 
@@ -289,7 +289,7 @@ fn a_stock_landing_hypergate_and_wormhole_with_movies_on_start_no_movie() {
     let tichel = map.model().system(SystemId(129)).expect("Tichel");
     let at = map.transform().world_to_screen(tichel.position());
     driver.click(at);
-    driver.press(Key::Char('m'));
+    driver.press(Key::KeyM);
     assert_eq!(driver.showing(), Showing::Flight, "no movie");
     assert_eq!(driver.session().system(), SystemId(129), "entered");
     assert!(player.calls().is_empty(), "{:?}", player.calls());

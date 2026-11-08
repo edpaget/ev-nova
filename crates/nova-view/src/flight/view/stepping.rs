@@ -62,20 +62,21 @@
 
 use nova_sim::flight_frame::{PassReport, StepInput, StepRun};
 use nova_sim::player_wrap::PlayerWrap;
-use nova_sim::{Controls, Face, PlayerCommand, RuleKey, RuleSource, Rulebook, ShipRef, Turn, Vec2};
+use nova_sim::{
+    Amounts, Controls, Face, PlayerCommand, RuleKey, RuleSource, Rulebook, ShipRef, Turn, Vec2,
+};
 
-use crate::Key;
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::effects::{Breakups, LoopedSounds, Scene};
 use crate::flight::sim_port::FlightSim;
+use crate::keymap::FlightCommand as F;
 use crate::system::camera::Anchor;
 use crate::system::catalog::SystemCatalog;
 
 use super::between_passes::{self, BetweenPasses};
 use super::{
-    AFTERBURNER_KEY, CLOAK_KEY, DESELECT_KEY, EJECT_KEY, FACE_TARGET_KEY, FIRE_KEY, FlightView,
-    JETTISON_KEY, LAND_KEY, SECONDARY_KEY, SELF_DESTRUCT_KEY, dying, glow_decay, play_area, point,
-    show_combat, show_stellars, stars, window_width,
+    FlightView, dying, glow_decay, play_area, point, show_combat, show_stellars, stars,
+    window_width,
 };
 
 /// The rules the view shows the steps' effects, the stars, the world, the
@@ -115,10 +116,13 @@ pub(super) struct Presentation {
     /// [`RuleKey::PayMillions`]'s reading: how the messages write a
     /// number from a million.
     pub(super) millions: RuleSource,
+    /// [`RuleKey::HintKeyNames`]'s reading: how the tutorial's hints
+    /// name a key.
+    pub(super) hint_names: RuleSource,
 }
 
 impl Presentation {
-    /// The ten as `rules` read them.
+    /// The eleven as `rules` read them.
     pub(super) fn of(rules: &Rulebook) -> Self {
         Self {
             debris: rules.source_for(RuleKey::ShipDebris),
@@ -131,6 +135,7 @@ impl Presentation {
             ion_tint_murk: rules.source_for(RuleKey::IonTintMurkColour),
             hud_cadence: rules.source_for(RuleKey::HudCadence),
             millions: rules.source_for(RuleKey::PayMillions),
+            hint_names: rules.source_for(RuleKey::HintKeyNames),
         }
     }
 
@@ -150,27 +155,80 @@ impl Presentation {
     }
 }
 
+/// The turn and the thrust flight holds ([`FlightView::steering`]).
+struct Steering {
+    /// Which way it turns.
+    way: Turn,
+    /// How far the turn is held, 0 to 1.
+    turn: f32,
+    /// How far the thrust is held, 0 to 1.
+    thrust: f32,
+}
+
 impl<C, S: FlightSim> FlightView<C, S> {
-    /// The controls for the keys held.
+    /// The controls for the commands held and the sticks. Autopilot with
+    /// Option ([`F::FaceStellar`]) faces the navigation stellar, whether
+    /// its key is Autopilot's with Option or one of its own. The turn and
+    /// the thrust are [`FlightView::steering`]'s, held while their amount
+    /// is above none.
     pub(super) fn controls(&self) -> Controls {
-        let holding = |key| self.held.contains(&key);
-        let turn = match (holding(Key::Left), holding(Key::Right)) {
-            (true, false) => Turn::Left,
-            (false, true) => Turn::Right,
-            _ => Turn::None,
-        };
-        let face = match (holding(FACE_TARGET_KEY), holding(Key::Alt)) {
-            (false, _) => Face::Off,
-            (true, false) => Face::Target,
-            (true, true) => Face::Stellar,
+        let steering = self.steering();
+        let face = if self.held(F::FaceStellar) {
+            Face::Stellar
+        } else if self.held(F::Autopilot) {
+            Face::Target
+        } else {
+            Face::Off
         };
         Controls {
-            thrust: holding(Key::Up),
-            turn,
-            reverse: holding(Key::Down),
+            thrust: steering.thrust > 0.0,
+            turn: steering.way,
+            reverse: self.held(F::ReverseCourse),
             face,
-            afterburner: holding(AFTERBURNER_KEY),
+            afterburner: self.held(F::Afterburner),
         }
+    }
+
+    /// How far the turn and the thrust are held: a key's (or the d-pad's)
+    /// fully, a stick's by its amount.
+    pub(super) fn amounts(&self) -> Amounts {
+        let steering = self.steering();
+        Amounts {
+            turn: steering.turn,
+            thrust: steering.thrust,
+        }
+    }
+
+    /// The turn and the thrust from the commands held and the sticks. The
+    /// turn is the key's way at 1 while exactly one turn command is held,
+    /// otherwise the turn stick's ([`F::TurnAxis`]), its sign the way and
+    /// its size the amount. The thrust is 1 while Accelerate is held,
+    /// otherwise the throttle stick's ([`F::ThrottleAxis`]) forward part:
+    /// pulled back, it thrusts none (and past the press threshold holds
+    /// Reverse Course, a command). So a key or d-pad press beats a smaller
+    /// stick amount, and with keys alone each is 0 or 1.
+    fn steering(&self) -> Steering {
+        let (way, turn) = match (self.held(F::RotateLeft), self.held(F::RotateRight)) {
+            (true, false) => (Turn::Left, 1.0),
+            (false, true) => (Turn::Right, 1.0),
+            _ => {
+                let stick = self.keys.axis(F::TurnAxis);
+                let way = if stick > 0.0 {
+                    Turn::Right
+                } else if stick < 0.0 {
+                    Turn::Left
+                } else {
+                    Turn::None
+                };
+                (way, stick.abs())
+            }
+        };
+        let thrust = if self.held(F::Accelerate) {
+            1.0
+        } else {
+            self.keys.axis(F::ThrottleAxis).max(0.0)
+        };
+        Steering { way, turn, thrust }
     }
 
     /// What the frame's steps are given, the ship drawn at `anchor`: the
@@ -182,29 +240,32 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// @0x705b7); double time and Hyperspace Effects as the screen was
     /// told; the land key held and L's latch, `_dockTryFlag`, which holds
     /// the dock approach back (the `faded_keys` module); the jettison
-    /// chord, `Some(all)` while Command and K are down and the flight
-    /// takes it, `all` unless Option is down too, or a tap of it since
-    /// the last step ([`FlightView::jettison`]); and whether 334 ms or
+    /// chord, `Some(all)` while Jettison Cargo is held and the flight
+    /// takes it, `all` unless it is held with Option too
+    /// ([`F::JettisonNonMission`]), or a tap of it since the last step
+    /// ([`FlightView::jettison_tap`]); and whether 334 ms or
     /// more of the wall time handed to the view went by without a step,
     /// which holds the next step's gain.
     pub(super) fn step_input(&self, anchor: Anchor) -> StepInput {
-        let held = |key| self.held.contains(&key);
-        let chord = |command, key| self.takes(command) && held(Key::Command) && held(key);
-        let jettison = chord(PlayerCommand::Jettison, JETTISON_KEY)
-            .then(|| !held(Key::Alt))
+        let chord = |gate, command| self.takes(gate) && self.held(command);
+        let non_mission = self.held(F::JettisonNonMission);
+        let jettison = (self.takes(PlayerCommand::Jettison)
+            && (self.held(F::JettisonCargo) || non_mission))
+            .then_some(!non_mission)
             .or(self.jettison_tapped);
         StepInput {
             controls: self.controls(),
+            amounts: self.amounts(),
             play_area: play_area(self.view, anchor),
             window_width: window_width(self.view),
-            fire: (held(FIRE_KEY), held(SECONDARY_KEY)),
-            eject: chord(PlayerCommand::Eject, EJECT_KEY),
-            self_destruct: chord(PlayerCommand::SelfDestruct, SELF_DESTRUCT_KEY),
-            cloak: self.takes(PlayerCommand::Cloak) && held(CLOAK_KEY),
-            weapon_safety: self.takes(PlayerCommand::DeselectWeapon) && held(DESELECT_KEY),
+            fire: (self.held(F::FirePrimary), self.held(F::FireSecondary)),
+            eject: chord(PlayerCommand::Eject, F::Eject),
+            self_destruct: chord(PlayerCommand::SelfDestruct, F::SelfDestruct),
+            cloak: chord(PlayerCommand::Cloak, F::EngageCloak),
+            weapon_safety: chord(PlayerCommand::DeselectWeapon, F::WeaponSafety),
             double_time_key: self.double_time,
             hyperspace_effects: self.hyperspace_effects,
-            land_key: held(LAND_KEY),
+            land_key: self.held(F::LandDock),
             dock_try: self.faded_keys.land_latched(),
             jettison,
             held: nova_sim::speed_mult::holds_after(self.since_step),
@@ -225,7 +286,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.sim.step(&input, steps, &mut report);
         if !report.steps.is_empty() {
             self.since_step = std::time::Duration::ZERO;
-            // A step has read the tap (`FlightView::jettison`).
+            // A step has read the tap (`FlightView::jettison_tap`).
             self.jettison_tapped = None;
         }
         let mut notes = Vec::new();

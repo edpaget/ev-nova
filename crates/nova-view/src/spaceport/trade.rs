@@ -95,23 +95,25 @@ use super::layout::DONE_LABEL;
 use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
 use super::quantity_ask::QuantityAsk;
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
+use crate::bound_names::{CONFIRM_OR_BACK, press_clause};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect, frame_rect, rule};
-use crate::flight::view::is_map_press;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
-use crate::input::{Input, Key};
+use crate::input::Input;
+use crate::keymap::{
+    Command, CommandReader, PlayCommand, SharedBindings, TradeCommand, UiCommand, contexts,
+};
 use crate::movie::Movies;
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing, Role};
-use crate::ui::mission_info::is_mission_info_press;
-use crate::ui::player_info::is_player_info_press;
 use crate::ui::quantity::QuantityDialog;
 use crate::ui::text_box::TextBox;
+use crate::ui::touch_aids::ModifierToggle;
 
 /// The "Trade" dialog's `DLOG` (and `DITL`) ID.
 pub const TRADE_DIALOG: i16 = 1001;
@@ -141,16 +143,6 @@ pub const EVENT_ITEM: usize = 15;
 pub const BUY_LABEL: &str = "Buy";
 /// `STR#` 150 #3.
 pub const SELL_LABEL: &str = "Sell";
-
-/// Buys, as Buy does: the original's default.
-pub const BUY_KEY: Key = Key::Char('b');
-/// Sells, as Sell does: the original's default.
-pub const SELL_KEY: Key = Key::Char('s');
-/// Held, makes a Buy or Sell ask for a count in the quantity dialog, as
-/// the original's Option does, or by the other reading of
-/// [`RuleKey::TradeCount`](nova_sim::RuleKey::TradeCount) trade the most
-/// at once.
-pub const MAX_LOT_KEY: Key = Key::Alt;
 
 /// The dialog's font: `_smallTextFont`, Geneva (@0x4cf4b-0x4cf72).
 pub const TEXT_FONT: Font = Font::Geneva;
@@ -260,10 +252,10 @@ impl std::fmt::Debug for MetricsHandle {
 /// What the screen's own keys asked for, until each is taken.
 #[derive(Clone, Copy, Debug, Default)]
 struct KeyAsks {
-    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY)
+    /// Whether [the player info key](crate::keymap::PlayCommand::PlayerInfo)
     /// asked for the player info screen.
     player_info: bool,
-    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// Whether [the mission info key](crate::keymap::PlayCommand::MissionInfo)
     /// asked for the mission info screen.
     mission_info: bool,
     /// Whether the map key asked for the course map.
@@ -296,10 +288,13 @@ pub struct TradeScreen {
     style: ButtonStyle,
     /// Whether its dialogs' buttons take the keyboard focus.
     focus_ring: FocusRing,
-    /// Whether Shift is held, so that Tab steps back under
-    /// [`FocusRing::Off`] (`_TradeFilter` @0x4e18a).
-    backwards: bool,
+    /// Its keys, as commands ([`contexts::TRADE`]): Buy and Sell,
+    /// Shift-Tab ([`TradeCommand::TabBack`], `_TradeFilter` @0x4e18a),
+    /// Option for the quantity ask, the play keys and the shared UI keys.
+    keys: CommandReader,
     sounds: Vec<Sound>,
+    /// Trade Most's touch toggle (the `touch` module).
+    toggle: ModifierToggle,
 }
 
 impl TradeScreen {
@@ -331,20 +326,22 @@ impl TradeScreen {
                 metrics: MetricsHandle(metrics),
             }
         });
+        let toggle = touch::toggle(laid.as_ref().ok().map(|laid| laid.dialog.bounds()));
         let mut screen = Self {
+            toggle,
             laid,
             market,
             colors: ListColors::STOCK,
             selected: 0,
             top: 0,
-            quantity: QuantityAsk::new(quantity.ok(), style),
+            quantity: QuantityAsk::new(quantity.ok(), style, contexts::TRADE, TradeCommand::MaxLot),
             offering: None,
             asks: KeyAsks::default(),
             order: None,
             closed: false,
             style,
             focus_ring: FocusRing::default(),
-            backwards: false,
+            keys: CommandReader::new(contexts::TRADE),
             sounds: Vec::new(),
         };
         let first = positions(&screen.market).into_iter().flatten().next();
@@ -356,6 +353,21 @@ impl TradeScreen {
     #[must_use]
     pub fn with_colors(self, colors: ListColors) -> Self {
         Self { colors, ..self }
+    }
+
+    /// The trade center reading its keys through `bindings`: its own, its
+    /// quantity ask's and its dialogs'.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.set_bindings(bindings.clone());
+        }
+        self.quantity.set_bindings(bindings.clone());
+        if let Some(offering) = &mut self.offering {
+            offering.set_bindings(bindings.clone());
+        }
+        self.keys.set_bindings(bindings);
+        self
     }
 
     /// The trade center with its dialogs' buttons taking the keyboard focus
@@ -378,7 +390,11 @@ impl TradeScreen {
     #[must_use]
     pub fn with_offers(self, templates: OfferTemplates) -> Self {
         Self {
-            offering: Some(VenueOffers::asking(templates).with_focus_ring(self.focus_ring)),
+            offering: Some(
+                VenueOffers::asking(templates)
+                    .with_focus_ring(self.focus_ring)
+                    .with_bindings(self.keys.bindings().clone()),
+            ),
             ..self
         }
     }
@@ -394,7 +410,7 @@ impl TradeScreen {
         }
     }
 
-    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) has asked for the player info screen
+    /// Whether [the player info key](crate::keymap::PlayCommand::PlayerInfo) has asked for the player info screen
     /// since this was last asked, in the trade center or its offer
     /// (`_TradeFilter` @0x4e109), not in its quantity dialog.
     pub fn take_player_info_request(&mut self) -> bool {
@@ -419,7 +435,7 @@ impl TradeScreen {
         self.offering.as_mut()?.take_map_request()
     }
 
-    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// Whether [the mission info key](crate::keymap::PlayCommand::MissionInfo)
     /// has asked for the mission info screen since this was last asked,
     /// here or in its offer.
     pub fn take_info_request(&mut self) -> bool {
@@ -582,6 +598,7 @@ impl TradeScreen {
             .min(at)
             .max((at + 1).saturating_sub(ROWS));
         self.regrey();
+        self.sync_pad_targets();
     }
 
     /// Selects the row of the next filled list position after the
@@ -810,15 +827,14 @@ impl Screen for TradeScreen {
     /// Every input goes to the exchange, or to the quantity dialog while
     /// it is open; it never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
-        // Shift is followed under the offer and the quantity dialog too,
-        // so a release there is not lost.
-        if let Input::Key {
-            key: Key::Shift,
-            pressed,
-            ..
-        } = *input
-        {
-            self.backwards = pressed;
+        if let Some(action) = crate::ui::touch_aids::host::intercept(self, input) {
+            return action;
+        }
+        // Its keys are followed under the offer and the quantity dialog
+        // too, so a release there is not lost.
+        let command = self.keys.follow(input);
+        if self.tell_held(input) {
+            return ScreenAction::None;
         }
         if let Some(offering) = &mut self.offering
             && offering.input(input, &mut self.sounds)
@@ -836,61 +852,53 @@ impl Screen for TradeScreen {
             }
             return ScreenAction::None;
         }
+        let fresh = command
+            .filter(|command| command.pressed && !command.repeat)
+            .map(|command| command.command);
         let Ok(laid) = &mut self.laid else {
-            if let Input::Key {
-                key: Key::Enter | Key::Escape,
-                pressed: true,
-                repeat: false,
-            } = *input
-            {
+            if matches!(
+                fresh,
+                Some(Command::Ui(UiCommand::Confirm | UiCommand::Back))
+            ) {
                 self.closed = true;
             }
             return ScreenAction::None;
         };
-        if is_map_press(input) {
-            self.asks.map = true;
-            return ScreenAction::None;
+        match fresh {
+            Some(Command::Play(PlayCommand::GalaxyMap)) => {
+                self.asks.map = true;
+                return ScreenAction::None;
+            }
+            Some(Command::Play(PlayCommand::PlayerInfo)) => {
+                self.asks.player_info = true;
+                return ScreenAction::None;
+            }
+            Some(Command::Play(PlayCommand::MissionInfo)) => {
+                self.asks.mission_info = true;
+                return ScreenAction::None;
+            }
+            _ => {}
         }
-        if is_player_info_press(input) {
-            self.asks.player_info = true;
-            return ScreenAction::None;
-        }
-        if is_mission_info_press(input) {
-            self.asks.mission_info = true;
-            return ScreenAction::None;
-        }
-        match *input {
-            Input::Key {
-                key: MAX_LOT_KEY, ..
-            } => self.quantity.follow_alt(input),
+        let ring_off = self.focus_ring == FocusRing::Off;
+        match command.map(|command| (command.command, command.pressed, command.repeat)) {
+            Some((Command::Trade(TradeCommand::MaxLot), ..)) => {
+                self.quantity.follow_alt(input);
+            }
             // Tab steps the selection only under the engine reading; the
             // focus ring keeps it otherwise. Press-only, though the
             // original steps on autoKey too (@0x4e0c3).
-            Input::Key {
-                key: Key::Tab,
-                pressed: true,
-                repeat: false,
-            } if self.focus_ring == FocusRing::Off => self.step(!self.backwards),
-            Input::Key {
-                key: Key::Up,
-                pressed: true,
-                ..
-            } => self.step(false),
-            Input::Key {
-                key: Key::Down,
-                pressed: true,
-                ..
-            } => self.step(true),
-            Input::Key {
-                key: BUY_KEY,
-                pressed: true,
-                ..
-            } => self.ask(Direction::Buy, true),
-            Input::Key {
-                key: SELL_KEY,
-                pressed: true,
-                ..
-            } => self.ask(Direction::Sell, true),
+            Some((Command::Ui(UiCommand::Tab), true, false)) if ring_off => self.step(true),
+            Some((
+                Command::Trade(TradeCommand::TabBack) | Command::Ui(UiCommand::PrevFocus),
+                true,
+                false,
+            )) if ring_off => {
+                self.step(false);
+            }
+            Some((Command::Ui(UiCommand::Up), true, _)) => self.step(false),
+            Some((Command::Ui(UiCommand::Down), true, _)) => self.step(true),
+            Some((Command::Trade(TradeCommand::Buy), true, _)) => self.ask(Direction::Buy, true),
+            Some((Command::Trade(TradeCommand::Sell), true, _)) => self.ask(Direction::Sell, true),
             _ => {
                 let event = laid.dialog.input(input);
                 if let Some(DialogEvent::Item(item)) = event {
@@ -917,7 +925,8 @@ impl Screen for TradeScreen {
             Err(reason) => {
                 list.text(
                     format!(
-                        "Cannot show the trade center: {reason}. Press Return or Escape to close it."
+                        "Cannot show the trade center: {reason}.{}",
+                        press_clause(&self.keys, &CONFIRM_OR_BACK, "close it")
                     ),
                     PROBLEM_AT,
                     PROBLEM_SIZE,
@@ -937,9 +946,19 @@ impl Screen for TradeScreen {
         if let Some(offering) = &self.offering {
             offering.draw(list);
         }
+        crate::ui::touch_aids::host::draw(self, list);
+    }
+
+    /// Its toggle hides and disarms while something the spaceport shows
+    /// covers it ([`crate::ui::touch_aids::host::cover`]), and its quantity
+    /// dialog asks for no text entry.
+    fn set_covered(&mut self, covered: bool) {
+        crate::ui::touch_aids::host::cover(self, covered);
+        self.quantity.set_covered(covered);
     }
 
     fn cancel_pointer(&mut self) {
+        crate::ui::touch_aids::host::cancel(self);
         if self
             .offering
             .as_mut()
@@ -954,10 +973,10 @@ impl Screen for TradeScreen {
         }
     }
 
-    /// Lets go of Alt and Shift, and of the keys held in the quantity
-    /// dialog.
+    /// Lets go of its keys, Alt among them, and of the keys held in the
+    /// quantity dialog.
     fn release_keys(&mut self) {
-        self.backwards = false;
+        self.keys.let_go();
         self.quantity.release_keys();
     }
 
@@ -976,6 +995,9 @@ impl Screen for TradeScreen {
     }
 }
 
+pub(crate) mod pad;
+pub(crate) mod touch;
+
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
@@ -986,7 +1008,7 @@ mod tests {
 
     use super::*;
     use crate::draw::DrawCommand;
-    use crate::input::MouseButton;
+    use crate::input::{Key, MouseButton};
     use crate::sound::UiSound;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
@@ -998,7 +1020,7 @@ mod tests {
     /// Stock "Trade": `DLOG` 1001, 426 x 252 and centred, and its
     /// seventeen user items, where 2, 3, 12, 15, 16 and 17 are disabled
     /// and 2, 16 and 17 parked outside it.
-    fn template() -> DialogTemplate {
+    pub(super) fn template() -> DialogTemplate {
         let items = [
             (272.0, 221.0, 99.0, 25.0, true),
             (129.0, 299.0, 68.0, 30.0, false),
@@ -1061,7 +1083,7 @@ mod tests {
     /// Food at 93 (2 held, lowered), metal at 200 (medium), and opals
     /// bought here only at 1500 (1 held, high), for a player with 1000
     /// credits and 7 of 10 tons free, during a food surplus.
-    fn market() -> Market {
+    pub(super) fn market() -> Market {
         Market {
             rows: vec![
                 MarketRow {
@@ -1088,17 +1110,17 @@ mod tests {
         }
     }
 
-    fn layout() -> (DialogTemplate, Rc<dyn TextMetrics>) {
+    pub(super) fn layout() -> (DialogTemplate, Rc<dyn TextMetrics>) {
         (template(), Rc::new(MonoMetrics))
     }
 
-    fn screen_of(market: Market) -> TradeScreen {
+    pub(super) fn screen_of(market: Market) -> TradeScreen {
         TradeScreen::new(Ok(layout()), Ok(quantity()), market, ButtonStyle::STOCK)
     }
 
     /// Stock `DITL` 1003, fixed at (10, 20): OK (1), the prompt (2), the
     /// field (3) and Cancel (4).
-    fn quantity() -> DialogTemplate {
+    pub(super) fn quantity() -> DialogTemplate {
         let item = |x, y, w, h, kind| ItemTemplate {
             bounds: rect(x, y, w, h),
             enabled: true,
@@ -1116,7 +1138,7 @@ mod tests {
         }
     }
 
-    fn screen() -> TradeScreen {
+    pub(super) fn screen() -> TradeScreen {
         screen_of(market())
     }
 
@@ -1136,7 +1158,7 @@ mod tests {
             .collect()
     }
 
-    fn item(screen: &TradeScreen, number: usize) -> Bounds {
+    pub(super) fn item(screen: &TradeScreen, number: usize) -> Bounds {
         screen
             .dialog()
             .expect("laid out")
@@ -1144,7 +1166,7 @@ mod tests {
             .expect("an item")
     }
 
-    fn key(key: Key, pressed: bool, repeat: bool) -> Input {
+    pub(super) fn key(key: Key, pressed: bool, repeat: bool) -> Input {
         Input::Key {
             key,
             pressed,
@@ -1152,11 +1174,11 @@ mod tests {
         }
     }
 
-    fn press(screen: &mut TradeScreen, k: Key) {
+    pub(super) fn press(screen: &mut TradeScreen, k: Key) {
         screen.input(&key(k, true, false));
     }
 
-    fn click(screen: &mut TradeScreen, at: Point) {
+    pub(super) fn click(screen: &mut TradeScreen, at: Point) {
         for pressed in [true, false] {
             screen.input(&Input::PointerButton {
                 button: MouseButton::Left,
@@ -1166,12 +1188,12 @@ mod tests {
         }
     }
 
-    fn click_item(screen: &mut TradeScreen, number: usize) {
+    pub(super) fn click_item(screen: &mut TradeScreen, number: usize) {
         let at = item(screen, number).center();
         click(screen, at);
     }
 
-    fn order(row: usize, good: Good, direction: Direction, lot: Lot) -> Order {
+    pub(super) fn order(row: usize, good: Good, direction: Direction, lot: Lot) -> Order {
         Order {
             row,
             good,
@@ -1198,9 +1220,15 @@ mod tests {
             [1, 3, 4, 8, 12, 13, 14, 15]
         );
         assert_eq!((BUY_LABEL, SELL_LABEL), ("Buy", "Sell"));
+        let keys = crate::keymap::KeyMap::default();
+        let key = |command: TradeCommand| keys.combo(command.into()).map(|combo| combo.key);
         assert_eq!(
-            (BUY_KEY, SELL_KEY, MAX_LOT_KEY),
-            (Key::Char('b'), Key::Char('s'), Key::Alt)
+            (
+                key(TradeCommand::Buy),
+                key(TradeCommand::Sell),
+                key(TradeCommand::MaxLot)
+            ),
+            (Some(Key::KeyB), Some(Key::KeyS), Some(Key::AltLeft))
         );
         assert_eq!((TEXT_FONT, TEXT_SIZE), (Font::Geneva, 9.0));
         assert_eq!(DARK_GREY, Color::rgba(0x40, 0x40, 0x40, 255));
@@ -1484,7 +1512,7 @@ mod tests {
             drawn_at(&commands, "Food").map(|(_, c)| c),
             Some(colors.text)
         );
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         let commands = drawn(&screen);
         assert!(contains(
             &commands,
@@ -1723,17 +1751,17 @@ mod tests {
     #[test]
     fn up_and_down_move_the_selection_and_wrap_at_the_ends() {
         let mut screen = screen();
-        press(&mut screen, Key::Up);
+        press(&mut screen, Key::ArrowUp);
         assert_eq!(screen.selected(), Some(2), "wraps to the last");
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         assert_eq!(screen.selected(), Some(0), "wraps to the first");
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         assert_eq!(screen.selected(), Some(1));
-        screen.input(&key(Key::Down, true, true));
+        screen.input(&key(Key::ArrowDown, true, true));
         assert_eq!(screen.selected(), Some(2), "repeats too");
-        screen.input(&key(Key::Up, false, false));
+        screen.input(&key(Key::ArrowUp, false, false));
         assert_eq!(screen.selected(), Some(2), "not on release");
-        press(&mut screen, Key::Up);
+        press(&mut screen, Key::ArrowUp);
         assert_eq!(screen.selected(), Some(1));
     }
 
@@ -1760,13 +1788,13 @@ mod tests {
         let mut screen = screen_of(gappy());
         let mut visited = vec![screen.selected()];
         for _ in 0..4 {
-            press(&mut screen, Key::Down);
+            press(&mut screen, Key::ArrowDown);
             visited.push(screen.selected());
         }
         assert_eq!(visited, [Some(0), Some(1), Some(3), Some(2), Some(0)]);
-        press(&mut screen, Key::Up);
+        press(&mut screen, Key::ArrowUp);
         assert_eq!(screen.selected(), Some(2), "back round to slot 7");
-        press(&mut screen, Key::Up);
+        press(&mut screen, Key::ArrowUp);
         assert_eq!(screen.selected(), Some(3), "back to slot 6");
     }
 
@@ -1784,18 +1812,35 @@ mod tests {
         assert_eq!(screen.take_order(), None);
     }
 
+    /// `_TradeFilter` reads `shiftKey` (@0x4e18a), which either Shift
+    /// sets.
+    #[test]
+    fn either_shift_takes_tab_back_until_both_are_let_go() {
+        let mut screen = screen_of(gappy()).with_focus_ring(FocusRing::Off);
+        press(&mut screen, Key::ShiftRight);
+        press(&mut screen, Key::Tab);
+        assert_eq!(screen.selected(), Some(2), "back with the right Shift");
+        press(&mut screen, Key::ShiftLeft);
+        screen.input(&key(Key::ShiftRight, false, false));
+        press(&mut screen, Key::Tab);
+        assert_eq!(screen.selected(), Some(3), "the left one still down");
+        screen.input(&key(Key::ShiftLeft, false, false));
+        press(&mut screen, Key::Tab);
+        assert_eq!(screen.selected(), Some(2), "forward once both are up");
+    }
+
     #[test]
     fn shift_tab_steps_back_under_the_engine_reading() {
         let mut screen = screen_of(gappy()).with_focus_ring(FocusRing::Off);
-        press(&mut screen, Key::Shift);
+        press(&mut screen, Key::ShiftLeft);
         press(&mut screen, Key::Tab);
         assert_eq!(screen.selected(), Some(2), "round to the last filled slot");
         press(&mut screen, Key::Tab);
         assert_eq!(screen.selected(), Some(3));
-        screen.input(&key(Key::Shift, false, false));
+        screen.input(&key(Key::ShiftLeft, false, false));
         press(&mut screen, Key::Tab);
         assert_eq!(screen.selected(), Some(2), "forward again");
-        press(&mut screen, Key::Shift);
+        press(&mut screen, Key::ShiftLeft);
         screen.release_keys();
         press(&mut screen, Key::Tab);
         assert_eq!(screen.selected(), Some(0), "Shift let go with the keys");
@@ -1815,7 +1860,7 @@ mod tests {
     fn tab_with_no_rows_steps_nothing() {
         let mut screen = screen_of(long(0)).with_focus_ring(FocusRing::Off);
         for shift in [false, true] {
-            screen.input(&key(Key::Shift, shift, false));
+            screen.input(&key(Key::ShiftLeft, shift, false));
             press(&mut screen, Key::Tab);
             assert_eq!(screen.selected(), None);
         }
@@ -1824,11 +1869,11 @@ mod tests {
     #[test]
     fn under_the_focus_ring_tab_moves_the_button_focus_not_the_selection() {
         let mut screen = screen();
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         press(&mut screen, Key::Tab);
         assert_eq!(screen.selected(), Some(1));
         assert!(screen.dialog().and_then(Dialog::focus).is_some(), "focused");
-        press(&mut screen, Key::Shift);
+        press(&mut screen, Key::ShiftLeft);
         press(&mut screen, Key::Tab);
         assert_eq!(screen.selected(), Some(1), "Shift+Tab too");
         let mut done = screen_of(gappy());
@@ -1841,9 +1886,9 @@ mod tests {
     #[test]
     fn shift_let_go_in_the_quantity_dialog_is_let_go_after_it() {
         let mut screen = screen_of(gappy()).with_focus_ring(FocusRing::Off);
-        press(&mut screen, Key::Shift);
+        press(&mut screen, Key::ShiftLeft);
         alt_click(&mut screen, BUY_ITEM);
-        screen.input(&key(Key::Shift, false, false));
+        screen.input(&key(Key::ShiftLeft, false, false));
         let cancel = quantity_item(&screen, 4);
         click(&mut screen, cancel);
         assert!(screen.quantity().is_none(), "closed");
@@ -1922,8 +1967,8 @@ mod tests {
         // the first row shown scrolled into view.
         assert_eq!((screen.selected(), screen.top()), (Some(0), 0));
         assert_eq!(names(&screen), ["Good 0", "Good 1"]);
-        press(&mut screen, Key::Down);
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
+        press(&mut screen, Key::ArrowDown);
         assert_eq!((screen.selected(), screen.top()), (Some(2), 1));
         assert_eq!(names(&screen), ["Good 0", "Good 1", "Good 2"]);
         let good_2 = item(&screen, 11);
@@ -1931,19 +1976,19 @@ mod tests {
             &drawn(&screen),
             &filled(shrunk(good_2, 1.0, 1.0), Color::rgba(0x80, 0, 0, 255))
         ));
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         assert_eq!((screen.selected(), screen.top()), (Some(3), 2));
         click_item(&mut screen, 4);
         assert_eq!(screen.selected(), Some(3), "slot 2, scrolled, is empty");
         click_item(&mut screen, 8);
         assert_eq!(screen.selected(), Some(0));
-        press(&mut screen, Key::Up);
+        press(&mut screen, Key::ArrowUp);
         assert_eq!(
             (screen.selected(), screen.top()),
             (Some(3), 2),
             "round to the last, shown"
         );
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         assert_eq!(
             (screen.selected(), screen.top()),
             (Some(0), 2),
@@ -1956,9 +2001,9 @@ mod tests {
         // 6 empty slots, goods 0-10 at positions 6-16, empty slot 7.
         let mut screen = screen_of(long(11));
         assert_eq!((screen.selected(), screen.top()), (Some(0), 0));
-        press(&mut screen, Key::Up);
+        press(&mut screen, Key::ArrowUp);
         assert_eq!((screen.selected(), screen.top()), (Some(10), 9));
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         assert_eq!((screen.selected(), screen.top()), (Some(0), 6));
     }
 
@@ -1966,7 +2011,7 @@ mod tests {
     fn eight_positions_or_fewer_never_scroll() {
         let mut screen = screen_of(long(1));
         assert_eq!(screen.top(), 0);
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         assert_eq!(screen.top(), 0);
         assert_eq!(names(&screen), ["Good 0"]);
     }
@@ -2006,34 +2051,72 @@ mod tests {
             screen.take_order(),
             Some(order(0, FOOD, Direction::Sell, Lot::Click))
         );
-        press(&mut screen, Key::Down);
-        press(&mut screen, BUY_KEY);
+        press(&mut screen, Key::ArrowDown);
+        press(&mut screen, Key::KeyB);
         assert_eq!(
             screen.take_order(),
             Some(order(1, METAL, Direction::Buy, Lot::Click))
         );
-        press(&mut screen, Key::Down);
-        press(&mut screen, SELL_KEY);
+        press(&mut screen, Key::ArrowDown);
+        press(&mut screen, Key::KeyS);
         assert_eq!(
             screen.take_order(),
             Some(order(2, OPALS, Direction::Sell, Lot::Click))
         );
     }
 
+    /// The trade center reads its keys through the key map it is given:
+    /// Buy rebound to Q buys on Q and no longer on B, and Option rebound
+    /// to Z holds the most-at-once on Z alone.
     #[test]
-    fn holding_b_or_s_keeps_trading() {
-        let mut screen = screen();
-        screen.input(&key(BUY_KEY, true, true));
+    fn a_rebound_buy_buys_on_its_new_key_alone() {
+        use crate::keymap::{Bindings, KeyCombo, SharedBindings, TradeCommand};
+        let bindings = SharedBindings::new(
+            Bindings::default()
+                .rebound(TradeCommand::Buy, KeyCombo::key(Key::KeyQ))
+                .rebound(TradeCommand::MaxLot, KeyCombo::key(Key::KeyZ)),
+        );
+        let mut screen = screen_of(Market {
+            rules: Rulebook::default().with_override(RuleKey::TradeCount, RuleSource::Bible),
+            ..market()
+        })
+        .with_bindings(bindings);
+        press(&mut screen, Key::KeyB);
+        assert_eq!(screen.take_order(), None, "B no longer buys");
+        press(&mut screen, Key::KeyQ);
         assert_eq!(
             screen.take_order(),
             Some(order(0, FOOD, Direction::Buy, Lot::Click))
         );
-        screen.input(&key(SELL_KEY, true, true));
+        press(&mut screen, Key::AltLeft);
+        press(&mut screen, Key::KeyQ);
+        assert_eq!(
+            screen.take_order(),
+            Some(order(0, FOOD, Direction::Buy, Lot::Click)),
+            "Option no longer holds the most"
+        );
+        press(&mut screen, Key::KeyZ);
+        press(&mut screen, Key::KeyQ);
+        assert_eq!(
+            screen.take_order(),
+            Some(order(0, FOOD, Direction::Buy, Lot::Max))
+        );
+    }
+
+    #[test]
+    fn holding_b_or_s_keeps_trading() {
+        let mut screen = screen();
+        screen.input(&key(Key::KeyB, true, true));
+        assert_eq!(
+            screen.take_order(),
+            Some(order(0, FOOD, Direction::Buy, Lot::Click))
+        );
+        screen.input(&key(Key::KeyS, true, true));
         assert_eq!(
             screen.take_order(),
             Some(order(0, FOOD, Direction::Sell, Lot::Click))
         );
-        screen.input(&key(BUY_KEY, false, false));
+        screen.input(&key(Key::KeyB, false, false));
         assert_eq!(screen.take_order(), None, "not on release");
     }
 
@@ -2043,30 +2126,30 @@ mod tests {
             rules: Rulebook::default().with_override(RuleKey::TradeCount, RuleSource::Bible),
             ..market()
         });
-        press(&mut screen, MAX_LOT_KEY);
+        press(&mut screen, Key::AltLeft);
         click_item(&mut screen, BUY_ITEM);
         assert_eq!(
             screen.take_order(),
             Some(order(0, FOOD, Direction::Buy, Lot::Max))
         );
-        press(&mut screen, SELL_KEY);
+        press(&mut screen, Key::KeyS);
         assert_eq!(
             screen.take_order(),
             Some(order(0, FOOD, Direction::Sell, Lot::Max))
         );
-        screen.input(&key(MAX_LOT_KEY, true, true));
-        press(&mut screen, BUY_KEY);
+        screen.input(&key(Key::AltLeft, true, true));
+        press(&mut screen, Key::KeyB);
         assert_eq!(
             screen.take_order(),
             Some(order(0, FOOD, Direction::Buy, Lot::Max))
         );
-        screen.input(&key(MAX_LOT_KEY, false, false));
-        press(&mut screen, BUY_KEY);
+        screen.input(&key(Key::AltLeft, false, false));
+        press(&mut screen, Key::KeyB);
         assert_eq!(
             screen.take_order(),
             Some(order(0, FOOD, Direction::Buy, Lot::Click))
         );
-        press(&mut screen, MAX_LOT_KEY);
+        press(&mut screen, Key::AltLeft);
         screen.release_keys();
         click_item(&mut screen, SELL_ITEM);
         assert_eq!(
@@ -2077,7 +2160,7 @@ mod tests {
 
     // The quantity dialog, by the engine's count reading.
 
-    fn quantity_item(screen: &TradeScreen, number: usize) -> Point {
+    pub(super) fn quantity_item(screen: &TradeScreen, number: usize) -> Point {
         screen
             .quantity()
             .expect("asking")
@@ -2096,17 +2179,42 @@ mod tests {
 
     fn typed(screen: &mut TradeScreen, text: &str) {
         for c in text.chars() {
-            screen.input(&key(Key::Char(c), true, false));
+            screen.input(&key(
+                crate::input::letter_key(c).unwrap_or(Key::Unidentified),
+                true,
+                false,
+            ));
             screen.input(&Input::Text(c));
         }
     }
 
     /// Opens the quantity dialog on the selected row with Alt and a click
     /// on `button`, Alt then let go.
-    fn alt_click(screen: &mut TradeScreen, button: usize) {
-        press(screen, MAX_LOT_KEY);
+    pub(super) fn alt_click(screen: &mut TradeScreen, button: usize) {
+        press(screen, Key::AltLeft);
         click_item(screen, button);
-        screen.input(&key(MAX_LOT_KEY, false, false));
+        screen.input(&key(Key::AltLeft, false, false));
+    }
+
+    /// `_DoTradeDialog` reads `optionKey` from the event (@0x5e211,
+    /// @0x5e45c), which either Option sets.
+    #[test]
+    fn either_option_held_asks_for_a_count_until_both_are_let_go() {
+        let mut screen = screen();
+        press(&mut screen, Key::AltRight);
+        click_item(&mut screen, BUY_ITEM);
+        assert!(screen.quantity().is_some(), "the right Option asks");
+        let cancel = quantity_item(&screen, 4);
+        click(&mut screen, cancel);
+        press(&mut screen, Key::AltLeft);
+        screen.input(&key(Key::AltRight, false, false));
+        click_item(&mut screen, BUY_ITEM);
+        assert!(screen.quantity().is_some(), "the left one still down");
+        let cancel = quantity_item(&screen, 4);
+        click(&mut screen, cancel);
+        screen.input(&key(Key::AltLeft, false, false));
+        click_item(&mut screen, BUY_ITEM);
+        assert!(screen.quantity().is_none(), "both up: no count asked");
     }
 
     #[test]
@@ -2139,9 +2247,9 @@ mod tests {
     #[test]
     fn alt_s_opens_a_sale_dialog_its_s_typing_nothing_and_return_trades_the_most() {
         let mut screen = screen();
-        press(&mut screen, MAX_LOT_KEY);
+        press(&mut screen, Key::AltLeft);
         // As a Mac sends Option-S: the key, then the character it types.
-        press(&mut screen, SELL_KEY);
+        press(&mut screen, Key::KeyS);
         screen.input(&Input::Text('ß'));
         assert_eq!(
             quantity_texts(&screen),
@@ -2154,7 +2262,7 @@ mod tests {
             "only the first typed character is dropped"
         );
         let mut screen = self::screen();
-        press(&mut screen, MAX_LOT_KEY);
+        press(&mut screen, Key::AltLeft);
         typed(&mut screen, "s");
         press(&mut screen, Key::Enter);
         assert_eq!(
@@ -2195,8 +2303,8 @@ mod tests {
     fn while_the_dialog_is_open_b_and_escape_do_not_reach_the_exchange() {
         let mut screen = screen();
         alt_click(&mut screen, BUY_ITEM);
-        press(&mut screen, BUY_KEY);
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::KeyB);
+        press(&mut screen, Key::ArrowDown);
         click_item(&mut screen, SELL_ITEM);
         press(&mut screen, Key::Escape);
         assert_eq!(screen.take_order(), None);
@@ -2208,15 +2316,15 @@ mod tests {
     #[test]
     fn alt_let_go_in_the_dialog_is_let_go_after_it() {
         let mut screen = screen();
-        press(&mut screen, MAX_LOT_KEY);
+        press(&mut screen, Key::AltLeft);
         click_item(&mut screen, BUY_ITEM);
-        screen.input(&key(MAX_LOT_KEY, false, false));
+        screen.input(&key(Key::AltLeft, false, false));
         press(&mut screen, Key::Enter);
         assert_eq!(
             screen.take_order(),
             Some(order(0, FOOD, Direction::Buy, Lot::Count(7)))
         );
-        press(&mut screen, BUY_KEY);
+        press(&mut screen, Key::KeyB);
         assert_eq!(
             screen.take_order(),
             Some(order(0, FOOD, Direction::Buy, Lot::Click))
@@ -2225,10 +2333,10 @@ mod tests {
         click_item(&mut screen, BUY_ITEM);
         screen.take_order();
         alt_click(&mut screen, BUY_ITEM);
-        press(&mut screen, MAX_LOT_KEY);
+        press(&mut screen, Key::AltLeft);
         press(&mut screen, Key::Enter);
         screen.take_order();
-        press(&mut screen, BUY_KEY);
+        press(&mut screen, Key::KeyB);
         assert_eq!(screen.take_order(), None);
         assert!(screen.quantity().is_some(), "Alt still held");
     }
@@ -2236,12 +2344,12 @@ mod tests {
     #[test]
     fn letting_go_of_the_keys_in_the_dialog_lets_go_of_alt() {
         let mut screen = screen();
-        press(&mut screen, MAX_LOT_KEY);
+        press(&mut screen, Key::AltLeft);
         click_item(&mut screen, BUY_ITEM);
         screen.release_keys();
         press(&mut screen, Key::Enter);
         screen.take_order();
-        press(&mut screen, BUY_KEY);
+        press(&mut screen, Key::KeyB);
         assert_eq!(
             screen.take_order(),
             Some(order(0, FOOD, Direction::Buy, Lot::Click))
@@ -2279,8 +2387,8 @@ mod tests {
     #[test]
     fn below_a_most_under_nothing_the_dialog_opens_and_only_cancel_leaves() {
         let mut screen = waste(1000);
-        press(&mut screen, MAX_LOT_KEY);
-        press(&mut screen, BUY_KEY);
+        press(&mut screen, Key::AltLeft);
+        press(&mut screen, Key::KeyB);
         assert_eq!(
             screen.quantity().map(|asking| asking.field().text()),
             Some("-5")
@@ -2294,8 +2402,8 @@ mod tests {
         assert!(screen.quantity().is_none());
         assert_eq!(screen.take_order(), None);
         let mut screen = waste(0);
-        press(&mut screen, MAX_LOT_KEY);
-        press(&mut screen, BUY_KEY);
+        press(&mut screen, Key::AltLeft);
+        press(&mut screen, Key::KeyB);
         press(&mut screen, Key::Enter);
         assert!(screen.quantity().is_none(), "0 of 0 confirmed");
         assert_eq!(screen.take_order(), None);
@@ -2349,10 +2457,10 @@ mod tests {
     /// @0x5e45c): any other modifier is a plain trade.
     #[test]
     fn with_shift_control_or_command_held_buy_and_sell_ask_for_a_plain_trade() {
-        for modifier in [Key::Shift, Key::Control, Key::Command] {
+        for modifier in [Key::ShiftLeft, Key::ControlLeft, Key::MetaLeft] {
             let mut screen = screen();
             screen.input(&key(modifier, true, false));
-            press(&mut screen, BUY_KEY);
+            press(&mut screen, Key::KeyB);
             assert_eq!(
                 screen.take_order(),
                 Some(order(0, FOOD, Direction::Buy, Lot::Click)),
@@ -2386,16 +2494,16 @@ mod tests {
     fn buy_and_sell_are_greyed_as_the_market_allows() {
         let mut screen = screen();
         assert_eq!(enabled(&screen), (true, true), "food");
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         assert_eq!(enabled(&screen), (true, false), "metal, none held");
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         assert_eq!(enabled(&screen), (false, true), "opals, not sold here");
         click_item(&mut screen, BUY_ITEM);
-        press(&mut screen, BUY_KEY);
+        press(&mut screen, Key::KeyB);
         assert_eq!(screen.take_order(), None, "greyed asks for nothing");
-        press(&mut screen, Key::Up);
+        press(&mut screen, Key::ArrowUp);
         click_item(&mut screen, SELL_ITEM);
-        press(&mut screen, SELL_KEY);
+        press(&mut screen, Key::KeyS);
         assert_eq!(screen.take_order(), None);
         let broke = Market {
             cash: 10,
@@ -2426,7 +2534,7 @@ mod tests {
         for cash in [0, -200, 1000] {
             let mut screen = waste(cash, 1);
             assert_eq!(enabled(&screen), (true, false), "{cash}");
-            press(&mut screen, BUY_KEY);
+            press(&mut screen, Key::KeyB);
             assert_eq!(
                 screen.take_order(),
                 Some(order(0, OPALS, Direction::Buy, Lot::Click)),
@@ -2459,18 +2567,18 @@ mod tests {
             ..market()
         });
         assert_eq!(enabled(&screen), (false, true), "the high row");
-        press(&mut screen, BUY_KEY);
+        press(&mut screen, Key::KeyB);
         assert_eq!(screen.take_order(), None, "greyed asks for nothing");
-        press(&mut screen, SELL_KEY);
+        press(&mut screen, Key::KeyS);
         assert_eq!(
             screen.take_order(),
             Some(order(0, OPALS, Direction::Sell, Lot::Click))
         );
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         assert_eq!(enabled(&screen), (true, false), "the low row");
-        press(&mut screen, SELL_KEY);
+        press(&mut screen, Key::KeyS);
         assert_eq!(screen.take_order(), None);
-        press(&mut screen, BUY_KEY);
+        press(&mut screen, Key::KeyB);
         assert_eq!(
             screen.take_order(),
             Some(order(1, OPALS, Direction::Buy, Lot::Click))
@@ -2485,24 +2593,24 @@ mod tests {
         });
         for row in [0, 1] {
             assert_eq!(enabled(&screen), (true, true), "{row}");
-            press(&mut screen, BUY_KEY);
+            press(&mut screen, Key::KeyB);
             assert_eq!(
                 screen.take_order(),
                 Some(order(row, OPALS, Direction::Buy, Lot::Click))
             );
-            press(&mut screen, SELL_KEY);
+            press(&mut screen, Key::KeyS);
             assert_eq!(
                 screen.take_order(),
                 Some(order(row, OPALS, Direction::Sell, Lot::Click))
             );
-            press(&mut screen, Key::Down);
+            press(&mut screen, Key::ArrowDown);
         }
     }
 
     #[test]
     fn a_new_market_shows_and_regreys_keeping_the_selection() {
         let mut screen = screen();
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         let mut bought = market();
         bought.rows[1].held = 7;
         bought.free = 0;
@@ -2515,7 +2623,7 @@ mod tests {
         assert!(shown.contains(&"7".to_owned()), "{shown:?}");
         let mut scrolled = screen_of(long(11));
         for _ in 0..10 {
-            press(&mut scrolled, Key::Down);
+            press(&mut scrolled, Key::ArrowDown);
         }
         assert_eq!((scrolled.selected(), scrolled.top()), (Some(10), 9));
         scrolled.set_market(long(3));
@@ -2535,7 +2643,7 @@ mod tests {
         let mut screen = screen();
         click_item(&mut screen, DONE_ITEM);
         assert!(screen.closed());
-        for k in [Key::Enter, Key::Escape] {
+        for k in [Key::Enter, Key::NumpadEnter, Key::Escape] {
             let mut screen = screen_of(market());
             assert_eq!(screen.input(&key(k, true, false)), ScreenAction::None);
             assert!(screen.closed(), "{k:?}");
@@ -2565,7 +2673,7 @@ mod tests {
             at: buy,
         });
         assert_eq!(screen.take_sounds(), []);
-        press(&mut screen, BUY_KEY);
+        press(&mut screen, Key::KeyB);
         press(&mut screen, Key::Enter);
         assert_eq!(screen.take_sounds(), []);
     }
@@ -2601,7 +2709,7 @@ mod tests {
 
     #[test]
     fn without_the_dialog_it_says_why_and_return_or_escape_closes_it() {
-        for k in [Key::Enter, Key::Escape] {
+        for k in [Key::Enter, Key::NumpadEnter, Key::Escape] {
             let mut screen = TradeScreen::new(
                 Err("no DLOG 1001".to_owned()),
                 Ok(quantity()),
@@ -2614,9 +2722,9 @@ mod tests {
             for other in [
                 key(k, true, true),
                 key(k, false, false),
-                key(BUY_KEY, true, false),
-                key(MAX_LOT_KEY, true, false),
-                key(Key::Down, true, false),
+                key(Key::KeyB, true, false),
+                key(Key::AltLeft, true, false),
+                key(Key::ArrowDown, true, false),
             ] {
                 screen.input(&other);
             }
@@ -2627,6 +2735,59 @@ mod tests {
             screen.input(&key(k, true, false));
             assert!(screen.closed(), "{k:?}");
         }
+    }
+
+    #[test]
+    fn without_the_dialog_it_names_the_keys_bound_to_close_it() {
+        use crate::keymap::{Bindings, KeyCombo, SharedBindings, UiCommand};
+        let screen = TradeScreen::new(
+            Err("no DLOG 1001".to_owned()),
+            Ok(quantity()),
+            market(),
+            ButtonStyle::STOCK,
+        )
+        .with_bindings(SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyQ)),
+        ));
+        assert_eq!(
+            drawn(&screen),
+            [DrawCommand::Text {
+                text: "Cannot show the trade center: no DLOG 1001. Press Q or Escape to close it."
+                    .to_owned(),
+                font: Font::Geneva,
+                origin: PROBLEM_AT,
+                size: PROBLEM_SIZE,
+                wrap_width: None,
+                color: Color::ERROR,
+            }]
+        );
+    }
+
+    #[test]
+    fn without_the_dialog_it_names_the_buttons_with_a_pad_last_used() {
+        use crate::input::{ControllerFamily, Device, Surroundings};
+        let mut screen = TradeScreen::new(
+            Err("no DLOG 1001".to_owned()),
+            Ok(quantity()),
+            market(),
+            ButtonStyle::STOCK,
+        );
+        screen.input(&Input::Surroundings(Surroundings::of(Device::Gamepad(
+            ControllerFamily::Generic,
+        ))));
+        assert_eq!(
+            drawn(&screen),
+            [DrawCommand::Text {
+                text:
+                    "Cannot show the trade center: no DLOG 1001. Press South or East to close it."
+                        .to_owned(),
+                font: Font::Geneva,
+                origin: PROBLEM_AT,
+                size: PROBLEM_SIZE,
+                wrap_width: None,
+                color: Color::ERROR,
+            }]
+        );
     }
 
     // The trade center's mission offers.
@@ -2641,6 +2802,28 @@ mod tests {
     /// The trade center, its offers given.
     fn offering() -> TradeScreen {
         screen().with_offers(offer_templates())
+    }
+
+    /// The exchange hands its bindings to the offer it opens, given before
+    /// or after its offers: Confirm rebound to F1 accepts on F1 alone.
+    #[test]
+    fn its_offer_reads_the_bindings_the_exchange_was_given() {
+        use crate::keymap::{Bindings, KeyCombo, SharedBindings, UiCommand};
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::F1)),
+        );
+        for mut screen in [
+            offering().with_bindings(bindings.clone()),
+            screen()
+                .with_bindings(bindings.clone())
+                .with_offers(offer_templates()),
+        ] {
+            screen.open_offer(prompt());
+            screen.input(&key(Key::Enter, true, false));
+            assert!(screen.take_offer_choice().is_none(), "Return no longer");
+            screen.input(&key(Key::F1, true, false));
+            assert!(screen.take_offer_choice().is_some(), "F1 accepts");
+        }
     }
 
     /// Wiring: the exchange reads its offers' readout
@@ -2724,7 +2907,7 @@ mod tests {
         offer.draw(&mut over);
         expected.extend(over.iter().cloned());
         assert_eq!(drawn(&screen), expected, "drawn over the trade center");
-        press(&mut screen, BUY_KEY);
+        press(&mut screen, Key::KeyB);
         assert_eq!(screen.take_order(), None, "B went to the offer");
         assert_eq!(screen.take_offer_choice(), None);
         press(&mut screen, Key::Enter);
@@ -2850,7 +3033,7 @@ mod tests {
 
     #[test]
     fn the_mission_info_key_asks_for_the_mission_info_screen() {
-        let i = crate::ui::mission_info::MISSION_INFO_KEY;
+        let i = crate::keymap::test_keys::MISSION_INFO_KEY;
         let mut screen = screen();
         assert!(!screen.take_info_request());
         screen.input(&key(i, true, true));
@@ -2875,7 +3058,7 @@ mod tests {
 
     #[test]
     fn the_map_key_asks_for_the_map_on_a_press_not_in_the_quantity_dialog() {
-        let m = crate::flight::view::MAP_KEY;
+        let m = crate::Key::KeyM;
         let mut screen = screen();
         assert!(!screen.take_map_request());
         screen.input(&key(m, true, true));
@@ -2909,7 +3092,7 @@ mod tests {
     fn the_mission_info_key_asks_from_its_offer_which_stays_open() {
         let mut screen = offering();
         screen.open_offer(prompt());
-        press(&mut screen, crate::ui::mission_info::MISSION_INFO_KEY);
+        press(&mut screen, crate::keymap::test_keys::MISSION_INFO_KEY);
         assert!(screen.take_info_request());
         assert!(screen.offer_dialog().is_some());
     }
@@ -2920,11 +3103,11 @@ mod tests {
         for ring in [FocusRing::Tab, FocusRing::Off] {
             for k in [
                 Key::Tab,
-                Key::Down,
-                Key::Up,
-                BUY_KEY,
-                SELL_KEY,
-                crate::ui::player_info::PLAYER_INFO_KEY,
+                Key::ArrowDown,
+                Key::ArrowUp,
+                Key::KeyB,
+                Key::KeyS,
+                crate::keymap::test_keys::PLAYER_INFO_KEY,
                 Key::Enter,
                 Key::Escape,
             ] {

@@ -8,6 +8,7 @@ use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::movie_frame::MovieFrame;
+use crate::text_entry::EntryAsk;
 
 /// How a sprite combines with what is beneath it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -445,6 +446,9 @@ pub struct DrawList {
     /// ([`DrawList::start_world_tail`]). One tail serves the whole list, as
     /// one clip does.
     world_tail: Option<usize>,
+    /// What the frame asks of the platform's text entry, if a focused
+    /// field asks ([`DrawList::ask_text_entry`]).
+    text_entry: Option<EntryAsk>,
 }
 
 impl DrawList {
@@ -516,6 +520,21 @@ impl DrawList {
     #[must_use]
     pub fn world_tail(&self) -> Option<usize> {
         self.world_tail
+    }
+
+    /// Asks the platform for text entry at a focused field: a readout
+    /// the app needs only at a frame, so it travels with the frame
+    /// ([`crate::text_entry`]). The last ask of a frame wins; a host that
+    /// something covers asks nothing, so two never meet.
+    pub fn ask_text_entry(&mut self, ask: EntryAsk) -> &mut Self {
+        self.text_entry = Some(ask);
+        self
+    }
+
+    /// What the frame asks of the platform's text entry, if anything.
+    #[must_use]
+    pub fn text_entry(&self) -> Option<EntryAsk> {
+        self.text_entry
     }
 
     /// The commands, in draw order.
@@ -680,7 +699,8 @@ impl DrawList {
     /// further on. A frame drawn for Nova's 1024x768 is drawn centred in a
     /// widened view so. Each keeps its layer. `other`'s world clip, moved
     /// by `by`, replaces this list's if `other` has one, and so does its
-    /// world tail, moved past this list's commands.
+    /// world tail, moved past this list's commands, and its text-entry ask,
+    /// moved by `by` too.
     pub fn extend_translated(&mut self, other: &Self, by: Point) -> &mut Self {
         if let Some(tail) = other.world_tail {
             self.world_tail = Some(self.commands.len() + tail);
@@ -690,6 +710,9 @@ impl DrawList {
         self.layers.extend(&other.layers);
         if let Some(clip) = other.world_clip {
             self.world_clip = Some(clip.offset(by));
+        }
+        if let Some(ask) = other.text_entry {
+            self.text_entry = Some(ask.offset(by));
         }
         self
     }
@@ -977,6 +1000,51 @@ mod tests {
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
+    }
+
+    fn ask(x: f32, focused: u32) -> EntryAsk {
+        EntryAsk {
+            field: Bounds::at(at(x, 20.0), 60.0, 16.0),
+            focused,
+        }
+    }
+
+    #[test]
+    fn a_list_asks_for_no_text_entry_until_asked() {
+        let mut list = DrawList::new();
+        assert_eq!(list.text_entry(), None);
+        list.ask_text_entry(ask(10.0, 1));
+        assert_eq!(list.text_entry(), Some(ask(10.0, 1)));
+        assert!(list.is_empty(), "an ask is no command");
+    }
+
+    #[test]
+    fn the_last_ask_in_a_frame_wins() {
+        let mut list = DrawList::new();
+        list.ask_text_entry(ask(10.0, 1));
+        list.ask_text_entry(ask(30.0, 2));
+        assert_eq!(list.text_entry(), Some(ask(30.0, 2)));
+    }
+
+    #[test]
+    fn extending_translated_moves_the_ask() {
+        let mut dialogs = DrawList::new();
+        dialogs.ask_text_entry(ask(10.0, 4));
+        let mut list = DrawList::new();
+        list.ask_text_entry(ask(500.0, 1));
+        list.extend_translated(&dialogs, at(170.0, -2.0));
+        assert_eq!(
+            list.text_entry(),
+            Some(ask(10.0, 4).offset(at(170.0, -2.0)))
+        );
+    }
+
+    #[test]
+    fn extending_with_no_ask_keeps_the_ask() {
+        let mut list = DrawList::new();
+        list.ask_text_entry(ask(10.0, 1));
+        list.extend_translated(&DrawList::new(), at(170.0, 0.0));
+        assert_eq!(list.text_entry(), Some(ask(10.0, 1)));
     }
 
     #[test]

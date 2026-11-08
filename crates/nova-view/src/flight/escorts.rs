@@ -2,12 +2,14 @@
 //! how the menu is drawn over the flight (`_ShowEscortMenu` @0x5664a and
 //! `_DrawEscortMenuInFrame` @0x56268 in the `EV Nova` executable).
 //!
-//! - E ([`MENU_KEY`]) opens the menu in full ([`FULL_LEVEL`]), selecting
+//! - E ([`FlightCommand::EscortMenu`](crate::keymap::FlightCommand::EscortMenu))
+//!   opens the menu in full ([`FULL_LEVEL`]), selecting
 //!   All Ships; with no escorts it stays shut and the flight says so
 //!   ([`NO_ESCORTS`]). E again, or Return, closes it at once, fading or
 //!   not. E's close beeps; Return's, and the fade's end, beep only while E
 //!   is held, as the close block reads the key live (@0x6e01e-0x6e04d).
-//! - While it shows, fading too, keys 1-5 ([`GROUP_KEYS`]) select All
+//! - While it shows, fading too, keys 1-5
+//!   ([`EscortMenuCommand`](crate::keymap::EscortMenuCommand)) select All
 //!   Ships, Fighters, Medium Ships, Warships or Freighters and show it in
 //!   full again; a class the player has no escort of is not selected,
 //!   though its press, silent, still restarts the timeout, holding a fade
@@ -106,29 +108,18 @@ use nova_sim::escort::{ESCORT_COMMANDS, NEW_ORDERS, WILL_ATTACK, order_label};
 use nova_sim::flight_frame::EscortMenuPass;
 use nova_sim::{ClassRow, Commanded, EscortCommand, EscortGroup};
 
+use crate::bound_names::{Spelling, name_read};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
 use crate::flight::floating;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
-use crate::input::Key;
+use crate::keymap::{CommandReader, EscortMenuCommand};
 use crate::text::TextMetrics;
 use crate::time::sixtieths;
 
 pub use nova_sim::escort::NO_ESCORTS;
 
-/// The escort menu key: the original's default (`Keys.nib`'s
-/// `escortMenuKey`).
-pub const MENU_KEY: Key = Key::Char('e');
-/// The keys that select All Ships, Fighters, Medium Ships, Warships and
-/// Freighters while the menu is open (hard-coded, @0xce722).
-pub const GROUP_KEYS: [Key; 5] = [
-    Key::Char('1'),
-    Key::Char('2'),
-    Key::Char('3'),
-    Key::Char('4'),
-    Key::Char('5'),
-];
 /// How long the menu stays open after it opens, or after the last
 /// selection or command: 480 ticks of 60 Hz.
 pub const MENU_TIMEOUT: Duration = Duration::from_secs(8);
@@ -449,7 +440,8 @@ impl EscortMenu {
         Toggled::Opened
     }
 
-    /// Key `n` of [`GROUP_KEYS`] (from 0), at `now`: while the menu shows,
+    /// Group `n` of the menu's (from 0,
+    /// [`EscortMenuCommand`](crate::keymap::EscortMenuCommand)), at `now`: while the menu shows,
     /// selects its group when the player has an escort of it (All Ships
     /// always), shows the menu in full, redrawn over `rows` (@0x6e114),
     /// and says it did. A press of a class
@@ -625,7 +617,8 @@ impl EscortMenu {
     /// given with the group selected now ([`MenuRows::Live`]); in
     /// `colors`, at its level, its text measured by `metrics` (without
     /// them, the title starts at the frame's left and an order at the
-    /// right inset): as the floating map is drawn ([`floating::draw`]),
+    /// right inset), each row's key named for the device `keys` reads
+    /// ([`row_key`]): as the floating map is drawn ([`floating::draw`]),
     /// the border faded and the rest clipped to the frame and faded, so
     /// its black inside ORs in nothing.
     pub fn draw(
@@ -634,6 +627,7 @@ impl EscortMenu {
         rows: MenuRows<'_>,
         colors: EscortMenuColors,
         metrics: Option<&dyn TextMetrics>,
+        keys: &CommandReader,
     ) {
         let Some(shown) = &self.open else {
             return;
@@ -643,9 +637,25 @@ impl EscortMenu {
             MenuRows::Live(rows) => (shown.group, rows),
         };
         floating::draw(list, frame(), shown.level, colors.border, |list| {
-            draw_inside(list, group, rows, colors, metrics);
+            draw_inside(list, group, rows, colors, metrics, keys);
         });
     }
+}
+
+/// The digit each row is numbered with, as `_DrawEscortMenuInFrame`
+/// writes the row's number (`NumToString(row)` @0x5649a, then `") "`
+/// @0x564ad), not the group key bound.
+const ROW_DIGITS: [&str; 5] = ["1", "2", "3", "4", "5"];
+
+/// What row `n` (from 0) names its group key: the row's digit whatever
+/// the key is bound to on the keyboard ([`Spelling::Fixed`]), through
+/// the one naming function, so another device names its own input.
+fn row_key(keys: &CommandReader, n: usize) -> String {
+    EscortMenuCommand::ALL
+        .get(n)
+        .zip(ROW_DIGITS.get(n))
+        .and_then(|(&command, &digit)| name_read(keys, command, Spelling::Fixed(digit)))
+        .unwrap_or_default()
 }
 
 /// The menu's inside with `selected` selected (see the module docs): its
@@ -657,6 +667,7 @@ fn draw_inside(
     rows: &[ClassRow; 4],
     colors: EscortMenuColors,
     metrics: Option<&dyn TextMetrics>,
+    keys: &CommandReader,
 ) {
     let frame = frame();
     let (left, top, right) = (frame.min.x, frame.min.y, frame.max.x);
@@ -690,7 +701,7 @@ fn draw_inside(
         let color = if present { Color::WHITE } else { ABSENT_ROW };
         let text_top = top + ROW_BASELINE + step - MENU_TEXT_SIZE;
         list.text(
-            format!("{}) {}", n + 1, group.menu_label()),
+            format!("{}) {}", row_key(keys, n), group.menu_label()),
             Point::new(left + TEXT_INSET, text_top),
             MENU_TEXT_SIZE,
             None,
@@ -765,7 +776,16 @@ pub fn fighters_abandoned_message(count: u32) -> String {
 mod tests {
     use super::*;
     use crate::draw::DrawCommand;
+    use crate::input::Key;
+    use crate::keymap::{
+        Bindings, EscortMenuCommand, FlightCommand, KeyCombo, KeyMap, SharedBindings, contexts,
+    };
     use nova_sim::{EscortClass, EscortOrder};
+
+    /// Flight's keys under the default bindings.
+    fn keys() -> CommandReader {
+        CommandReader::new(contexts::FLIGHT)
+    }
 
     /// The fleet's rows: a warship escort holding, a freighter in
     /// formation, and no fighters or medium ships.
@@ -1111,7 +1131,10 @@ mod tests {
         assert_eq!(menu.group(), EscortGroup::All);
         assert_eq!(menu.toggle(AT, &rows()), Toggled::Closed);
         assert!(!menu.is_open());
-        assert_eq!(MENU_KEY, Key::Char('e'));
+        assert_eq!(
+            KeyMap::default().combo(FlightCommand::EscortMenu.into()),
+            Some(KeyCombo::key(Key::KeyE))
+        );
     }
 
     #[test]
@@ -1136,9 +1159,21 @@ mod tests {
         assert!(menu.select(0, AT, &rows()), "1: all, always");
         assert_eq!(menu.group(), EscortGroup::All);
         assert!(!menu.select(5, AT, &rows()), "no sixth key");
+        let keys = KeyMap::default();
         assert_eq!(
-            GROUP_KEYS,
-            ['1', '2', '3', '4', '5'].map(Key::Char),
+            EscortMenuCommand::ALL
+                .iter()
+                .map(|&group| keys.combo(group.into()))
+                .collect::<Vec<_>>(),
+            [
+                Key::Digit1,
+                Key::Digit2,
+                Key::Digit3,
+                Key::Digit4,
+                Key::Digit5
+            ]
+            .map(|key| Some(KeyCombo::key(key)))
+            .to_vec(),
             "hard-coded"
         );
     }
@@ -1300,7 +1335,7 @@ mod tests {
         menu.update(late, u32::from(FULL_LEVEL - level), 2);
         assert_eq!(menu.level(), Some(level));
         let mut list = DrawList::new();
-        menu.draw(&mut list, MenuRows::Held, COLORS, Some(&Fixed));
+        menu.draw(&mut list, MenuRows::Held, COLORS, Some(&Fixed), &keys());
         list.iter().cloned().collect()
     }
 
@@ -1398,7 +1433,7 @@ mod tests {
     fn without_metrics_the_title_starts_at_the_left_and_the_orders_at_the_inset() {
         let menu = opened();
         let mut list = DrawList::new();
-        menu.draw(&mut list, MenuRows::Held, COLORS, None);
+        menu.draw(&mut list, MenuRows::Held, COLORS, None, &keys());
         let texts: Vec<_> = list
             .iter()
             .filter_map(|command| match command {
@@ -1423,11 +1458,11 @@ mod tests {
     #[test]
     fn the_shut_menu_draws_nothing() {
         let mut list = DrawList::new();
-        EscortMenu::default().draw(&mut list, MenuRows::Held, COLORS, Some(&Fixed));
+        EscortMenu::default().draw(&mut list, MenuRows::Held, COLORS, Some(&Fixed), &keys());
         assert!(list.is_empty());
         let mut faded = opened();
         assert!(faded.update(after(AT, 600), 32, 2), "faded out");
-        faded.draw(&mut list, MenuRows::Held, COLORS, Some(&Fixed));
+        faded.draw(&mut list, MenuRows::Held, COLORS, Some(&Fixed), &keys());
         assert!(list.is_empty(), "at level 0");
     }
 
@@ -1437,11 +1472,27 @@ mod tests {
     /// The texts `menu` draws by `rows`, with their colours.
     fn texts(menu: &EscortMenu, rows: MenuRows<'_>) -> Vec<(String, Color)> {
         let mut list = DrawList::new();
-        menu.draw(&mut list, rows, COLORS, Some(&Fixed));
+        menu.draw(&mut list, rows, COLORS, Some(&Fixed), &keys());
         list.iter()
             .filter_map(|command| match command {
                 DrawCommand::Clipped { command, .. } => match &**command {
                     DrawCommand::Text { text, color, .. } => Some((text.clone(), *color)),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The row texts the opened menu draws, naming its keys through
+    /// `keys`, for the device `keys` reads.
+    fn row_texts(keys: &CommandReader) -> Vec<String> {
+        let mut list = DrawList::new();
+        opened().draw(&mut list, MenuRows::Held, COLORS, None, keys);
+        list.iter()
+            .filter_map(|command| match command {
+                DrawCommand::Clipped { command, .. } => match &**command {
+                    DrawCommand::Text { text, .. } if text.contains(") ") => Some(text.clone()),
                     _ => None,
                 },
                 _ => None,
@@ -1469,7 +1520,7 @@ mod tests {
             }
         }
         let mut list = DrawList::new();
-        menu.draw(&mut list, rows, COLORS, Some(&Fixed));
+        menu.draw(&mut list, rows, COLORS, Some(&Fixed), &keys());
         list.iter().find_map(on_row)
     }
 
@@ -1724,6 +1775,110 @@ mod tests {
         ));
         assert!(!shows(&menu, MenuRows::Held, "Attack", Color::WHITE));
         assert_eq!(bar_row(&menu, MenuRows::Live(&attacking)), Some(4));
+    }
+
+    #[test]
+    fn the_rows_keep_their_digits_whatever_the_group_keys_are_bound_to() {
+        let expected: Vec<String> = EscortGroup::ALL
+            .iter()
+            .zip(1..)
+            .map(|(group, n)| format!("{n}) {}", group.menu_label()))
+            .collect();
+        assert_eq!(row_texts(&CommandReader::new(contexts::FLIGHT)), expected);
+        let rebound = Bindings::default()
+            .rebound(EscortMenuCommand::Group1, KeyCombo::key(Key::KeyQ))
+            .unbound(EscortMenuCommand::Group2);
+        let keys = CommandReader::new(contexts::FLIGHT).with_bindings(SharedBindings::new(rebound));
+        assert_eq!(row_texts(&keys), expected, "the original's row numbers");
+        assert_eq!(
+            EscortMenuCommand::ALL,
+            [
+                EscortMenuCommand::Group1,
+                EscortMenuCommand::Group2,
+                EscortMenuCommand::Group3,
+                EscortMenuCommand::Group4,
+                EscortMenuCommand::Group5
+            ],
+            "row n's command is the nth"
+        );
+    }
+
+    /// A flight reader over `bindings`, told `family`'s pad was used
+    /// last.
+    fn told_pad(bindings: Bindings, family: crate::input::ControllerFamily) -> CommandReader {
+        let mut keys =
+            CommandReader::new(contexts::FLIGHT).with_bindings(SharedBindings::new(bindings));
+        keys.follow(&crate::Input::Surroundings(crate::input::Surroundings::of(
+            crate::input::Device::Gamepad(family),
+        )));
+        keys
+    }
+
+    #[test]
+    fn with_a_pad_last_used_the_rows_name_its_group_entries_and_an_unbound_one_its_digit() {
+        let named = |keys: &[&str]| -> Vec<String> {
+            EscortGroup::ALL
+                .iter()
+                .zip(keys)
+                .map(|(group, key)| format!("{key}) {}", group.menu_label()))
+                .collect()
+        };
+        let xbox = told_pad(Bindings::default(), crate::input::ControllerFamily::Xbox);
+        assert_eq!(
+            row_texts(&xbox),
+            named(&[
+                "Menu+D-Up",
+                "Menu+D-Right",
+                "Menu+D-Down",
+                "Menu+D-Left",
+                "Menu+LS"
+            ])
+        );
+        let mut unbound = Bindings::default();
+        unbound.gamepad.unbind(EscortMenuCommand::Group2.into());
+        let keys = told_pad(unbound, crate::input::ControllerFamily::Xbox);
+        assert_eq!(
+            row_texts(&keys),
+            named(&["Menu+D-Up", "2", "Menu+D-Down", "Menu+D-Left", "Menu+LS"])
+        );
+    }
+
+    /// How far each row's text, drawn with [`Fixed`]'s metrics through
+    /// `keys`, reaches past the left of its order's label, if any does.
+    fn row_overlaps(keys: &CommandReader) -> Vec<f32> {
+        let mut list = DrawList::new();
+        opened().draw(&mut list, MenuRows::Held, COLORS, Some(&Fixed), keys);
+        let texts: Vec<(String, Point)> = list
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Clipped { command, .. } => match &**command {
+                    DrawCommand::Text { text, origin, .. } => Some((text.clone(), *origin)),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        texts
+            .iter()
+            .filter(|(text, _)| text.contains(") "))
+            .filter_map(|(row, at)| {
+                let label = texts.iter().find(|(text, origin)| {
+                    !text.contains(") ") && origin.y == at.y && origin.x > at.x
+                })?;
+                let reach = at.x + Fixed.width(Font::Geneva, MENU_TEXT_SIZE, row);
+                (reach > label.1.x).then_some(reach - label.1.x)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_keyboard_s_row_digits_clear_their_orders() {
+        // A pad's names (`Menu+D-Up`) reach into the orders with these
+        // metrics: rdm:phase/front-end/phase-17-escort-menu-pad-names.
+        assert_eq!(
+            row_overlaps(&CommandReader::new(contexts::FLIGHT)),
+            Vec::<f32>::new()
+        );
     }
 
     #[test]
