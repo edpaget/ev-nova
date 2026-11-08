@@ -76,7 +76,16 @@
 //!    [`NEAR`](crate::clearance::NEAR) of it on both axes, else at 0 with
 //!    the request's line ([`DockSaid::Requested`]), and the press gives
 //!    [`LandOutcome::Requested`]. Not cleared, [`LandingRefusal::Denied`],
-//!    and the request is dropped.
+//!    and the request is dropped. The press stops here for traffic
+//!    control ([`dock_request`] gives [`DockStage::Asks`], answered by
+//!    [`DockAsk::answer`]), so the new game's traffic control can scan the
+//!    ship first and the clearance read the record the scan leaves: a
+//!    law-keeping government's, for a ship whose mod kits draw the law's
+//!    attention (`nova_sim::dock_scan`). The session runs it only for a
+//!    ship neither cloaked nor disabled, at a stellar that is no
+//!    hypergate or wormhole, as the original refuses those first
+//!    (`_ShipIsCloaked` @0x66a8e, `_IsDisabled` @0x66aee). The original
+//!    has no such scan.
 //!
 //! So a press lands only once the dock approach has counted the request
 //! past [`REQUESTED_NEAR`] ([`approach`](crate::clearance::approach)), and
@@ -670,7 +679,8 @@ pub fn land_key_pick<'a>(
 /// by `speed` ([`RuleKey::LandingSpeed`](crate::RuleKey::LandingSpeed))
 /// and the untargeted pick's gate limit by `gates`
 /// ([`RuleKey::GatePickRange`](crate::RuleKey::GatePickRange)): see the
-/// module docs.
+/// module docs. It is [`dock_request`] with traffic control answered by
+/// `cleared` ([`DockAsk::answer`]).
 // One argument per thing the original's dock request reads.
 #[allow(clippy::too_many_arguments)]
 pub fn land_or_select(
@@ -685,35 +695,137 @@ pub fn land_or_select(
     speed: RuleSource,
     gates: RuleSource,
 ) -> DockPress {
-    let refused = |refusal| DockPress {
-        selected: None,
-        dock,
-        said: None,
-        outcome: Err(refusal),
+    match dock_request(target, dock, player, cash, sites, held, reach, speed, gates) {
+        DockStage::Done(press) => press,
+        DockStage::Asks(ask) => {
+            let clear = cleared(ask.site());
+            ask.answer(clear)
+        }
+    }
+}
+
+/// How far a press of the land key got before traffic control
+/// ([`dock_request`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DockStage {
+    /// The press is done without asking traffic control: it picked
+    /// nothing, was refused at steps 1-4, or attempted the landing at 6.
+    Done(DockPress),
+    /// The press reached step 7, the request: traffic control is to be
+    /// asked ([`DockAsk::answer`]).
+    Asks(DockAsk),
+}
+
+/// A press of the land key at step 7, waiting for traffic control's
+/// answer (see the module docs). The new game's dock scan runs here,
+/// before the answer, so the clearance reads the record the scan leaves
+/// (`nova_sim::Session`'s `dock_scan` module).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DockAsk {
+    /// The stellar asked.
+    site: LandingSite,
+    /// The stellar the press selected, when nothing was selected.
+    selected: Option<StellarId>,
+    /// What the press said so far.
+    said: Option<DockSaid>,
+    /// Whether the ship is within [`NEAR`](crate::clearance::NEAR) of the
+    /// stellar on both axes.
+    near: bool,
+}
+
+impl DockAsk {
+    /// The stellar whose traffic control is asked.
+    #[must_use]
+    pub fn site(&self) -> &LandingSite {
+        &self.site
+    }
+
+    /// The press, traffic control having `cleared` the pilot or not: not
+    /// cleared, [`LandingRefusal::Denied`] and the request dropped;
+    /// cleared, the request is the stellar's, at [`REQUESTED_NEAR`] in
+    /// silence when near, else at 0 with the request's line, and the press
+    /// gives [`LandOutcome::Requested`].
+    #[must_use]
+    pub fn answer(self, cleared: bool) -> DockPress {
+        let site = &self.site;
+        let (stellar, station) = (site.id, is_station(site));
+        if !cleared {
+            return DockPress {
+                selected: self.selected,
+                dock: None,
+                said: self.said,
+                outcome: Err(LandingRefusal::Denied {
+                    stellar,
+                    station,
+                    min_status: site.min_status,
+                }),
+            };
+        }
+        let request = DockRequest {
+            stellar,
+            permission: if self.near { REQUESTED_NEAR } else { 0 },
+        };
+        DockPress {
+            selected: self.selected,
+            dock: Some(request),
+            said: if self.near {
+                self.said
+            } else {
+                Some(DockSaid::Requested)
+            },
+            outcome: Ok(LandOutcome::Requested { stellar, station }),
+        }
+    }
+}
+
+/// What the land key does up to traffic control (see [`land_or_select`],
+/// whose arguments these are but `cleared`): [`DockStage::Done`] with the
+/// press when it ends at steps 1-6, else [`DockStage::Asks`] at step 7,
+/// the request, for the caller to ask traffic control.
+// One argument per thing the original's dock request reads.
+#[allow(clippy::too_many_arguments)]
+pub fn dock_request(
+    target: Option<&LandingSite>,
+    dock: Option<DockRequest>,
+    player: &ShipState,
+    cash: i64,
+    sites: &[LandingSite],
+    held: impl Fn(&LandingSite) -> bool,
+    reach: impl Fn(&LandingSite) -> LandingReach,
+    speed: RuleSource,
+    gates: RuleSource,
+) -> DockStage {
+    let refused = |refusal| {
+        DockStage::Done(DockPress {
+            selected: None,
+            dock,
+            said: None,
+            outcome: Err(refusal),
+        })
     };
     let (site, selected) = match land_key_pick(target, player.position, sites, gates) {
         Ok(picked) => picked,
         Err(refusal) => return refused(refusal),
     };
     if !is_landable(site) || !held(site) {
-        return DockPress {
+        return DockStage::Done(DockPress {
             selected,
             dock,
             said: None,
             outcome: Err(not_landable(site)),
-        };
+        });
     }
     let (stellar, station) = (site.id, is_station(site));
     if fee_due(site).is_some_and(|fee| fee > cash) {
-        return DockPress {
+        return DockStage::Done(DockPress {
             selected,
             dock: None,
             said: None,
             outcome: Err(LandingRefusal::CannotPayFee { stellar, station }),
-        };
+        });
     }
     if site.gate_closed {
-        return DockPress {
+        return DockStage::Done(DockPress {
             selected,
             dock: None,
             said: None,
@@ -722,7 +834,7 @@ pub fn land_or_select(
                 station,
                 min_status: site.min_status,
             }),
-        };
+        });
     }
     let (mut dock, mut said) = (dock, None);
     if has(site, StellarFlags::UNINHABITED) {
@@ -732,40 +844,22 @@ pub fn land_or_select(
         });
         said = Some(DockSaid::NoResponse);
     }
-    let pressed = |dock, said, outcome| DockPress {
-        selected,
-        dock,
-        said,
-        outcome,
-    };
     if let Some(request) = dock.filter(|request| request.stellar == stellar) {
         let attempt = check_landing(player, site, request.permission, reach(site), speed);
         let dock = if attempt.is_ok() { None } else { dock };
-        return pressed(dock, said, attempt.map(LandOutcome::Landed));
+        return DockStage::Done(DockPress {
+            selected,
+            dock,
+            said,
+            outcome: attempt.map(LandOutcome::Landed),
+        });
     }
-    if !cleared(site) {
-        let denied = LandingRefusal::Denied {
-            stellar,
-            station,
-            min_status: site.min_status,
-        };
-        return pressed(None, said, Err(denied));
-    }
-    let near = clearance::near(site.position - player.position);
-    let request = DockRequest {
-        stellar,
-        permission: if near { REQUESTED_NEAR } else { 0 },
-    };
-    let said = if near {
-        said
-    } else {
-        Some(DockSaid::Requested)
-    };
-    pressed(
-        Some(request),
+    DockStage::Asks(DockAsk {
+        site: *site,
+        selected,
         said,
-        Ok(LandOutcome::Requested { stellar, station }),
-    )
+        near: clearance::near(site.position - player.position),
+    })
 }
 
 /// The landing fee `site` charges, when one is due: its `Fee` when that is
@@ -1274,6 +1368,124 @@ mod tests {
         press.outcome.map(|outcome| match outcome {
             LandOutcome::Landed(stellar) | LandOutcome::Requested { stellar, .. } => stellar,
         })
+    }
+
+    /// L pressed at `site` with the dock request `dock`, up to traffic
+    /// control, the ship at (`x`, `y`) at rest.
+    fn stage(site: &LandingSite, dock: Option<DockRequest>, x: f32) -> DockStage {
+        dock_request(
+            Some(site),
+            dock,
+            &ship(x, 0.0, 0.0, 0.0),
+            RICH,
+            std::slice::from_ref(site),
+            |_| true,
+            engine_reach,
+            RuleSource::Engine,
+            RuleSource::Engine,
+        )
+    }
+
+    fn inhabited() -> LandingSite {
+        with_flags(StellarFlags::CAN_LAND)
+    }
+
+    #[test]
+    fn a_press_at_an_inhabited_stellar_not_yet_requested_asks_traffic_control_there() {
+        let site = inhabited();
+        let DockStage::Asks(ask) = stage(&site, None, 0.0) else {
+            panic!("asks");
+        };
+        assert_eq!(ask.site(), &site);
+    }
+
+    #[test]
+    fn an_uninhabited_stellar_a_granted_request_a_closed_gate_or_a_fee_never_ask() {
+        let uninhabited = with_flags(StellarFlags::CAN_LAND | StellarFlags::UNINHABITED);
+        assert!(matches!(stage(&uninhabited, None, 0.0), DockStage::Done(_)));
+        let granted = Some(DockRequest {
+            stellar: inhabited().id,
+            permission: CLEARED,
+        });
+        assert!(matches!(
+            stage(&inhabited(), granted, 0.0),
+            DockStage::Done(_)
+        ));
+        let closed = LandingSite {
+            gate_closed: true,
+            ..inhabited()
+        };
+        assert!(matches!(stage(&closed, None, 0.0), DockStage::Done(_)));
+        let dear = LandingSite {
+            fee: i32::try_from(RICH + 1).unwrap(),
+            ..inhabited()
+        };
+        assert!(matches!(stage(&dear, None, 0.0), DockStage::Done(_)));
+        let unlandable = with_flags(0);
+        assert!(matches!(stage(&unlandable, None, 0.0), DockStage::Done(_)));
+    }
+
+    #[test]
+    fn traffic_control_s_answer_requests_near_in_silence_or_far_aloud_or_denies() {
+        let site = inhabited();
+        let answered = |x: f32, cleared: bool| {
+            let DockStage::Asks(ask) = stage(&site, None, x) else {
+                panic!("asks");
+            };
+            ask.answer(cleared)
+        };
+        let near = answered(0.0, true);
+        assert_eq!(
+            near.dock,
+            Some(DockRequest {
+                stellar: site.id,
+                permission: REQUESTED_NEAR,
+            })
+        );
+        assert_eq!(near.said, None);
+        assert_eq!(
+            near.outcome,
+            Ok(LandOutcome::Requested {
+                stellar: site.id,
+                station: false,
+            })
+        );
+        let far = answered(5000.0, true);
+        assert_eq!(far.dock.map(|dock| dock.permission), Some(0));
+        assert_eq!(far.said, Some(DockSaid::Requested));
+        let denied = answered(0.0, false);
+        assert_eq!(denied.dock, None);
+        assert_eq!(
+            denied.outcome,
+            Err(LandingRefusal::Denied {
+                stellar: site.id,
+                station: false,
+                min_status: site.min_status,
+            })
+        );
+    }
+
+    #[test]
+    fn land_or_select_is_the_request_with_traffic_control_answered() {
+        let site = inhabited();
+        for cleared in [true, false] {
+            let DockStage::Asks(ask) = stage(&site, None, 0.0) else {
+                panic!("asks");
+            };
+            let pressed = land_or_select(
+                Some(&site),
+                None,
+                &parked(),
+                RICH,
+                std::slice::from_ref(&site),
+                |_| cleared,
+                |_| true,
+                engine_reach,
+                RuleSource::Engine,
+                RuleSource::Engine,
+            );
+            assert_eq!(pressed, ask.answer(cleared), "{cleared}");
+        }
     }
 
     #[test]
