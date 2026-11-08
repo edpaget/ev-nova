@@ -72,6 +72,12 @@ mock_provider "github" {}
 run "no_profile_before_validation" {
   command = plan
 
+  # The committed default is the completed validation, so the first apply's
+  # state is set here explicitly.
+  variables {
+    identity_validation_id = null
+  }
+
   assert {
     condition = (
       length(azapi_resource.certificate_profile) == 0 &&

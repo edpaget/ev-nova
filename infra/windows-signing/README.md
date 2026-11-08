@@ -77,7 +77,9 @@ mise run infra-windows-signing-plan    # read the diff
 mise run infra-windows-signing-apply   # interactive: check the summary, then type `yes`
 ```
 
-1. **Apply 1.** With `identity_validation_id` unset (`null`), plan and apply.
+1. **Apply 1.** With `identity_validation_id`'s default set to `null`,
+   plan and apply. (The committed default is now the completed validation's
+   ID; a setup from scratch sets it back to `null` until step 3.)
    It creates the registration, the resource group, the account, the
    Identity Verifier assignment, the Entra application, service principal
    and federated credential, and the environment with its policy and six
@@ -88,7 +90,9 @@ mise run infra-windows-signing-apply   # interactive: check the summary, then ty
    validations > New > Public, and submit. Wait for the status to read
    **Completed** (it can take days), then copy the validation's ID.
 3. **Apply 2.** Set the ID as `identity_validation_id`'s default in
-   `variables.tf` (it isn't secret) and commit. Plan and apply: it creates
+   `variables.tf` (it isn't secret) and commit. The default is now
+   `ba5a4aef-b157-4944-93a6-cd11888acdd6`, the operator's individual
+   validation, which completed in November 2026. Plan and apply: it creates
    the certificate profile and the Certificate Profile Signer assignment.
    Plan again: it must report `No changes.` If the follow-up plan shows drift
    on `includeStreetAddress` or `includePostalCode`, set both to `false`

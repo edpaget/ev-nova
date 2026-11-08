@@ -5,14 +5,15 @@ variable "state_passphrase" {
 }
 
 # Not a secret: it names the operator's completed Public Trust identity
-# validation, and grants nothing by itself. Set the default to its ID once
-# the validation completes (README.md, "The two-apply flow"). While it is
-# null, the certificate profile and its signer role assignment aren't
-# created.
+# validation, and grants nothing by itself. The default is the individual
+# validation that completed in November 2026 (README.md, "The two-apply
+# flow"); replace it when the validation is renewed ("Validation renewal").
+# Set to null, the certificate profile and its signer role assignment
+# aren't created, as on the first apply.
 variable "identity_validation_id" {
   description = "The ID of the completed Public Trust identity validation on the Artifact Signing account, or null before validation completes."
   type        = string
-  default     = null
+  default     = "ba5a4aef-b157-4944-93a6-cd11888acdd6"
 
   validation {
     condition     = var.identity_validation_id == null || try(length(trimspace(var.identity_validation_id)) > 0, false)
