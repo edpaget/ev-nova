@@ -101,9 +101,11 @@
 //! **Not modelled**: `_gPause` = 0, as flight has no pause; the
 //! status-panel redraw, which the view draws every frame; the escort
 //! menu's shut, the view's hand-over (`FlightView::shut_escort_menu`);
-//! the menu bar, the app's; `_cursorAlpha` = 0, the view's
-//! (`FlightView::enter_game`); and `_playerKilledByHector`, the Captain
+//! the menu bar, the app's; and `_playerKilledByHector`, the Captain
 //! Hector nag, a non-goal (see the `player_downed` module).
+//!
+//! `_cursorAlpha` = 0 is built by the view at entry:
+//! `nova_view::FlightView::enter_game` calls `HoverCursor::fade_out`.
 //!
 //! **Left out.** The cheat-mode freeze (`_cheatsActive` keeps
 //! `_gameFrozen` through each pass and the loop, @0x6842c, @0x46437)
