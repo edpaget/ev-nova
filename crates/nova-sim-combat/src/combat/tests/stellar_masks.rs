@@ -108,6 +108,17 @@ struct Pass {
 
 /// The collision passes of `combat` among `stellars`, `sprites` lent.
 fn passes(combat: &mut Combat, stellars: &mut [StellarTarget], sprites: &ContactSprites) -> Pass {
+    passes_among(combat, &mut [], stellars, sprites)
+}
+
+/// [`passes`] among `ships` too.
+fn passes_among(
+    combat: &mut Combat,
+    ships: &mut [Ship],
+    stellars: &mut [StellarTarget],
+    sprites: &ContactSprites,
+) -> Pass {
+    let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
     let (arsenal, govts) = (Arsenal::default(), Governments::default());
     let arena = Arena {
         pass: GamePass::Advance { double_time: false },
@@ -121,7 +132,7 @@ fn passes(combat: &mut Combat, stellars: &mut [StellarTarget], sprites: &Contact
         contact: Some(sprites),
         ..Scenery::default()
     };
-    combat.test_hits(&mut [], arena, scenery, &mut NeverFires);
+    combat.test_hits(&mut fighters, arena, scenery, &mut NeverFires);
     let at = combat
         .take_events()
         .iter()
@@ -315,6 +326,62 @@ fn on_a_wraps_pass_a_stellar_is_met_by_its_mask_where_its_sprite_stood() {
     };
     assert_eq!(struck(before), 1, "where the two sprites stood");
     assert_eq!(struck(before + shift), 0, "not in the world");
+}
+
+#[test]
+fn a_shots_and_a_stellars_masks_are_laid_out_from_where_the_player_was_seen() {
+    // The player seen far from the origin, the stellar 100 above it.
+    let seen = Vec2::new(500.0, 300.0);
+    let place = seen - Vec2::new(0.0, 100.0);
+    let stellar = sprite(quartered(), 0, place);
+    let sprites = lending(
+        Some(square(2, |_, _| true)),
+        vec![(STELLAR, stellar)],
+        ShotContact::Placed,
+    );
+    let struck = |off: Vec2| {
+        let at = place + off;
+        let mut combat = Combat::default();
+        fly(&mut combat, (gun(), A, ShotLayer::Shots), (at, at), None);
+        let mut player = [Ship {
+            id: ShipRef::Player,
+            fleet: ShipRef::Player,
+            ..Ship::at(0, seen.x, seen.y)
+        }];
+        let mut stellars = [target(STELLAR, place, 100)];
+        passes_among(&mut combat, &mut player, &mut stellars, &sprites)
+            .strikes
+            .len()
+    };
+    assert_eq!(struck(Vec2::new(9.0, 9.0)), 1, "over its pixels");
+    assert_eq!(struck(Vec2::new(-9.0, -9.0)), 0, "over its clear quarter");
+}
+
+#[test]
+fn on_a_wraps_pass_a_shot_left_behind_meets_a_stellar_by_their_masks_where_both_are() {
+    // Both far beyond the wrap's reach: the shot is left behind, a delta
+    // back, and the stellar, never carried, is met a delta on, so their
+    // sprites stand together. The disc, 1 across, is out of reach.
+    let stood = Vec2::new(WRAP_EDGE + 10.0, 0.0);
+    let place = Vec2::new(stood.x - WRAP_EDGE * 2.0, 0.0);
+    let at = place + Vec2::new(5.0, 0.0);
+    let mut combat = Combat::default();
+    fly(&mut combat, (gun(), A, ShotLayer::Shots), (at, at), None);
+    combat.carry(&PlayerWrap::of(stood).expect("past the edge"), Vec::new());
+    assert_eq!(combat.shots[0].position, at, "left behind");
+    let solid = sprite(square(20, |_, _| true), 0, place);
+    let sprites = lending(
+        Some(square(2, |_, _| true)),
+        vec![(STELLAR, solid)],
+        ShotContact::Placed,
+    );
+    let mut stellars = [StellarTarget {
+        radius: 1.0,
+        ..target(STELLAR, place, 100)
+    }];
+    let pass = passes(&mut combat, &mut stellars, &sprites);
+    assert_eq!(pass.strikes.len(), 1);
+    assert_eq!(pass.at, [at], "where the shot is");
 }
 
 // The disc decides.
