@@ -3469,17 +3469,29 @@ mod tests {
     fn the_player_fires_nothing_unless_intact_and_reports_an_unflown_guidance() {
         let mut armament = mounted(blaster(128, 0), 1);
         let mut supplies = Supplies::none();
-        let fired = armament.fire_player(
-            WeaponId(128),
+        // A breaking-up or destroyed player launches nothing either, so no
+        // stray beam of its can step its pod word (`_IsDisabled` holds for
+        // a breaking-up player, and its fire is gated on that @0x6ab1c).
+        for condition in [
             Condition::Disabled,
-            supplies.shooter,
-            &mut supplies.rounds,
-            &mut supplies.fuel,
-            &mut NeverFires,
-            &mut supplies.reports,
-            &mut ahead,
-        );
-        assert_eq!(fired, None);
+            Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            },
+            Condition::Destroyed,
+        ] {
+            let fired = armament.fire_player(
+                WeaponId(128),
+                condition,
+                supplies.shooter,
+                &mut supplies.rounds,
+                &mut supplies.fuel,
+                &mut NeverFires,
+                &mut supplies.reports,
+                &mut ahead,
+            );
+            assert_eq!(fired, None, "{condition:?}");
+        }
         let mut odd = mounted(
             WeaponRecord {
                 guidance: 42,

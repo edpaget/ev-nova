@@ -71,9 +71,11 @@ pub enum PlayerFate {
     /// In the escape pod after an eject, counting down to the rescue: the
     /// original's pod countdown +0xc908 while it is above 0, set to
     /// [`POD_TICKS`] by the eject (@0x6f669) and taken down a tick by the
-    /// pod's flight (@0x68d95-0x68dcd). A running pod wins over the
-    /// condition: the pod's frames return (@0x68ddd) before anything else
-    /// `_HandlePlayer` does.
+    /// pod's flight (@0x68d95-0x68dcd). A running pod wins over every
+    /// condition but destroyed: the pod's frames return (@0x68ddd) before
+    /// anything else the active branch does, but an inactive player takes
+    /// the dead branch (@0x68700) before the pod block is reached, so a
+    /// destroyed player beside a stray-stepped word is held.
     Ejected {
         /// The pod ticks still to run before the rescue.
         ticks_left: u32,
@@ -321,8 +323,12 @@ impl PlayerFate {
     /// `exploded_this_tick` says whether the ship was destroyed on the
     /// latest tick, and `ending` how far the game's end has got since.
     /// Both matter only to a destroyed ship; one with no ending recorded
-    /// is at the hold's start. A running `pod` countdown wins over all of
-    /// them: the player is [`PlayerFate::Ejected`].
+    /// is at the hold's start. A running `pod` countdown wins over every
+    /// condition but [`Condition::Destroyed`]: the player is
+    /// [`PlayerFate::Ejected`]. A destroyed player is held whatever the
+    /// pod word holds, as `_HandlePlayer` tests the active byte (@0x68700)
+    /// before the pod block (@0x68d1d) and its dead branch never reads
+    /// +0xc908.
     #[must_use]
     pub fn of(
         condition: Condition,
@@ -330,7 +336,9 @@ impl PlayerFate {
         ending: Option<Ending>,
         pod: Option<u32>,
     ) -> Self {
-        if let Some(ticks_left) = pod {
+        if let Some(ticks_left) = pod
+            && condition != Condition::Destroyed
+        {
             return Self::Ejected { ticks_left };
         }
         match condition {
@@ -668,6 +676,44 @@ mod tests {
                     PlayerFate::of(condition, false, None, Some(ticks_left)),
                     PlayerFate::Ejected { ticks_left },
                     "{condition:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_destroyed_player_is_held_whatever_its_pod_word() {
+        // `_HandlePlayer` tests the active byte +0xb8 (@0x68700) before the
+        // pod block (@0x68d1d): an inactive player takes the dead branch,
+        // which never reads +0xc908, whatever a stray beam stepped it to.
+        let endings = [
+            (true, None, PlayerFate::Exploded),
+            (
+                false,
+                None,
+                PlayerFate::Holding {
+                    ticks_left: HOLD_TICKS,
+                },
+            ),
+            (
+                false,
+                Some(Ending::Holding { ticks_left: 9 }),
+                PlayerFate::Holding { ticks_left: 9 },
+            ),
+            (
+                false,
+                Some(Ending::Expired),
+                PlayerFate::Holding { ticks_left: 0 },
+            ),
+            (false, Some(Ending::Fading), PlayerFate::Fading),
+            (false, Some(Ending::GameOver), PlayerFate::GameOver),
+        ];
+        for (exploded, ending, fate) in endings {
+            for pod in [0, 1, 3, POD_TICKS] {
+                assert_eq!(
+                    PlayerFate::of(Condition::Destroyed, exploded, ending, Some(pod)),
+                    fate,
+                    "pod {pod}, {ending:?}"
                 );
             }
         }

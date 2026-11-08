@@ -723,7 +723,11 @@ pub const EXPLOSION_BAND: u32 = 2;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Breakup {
     /// The ship explodes: on its breakup tick with no `DeathDelay`, on the
-    /// tick after with 1. The default, and the other reading.
+    /// tick after with 1. The default, and the other reading. A player it
+    /// destroys beside a pod word a stray beam stepped is held, not
+    /// flown and rescued, as `_HandlePlayer`'s dead branch (@0x68700)
+    /// holds any inactive player before the pod block (@0x68d1d): the
+    /// only route to that state once the pod's return stalls the timer.
     #[default]
     Explodes,
     /// The original's: `_HandleShipDisplay` sets a timer that is not above
