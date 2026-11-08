@@ -2,6 +2,8 @@
 //! ([`stellar_guns`](crate::combat::stellar_guns)): a stellar's shot,
 //! launched by no ship (source -1), hits only the ship it is aimed at
 //! (`_ShotCanHitShip` @0x44a71-0x44a88), as the collision passes test it.
+//! It also pins that a fighter the player leads is judged as the player's
+//! side (`_IsThreatToStellar` @0x9f61-0x9f73).
 
 use super::*;
 use crate::catalog::{GovtRecord, StellarId};
@@ -128,6 +130,12 @@ fn pirate(id: u32, distance: f32) -> Ship {
 /// The ship [`stellar`]'s gun, armed with `record`, aims its shot at among
 /// `ships`, if it fires.
 fn aimed_at(ships: &mut [Ship], record: WeaponRecord) -> Option<ShipRef> {
+    aimed_at_by(stellar(), ships, record)
+}
+
+/// The ship `gun`, armed with `record`, aims its shot at among `ships`,
+/// if it fires.
+fn aimed_at_by(gun: StellarGun, ships: &mut [Ship], record: WeaponRecord) -> Option<ShipRef> {
     let arsenal = Arsenal::new(&[record], Vec::new());
     let govts = govts();
     let mut combat = Combat::default();
@@ -139,7 +147,7 @@ fn aimed_at(ships: &mut [Ship], record: WeaponRecord) -> Option<ShipRef> {
         rules: Rules::default(),
         field: Field::default(),
     };
-    combat.fire_stellar_guns(&fighters, arena, &mut [stellar()], &mut NeverFires);
+    combat.fire_stellar_guns(&fighters, arena, &mut [gun], &mut NeverFires);
     combat.shots().first().and_then(|shot| shot.aimed_at)
 }
 
@@ -248,4 +256,64 @@ fn a_stellars_shot_holds_its_quarrys_slot_and_strikes_a_newcomer_in_it() {
         ..Ship::at(2, 0.0, -100.0)
     }];
     assert_eq!(struck_by_no_one(&mut combat, &mut ships), [B]);
+}
+
+/// [`stellar`] with the player a criminal: a record far under any
+/// `CrimeTol`.
+fn criminal() -> StellarGun {
+    let mut gun = stellar();
+    gun.standing.record = -1000;
+    gun
+}
+
+/// The player, `distance` above the stellar.
+fn player_at(distance: f32) -> Ship {
+    Ship {
+        id: ShipRef::Player,
+        fleet: ShipRef::Player,
+        slot: Slot::Player,
+        ..Ship::at(0, 0.0, -distance)
+    }
+}
+
+/// NPC `id`, of government `govt`, escorting the player `distance` above
+/// the stellar.
+fn escort(id: u32, distance: f32, govt: Option<GovtId>) -> Ship {
+    Ship {
+        leader: Some(ShipRef::Player),
+        fleet: ShipRef::Player,
+        govt,
+        ..Ship::at(id, 0.0, -distance)
+    }
+}
+
+#[test]
+fn a_criminal_players_escort_nearer_than_the_player_draws_the_shot() {
+    assert_eq!(
+        aimed_at_by(
+            criminal(),
+            &mut [player_at(300.0), escort(1, 100.0, None)],
+            turret()
+        ),
+        Some(A),
+        "the player's side, by its leader"
+    );
+    let unled = Ship {
+        leader: None,
+        ..escort(1, 100.0, None)
+    };
+    assert_eq!(
+        aimed_at_by(criminal(), &mut [player_at(300.0), unled], turret()),
+        Some(ShipRef::Player),
+        "independent and unled, no threat"
+    );
+    assert_eq!(
+        aimed_at_by(
+            stellar(),
+            &mut [player_at(300.0), escort(1, 100.0, Some(PIRATES))],
+            turret()
+        ),
+        None,
+        "judged by the clean player's standing, not its own government"
+    );
 }
