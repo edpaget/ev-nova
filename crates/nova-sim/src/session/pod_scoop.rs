@@ -357,6 +357,26 @@ mod tests {
         assert_eq!(session.take_sounds(), twin.take_sounds());
     }
 
+    #[test]
+    fn a_pod_ejected_during_a_pass_is_first_scooped_on_the_next() {
+        // The box layer's collision (@0x43e70) runs before `_HandleShip`
+        // spawns the pod (@0x44483).
+        let (catalog, mut session) = scooper(RuleSource::Engine);
+        box_at(&mut session, FAR, 3);
+        let at = session.player().position;
+        let mut dying = crate::session::escape_pods::tests::ejecting(at);
+        dying.pods_left = 1;
+        session.space.traffic.add_npc(dying);
+        pass(&mut session, &catalog);
+        assert_eq!(shown(&session), [true], "ejected this pass, not tested");
+        assert_eq!(held(&session), []);
+        assert_eq!(contents(&session), [Some(3)]);
+        pass(&mut session, &catalog);
+        assert_eq!(shown(&session), [false], "taken the next");
+        assert_eq!(held(&session), [(Good::Commodity(3), 1)]);
+        assert!(session.cargo_boxes().is_empty(), "box slot 0 gone");
+    }
+
     /// A scooping NPC, a miner in state 17, at `at`, its disc 10 across
     /// its centre, its hold empty.
     fn scooping_npc(at: Vec2) -> Npc {
