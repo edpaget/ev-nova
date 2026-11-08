@@ -485,7 +485,7 @@ pub fn draw_map(
 
 /// The closed gate lanes `state`'s map draws beside the links drawn,
 /// `current_links` and `links`, each in its look, by
-/// [`RuleKey::MapLaneStyle`]'s other reading and off the hypergate map
+/// [`RuleKey::MapLaneStyle`](crate::RuleKey::MapLaneStyle)'s other reading and off the hypergate map
 /// (see the [`map_lanes`](crate::map_lanes) module): from the current
 /// system, then each visible, explored and known system by ascending ID,
 /// each pair once and none drawn as a link either way.
