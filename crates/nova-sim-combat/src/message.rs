@@ -5,6 +5,20 @@ use crate::catalog::{JunkId, OutfitId, ShipId, StellarId, SystemId};
 use crate::clearance::DockKind;
 use crate::tutorial::TutorialHint;
 
+/// What a dock scan found ([`SimMessage::DockScanned`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DockFind {
+    /// A `jünk`, named by its `LCName`.
+    Junk(JunkId),
+    /// An outfit, named by its `LCName` for one, else its `LCPlural`.
+    Outfit {
+        /// The outfit.
+        id: OutfitId,
+        /// Whether the player owns exactly one.
+        one: bool,
+    },
+}
+
 /// Something a `nova_sim::Session` did that the player is told of.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SimMessage {
@@ -114,6 +128,18 @@ pub enum SimMessage {
         outfit: OutfitId,
         /// Whether the player owns exactly one (@0x7f103-0x7f113).
         one: bool,
+        /// The credits fined: none for no fine.
+        fine: i64,
+    },
+    /// The new game's traffic control scanned the ship as it asked to land
+    /// and found contraband: the player is fined and convicted of
+    /// smuggling before the clearance (see `nova_sim::dock_scan`). The
+    /// original has no such scan, nor a `STR#` for it.
+    DockScanned {
+        /// The stellar whose traffic control scanned.
+        stellar: StellarId,
+        /// What it found.
+        found: DockFind,
         /// The credits fined: none for no fine.
         fine: i64,
     },
@@ -307,7 +333,8 @@ impl SimMessage {
     ///   [`Smuggling`](Self::Smuggling),
     ///   [`IllegalJunk`](Self::IllegalJunk) and
     ///   [`IllegalOutfit`](Self::IllegalOutfit): 400 (`_ScanPlayer`
-    ///   @0x7e79d, @0x7ea96, @0x7eece, @0x7f38f).
+    ///   @0x7e79d, @0x7ea96, @0x7eece, @0x7f38f), and so the new game's
+    ///   [`DockScanned`](Self::DockScanned), as a scan's.
     /// - [`EscortRepaired`](Self::EscortRepaired) and
     ///   [`FighterRepaired`](Self::FighterRepaired): 250 (`_HandleShip`
     ///   @0x33ba1, `_HandlePlayerBoardAttempt` @0x65cff, @0x65af6,
@@ -362,6 +389,7 @@ impl SimMessage {
             | Self::Smuggling { .. }
             | Self::IllegalJunk { .. }
             | Self::IllegalOutfit { .. }
+            | Self::DockScanned { .. }
             | Self::BombExploded { .. }
             | Self::ScanHail(_)
             | Self::CargoStolen { .. }
@@ -459,6 +487,24 @@ mod tests {
         // 0xfa pushed for `_DisplayComm` (@0x9721e).
         for station in [false, true] {
             assert_eq!(SimMessage::BribeCleared { station }.ticks(), 250);
+        }
+    }
+
+    #[test]
+    fn a_dock_scan_lasts_as_long_as_a_scan() {
+        for found in [
+            DockFind::Outfit {
+                id: OutfitId(131),
+                one: true,
+            },
+            DockFind::Junk(JunkId(150)),
+        ] {
+            let scanned = SimMessage::DockScanned {
+                stellar: StellarId(128),
+                found,
+                fine: 500,
+            };
+            assert_eq!(scanned.ticks(), 400);
         }
     }
 

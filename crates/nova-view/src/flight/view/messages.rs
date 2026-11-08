@@ -13,8 +13,8 @@ use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
 use nova_sim::mission::screens::NO_ACTIVE_MISSIONS;
 use nova_sim::text_tags::comma_number;
 use nova_sim::{
-    Assigned, BoardRefusal, Chance, CommNote, DockKind, GateKind, HailRefusal, Help, JumpRefusal,
-    LandingRefusal, SelfDestructLine, ShipId, SimMessage, StellarId, Taken,
+    Assigned, BoardRefusal, Chance, CommNote, DockFind, DockKind, GateKind, HailRefusal, Help,
+    JumpRefusal, LandingRefusal, SelfDestructLine, ShipId, SimMessage, StellarId, Taken,
 };
 use nova_sim::{MissionBoardLine, PayNote, RuleSource, TutorialHint};
 
@@ -352,6 +352,37 @@ pub fn illegal_outfit_message(
     )
 }
 
+/// What the message line says when the new game's traffic control finds
+/// `found` as it searches the ship before landing: "Your ship is searched
+/// before landing: the `found` is found.", and the fine as
+/// [`smuggling_message`] adds it. The original has no such scan, nor a
+/// `STR#` for it, so the words are the engine's own.
+#[must_use]
+pub fn dock_scanned_message(found: &str, fine: i64) -> String {
+    with_fine(
+        format!("Your ship is searched before landing: the {found} is found."),
+        fine,
+    )
+}
+
+/// What a dock scan's notice calls what it found: an outfit by its
+/// `LCName` for one or its `LCPlural` for more, else, for an outfit with
+/// none (the new game's), by its name; a `jünk` by its `LCName`.
+fn dock_find_name(found: DockFind, names: &Names) -> &str {
+    match found {
+        DockFind::Junk(junk) => names.junk_lc(junk).unwrap_or_default(),
+        DockFind::Outfit { id, one } => {
+            let (lc_name, lc_plural) = names.outfit_lc(id).unwrap_or_default();
+            let lc = if one { lc_name } else { lc_plural };
+            if lc.is_empty() {
+                names.outfit(id).unwrap_or_default()
+            } else {
+                lc
+            }
+        }
+    }
+}
+
 /// What the flight's messages are worded with: the names fixed for the
 /// flight's life, as its opening handed them, and the names the flight
 /// decides, as the kept frame holds them: the player's ship's name, empty
@@ -555,6 +586,12 @@ pub(super) fn sim_message_text(
                 *one,
                 lc_name,
                 lc_plural,
+                *fine,
+            ));
+        }
+        SimMessage::DockScanned { found, fine, .. } => {
+            return Some(dock_scanned_message(
+                dock_find_name(*found, words.names),
                 *fine,
             ));
         }
@@ -885,6 +922,7 @@ pub(super) fn arrival_lead(message: &SimMessage, chance: &mut dyn Chance) -> Opt
         | SimMessage::Smuggling { .. }
         | SimMessage::IllegalJunk { .. }
         | SimMessage::IllegalOutfit { .. }
+        | SimMessage::DockScanned { .. }
         | SimMessage::Buoy(_)
         | SimMessage::TookOff { .. }
         | SimMessage::DockRequested { .. }

@@ -11,8 +11,8 @@
 //! `sim_adapter/fake_catalog_checks.rs`'.
 
 use super::*;
-use nova_sim::SelfDestructLine;
 use nova_sim::flight_frame::{FlightEvent, OutfitNames, ShipNames};
+use nova_sim::{DockFind, SelfDestructLine};
 
 /// What `fake` words its messages with: its opening's names, and its
 /// frame's player's ship's name and date.
@@ -434,6 +434,68 @@ fn a_contraband_notice_reads_its_names_from_the_flight() {
     );
     assert_eq!(lead_of(&junk(150)), None);
     assert_eq!(lead_of(&outfit(None)), None);
+}
+
+/// The new game's dock scan names what it found as the flight names it,
+/// an outfit with no lower-case name by its name, and adds the fine as
+/// the scans do.
+#[test]
+fn a_dock_scan_says_what_traffic_control_found_and_the_fine() {
+    let names = naming_with(|names| {
+        names.outfits.insert(
+            OutfitId(131),
+            OutfitNames {
+                name: "Gun mount".to_owned(),
+                lc_name: String::new(),
+                lc_plural: String::new(),
+            },
+        );
+        names
+            .outfits
+            .insert(OutfitId(275), outfit_lc("blaster", "blasters"));
+    });
+    let scanned = |found, fine| SimMessage::DockScanned {
+        stellar: StellarId(128),
+        found,
+        fine,
+    };
+    let kit = DockFind::Outfit {
+        id: OutfitId(131),
+        one: true,
+    };
+    assert_eq!(
+        text(&scanned(kit, 500), &names).as_deref(),
+        Some(
+            "Your ship is searched before landing: the Gun mount is found. You have been \
+             fined 500 credits."
+        )
+    );
+    assert_eq!(
+        text(&scanned(kit, 0), &names).as_deref(),
+        Some("Your ship is searched before landing: the Gun mount is found.")
+    );
+    let blasters = DockFind::Outfit {
+        id: OutfitId(275),
+        one: false,
+    };
+    assert_eq!(
+        text(&scanned(blasters, 1), &names),
+        Some(dock_scanned_message("blasters", 1))
+    );
+    let blaster = DockFind::Outfit {
+        id: OutfitId(275),
+        one: true,
+    };
+    assert_eq!(
+        text(&scanned(blaster, 0), &names),
+        Some(dock_scanned_message("blaster", 0))
+    );
+    let junk = DockFind::Junk(nova_sim::JunkId(150));
+    assert_eq!(
+        text(&scanned(junk, 0), &names),
+        Some(dock_scanned_message("bio-weapons", 0))
+    );
+    assert_eq!(lead_of(&scanned(kit, 0)), None);
 }
 
 /// The found mission's drawn ship name names the scanner when it has

@@ -118,6 +118,9 @@
 //!   at a time ([`ConversationPage`]) for the spaceport's conversation;
 //!   with the `fixture` feature, its fake (`dialog::fake`) too. The game
 //!   wires `nova-ink`'s adapter.
+//! - [`dock_scan`]: the new game's attention from the law: whether
+//!   traffic control scans a ship that asks to land, by the attention its
+//!   kits draw.
 //! - [`escape`]: the player's escape: the escape pod and auto-eject
 //!   outfits, the escape ship a fighter bay offers, when auto-eject arms,
 //!   and where the escape pod is taken.
@@ -514,6 +517,7 @@ pub use nova_sim_combat::sabotage;
 pub use nova_sim_combat::self_destruct;
 pub mod save;
 pub mod saves;
+pub use nova_sim_ai::dock_scan;
 pub use nova_sim_ai::scan;
 pub use nova_sim_ai::scoop;
 pub use nova_sim_combat::self_repair;
@@ -613,7 +617,7 @@ pub use landing::{
 };
 pub use legal::{Crime, CrimeMap, LegalCode, NovaLaw};
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
-pub use message::{SelfDestructLine, SimMessage};
+pub use message::{DockFind, SelfDestructLine, SimMessage};
 pub use navigation::{NavMode, next_after, stellar_under};
 pub use news::News;
 pub use outfit_effects::{OutfitRules, Rgb15};
