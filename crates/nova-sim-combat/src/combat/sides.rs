@@ -396,7 +396,8 @@ impl Sides<'_> {
     /// its slot names ([`Sides::guards_slot`]): its mark's slot, or once
     /// its mark has left the fight the slot it holds
     /// ([`Shot::aimed_slot`]), which a sub-munition given an empty slot
-    /// holds too. A locked shot is aimed at
+    /// holds too; aimed at no ship, the ship in that slot as well. A
+    /// locked shot is aimed at
     /// its asteroid's slot read as a ship slot, at none once it let the
     /// slot go.
     fn marks(&self, shot: &Shot, target: &Target) -> bool {
@@ -410,7 +411,11 @@ impl Sides<'_> {
         // sub-munition given an empty slot ([`Shot::aimed_slot`]).
         let held = shot.aimed_slot.map(locked_slot::slot_number);
         match shot.aimed_at {
-            None => held.is_none_or(|slot| Self::guards_slot(slot, target)),
+            // The ship in the slot itself (@0x44a7b), or its stellar's
+            // defenders (@0x44a81).
+            None => shot.aimed_slot.is_none_or(|slot| {
+                target.slot == slot || Self::guards_slot(locked_slot::slot_number(slot), target)
+            }),
             Some(aimed) => {
                 aimed == target.ship
                     || self
@@ -1068,5 +1073,29 @@ mod tests {
                 .collect();
             assert_eq!(hits, [false, false, true], "{aimed_at:?}");
         }
+    }
+
+    #[test]
+    fn a_shot_no_ship_fired_aimed_at_no_ship_hits_the_ship_in_the_slot_it_holds() {
+        // +0x2a 3 against the ship's slot (+0x86, @0x44a7b) passes before
+        // the stellar test (@0x44a81): the ship in slot 3 is hit though it
+        // defends nothing, as are slot 3's stellar's defenders.
+        let targets = [
+            defending(npc(3), None, 3),
+            defending(npc(7), Some(131), 7),
+            defending(npc(5), None, 5),
+        ];
+        let sides = among(&targets);
+        let shot = Shot {
+            source: Source::Other,
+            aimed_at: None,
+            aimed_slot: Some(crate::ship_layer::Slot::Berth(3)),
+            ..rolled(None)
+        };
+        let hits: Vec<bool> = targets
+            .iter()
+            .map(|target| sides.shot_can_hit(&shot, target))
+            .collect();
+        assert_eq!(hits, [true, true, false]);
     }
 }
