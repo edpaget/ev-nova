@@ -150,7 +150,10 @@ impl Holders {
     /// the player of `world`: `_HandleShip`'s pull and release read the
     /// holder's slot live (@0x3401f-0x34032, @0x353e2-0x3540c). An NPC not
     /// among `npcs` (one freed at its step, or gone before the pass) keeps
-    /// its record, or stays gone (see the module docs).
+    /// its record, or stays gone (see the module docs); one taken out at
+    /// its step with no record (a mission ship that leaves as it lands,
+    /// under [`RuleKey::LandedLeaves`](crate::RuleKey::LandedLeaves)' other
+    /// reading) stays as the half began.
     pub fn read_live(&mut self, holder: ShipRef, npcs: &[Npc], world: &World) {
         match holder {
             ShipRef::Player => self.player = player(world),

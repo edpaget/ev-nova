@@ -171,3 +171,22 @@ fn a_held_npc_lets_go_of_a_holder_disabled_earlier_in_the_pass() {
     );
     assert_eq!(held.tractor, None, "released in that pass");
 }
+
+#[test]
+fn a_holder_taken_out_at_its_step_with_no_record_is_read_as_the_half_began() {
+    // A mission ship that leaves as it lands, under `LandedLeaves`' other
+    // reading, leaves the traffic at its step with no record (`Freed::by`
+    // a landing is none): a later slot's hold reads it as the half began,
+    // its velocity and intact, as no slot of the original is freed so.
+    let world = pulling(SNAP);
+    let mut traffic = traffic_of(vec![
+        holder(),
+        held_by(ShipRef::Npc(HOLDER), Vec2::new(5.0, 0.0)),
+    ]);
+    let mut pass = traffic.begin_fly(&world, &BTreeSet::new(), FlyHalf::Again);
+    traffic.npcs.retain(|npc| npc.id != HOLDER);
+    traffic.fly_npc(&mut pass, HELD, &world, &mut NeverFires);
+    let held = ship(&traffic, HELD);
+    assert_eq!(held.state.velocity, drifted(holder().state.velocity));
+    assert!(held.tractor.is_some(), "kept by the intact holder");
+}
