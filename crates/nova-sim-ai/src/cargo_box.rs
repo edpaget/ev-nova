@@ -21,7 +21,7 @@
 //!   of none or less, else `trunc(share / 5)`, at least 1 and at most 12.
 //!   None while landed (0x3b5060).
 //! - **The spawn** ([`CargoBoxes::spawn`]): the first free slot of 64,
-//!   none when all are taken; the ship's position and velocity; a life of
+//!   none when all are taken (see "The slots"); the ship's position and velocity; a life of
 //!   `Rand(90) + 180` ticks; frame `Rand(36)`; a spin of −1, 0, 0 or +1
 //!   by `Rand(4)`; graphic 0, holding nothing and not scoopable. It is
 //!   moved half the ship's sprite width straight behind it (32 wide
@@ -31,7 +31,7 @@
 //! - **The scoopable box** ([`CargoBoxes::spawn_scoopable`],
 //!   `_SpawnScoopableBox` @0x3e3c5-0x3e54f, called only by
 //!   `_DestroyAsteroid` @0xae73): the first free slot of 64, none when all
-//!   are taken; where the asteroid was, from rest; a life of `Rand(200) +
+//!   are taken (see "The slots"); where the asteroid was, from rest; a life of `Rand(200) +
 //!   300` ticks; frame `Rand(36)`; a spin of −1, 0, 0 or +1 by `Rand(4)`;
 //!   scoopable (+0x24), holding the asteroid's `YieldType` (+0x22), of
 //!   the graphic given, 1-4 (+0x1e); kicked `(Rand(81) + 60) × 0.2 ×
@@ -69,7 +69,12 @@
 //! `_SpawnScoopableBox` @0x3e3f8), so a box spawned after an earlier one
 //! went lands in the freed lower slot, and the boxes are drawn, collided
 //! and listed in slot order ([`CargoBoxes::boxes`], a
-//! [`SlotPool`](crate::slot_pool::SlotPool)). Only a spawn writes a slot's
+//! [`SlotPool`](crate::slot_pool::SlotPool)). A spawn that finds no free
+//! slot is dropped before it draws anything. The 64 slots are a resource
+//! limit, so the engine keeps them only under `CombatCaps`' engine reading
+//! ([`CargoBoxes::set_combat_caps`]); by default the table grows past 64
+//! at its end, still first-free, as `slot_pool`'s docs describe, and the
+//! slot bytes grow with it. Only a spawn writes a slot's
 //! scoopable byte +0x24 and its contents +0x22 (`_SpawnBox` +0x24 = 0
 //! @0x3de78; `_SpawnScoopableBox` +0x24 = 1 @0x3e482, +0x22 the yield
 //! @0x3e48d); expiry, `_killBoxes` (`_HandleBoxes` @0x2dfb1-0x2dfee) and a
@@ -86,11 +91,13 @@ use crate::chance::Chance;
 use crate::flight::{ShipState, facing};
 use crate::geometry::Vec2;
 use crate::player_wrap::PlayerWrap;
+use crate::rulebook::RuleSource;
 use crate::scoop::{BoxFrames, Scooping};
 use crate::slot_pool::SlotPool;
 use crate::speed_mult::SpeedMult;
 
-/// The most boxes in space at once: the table's 64 slots.
+/// The most boxes in space at once under `CombatCaps`' engine reading:
+/// the table's 64 slots ([`CargoBoxes::set_combat_caps`]).
 pub const MAX_BOXES: usize = 64;
 
 /// The most boxes one ship drops in one jettison (@0x3e2b5).
@@ -226,8 +233,8 @@ pub struct SlotBytes {
     pub contents: Option<i16>,
 }
 
-/// The cargo boxes in space, at most [`MAX_BOXES`], by slot (see "The
-/// slots" in the module docs).
+/// The cargo boxes in space, by slot, at most [`MAX_BOXES`] under
+/// `CombatCaps`' engine reading (see "The slots" in the module docs).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CargoBoxes {
     /// The live boxes, by slot.
@@ -235,9 +242,21 @@ pub struct CargoBoxes {
     /// Each slot's last bytes, by slot; a slot past the end was never
     /// written.
     bytes: Vec<SlotBytes>,
+    /// The most boxes the table holds: [`MAX_BOXES`] under `CombatCaps`'
+    /// engine reading, none by default ([`CargoBoxes::set_combat_caps`]).
+    cap: Option<usize>,
 }
 
 impl CargoBoxes {
+    /// Caps the table as `source` reads `RuleKey::CombatCaps`: at
+    /// [`MAX_BOXES`] by the engine, a box finding no slot dropped before
+    /// its draws; uncapped by the other reading, the default, the table
+    /// growing past 64 at its end, still first-free. The cap lasts the
+    /// session: [`CargoBoxes::clear`] keeps it.
+    pub fn set_combat_caps(&mut self, source: RuleSource) {
+        self.cap = (source == RuleSource::Engine).then_some(MAX_BOXES);
+    }
+
     /// Carries each box within `wrap`'s reach: `_WrapPlayerPosition`'s loop
     /// of `_boxData` (@0x6811f-0x681a1), which leaves its velocity.
     pub fn carry(&mut self, wrap: &PlayerWrap) {
@@ -252,10 +271,15 @@ impl CargoBoxes {
         self.boxes.as_slice()
     }
 
+    /// Whether the table holds all its cap allows: never by default.
+    fn is_full(&self) -> bool {
+        self.cap.is_some_and(|cap| self.boxes.len() >= cap)
+    }
+
     /// Puts `cargo_box` in the first free slot and writes the slot's bytes
-    /// from it; nothing when every slot is taken.
+    /// from it; nothing when the cap leaves no slot free.
     fn insert(&mut self, cargo_box: CargoBox) {
-        let Some(slot) = self.boxes.insert(cargo_box, Some(MAX_BOXES)) else {
+        let Some(slot) = self.boxes.insert(cargo_box, self.cap) else {
             return;
         };
         if self.bytes.len() <= slot {
@@ -301,14 +325,15 @@ impl CargoBoxes {
     }
 
     /// Spawns one box behind `ship` as `_SpawnBox` does (see the module
-    /// docs), drawing on `chance`; nothing when the table is full.
+    /// docs), drawing on `chance`; nothing, and no draw, when the cap
+    /// leaves no slot free.
     pub fn spawn(
         &mut self,
         ship: &ShipState,
         sprite_width: Option<f32>,
         chance: &mut (impl Chance + ?Sized),
     ) {
-        if self.boxes.len() >= MAX_BOXES {
+        if self.is_full() {
             return;
         }
         let life = f32::from(chance.roll(90) + 180);
@@ -336,7 +361,7 @@ impl CargoBoxes {
 
     /// Spawns one scoopable box at `at`, holding `contents`, of `graphic`,
     /// as `_SpawnScoopableBox` does (see the module docs), drawing on
-    /// `chance`; nothing when the table is full.
+    /// `chance`; nothing, and no draw, when the cap leaves no slot free.
     pub fn spawn_scoopable(
         &mut self,
         at: Vec2,
@@ -344,7 +369,7 @@ impl CargoBoxes {
         graphic: u16,
         chance: &mut (impl Chance + ?Sized),
     ) {
-        if self.boxes.len() >= MAX_BOXES {
+        if self.is_full() {
             return;
         }
         let life = f32::from(chance.roll(SCOOPABLE_LIFE_SIDES) + SCOOPABLE_LIFE_BASE);
@@ -664,9 +689,16 @@ mod tests {
         assert!(close(back.velocity, facing(359.0) * 0.28), "{back:?}");
     }
 
-    #[test]
-    fn a_full_table_spawns_no_scoopable_box() {
+    /// A table under `CombatCaps`' engine reading: at most [`MAX_BOXES`].
+    fn capped() -> CargoBoxes {
         let mut boxes = CargoBoxes::default();
+        boxes.set_combat_caps(RuleSource::Engine);
+        boxes
+    }
+
+    #[test]
+    fn under_the_caps_a_65th_scoopable_box_is_dropped() {
+        let mut boxes = capped();
         for _ in 0..MAX_BOXES + 3 {
             boxes.spawn_scoopable(Vec2::ZERO, None, 1, &mut Scripted::default());
         }
@@ -674,12 +706,80 @@ mod tests {
     }
 
     #[test]
-    fn a_full_table_spawns_nothing() {
-        let mut boxes = CargoBoxes::default();
+    fn under_the_caps_a_65th_box_is_dropped() {
+        let mut boxes = capped();
         for _ in 0..MAX_BOXES + 3 {
             boxes.spawn(&heading(0.0), None, &mut Scripted::default());
         }
         assert_eq!(boxes.boxes().len(), MAX_BOXES);
+    }
+
+    #[test]
+    fn under_the_caps_a_box_finding_no_slot_draws_nothing() {
+        let mut boxes = capped();
+        for _ in 0..MAX_BOXES {
+            boxes.spawn(&heading(0.0), None, &mut Scripted::default());
+        }
+        let mut chance = Scripted::default();
+        boxes.spawn(&heading(0.0), None, &mut chance);
+        boxes.spawn_scoopable(Vec2::ZERO, None, 1, &mut chance);
+        assert!(chance.sides_asked.is_empty(), "{:?}", chance.sides_asked);
+    }
+
+    #[test]
+    fn by_default_a_65th_box_is_kept_first_free() {
+        let count = i16::try_from(MAX_BOXES).unwrap() + 1;
+        let mut boxes = CargoBoxes::default();
+        for held in 0..count {
+            boxes.spawn_scoopable(
+                Vec2::new(f32::from(held), 0.0),
+                Some(held),
+                1,
+                &mut Scripted::default(),
+            );
+        }
+        assert_eq!(contents(&boxes), (0..count).map(Some).collect::<Vec<_>>());
+        assert_eq!(
+            boxes.bytes[MAX_BOXES],
+            SlotBytes {
+                scoopable: true,
+                contents: Some(count - 1)
+            },
+            "slot 64's bytes are written"
+        );
+        let taken = boxes.take_touching(
+            &Scooping::disc(Vec2::new(1.0, 0.0), 0.1),
+            &BoxFrames::default(),
+        );
+        assert_eq!(taken.map(|made| made.contents), Some(Some(1)));
+        boxes.spawn_scoopable(Vec2::ZERO, Some(500), 1, &mut Scripted::default());
+        let listed = contents(&boxes);
+        assert_eq!(listed.len(), MAX_BOXES + 1);
+        assert_eq!(
+            listed[..3],
+            [Some(0), Some(500), Some(2)],
+            "the freed slot 1"
+        );
+        assert_eq!(listed[MAX_BOXES], Some(count - 1));
+    }
+
+    #[test]
+    fn by_default_a_jettison_keeps_boxes_past_64() {
+        let mut boxes = CargoBoxes::default();
+        for _ in 0..MAX_BOXES + 3 {
+            boxes.spawn(&heading(0.0), None, &mut Scripted::default());
+        }
+        assert_eq!(boxes.boxes().len(), MAX_BOXES + 3);
+    }
+
+    #[test]
+    fn only_the_engine_reading_caps_the_table_and_clearing_keeps_it() {
+        let mut boxes = capped();
+        assert_eq!(boxes.cap, Some(MAX_BOXES));
+        boxes.clear();
+        assert_eq!(boxes.cap, Some(MAX_BOXES), "clearing keeps the cap");
+        boxes.set_combat_caps(RuleSource::Bible);
+        assert_eq!(boxes.cap, None);
     }
 
     #[test]
