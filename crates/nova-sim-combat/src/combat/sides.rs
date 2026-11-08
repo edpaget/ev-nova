@@ -22,11 +22,16 @@
 //! 3. as a lost shot ([`Jam::Lost`], +0x30 = 998, @0x447f7, the
 //!    function's only read of the jam), any ship: a shot whose ship has
 //!    gone is lost ([`projectile`](super::projectile)). An interfered one
-//!    (999) is tested as a clear one. A shot locked on an asteroid
-//!    ([`Jam::Asteroid`], jam 1) hits no ship here, though the original
-//!    lets it on (rdm:phase/combat-and-flight/phase-1-locked-shot-reads-asteroid-slot-as-ship-slot).
+//!    (999) is tested as a clear one, and so is one locked on an asteroid
+//!    ([`Jam::Asteroid`], jam 1), whose ship slot (+0x2a) holds the
+//!    asteroid's slot k, read here as ship slot k
+//!    ([`locked_slot`](super::locked_slot)): the player for 0, else
+//!    berth k. By the other reading of
+//!    [`RuleKey::LockedShotShipSlot`](crate::RuleKey::LockedShotShipSlot)
+//!    ([`LockedSlot`]) a locked shot hits no ship.
 //!    As a homing shot, jammed or not, it never hits any ship but its
-//!    target, unless `Flags2` 0x0008 (@0x44812-0x44836). The jam-0 tests
+//!    target, a locked one but the ship in slot k and none once it let
+//!    the slot go, unless `Flags2` 0x0008 (@0x44812-0x44836). The jam-0 tests
 //!    that keep an interfered shot out of the missile lock (`_HandleShot`
 //!    @0x35756), point defence's pick (@0x393e9) and
 //!    `_CalculateTargetedDamage` (@0x3a1bd) are those callers' own, made in
@@ -34,7 +39,9 @@
 //! 4. as a shot no ship fired ([`Source::Other`]), any ship but the one it
 //!    is aimed at and the defenders of the stellar whose index (its ID
 //!    less 128) is that ship's slot, when it is aimed at one
-//!    (@0x44a71-0x44a88, branch 7): a stellar's gun aimed at the player,
+//!    (@0x44a71-0x44a88, branch 7; a locked one, the ship in slot k and
+//!    the defenders of the stellar k names, and any ship once it let the
+//!    slot go): a stellar's gun aimed at the player,
 //!    slot 0, also hits `spöb` 128's defenders; of the
 //!    rules below only rule 8 applies to it, as the branch jumps there,
 //!    and rules 9 and 10 pass for a firer of -1. Besides a shot turned on
@@ -140,6 +147,7 @@ use super::beam::Beam;
 #[cfg(doc)]
 use super::hull::Condition;
 use super::hull::ESCAPE_POD_SHIP;
+use super::locked_slot::{self, LockedSlot};
 use super::planet_type::{self, BeamPlanetFlag};
 use super::projectile::{Jam, Shot, Source, Target};
 use super::weapon::Guidance;
@@ -225,6 +233,8 @@ pub struct Sides<'a> {
     pub pass_through: PassThrough,
     /// Which of its weapon's bits makes a beam planet-type.
     pub beam_planet_flag: BeamPlanetFlag,
+    /// How a shot locked on an asteroid reads the slot it holds.
+    pub locked_slot: LockedSlot,
 }
 
 impl Sides<'_> {
@@ -233,14 +243,14 @@ impl Sides<'_> {
     pub fn shot_can_hit(&self, shot: &Shot, target: &Target) -> bool {
         if !target.condition.active()
             || target.ship_type >= ESCAPE_POD_SHIP
-            // Lost (998) is @0x447f7's only reject; an asteroid lock is
-            // left to rdm:phase/combat-and-flight/phase-1-locked-shot-reads-asteroid-slot-as-ship-slot.
-            || matches!(shot.jam, Jam::Lost | Jam::Asteroid(_))
+            // Lost (998) is @0x447f7's only reject; a locked shot (1)
+            // goes on by the original's reading.
+            || self.locked_slot.bars(shot.jam)
         {
             return false;
         }
         if shot.weapon.guidance == Guidance::Homing
-            && shot.target != Some(target.ship)
+            && !Self::homes_on(shot, target)
             && !shot.weapon.proximity_by_others()
         {
             return false;
@@ -248,12 +258,7 @@ impl Sides<'_> {
         let matched = planet_type::shot_may_hit(&shot.weapon, target.ties.planet_type);
         let kept = match shot.source {
             Source::Ship(kept) => kept,
-            Source::Other => {
-                return matched
-                    && shot.aimed_at.is_none_or(|aimed| {
-                        aimed == target.ship || self.guards_slot_of(aimed, target)
-                    });
-            }
+            Source::Other => return matched && self.marks(shot, target),
         };
         if !matched {
             return false;
@@ -374,24 +379,58 @@ impl Sides<'_> {
         }
     }
 
-    /// Whether `target` defends the stellar whose index (its ID less 128)
-    /// is the ship-table slot of `aimed`, the ship a non-ship shot is
-    /// aimed at (branch 7, `cmpw 0x8c(%ebx)` @0x44a81): the player's slot
-    /// 0 names `spöb` 128, an NPC's its berth; an NPC gone from the fight
-    /// names none. A stellar's gun aimed at the player so hits Earth's
-    /// defenders, as the original's does.
-    fn guards_slot_of(&self, aimed: ShipRef, target: &Target) -> bool {
-        let Some(stellar) = target.ties.defends else {
-            return false;
-        };
-        let slot = match aimed {
+    /// Whether homing `shot` is aimed at `target` (+0x2a against the
+    /// ship's slot, @0x44828): its target, or, locked on an asteroid,
+    /// the ship in the ship slot of its asteroid's
+    /// ([`locked_slot::ship_slot`]), none once it let the slot go (-1).
+    fn homes_on(shot: &Shot, target: &Target) -> bool {
+        match shot.jam {
+            Jam::Asteroid(k) => k.is_some_and(|k| target.slot == locked_slot::ship_slot(k)),
+            Jam::Clear | Jam::Interfered | Jam::Lost => shot.target == Some(target.ship),
+        }
+    }
+
+    /// Whether a shot no ship fired may hit `target` by what it is aimed
+    /// at (branch 7, @0x44a71-0x44a88): any ship when it is aimed at none
+    /// (+0x2a above 63), else the ship and the defenders of the stellar
+    /// its slot names ([`Sides::guards_slot`]). A locked shot is aimed at
+    /// its asteroid's slot read as a ship slot, at none once it let the
+    /// slot go.
+    fn marks(&self, shot: &Shot, target: &Target) -> bool {
+        if let Jam::Asteroid(k) = shot.jam {
+            return k.is_none_or(|k| {
+                target.slot == locked_slot::ship_slot(k)
+                    || Self::guards_slot(i64::try_from(k).unwrap_or(i64::MAX), target)
+            });
+        }
+        shot.aimed_at.is_none_or(|aimed| {
+            aimed == target.ship
+                || self
+                    .slot_of(aimed)
+                    .is_some_and(|slot| Self::guards_slot(slot, target))
+        })
+    }
+
+    /// The ship-table slot of `ship`: the player's 0, an NPC's its berth;
+    /// none for an NPC gone from the fight.
+    fn slot_of(&self, ship: ShipRef) -> Option<i64> {
+        match ship {
             ShipRef::Player => Some(0),
-            ShipRef::Npc(_) => self.find(aimed).map(|aimed| match aimed.slot {
-                crate::ship_layer::Slot::Player => 0,
-                crate::ship_layer::Slot::Berth(berth) => i64::from(berth),
-            }),
-        };
-        slot.is_some_and(|slot| i64::from(stellar.0) - 128 == slot)
+            ShipRef::Npc(_) => self
+                .find(ship)
+                .map(|found| locked_slot::slot_number(found.slot)),
+        }
+    }
+
+    /// Whether `target` defends the stellar whose index (its ID less 128)
+    /// is ship-table slot `slot` (branch 7, `cmpw 0x8c(%ebx)` @0x44a81):
+    /// slot 0 names `spöb` 128. A stellar's gun aimed at the player so hits
+    /// Earth's defenders, as the original's does.
+    fn guards_slot(slot: i64, target: &Target) -> bool {
+        target
+            .ties
+            .defends
+            .is_some_and(|stellar| i64::from(stellar.0) - 128 == slot)
     }
 
     /// The fight's ship `ship`, if it is in the fight.
@@ -566,20 +605,118 @@ mod tests {
         }
     }
 
+    /// A homing shot of `flags2`, `firer`'s, locked on asteroid slot `k`:
+    /// its target and the ship it is aimed at cleared, as the lock leaves
+    /// them.
+    fn locked(firer: ShipRef, flags2: u16, k: Option<usize>, source: Source) -> Shot {
+        Shot {
+            jam: Jam::Asteroid(k),
+            target: None,
+            aimed_at: None,
+            source,
+            ..Shot::launch(
+                WeaponSpec::new(&crate::catalog::WeaponRecord {
+                    guidance: 1,
+                    flags2,
+                    ..weapon(128)
+                }),
+                firer,
+                firer,
+                &ShipState::default(),
+                0.0,
+            )
+        }
+    }
+
+    /// The player, slot 0, and NPCs 2 and 3 in berths 2 and 3.
+    fn slotted() -> [Target; 3] {
+        [
+            defending(ShipRef::Player, None, 0),
+            defending(npc(2), None, 2),
+            defending(npc(3), None, 3),
+        ]
+    }
+
+    /// Which of `targets` `shot` hits among them, by `rule`.
+    fn hits_by(rule: LockedSlot, shot: &Shot, targets: &[Target]) -> Vec<bool> {
+        let sides = Sides {
+            locked_slot: rule,
+            ..among(targets)
+        };
+        targets
+            .iter()
+            .map(|target| sides.shot_can_hit(shot, target))
+            .collect()
+    }
+
     #[test]
-    fn a_shot_locked_on_an_asteroid_still_hits_no_ship() {
-        // Left to
-        // rdm:phase/combat-and-flight/phase-1-locked-shot-reads-asteroid-slot-as-ship-slot.
-        let targets = [ship(npc(2), None), ship(npc(3), None)];
-        let sides = among(&targets);
-        for jam in [Jam::Asteroid(Some(0)), Jam::Asteroid(None)] {
-            for guidance in [1, -1] {
-                let shot = jammed(guidance, 0x0008, jam);
-                for target in &targets {
-                    assert!(!sides.shot_can_hit(&shot, target), "{jam:?}");
+    fn a_shot_locked_on_an_asteroid_hits_the_ship_in_the_ship_slot_of_its_asteroids() {
+        // `_ShotCanHitShip` lets jam 1 on (@0x447f7); the homing test
+        // compares +0x2a, slot k, with the ship's slot (@0x44828).
+        let targets = slotted();
+        let source = Source::Ship(Ties::default());
+        let by = LockedSlot::ShipSlot;
+        let at_3 = locked(npc(1), 0, Some(3), source);
+        assert_eq!(hits_by(by, &at_3, &targets), [false, false, true]);
+        let at_0 = locked(npc(1), 0, Some(0), source);
+        assert_eq!(hits_by(by, &at_0, &targets), [true, false, false]);
+        let players = locked(ShipRef::Player, 0, Some(0), source);
+        assert_eq!(
+            hits_by(by, &players, &targets),
+            [false, false, false],
+            "never its firer (@0x447df)"
+        );
+        let let_go = locked(npc(1), 0, None, source);
+        assert_eq!(hits_by(by, &let_go, &targets), [false, false, false]);
+    }
+
+    #[test]
+    fn a_locked_shot_by_others_hits_any_ship_it_may_otherwise_hit() {
+        // `Flags2` 0x0008 passes the homing test (@0x44832).
+        let targets = slotted();
+        let source = Source::Ship(Ties::default());
+        for k in [Some(3), None] {
+            let shot = locked(npc(1), 0x0008, k, source);
+            assert_eq!(
+                hits_by(LockedSlot::ShipSlot, &shot, &targets),
+                [true, true, true],
+                "{k:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_a_locked_shot_hits_no_ship() {
+        let targets = slotted();
+        for source in [Source::Ship(Ties::default()), Source::Other] {
+            for flags2 in [0, 0x0008] {
+                for k in [Some(0), Some(3), None] {
+                    let shot = locked(npc(1), flags2, k, source);
+                    assert_eq!(
+                        hits_by(LockedSlot::NoShip, &shot, &targets),
+                        [false, false, false],
+                        "{source:?} {flags2:#x} {k:?}"
+                    );
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_locked_shot_no_ship_fired_hits_its_slots_ship_and_the_defenders_its_slot_names() {
+        // Branch 7 (@0x44a71-0x44a88) compares +0x2a with the ship's slot
+        // and its stellar's index; -1 (0xffff) is above 63 and passes.
+        let targets = [
+            defending(npc(3), None, 3),
+            defending(npc(5), Some(131), 5),
+            defending(npc(6), Some(129), 6),
+        ];
+        let by = LockedSlot::ShipSlot;
+        let shot = |k| locked(npc(1), 0x0008, k, Source::Other);
+        assert_eq!(hits_by(by, &shot(Some(3)), &targets), [true, true, false]);
+        assert_eq!(hits_by(by, &shot(Some(5)), &targets), [false, true, false]);
+        assert_eq!(hits_by(by, &shot(Some(9)), &targets), [false, false, false]);
+        assert_eq!(hits_by(by, &shot(None), &targets), [true, true, true]);
     }
 
     #[test]

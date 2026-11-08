@@ -75,7 +75,11 @@ impl Combat {
     ///   slot;
     /// - a shot whose last move spent it ([`Shot::expired`]) comes to its
     ///   end of life (@0x36195 → @0x35f08): it releases its sub-munitions
-    ///   at the ship its damage is aimed at (@0x35f49), each weapon read
+    ///   at the ship its damage is aimed at (@0x35f49), or, locked on an
+    ///   asteroid, at the ship in the ship slot of its asteroid's, as the
+    ///   fight's [`LockedSlot`](super::locked_slot::LockedSlot) reads it
+    ///   ([`LockedSlot::released_at`](super::locked_slot::LockedSlot::released_at)),
+    ///   each weapon read
     ///   from `arsenal`, its spread drawn on `chance`, its owner's plunder
     ///   read among `fighters`, each taking the first slot free as of this
     ///   visit, its own still held, and seeking among the ships as the
@@ -231,7 +235,8 @@ impl Combat {
         chance: &mut dyn Chance,
     ) -> Vec<Landed> {
         if shot.weapon.subs_on_expiry() {
-            self.release(shot, (shot.aimed_at, fighters), sides, arsenal, chance);
+            let given = sides.locked_slot.released_at(shot, sides.targets);
+            self.release(shot, (given, fighters), sides, arsenal, chance);
         }
         if shot.weapon.detonates() {
             let hit = Hit {

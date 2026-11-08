@@ -428,6 +428,7 @@ pub mod ion;
 pub mod ion_tint;
 pub mod jamming;
 mod lineup;
+pub mod locked_slot;
 pub mod phases;
 pub mod planet_type;
 mod player_berths;
@@ -477,6 +478,7 @@ use hull::{
 use impact::{Body, Tractor, TractorLock};
 use ion::{Burst, Dose, Ion, IonLockout};
 use jamming::Jamming;
+use locked_slot::LockedSlot;
 pub use phases::Arena;
 use planet_type::{BeamPlanetFlag, BlastKind, PlanetBlasts};
 use plunder::Plunderer;
@@ -1303,6 +1305,9 @@ pub struct Combat {
     planet_blasts: PlanetBlasts,
     /// Which of its weapon's bits makes a beam planet-type.
     beam_planet_flag: BeamPlanetFlag,
+    /// How a shot locked on an asteroid reads the slot it holds
+    /// ([`RuleKey::LockedShotShipSlot`](crate::RuleKey::LockedShotShipSlot)).
+    locked_slot: LockedSlot,
     /// Whether a planet-type beam hits a stellar
     /// ([`RuleKey::BeamStellars`](crate::RuleKey::BeamStellars)).
     beam_stellars: RuleSource,
@@ -1657,10 +1662,10 @@ impl Combat {
     }
 
     /// The readings the hit rules take ([`Sides`]): who counts as the
-    /// player for the pass-through flags, and which bit makes a beam
-    /// planet-type.
-    fn hit_readings(&self) -> (PassThrough, BeamPlanetFlag) {
-        (self.pass_through, self.beam_planet_flag)
+    /// player for the pass-through flags, which bit makes a beam
+    /// planet-type, and how a locked shot reads its slot.
+    fn hit_readings(&self) -> (PassThrough, BeamPlanetFlag, LockedSlot) {
+        (self.pass_through, self.beam_planet_flag, self.locked_slot)
     }
 
     /// Has a decaying shot take a step as `step` says: by default,
@@ -1735,6 +1740,16 @@ impl Combat {
     /// those the fight's [`PointDefenceRule`] calls hostile.
     pub fn set_pd_hostility(&mut self, source: RuleSource) {
         self.pd_hostility = source;
+    }
+
+    /// Has a shot locked on an asteroid read the slot it holds as
+    /// `source` says
+    /// ([`RuleKey::LockedShotShipSlot`](crate::RuleKey::LockedShotShipSlot),
+    /// see [`locked_slot`]): by default, the engine's, as a ship slot, in
+    /// the hit rules and for its end-of-life sub-munitions; by the other
+    /// reading, as no ship.
+    pub fn set_locked_shot_ship_slot(&mut self, source: RuleSource) {
+        self.locked_slot = LockedSlot::from(source);
     }
 
     /// Has a `Seeker` 0x4000 shot measure how far its target is off ahead
@@ -2874,7 +2889,7 @@ impl Combat {
         }
     }
 
-    /// Puts in flight the sub-munitions `parent` releases at `target`
+    /// Puts in flight the sub-munitions `parent` releases at `given`
     /// among `targets`, their weapon read from `arsenal` (none when it
     /// cannot be read), heard from where the parent is. Of a guidance not
     /// flown yet, they report it and none fly. Under the
@@ -2884,10 +2899,13 @@ impl Combat {
     /// fly, and the release is heard all the same, its sound coming before
     /// its loop. A sub-munition whose weapon places no shot
     /// ([`WeaponSpec::spawns_shot`](weapon::WeaponSpec::spawns_shot)) ends it at the first, so none fly.
+    /// Given a locked parent's empty ship slot, each is aimed at no ship,
+    /// and one its seek leaves aimed at none is lost
+    /// ([`Given::settle`](locked_slot::Given::settle)).
     fn release(
         &mut self,
         parent: &Shot,
-        (target, fighters): (Option<ShipRef>, &[Fighter]),
+        (given, fighters): (locked_slot::Given, &[Fighter]),
         sides: &Sides,
         arsenal: &Arsenal,
         chance: &mut dyn Chance,
@@ -2902,6 +2920,7 @@ impl Combat {
         // `_SpawnShotSubmunitions` spawns as the parent's source slot
         // (+0x2c): its ship's class and plunder as they are now.
         let (turret_over, owner) = self.source_slot_reads(parent, fighters, arsenal);
+        let target = given.ship();
         let shots = submunition::release(parent, sub, (target, turret_over));
         if shots.is_empty() {
             return;
@@ -2936,7 +2955,7 @@ impl Combat {
             shot.disable_only |= plunder::shot_disables(owner, target, sides.targets);
             shot.roll_at_launch(self.field.interference, self.field.speed_mult, chance);
             // Each seeks once seated, with its own roll and jam (@0x3f3cf).
-            let shot = submunition::aim(parent, shot, n, sides, chance);
+            let shot = given.settle(submunition::aim(parent, shot, n, sides, chance));
             self.insert_seated(&shot);
         }
     }
@@ -3679,6 +3698,7 @@ mod tests {
     mod interfered_hits;
     mod ion_lockout_tick;
     mod lineup;
+    mod locked_submunitions;
     mod npc_gain;
     mod pd_parent;
     mod phase;

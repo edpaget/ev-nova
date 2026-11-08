@@ -7,8 +7,13 @@
 //! - A shot releases its weapon's [`Submunitions`] on a proximity hit
 //!   ([`Fuse::Proximity`](super::projectile::Fuse::Proximity)), aimed at
 //!   the ship it hit, and at the end of its life, aimed at the ship its
-//!   damage is aimed at ([`Shot::aimed_at`], none once it is lost),
-//!   unless its weapon releases none then (`Flags2` 0x0020). A shot that
+//!   damage is aimed at ([`Shot::aimed_at`], none once it is lost), or,
+//!   locked on an asteroid, at the ship in the ship slot of its
+//!   asteroid's, by
+//!   [`RuleKey::LockedShotShipSlot`](crate::RuleKey::LockedShotShipSlot)'s
+//!   engine reading ([`locked_slot`](super::locked_slot): one released at
+//!   an empty slot, and aimed at none once seated, is lost), unless its
+//!   weapon releases none then (`Flags2` 0x0020). A shot that
 //!   touches a ship releases none: the sprite collision passes call
 //!   `_HandleShipHit` with `spawnSubs` 0 (@0x37095), the proximity pass
 //!   with 1 (@0x37678). It releases

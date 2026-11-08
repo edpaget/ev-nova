@@ -492,12 +492,13 @@ impl Combat {
             // left of its firer's plunder.
             while let Some(index) = (walk.next < self.beams.len()).then_some(walk.next) {
                 walk.next += 1;
-                let (pass_through, beam_planet_flag) = self.hit_readings();
+                let (pass_through, beam_planet_flag, locked_slot) = self.hit_readings();
                 let sides = Sides {
                     targets: &targets,
                     govts: arena.govts,
                     pass_through,
                     beam_planet_flag,
+                    locked_slot,
                 };
                 let among = (&*fighters, &mut *stellars);
                 let Some(hit) = self.beam_hit(index, among, &sides, pass.beam_damage()) else {

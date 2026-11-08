@@ -49,7 +49,16 @@
 //! missile lock (@0x35756), point defence never picks it (@0x393e9), and
 //! its damage counts as aimed at no ship (`_CalculateTargetedDamage`
 //! @0x3a1bd). It hits any asteroid it meets (the asteroid passes read no
-//! jam; see [`asteroid_hit`](super::asteroid_hit)).
+//! jam; see [`asteroid_hit`](super::asteroid_hit)). Elsewhere its ship
+//! slot (+0x2a), which holds the asteroid's slot k, is read as ship slot k
+//! ([`locked_slot`](super::locked_slot), by
+//! [`RuleKey::LockedShotShipSlot`](crate::RuleKey::LockedShotShipSlot)'s
+//! engine reading): `_ShotCanHitShip` rejects only jam 998 (@0x447f7), so
+//! it can hit the ship in ship slot k, the player for k = 0, and any ship
+//! under `Flags2` 0x0008 (@0x44821-0x44836)
+//! ([`Sides`](super::sides::Sides)); and its end-of-life sub-munitions are
+//! aimed at that ship (@0x35f3e-0x35f49). By the other reading it hits no
+//! ship and its sub-munitions are aimed at none.
 //!
 //! # Left out
 //!
@@ -59,13 +68,6 @@
 //!   own heading, as with no slot.
 //! - The box test's 16-bit wrap (`addw $0xc7` / `cmpw $0x18e`) is not
 //!   replicated.
-//! - The original reads the asteroid's slot k in +0x2a as a ship slot
-//!   elsewhere: `_ShotCanHitShip` rejects only jam 998 (@0x447f7), so a
-//!   locked shot can hit the ship in ship slot k, and any ship under
-//!   `Flags2` 0x0008 (@0x44821-0x44836); and its end-of-life sub-munitions
-//!   are aimed at that ship (@0x35f3e-0x35f49). Here a locked shot hits no
-//!   ship ([`Sides`](super::sides::Sides)) and its sub-munitions are aimed
-//!   at none: rdm:phase/combat-and-flight/phase-1-locked-shot-reads-asteroid-slot-as-ship-slot.
 
 use super::projectile::{Guide, HOMING_DELAY, Jam, LockAngle, Shot, wrap_turned};
 use super::weapon::{Guidance, SEEKS_ASTEROIDS};
