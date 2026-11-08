@@ -164,6 +164,8 @@ pub struct FakePilotCatalog {
     pub stellar_dialogs: crate::dialogs::StellarDialogs,
     /// The missions, news and jump points: none, by default.
     pub storylines: crate::storylines::Storylines,
+    /// The ship classes' and kits' fittings: none, by default.
+    pub fittings: crate::fittings::Fittings,
 }
 
 impl FakePilotCatalog {
@@ -290,6 +292,7 @@ pub fn catalog() -> FakePilotCatalog {
         rle_sheets_asked: RefCell::default(),
         stellar_dialogs: crate::dialogs::StellarDialogs::default(),
         storylines: crate::storylines::Storylines::default(),
+        fittings: crate::fittings::Fittings::default(),
     }
 }
 
@@ -569,6 +572,10 @@ impl PilotCatalog for FakePilotCatalog {
 
     fn storylines(&self) -> crate::storylines::Storylines {
         self.storylines.clone()
+    }
+
+    fn fittings(&self) -> crate::fittings::Fittings {
+        self.fittings.clone()
     }
 
     /// Each existing system's [`FakePilotCatalog::nav_defs`] where given,

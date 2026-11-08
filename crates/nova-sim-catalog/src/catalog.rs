@@ -2233,6 +2233,13 @@ pub trait PilotCatalog {
     fn storylines(&self) -> crate::storylines::Storylines {
         crate::storylines::Storylines::default()
     }
+    /// The new game's fittings: each ship class's own hardpoints and each
+    /// mod kit's attention and hardpoints (see the
+    /// [`fittings`](crate::fittings) module). None by default: the stock
+    /// game has none.
+    fn fittings(&self) -> crate::fittings::Fittings {
+        crate::fittings::Fittings::default()
+    }
     /// Every `spöb` that can be read, by ascending ID, with what its
     /// destruction and regeneration read.
     fn stellar_lives(&self) -> Vec<StellarLife>;
@@ -2562,6 +2569,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
     fn storylines(&self) -> crate::storylines::Storylines {
         (**self).storylines()
     }
+
+    fn fittings(&self) -> crate::fittings::Fittings {
+        (**self).fittings()
+    }
 }
 
 /// A shared catalog is a catalog, so the sim and the views can read the
@@ -2741,6 +2752,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn storylines(&self) -> crate::storylines::Storylines {
         (**self).storylines()
+    }
+
+    fn fittings(&self) -> crate::fittings::Fittings {
+        (**self).fittings()
     }
 }
 

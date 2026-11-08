@@ -23,6 +23,9 @@
 //! - [`dialogs`]: each stellar's conversation, its Ink file, its compiled
 //!   story and the knot it enters
 //!   ([`StellarDialogs`](dialogs::StellarDialogs)).
+//! - [`fittings`]: the new game's hardpoints and kit attention
+//!   ([`Fittings`](fittings::Fittings)), which the player's exit points
+//!   and the dock scan read.
 //! - `fixture` (with the `fixture` feature, and in this crate's tests):
 //!   builders for the catalog's records and mocks of the [`ControlBits`]
 //!   port, for the tests of this crate and the nova-sim crates above.
@@ -55,6 +58,7 @@ pub mod catalog;
 pub mod control;
 pub mod data;
 pub mod dialogs;
+pub mod fittings;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 #[cfg(test)]

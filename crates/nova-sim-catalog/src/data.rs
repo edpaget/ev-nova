@@ -115,6 +115,10 @@ impl PilotCatalog for GameData {
         crate::storylines::storylines(self)
     }
 
+    fn fittings(&self) -> crate::fittings::Fittings {
+        GameData::fittings(self).clone()
+    }
+
     fn first_character(&self) -> Result<CharacterStart, StartError> {
         let (_, first) = self
             .records::<Character>()
