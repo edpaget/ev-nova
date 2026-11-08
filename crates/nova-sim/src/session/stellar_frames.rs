@@ -12,9 +12,10 @@
 //! 0x44350`, @0x44026-0x4402a) jumps to before it. So
 //! [`Session::stellar_sprite_tick`] runs there in every pass of a frame,
 //! double time's second included, and the deadly-stellar touch reads the
-//! frame it left (see the `deadly_masks` module). Game entry's priming
-//! passes don't run it yet (see the `priming_passes` module). Landed, the pass runs its
-//! landed work instead, and nothing steps. Each `_PrepareAllSprites` and
+//! frame it left (see the `deadly_masks` module). Game entry's two
+//! priming passes run it too, each after its ship loop (see the
+//! `priming_passes` module). Landed, the pass runs its landed work
+//! instead, and nothing steps. Each `_PrepareAllSprites` and
 //! game entry runs the same walk at its own gain (see the
 //! `stellar_passes` module).
 //!

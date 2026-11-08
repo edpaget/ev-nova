@@ -200,13 +200,13 @@ pub(super) struct PassCatalogs<'a> {
     /// [`Session::tick_again`]), for the tests that count a pass's work.
     pub(super) quotes: Option<&'a dyn CommCatalog>,
     /// Whether it is a priming pass at game entry (see the
-    /// `priming_passes` module). A frame's advance pass, after its ship
-    /// loop, moves the quote clock, which stands for `TickCount`, on a
-    /// tick when handed [`PassCatalogs::quotes`]; each of a frame's passes
-    /// then runs the sprite tick (`_HandleStellarSprites` @0x444d2,
-    /// [`Session::stellar_sprite_tick`]). A priming pass takes no real
-    /// time and runs no sprite tick: its stellar step is
-    /// rdm:phase/combat-and-flight/phase-10-stellar-step-of-the-frozen-entry-passes.
+    /// `priming_passes` module). Only the quote clock reads it: a frame's
+    /// advance pass, after its ship loop, moves the quote clock, which
+    /// stands for `TickCount`, on a tick when handed
+    /// [`PassCatalogs::quotes`], and a priming pass takes no real time,
+    /// so it moves none. It runs the sprite tick
+    /// (`_HandleStellarSprites` @0x444d2,
+    /// [`Session::stellar_sprite_tick`]) as every advance pass does.
     pub(super) priming: bool,
 }
 
@@ -575,13 +575,12 @@ impl Session {
         // ship loop and before the guns read it (see the
         // `stellar_defence` module).
         self.mark_defended_stellars();
-        // `_HandleStellarSprites` (@0x444d2), on both passes of a frame
-        // (see the `stellar_frames` module) but not on a priming pass
-        // (see `PassCatalogs::priming`), then `_HandleStellarWeapons`
+        // `_HandleStellarSprites` (@0x444d2), on every advance pass, both
+        // passes of a frame and each priming pass, with no branch around
+        // it (@0x444c6-0x444d2), reading no `_gameFrozen` (see the
+        // `stellar_frames` module), then `_HandleStellarWeapons`
         // (@0x444d7).
-        if !priming {
-            self.stellar_sprite_tick(chance);
-        }
+        self.stellar_sprite_tick(chance);
         self.stellar_guns(pass, rules, chance);
         // `_HandleAsteroids` (@0x444f5) and the second pass's
         // `_HandleReinforcements` (@0x44504), after the collision passes

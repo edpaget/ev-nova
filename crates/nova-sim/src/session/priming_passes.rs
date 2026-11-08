@@ -66,7 +66,8 @@
 //! 7. `_PlayGame`'s `_PrepareAllSprites` and its pass (@0x45834).
 //!
 //! So an entry runs exactly two `_PrepareAllSprites`, both with the ships
-//! in place, and three stellar passes. [`Session::fly`], the developer's
+//! in place, three stellar passes and two sprite ticks, one in each
+//! priming pass: it steps every stellar shown and every gate five times. [`Session::fly`], the developer's
 //! flight, enters no game: its ships are still set up in its first step.
 //!
 //! **A priming pass** is [`Session::advance_pass`] with none of the
@@ -86,13 +87,12 @@
 //! frame's pass. What the passes raise (sounds, lines, quotes, fight
 //! events) stays for the view: the warm-up frame drains the sounds and
 //! lines, and the first step's report carries the fight events and
-//! quotes. No stellar step: that is
-//! rdm:phase/combat-and-flight/phase-10-stellar-step-of-the-frozen-entry-passes,
-//! so a priming pass runs no sprite tick after its ship loop, where each
-//! of a frame's passes does (`_HandleStellarSprites` @0x444d2,
-//! `Session::stellar_sprite_tick`,
-//! [`PassCatalogs::priming`](super::game_work::PassCatalogs::priming)):
-//! no stellar or gate steps in it, the one place that phase changes.
+//! quotes. Each priming pass runs the sprite tick after its ship loop, as
+//! each of a frame's passes does (`_HandleStellarSprites` @0x444d2,
+//! `Session::stellar_sprite_tick`, which reads no `_gameFrozen`): at the
+//! gain entry set, gates held as they stand, the ships its own arrivals
+//! (`_EnterMoreShips` @0x44237) brought among them, and the dock request
+//! too, which `ignore_keys` leaves.
 //!
 //! A player landed at entry, which no way into play leaves since a pilot
 //! opens in space over its stellar, has no ships set up (the take-off sets
@@ -174,7 +174,8 @@ impl Session {
         self.ship.warp.gate = None;
         let frame = self.space.frame;
         self.space.pass_frame = frame;
-        // No stellar step yet: see `PassCatalogs::priming`.
+        // The pass's sprite tick runs after its ship loop, as a frame's
+        // does (`_HandleStellarSprites` @0x444d2).
         let run = AdvanceRun {
             quotes: Some(quotes),
             priming: true,
@@ -535,6 +536,79 @@ mod tests {
         assert!(!session.port.land_key);
         assert_eq!(session.ship.fate.jettison_held, None);
         assert!(session.port.dock_try, "a latch, not a key");
+    }
+
+    #[test]
+    fn a_priming_pass_steps_every_stellar_shown_and_every_gate_once() {
+        // `_HandleStellarSprites` (@0x444d2) runs after each priming pass's
+        // ship loop, at the gain as it stands, gates held as they stand.
+        use crate::catalog::{LandingSite, SiteAnimation, StellarId};
+        use crate::clearance::{CLEARED, DockRequest};
+        use crate::gate::HYPERGATE;
+        use crate::gate_sprite::GateAnimation;
+        use crate::stellar_frames::StellarAnimation;
+        use crate::testkit::planet;
+        let animated = LandingSite {
+            animation: SiteAnimation {
+                delay: 1,
+                type_frames: 5,
+                type_sheet_frames: 5,
+                ..SiteAnimation::default()
+            },
+            ..planet(140, -100.0, 200.0)
+        };
+        let gate = |id| LandingSite {
+            flags2: HYPERGATE,
+            animation: SiteAnimation {
+                delay: 1,
+                type_frames: 6,
+                ..SiteAnimation::default()
+            },
+            ..planet(id, 100.0, 200.0)
+        };
+        let mut catalog = crate::testkit::catalog();
+        catalog.sites[0].1 = vec![animated, gate(300), gate(301)];
+        let mut session = Session::start(&catalog).expect("starts");
+        // A dock request at 301: `ignore_keys` lets go of the key, not it.
+        session.port.dock = Some(DockRequest {
+            stellar: StellarId(301),
+            permission: CLEARED,
+        });
+        let oracle = session.clone();
+        let mut collab = StepCollaborators {
+            catalog: &catalog,
+            behaviour: &NovaAi::default(),
+            rules: Rules::default(),
+            chance: &mut NeverFires,
+        };
+        session.priming_pass(&mut collab);
+        let id = StellarId(140);
+        let five = std::num::NonZeroU16::new(5).expect("non-zero");
+        let mut frames = oracle.space.stellar_frames[&id].frames;
+        frames.step_by(
+            SpeedMult::FULL,
+            StellarAnimation::of(&animated),
+            false,
+            five,
+            five,
+            &mut NeverFires,
+        );
+        assert_eq!(session.space.stellar_frames[&id].frames, frames);
+        assert_eq!(session.stellar_frame(id), frames.shown());
+        let anim = GateAnimation::of(&gate(300));
+        let after = |id, held| {
+            let mut sprite = oracle.space.gate_sprites[&StellarId(id)];
+            sprite.step(&anim, false, held, &mut NeverFires);
+            sprite
+        };
+        let (released, held) = (after(300, false), after(301, true));
+        assert_ne!(released, held);
+        assert_eq!(session.space.gate_sprites[&StellarId(300)], released);
+        assert_eq!(
+            session.space.gate_sprites[&StellarId(301)],
+            held,
+            "held by the request"
+        );
     }
 
     #[test]
