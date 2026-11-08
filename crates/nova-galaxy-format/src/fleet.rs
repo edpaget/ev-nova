@@ -331,6 +331,9 @@ pub struct Resolved<'a> {
     /// Every hardpoint: the hull's, then each kit's. Ids may repeat if a
     /// kit reuses one (`check` reports it).
     pub hardpoints: Vec<Placed<'a>>,
+    /// The chain's stats merged field by field, the nearest given winning,
+    /// before any kit: a stat nobody in the chain gives is `None`.
+    pub stats: Stats,
     /// The stats with every kit's effects added. A stat nobody gives is 0.
     pub totals: Totals,
 }
@@ -472,6 +475,7 @@ pub fn resolve<'a>(galaxy: &'a Galaxy, id: &Id) -> Result<Resolved<'a>, ResolveE
         size: nearest(&|s| s.size.is_some()).and_then(|s| s.size),
         mods,
         hardpoints,
+        stats,
         totals,
     })
 }
@@ -647,6 +651,39 @@ mod tests {
             assert_eq!(ship.size.unwrap().length, 8.0);
             assert_eq!(ship.totals.speed, 400);
             assert_eq!(ship.totals.hull, 50, "merged field by field");
+        }
+
+        #[test]
+        fn a_two_step_chain_merges_its_stats_field_by_field_nearest_first() {
+            let galaxy = galaxy_with(&[
+                (
+                    "ships/fast-skiff.md",
+                    "---\nname: Fast skiff\nbase: skiff\nstats: {speed: 400, cargo: 4}\n---\n",
+                ),
+                (
+                    "ships/faster-skiff.md",
+                    "---\nname: Faster skiff\nbase: fast-skiff\nstats: {speed: 500}\n---\n",
+                ),
+            ]);
+            let ship = resolve(&galaxy, &id("faster-skiff")).unwrap();
+            assert_eq!(
+                ship.stats,
+                Stats {
+                    hull: Some(50),
+                    shields: None,
+                    speed: Some(500),
+                    handling: None,
+                    cargo: Some(4),
+                }
+            );
+        }
+
+        #[test]
+        fn a_kit_changes_the_totals_but_not_the_stats() {
+            let galaxy = galaxy_with(&[]);
+            let ship = resolve(&galaxy, &id("armed-skiff")).unwrap();
+            assert_eq!(ship.stats.cargo, Some(10), "the chain's own");
+            assert_eq!(ship.totals.cargo, 8, "the kit's -2 added");
         }
 
         #[test]
