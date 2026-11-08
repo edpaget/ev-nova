@@ -358,6 +358,39 @@ fn a_shots_and_a_stellars_masks_are_laid_out_from_where_the_player_was_seen() {
 }
 
 #[test]
+fn each_sprites_offset_from_the_player_seen_is_truncated_on_its_own() {
+    // The player seen at (0.5, 0.5): the stellar at (1, 0.5) sits (0.5, 0)
+    // off it, truncated to (0, 0); the shot at (0, 1.5) sits (-0.5, 1) off
+    // it, truncated to (0, 1). Their drawn pixels meet only so; from the
+    // origin they would sit a pixel apart.
+    let seen = Vec2::new(0.5, 0.5);
+    let place = Vec2::new(1.0, 0.5);
+    let at = Vec2::new(0.0, 1.5);
+    let stellar = sprite(Rc::new(sheet(&[&["#."]])), 0, place);
+    let sprites = ContactSprites {
+        walk: MaskWalk::Drawn,
+        ..lending(
+            Some(Rc::new(sheet(&[&["#."]]))),
+            vec![(STELLAR, stellar)],
+            ShotContact::Placed,
+        )
+    };
+    let mut combat = Combat::default();
+    fly(&mut combat, (gun(), A, ShotLayer::Shots), (at, at), None);
+    let mut player = [Ship {
+        id: ShipRef::Player,
+        fleet: ShipRef::Player,
+        ..Ship::at(0, seen.x, seen.y)
+    }];
+    let mut stellars = [StellarTarget {
+        radius: 0.01,
+        ..target(STELLAR, place, 100)
+    }];
+    let pass = passes_among(&mut combat, &mut player, &mut stellars, &sprites);
+    assert_eq!(pass.strikes.len(), 1);
+}
+
+#[test]
 fn on_a_wraps_pass_a_shot_left_behind_meets_a_stellar_by_their_masks_where_both_are() {
     // Both far beyond the wrap's reach: the shot is left behind, a delta
     // back, and the stellar, never carried, is met a delta on, so their
