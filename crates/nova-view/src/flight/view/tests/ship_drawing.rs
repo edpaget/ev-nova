@@ -328,6 +328,42 @@ fn pass_raising(view: &mut Faked, combat: Vec<CombatEvent>) {
 }
 
 #[test]
+fn a_hits_flash_is_held_to_the_shields_share_of_its_classs_shield_not_its_capacity() {
+    // A capacity (80, raised by an outfit, say) twice the class's own
+    // `Shield` (40): the flash is held to the shield's share of the class's.
+    let catalog = FakeCatalog {
+        npc_sheet: Some(ShipSheet {
+            shield: Some(layer(2501, 72)),
+            ..npc_sheet()
+        }),
+        ..armed(1, &[BLASTER])
+    };
+    let mut view = flying_with(catalog, 180.0);
+    let npc = ShipRef::Npc(NPC_0);
+    redrawn(&mut view, 1, |npc| {
+        npc.shield = nova_sim::Gauge {
+            now: 20.0,
+            max: 80.0,
+        };
+        npc.class_shield = Some(40.0);
+    });
+    let hit = CombatEvent::Hit {
+        ship: npc,
+        weapon: Some(BLASTER),
+        at: Vec2::new(100.0, -100.0),
+        passes_shields: false,
+        late: false,
+    };
+    pass_raising(&mut view, vec![hit]);
+    // The hit sets the timer to 32: trunc(min(32, share(20, 40))) =
+    // trunc(min(32, 20 * 32 / 40)) = 16. Held to the capacity it would be
+    // share(20, 80) = 8; both sit inside share's 4..=32 band.
+    assert_eq!(view.flashes[&npc].drawn(), Some(16));
+    let hull = frames_of(&view, 2001)[0];
+    assert_eq!(drawn_of(&view, 2501), [(hull, lights_tint(16), true)]);
+}
+
+#[test]
 fn a_plug_in_shield_image_flashes_on_a_hit_and_fades() {
     // What the hit does to the shield is the session's; the view flashes
     // the layer from the hit the pass reports.
