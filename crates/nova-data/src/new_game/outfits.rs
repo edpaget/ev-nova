@@ -364,6 +364,18 @@ mod tests {
     }
 
     #[test]
+    fn a_weapon_of_no_exit_mount_leaves_from_the_centre() {
+        let (galaxy, _) = nova_galaxy_format::load::load(
+            &galaxy().with("outfits/blaster.md", &gun("Bay", "bay", 30, 900, 2.0)),
+        );
+        let doc = &galaxy.outfits[&Id::try_from("blaster".to_owned()).unwrap()];
+        let AnyRecord::Weapon(weapon) = weapon(128, doc).record else {
+            panic!("a wëap");
+        };
+        assert_eq!(weapon.exit_type, -1);
+    }
+
+    #[test]
     fn a_damage_past_i16_is_the_most() {
         let game =
             loaded(&galaxy().with("outfits/blaster.md", &gun("B", "fixed", u32::MAX, 300, 0.5)));

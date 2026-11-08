@@ -1490,3 +1490,132 @@ fn the_sample_cut_maps_its_kits_weapon_and_yards_without_problems() {
     assert!(yard("luyten-exchange").flags.bits() & flags::OUTFITTER != 0);
     assert!(yard("marrow-yard").flags.bits() & flags::OUTFITTER != 0);
 }
+
+/// The fixture galaxy with the skiff carrying `hardpoints` (YAML list
+/// items) and no other fields but its size, its armed variant fitted with
+/// no kit.
+fn skiff_with_hardpoints(hardpoints: &str) -> MemSource {
+    galaxy()
+        .with(
+            "ships/skiff.md",
+            &format!(
+                "---\nname: Skiff\nstyle: civilian\nrole: shuttle\n\
+                 size: {{length: 8, beam: 4, collision_radius: 4}}\nhardpoints:\n{hardpoints}---\n"
+            ),
+        )
+        .with(
+            "ships/armed-skiff.md",
+            "---\nname: Armed skiff\nbase: skiff\n---\n",
+        )
+}
+
+#[test]
+fn a_hull_s_turret_hardpoint_is_a_turret_slot_and_not_a_gun_slot() {
+    let skiff = skiff(&skiff_with_hardpoints(
+        "  - id: top\n    mount: turret\n    position: [0, 0]\n",
+    ));
+    assert_eq!((skiff.max_gun, skiff.max_tur), (0, 1));
+}
+
+#[test]
+fn exactly_four_spots_of_a_kind_fill_the_points_with_no_problem() {
+    let hardpoints = (0..4)
+        .map(|n| format!("  - id: t{n}\n    mount: turret\n    position: [{n}, 0]\n"))
+        .collect::<Vec<_>>()
+        .concat();
+    let game = loaded(&skiff_with_hardpoints(&hardpoints));
+    assert_eq!(problems(&game), Vec::<String>::new());
+    let (_, anim): (_, ShipAnim) = named(&game, game.ids.ships[&id("skiff")]);
+    assert_eq!(anim.turret_pos_x, [0, 1, 2, 3]);
+}
+
+/// The fixture galaxy with `count` weapon outfits, `w0`..., each on one of
+/// the skiff's hardpoints, four of each mount in turn.
+fn skiff_with_weapons(count: usize) -> MemSource {
+    let hardpoints = (0..count)
+        .map(|n| {
+            let mount = ["fixed", "turret", "launcher"][n / 4];
+            format!("  - id: h{n}\n    mount: {mount}\n    position: [0, 0]\n    outfit: w{n}\n")
+        })
+        .collect::<Vec<_>>()
+        .concat();
+    (0..count).fold(skiff_with_hardpoints(&hardpoints), |source, n| {
+        source.with(
+            &format!("outfits/w{n}.md"),
+            "---\nname: W\nmount: fixed\ndamage: 1\nrange: 10\nreload: 1\nprice: 1\n---\n",
+        )
+    })
+}
+
+#[test]
+fn eight_stock_weapons_fill_both_weapon_arrays_with_no_problem() {
+    let game = loaded(&skiff_with_weapons(8));
+    assert_eq!(problems(&game), Vec::<String>::new());
+    let skiff = ship_of(&game, "skiff");
+    let weapon = |n: usize| Some(WeaponId(game.ids.weapons[&id(&format!("w{n}"))]));
+    assert_eq!(
+        skiff.weap_type1_4,
+        [weapon(0), weapon(1), weapon(2), weapon(3)]
+    );
+    assert_eq!(
+        skiff.weap_type5_8,
+        [weapon(4), weapon(5), weapon(6), weapon(7)]
+    );
+    assert_eq!(skiff.weap_count5_8, [1; 4]);
+}
+
+#[test]
+fn a_ninth_stock_weapon_is_a_problem_and_left_out() {
+    let game = loaded(&skiff_with_weapons(9));
+    assert_eq!(
+        problems(&game),
+        [
+            "ships/armed-skiff.md: it has more than eight weapons; 1 are left out",
+            "ships/skiff.md: it has more than eight weapons; 1 are left out",
+        ],
+        "the variant inherits the hardpoints"
+    );
+}
+
+#[test]
+fn eight_default_items_are_no_problem() {
+    let kits: Vec<String> = (0..8).map(|n| format!("k{n}")).collect();
+    let source = kits.iter().fold(galaxy(), |source, kit| {
+        source.with(
+            &format!("mods/{kit}.md"),
+            "---\nname: K\nfits: [shuttle]\nfitted_at: legal\nprice: 1\n---\n",
+        )
+    });
+    let game = loaded(&source.with(
+        "ships/armed-skiff.md",
+        &format!(
+            "---\nname: Armed skiff\nbase: skiff\nmods: [{}]\n---\n",
+            kits.join(", ")
+        ),
+    ));
+    assert_eq!(problems(&game), Vec::<String>::new());
+}
+
+#[test]
+fn a_kit_s_missing_hardpoint_outfit_is_reported_against_the_kit_alone_whatever_its_id() {
+    // The kit shares its id with the ship that fits it: the ship still
+    // reports only its own hardpoints' outfits.
+    let game = loaded(
+        &galaxy()
+            .with(
+                "mods/armed-skiff.md",
+                "---\nname: Bed\nfits: [shuttle]\nfitted_at: legal\nprice: 1\n\
+                 hardpoints:\n  - id: bed\n    mount: turret\n    position: [0, -1]\n    outfit: lost\n---\n",
+            )
+            .with(
+                "ships/armed-skiff.md",
+                "---\nname: Armed skiff\nbase: skiff\nmods: [armed-skiff]\n---\n",
+            ),
+    );
+    assert_eq!(
+        problems(&game),
+        [
+            "mods/armed-skiff.md: its hardpoint `bed`'s outfit `lost` is not in outfits/; it isn't given with the kit"
+        ]
+    );
+}

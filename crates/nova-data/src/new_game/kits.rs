@@ -555,6 +555,32 @@ mod tests {
     }
 
     #[test]
+    fn an_effect_past_i16_is_held_to_the_nearest() {
+        let game = loaded(&galaxy().with(
+            "mods/gun-mount.md",
+            "---\nname: Gun mount\nfits: [shuttle]\nfitted_at: legal\nprice: 100\n\
+             effects: {hull: 40000, cargo: -40000, speed: 7}\n---\n",
+        ));
+        assert_eq!(
+            slots(&kit_of(&game, "gun-mount")),
+            [(6, i16::MAX), (8, 7), (2, i16::MIN), (-1, 0)]
+        );
+    }
+
+    #[test]
+    fn a_hardpoint_outfit_that_failed_to_load_is_not_reported_again() {
+        let game = loaded(&galaxy().with("mods/gun-mount.md", GUN_MOUNT).with(
+            "outfits/mass-driver.md",
+            "---\nname: Mass driver\nmount: sideways\n---\n",
+        ));
+        let lines = problems(&game);
+        assert!(
+            !lines.iter().any(|line| line.starts_with("mods/")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
     fn two_hardpoint_outfits_are_given_in_order() {
         let game = loaded(&galaxy().with(
             "mods/gun-mount.md",
