@@ -8594,7 +8594,7 @@ mod tests {
     }
 
     #[test]
-    fn a_berths_pick_outlives_a_jump_but_not_a_new_traffic() {
+    fn a_berths_pick_outlives_a_jump_and_reaches_a_new_traffic_given_the_kept_berths() {
         let mut traffic = left_picking(WeaponId(131), RuleSource::Engine);
         traffic.retarget(table(0), &BTreeSet::new(), Leave::Dropped);
         traffic.enter(table(0), &mut Draws::of(&[]));
@@ -8605,8 +8605,12 @@ mod tests {
         );
         let mut fresh = Traffic::new();
         fresh.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
-        assert_eq!(fresh.npcs()[0].pick, None);
+        assert_eq!(fresh.npcs()[0].pick, None, "a launch's empty table");
         assert_eq!(fresh.reused_slot_pick(), RuleSource::Engine);
+        let mut given = Traffic::new();
+        given.keep_berths(traffic.kept_berths());
+        given.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
+        assert_eq!(given.npcs()[0].pick, Some(WeaponId(131)));
     }
 
     #[test]

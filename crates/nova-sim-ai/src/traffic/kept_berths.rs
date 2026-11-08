@@ -1,13 +1,14 @@
 //! What the original's ship table keeps from one traffic to the next: each
 //! slot's cached odds (+0xc914), search timer (+0xc90c), voice variant
 //! (+0xc922), can-scoop flag (+0xc3), escort-command mark (+0xc4), person
-//! (+0xc8d0) and formation place (+0x28/+0x2c).
+//! (+0xc8d0), formation place (+0x28/+0x2c), pick (+0x72) and exit
+//! cursors (+0xc8fe-+0xc905), and the player's slot 0's exit cursors.
 //!
 //! **The original.** The ship table is one `NewPtr(0x325000)` that
 //! `_InitArrays` takes once (@0x1b7a1-0x1b7b5, called from `_InitEVNova`
 //! @0x466fa) and keeps until the app quits. `_InitObjects` (@0x1c2e5,
 //! called once from `_InitEVNova` @0x47252) sets some of each slot's words
-//! at launch, none of these seven, and the fresh pages the table is
+//! at launch, none of these but the pick (-1 @0x1c385), and the fresh pages the table is
 //! served from read 0. After that, only the spawns, the odds pass and the
 //! AI write +0xc914 (see [`odds_cache`](super::odds_cache)), only
 //! `_HighLevelAIHandler` writes +0xc90c (see
@@ -26,7 +27,15 @@
 //! captures write an NPC slot's +0xc8d0 (`_ResetPlayer` @0x1d4fb writes
 //! the player's slot 0 alone), and only the formation calc and
 //! `_RespawnEscort` write +0x28/+0x2c (see
-//! [`formation_places`](super::formation_places)). No relocation, pilot
+//! [`formation_places`](super::formation_places)). Only `_HandleShip`
+//! (@0x35012), `_DoShipCapture` (@0x41207) and the AI's choosers
+//! (`_AIFireGun` @0x8020f, `_AIFireGunUntargeted` @0x80519,
+//! `_AIFirePlanetGun` @0x805be, `_AIFireTurret` @0x80e3c,
+//! `_AIFireMissile` @0x8135f, `_AILaunchFighter` @0x81411) write an NPC
+//! slot's +0x72 (see [`berth_picks`](super::berth_picks)), and only
+//! `_ModifyShotStartPosition` (@0x742c-0x74bc) and `_SpawnBeam`
+//! (@0x450ff-0x4523d) any slot's +0xc8fe-+0xc905, slot 0's included (see
+//! [`berth_exits`](super::berth_exits)). No relocation, pilot
 //! load or new game
 //! (`_OpenPilotFile`, `_LoadPilotData`, `_ResetPlayer`, `_DoNewPilot`,
 //! `_EnterGameFromMainScreen`, `_PlayGame`) clears them, so each slot's
@@ -53,21 +62,36 @@
 //! `_InitMissions` @0x97bbf). The odds carry changes no read: every
 //! active slot was written -1 by its spawn, and a carried marker only
 //! joins the walk the new ships' marks make. The formation places reach a
-//! new follower, as its berth's word.
-//!
-//! The picks (+0x72) and the exit cursors (+0xc8fe-+0xc905) the original's
-//! table keeps too are not handed on: a new traffic starts them empty (see
+//! new follower, as its berth's word. The picks reach a new ship by
+//! [`RuleKey::ReusedSlotPick`](crate::RuleKey::ReusedSlotPick) and the
+//! exit cursors by
+//! [`RuleKey::ReusedSlotExits`](crate::RuleKey::ReusedSlotExits) (see
 //! [`berth_kept`](super::berth_kept)).
+//!
+//! The player's slot 0 is no traffic's berth (the NPCs' start at 1), so
+//! its exit cursors ride apart ([`KeptBerths::with_player_exits`]): a
+//! traffic hands on a fresh slot's, every `ExitType` at exit 0, and the
+//! session puts the player's in and takes them out
+//! (`nova_sim::Session::with_kept_berths`). The player's pick is not
+//! carried: `_ResetPlayer` writes slot 0's +0x72 -1 on every pilot load
+//! and new game (@0x1d4dd).
+//!
+//! The blink timer (+0xc8ec) and the heading (+0x68) the original's table
+//! keeps too are not handed on yet: rdm
+//! phase/combat-and-flight-2/phase-3-carry-slot-blink-and-heading-across-app-life.
 
 use std::collections::BTreeMap;
 
 use super::Traffic;
+use super::berth_exits::BerthExits;
 use super::berth_marks::BerthMarks;
+use super::berth_picks::BerthPicks;
 use super::berth_scoops::BerthScoops;
 use super::berth_search::BerthSearch;
 use super::berth_voices::BerthVoices;
 use super::formation_places::BerthPlaces;
 use super::odds_cache::OddsCache;
+use crate::combat::exits::ExitCursors;
 
 /// The words each berth keeps from one traffic to the next (see the
 /// module docs).
@@ -87,6 +111,33 @@ pub struct KeptBerths {
     persons: BTreeMap<u32, String>,
     /// Each berth's formation place.
     places: BerthPlaces,
+    /// Each berth's last pick.
+    picks: BerthPicks,
+    /// Each berth's last exit cursors.
+    exits: BerthExits,
+    /// The player's exit cursors: the table's slot 0, kept apart from the
+    /// NPC berths, which start at 1, so no traffic holds them. A
+    /// traffic's own are a fresh slot's, every `ExitType` at exit 0, and
+    /// the session puts the player's in
+    /// ([`KeptBerths::with_player_exits`]).
+    player_exits: ExitCursors,
+}
+
+impl KeptBerths {
+    /// These berths, the player's exit cursors `exits`.
+    #[must_use]
+    pub fn with_player_exits(self, exits: ExitCursors) -> Self {
+        Self {
+            player_exits: exits,
+            ..self
+        }
+    }
+
+    /// The player's exit cursors (see [`KeptBerths::with_player_exits`]).
+    #[must_use]
+    pub fn player_exits(&self) -> ExitCursors {
+        self.player_exits
+    }
 }
 
 impl Traffic {
@@ -102,6 +153,9 @@ impl Traffic {
             odds: self.odds.clone(),
             persons: self.berth_persons.clone(),
             places: self.berth_places.clone(),
+            picks: self.berth_picks.clone(),
+            exits: self.berth_exits.clone(),
+            player_exits: ExitCursors::default(),
         }
     }
 
@@ -116,6 +170,8 @@ impl Traffic {
         self.odds = kept.odds;
         self.berth_persons = kept.persons;
         self.berth_places.take_words_of(kept.places);
+        self.berth_picks.take_words_of(kept.picks);
+        self.berth_exits.take_words_of(kept.exits);
     }
 }
 
@@ -125,8 +181,9 @@ mod tests {
     use super::*;
     use crate::ai::Goal;
     use crate::ai::lost_sight::SearchTimer;
-    use crate::catalog::GovtId;
+    use crate::catalog::{GovtId, WeaponId};
     use crate::combat::ShipRef;
+    use crate::combat::exits::ExitKind;
     use crate::geometry::Vec2;
     use crate::rulebook::RuleSource;
     use crate::stats::ShipStats;
@@ -257,6 +314,74 @@ mod tests {
         new.keep_berths(old.kept_berths());
         assert_eq!(new.berth_person(9), Some("Ace"));
         assert_eq!(new.berth_person(1), None);
+    }
+
+    #[test]
+    fn a_ship_brought_into_a_new_traffic_takes_its_berths_pick_by_that_traffics_reading() {
+        let mut old = passed();
+        old.write_berth_pick(1, Some(WeaponId(131)));
+        let pick = |reading| {
+            let mut new = Traffic::new();
+            new.set_reused_slot_pick(reading);
+            new.keep_berths(old.kept_berths());
+            assert_eq!(new.reused_slot_pick(), reading);
+            let id = new.add_npc_at(npc(0, ShipStats::new(FAST, &[])), 1);
+            new.npcs()
+                .iter()
+                .find(|npc| npc.id == id)
+                .expect("added")
+                .pick
+        };
+        assert_eq!(pick(RuleSource::Engine), Some(WeaponId(131)));
+        assert_eq!(pick(RuleSource::Bible), None);
+    }
+
+    /// Cursors stepped twice on the gun exits.
+    fn stepped_twice() -> ExitCursors {
+        let mut cursors = ExitCursors::default();
+        cursors.step(ExitKind::Gun);
+        cursors.step(ExitKind::Gun);
+        cursors
+    }
+
+    #[test]
+    fn a_ship_brought_into_a_new_traffic_takes_its_berths_exit_cursors_by_that_traffics_reading() {
+        let mut old = passed();
+        old.write_berth_exits(1, stepped_twice());
+        let gun = |reading| {
+            let mut new = Traffic::new();
+            new.set_reused_slot_exits(reading);
+            new.keep_berths(old.kept_berths());
+            assert_eq!(new.reused_slot_exits(), reading);
+            let id = new.add_npc_at(npc(0, ShipStats::new(FAST, &[])), 1);
+            new.npcs()
+                .iter()
+                .find(|npc| npc.id == id)
+                .expect("added")
+                .armament
+                .exit_cursors()
+                .next(ExitKind::Gun)
+        };
+        assert_eq!(gun(RuleSource::Engine), 2);
+        assert_eq!(gun(RuleSource::Bible), 0);
+    }
+
+    #[test]
+    fn a_traffics_kept_berths_hold_the_player_at_exit_0_and_keep_berths_ignores_them() {
+        let old = passed();
+        assert_eq!(old.kept_berths().player_exits(), ExitCursors::default());
+        let kept = old.kept_berths().with_player_exits(stepped_twice());
+        assert_eq!(kept.player_exits(), stepped_twice());
+        let mut new = Traffic::new();
+        new.keep_berths(kept);
+        assert_eq!(
+            new.kept_berths(),
+            old.kept_berths(),
+            "no berth took the player's"
+        );
+        let id = new.add_npc_at(npc(0, ShipStats::new(FAST, &[])), 1);
+        let ship = new.npcs().iter().find(|npc| npc.id == id).expect("added");
+        assert_eq!(ship.armament.exit_cursors().next(ExitKind::Gun), 0);
     }
 
     #[test]
