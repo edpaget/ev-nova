@@ -451,6 +451,7 @@ mod source_slot;
 pub mod spin_timer;
 pub mod sprite_load;
 pub mod stellar;
+mod stellar_contact;
 pub mod stellar_guns;
 pub mod stellar_hazards;
 pub mod submunition;
@@ -3728,6 +3729,7 @@ mod tests {
     mod spin_starts;
     mod stellar_guns;
     mod stellar_hazards;
+    mod stellar_masks;
     mod strike_terms;
     mod tick_phases;
     mod turn_reads;
