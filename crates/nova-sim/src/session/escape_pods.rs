@@ -101,11 +101,14 @@ impl Session {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::catalog::SystemId;
     use crate::chance::NeverFires;
     use crate::flight::Controls;
     use crate::flight_frame::FlightFrame;
+    use crate::gate::{GateRefusal, WORMHOLE};
     use crate::rulebook::Rulebook;
-    use crate::testkit::{FakePilotCatalog, catalog, land_now, work};
+    use crate::session::tests::{at_wormhole, gate_site, wormholes};
+    use crate::testkit::{FakePilotCatalog, begin_jump_now, catalog, fly_out, land_now, work};
 
     fn flying(catalog: &FakePilotCatalog) -> Session {
         let mut session = Session::start(catalog).expect("starts");
@@ -158,6 +161,40 @@ mod tests {
         let mut session = flying(&catalog);
         with_pod(&mut session, Vec2::new(300.0, 0.0));
         land_now(&mut session).expect("lands");
+        assert!(session.escape_pods().is_empty());
+    }
+
+    #[test]
+    fn a_jumps_arrival_clears_the_pods() {
+        // The arrival's `_killShots` frees the pods (@0x39e75-0x39e84).
+        let catalog = catalog();
+        let mut session = flying(&catalog);
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
+        with_pod(&mut session, Vec2::new(300.0, 0.0));
+        assert_eq!(session.escape_pods().len(), 1);
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(131))
+        );
+        assert!(session.escape_pods().is_empty());
+    }
+
+    #[test]
+    fn a_wormhole_with_no_exit_clears_the_pods() {
+        // The dock request's tail runs `_killShots` (@0x66f40), which
+        // frees the pods (@0x39e75-0x39e84).
+        let catalog = FakePilotCatalog {
+            gates: vec![gate_site(400, (0.0, 0.0), WORMHOLE, &[], 0)],
+            ..wormholes()
+        };
+        let mut session = at_wormhole(&catalog);
+        with_pod(&mut session, Vec2::new(300.0, 0.0));
+        assert_eq!(
+            session.enter_wormhole(&catalog, &mut NeverFires),
+            Err(GateRefusal::NoExit)
+        );
         assert!(session.escape_pods().is_empty());
     }
 
