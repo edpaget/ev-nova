@@ -31,6 +31,10 @@
 //!   and its trader escorts: how many ([`box_count`](cargo_box::box_count)),
 //!   where each starts, and how it drifts, spins and fades
 //!   ([`CargoBoxes`](cargo_box::CargoBoxes)).
+//! - [`dock_scan`]: the new game's attention from the law: whether
+//!   traffic control scans a ship that asks to land
+//!   ([`dock_scan::scans`]), by the attention its kits draw
+//!   ([`dock_scan::attention`]).
 //! - [`escort`]: the player's escorts: their
 //!   [`EscortClass`](escort::EscortClass), the
 //!   [`EscortOrder`](escort::EscortOrder) each follows, the
@@ -124,6 +128,7 @@ use nova_sim_state::{govt, landing, legal, market, stats};
 pub mod ai;
 pub mod brackets;
 pub mod cargo_box;
+pub mod dock_scan;
 pub mod escort;
 pub mod escort_arrival;
 pub mod escort_voice;
