@@ -1,7 +1,8 @@
 //! The session's tests of the exit cursors (rdm weapons-fidelity phase
 //! 18): a ship-table slot keeps its last ship's cursors for the next ship
 //! brought into it, and the player's carry through every refit and, by
-//! the engine, through a change of ship, as only `_ModifyShotStartPosition`
+//! the engine, through a change of ship, a pilot load and a new game (see
+//! [`kept_berths`](super::kept_berths)), as only `_ModifyShotStartPosition`
 //! and `_SpawnBeam` write +0xc8fe-+0xc905 (see
 //! [`berth_exits`](crate::traffic::berth_exits) and
 //! [`RuleKey::ReusedSlotExits`]). The fold set (+0xc8fc), which no refit
@@ -160,6 +161,57 @@ fn fire(session: &mut Session) -> usize {
     work(session, &crate::testkit::catalog(), Controls::default());
     session.hold_trigger(Trigger::default());
     newest_exit(session, ShipRef::Player, session.ship.player.position)
+}
+
+#[test]
+fn a_pilot_load_and_a_new_game_keep_the_players_exit_cursors_by_the_engine_and_reset_them_by_the_other_reading()
+ {
+    let catalog = four_guns();
+    for (reading, exit) in [(RuleSource::Engine, 1), (RuleSource::Bible, 0)] {
+        let last = fired_once(&catalog, reading);
+        let rules = Rulebook::default().with_override(RuleKey::ReusedSlotExits, reading);
+        let check = |boundary: &str, mut next: Session| {
+            assert_eq!(
+                next.ship.fit.armament.exit_cursors().next(ExitKind::Gun),
+                exit,
+                "{boundary}, {reading:?}"
+            );
+            next.ship.player.heading = 0.0;
+            assert_eq!(fire(&mut next), exit, "{boundary}, {reading:?}");
+        };
+        check(
+            "new game",
+            Session::start(&catalog)
+                .expect("starts")
+                .with_rules(rules)
+                .with_kept_berths(last.kept_berths()),
+        );
+        let pilot = crate::pilot::Pilot::new(&catalog, "Loaded").expect("a pilot");
+        check(
+            "load",
+            Session::load(&catalog, pilot, &rules)
+                .expect("loads")
+                .with_rules(rules)
+                .with_kept_berths(last.kept_berths()),
+        );
+    }
+}
+
+#[test]
+fn a_relocation_keeps_the_players_exit_cursors_by_either_reading() {
+    let catalog = four_guns();
+    for reading in [RuleSource::Engine, RuleSource::Bible] {
+        let mut session = fired_once(&catalog, reading);
+        let stellar = session.chart.sites[0].id;
+        session
+            .land_at(&catalog, session.pilot.system, stellar)
+            .expect("relocates");
+        assert_eq!(
+            session.ship.fit.armament.exit_cursors().next(ExitKind::Gun),
+            1,
+            "{reading:?}"
+        );
+    }
 }
 
 #[test]
