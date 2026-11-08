@@ -23,6 +23,10 @@ pub enum Scaling {
     /// sharp-bilinear ([`Upscaler::SharpBilinear`]).
     SharpBilinear,
     /// Flight's world drawn at the logical resolution, then enlarged with
+    /// AMD's `FidelityFX` Super Resolution 1 ([`Upscaler::Fsr1`]). Every
+    /// device has it.
+    Fsr1,
+    /// Flight's world drawn at the logical resolution, then enlarged with
     /// MetalFX's spatial scaler ([`Upscaler::MetalFxSpatial`]). Listed only
     /// where the device has it.
     MetalFxSpatial,
@@ -45,9 +49,10 @@ pub enum Enlargement {
 
 impl Scaling {
     /// Every scaling, in the order the Preferences dialog lists them.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Native,
         Self::SharpBilinear,
+        Self::Fsr1,
         Self::MetalFxSpatial,
         Self::SuperXbr,
     ];
@@ -61,6 +66,7 @@ impl Scaling {
         match self {
             Self::Native => (Upscaler::Native, Enlargement::Native),
             Self::SharpBilinear => (Upscaler::SharpBilinear, Enlargement::Native),
+            Self::Fsr1 => (Upscaler::Fsr1, Enlargement::Native),
             Self::MetalFxSpatial => (Upscaler::MetalFxSpatial, Enlargement::Native),
             Self::SuperXbr => (Upscaler::Native, Enlargement::SuperXbr),
         }
@@ -85,6 +91,7 @@ impl Scaling {
         match self {
             Self::Native => "Scaling: Native",
             Self::SharpBilinear => "Scaling: Sharp-bilinear",
+            Self::Fsr1 => "Scaling: FSR 1",
             Self::MetalFxSpatial => "Scaling: MetalFX",
             Self::SuperXbr => "Scaling: Super-xBR",
         }
@@ -97,6 +104,7 @@ impl From<Upscaler> for Scaling {
         match upscaler {
             Upscaler::Native => Self::Native,
             Upscaler::SharpBilinear => Self::SharpBilinear,
+            Upscaler::Fsr1 => Self::Fsr1,
             Upscaler::MetalFxSpatial => Self::MetalFxSpatial,
         }
     }
@@ -119,6 +127,7 @@ mod tests {
             [
                 Scaling::Native,
                 Scaling::SharpBilinear,
+                Scaling::Fsr1,
                 Scaling::MetalFxSpatial,
                 Scaling::SuperXbr
             ]
@@ -129,6 +138,7 @@ mod tests {
     fn each_label_names_the_scaling_it_chooses() {
         assert_eq!(Scaling::Native.label(), "Scaling: Native");
         assert_eq!(Scaling::SharpBilinear.label(), "Scaling: Sharp-bilinear");
+        assert_eq!(Scaling::Fsr1.label(), "Scaling: FSR 1");
         assert_eq!(Scaling::MetalFxSpatial.label(), "Scaling: MetalFX");
         assert_eq!(Scaling::SuperXbr.label(), "Scaling: Super-xBR");
     }
@@ -143,6 +153,7 @@ mod tests {
             Scaling::SharpBilinear.sites(),
             (Upscaler::SharpBilinear, Enlargement::Native)
         );
+        assert_eq!(Scaling::Fsr1.sites(), (Upscaler::Fsr1, Enlargement::Native));
         assert_eq!(
             Scaling::MetalFxSpatial.sites(),
             (Upscaler::MetalFxSpatial, Enlargement::Native)
@@ -158,6 +169,7 @@ mod tests {
         for upscaler in [
             Upscaler::Native,
             Upscaler::SharpBilinear,
+            Upscaler::Fsr1,
             Upscaler::MetalFxSpatial,
         ] {
             assert_eq!(
@@ -170,7 +182,7 @@ mod tests {
 
     #[test]
     fn the_list_is_the_upscalers_listed_then_super_xbr() {
-        use Scaling::{MetalFxSpatial, Native, SharpBilinear, SuperXbr};
+        use Scaling::{Fsr1, MetalFxSpatial, Native, SharpBilinear, SuperXbr};
         assert_eq!(Scaling::list(&[Upscaler::Native]), [Native, SuperXbr]);
         assert_eq!(
             Scaling::list(&[Upscaler::Native, Upscaler::SharpBilinear]),
@@ -183,6 +195,15 @@ mod tests {
                 Upscaler::MetalFxSpatial
             ]),
             [Native, SharpBilinear, MetalFxSpatial, SuperXbr]
+        );
+        assert_eq!(
+            Scaling::list(&[
+                Upscaler::Native,
+                Upscaler::SharpBilinear,
+                Upscaler::Fsr1,
+                Upscaler::MetalFxSpatial
+            ]),
+            [Native, SharpBilinear, Fsr1, MetalFxSpatial, SuperXbr]
         );
     }
 
