@@ -82,6 +82,23 @@
 //! out, and [`Session::hover_place`] and [`Session::framed_by`] read them,
 //! by [`RuleKey::UndisplayedShips`].
 //!
+//! A slot no display has laid out since launch keeps the rect
+//! `_InitSprites` (@0x1eda2) left it: it clones `shïp` 128's master into
+//! every ship slot (`_SWCloneSprite` @0x1f135, which copies the master's
+//! whole record, @0xa9462) and never locates it, and nothing ever locates
+//! a master (`_SWCreateSprite` zeroes the rect, @0xa8bc5-0xa8bdf; the
+//! frame changes keep the top-left, as every hotspot is zero). So such a
+//! ship is boxed with its top-left at the window's top-left, the sprite
+//! world's (0, 0) (`_HandleMouse` reads the pointer in the window's
+//! coordinates, @0x37fcd-0x37fd8), sized by a frame of its slot's frames
+//! ([`HoverPlace::Cloned`]): an escape fighter or a bay's fighter in a
+//! high slot no ship has used since launch, until its slot's display (rdm
+//! combat-and-flight phase 2). Left out: the places are the session's, and
+//! every session starts with none, where the original's outlive a game
+//! (they are the launch's): a slot a game before laid out and this one
+//! hasn't is boxed at its old place there, here at the top-left
+//! (rdm:phase/combat-and-flight-2 follow-up of this phase).
+//!
 //! **`_PrepareAllSprites`' other parts** change nothing the player sees
 //! (rdm weapons-fidelity phase 47's findings): no site that runs it holds
 //! a dying ship, a live shot, a cargo box or a live asteroid field, and
@@ -92,10 +109,8 @@
 //! it, and game entry's where the ships are set up (see the
 //! `stellar_passes` module).
 //!
-//! Left out, each with its owner: the box of a slot never laid out this
-//! run (`_InitSprites`' clone rect @0x1f135, here no box), and
-//! `_PlayGame`'s frozen `_DoPlayGameWork(1)` at entry (@0x457f3-0x4580c):
-//! rdm:phase/combat-and-flight/phase-2-left-out-of-weapons-fidelity-47.
+//! `_PlayGame`'s frozen `_DoPlayGameWork(1)` at entry (@0x457f3-0x4580c)
+//! is the `priming_passes` module's.
 
 use super::player_led::slot_of;
 use super::{Session, Setup, Space};
@@ -112,8 +127,12 @@ pub enum HoverPlace {
     /// At this whole-pixel offset from where the player is drawn: where
     /// its slot was last laid out, by another ship.
     Stale(Vec2),
-    /// Nowhere: its slot has not been laid out this run.
-    Unplaced,
+    /// At the window's top-left, the sprite world's (0, 0): its slot has
+    /// not been laid out this run, so its rect is where `_InitSprites`'
+    /// clone left it (`_SWCloneSprite` @0x1f135 copies the unlocated
+    /// master's rect, @0xa9462). Sized by a frame of the frames its slot
+    /// holds ([`Session::framed_by`]).
+    Cloned,
 }
 
 impl Session {
@@ -149,8 +168,8 @@ impl Session {
     /// [`RuleKey::UndisplayedShips`]' engine reading, one its slot has not
     /// displayed is boxed at the offset from the player its slot was last
     /// laid out at ([`HoverPlace::Stale`]), in the frames its slot last
-    /// cloned ([`Session::framed_by`]), or has no box in a slot no display
-    /// has laid out this run ([`HoverPlace::Unplaced`]); by the other
+    /// cloned ([`Session::framed_by`]), or at the window's top-left in a
+    /// slot no display has laid out this run ([`HoverPlace::Cloned`]); by the other
     /// reading every ship is boxed where it is. A ship not here is boxed
     /// where it is, which is nowhere.
     #[must_use]
@@ -275,8 +294,8 @@ impl Space {
     /// [`RuleKey::UndisplayedShips`]' engine reading, one its slot has not
     /// displayed is boxed at the offset from the player its slot was last
     /// laid out at ([`HoverPlace::Stale`]), in the frames its slot last
-    /// cloned ([`Session::framed_by`]), or has no box in a slot no display
-    /// has laid out this run ([`HoverPlace::Unplaced`]); by the other
+    /// cloned ([`Session::framed_by`]), or at the window's top-left in a
+    /// slot no display has laid out this run ([`HoverPlace::Cloned`]); by the other
     /// reading every ship is boxed where it is. A ship not here is boxed
     /// where it is, which is nowhere.
     #[must_use]
@@ -294,7 +313,7 @@ impl Space {
         self.slot_sprites
             .places
             .of(slot)
-            .map_or(HoverPlace::Unplaced, HoverPlace::Stale)
+            .map_or(HoverPlace::Cloned, HoverPlace::Stale)
     }
 
     /// Takes NPC `id` out and puts a copy of it in its berth at `at`, at
@@ -619,16 +638,32 @@ mod tests {
     }
 
     #[test]
-    fn a_slot_never_laid_out_has_no_box() {
+    fn a_slot_never_laid_out_is_boxed_where_the_launchs_clone_left_it() {
+        // `_InitSprites` clones every ship slot from `shïp` 128's master
+        // (@0x1f135) and never locates it, so the rect stays at the window's
+        // top-left until the slot's first display (@0x2cd9d).
         let (_, mut session) = flying(Rulebook::default());
         let new = ShipRef::Npc(newcomer(&mut session));
-        assert_eq!(session.hover_place(new), HoverPlace::Unplaced);
+        assert_eq!(session.hover_place(new), HoverPlace::Cloned);
+        assert_eq!(
+            session.framed_by(new),
+            Some(crate::ship_layer::INIT_FRAMES),
+            "the clone's frames"
+        );
         work(
             &mut session,
             &crate::testkit::catalog(),
             Controls::default(),
         );
         assert_eq!(session.hover_place(new), HoverPlace::Own, "once displayed");
+    }
+
+    #[test]
+    fn by_the_other_reading_a_slot_never_laid_out_is_boxed_where_its_ship_is() {
+        let rules = Rulebook::default().with_override(RuleKey::UndisplayedShips, RuleSource::Bible);
+        let (_, mut session) = flying(rules);
+        let new = ShipRef::Npc(newcomer(&mut session));
+        assert_eq!(session.hover_place(new), HoverPlace::Own);
     }
 
     #[test]

@@ -251,7 +251,7 @@ pub(super) mod tests {
             shown: ShipDrawn::Hidden,
             cloak: CloakShown::Hidden,
             gate: GateFade::Entering { ticks_left: 99.0 },
-            hover: HoverPlace::Unplaced,
+            hover: HoverPlace::Cloned,
             framed: Some(ShipId(999)),
             on_radar: true,
             iff: ShipIff::Threat,

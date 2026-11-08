@@ -440,6 +440,88 @@ fn an_undisplayed_ship_is_hovered_and_clicked_at_its_slots_last_place_not_its_ow
     assert!(drawn.npcs.iter().any(|&(npc, _)| npc == id), "the box sent");
 }
 
+/// [`faked_with_npc`] with its NPC in a slot never laid out this run,
+/// its slot holding ship type `framed`'s frames.
+fn faked_with_cloned_npc(framed: i16) -> (Faked, NpcId) {
+    let (mut view, id) = faked_with_npc();
+    super::faked_hud::changes(&mut view, |frame| {
+        frame.ships[1].hover = nova_sim::HoverPlace::Cloned;
+        frame.ships[1].framed = Some(ShipId(framed));
+    });
+    (view, id)
+}
+
+#[test]
+fn a_ship_in_a_slot_never_laid_out_is_boxed_at_the_windows_top_left_in_its_framed_size() {
+    // `_InitSprites`' clone leaves the slot's rect at the sprite world's
+    // (0, 0) (@0x1f135). That such a ship is `Cloned`, and by which frames,
+    // is nova-sim's
+    // (`a_slot_never_laid_out_is_boxed_where_the_launchs_clone_left_it`).
+    for (framed, width) in [(131, 100), (129, 40)] {
+        let (view, id) = faked_with_cloned_npc(framed);
+        let boxed = view.drawn_boxes().npc(id).expect("boxed");
+        let top_left = view
+            .camera()
+            .world_to_screen(Point::new(boxed.rect.left, boxed.rect.top));
+        assert_eq!(top_left, Point::new(0.0, 0.0), "{framed}");
+        assert_eq!(
+            (boxed.rect.width, boxed.rect.height),
+            (width, width),
+            "{framed}"
+        );
+    }
+}
+
+#[test]
+fn a_cloned_slots_box_is_sized_by_a_sheet_no_traffic_brings() {
+    // `shïp` 128, the clone's frames, is among no system's traffic here:
+    // the frame naming it reads its sheet, so the box is its size and not
+    // the crossed box's.
+    let (view, id) = faked_with_cloned_npc(128);
+    assert!(!view.frame.traffic_ships.contains(&ShipId(128)));
+    let Some(Ok(sheet)) = view.npc_sheets.get(&ShipId(128)) else {
+        panic!("128's sheet read: {:?}", view.npc_sheets.keys());
+    };
+    let size = sheet.size();
+    assert_ne!(size, super::super::placeholder_size(), "a sheet of its own");
+    let boxed = view.drawn_boxes().npc(id).expect("boxed");
+    assert_eq!((boxed.rect.width, boxed.rect.height), size);
+}
+
+#[test]
+fn a_small_cloned_box_takes_the_pointer_within_its_inset_and_not_past_it() {
+    // `_HandleMouse` (@0x38183-0x381a8) and the click block
+    // (@0x6a4b7-0x6a4df) grow a rect no wider than 47 by 16 a side, then
+    // `PtInRect` keeps the right and bottom edges out.
+    let (mut view, id) = faked_with_cloned_npc(129);
+    let boxed = view.drawn_boxes().npc(id).expect("boxed");
+    assert!(boxed.rect.width <= nova_sim::navigation::SMALL_SPRITE_WIDTH);
+    let world = |view: &Faked, x: f32, y: f32| {
+        let p = view.camera().screen_to_world(Point::new(x, y));
+        Vec2::new(p.x, p.y)
+    };
+    let edge = 40.0 + 16.0;
+    for (x, y, takes) in [
+        (edge - 1.0, edge - 1.0, true),
+        (20.0, edge - 1.0, true),
+        (edge, 20.0, false),
+        (20.0, edge, false),
+    ] {
+        assert_eq!(boxed.rect.holds(world(&view, x, y)), takes, "({x}, {y})");
+        view.click_in_space(Point::new(x, y));
+        let sent = match view.sim.applied().last() {
+            Some(FlightCommand::ClickInSpace { drawn, .. }) => drawn.npc(id),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(sent, Some(boxed), "the box sent with the click");
+        view.cursor_input(&Input::PointerMoved(Point::new(x, y)));
+        view.hovering();
+        let (at, drawn) = last_hover(&view);
+        assert_eq!(at, world(&view, x, y));
+        assert_eq!(drawn.npc(id), Some(boxed), "the box sent with the hover");
+    }
+}
+
 #[test]
 fn by_the_other_reading_an_undisplayed_ship_is_hovered_and_clicked_where_it_is() {
     // (`by_the_other_reading_an_undisplayed_ship_is_hovered_where_it_is`.)
