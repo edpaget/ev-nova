@@ -23,7 +23,14 @@
 //!    body). The ship becomes `shïp` 128, keeping only its persistent
 //!    outfits (`Flags` 0x0004, @0x1d6dd-0x1d703), with the class's stock
 //!    weapons and ammunition (@0x68fe0-0x690ab) and none of its default
-//!    items, which the rescue never adds. The condition is intact and the
+//!    items, which the rescue never adds. It boards the class as the eject
+//!    does (`Session::board_class`), so by the engine's reading of
+//!    [`RuleKey::EjectPersistentWeapons`] a persistent weapon or
+//!    ammunition outfit is held to the class's stock of it at once. The
+//!    original calls no fold here: it keeps such an outfit's count with
+//!    no gun in the weapon array, unarmed until the next fold caps it to
+//!    none (rdm:phase/combat-and-flight-2/phase-8-rescue-keeps-persistent-weapon-count-unarmed).
+//!    The condition is intact and the
 //!    pod gone; the targets, the secondary weapon (+0x72), the system
 //!    jumped from (+0x94) and the course go; the cargo is emptied, the
 //!    commodities (+0x7a) and every `jünk` (`_junkData` +0x22); the paint
@@ -997,6 +1004,36 @@ mod tests {
         assert_eq!(session.pilot.missions.iter().count(), 0, "aborted");
         assert_eq!(session.pilot.legal_record(GovtId(140)), 5);
         assert_eq!(session.pilot.system_record(SystemId(130)), 5);
+    }
+
+    #[test]
+    fn the_rescue_loses_a_persistent_weapon_ship_128_does_not_stock_by_the_engine_alone() {
+        const KEPT_GUN: i16 = 303;
+        let mut catalog = rescuing();
+        catalog.outfits.push(crate::catalog::OutfitRecord {
+            flags: OutfitFlags::PERSISTENT,
+            ..outfit(KEPT_GUN, &[(MOD_WEAPON, 129)])
+        });
+        catalog.weapons.push(weapon(129));
+        for (source, kept) in [(RuleSource::Engine, false), (RuleSource::Bible, true)] {
+            let rules = Rulebook::default().with_override(RuleKey::EjectPersistentWeapons, source);
+            let mut session = due(&catalog).with_rules(rules);
+            session.pilot.outfits.insert(OutfitId(KEPT_GUN), 1);
+            assert!(session.rescue_if_due(&catalog, &mut NeverFires));
+            assert_eq!(
+                session.pilot.outfits.get(&OutfitId(KEPT_GUN)).copied(),
+                kept.then_some(1),
+                "{source:?}"
+            );
+            let mounted = session
+                .ship
+                .fit
+                .armament
+                .mounts()
+                .iter()
+                .any(|mount| mount.spec.id == WeaponId(129));
+            assert_eq!(mounted, kept, "{source:?}");
+        }
     }
 
     #[test]
