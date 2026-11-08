@@ -180,12 +180,6 @@ impl BetweenPasses {
         let presented = self.presented;
         self.arrival.take_if(|_| presented)
     }
-
-    /// The second pass, its breakups as they were heard, and the time the
-    /// hold was taken: what replays it.
-    pub(super) fn into_second(self) -> (Option<PassReport>, Option<Breakups>, Duration) {
-        (self.second, self.heard, self.at)
-    }
 }
 
 /// What is drawn: `held`'s frame, or else `frame`, the kept one, as
@@ -266,13 +260,30 @@ impl<C, S: FlightSim> FlightView<C, S> {
         let Some(held) = self.between_passes.take() else {
             return;
         };
-        if let Some(pass) = held.second {
-            if let Some(wrap) = pass.wrap {
-                self.carry_wrap(&wrap);
-            }
-            self.step_effects(&pass, None, anchor, held.heard);
-            self.run_held_escort_menu(held.at, pass.escort_menu);
+        self.replay_held(held, anchor, false);
+    }
+
+    /// Replays `held`'s second pass, if it has one, the ship drawn at
+    /// `anchor`: its wrap first, its effects with its breakups as they
+    /// were heard, then its escort-menu block at the time the hold was
+    /// taken ([`FlightView::run_held_escort_menu`]). On the pass a jump's
+    /// `arrival` settled in, its explosions step once more in the new
+    /// scene before the menu's block
+    /// ([`FlightView::step_arrival_explosions`]). Both a release
+    /// ([`FlightView::release_between_passes`]) and a held arrival
+    /// (`FlightView::arrive_held`) replay by it.
+    pub(super) fn replay_held(&mut self, held: BetweenPasses, anchor: Anchor, arrival: bool) {
+        let Some(pass) = held.second else {
+            return;
+        };
+        if let Some(wrap) = pass.wrap {
+            self.carry_wrap(&wrap);
         }
+        self.step_effects(&pass, None, anchor, held.heard);
+        if arrival {
+            self.step_arrival_explosions(&pass);
+        }
+        self.run_held_escort_menu(held.at, pass.escort_menu);
     }
 
     /// Drops the hold unreplayed, where the ship is seated afresh, its

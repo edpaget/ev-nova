@@ -315,16 +315,8 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
         };
         let lines = std::mem::take(&mut self.held_lines);
         self.arrived(&[]);
-        let (second, heard, at) = held.into_second();
-        if let Some(pass) = second {
-            let anchor = self.anchor();
-            if let Some(wrap) = pass.wrap {
-                self.carry_wrap(&wrap);
-            }
-            self.step_effects(&pass, None, anchor, heard);
-            self.step_arrival_explosions(&pass);
-            self.run_held_escort_menu(at, pass.escort_menu);
-        }
+        let anchor = self.anchor();
+        self.replay_held(held, anchor, true);
         self.previous = exit.place;
         self.arrival_effect();
         for (text, ticks) in lines {
