@@ -88,14 +88,15 @@ impl LockedSlot {
     /// among `targets` (`_HandleShot` @0x35f3e-0x35f49): the ship its
     /// damage is aimed at, or for a locked shot by
     /// [`LockedSlot::ShipSlot`] the ship holding its slot ([`holder`]),
-    /// or the empty slot when none does.
+    /// or the empty slot when none does. Any other locked shot gives
+    /// none: the lock cleared the ship it was aimed at
+    /// ([`asteroid_seek`](super::asteroid_seek)).
     #[must_use]
     pub fn released_at(self, shot: &Shot, targets: &[Target]) -> Given {
         match (shot.jam, self) {
             (Jam::Asteroid(Some(k)), Self::ShipSlot) => {
                 holder(k, targets).map_or(Given::EmptySlot, |ship| Given::Ship(Some(ship)))
             }
-            (Jam::Asteroid(_), _) => Given::Ship(None),
             _ => Given::Ship(shot.aimed_at),
         }
     }
