@@ -1406,10 +1406,6 @@ pub struct Combat {
     /// ([`RuleKey::ReusedShotSlotRoll`](crate::RuleKey::ReusedShotSlotRoll)):
     /// by the engine, it does.
     reused_roll: RuleSource,
-    /// Whether a shot starts on its slot's leftover spin timer
-    /// ([`RuleKey::ReusedShotSlotSpin`](crate::RuleKey::ReusedShotSlotSpin)):
-    /// by the engine, it does.
-    reused_spin: RuleSource,
     /// Each ship slot's record of the last ship in it, which a
     /// sub-munition reads as it spawns ([`source_slot`]).
     slot_ships: BTreeMap<Slot, source_slot::SlotShip>,

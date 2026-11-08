@@ -95,9 +95,7 @@ impl Combat {
     ///   by the fight's decay reading, homing among the
     ///   ships where they are now, with each ship's jamming and sight as
     ///   the hits so far, and the answers to the locks before it, left
-    ///   them ([`Sight`](super::projectile::Sight)), and its slot keeps a
-    ///   spinning shot's spin timer as the visit left it
-    ///   (`ShotSlots::keep_spin`, @0x35879-0x358c4); then its missile
+    ///   them ([`Sight`](super::projectile::Sight)); then its missile
     ///   lock, if it makes one at the frame's gain ([`lock`]), lands at
     ///   once (@0x35855), reading the target where it is now, and the
     ///   stretch stops there ([`Stretch::Answer`]), its walk kept to
@@ -198,9 +196,6 @@ impl Combat {
         };
         let shot = &mut self.shots[index];
         shot.step(&guide, chance);
-        if shot.weapon.spins() {
-            self.slots.keep_spin(shot.slot, shot.spin_timer);
-        }
     }
 
     /// Lands `hits` among `fighters` at a visit ([`Combat::land`]), as

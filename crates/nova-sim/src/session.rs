@@ -1644,9 +1644,6 @@ impl Session {
             .set_reused_shot_slot_roll(rules.source_for(RuleKey::ReusedShotSlotRoll));
         self.space
             .combat
-            .set_reused_shot_slot_spin(rules.source_for(RuleKey::ReusedShotSlotSpin));
-        self.space
-            .combat
             .set_ion_lockout(rules.source_for(RuleKey::IonFireLockout));
         self.space.read_reused_slot_rules(&rules);
         self.chart.read_rescue_rule(&rules);
