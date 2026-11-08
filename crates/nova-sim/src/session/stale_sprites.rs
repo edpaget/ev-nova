@@ -155,6 +155,23 @@ impl PlayerShip {
     /// The disc of an unowned slot placed at `top_left` from the player:
     /// graphic type 0's frame there, none when it cannot be read.
     fn ghost_disc(&self, statics: &Statics, top_left: (i32, i32)) -> Option<DeadlyDisc> {
+        let (at, frame) = self.ghost_centre(statics, top_left)?;
+        Some(DeadlyDisc {
+            at,
+            radius: sprite_radius(frame),
+        })
+    }
+
+    /// Where an unowned slot placed at `top_left` from the player is, and
+    /// the frame it holds: the centre of graphic type 0's frame there,
+    /// from the player's place now, with that frame; none when it cannot
+    /// be read. Both the deadly pass ([`PlayerShip::ghost_disc`]) and the
+    /// shot pass (`Session::shot_stellar_targets`) place a ghost by it.
+    pub(super) fn ghost_centre(
+        &self,
+        statics: &Statics,
+        top_left: (i32, i32),
+    ) -> Option<(Vec2, (u32, u32))> {
         let frame = statics.fallback_frame?;
         // A screen offset and a sprite's side are far within a float's
         // exact range.
@@ -163,10 +180,7 @@ impl PlayerShip {
             Vec2::new(top_left.0 as f32, top_left.1 as f32),
             Vec2::new(frame.0 as f32, frame.1 as f32),
         );
-        Some(DeadlyDisc {
-            at: self.player.position + corner + size * 0.5,
-            radius: sprite_radius(frame),
-        })
+        Some((self.player.position + corner + size * 0.5, frame))
     }
 }
 

@@ -110,15 +110,7 @@ impl Session {
             .filter_map(|(walked, held)| match held {
                 Held::Drawn(drawn) => self.target_drawn_as(walked, drawn),
                 Held::Ghost { top_left } => {
-                    let frame = self.statics.fallback_frame?;
-                    // A screen offset and a sprite's side are far within a
-                    // float's exact range.
-                    #[allow(clippy::cast_precision_loss)]
-                    let (corner, size) = (
-                        Vec2::new(top_left.0 as f32, top_left.1 as f32),
-                        Vec2::new(frame.0 as f32, frame.1 as f32),
-                    );
-                    let centre = self.ship.player.position + corner + size * 0.5;
+                    let (centre, frame) = self.ship.ghost_centre(&self.statics, top_left)?;
                     self.stellar_target(walked.id, centre, frame_radius(frame))
                 }
             })
