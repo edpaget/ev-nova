@@ -973,6 +973,17 @@ mod tests {
     }
 
     #[test]
+    fn with_no_mask_a_ships_disc_reaches_a_pods_rect_by_its_own_height() {
+        // 8 across and 20 down, centred on (20, 20): y 10 to 30.
+        let rows = vec!["........"; 20];
+        let sheet = Rc::new(nova_sim_base::fixture::rle::sheet(&[&rows]));
+        let pod = pod_at(Vec2::new(20.0, 20.0));
+        let below = |y| Scooping::disc(Vec2::new(20.0, y), 4.0).touches_pod(&pod, Some(&sheet));
+        assert!(below(33.0), "3 off its bottom edge");
+        assert!(!below(35.0), "5 off it");
+    }
+
+    #[test]
     fn with_no_mask_a_ships_disc_touches_a_pods_rect() {
         let sheet = square(8, |_, _| false);
         let pod = pod_at(Vec2::new(20.0, 20.0));
