@@ -214,6 +214,7 @@ fn at_centre(flags: u32, min_status: i16) -> LandingSite {
         flags2: 0,
         destroyed: false,
         dominated_at_run_time: false,
+        gate_closed: false,
         graphic: 0,
         dead_graphic: None,
         dead_frame_size: None,

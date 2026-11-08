@@ -441,6 +441,7 @@ pub(in crate::flight) fn site(id: i16, (x, y): (f32, f32), flags: u32) -> Landin
         flags2: 0,
         destroyed: false,
         dominated_at_run_time: false,
+        gate_closed: false,
         graphic: 0,
         dead_graphic: None,
         dead_frame_size: None,

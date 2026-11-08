@@ -181,6 +181,27 @@ impl FakePilotCatalog {
         self
     }
 
+    /// This catalog with the jump point `point` (`system/point`) among its
+    /// storylines' points: gate `gate`, no owner, at `stability`,
+    /// replacing any point of that name. Its other storylines are kept.
+    #[must_use]
+    pub fn with_point(
+        mut self,
+        point: &str,
+        gate: i16,
+        stability: crate::storylines::PointStability,
+    ) -> Self {
+        self.storylines.points.insert(
+            point.to_owned(),
+            crate::storylines::PointAt {
+                gate: StellarId(gate),
+                owner: None,
+                stability,
+            },
+        );
+        self
+    }
+
     /// This catalog with `lives` among its stellars' lives.
     #[must_use]
     pub fn living(mut self, lives: impl IntoIterator<Item = StellarLife>) -> Self {
@@ -666,6 +687,38 @@ impl CommCatalog for FakePilotCatalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_point_is_added_to_the_storylines_with_its_gate_and_stability() {
+        use crate::storylines::{PointAt, PointStability};
+        let fake = catalog()
+            .with_point("drift/road", 151, PointStability::Dead)
+            .with_point("hearth/road", 152, PointStability::Stable)
+            .with_point("drift/road", 153, PointStability::Unstable);
+        assert_eq!(
+            fake.storylines.points,
+            std::collections::BTreeMap::from([
+                (
+                    "drift/road".to_owned(),
+                    PointAt {
+                        gate: StellarId(153),
+                        owner: None,
+                        stability: PointStability::Unstable,
+                    }
+                ),
+                (
+                    "hearth/road".to_owned(),
+                    PointAt {
+                        gate: StellarId(152),
+                        owner: None,
+                        stability: PointStability::Stable,
+                    }
+                ),
+            ]),
+            "a point given again replaces the first"
+        );
+        assert!(fake.storylines.missions.is_empty());
+    }
 
     #[test]
     fn a_gates_stability_is_set_on_that_gate_alone() {
