@@ -222,10 +222,16 @@ fn ejected_from(
     screen: AppScreen,
     create: fn(&mut AppScreen, &str),
 ) -> AppScreen {
+    // The rescue's `shïp` 128 has no shield, which the engine's reading
+    // of `RescueArmor` gives its armour from, and the rest of the
+    // rescue's pass displays it (`jmp 0x71113` @0x692ce): by that reading
+    // it would break up there. These tests read the rescue's screens.
+    let rules = Rulebook::default().with_override(RuleKey::RescueArmor, RuleSource::Bible);
     let mut screen = screen
         .with_chance(above_the_player())
         .with_behaviour(Rc::new(Firing))
         .with_disable_rule(Rc::new(Never))
+        .with_rules(rules)
         .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
         .appeared();
     create(&mut screen, "Ada");
@@ -1302,10 +1308,16 @@ fn sabotaged_and_took_off(store: &MemoryPilots, saboteurs: &[Saboteur]) -> AppSc
 /// `screen`, over [`deadly_data`] or its like, landed and taken off
 /// with the killer above the player.
 fn took_off_over(store: &MemoryPilots, screen: AppScreen) -> AppScreen {
+    // The rescue's `shïp` 128 has no shield, which the engine's reading
+    // of `RescueArmor` gives its armour from, and the rest of the
+    // rescue's pass displays it (`jmp 0x71113` @0x692ce): by that reading
+    // it would break up there. These tests read the rescue's screens.
+    let rules = Rulebook::default().with_override(RuleKey::RescueArmor, RuleSource::Bible);
     let mut screen = screen
         .with_chance(above_the_player())
         .with_behaviour(Rc::new(Firing))
         .with_disable_rule(Rc::new(Never))
+        .with_rules(rules)
         .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
         .appeared();
     create(&mut screen, "Ada");
