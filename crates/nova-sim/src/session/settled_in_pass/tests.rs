@@ -268,24 +268,98 @@ fn on_the_pass_a_warp_ends_no_ship_of_the_old_system_thinks_flies_fires_or_hits(
     );
 }
 
+// `jmp 0x71113` (@0x6c625) skips the rest of `_HandlePlayer`: the death
+// timer (@0x6d7e6), the escort menu's block (@0x6df59), the klaxon
+// (@0x6f1e4), the eject (@0x6f22c) and the cloak key (@0x705b7).
+
 #[test]
-fn the_arrivals_pass_runs_no_death_timer_escort_menu_eject_or_cloak_key() {
-    // `jmp 0x71113` (@0x6c625) skips the death timer (@0x6d7e6), the
-    // escort menu's block (@0x6df59), the eject (@0x6f22c) and the cloak
-    // key (@0x705b7).
+fn the_arrivals_pass_runs_no_escort_menu_block() {
     let catalog = catalog();
     let mut session = a_pass_short_of_the_end(&catalog);
+    let report = steps(&mut session, &catalog, &StepInput::default(), 1);
+    let run = &report.steps[0];
+    assert!(run.arrival.is_some(), "the arrival's step");
+    assert_eq!(run.passes[0].escort_menu, None, "no escort-menu block");
+}
+
+#[test]
+fn the_arrivals_pass_takes_no_eject() {
+    use crate::catalog::OutfitId;
+    use crate::session::eject::tests::{POD, ejecting, in_the_pod};
+    let catalog = ejecting(100);
+    let mut session = a_pass_short_of_the_end(&catalog);
+    // A pod aboard and the chord held, the armour gone after the pass's
+    // head read the player intact, so the move doesn't collapse the jump
+    // and the eject check, reading `_IsDying` by the armour, would eject.
+    session.pilot.outfits.insert(OutfitId(POD), 1);
+    session.pilot.reserves.armor.now = 0.0;
     let input = StepInput {
-        cloak: true,
         eject: true,
         ..StepInput::default()
     };
     let report = steps(&mut session, &catalog, &input, 1);
-    let run = &report.steps[0];
-    assert!(run.arrival.is_some(), "the arrival's step");
-    assert_eq!(run.passes[0].escort_menu, None, "no escort-menu block");
-    assert_eq!(session.pod, None, "no eject");
-    assert_eq!(session.ship.cloak.cloak, crate::cloak::Cloak::default());
+    assert!(report.steps[0].arrival.is_some(), "the arrival's step");
+    assert!(!in_the_pod(&session), "no eject");
+    assert_eq!(session.pod, None);
+}
+
+#[test]
+fn the_arrivals_pass_takes_no_cloak_key() {
+    use crate::catalog::OutfitId;
+    use crate::cloak::{Cloak, MOD_CLOAK};
+    let mut catalog = armed();
+    catalog
+        .outfits
+        .push(nova_sim_catalog::fixture::outfit(300, &[(MOD_CLOAK, 0)]));
+    let mut session = a_pass_short_of_the_end(&catalog);
+    // A cloak owned and paid for: off the jump, the key would cloak.
+    session.pilot.outfits.insert(OutfitId(300), 1);
+    session.pilot.reserves.fuel.now = 100.0;
+    session.pilot.reserves.shield.now = 100.0;
+    session.take_sounds();
+    let input = StepInput {
+        cloak: true,
+        ..StepInput::default()
+    };
+    let report = steps(&mut session, &catalog, &input, 1);
+    assert!(report.steps[0].arrival.is_some(), "the arrival's step");
+    assert_eq!(session.player_cloak(), Cloak::default(), "not cloaking");
+    let sounds = session.take_sounds();
+    assert!(
+        !sounds.contains(&SimSound::Cloaked) && !sounds.contains(&SimSound::Refused),
+        "the key unread: {sounds:?}"
+    );
+}
+
+#[test]
+fn the_arrivals_start_ticks_no_death_timer_and_sounds_no_klaxon() {
+    // A player dying at the pass's head collapses its jump in the move
+    // (see the `jump_collapse` module), so no whole pass arrives with its
+    // timer running. The pass's own steps show the skip instead: its
+    // move ends the warp, the exit settles, and a timer running then
+    // keeps its ticks.
+    use super::super::game_work::PassStart;
+    use crate::combat::GamePass;
+    use crate::combat::hull::Condition;
+    let catalog = catalog();
+    let mut session = a_pass_short_of_the_end(&catalog);
+    let mut start = PassStart::of(&session);
+    let pass = GamePass::Advance { double_time: false };
+    session.player_move(Controls::default(), pass, start.player_head());
+    assert_eq!(
+        session.settle_exit(&mut start, &catalog, &mut NeverFires),
+        Some(Exit::Arrival)
+    );
+    let dying = Condition::Dying {
+        ticks_left: 5,
+        starting: false,
+    };
+    session.ship.condition = dying;
+    session.take_sounds();
+    session.player_display_head(start.player_head(), &mut NeverFires);
+    assert_eq!(session.ship.condition, dying, "the timer unticked");
+    let sounds = session.take_sounds();
+    assert!(!sounds.contains(&SimSound::Klaxon), "{sounds:?}");
 }
 
 #[test]
