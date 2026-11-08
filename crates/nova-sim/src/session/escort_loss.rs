@@ -387,3 +387,100 @@ fn an_escorts_kill_after_its_loss_in_the_walk_credits_no_one() {
     // Its leader was cleared to -1 as the disabling hit landed (@0x3afdd).
     assert_eq!(rating_after_an_escorts_kill(false), 0);
 }
+
+/// One pass with no trigger held.
+fn tick(session: &mut Session, catalog: &FakePilotCatalog) {
+    session.game_work(
+        Controls::default(),
+        catalog,
+        &Watching::default(),
+        Rules::default(),
+        &mut NeverFires,
+    );
+}
+
+/// [`escorted`], its escort NPC 0 disabled by a tick (armour 3) and so
+/// lost, then repaired at its turn and rejoined as a ship the rule still
+/// disables: 40,000 armour, its class's as well as its own (the fight
+/// reads its class's as a hit lands), not tough, repaired to under a
+/// third.
+fn rejoined_still_disabled(catalog: &FakePilotCatalog) -> Session {
+    use crate::combat::hull::Condition;
+    let mut session = escorted(catalog);
+    session
+        .space
+        .npc_mut(NpcId(0))
+        .expect("there")
+        .reserves
+        .armor
+        .now = 3.0;
+    tick(&mut session, catalog);
+    assert!(!session.is_escort(NpcId(0)), "lost as it was disabled");
+    let npc = session.space.npc_mut(NpcId(0)).expect("still here");
+    assert!(npc.former.is_some(), "remembers being an escort");
+    npc.self_repair = true;
+    npc.stats.armor = 40_000.0;
+    npc.reserves.armor.max = 40_000.0;
+    npc.reserves.armor.now = 100.0;
+    session.repair_at_turn(
+        NpcId(0),
+        Rules::default(),
+        &mut crate::testkit::Draws::of(&[0]),
+    );
+    assert!(session.is_escort(NpcId(0)), "rejoins");
+    assert_eq!(
+        session.space.npc(NpcId(0)).expect("here").condition,
+        Condition::Disabled,
+        "rejoins, still disabled"
+    );
+    let _ = (session.take_messages(), session.take_sounds());
+    session
+}
+
+#[test]
+fn a_rejoined_escort_still_disabled_leaves_the_fleet_on_the_tick_a_shot_hits_it() {
+    use crate::combat::hull::Condition;
+    let catalog = armed();
+    let mut session = rejoined_still_disabled(&catalog);
+    let escorts = session.pilot().escorts().len();
+    for pass in 0..3 {
+        tick(&mut session, &catalog);
+        assert!(
+            session.is_escort(NpcId(0)),
+            "kept, though disabled, pass {pass}"
+        );
+        assert_eq!(
+            session.space.npc(NpcId(0)).expect("here").condition,
+            Condition::Disabled,
+            "still disabled, pass {pass}"
+        );
+        assert_eq!(session.pilot().escorts().len(), escorts, "pass {pass}");
+    }
+    shot_into_the_escort(&mut session, &catalog);
+    assert!(session.is_escort(NpcId(0)), "kept on the firing tick");
+    let armour = session
+        .space
+        .npc(NpcId(0))
+        .expect("here")
+        .reserves
+        .armor
+        .now;
+    let shot = session
+        .space
+        .combat
+        .shots()
+        .iter()
+        .find(|shot| shot.firer == ShipRef::Player)
+        .expect("the shot")
+        .id;
+    tick(&mut session, &catalog);
+    let npc = session.space.npc(NpcId(0)).expect("not destroyed");
+    assert_eq!(npc.condition, Condition::Disabled, "still disabled");
+    assert!(npc.reserves.armor.now < armour, "struck");
+    assert!(
+        !session.space.combat.shots().iter().any(|s| s.id == shot),
+        "the shot landed"
+    );
+    assert!(!session.is_escort(NpcId(0)), "lost to the hit");
+    assert_eq!(session.pilot().escorts().len(), escorts - 1, "one fewer");
+}
