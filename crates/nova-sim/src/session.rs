@@ -1627,6 +1627,9 @@ impl Session {
             .combat
             .set_combat_caps(rules.source_for(RuleKey::CombatCaps));
         self.space
+            .boxes
+            .set_combat_caps(rules.source_for(RuleKey::CombatCaps));
+        self.space
             .combat
             .set_speed_cap(rules.source_for(RuleKey::SpeedCap));
         self.space.combat.set_asteroid_fuse(AsteroidFuse::from(

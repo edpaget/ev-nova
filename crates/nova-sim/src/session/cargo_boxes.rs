@@ -1383,4 +1383,21 @@ mod tests {
             assert_eq!(session.cargo_boxes().is_empty(), taken, "{at:?}");
         }
     }
+
+    #[test]
+    fn the_rulebook_says_whether_the_cargo_boxes_are_capped() {
+        use crate::cargo_box::CargoBoxes;
+        use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+        let catalog = catalog();
+        let session = |rules: Rulebook| Session::start(&catalog).expect("starts").with_rules(rules);
+        assert_eq!(
+            session(Rulebook::default()).space.boxes,
+            CargoBoxes::default()
+        );
+        let mut capped = CargoBoxes::default();
+        capped.set_combat_caps(RuleSource::Engine);
+        assert_ne!(capped, CargoBoxes::default());
+        let engine = Rulebook::default().with_override(RuleKey::CombatCaps, RuleSource::Engine);
+        assert_eq!(session(engine).space.boxes, capped);
+    }
 }
