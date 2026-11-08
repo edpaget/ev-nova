@@ -488,6 +488,7 @@ mod disabled_mission_escorts;
 mod display_carry;
 mod display_gain;
 mod display_step;
+mod dock_scan;
 mod dock_tail;
 mod dominated_stellars;
 mod double_time;
@@ -817,7 +818,7 @@ use crate::hyperspace::{
 };
 #[cfg(any(test, doc))]
 use crate::hyperspace::{HyperSelectRule, HyperlinkRule, JumpZoneRule, MultiJumpRule};
-use crate::landing::{LandOutcome, LandingRefusal, Standing, land_or_select};
+use crate::landing::{DockStage, LandOutcome, LandingRefusal, Standing, dock_request};
 use crate::legal::{self, Crime, LegalCode};
 use crate::market::{self, Direction, EscortHolds, Goods, Market, Markup, Order, TradeRefusal};
 use crate::message::SimMessage;
@@ -1433,6 +1434,7 @@ impl Session {
                 .collect(),
             stellar_dialogs: catalog.stellar_dialogs(),
             storylines,
+            fittings: catalog.fittings(),
         };
         let mut session = Self {
             mode: Mode::Flying,
@@ -3579,8 +3581,9 @@ impl Session {
 
     /// Presses the land key, unless a jump is under way, its pre-jump stage
     /// included: as the [`landing`](crate::landing) rules say
-    /// ([`land_or_select`]), with the stellar selected, the dock request
-    /// (see the `clearance` module) and traffic control's clearance
+    /// ([`land_or_select`](crate::landing::land_or_select)), with the
+    /// stellar selected, the dock request (see the `clearance` module) and
+    /// traffic control's clearance
     /// ([`landing::cleared`](crate::landing::cleared)) of the pilot's
     /// standing: its legal record, the `Require` its ranks meet, its
     /// missions' stellars, the blessing table (see the `ranks` module),
@@ -3664,6 +3667,12 @@ impl Session {
     /// the can-land flag makes no dock request in the original
     /// (`_FindNearestStellar` gives -1, @0x6a94c), so its
     /// [`LandingRefusal::NothingLandable`] is silent.
+    ///
+    /// This bare press carries no [`LegalCode`], so the new game's traffic
+    /// control scans nothing:
+    /// [`FlightCommand::Land`](crate::flight_frame::FlightCommand::Land)
+    /// presses with its collaborators' law, which runs the dock scan at
+    /// the request (see the `dock_scan` module).
     pub fn land(&mut self) -> Result<LandPress, LandingRefusal> {
         self.land_requesting().0
     }
@@ -3675,7 +3684,17 @@ impl Session {
     /// under way, a breaking-up or destroyed ship, @0x6a8cb-0x6a8df) or
     /// whose pick found nothing (@0x6a90f) makes none.
     pub(crate) fn land_requesting(&mut self) -> (Result<LandPress, LandingRefusal>, bool) {
-        let (press, requested) = self.land_press();
+        self.land_requesting_by(None)
+    }
+
+    /// [`Session::land_requesting`], traffic control scanning the ship
+    /// first and convicting by `law`, when given (see the `dock_scan`
+    /// module).
+    pub(crate) fn land_requesting_by(
+        &mut self,
+        law: Option<&dyn LegalCode>,
+    ) -> (Result<LandPress, LandingRefusal>, bool) {
+        let (press, requested) = self.land_press(law);
         if let Err(refusal) = &press
             && refusal.beeps()
         {
@@ -3684,7 +3703,10 @@ impl Session {
         (press, requested)
     }
 
-    fn land_press(&mut self) -> (Result<LandPress, LandingRefusal>, bool) {
+    fn land_press(
+        &mut self,
+        law: Option<&dyn LegalCode>,
+    ) -> (Result<LandPress, LandingRefusal>, bool) {
         if self.mode.jump().is_some() {
             return (Err(LandingRefusal::Jumping), false);
         }
@@ -3695,8 +3717,6 @@ impl Session {
                 return (Err(LandingRefusal::Disabled), false);
             }
         };
-        let blessing = self.blessing();
-        let reading = self.setup.rules.source_for(RuleKey::BlessingLanding);
         let candidates = self.chart.pick_candidates(&self.pilot, &self.statics);
         // The stellar held, wherever its system lists it, and the dock
         // request's recheck of it (@0x6699a-0x669aa): its owner word the
@@ -3708,13 +3728,12 @@ impl Session {
             self.chart.sites.iter().any(|shown| shown.id == site.id)
                 && self.chart.held_here(&self.pilot, &self.statics, site.id)
         };
-        let press = land_or_select(
+        let stage = dock_request(
             target,
             self.port.dock,
             &self.ship.player,
             self.pilot.cash,
             &candidates,
-            |site| crate::landing::cleared(site, self.standing(site, &blessing), reading),
             held,
             |site| {
                 let held = self.chart.held_here(&self.pilot, &self.statics, site.id);
@@ -3723,12 +3742,35 @@ impl Session {
             self.setup.rules.source_for(RuleKey::LandingSpeed),
             self.setup.rules.source_for(RuleKey::GatePickRange),
         );
+        let press = match stage {
+            DockStage::Done(press) => press,
+            DockStage::Asks(ask) => {
+                // The new game's dock scan, before traffic control answers
+                // and only for a ship the press would not refuse as
+                // cloaked or disabled (see the `dock_scan` module).
+                if let Some(law) = law
+                    && !disabled
+                    && !self.ship.cloak.cloak.is_cloaked()
+                {
+                    self.dock_scan(ask.site(), law);
+                }
+                let blessing = self.blessing();
+                let reading = self.setup.rules.source_for(RuleKey::BlessingLanding);
+                let site = ask.site();
+                ask.answer(crate::landing::cleared(
+                    site,
+                    self.standing(site, &blessing),
+                    reading,
+                ))
+            }
+        };
         let requested = had_target || press.selected.is_some();
         (self.land_picked(press, disabled), requested)
     }
 
     /// The rest of the land key's press once its pick is made, `press`
-    /// what [`land_or_select`] gave and the ship `disabled` or not.
+    /// what [`dock_request`] and traffic control gave and the ship
+    /// `disabled` or not.
     fn land_picked(
         &mut self,
         press: crate::landing::DockPress,
@@ -6373,7 +6415,10 @@ impl PlayerShip {
         reserves: ReservePolicy,
     ) {
         let hold = reserves == ReservePolicy::Hold;
-        self.fit.hull = setup.hull(statics, pilot.ship);
+        // The new game's hardpoints, its class's and its kits' (see the
+        // `dock_scan` module); a stock class's exits stand.
+        let hull = setup.hull(statics, pilot.ship);
+        self.fit.hull = statics.fitted_hull(&hull, pilot.ship, &self.counted_outfits(pilot));
         // No refit writes the exit cursors (+0xc8fe-+0xc905) or the fold
         // set (+0xc8fc): the new armament carries the old's (a change of
         // class resets the fold set after, in `become_class`).

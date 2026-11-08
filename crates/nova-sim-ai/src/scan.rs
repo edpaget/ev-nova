@@ -5,6 +5,10 @@
 //! `nova_sim::mission::cargo::scan`; the session
 //! runs the three in order (its `mission_cargo` module).
 //!
+//! The new game's traffic control runs the contraband scan too, as the
+//! player asks to land with mod kits that draw the law's attention
+//! ([`dock_scan`](crate::dock_scan)).
+//!
 //! # The gates
 //!
 //! A ship scans the player once it has looked the player over (see

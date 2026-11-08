@@ -192,11 +192,15 @@ impl Session {
     }
 
     /// The land key, telling the gate autopilot's press from the
-    /// player's (see the module docs): [`Session::land_requesting`]'s
-    /// press and whether it made a dock request.
-    pub(crate) fn press_land_key(&mut self) -> (Result<LandPress, LandingRefusal>, bool) {
+    /// player's (see the module docs): [`Session::land_requesting_by`]'s
+    /// press, traffic control scanning by `law` (the `dock_scan` module),
+    /// and whether it made a dock request.
+    pub(crate) fn press_land_key(
+        &mut self,
+        law: &dyn crate::legal::LegalCode,
+    ) -> (Result<LandPress, LandingRefusal>, bool) {
         let own = self.ship.gate_pilot.is_some_and(|pilot| pilot.asked_land);
-        let press = self.land_requesting();
+        let press = self.land_requesting_by(Some(law));
         let ended = !own || press.0.is_err_and(ends_on);
         if ended {
             self.ship.gate_pilot = None;

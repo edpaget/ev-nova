@@ -21,7 +21,8 @@ impl Session {
     ///   raised when told.
     /// - [`FlightCommand::Land`] runs [`Session::land`], telling the gate
     ///   autopilot's own press from the player's
-    ///   ([`Session::press_land_key`]): answered
+    ///   ([`Session::press_land_key`]), its traffic control scanning by
+    ///   `collab`'s law (the `dock_scan` module): answered
     ///   [`Answer::LandPress`], or [`Answer::LandRefused`] with why and
     ///   the gate the refusal's stellar is ([`Session::gate_kind`]).
     /// - [`FlightCommand::OpenHypergate`] runs [`Session::open_hypergate`]:
@@ -68,7 +69,7 @@ impl Session {
                     },
                 },
             },
-            FlightCommand::Land => match self.press_land_key() {
+            FlightCommand::Land => match self.press_land_key(collab.law) {
                 (Ok(press), _) => Answer::LandPress(press),
                 (Err(refusal), requested) => Answer::LandRefused {
                     gate: refusal
