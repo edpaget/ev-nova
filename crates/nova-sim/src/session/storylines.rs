@@ -54,6 +54,16 @@
 //!   and no frame, dialog page or save comes between. The state change
 //!   that applied the block (an offer, a decision, a success, an event)
 //!   has made a save due already.
+//! - **Gates.** A hypergate entry that comes out
+//!   ([`Session::enter_hypergate`]) from a jump point's gate passes that
+//!   point ([`Session::left_through_gate`], [`Play::passed_point`]): its
+//!   active `take_point` missions are met, those with no completion
+//!   succeed at once, and a change makes a save due. The storylines then
+//!   settle before the entry returns, the points synced and the outfits
+//!   made, so an owner or stability a success changes is stamped on the
+//!   sites before the first frame in the new system. Arriving through a
+//!   point's gate, or an entry refused or cancelled, passes nothing. The
+//!   gate autopilot's entries are the same entry, so they pass it too.
 //! - **News.** [`Session::heard_news`] lists what a system has heard over
 //!   the galaxy's lanes ([`news::heard`]).
 
@@ -298,6 +308,31 @@ impl Session {
                 apply(&op, session, chance);
             }
         });
+    }
+
+    /// Settles leaving through the hypergate `gate`, an entry made from it
+    /// that came out: when it is a jump point's gate, its `take_point`
+    /// missions are met ([`Play::passed_point`]), a change making a save
+    /// due, and the storylines settle ([`Session::settle_storylines`]), so
+    /// a success's point changes are stamped before the first frame (see
+    /// the module docs).
+    pub(super) fn left_through_gate(&mut self, gate: StellarId, chance: &mut dyn Chance) {
+        let storylines = &self.statics.storylines;
+        let Some(point) = storylines
+            .points
+            .iter()
+            .find_map(|(point, at)| (at.gate == gate).then_some(point))
+        else {
+            return;
+        };
+        self.out.save_due |= Play {
+            storylines,
+            flags: &mut self.pilot.flags,
+            story: &mut self.pilot.story,
+            outfits: &mut self.out.story_outfits,
+        }
+        .passed_point(point);
+        self.settle_storylines(chance);
     }
 
     /// The news `system` has heard by today, over each item's reach,
@@ -1333,5 +1368,161 @@ mod tests {
                 .take_events()
                 .contains(&crate::session::events::SessionEvent::GalaxyChanged)
         );
+    }
+
+    /// Gates: leaving through a point's gate meets its `take_point`.
+    mod gates {
+        use super::*;
+        use crate::gate::{GateKind, GateRefusal};
+        use crate::navigation::NavMode;
+        use crate::session::LandPress;
+        use crate::testkit::{HEARTH, laned_stable};
+
+        /// The gate in drift to hearth, which the pilot starts over.
+        const TO_HEARTH: StellarId = StellarId(300);
+        /// Its partner, in hearth.
+        const FROM_DRIFT: StellarId = StellarId(310);
+
+        /// [`laned_stable`] with the road, taking the point `point`, and
+        /// its `complete`; its success gives `hearth/drift-road` to the
+        /// guild.
+        fn roads(point: &str, complete: Option<MissionCompletion>) -> FakePilotCatalog {
+            let mut catalog = laned_stable();
+            catalog.storylines.missions.insert(
+                "road".to_owned(),
+                StoryMission {
+                    objective: Some(nova_sim_catalog::storylines::MissionObjective::TakePoint {
+                        point: point.to_owned(),
+                        held_by: "warden".to_owned(),
+                    }),
+                    complete,
+                    on_success: StoryEffects {
+                        points: vec![PointState {
+                            point: "hearth/drift-road".to_owned(),
+                            owner: Some("guild".to_owned()),
+                            stability: None,
+                        }],
+                        ..StoryEffects::default()
+                    },
+                    ..offered_at(DOCK, FILE, "offer")
+                },
+            );
+            catalog
+                .storylines
+                .factions
+                .insert("guild".to_owned(), GUILD);
+            catalog
+        }
+
+        /// A completion at the dock.
+        fn completion() -> MissionCompletion {
+            MissionCompletion {
+                at: Some(StellarId(DOCK)),
+                dialog: nova_sim_catalog::fixture::storylines::place(FILE, "done"),
+            }
+        }
+
+        /// A new pilot over `catalog`, in drift over gate 300, the road
+        /// accepted, at the gate's entry, no save due.
+        fn at_the_entry(catalog: &FakePilotCatalog) -> Session {
+            let rules = Rulebook::default()
+                .with_override(RuleKey::GateLanes, RuleSource::Bible)
+                .with_override(RuleKey::GateCourse, RuleSource::Bible);
+            let mut session = Session::start_ruled(catalog, &rules).expect("starts");
+            session.pilot.story.missions.insert(
+                "road".to_owned(),
+                MissionState::Active {
+                    cargo: 0,
+                    met: false,
+                },
+            );
+            session.chart.set_nav(NavMode::Stellar(Some(TO_HEARTH)));
+            let _ = session.land();
+            session.dock_approach();
+            assert_eq!(
+                session.land(),
+                Ok(LandPress::AtGate {
+                    stellar: TO_HEARTH,
+                    kind: GateKind::Hypergate,
+                })
+            );
+            session.out.save_due = false;
+            session.take_events();
+            session
+        }
+
+        fn site(session: &Session, id: StellarId) -> crate::catalog::LandingSite {
+            *session
+                .chart
+                .sites
+                .iter()
+                .find(|site| site.id == id)
+                .expect("shown")
+        }
+
+        const MET: Option<MissionState> = Some(MissionState::Active {
+            cargo: 0,
+            met: true,
+        });
+
+        const NOT_MET: Option<MissionState> = Some(MissionState::Active {
+            cargo: 0,
+            met: false,
+        });
+
+        #[test]
+        fn leaving_through_the_point_s_gate_meets_it_and_makes_a_save_due() {
+            let catalog = roads("drift/hearth-road", Some(completion()));
+            let mut session = at_the_entry(&catalog);
+            assert_eq!(
+                session.enter_hypergate(Some(HEARTH), &catalog, &mut NeverFires),
+                Ok(HEARTH)
+            );
+            assert_eq!(state(&session, "road"), MET, "its completion is to play");
+            assert!(session.out.save_due);
+        }
+
+        #[test]
+        fn leaving_through_another_gate_meets_nothing() {
+            // `hearth/drift-road` is the partner's point: the ship comes
+            // out of its gate, and arriving meets nothing.
+            let catalog = roads("hearth/drift-road", Some(completion()));
+            let mut session = at_the_entry(&catalog);
+            assert_eq!(
+                session.enter_hypergate(Some(HEARTH), &catalog, &mut NeverFires),
+                Ok(HEARTH)
+            );
+            assert_eq!(state(&session, "road"), NOT_MET);
+            assert!(!session.out.save_due);
+        }
+
+        #[test]
+        fn an_entry_that_comes_out_nowhere_meets_nothing() {
+            let catalog = roads("drift/hearth-road", Some(completion()));
+            let mut session = at_the_entry(&catalog);
+            assert_eq!(
+                session.enter_hypergate(None, &catalog, &mut NeverFires),
+                Err(GateRefusal::Cancelled)
+            );
+            assert_eq!(state(&session, "road"), NOT_MET);
+            assert!(!session.out.save_due);
+        }
+
+        #[test]
+        fn an_owner_change_the_exit_makes_is_stamped_as_it_returns() {
+            let catalog = roads("drift/hearth-road", None);
+            let mut session = at_the_entry(&catalog);
+            assert_eq!(
+                session.enter_hypergate(Some(HEARTH), &catalog, &mut NeverFires),
+                Ok(HEARTH)
+            );
+            assert_eq!(state(&session, "road"), Some(MissionState::Done));
+            assert_eq!(site(&session, FROM_DRIFT).govt, Some(GUILD), "restamped");
+            assert!(
+                session
+                    .take_events()
+                    .contains(&crate::session::events::SessionEvent::GalaxyChanged)
+            );
+        }
     }
 }
