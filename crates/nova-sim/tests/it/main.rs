@@ -8,6 +8,7 @@ mod common;
 mod passes;
 
 mod asteroids;
+mod board_reach_frame;
 mod frame_rate;
 mod landing;
 mod missions;
