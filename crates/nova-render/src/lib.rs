@@ -63,7 +63,8 @@
 //! [`wgpu::SharpBilinear`] draws it into a texture of the logical size
 //! and enlarges that onto the viewport, the overlay over it, and the
 //! world's tail ([`Frame::world_tail`]) over that at the window's
-//! resolution. On macOS,
+//! resolution. [`wgpu::Fsr1`] does the same with AMD's FSR 1 (EASU, then
+//! RCAS) on every device. On macOS,
 //! MetalFX's spatial scaler (through the `nova_metalfx` crate, the one
 //! place unsafe code lives) does the same in a command buffer of its own,
 //! falling back to sharp-bilinear, with one warning, for a size it won't

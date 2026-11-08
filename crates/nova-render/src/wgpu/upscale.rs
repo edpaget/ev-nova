@@ -1,6 +1,7 @@
 //! The upscaler port in the renderer's terms: enlarge a world texture onto
 //! the target. [`Native`] never has one to enlarge; [`SharpBilinear`]
-//! does, in the frame's own encoder, and so does MetalFX on macOS
+//! does, in the frame's own encoder, as [`Fsr1`] does in two passes
+//! (EASU, then RCAS), and so does MetalFX on macOS
 //! (`metal_fx::MetalFxSpatial`), in a command buffer of its own put
 //! between the world's and the overlay's
 //! ([`FrameCommands::insert`](super::frame_commands::FrameCommands::insert)).
@@ -10,6 +11,7 @@
 //! its place everywhere else.
 
 use super::frame_commands::WgpuCommands;
+use super::fsr1::Fsr1;
 use super::sharp_bilinear::SharpBilinear;
 use crate::upscale::{Abilities, Upscaler, WorldResolution, effective, resolution_of};
 use crate::viewport::PixelRect;
@@ -96,6 +98,7 @@ pub(super) fn upscale_for(
     match effective(choice, abilities) {
         Upscaler::Native => Box::new(Native),
         Upscaler::SharpBilinear => Box::new(SharpBilinear::new(device, queue)),
+        Upscaler::Fsr1 => Box::new(Fsr1::new(device, queue)),
         Upscaler::MetalFxSpatial => metal_fx(device, queue),
     }
 }
