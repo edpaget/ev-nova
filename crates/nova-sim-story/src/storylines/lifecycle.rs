@@ -33,8 +33,16 @@
 //! - **Objectives.** A `deliver` objective's cargo counts in the hold
 //!   ([`StoryState::cargo_aboard`]). Landing at its stellar drops the
 //!   cargo off and meets it ([`Play::landed`]). A `take_point` objective
-//!   is only state for now: it is never met (`play-the-sample` decides
-//!   what taking a point is).
+//!   is met when the player leaves through its point's gate: a hypergate
+//!   entry made from that gate that comes out ([`Play::passed_point`]).
+//!   Arriving at the point from its partner meets nothing, nor does a
+//!   landing. The format leaves taking a point open and the original has
+//!   no such objective, so this is the engine's reading, with no rulebook
+//!   key. It matches the sample's briefing ("Fly the blockade") and needs
+//!   no ships; a holder's own gate is no bar to it, as a new-game
+//!   government asks nothing of a pilot it hasn't met (`play-the-sample`
+//!   phase 2 checked the sample's far gate, held by the Harrow band).
+//!   `play-the-sample` phase 14 narrows it to beating the holder's ships.
 //! - **Success.** A met mission with a completion conversation succeeds
 //!   as that conversation opens at its stellar, or at the objective's
 //!   when it names none ([`Play::complete`]), `on_success` applying
@@ -238,6 +246,37 @@ impl Play<'_> {
                 changed = true;
             }
         }
+        changed |= self.succeed_met();
+        self.fire_events() || changed
+    }
+
+    /// Passes through the jump point `point` (`system/point`), leaving by
+    /// its gate: each active `take_point` mission on `point` is met, each
+    /// met mission with no completion conversation succeeds, then events
+    /// are checked (see the module docs). Whether anything changed.
+    pub fn passed_point(&mut self, point: &str) -> bool {
+        let mut changed = false;
+        for (id, mission) in &self.storylines.missions {
+            let Some(MissionState::Active { met: false, cargo }) = self.story.mission(id) else {
+                continue;
+            };
+            if let Some(MissionObjective::TakePoint { point: taken, .. }) = &mission.objective
+                && taken == point
+            {
+                self.story
+                    .missions
+                    .insert(id.clone(), MissionState::Active { cargo, met: true });
+                changed = true;
+            }
+        }
+        changed |= self.succeed_met();
+        self.fire_events() || changed
+    }
+
+    /// Each met mission with no completion conversation succeeds. Whether
+    /// any did.
+    fn succeed_met(&mut self) -> bool {
+        let mut changed = false;
         for (id, mission) in &self.storylines.missions {
             if mission.complete.is_none()
                 && matches!(
@@ -249,7 +288,7 @@ impl Play<'_> {
                 changed = true;
             }
         }
-        self.fire_events() || changed
+        changed
     }
 
     /// Passes a day: the day of the game goes on by one, then events are
@@ -669,7 +708,7 @@ mod tests {
     }
 
     #[test]
-    fn a_take_point_mission_stays_active() {
+    fn a_take_point_mission_stays_active_through_landings_and_days() {
         let mut f = Fixture::new(&[(
             "road",
             StoryMission {
@@ -693,6 +732,144 @@ mod tests {
         }
         f.play().day_passed();
         assert_eq!(f.state("road"), active);
+    }
+
+    /// A `take_point` objective on `point`.
+    fn taking(point: &str) -> MissionObjective {
+        MissionObjective::TakePoint {
+            point: point.to_owned(),
+            held_by: "warden".to_owned(),
+        }
+    }
+
+    /// The road: offered at the dock, taking the side road's point, with
+    /// no completion, its success giving the point to the guild.
+    fn road() -> StoryMission {
+        StoryMission {
+            objective: Some(taking("hearth/side")),
+            complete: None,
+            on_success: StoryEffects {
+                points: vec![PointState {
+                    point: "hearth/side".to_owned(),
+                    owner: Some("guild".to_owned()),
+                    stability: None,
+                }],
+                ..setting(&["succeeded"])
+            },
+            ..job()
+        }
+    }
+
+    /// `f` with mission `id` offered and accepted.
+    fn accepted(f: &mut Fixture, id: &str) {
+        f.play().make_offer(id);
+        assert!(f.play().decide(id, Outcome::Accept, 100));
+    }
+
+    #[test]
+    fn passing_the_point_meets_its_take_point_and_one_without_a_completion_succeeds() {
+        let mut f = Fixture::new(&[("road", road())]);
+        accepted(&mut f, "road");
+        assert!(f.play().passed_point("hearth/side"));
+        assert_eq!(f.state("road"), Some(MissionState::Done));
+        assert!(f.flags.is_set("succeeded"));
+        assert_eq!(
+            f.story.points["hearth/side"],
+            PointChange {
+                owner: Some("guild".to_owned()),
+                stability: None,
+            }
+        );
+        assert!(!f.play().passed_point("hearth/side"), "done: no change");
+    }
+
+    #[test]
+    fn passing_the_point_leaves_one_with_a_completion_met_for_its_scene() {
+        let mut f = Fixture::new(&[(
+            "road",
+            StoryMission {
+                complete: Some(MissionCompletion {
+                    at: Some(StellarId(CAMP)),
+                    dialog: place("done"),
+                }),
+                ..road()
+            },
+        )]);
+        accepted(&mut f, "road");
+        assert!(f.play().passed_point("hearth/side"));
+        assert_eq!(
+            f.state("road"),
+            Some(MissionState::Active {
+                cargo: 0,
+                met: true
+            })
+        );
+        assert!(!f.flags.is_set("succeeded"), "its completion is to play");
+        assert_eq!(
+            f.next(CAMP, &[], false),
+            Some(Scene::Completion("road".to_owned()))
+        );
+        assert!(!f.play().passed_point("hearth/side"), "met already");
+    }
+
+    #[test]
+    fn passing_the_point_meets_nothing_else() {
+        let mut f = Fixture::new(&[
+            (
+                "elsewhere",
+                StoryMission {
+                    objective: Some(taking("hearth/main")),
+                    ..road()
+                },
+            ),
+            ("job", job()),
+            ("unseen", road()),
+        ]);
+        accepted(&mut f, "elsewhere");
+        accepted(&mut f, "job");
+        assert!(!f.play().passed_point("hearth/side"));
+        assert_eq!(
+            f.state("elsewhere"),
+            Some(MissionState::Active {
+                cargo: 0,
+                met: false
+            }),
+            "another point's"
+        );
+        assert_eq!(f.state("job"), Some(ACTIVE), "a deliver");
+        assert_eq!(f.state("unseen"), None, "not accepted");
+        f.play().make_offer("unseen");
+        assert!(
+            !f.play().passed_point("hearth/side"),
+            "offered, not accepted"
+        );
+        assert_eq!(f.state("unseen"), Some(MissionState::Offered));
+    }
+
+    #[test]
+    fn passing_the_point_makes_an_event_waiting_on_the_success_happen() {
+        let mut f = Fixture::new(&[
+            ("road", road()),
+            (
+                "event",
+                waiting_on(Requires {
+                    missions_done: vec!["road".to_owned()],
+                    ..Requires::default()
+                }),
+            ),
+        ]);
+        accepted(&mut f, "road");
+        assert_eq!(f.state("event"), None);
+        assert!(f.play().passed_point("hearth/side"));
+        assert_eq!(f.state("event"), Some(MissionState::Done));
+        assert!(f.flags.is_set("fired"));
+    }
+
+    #[test]
+    fn passing_the_point_with_nothing_to_meet_changes_nothing() {
+        let mut f = Fixture::new(&[]);
+        assert!(!f.play().passed_point("hearth/side"));
+        assert_eq!(f.story, StoryState::default());
     }
 
     /// An event on day `day`, releasing `word` and closing the side road.
