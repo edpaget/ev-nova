@@ -1,20 +1,29 @@
 //! A ship's hull in combat: how big a target it is, when it is disabled,
 //! and how it dies.
 //!
-//! - Its hit radius is a third of its `shän`'s `BaseXSize`
+//! - It is measured by its loaded base sprite's frame
+//!   ([`HullSpec::sprite_size`], [`HullSpec::sprite_height`]), which
+//!   `_GetSpriteXSize` (@0x26d4) and `_GetSpriteYSize` (@0x2703) read, and
+//!   `_GetMasterShipSpriteXSize` (@0xad38) through the ship's sprite base:
+//!   the frame `_LoadExtendedShipSprites` loads, its `BaseImage` `rlëD`'s
+//!   header size (@0x228b5), or for a `PICT` sheet its `shän`'s
+//!   `BaseXSize`/`BaseYSize` (@0x2291d-0x2298b), and for a ship sharing an
+//!   earlier ship's `BaseImage` that ship's (@0x22817). Every stock ship's
+//!   frame is its `shän`'s sizes. With no frame (a hand-built record, or a
+//!   sheet that couldn't be read) it falls back to its `shän`'s sizes.
+//! - Its hit radius is a third of its frame's width
 //!   ([`HIT_RADIUS_PER_SIZE`]): the half of the original beam test's
 //!   0.66 x sprite width (`_HandleBeams`) that a beam's reach adds. The
 //!   original tests shots against sprite masks, which the simulation does
-//!   not have. A ship type without a `shän` is a placeholder
+//!   not have. A ship type without a width is a placeholder
 //!   [`DEFAULT_HIT_RADIUS`] across.
 //! - Its board reach, how far off its centre the player can board it, is
-//!   half its `shän`'s `BaseXSize` on the x axis and half its `BaseYSize`
-//!   on the y axis ([`BOARD_REACH_PER_SIZE`], 0.5 @0xdd128 x the sprite's
-//!   width and height, `_GetSpriteXSize` @0x26d4 and `_GetSpriteYSize`
-//!   @0x2703, in `_HandlePlayerBoardAttempt`). Those read the loaded
-//!   sprite's frame, which is the `shän`'s sizes for every stock ship; a
-//!   missing or non-positive size reads as [`FALLBACK_SPRITE_SIZE`], as
-//!   they return for a sprite without a frame (@0x26fc, @0x272b).
+//!   half its frame's width on the x axis and half its height on the y
+//!   axis ([`BOARD_REACH_PER_SIZE`], 0.5 @0xdd128 x the sprite's width and
+//!   height, `_GetSpriteXSize` and `_GetSpriteYSize` in
+//!   `_HandlePlayerBoardAttempt`); a missing or non-positive size reads as
+//!   [`FALLBACK_SPRITE_SIZE`], as they return for a sprite without a frame
+//!   (@0x26fc, @0x272b).
 //! - A ship is disabled as a [`DisableRule`] says. Nova's,
 //!   [`NovaDisable`], is `_IsDisabled`'s.
 //! - Its `Flags` 0x1000, 0x2000 and 0x4000 ([`BLIND_SPOTS`]) blind its
@@ -98,14 +107,14 @@ pub fn never_breaks_up(ship: ShipId) -> bool {
 /// The hit radius of a ship type without a `shän`, in pixels: a
 /// placeholder.
 pub const DEFAULT_HIT_RADIUS: f32 = 16.0;
-/// A ship's hit radius per pixel of its `shän`'s `BaseXSize`.
+/// A ship's hit radius per pixel of its loaded frame's width.
 pub const HIT_RADIUS_PER_SIZE: f32 = 0.33;
 /// The size, in pixels, `_GetSpriteXSize` and `_GetSpriteYSize` give a
 /// sprite without a usable frame (@0x26fc, @0x272b): the board reach of a
-/// ship without a `shän` size is half of it on that axis.
+/// ship without a frame or `shän` size is half of it on that axis.
 pub const FALLBACK_SPRITE_SIZE: f32 = 32.0;
-/// A ship's board reach per pixel of its `shän`'s `BaseXSize` (on the x
-/// axis) and `BaseYSize` (on the y axis).
+/// A ship's board reach per pixel of its loaded frame's width (on the x
+/// axis) and height (on the y axis).
 pub const BOARD_REACH_PER_SIZE: f32 = 0.5;
 /// The `shïp` `Flags` bit that disables it at [`TOUGH_DISABLE_PERCENT`]
 /// of its armour instead of [`DISABLE_PERCENT`].
@@ -250,12 +259,12 @@ pub struct HullSpec {
     /// How far off its centre, in pixels, the player can board it: `x` on
     /// the x axis and `y` on the y axis.
     pub board_reach: Vec2,
-    /// Its sprite's width, its `shän`'s `BaseXSize`, in pixels; none
-    /// without a sprite. A formation is spaced by it (see
+    /// Its sprite's width, its loaded frame's (else its `shän`'s
+    /// `BaseXSize`), in pixels; none without either. A formation is spaced by it (see
     /// `nova_sim::escort::spacing`).
     pub sprite_size: Option<f32>,
-    /// Its sprite's height, its `shän`'s `BaseYSize`, in pixels; none
-    /// without a sprite. Whether it is on screen reads it with the width
+    /// Its sprite's height, its loaded frame's (else its `shän`'s
+    /// `BaseYSize`), in pixels; none without either. Whether it is on screen reads it with the width
     /// (see [`cloak::on_screen`](crate::cloak::on_screen)).
     pub sprite_height: Option<f32>,
     /// Whether it is a planet-type ship, its `Flags` [`PLANET_TYPE`]: it
@@ -409,13 +418,24 @@ impl Default for HullSpec {
     }
 }
 
+/// One axis of a hull's sprite, in pixels: its loaded frame's, `frame`,
+/// when that fits a `rlëD` header's `u16`, otherwise its `shän`'s, `shan`,
+/// when positive; otherwise none.
+fn measure(frame: Option<u32>, shan: Option<i16>) -> Option<f32> {
+    frame
+        .and_then(|pixels| u16::try_from(pixels).ok())
+        .map(f32::from)
+        .or_else(|| shan.filter(|&size| size > 0).map(f32::from))
+}
+
 impl HullSpec {
     /// The hull `record` describes (see the module docs).
     #[must_use]
     pub fn new(record: &HullRecord) -> Self {
-        let size = record.size.filter(|&size| size > 0).map(f32::from);
+        let frame = record.frame;
+        let size = measure(frame.map(|f| f.width), record.size);
         let hit_radius = size.map_or(DEFAULT_HIT_RADIUS, |size| size * HIT_RADIUS_PER_SIZE);
-        let height = record.height.filter(|&height| height > 0).map(f32::from);
+        let height = measure(frame.map(|f| f.height), record.height);
         let board_reach = Vec2::new(
             size.unwrap_or(FALLBACK_SPRITE_SIZE) * BOARD_REACH_PER_SIZE,
             height.unwrap_or(FALLBACK_SPRITE_SIZE) * BOARD_REACH_PER_SIZE,
@@ -799,7 +819,7 @@ impl DisableRule for NovaDisable {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::catalog::{BoomId, ShipDisplay, ShipExits, ShipId};
+    use crate::catalog::{BoomId, FrameSize, ShipDisplay, ShipExits, ShipId};
     use crate::combat::exits::ExitPoints;
     use nova_sim_catalog::fixture::hull;
 
@@ -1056,7 +1076,7 @@ mod tests {
     }
 
     #[test]
-    fn the_hit_radius_is_a_third_of_the_shäns_size() {
+    fn without_a_loaded_frame_the_hit_radius_is_a_third_of_the_shäns_size() {
         let shuttle = HullSpec::new(&HullRecord {
             size: Some(24),
             ..hull(128)
@@ -1144,7 +1164,7 @@ mod tests {
     }
 
     #[test]
-    fn the_sprite_size_is_the_shäns_size() {
+    fn without_a_loaded_frame_the_sprite_size_is_the_shäns_size() {
         let shuttle = HullSpec::new(&HullRecord {
             size: Some(24),
             ..hull(128)
@@ -1158,7 +1178,7 @@ mod tests {
     }
 
     #[test]
-    fn the_sprite_height_is_the_shäns_height() {
+    fn without_a_loaded_frame_the_sprite_height_is_the_shäns_height() {
         let tall = HullSpec::new(&HullRecord {
             size: Some(24),
             height: Some(40),
@@ -1177,7 +1197,7 @@ mod tests {
     }
 
     #[test]
-    fn the_board_reach_is_half_the_shäns_size_on_each_axis() {
+    fn without_a_loaded_frame_the_board_reach_is_half_the_shäns_size_on_each_axis() {
         let tall = HullSpec::new(&HullRecord {
             size: Some(24),
             height: Some(40),
@@ -1207,6 +1227,73 @@ mod tests {
         }
         assert_eq!(FALLBACK_SPRITE_SIZE, 32.0);
         assert_eq!(HullSpec::default().board_reach, Vec2::new(16.0, 16.0));
+    }
+
+    /// `_GetSpriteXSize`/`_GetSpriteYSize` read the loaded sprite's frame,
+    /// which is its `rlëD`'s header size whatever the `shän` says.
+    #[test]
+    fn the_board_reach_is_half_the_loaded_frame() {
+        let repainted = HullSpec::new(&HullRecord {
+            size: Some(24),
+            height: Some(40),
+            frame: Some(FrameSize {
+                width: 30,
+                height: 50,
+            }),
+            ..hull(128)
+        });
+        assert_eq!(repainted.board_reach, Vec2::new(15.0, 25.0));
+        assert_eq!(repainted.sprite_size, Some(30.0));
+        assert_eq!(repainted.sprite_height, Some(50.0));
+        assert!(
+            (repainted.hit_radius - 30.0 * HIT_RADIUS_PER_SIZE).abs() < 1e-5,
+            "{repainted:?}"
+        );
+        let sizeless = HullSpec::new(&HullRecord {
+            frame: Some(FrameSize {
+                width: 30,
+                height: 50,
+            }),
+            ..hull(128)
+        });
+        assert_eq!(sizeless.board_reach, Vec2::new(15.0, 25.0), "no shän sizes");
+    }
+
+    #[test]
+    fn without_a_frame_the_hull_measures_by_its_shäns_sizes() {
+        let measured = |frame| {
+            let spec = HullSpec::new(&HullRecord {
+                size: Some(24),
+                height: Some(40),
+                frame,
+                ..hull(128)
+            });
+            (spec.sprite_size, spec.sprite_height, spec.board_reach)
+        };
+        let by_shan = (Some(24.0), Some(40.0), Vec2::new(12.0, 20.0));
+        assert_eq!(measured(None), by_shan);
+        let too_wide = FrameSize {
+            width: 65_536,
+            height: 50,
+        };
+        assert_eq!(
+            measured(Some(too_wide)),
+            (Some(24.0), Some(50.0), Vec2::new(12.0, 25.0)),
+            "a width past a header's u16 falls back on its axis"
+        );
+        let too_tall = FrameSize {
+            width: 30,
+            height: 65_536,
+        };
+        assert_eq!(
+            measured(Some(too_tall)),
+            (Some(30.0), Some(40.0), Vec2::new(15.0, 20.0))
+        );
+        let widest = FrameSize {
+            width: 65_535,
+            height: 65_535,
+        };
+        assert_eq!(measured(Some(widest)).0, Some(65_535.0));
     }
 
     #[test]

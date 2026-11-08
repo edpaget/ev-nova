@@ -9,8 +9,10 @@
 //! relative to the player as it then stood (the walk's `seen` places, see
 //! [`Lineup`](super::lineup::Lineup)): a ship by the standard rule at its
 //! drawn frame's size (`_HandleShipDisplay`, [`Placement::Standard`]), the
-//! sheet's when it was read, else its `shän`'s `BaseXSize` and
-//! `BaseYSize`, which every stock sheet's frame equals; a shot by the
+//! sheet's when it was read, else its loaded frame's size
+//! ([`HullSpec::sprite_size`](super::hull::HullSpec::sprite_size) and
+//! [`sprite_height`](super::hull::HullSpec::sprite_height): a `PICT`
+//! sheet's `shän` sizes), which every stock sheet's frame equals; a shot by the
 //! shot rule, half its frame's width off both axes (`_HandleShot`
 //! @0x35c66-0x35cc0, [`Placement::Shot`]), carried back on a wrap's pass
 //! ([`wrap_carry`](super::wrap_carry)); an asteroid by the standard rule
@@ -188,8 +190,9 @@ fn whole(side: f32) -> u32 {
 
 impl ContactSprites {
     /// `ship` of `hull` laid out `offset` from the player (see the module
-    /// docs): at its sheet's size with its mask, else at its `shän`
-    /// sizes with none; none without either.
+    /// docs): at its sheet's size with its mask, else at its hull's
+    /// loaded frame size (a `PICT` sheet's `shän` sizes) with none; none
+    /// without either.
     fn ship(&self, ship: ShipRef, hull: &HullSpec, offset: Vec2) -> Option<Laid> {
         if let Some((_, sprite)) = self.ships.iter().find(|(id, _)| *id == ship) {
             let rect = Placement::Standard.rect(offset, (sprite.sheet.width, sprite.sheet.height));

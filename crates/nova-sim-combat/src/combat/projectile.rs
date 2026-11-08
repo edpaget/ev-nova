@@ -201,8 +201,8 @@ pub struct Target {
     pub radius: f32,
     /// Its sprite's width, in pixels, as `_GetMasterShipSpriteXSize`
     /// reads it, which a beam's cone sizes it by
-    /// ([`cone`](super::beam::cone)): its `shän`'s `BaseXSize`, which every
-    /// stock sheet's frame width equals, or
+    /// ([`cone`](super::beam::cone)): its hull's loaded frame width
+    /// ([`HullSpec::sprite_size`](super::hull::HullSpec::sprite_size)), or
     /// [`NO_SPRITE_WIDTH`](super::beam::NO_SPRITE_WIDTH) with none.
     pub sprite_x: f32,
     /// Whether it has a sprite sheet: a proximity fuse sizes a ship of
@@ -230,8 +230,8 @@ pub struct Target {
 
 impl Target {
     /// Its sprite's width as a proximity fuse reads it, `_GetSpriteXSize`
-    /// of its sprite (@0x26d4-0x2702): its current frame's width, which
-    /// is its [`Target::sprite_x`] for every stock sheet, or
+    /// of its sprite (@0x26d4-0x2702): its current frame's width, its
+    /// [`Target::sprite_x`] (every frame of a sheet is its size), or
     /// [`NO_SHEET_WIDTH`] with no sheet.
     #[must_use]
     pub fn fuse_width(&self) -> f32 {
