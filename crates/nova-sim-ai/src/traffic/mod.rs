@@ -414,6 +414,8 @@ mod warship_ally_tests;
 pub mod weigh;
 #[cfg(test)]
 mod window_tests;
+#[cfg(test)]
+mod world_flight_tests;
 mod wrap_carry;
 
 use crate::ai::interceptor::within_reach;
