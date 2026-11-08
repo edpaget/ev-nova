@@ -88,6 +88,8 @@
 //!   ([`player_scoops`](scoop::player_scoops),
 //!   [`npc_scoop`](scoop::npc_scoop)), which boxes they take and what each
 //!   box adds ([`Haul`](scoop::Haul)).
+//! - [`escape_pod`]: the NPCs' escape pods adrift: their spawn, drift,
+//!   fade-out and slots ([`EscapePods`](escape_pod::EscapePods)).
 //! - [`slot_pool`]: the original's first-free tables, the cargo boxes'
 //!   and the escape pods' ([`SlotPool`](slot_pool::SlotPool)).
 //! - [`targeting`]: which NPC the player's target command picks
@@ -126,6 +128,7 @@ use nova_sim_state::{govt, landing, legal, market, stats};
 pub mod ai;
 pub mod brackets;
 pub mod cargo_box;
+pub mod escape_pod;
 pub mod escort;
 pub mod escort_arrival;
 pub mod escort_voice;

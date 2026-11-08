@@ -1,6 +1,6 @@
 //! The original's fixed tables whose entries take the first free slot:
 //! `_boxData`, the cargo boxes ([`cargo_box`](crate::cargo_box)), and
-//! `_podData`, the escape pods.
+//! `_podData`, the escape pods ([`escape_pod`](crate::escape_pod)).
 //!
 //! # The original
 //!
