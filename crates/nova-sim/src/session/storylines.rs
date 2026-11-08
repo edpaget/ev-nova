@@ -329,7 +329,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::catalog::{OutfitId, OutfitRecord};
+    use crate::catalog::{GovtId, OutfitId, OutfitRecord};
     use crate::chance::NeverFires;
     use crate::dialog::Value;
     use crate::dialog::fake::{FakeChoice, FakeDialog, FakeKnot, FakeLoader};
@@ -1273,5 +1273,65 @@ mod tests {
         assert_eq!(lines(&converse(&mut session, Converse::Open)), ["Hello."]);
         assert!(session.ship.fuel_cap_cached, "nothing queued: no reset");
         assert!(!session.chart.galaxy_stale);
+    }
+
+    /// The guild's `gövt`.
+    const GUILD: GovtId = GovtId(129);
+
+    /// The job, its accept handing `a/b` to the guild.
+    fn handing_over() -> StoryMission {
+        let job = job(10);
+        StoryMission {
+            on_accept: StoryEffects {
+                points: vec![PointState {
+                    point: "a/b".to_owned(),
+                    owner: Some("guild".to_owned()),
+                    stability: None,
+                }],
+                ..job.on_accept.clone()
+            },
+            ..job
+        }
+    }
+
+    /// The site of planet 129, in the dock's system, as the chart holds
+    /// it.
+    fn far_planet(session: &Session) -> crate::catalog::LandingSite {
+        *session
+            .chart
+            .sites
+            .iter()
+            .find(|site| site.id == StellarId(129))
+            .expect("shown")
+    }
+
+    #[test]
+    fn a_choice_that_changes_a_point_restamps_its_gate_before_it_answers() {
+        let mut catalog = talking(&[("job", handing_over())]);
+        // `a/b`'s gate is planet 129, so the chart holds its site.
+        catalog
+            .storylines
+            .points
+            .get_mut("a/b")
+            .expect("talking's point")
+            .gate = StellarId(129);
+        catalog
+            .storylines
+            .factions
+            .insert("guild".to_owned(), GUILD);
+        let mut session = landed(&catalog);
+        converse(&mut session, Converse::Open);
+        assert_ne!(far_planet(&session).govt, Some(GUILD));
+        session.take_events();
+        assert_eq!(
+            lines(&converse(&mut session, Converse::Choose(0))),
+            ["Bay two."]
+        );
+        assert_eq!(far_planet(&session).govt, Some(GUILD), "restamped");
+        assert!(
+            session
+                .take_events()
+                .contains(&crate::session::events::SessionEvent::GalaxyChanged)
+        );
     }
 }
