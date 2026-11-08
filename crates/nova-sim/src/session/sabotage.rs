@@ -43,7 +43,8 @@
 //! copy is removed (@0x698f7); and the bomb goes off on the player
 //! ([`bomb_goes_off`]: its damage to the armour alone, a hit that can
 //! neither kill nor disable), under the session's disable rule, so a
-//! second bomb sees the first's damage. Then
+//! second bomb sees the first's damage. A bomb's disable collapses a
+//! pre-jump only on the next pass (see the `jump_collapse` module). Then
 //! `_ResetPlayerPrecalcedValues` runs (@0x69a05), the sabotage clock's
 //! refresh with it:
 //! no bomb is left, so the flag clears and the next tick zeroes the

@@ -235,7 +235,7 @@ impl Session {
         self.before_move(self.space.pass_frame, pass);
         let start = PassStart::of(self);
         self.player_fires(pass, rules, chance);
-        self.player_move(controls, pass);
+        self.player_move(controls, pass, start.player_head());
         if self.ship.fate.rescue_due {
             return;
         }

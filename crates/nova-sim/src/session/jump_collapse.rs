@@ -6,9 +6,12 @@
 //! -0x2cb) and its jump state +0x50 is above 0 (@0x688aa-0x688b5).
 //! `_IsDisabled` is an armour test (@0x2d95-0x2dcc), so a dying player,
 //! its armour gone, collapses too. The engine runs the collapse
-//! ([`Session::collapse_jump`]) in the player's move's arm for a disabled
-//! or dying player (`Session::move_player`), in its [`Jump::PreJump`] or its [`Jump::Hyperspace`],
-//! as the world runs through the warp (see the `warp_stage` module).
+//! ([`Session::collapse_jump`]) in the player's move
+//! (`Session::move_player`) on the pass head's disabled flag
+//! (`PlayerHead::disabled`, which `PassStart::of` reads before
+//! `Session::player_fires`), as -0x2cb is read once at @0x68897, in its
+//! [`Jump::PreJump`] or its [`Jump::Hyperspace`], as the world runs
+//! through the warp (see the `warp_stage` module).
 //!
 //! **The speed.** el = `TickCount` − +0xa4 (@0x688bb-0x688c0), the Mac
 //! ticks of the warp clock. While the ship brakes the original restamps
@@ -65,11 +68,10 @@
 //! (@0x44483), so a hit that disables the player collapses the jump in
 //! the next frame's `_HandlePlayer`. The engine does the same: the pass's
 //! fight disables, and the next pass's move collapses. A sabotage bomb
-//! that disables goes off in `_HandlePlayer` (@0x69a05) after its
-//! collapse check (0x688aa), so the original collapses that jump in the
-//! next frame; the engine's move, after the bomb in the same pass,
-//! collapses it in the bomb's own (filed:
-//! rdm:task/sabotage-disable-collapses-jump-a-frame-early). The eject
+//! (`_DamageShip` @0x699b2) and the self-repair (@0x68b3d) come after
+//! the collapse (0x688aa), so a bomb's disable collapses on the next pass
+//! and a disable a self-repair lifts still collapses on its own pass, as
+//! the engine's move reads the head. The eject
 //! (@0x6f22c) comes after the collapse in `_HandlePlayer`, so
 //! [`Session::eject`] collapses a pre-jump first, before the hulk takes
 //! the player's state and before the class changes. The pass's move
@@ -223,9 +225,13 @@ mod tests {
     /// A session flown out and braking for its jump to 131, with a warp
     /// sound of `duration` Mac ticks.
     fn braking(duration: u32) -> Session {
-        let catalog = catalog();
-        let mut session = bound_for_131(&catalog, Vec2::ZERO, Vec2::ZERO, 0.0);
-        fly_out(&mut session, &catalog);
+        braking_in(&catalog(), duration)
+    }
+
+    /// [`braking`] from `catalog`.
+    fn braking_in(catalog: &FakePilotCatalog, duration: u32) -> Session {
+        let mut session = bound_for_131(catalog, Vec2::ZERO, Vec2::ZERO, 0.0);
+        fly_out(&mut session, catalog);
         session.begin_jump().expect("jumps");
         assert_eq!(session.preparing_jump(), Some(SystemId(131)));
         assert_eq!(session.warp_clock(), None, "braking");
@@ -278,6 +284,128 @@ mod tests {
                 * DISABLED_DRAG;
         assert_eq!(session.player().velocity, expected);
         assert_ne!(expected, before.velocity * DISABLED_DRAG);
+    }
+
+    /// Disables a ship below half its armour capacity, so the bomb's
+    /// cant-disable reset (about a third) leaves it disabled.
+    #[derive(Debug)]
+    struct BelowHalf;
+
+    impl crate::combat::hull::DisableRule for BelowHalf {
+        fn disabled(
+            &self,
+            armor: crate::reserves::Gauge,
+            _hull: &crate::combat::hull::HullSpec,
+        ) -> bool {
+            armor.now < armor.max / 2.0
+        }
+    }
+
+    #[test]
+    fn a_sabotage_bomb_that_disables_the_player_in_its_pre_jump_collapses_the_jump_on_the_next_pass()
+     {
+        // The collapse reads `_IsDisabled` from the top of `_HandlePlayer`
+        // (-0x2cb @0x6889e); the bomb's damage (`_DamageShip` @0x699b2)
+        // comes after it, so the collapse sees the disable a frame later.
+        let mut catalog = catalog();
+        catalog.outfits.push(crate::testkit::bomb_outfit());
+        let mut session = braking_in(&catalog, 9);
+        session
+            .pilot
+            .outfits
+            .insert(crate::catalog::OutfitId(crate::testkit::BOMB), 1);
+        session.reset_precalced();
+        let _ = session.ship.latches.sabotage.tick(
+            false,
+            crate::SpeedMult::FULL,
+            &mut crate::testkit::Draws::of(&[0]),
+        );
+        session
+            .ship
+            .latches
+            .sabotage
+            .set_counter(crate::sabotage::FUSE);
+        let rules = crate::combat::Rules {
+            disable: &BelowHalf,
+            ..crate::combat::Rules::default()
+        };
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            rules,
+            &mut crate::testkit::Draws::of(&[0]),
+        );
+        assert_eq!(
+            session.ship.condition,
+            Condition::Disabled,
+            "the bomb disabled"
+        );
+        let messages = session.take_messages();
+        assert!(
+            messages
+                .iter()
+                .any(|m| matches!(m, SimMessage::BombExploded { .. }))
+        );
+        assert_eq!(session.preparing_jump(), Some(SystemId(131)), "not yet");
+        assert!(!messages.contains(&SimMessage::JumpCollapsed));
+        assert!(!sounds(&mut session).contains(&SimSound::JumpCollapsed));
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            rules,
+            &mut crate::testkit::Draws::of(&[0]),
+        );
+        assert_eq!(session.preparing_jump(), None, "collapsed on the next pass");
+        let messages = session.take_messages();
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|m| **m == SimMessage::JumpCollapsed)
+                .count(),
+            1
+        );
+        assert!(sounds(&mut session).contains(&SimSound::JumpCollapsed));
+    }
+
+    #[test]
+    fn a_player_whose_disable_lifts_before_the_move_still_collapses() {
+        // The self-repair (@0x68b3d-0x68c6c) comes after the collapse
+        // (@0x688aa), which reads -0x2cb from the top of `_HandlePlayer`.
+        const DROIDS: i16 = 437;
+        let mut catalog = catalog();
+        catalog.outfits.push(crate::testkit::outfit(
+            DROIDS,
+            &[(crate::self_repair::MOD_REPAIR, 0)],
+        ));
+        let mut session = braking_in(&catalog, 9);
+        session
+            .pilot
+            .outfits
+            .insert(crate::catalog::OutfitId(DROIDS), 1);
+        session.pilot.reserves.armor.now = 3.0;
+        session.ship.condition = Condition::Disabled;
+        assert!(!session.ship.repair_inhibit.holds());
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            crate::combat::Rules::default(),
+            &mut crate::testkit::Draws::of(&[0]),
+        );
+        assert_eq!(session.ship.condition, Condition::Intact, "repaired");
+        let messages = session.take_messages();
+        assert!(messages.contains(&SimMessage::PropulsionRepaired));
+        assert!(
+            messages.contains(&SimMessage::JumpCollapsed),
+            "{messages:?}"
+        );
+        assert_eq!(session.preparing_jump(), None);
+        assert!(sounds(&mut session).contains(&SimSound::JumpCollapsed));
     }
 
     #[test]

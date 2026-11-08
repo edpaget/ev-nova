@@ -232,7 +232,8 @@ pub(super) struct PlayerHead {
     pub(super) dying: bool,
     /// Whether the player was disabled or breaking up, `_IsDisabled`
     /// (-0x2cb), which the cloak key and upkeep read (see the
-    /// `player_cloak` module).
+    /// `player_cloak` module), and the pre-jump's collapse (see the
+    /// `jump_collapse` module).
     pub(super) disabled: bool,
     /// Whether the player was destroyed, so `_HandlePlayer` takes its dead
     /// branch (0x6870d-0x6888c) and returns (@0x68853, @0x6888c) before
@@ -373,7 +374,7 @@ impl Session {
         self.ship.fate.player_exploded_this_tick = false;
         let start = PassStart::of(self);
         self.player_fires(pass, rules, chance);
-        self.player_move(controls, pass);
+        self.player_move(controls, pass, start.player_head());
         // The sheets the pass's contacts read, before the scoop, the first
         // (see the `sprite_sheets` module).
         self.load_sprite_masks(catalog);

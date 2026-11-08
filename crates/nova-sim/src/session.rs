@@ -1785,7 +1785,7 @@ impl Session {
     /// so a destroyed player beside a word a stray beam stepped takes the
     /// dead branch and is held, the word left as it is (see the
     /// `stray_words` module).
-    fn player_move(&mut self, controls: Controls, pass: GamePass) {
+    fn player_move(&mut self, controls: Controls, pass: GamePass, head: game_work::PlayerHead) {
         if self.pod.is_some() && self.ship.condition != Condition::Destroyed {
             self.pod_tick();
             return;
@@ -1800,7 +1800,7 @@ impl Session {
         // no boundary the player sees.
         self.land_key_pass();
         self.dock_approach();
-        self.move_player(controls, pass);
+        self.move_player(controls, pass, head);
     }
 
     /// The ship's motion in [`Session::player_move`] on `pass`: by its
@@ -1818,10 +1818,13 @@ impl Session {
     /// player leads let go of their targets (`_MakeEscortsHyperWithParent`
     /// @0x3fdc0-0x3fdc2; see the `escorts` module). A ship that is not
     /// intact ignores the controls and drifts, slowing by
-    /// [`crate::flight::DISABLED_DRAG`] a pass before it moves, its
-    /// pre-jump collapsing first (see the `jump_collapse` module), and a
+    /// [`crate::flight::DISABLED_DRAG`] a pass before it moves, and a
     /// destroyed one stays where it is, letting go of its targets and
     /// counting the hold after its explosion down (see `dead_tick`).
+    ///
+    /// A player disabled or dying as the pass began (`start`,
+    /// [`game_work::PlayerHead::disabled`]) has its pre-jump collapse
+    /// first, whatever its condition now (see the `jump_collapse` module).
     ///
     /// The warp's clock moves on only on the advance pass: it is
     /// `TickCount`, real time, which double time's second pass doesn't
@@ -1839,20 +1842,20 @@ impl Session {
     /// while it is on, and the box bleeds back in the pre-jump and the
     /// warp's run as at any other time it is off. The ship's tick is
     /// capped by the box the last tick left ([`Session::player_caps`]).
-    fn move_player(&mut self, controls: Controls, pass: GamePass) {
+    fn move_player(&mut self, controls: Controls, pass: GamePass, start: game_work::PlayerHead) {
         let again = pass == GamePass::Again;
         let gain = self.speed_mult();
         self.ship
             .engage_afterburner(&self.pilot, self.mode.jump(), controls);
+        if start.disabled {
+            self.collapse_jump(again);
+        }
         let controls = match self.ship.condition {
             Condition::Intact => controls,
-            Condition::Disabled | Condition::Dying { .. } => {
-                self.collapse_jump(again);
-                Controls {
-                    face: controls.face,
-                    ..Controls::default()
-                }
-            }
+            Condition::Disabled | Condition::Dying { .. } => Controls {
+                face: controls.face,
+                ..Controls::default()
+            },
             Condition::Destroyed => {
                 self.ship.stop_thrust(&mut self.out);
                 self.ship.player.velocity = Vec2::ZERO;
