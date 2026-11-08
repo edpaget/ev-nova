@@ -40,7 +40,7 @@
 //!
 //! # Here
 //!
-//! The fight keeps [`ShipRef`] identities, and each shot remembers the
+//! The fight keeps [`ShipRef`](super::ShipRef) identities, and each shot remembers the
 //! slot its ship held ([`Shot::aimed_slot`]). At the head of the
 //! collision passes and of `_HandleShot`'s loop
 //! ([`Combat::follow_refilled_slots`]) a shot whose ship is gone, and
