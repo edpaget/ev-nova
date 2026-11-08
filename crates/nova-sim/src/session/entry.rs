@@ -1016,6 +1016,8 @@ impl Session {
         }
         if resets.has(Reset::Combat) {
             self.space.combat.clear();
+            // `_killShots` frees the escape pods too (@0x39e75-0x39e84).
+            self.space.clear_pods();
         }
         if resets.has(Reset::Explosions) {
             self.kill_explosions();

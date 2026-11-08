@@ -977,7 +977,7 @@ fn an_arrivals_pending_explosions_are_drawn_on_its_first_frame_and_unheard_from_
 }
 
 #[test]
-fn arriving_lays_out_the_new_system_letting_go_of_the_effects_pods_and_smoke() {
+fn arriving_lays_out_the_new_system_letting_go_of_the_effects_and_smoke() {
     let mut view = world(
         armed(0, &[BLASTER]),
         in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]),
@@ -995,7 +995,6 @@ fn arriving_lays_out_the_new_system_letting_go_of_the_effects_pods_and_smoke() {
     at_the_warps_end(&mut view, Vec::new());
     view.arrival_frame(0);
     assert_eq!(*view.effects(), Effects::default());
-    assert!(view.effects().pods().is_empty());
     assert_eq!(view.shot_looks.smoke().puffs(), []);
 }
 

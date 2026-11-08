@@ -123,6 +123,8 @@
 //!   and where the escape pod is taken.
 //! - [`npc_escape`]: what a dying NPC leaves behind: its crew's escape
 //!   pods, its person's pod, and its one roll for an escape ship.
+//! - [`escape_pod`]: the NPCs' escape pods adrift: their spawn, drift,
+//!   fade-out and slots ([`EscapePods`](escape_pod::EscapePods)).
 //! - [`escort`]: the player's escorts: their [`EscortClass`], the
 //!   [`EscortOrder`] each follows, the [`EscortCommand`]s the player gives
 //!   an [`EscortGroup`] and what one changed ([`Commanded`]), the escort
@@ -400,6 +402,7 @@
 pub use nova_sim_ai::ai;
 pub use nova_sim_ai::brackets;
 pub use nova_sim_ai::cargo_box;
+pub use nova_sim_ai::escape_pod;
 pub use nova_sim_base::afterburner;
 pub use nova_sim_base::blink;
 pub use nova_sim_base::chance;

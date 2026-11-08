@@ -1757,6 +1757,7 @@ fn frame_fields_differing(kept: &FlightFrame, fresh: &FlightFrame) -> Vec<&'stat
     check("shots", kept.shots == fresh.shots);
     check("beams", kept.beams == fresh.beams);
     check("cargo_boxes", kept.cargo_boxes == fresh.cargo_boxes);
+    check("pods", kept.pods == fresh.pods);
     check("asteroids", kept.asteroids == fresh.asteroids);
     check("stellars", kept.stellars == fresh.stellars);
     check(
@@ -1868,9 +1869,9 @@ fn show_combat(
             }
         }
         if heard {
-            effects.show_event(event, scene, looks, gain, chance);
+            effects.show_event(event, scene, looks, chance);
         } else {
-            effects.apply(event, scene, looks, gain, chance);
+            effects.apply(event, scene, looks, chance);
         }
     }
     step_flashes(flashes, ships, sheets, gain);

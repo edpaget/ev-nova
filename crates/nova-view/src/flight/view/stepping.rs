@@ -396,9 +396,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
             self.effects.hear_step(&dying, &scene, &self.looks, chance)
         };
         // The pass's gain, `_gSpeedMult`: `_HandleExplods`' for the
-        // explosions (@0x2f655, @0x2f811), `_HandleEscapePods`' for the
-        // pods (@0x39e92, @0x39ebe, @0x39fcc), a new pod's first step among
-        // them, and `_HandleShipDisplay`'s for the flashes (@0x2c964) and
+        // explosions (@0x2f655, @0x2f811), and `_HandleShipDisplay`'s for
+        // the flashes (@0x2c964) and
         // the glows (@0x2c7ed). The shot looks read it from `pass` for
         // `_HandleSmoke` (@0x2e3d6).
         let gain = pass.speed_mult;

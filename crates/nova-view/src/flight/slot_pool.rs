@@ -1,15 +1,17 @@
-//! The original's fixed sprite tables, `_explodData`, `_smokeData` and
-//! `_podData`, with their first-free pick.
+//! The original's fixed sprite tables the view simulates, `_explodData`
+//! and `_smokeData`, with their first-free pick. The simulation keeps its
+//! own first-free tables, the cargo boxes and the escape pods
+//! (`nova_sim_ai::slot_pool`).
 //!
 //! # The original
 //!
 //! `_InitSprites` adds each table's sprites to its layer once, in slot
-//! order (`_explodData` @0x1f962, `_podData` @0x1fc71, `_smokeData`
-//! @0x1fe8f), and nothing moves them after (no `_PutSpriteInLayer` on
-//! them, no `_SWSortSpriteLayer`), so each layer draws in slot order. A
-//! new one takes the first free slot (`_SpawnExplod` @0x3f5ef,
-//! `_SpawnSmoke` @0x3f957, `_SpawnEscapePod` @0x45564), so a new one in a
-//! freed low slot draws under an older one in a higher slot.
+//! order (`_explodData` @0x1f962, `_smokeData` @0x1fe8f), and nothing
+//! moves them after (no `_PutSpriteInLayer` on them, no
+//! `_SWSortSpriteLayer`), so each layer draws in slot order. A new one
+//! takes the first free slot (`_SpawnExplod` @0x3f5ef, `_SpawnSmoke`
+//! @0x3f957), so a new one in a freed low slot draws under an older one in
+//! a higher slot.
 //!
 //! # The engine
 //!
@@ -75,11 +77,6 @@ impl<T> SlotPool<T> {
     /// The items kept, in slot order, to change in place.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
         self.slots.iter_mut().flatten()
-    }
-
-    /// How many items are kept.
-    pub fn len(&self) -> usize {
-        self.iter().count()
     }
 
     /// Frees every slot.
@@ -163,7 +160,7 @@ mod tests {
     fn without_a_cap_the_pool_grows_past_it() {
         let mut pool = pool(&[1, 2]);
         assert_eq!(pool.insert(3, None), Some(2));
-        assert_eq!(pool.len(), 3);
+        assert_eq!(pool.iter().count(), 3);
     }
 
     #[test]
@@ -177,12 +174,12 @@ mod tests {
     }
 
     #[test]
-    fn len_counts_the_items_kept_and_clear_frees_every_slot() {
+    fn the_items_kept_are_counted_and_clear_frees_every_slot() {
         let mut pool = pool(&[1, 2, 3]);
         pool.retain_mut(|item| *item != 1);
-        assert_eq!(pool.len(), 2);
+        assert_eq!(pool.iter().count(), 2);
         pool.clear();
-        assert_eq!(pool.len(), 0);
+        assert_eq!(pool.iter().count(), 0);
         assert_eq!(pool, SlotPool::default());
     }
 }

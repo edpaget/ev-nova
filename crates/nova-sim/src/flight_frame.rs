@@ -46,6 +46,7 @@ use crate::combat::ship_frames::{Drawn, FrameSpec};
 use crate::combat::shot_layer::ShotLayer;
 use crate::combat::{CombatEvent, ShipRef};
 use crate::dialog::conversation::ConversationPage;
+use crate::escape_pod::Pod;
 use crate::escort::{ClassRow, Commanded, EscortClass, EscortCommand, EscortGroup};
 use crate::escort_dialog::{EscortButton, EscortDialogView};
 use crate::flight::{Amounts, Controls, ShipState};
@@ -185,6 +186,11 @@ pub struct FlightFrame {
     /// Each cargo box in space, in its table's order
     /// ([`Session::cargo_boxes`](crate::Session::cargo_boxes)).
     pub cargo_boxes: Vec<FrameBox>,
+    /// Each escape pod adrift, shown or hidden, in slot order
+    /// ([`Session::escape_pods`](crate::Session::escape_pods)): drawn
+    /// after the cargo boxes in their layer, each shown one at its life's
+    /// fade.
+    pub pods: Vec<Pod>,
     /// Each asteroid in the field, in the field's order
     /// ([`Session::asteroids`](crate::Session::asteroids)).
     pub asteroids: Vec<FrameAsteroid>,
@@ -298,6 +304,7 @@ impl Default for FlightFrame {
             shots: Vec::new(),
             beams: Vec::new(),
             cargo_boxes: Vec::new(),
+            pods: Vec::new(),
             asteroids: Vec::new(),
             stellars: Vec::new(),
             radar_stellars: Vec::new(),

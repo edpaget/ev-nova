@@ -323,7 +323,6 @@ fn landing_lets_go_of_the_line_the_effects_the_flashes_and_the_glows() {
     assert_eq!(view.take_landing(), Some(StellarId(128)));
     assert_eq!(view.message(), None, "forgotten once the ship lands");
     assert_eq!(*view.effects(), Effects::default());
-    assert!(view.effects().pods().is_empty());
     assert!(view.flashes.is_empty(), "the shield flashes");
     assert_eq!(view.glows.drawn(ShipRef::Player), None, "the weapon glow");
     assert_eq!(

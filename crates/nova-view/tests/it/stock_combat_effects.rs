@@ -52,13 +52,7 @@ fn the_stock_hellhounds_explosion_scatters_5_small_and_23_large_extras() {
         explosion,
         size: hellhound.blast_radius,
     };
-    effects.apply(
-        &event,
-        &scene,
-        &looks,
-        nova_sim::SpeedMult::FULL,
-        &mut NeverFires,
-    );
+    effects.apply(&event, &scene, &looks, &mut NeverFires);
     let count = |boom| {
         effects
             .explosions()
@@ -198,20 +192,21 @@ fn a_stock_escape_pod_draws_on_shan_895s_sheet_of_36_rotations() {
         at: Vec2::new(40.0, 0.0),
         velocity: Vec2::new(1.0, 0.0),
     };
-    effects.apply(
-        &event,
-        &scene,
-        &looks,
-        nova_sim::SpeedMult::FULL,
-        &mut NeverFires,
-    );
+    effects.apply(&event, &scene, &looks, &mut NeverFires);
     let heard: Vec<i16> = effects
         .take_sounds()
         .iter()
         .map(|sound| sound.sound.0)
         .collect();
     assert_eq!(heard, [372]);
-    assert_eq!(effects.pods().len(), 1);
+    // The simulation sets it adrift; the view draws it from the frame.
+    let pod = nova_sim::escape_pod::Pod {
+        position: Vec2::new(40.0, 0.0),
+        velocity: Vec2::new(1.0, 0.0),
+        life: 150.0,
+        frame: nova_sim::escape_pod::pod_frame(Vec2::new(1.0, 0.0), sheet.frames),
+        shown: true,
+    };
     let mut list = DrawList::new();
     let camera = nova_view::system::camera::Camera::centred_on(Point::new(0.0, 0.0));
     let clear = SeenMurk {
@@ -219,7 +214,7 @@ fn a_stock_escape_pod_draws_on_shan_895s_sheet_of_36_rotations() {
         murk: 0,
         colour: 0,
     };
-    effects.draw_pods(&mut list, &camera, &looks, clear);
+    nova_view::flight::pods::draw_pods(&mut list, &camera, &looks, clear, &[pod]);
     let drawn = list
         .into_iter()
         .filter(|command| {

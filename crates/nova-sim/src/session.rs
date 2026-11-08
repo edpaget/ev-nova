@@ -497,6 +497,7 @@ mod edit;
 mod effects_gain;
 mod eject;
 mod entry;
+mod escape_pods;
 mod escort_arrival;
 #[cfg(test)]
 mod escort_carriers;
@@ -4141,6 +4142,8 @@ impl Session {
         self.port.bar_news = None;
         self.chart.bar_nav = None;
         self.space.combat.clear();
+        // `_killShots` frees the escape pods too (@0x39e75-0x39e84).
+        self.space.clear_pods();
         // `_HandlePlayerDockRequest` sets `_killBoxes` (@0x66f40) and
         // `_killAsteroids` (@0x66f57).
         self.space.clear_boxes();

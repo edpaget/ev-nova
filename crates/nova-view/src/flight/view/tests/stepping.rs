@@ -1469,7 +1469,7 @@ fn a_wrap_marks_the_stars_so_none_streaks_across_it() {
     assert_eq!(list(&view, 0.0), list(&view, 1.0));
 }
 
-/// Effects at `near` and `far` of [`STOOD`]: an explosion, a pod and a puff
+/// Effects at `near` and `far` of [`STOOD`]: an explosion and a puff
 /// each, and particles at `near`.
 fn effects_about(view: &mut Faked, near: Vec2, far: Vec2) {
     let shot_at = |id, at| FrameShot {
@@ -1486,11 +1486,6 @@ fn effects_about(view: &mut Faked, near: Vec2, far: Vec2) {
         },
         size: 0.0,
     };
-    let podded = |at| CombatEvent::PodEjected {
-        ship: NPC,
-        at,
-        velocity: Vec2::ZERO,
-    };
     let burst = CombatEvent::Particles(nova_sim::combat::ParticleBurst {
         at: near,
         speed: 0.0,
@@ -1503,28 +1498,21 @@ fn effects_about(view: &mut Faked, near: Vec2, far: Vec2) {
     let pass = PassReport {
         shots: vec![shot_at(1, near), shot_at(2, far)],
         smoke_frame: true,
-        combat: vec![
-            exploded(near),
-            exploded(far),
-            podded(near),
-            podded(far),
-            burst,
-        ],
+        combat: vec![exploded(near), exploded(far), burst],
         ..wrapping(STOOD, None)
     };
     frame(view, one_step(vec![pass]));
 }
 
-/// [`effects_about`]'s places, as lists of where each explosion, pod and
-/// puff is and each particle.
-fn places(view: &Faked) -> (Vec<Point>, Vec<Point>, Vec<Vec2>, Point) {
+/// [`effects_about`]'s places, as lists of where each explosion and puff
+/// is and each particle.
+fn places(view: &Faked) -> (Vec<Point>, Vec<Vec2>, Point) {
     (
         view.effects
             .explosions()
             .iter()
             .map(|boom| boom.at)
             .collect(),
-        view.effects.pods().iter().map(|pod| pod.at).collect(),
         view.shot_looks
             .smoke()
             .puffs()
@@ -1536,7 +1524,7 @@ fn places(view: &Faked) -> (Vec<Point>, Vec<Point>, Vec<Vec2>, Point) {
 }
 
 #[test]
-fn explosions_pods_and_smoke_near_the_ship_keep_their_place_on_screen_and_those_far_stay() {
+fn explosions_and_smoke_near_the_ship_keep_their_place_on_screen_and_those_far_stay() {
     let catalog = blaster_looking(|look| {
         look.flags = crate::flight::smoke::SMALL_SMOKE;
         look.smoke_set = 1;
@@ -1547,18 +1535,15 @@ fn explosions_pods_and_smoke_near_the_ship_keep_their_place_on_screen_and_those_
         STOOD - Vec2::new(WRAP_EDGE * 2.0, 0.0),
     );
     effects_about(&mut view, near, far);
-    let (booms, pods, puffs, particle) = places(&view);
-    assert_eq!((booms.len(), pods.len(), puffs.len()), (2, 2, 2));
-    let drift = view.effects.pods()[0].velocity.x;
+    let (booms, puffs, particle) = places(&view);
+    assert_eq!((booms.len(), puffs.len()), (2, 2));
     frame(
         &mut view,
         one_step(vec![wrapping(STOOD + SHIFT, Some(wrap()))]),
     );
     let shifted = |at: Point| Point::new(at.x + SHIFT.x, at.y + SHIFT.y);
-    let (now_booms, now_pods, now_puffs, now_particle) = places(&view);
+    let (now_booms, now_puffs, now_particle) = places(&view);
     assert_eq!(now_booms, [shifted(booms[0]), booms[1]]);
-    assert!((now_pods[0].x - (shifted(pods[0]).x + drift)).abs() < 1e-2);
-    assert!((now_pods[1].x - (pods[1].x + drift)).abs() < 1e-2);
     assert_eq!(now_puffs, [puffs[0] + SHIFT, puffs[1]]);
     assert_eq!(now_particle.x, particle.x, "the particles aren't carried");
 }

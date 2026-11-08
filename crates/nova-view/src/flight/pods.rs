@@ -1,293 +1,134 @@
-//! The NPCs' escape pods: the decorative sprites a dying ship's crew and
-//! person eject, from the session's
-//! [`CombatEvent::PodEjected`](nova_sim::CombatEvent::PodEjected)s, as
-//! `_SpawnEscapePod` (@0x45547-0x456cc) and `_HandleEscapePods`
-//! (@0x39e48-0x3a063) show them in the `EV Nova` executable.
+//! Drawing the NPCs' escape pods, as `_HandleEscapePods`
+//! (@0x39e48-0x3a063) shows them in the `EV Nova` executable. The
+//! simulation keeps them (`nova_sim::escape_pod`: their spawn, drift,
+//! life, slots and whether each is shown) and hands them over in slot
+//! order ([`FlightFrame::pods`](nova_sim::flight_frame::FlightFrame::pods));
+//! the view draws each shown one ([`draw_pods`]), and plays `snd ` 372 for
+//! each [`CombatEvent::PodEjected`](nova_sim::CombatEvent::PodEjected)
+//! ([`Effects`](super::effects::Effects)).
 //!
-//! - **The spawn** ([`EscapePods::spawn`]): the pod takes the ship's
-//!   position and velocity, then `_Accel(Rand(360), (Rand(10) + 10) x
-//!   0.1)` on top (0.1 at 0xdd110), a push of 1.0 to 1.9 pixels a tick in a
-//!   direction of its own, and lives `Rand(100) + 150` ticks. It faces its
-//!   velocity: frame `trunc(_CalcInterceptAngle(0, v x 100) x frames /
-//!   360)` (100 at 0xdd060, 360 at 0xdd0f8) of shän 895's sheet, the
-//!   escape pod's ([`ESCAPE_POD_SHIP`](nova_sim::ESCAPE_POD_SHIP)), of its
-//!   `FramesPer` rotations, and keeps that frame. It takes its spawn
-//!   frame's step at once, as `_HandleEscapePods` runs after `_HandleShip`
-//!   in the frame (`_DoPlayGameWork` @0x44483, @0x44513).
-//! - **The pool.** Under the original's caps
-//!   ([`RuleKey::CombatCaps`](nova_sim::RuleKey::CombatCaps)'s engine
-//!   reading, [`Scene::caps`](super::effects::Scene::caps)) there are
-//!   [`MAX_PODS`] slots, a pod taking the first whose life is below 0
-//!   (@0x45564-0x456bf), and one more is not kept; by default nothing is
-//!   capped, and the pool is unbounded but still first-free. `_boxLayer`
-//!   draws the pods in slot order (`_InitSprites` adds them once, and
-//!   nothing moves them), so a new pod in a freed lower slot draws under
-//!   an older one in a higher slot ([`EscapePods::pods`],
-//!   [`EscapePods::draw`]). Either way the pod is heard ([`Effects`](super::effects::Effects)
-//!   plays `snd ` 372 for each event), as the sound is `_HandleShip`'s.
-//! - **Each step** ([`EscapePods::step`]): it drifts by its velocity × the
-//!   frame's gain and the gain comes off its life
-//!   ([`PassReport::speed_mult`](nova_sim::flight_frame::PassReport::speed_mult),
-//!   `_gSpeedMult` @0x39e92, @0x39ebe, @0x39fcc), each in doubles. It is
-//!   held, unseen, at a life of 0 (or between 0 and the gain), and its slot
-//!   is free once the life is below 0. A spawn's first step takes the
-//!   spawning pass's gain.
-//! - **The place** ([`EscapePods::draw`]): at whole pixels from the player,
-//!   by its sheet's own sides
-//!   ([`Camera::sprite_centre`], @0x39ef0-0x39f7d).
-//! - **The fade** ([`EscapePods::draw`]): opaque at a life of 32 or more
-//!   (32.0 at 0xdd654), at alpha `(32 - trunc(32 - life))/32` over its
-//!   last 32 ticks, which at a whole life is life/32, and not drawn at 0
-//!   or less (`ucomiss 32, life` / `jb`, `ucomiss 0, life` / `jbe`
-//!   @0x39fef-0x3a010, so a NaN life is hidden). `_HandleEscapePods` sets
-//!   the sprite's destination factor +0xa8 to `trunc(32 - life)`
-//!   (@0x3a00a-0x3a024), its channel factors left at 0
-//!   (`_SWCreateSprite` @0xa8d56-0xa8d71), so its draw proc
+//! - **The place**: at whole pixels from the player, by its sheet's own
+//!   sides ([`Camera::sprite_centre`], @0x39ef0-0x39f7d), on the frame of
+//!   shän 895's sheet the simulation gave it.
+//! - **The fade**: opaque at a life of 32 or more (32.0 at 0xdd654), at
+//!   alpha `(32 - trunc(32 - life))/32` over its last 32 ticks, which at a
+//!   whole life is life/32, and not drawn at 0 or less (`ucomiss 32, life`
+//!   / `jb`, `ucomiss 0, life` / `jbe` @0x39fef-0x3a010, so a NaN life is
+//!   hidden). `_HandleEscapePods` sets the sprite's destination factor
+//!   +0xa8 to `trunc(32 - life)` (@0x3a00a-0x3a024), its channel factors
+//!   left at 0 (`_SWCreateSprite` @0xa8d56-0xa8d71), so its draw proc
 //!   (`_BlitPixieRLETranslucentDrawProc`, 0xbb3fc) gives `(src x k) >> 5
 //!   | (dst x (32 - k)) >> 5` per channel, k = `32 - trunc(32 - life)`:
-//!   the OR crossfade,
-//!   [`Blend::OrCrossfade`](crate::draw::Blend::OrCrossfade) at alpha
-//!   k/32 ([`Pod::tint`]). An opaque pod is drawn plainly, as k = 32 is
-//!   the same copy.
-//! - **Leaving the system** clears them ([`EscapePods::clear`]), as
-//!   `_killShots` frees them on landing, a gate and the arrival
-//!   (@0x39e75-0x39e84), and the view clears its effects then.
+//!   the OR crossfade, [`Blend::OrCrossfade`](crate::draw::Blend::OrCrossfade)
+//!   at alpha k/32 ([`tint`]). An opaque pod is drawn plainly, as k = 32
+//!   is the same copy.
+//! - **Hidden**: a pod the simulation hides (its life run out, or a scoop
+//!   took it for box slot 0) is not drawn.
 //!
 //! The pods are drawn in their sprite layer, `_boxLayer` 0x3b53ec, after
-//! the cargo boxes (`_InitSprites` @0x1fc71-0x1fd57, added @0x1fcfb):
-//! above the disabled ships and below the smoke, the shots and the flying
-//! ships ([`SpriteLayer::Boxes`](nova_sim::sprite_layer::SpriteLayer::Boxes)).
+//! the cargo boxes (`_InitSprites` @0x1fc71-0x1fd57, added @0x1fcfb), in
+//! slot order: above the disabled ships and below the smoke, the shots and
+//! the flying ships
+//! ([`SpriteLayer::Boxes`](nova_sim::sprite_layer::SpriteLayer::Boxes)).
 //!
 //! A pod is murked at its position, seen from the player's ship
 //! ([`murk`](super::murk); `_HandleSpriteMurkiness` @0x39f90-0x39fbc,
 //! rdm:phase/play-feel-4/phase-17-murk-other-sprites), on top of its fade:
 //! the murk writes the sprite's +0xb0/+0xb4 and the fade +0xa8, so the
 //! two compose.
-//!
-//! The player's wrap carries them ([`EscapePods::carry`]), its velocity
-//! kept.
 
-use std::num::NonZeroU16;
-
-use nova_sim::player_wrap::PlayerWrap;
-use nova_sim::trig::intercept_angle;
-use nova_sim::{Chance, SpeedMult, Vec2};
+use nova_sim::escape_pod::Pod;
 
 use super::catalog::Looks;
 use super::murk::SeenMurk;
-use super::slot_pool::SlotPool;
 use crate::system::camera::Camera;
 use crate::{Blend, Color, DrawList, Point};
 
-/// Moves the place `at` if `wrap` reaches it.
-pub(super) fn carry_point(wrap: &PlayerWrap, at: &mut Point) {
-    let mut place = Vec2::new(at.x, at.y);
-    if wrap.carry(&mut place) {
-        *at = Point::new(place.x, place.y);
-    }
-}
-
-/// The most pods kept at once under the caps: `_podData`'s 32 entries
-/// (`cmpl $0x20` @0x456bc).
-pub const MAX_PODS: usize = 32;
 /// The life, in ticks, from which a pod is drawn opaque (32.0 at 0xdd654).
 pub const POD_FADE: f32 = 32.0;
 /// The steps of a pod's fade, the draw proc's 32 (`>> 5`).
 const FADE_STEPS: i32 = 32;
-/// A pod's least life (`Rand(100) + 150`, @0x4556e-0x45584).
-pub const POD_LIFE_MIN: u32 = 150;
-/// How many lives a pod can roll above [`POD_LIFE_MIN`].
-pub const POD_LIFE_ROLL: u32 = 100;
 
-/// An escape pod adrift.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Pod {
-    /// Where it is, in world units.
-    pub at: Point,
-    /// How far it moves a pass at full gain: the move is this × the
-    /// frame's gain.
-    pub velocity: Point,
-    /// The ticks it has left, a float as the original keeps it (+0x14):
-    /// each pass takes the frame's gain off it.
-    pub life: f32,
-    /// The frame of shän 895's sheet it shows.
-    pub frame: u16,
-}
-
-impl Pod {
-    /// How it is drawn: white at its alpha, or none at a life of 0 or less.
-    #[must_use]
-    pub fn tint(&self) -> Option<Color> {
-        if self.life >= POD_FADE {
-            Some(Color::WHITE)
-        } else if self.life > 0.0 {
-            // The translucency `trunc(32 - life)`, in 0..=31 here
-            // (@0x3a00a-0x3a024); the source's share is 32 less it.
-            #[allow(clippy::cast_possible_truncation)]
-            let murk = (POD_FADE - self.life).trunc() as i32;
-            let shown = FADE_STEPS - murk;
-            Some(Color::rgba(
-                255,
-                255,
-                255,
-                ((shown * 255 + FADE_STEPS / 2) / FADE_STEPS) as u8,
-            ))
-        } else {
-            None
-        }
-    }
-
-    /// One step at the frame's `gain`: it drifts by its velocity × the
-    /// gain, and the gain comes off its life, each added in doubles
-    /// (`_HandleEscapePods` @0x39e8d-0x39ee0, @0x39fcc-0x39fe5).
-    fn step(&mut self, gain: SpeedMult) {
-        self.at = Point::new(
-            gain.add_times(self.at.x, self.velocity.x),
-            gain.add_times(self.at.y, self.velocity.y),
-        );
-        self.life = gain.add_times(self.life, -1.0);
-    }
-}
-
-/// The frame of a sheet of `frames` rotations a pod moving at `velocity`
-/// faces: the original's whole-degree heading of its velocity, times the
-/// rotations in integers, then divided by 360 (@0x45676-0x4569d).
+/// How `pod` is drawn by its life: white at its alpha, or none at a life
+/// of 0 or less (see the module docs).
 #[must_use]
-pub fn pod_frame(velocity: Point, frames: NonZeroU16) -> u16 {
-    let towards = Vec2::new(velocity.x * 100.0, velocity.y * 100.0);
-    let angle = i32::from(intercept_angle(Vec2::ZERO, towards));
-    let frame = angle * i32::from(frames.get()) / 360;
-    u16::try_from(frame).unwrap_or(0) % frames.get()
+pub fn tint(pod: &Pod) -> Option<Color> {
+    if pod.life >= POD_FADE {
+        Some(Color::WHITE)
+    } else if pod.life > 0.0 {
+        // The translucency `trunc(32 - life)`, in 0..=31 here
+        // (@0x3a00a-0x3a024); the source's share is 32 less it.
+        #[allow(clippy::cast_possible_truncation)]
+        let murk = (POD_FADE - pod.life).trunc() as i32;
+        let shown = FADE_STEPS - murk;
+        Some(Color::rgba(
+            255,
+            255,
+            255,
+            ((shown * 255 + FADE_STEPS / 2) / FADE_STEPS) as u8,
+        ))
+    } else {
+        None
+    }
 }
 
-/// The escape pods adrift.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct EscapePods {
-    pods: SlotPool<Pod>,
+/// Draws each shown pod of `pods`, in their order, as `looks` says, where
+/// `camera` places it, at whole pixels by its sheet's sides
+/// ([`Camera::sprite_centre`], `_HandleEscapePods` @0x39ef0-0x39f7d),
+/// murked as the player sees it, `seen` ([`SeenMurk::at`]), as
+/// `_HandleEscapePods` murks it at its position (@0x39f90-0x39fbc) before
+/// its fade. None is drawn without the pods' sheet.
+pub fn draw_pods(
+    list: &mut DrawList,
+    camera: &Camera,
+    looks: &Looks,
+    seen: SeenMurk,
+    pods: &[Pod],
+) {
+    let Some(sheet) = looks.pod_sheet() else {
+        return;
+    };
+    for pod in pods.iter().filter(|pod| pod.shown) {
+        let Some(tint) = tint(pod) else {
+            continue;
+        };
+        let colorize = seen.at(pod.position);
+        let frame = sheet.image.frame(pod.frame);
+        let at = Point::new(pod.position.x, pod.position.y);
+        let at = camera.sprite_centre(at, sheet.size());
+        let blend = if pod.life >= POD_FADE {
+            Blend::Normal
+        } else {
+            Blend::OrCrossfade
+        };
+        list.mixed_sprite(frame, at, tint, blend, Some(colorize));
+    }
 }
 
-impl EscapePods {
-    /// Sets a pod adrift from a ship at `at` moving at `velocity`, drawing
-    /// on `chance`, unless the `caps` hold the pool full; its sheet's
-    /// rotations from `looks` (one without a sheet faces frame 0). It
-    /// takes its first step at once, at the pass's `gain`.
-    pub fn spawn(
-        &mut self,
-        at: Point,
-        velocity: Point,
-        gain: SpeedMult,
-        caps: bool,
-        looks: &Looks,
-        chance: &mut dyn Chance,
-    ) {
-        let cap = caps.then_some(MAX_PODS);
-        if cap.is_some_and(|cap| self.pods.len() >= cap) {
-            return;
-        }
-        let life = POD_LIFE_MIN + chance.below(POD_LIFE_ROLL);
-        let heading = chance.below(360) as f32;
-        let push = (chance.below(10) + 10) as f32 * 0.1;
-        let (sin, cos) = heading.to_radians().sin_cos();
-        let velocity = Point::new(velocity.x + sin * push, velocity.y - cos * push);
-        let frame = looks
-            .pod_sheet()
-            .map_or(0, |sheet| pod_frame(velocity, sheet.frames));
-        let mut pod = Pod {
-            at,
-            velocity,
-            life: life as f32,
-            frame,
-        };
-        pod.step(gain);
-        self.pods.insert(pod, cap);
-    }
-
-    /// Carries each pod within `wrap`'s reach: `_WrapPlayerPosition`'s loop
-    /// of `_podData` (@0x6822f-0x682b1), which leaves its velocity.
-    pub fn carry(&mut self, wrap: &PlayerWrap) {
-        for pod in self.pods.iter_mut() {
-            carry_point(wrap, &mut pod.at);
-        }
-    }
-
-    /// Steps every pod at the frame's `gain`, then frees those whose life
-    /// is below 0 (`ucomiss 0, life` / `jb` @0x39e67-0x39e6f: a NaN life
-    /// is freed too).
-    pub fn step(&mut self, gain: SpeedMult) {
-        self.pods.retain_mut(|pod| {
-            pod.step(gain);
-            pod.life >= 0.0
-        });
-    }
-
-    /// Draws each pod shown, as `looks` says, where `camera` places it, at
-    /// whole pixels by its sheet's sides ([`Camera::sprite_centre`],
-    /// `_HandleEscapePods` @0x39ef0-0x39f7d), murked as the player sees it, `seen` ([`SeenMurk::at`]), as
-    /// `_HandleEscapePods` murks it at its position (@0x39f90-0x39fbc)
-    /// before its fade.
-    pub fn draw(&self, list: &mut DrawList, camera: &Camera, looks: &Looks, seen: SeenMurk) {
-        let Some(sheet) = looks.pod_sheet() else {
-            return;
-        };
-        for pod in self.pods.iter() {
-            let Some(tint) = pod.tint() else {
-                continue;
-            };
-            let colorize = seen.at(Vec2::new(pod.at.x, pod.at.y));
-            let frame = sheet.image.frame(pod.frame);
-            let at = camera.sprite_centre(pod.at, sheet.size());
-            let blend = if pod.life >= POD_FADE {
-                Blend::Normal
-            } else {
-                Blend::OrCrossfade
-            };
-            list.mixed_sprite(frame, at, tint, blend, Some(colorize));
-        }
-    }
-
-    /// The pods adrift, the unseen ones at a life of 0 too, in slot order
-    /// (see the module docs).
-    #[must_use]
-    pub fn pods(&self) -> Vec<Pod> {
-        self.pods.to_vec()
-    }
-
-    /// Frees every pod.
-    pub fn clear(&mut self) {
-        self.pods.clear();
+/// A pod of `life` at `at`, for the drawing tests.
+#[cfg(test)]
+pub(crate) fn pod_at(at: nova_sim::Vec2, life: f32) -> Pod {
+    Pod {
+        position: at,
+        velocity: nova_sim::Vec2::ZERO,
+        life,
+        frame: 9,
+        shown: true,
     }
 }
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use std::collections::VecDeque;
+    use std::num::NonZeroU16;
+
+    use nova_sim::Vec2;
 
     use super::*;
     use crate::DrawCommand;
     use crate::ImageKey;
     use crate::flight::catalog::EffectSheet;
     use crate::system::camera::Anchor;
-
-    /// Draws its script, then the last outcome.
-    #[derive(Default)]
-    struct Script(VecDeque<u32>);
-
-    impl Chance for Script {
-        fn fires(&mut self, _percent: u8) -> bool {
-            false
-        }
-
-        fn below(&mut self, n: u32) -> u32 {
-            let draw = self.0.pop_front().unwrap_or(n - 1);
-            assert!(draw < n, "drew {draw} below {n}");
-            draw
-        }
-    }
-
-    fn script(draws: &[u32]) -> Script {
-        Script(draws.iter().copied().collect())
-    }
 
     /// The pod's sheet, `rlëD` 1095, of 36 rotations.
     fn looks() -> Looks {
@@ -300,196 +141,6 @@ mod tests {
             })),
             ..Looks::default()
         }
-    }
-
-    fn spawned(draws: &[u32]) -> EscapePods {
-        let mut pods = EscapePods::default();
-        pods.spawn(
-            Point::new(100.0, 50.0),
-            Point::new(2.0, 0.0),
-            SpeedMult::FULL,
-            false,
-            &looks(),
-            &mut script(draws),
-        );
-        pods
-    }
-
-    #[test]
-    fn a_pod_is_placed_at_whole_pixels_by_its_sheets_own_sides() {
-        // At (103.5, 50), so (103.25, 50.5) from the camera, truncated to
-        // (103, 50): (518, 434) less (15, 14) is the top left (503, 420).
-        let pods = spawned(&[20, 90, 5]);
-        assert_eq!(pods.pods()[0].at, Point::new(103.5, 50.0));
-        let sized = Looks {
-            pod: Some(Ok(EffectSheet {
-                frame_width: 31,
-                frame_height: 29,
-                ..*looks().pod_sheet().expect("read")
-            })),
-            ..Looks::default()
-        };
-        let camera = Camera::centred_on(Point::new(0.25, -0.5)).with_anchor(Anchor::PlayAreaCentre);
-        let clear = SeenMurk {
-            viewer: Vec2::ZERO,
-            murk: 0,
-            colour: 0,
-        };
-        let mut list = DrawList::new();
-        pods.draw(&mut list, &camera, &sized, clear);
-        let drawn: Vec<Point> = list
-            .iter()
-            .filter_map(|command| match *command {
-                DrawCommand::Sprite { center, .. } => Some(center),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(drawn, [Point::new(518.5, 434.5)]);
-    }
-
-    /// A pod spawned as [`spawned`] does, its first step at `gain`.
-    fn spawned_at(draws: &[u32], gain: SpeedMult) -> EscapePods {
-        let mut pods = EscapePods::default();
-        pods.spawn(
-            Point::new(100.0, 50.0),
-            Point::new(2.0, 0.0),
-            gain,
-            false,
-            &looks(),
-            &mut script(draws),
-        );
-        pods
-    }
-
-    /// A pod at rest of `life`, drifting at (2, -1).
-    fn adrift(life: f32) -> EscapePods {
-        let mut pods = EscapePods::default();
-        let pod = Pod {
-            at: Point::new(10.0, 20.0),
-            velocity: Point::new(2.0, -1.0),
-            life,
-            frame: 0,
-        };
-        pods.pods.insert(pod, None);
-        pods
-    }
-
-    #[test]
-    fn a_pod_drifts_and_ages_by_the_gain() {
-        let mut half = adrift(10.0);
-        half.step(SpeedMult::new(0.5));
-        let pod = half.pods()[0];
-        assert_eq!(pod.at, Point::new(11.0, 19.5), "half its velocity");
-        assert_eq!(pod.life, 9.5, "half a tick off its life");
-        let mut held = adrift(10.0);
-        held.step(SpeedMult::ZERO);
-        assert_eq!(held.pods(), adrift(10.0).pods(), "held still at 0");
-    }
-
-    #[test]
-    fn a_spawns_first_step_is_taken_at_the_gain() {
-        // Pushed (5 + 10) x 0.1 = 1.5 along 90°: velocity (3.5, 0).
-        let pod = spawned_at(&[20, 90, 5], SpeedMult::new(0.5)).pods()[0];
-        assert!((pod.at.x - 101.75).abs() < 1e-5, "half a step on: {pod:?}");
-        assert_eq!(pod.life, 169.5, "170 less half a tick");
-    }
-
-    #[test]
-    fn at_half_gain_a_pod_is_held_unseen_at_0_and_freed_below_it() {
-        let mut pods = adrift(1.0);
-        pods.step(SpeedMult::new(0.5));
-        assert_eq!(pods.pods()[0].life, 0.5);
-        assert!(pods.pods()[0].tint().is_some(), "shown at 0.5");
-        pods.step(SpeedMult::new(0.5));
-        assert_eq!(pods.pods()[0].life, 0.0);
-        assert_eq!(pods.pods()[0].tint(), None, "held unseen at 0");
-        pods.step(SpeedMult::new(0.5));
-        assert!(pods.pods().is_empty(), "freed below 0");
-    }
-
-    #[test]
-    fn a_fractional_life_fades_by_its_truncated_translucency() {
-        // trunc(32 - 10.5) = 21, so the pod's share is 11 of 32.
-        let tint = adrift(10.5).pods()[0].tint().expect("shown");
-        assert_eq!(tint.a, ((11 * 255 + 16) / 32) as u8);
-        let whole = adrift(10.0).pods()[0].tint().expect("shown");
-        assert_eq!(whole.a, ((10 * 255 + 16) / 32) as u8, "a whole life's");
-        let nearly = adrift(31.5).pods()[0].tint().expect("shown");
-        assert_eq!(nearly.a, 255, "trunc(0.5) is 0: the whole source");
-    }
-
-    #[test]
-    fn a_nan_life_is_hidden_and_freed() {
-        let mut pods = adrift(f32::NAN);
-        assert_eq!(pods.pods()[0].tint(), None, "hidden");
-        pods.step(SpeedMult::FULL);
-        assert!(pods.pods().is_empty(), "freed");
-    }
-
-    #[test]
-    fn a_pod_leaves_its_ship_pushed_off_and_takes_its_first_step() {
-        // Life 150 + 20, pushed (5 + 10) x 0.1 = 1.5 along 90°.
-        let pods = spawned(&[20, 90, 5]);
-        let [pod] = pods.pods()[..] else {
-            panic!("one pod");
-        };
-        assert_eq!(pod.life, 169.0, "170 less its first step");
-        assert!((pod.velocity.x - 3.5).abs() < 1e-5, "{:?}", pod.velocity);
-        assert!(pod.velocity.y.abs() < 1e-5);
-        assert!((pod.at.x - 103.5).abs() < 1e-5, "one step on");
-        assert_eq!(pod.frame, 9, "facing 90°: 9 of 36");
-        let least = spawned(&[0, 0, 0]);
-        assert_eq!(least.pods()[0].life, 149.0);
-        assert!((least.pods()[0].velocity.y + 1.0).abs() < 1e-5, "1.0 up");
-        let most = spawned(&[99, 180, 9]);
-        assert_eq!(most.pods()[0].life, 248.0);
-        assert!((most.pods()[0].velocity.y - 1.9).abs() < 1e-5, "1.9 down");
-    }
-
-    #[test]
-    fn a_pod_drifts_by_its_velocity_each_step() {
-        let mut pods = spawned(&[20, 90, 5]);
-        let before = pods.pods()[0];
-        pods.step(SpeedMult::FULL);
-        let after = pods.pods()[0];
-        assert!((after.at.x - before.at.x - 3.5).abs() < 1e-5);
-        assert_eq!(after.at.y, before.at.y);
-        assert_eq!(after.life, before.life - 1.0);
-        // Pushed straight down: it drifts down too.
-        let mut down = spawned(&[20, 180, 5]);
-        let before = down.pods()[0];
-        down.step(SpeedMult::FULL);
-        let after = down.pods()[0];
-        assert!((after.at.y - before.at.y - 1.5).abs() < 1e-5, "{after:?}");
-        assert!((after.at.x - before.at.x - 2.0).abs() < 1e-5);
-    }
-
-    #[test]
-    fn a_pod_is_opaque_to_32_fades_over_its_last_32_and_is_hidden_then_freed() {
-        // Life 150: 149 after its first step.
-        let mut pods = spawned(&[0, 90, 0]);
-        let mut alphas = Vec::new();
-        while let Some(pod) = pods.pods().first() {
-            alphas.push((pod.life, pod.tint().map(|tint| tint.a)));
-            pods.step(SpeedMult::FULL);
-        }
-        assert_eq!(alphas.first(), Some(&(149.0, Some(255))));
-        let at = |life| alphas.iter().find(|(l, _)| *l == life).map(|(_, a)| *a);
-        assert_eq!(at(32.0), Some(Some(255)), "opaque at 32");
-        assert_eq!(at(31.0), Some(Some(247)), "31/32");
-        assert_eq!(at(16.0), Some(Some(128)));
-        assert_eq!(at(1.0), Some(Some(8)), "1/32");
-        assert_eq!(at(0.0), Some(None), "held unseen at 0");
-        assert_eq!(alphas.last(), Some(&(0.0, None)), "then freed");
-        let fading: Vec<u8> = alphas
-            .iter()
-            .filter_map(|(life, alpha)| alpha.filter(|_| *life < 32.0))
-            .collect();
-        assert!(
-            fading.windows(2).all(|pair| pair[0] > pair[1]),
-            "{fading:?}"
-        );
-        assert_eq!(fading.len(), 31);
     }
 
     /// No murk to see.
@@ -508,70 +159,162 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_pod_is_drawn_on_its_frame_at_its_tint() {
-        let pods = spawned(&[20, 90, 5]);
+    /// What `pods` draws, through the camera at the origin: each sprite's
+    /// image, tint, blend and centre.
+    fn drawn(pods: &[Pod], looks: &Looks) -> Vec<(ImageKey, Color, Blend, Point)> {
         let mut list = DrawList::new();
-        pods.draw(
+        draw_pods(
             &mut list,
             &Camera::centred_on(Point::default()),
-            &looks(),
+            looks,
             CLEAR,
+            pods,
         );
-        let drawn: Vec<_> = list
-            .into_iter()
+        list.into_iter()
             .filter_map(|command| match command {
-                DrawCommand::Sprite { image, tint, .. } => Some((*image, *tint)),
+                DrawCommand::Sprite {
+                    image,
+                    tint,
+                    blend,
+                    center,
+                    ..
+                } => Some((*image, *tint, *blend, *center)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_pod_is_placed_at_whole_pixels_by_its_sheets_own_sides() {
+        // At (103.5, 50), so (103.25, 50.5) from the camera, truncated to
+        // (103, 50): (518, 434) less (15, 14) is the top left (503, 420).
+        let pod = pod_at(Vec2::new(103.5, 50.0), 100.0);
+        let sized = Looks {
+            pod: Some(Ok(EffectSheet {
+                frame_width: 31,
+                frame_height: 29,
+                ..*looks().pod_sheet().expect("read")
+            })),
+            ..Looks::default()
+        };
+        let camera = Camera::centred_on(Point::new(0.25, -0.5)).with_anchor(Anchor::PlayAreaCentre);
+        let mut list = DrawList::new();
+        draw_pods(&mut list, &camera, &sized, CLEAR, &[pod]);
+        let drawn: Vec<Point> = list
+            .iter()
+            .filter_map(|command| match *command {
+                DrawCommand::Sprite { center, .. } => Some(center),
                 _ => None,
             })
             .collect();
-        assert_eq!(drawn, [(ImageKey::sprite(1095, 9), Color::WHITE)]);
-        let mut unread = DrawList::new();
-        pods.draw(
-            &mut unread,
-            &Camera::centred_on(Point::default()),
-            &Looks::default(),
-            CLEAR,
+        assert_eq!(drawn, [Point::new(518.5, 434.5)]);
+    }
+
+    #[test]
+    fn a_pod_is_drawn_on_its_frame_at_its_tint() {
+        let pod = pod_at(Vec2::new(10.0, 0.0), 100.0);
+        let shown = drawn(&[pod], &looks());
+        assert_eq!(shown.len(), 1);
+        assert_eq!(
+            (shown[0].0, shown[0].1),
+            (ImageKey::sprite(1095, 9), Color::WHITE)
         );
-        assert!(unread.into_iter().next().is_none(), "no sheet, no pod");
+        assert!(
+            drawn(&[pod], &Looks::default()).is_empty(),
+            "no sheet, no pod"
+        );
+    }
+
+    #[test]
+    fn a_hidden_pod_is_not_drawn() {
+        let pod = Pod {
+            shown: false,
+            ..pod_at(Vec2::new(10.0, 0.0), 100.0)
+        };
+        assert!(drawn(&[pod], &looks()).is_empty());
+    }
+
+    #[test]
+    fn the_pods_are_drawn_in_the_frames_slot_order() {
+        let camera = Camera::centred_on(Point::default());
+        let pods = [
+            pod_at(Vec2::new(30.0, 0.0), 100.0),
+            pod_at(Vec2::new(20.0, 0.0), 100.0),
+        ];
+        let xs: Vec<f32> = drawn(&pods, &looks())
+            .into_iter()
+            .map(|(.., center)| center.x)
+            .collect();
+        let screen = |x| camera.world_to_screen(Point::new(x, 0.0)).x;
+        assert_eq!(xs, [screen(30.0), screen(20.0)]);
+    }
+
+    #[test]
+    fn a_pod_is_opaque_to_32_fades_over_its_last_32_and_is_hidden_at_0() {
+        let alpha = |life| tint(&pod_at(Vec2::ZERO, life)).map(|tint| tint.a);
+        assert_eq!(alpha(149.0), Some(255));
+        assert_eq!(alpha(32.0), Some(255), "opaque at 32");
+        assert_eq!(alpha(31.0), Some(247), "31/32");
+        assert_eq!(alpha(16.0), Some(128));
+        assert_eq!(alpha(1.0), Some(8), "1/32");
+        assert_eq!(alpha(0.0), None, "unseen at 0");
+        assert_eq!(alpha(f32::NAN), None, "a NaN life is hidden");
+        let fading: Vec<u8> = (1..32)
+            .rev()
+            .filter_map(|life| alpha(life as f32))
+            .collect();
+        assert!(
+            fading.windows(2).all(|pair| pair[0] > pair[1]),
+            "{fading:?}"
+        );
+        assert_eq!(fading.len(), 31);
+    }
+
+    #[test]
+    fn a_fractional_life_fades_by_its_truncated_translucency() {
+        // trunc(32 - 10.5) = 21, so the pod's share is 11 of 32.
+        let tint_of = |life| tint(&pod_at(Vec2::ZERO, life)).expect("shown");
+        assert_eq!(tint_of(10.5).a, ((11 * 255 + 16) / 32) as u8);
+        assert_eq!(
+            tint_of(10.0).a,
+            ((10 * 255 + 16) / 32) as u8,
+            "a whole life's"
+        );
+        assert_eq!(tint_of(31.5).a, 255, "trunc(0.5) is 0: the whole source");
     }
 
     #[test]
     fn a_fading_pod_is_crossfaded_by_or_and_an_opaque_one_drawn_plainly() {
-        let mut pods = spawned(&[20, 90, 5]);
-        let blends = |pods: &EscapePods| -> Vec<(Color, Blend)> {
-            let mut list = DrawList::new();
-            pods.draw(
-                &mut list,
-                &Camera::centred_on(Point::default()),
-                &looks(),
-                CLEAR,
-            );
-            list.into_iter()
-                .filter_map(|command| match command {
-                    DrawCommand::Sprite { tint, blend, .. } => Some((*tint, *blend)),
-                    _ => None,
-                })
+        let at = Vec2::new(10.0, 0.0);
+        let blends = |life| -> Vec<(Color, Blend)> {
+            drawn(&[pod_at(at, life)], &looks())
+                .into_iter()
+                .map(|(_, tint, blend, _)| (tint, blend))
                 .collect()
         };
-        while pods.pods()[0].life > POD_FADE {
-            pods.step(SpeedMult::FULL);
-        }
-        assert_eq!(blends(&pods), [(Color::WHITE, Blend::Normal)], "at 32");
-        pods.step(SpeedMult::FULL);
-        let tint = pods.pods()[0].tint().expect("shown");
-        assert_eq!(pods.pods()[0].life, POD_FADE - 1.0);
-        assert_eq!(blends(&pods), [(tint, Blend::OrCrossfade)], "at 31");
-        assert_eq!(tint.a, 247, "31/32");
+        assert_eq!(blends(POD_FADE), [(Color::WHITE, Blend::Normal)], "at 32");
+        let fading = tint(&pod_at(at, POD_FADE - 1.0)).expect("shown");
+        assert_eq!(
+            blends(POD_FADE - 1.0),
+            [(fading, Blend::OrCrossfade)],
+            "at 31"
+        );
+        assert_eq!(fading.a, 247, "31/32");
     }
 
     #[test]
     fn a_pod_far_from_the_viewer_in_murk_is_mixed_opaque_or_fading() {
-        let mut pods = spawned(&[20, 90, 5]);
-        let mixed = |pods: &EscapePods, viewer: Vec2| -> Vec<_> {
+        let position = Vec2::new(3000.0, 50.0);
+        let mixed = |life, viewer: Vec2| -> Vec<_> {
             let mut list = DrawList::new();
             let camera = Camera::centred_on(Point::default());
-            pods.draw(&mut list, &camera, &looks(), seen_from(viewer));
+            draw_pods(
+                &mut list,
+                &camera,
+                &looks(),
+                seen_from(viewer),
+                &[pod_at(position, life)],
+            );
             list.into_iter()
                 .filter_map(|command| match command {
                     DrawCommand::Sprite { tint, blend, .. } => Some((*tint, *blend, None)),
@@ -585,164 +328,22 @@ mod tests {
                 })
                 .collect()
         };
-        let pod = pods.pods()[0];
-        let position = Vec2::new(pod.at.x, pod.at.y);
         let murk = seen_from(Vec2::ZERO).at(position);
         assert!(murk.level > 0, "murky out here: {}", murk.level);
         assert_eq!(
-            mixed(&pods, Vec2::ZERO),
+            mixed(100.0, Vec2::ZERO),
             [(Color::WHITE, Blend::Normal, Some(murk))]
         );
         assert_eq!(
-            mixed(&pods, position),
+            mixed(100.0, position),
             [(Color::WHITE, Blend::Normal, None)],
             "plain at the viewer"
         );
-        while pods.pods()[0].life >= POD_FADE {
-            pods.step(SpeedMult::FULL);
-        }
-        let pod = pods.pods()[0];
-        let murk = seen_from(Vec2::ZERO).at(Vec2::new(pod.at.x, pod.at.y));
-        let fading = pod.tint().expect("shown");
+        let fading = tint(&pod_at(position, 20.0)).expect("shown");
         assert_eq!(
-            mixed(&pods, Vec2::ZERO),
+            mixed(20.0, Vec2::ZERO),
             [(fading, Blend::OrCrossfade, Some(murk))],
             "the mix under its fade"
-        );
-    }
-
-    #[test]
-    fn under_the_caps_a_33rd_pod_is_not_kept() {
-        for (caps, kept) in [(true, MAX_PODS), (false, MAX_PODS + 1)] {
-            let mut pods = EscapePods::default();
-            for _ in 0..=MAX_PODS {
-                pods.spawn(
-                    Point::new(0.0, 0.0),
-                    Point::new(0.0, 0.0),
-                    SpeedMult::FULL,
-                    caps,
-                    &looks(),
-                    &mut script(&[]),
-                );
-            }
-            assert_eq!(pods.pods().len(), kept, "caps {caps}");
-        }
-    }
-
-    #[test]
-    fn a_held_pod_keeps_its_slot_until_its_life_is_below_0() {
-        let mut pods = EscapePods::default();
-        for _ in 0..MAX_PODS {
-            pods.spawn(
-                Point::new(0.0, 0.0),
-                Point::new(0.0, 0.0),
-                SpeedMult::FULL,
-                true,
-                &looks(),
-                &mut script(&[0]),
-            );
-        }
-        for _ in 0..149 {
-            pods.step(SpeedMult::FULL);
-        }
-        assert!(pods.pods().iter().all(|pod| pod.life == 0.0));
-        pods.spawn(
-            Point::new(0.0, 0.0),
-            Point::new(0.0, 0.0),
-            SpeedMult::FULL,
-            true,
-            &looks(),
-            &mut script(&[]),
-        );
-        assert_eq!(pods.pods().len(), MAX_PODS, "no slot free at 0");
-        pods.step(SpeedMult::FULL);
-        assert!(pods.pods().is_empty(), "all free below 0");
-    }
-
-    #[test]
-    fn a_new_pod_takes_a_freed_lower_slot_and_draws_under_an_older_one() {
-        let spawn = |pods: &mut EscapePods, x: f32, life: u32| {
-            pods.spawn(
-                Point::new(x, 0.0),
-                Point::default(),
-                SpeedMult::FULL,
-                false,
-                &looks(),
-                &mut script(&[life, 0, 0]),
-            );
-        };
-        let mut pods = EscapePods::default();
-        spawn(&mut pods, 10.0, 0);
-        spawn(&mut pods, 20.0, 99);
-        for _ in 0..150 {
-            pods.step(SpeedMult::FULL);
-        }
-        let xs = |pods: &EscapePods| -> Vec<f32> { pods.pods().iter().map(|p| p.at.x).collect() };
-        assert_eq!(xs(&pods), [20.0], "the first freed below 0");
-        spawn(&mut pods, 30.0, 0);
-        assert_eq!(xs(&pods), [30.0, 20.0], "in slot order");
-        let camera = Camera::centred_on(Point::default());
-        let mut list = DrawList::new();
-        pods.draw(&mut list, &camera, &looks(), CLEAR);
-        let drawn: Vec<f32> = list
-            .into_iter()
-            .filter_map(|command| match command {
-                DrawCommand::Sprite { center, .. } => Some(center.x),
-                _ => None,
-            })
-            .collect();
-        let screen = |x| camera.world_to_screen(Point::new(x, 0.0)).x;
-        assert_eq!(drawn, [screen(30.0), screen(20.0)], "the new one first");
-    }
-
-    #[test]
-    fn a_wrap_carries_the_pods_within_its_reach_and_leaves_their_velocities() {
-        use nova_sim::player_wrap::{WRAP_EDGE, WRAP_SHIFT};
-        let player = Vec2::new(WRAP_EDGE + 10.0, 0.0);
-        let wrap = PlayerWrap::of(player).expect("past the edge");
-        let mut pods = EscapePods::default();
-        for x in [player.x - 100.0, player.x - WRAP_EDGE * 2.0] {
-            let at = Point::new(x, 40.0);
-            pods.spawn(
-                at,
-                Point::new(1.0, 0.0),
-                SpeedMult::FULL,
-                false,
-                &looks(),
-                &mut script(&[0, 0]),
-            );
-        }
-        let before = pods.pods();
-        pods.carry(&wrap);
-        let after = pods.pods();
-        assert_eq!(after[0].at.x, before[0].at.x - WRAP_SHIFT);
-        assert_eq!(after[0].at.y, before[0].at.y);
-        assert_eq!(after[0].velocity, before[0].velocity);
-        assert_eq!(after[1], before[1]);
-    }
-
-    #[test]
-    fn clearing_frees_every_pod() {
-        let mut pods = spawned(&[20, 90, 5]);
-        pods.clear();
-        assert!(pods.pods().is_empty());
-    }
-
-    #[test]
-    fn a_pod_faces_its_velocity_in_whole_degrees_of_its_sheet() {
-        let frames = |n| NonZeroU16::new(n).expect("non-zero");
-        assert_eq!(pod_frame(Point::new(0.0, -1.0), frames(36)), 0, "up");
-        assert_eq!(pod_frame(Point::new(1.0, 0.0), frames(36)), 9, "right");
-        assert_eq!(pod_frame(Point::new(0.0, 1.0), frames(36)), 18, "down");
-        assert_eq!(pod_frame(Point::new(-1.0, 0.0), frames(36)), 27, "left");
-        assert_eq!(pod_frame(Point::new(1.0, 0.0), frames(64)), 16);
-        // The table's heading of (1, 1) is 134°: trunc(134 x 64 / 360) = 23.
-        assert_eq!(intercept_angle(Vec2::ZERO, Vec2::new(100.0, 100.0)), 134);
-        assert_eq!(pod_frame(Point::new(1.0, 1.0), frames(64)), 23);
-        assert_eq!(
-            pod_frame(Point::new(1.0, 1.0), frames(36)),
-            13,
-            "134 x 36 / 360"
         );
     }
 }

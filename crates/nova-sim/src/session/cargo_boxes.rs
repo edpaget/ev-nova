@@ -188,10 +188,13 @@ impl Session {
     /// this pass's player move and the player's display step, the player
     /// having stood at `stood` before the move (see the `contact_masks`
     /// module): the boxes the ships touch are scooped
-    /// ([`Session::scoop_boxes`]), then the boxes step.
+    /// ([`Session::scoop_boxes`]), then the boxes step, then the escape
+    /// pods (`_HandleEscapePods` @0x44513, after `_HandleBoxes`; see the
+    /// `escape_pods` module for why they step before the ship loop).
     pub(super) fn scoop_after_display(&mut self, stood: Vec2) {
         self.scoop_boxes(stood);
         self.space.boxes_tick(self.speed_mult());
+        self.space.pods_tick(self.speed_mult());
     }
 }
 

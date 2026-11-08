@@ -1,5 +1,6 @@
 //! What is in the system around the player: the traffic, the fight and
-//! its strikes, the cargo boxes jettisons left, the asteroid field, the
+//! its strikes, the cargo boxes jettisons left, the escape pods adrift,
+//! the asteroid field, the
 //! stellars' damage and the sprites shown, the message line, the
 //! escorts' and encounters' state ([`Escorts`]), and the escorts' voice
 //! channel (see the `voices` module). The coordinators that
@@ -74,6 +75,9 @@ pub(super) struct Space {
     /// The cargo boxes jettisons left in space (see the `cargo_boxes`
     /// module); never saved, as the original saves none.
     pub(super) boxes: crate::cargo_box::CargoBoxes,
+    /// The NPCs' escape pods adrift (see the `escape_pods` module); never
+    /// saved, as the original saves none.
+    pub(super) pods: crate::escape_pod::EscapePods,
     /// The asteroid field about the player (see the `asteroids` module);
     /// never saved, as the original saves none.
     pub(super) asteroids: crate::asteroid::Asteroids,
@@ -274,6 +278,7 @@ impl Space {
             drawn: BTreeMap::new(),
             combat: Combat::default(),
             boxes: crate::cargo_box::CargoBoxes::default(),
+            pods: crate::escape_pod::EscapePods::default(),
             asteroids: crate::asteroid::Asteroids::default(),
             asteroid_kill: None,
             // A session starts or loads in flight, as `_DoNewPilot`

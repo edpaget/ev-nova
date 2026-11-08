@@ -52,6 +52,7 @@ impl Session {
             shots,
             beams,
             cargo_boxes,
+            pods,
             asteroids,
             stellars,
             radar_stellars,
@@ -101,6 +102,7 @@ impl Session {
         self.space.fill_shots(shots);
         self.space.fill_beams(beams);
         self.space.fill_boxes(cargo_boxes);
+        self.space.fill_pods(pods);
         self.space.fill_asteroids(asteroids);
         self.fill_stellars(stellars);
         self.fill_radar_stellars(radar_stellars);
@@ -318,6 +320,13 @@ pub(super) mod tests {
                 frame: 9,
                 fade: 9,
                 graphic: 9,
+            }],
+            pods: vec![crate::escape_pod::Pod {
+                position: Vec2::new(9.0, 9.0),
+                velocity: Vec2::new(9.0, 9.0),
+                life: 9.0,
+                frame: 9,
+                shown: false,
             }],
             asteroids: vec![FrameAsteroid {
                 position: Vec2::new(9.0, 9.0),

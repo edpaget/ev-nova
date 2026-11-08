@@ -34,8 +34,8 @@
 //!   system, and the colorize that mixes it toward its background.
 //! - `pen`: the `Pen` the HUD's panels set their text with, and
 //!   `_DrawCenteredText`'s centring.
-//! - [`pods`]: the NPCs' escape pods adrift, from the fight's
-//!   `PodEjected` events: their drift, their fade and their pool.
+//! - [`pods`]: drawing the NPCs' escape pods the simulation keeps, from
+//!   the frame: their place, their fade and their murk.
 //! - [`radar`]: the radar's view model, the marks `_DrawStatusRadar`
 //!   draws for a [`RadarScene`](radar::RadarScene) snapshot.
 //! - [`shot_fade`]: how a shot fades in and out, and how a translucent

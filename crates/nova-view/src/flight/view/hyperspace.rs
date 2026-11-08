@@ -219,7 +219,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         let chance = &mut self.effects_chance;
         let gain = self.frame.speed_mult;
         for event in combat {
-            self.effects.apply(event, &scene, &self.looks, gain, chance);
+            self.effects.apply(event, &scene, &self.looks, chance);
         }
         if !combat.is_empty() {
             self.effects.step(&[], &scene, &self.looks, gain, chance);

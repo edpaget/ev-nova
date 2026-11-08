@@ -556,6 +556,7 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         shots,
         beams,
         cargo_boxes,
+        pods,
         asteroids,
         stellars,
         radar_stellars,
@@ -651,6 +652,13 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
             frame: 0,
             fade: 0,
             graphic: 0,
+        }),
+        pods: one_or_none(pods, || nova_sim::escape_pod::Pod {
+            position: Vec2::ZERO,
+            velocity: Vec2::ZERO,
+            life: 0.0,
+            frame: 0,
+            shown: false,
         }),
         asteroids: one_or_none(asteroids, || FrameAsteroid {
             position: Vec2::ZERO,
@@ -3128,6 +3136,7 @@ mod tests {
                 shots,
                 beams,
                 cargo_boxes,
+                pods,
                 asteroids,
                 stellars,
                 radar_stellars,
@@ -3154,6 +3163,7 @@ mod tests {
             assert_ne!(other.shots, *shots);
             assert_ne!(other.beams, *beams);
             assert_ne!(other.cargo_boxes, *cargo_boxes);
+            assert_ne!(other.pods, *pods);
             assert_ne!(other.asteroids, *asteroids);
             assert_ne!(other.stellars, *stellars);
             assert_ne!(other.radar_stellars, *radar_stellars);

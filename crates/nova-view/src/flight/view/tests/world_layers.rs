@@ -2,7 +2,8 @@
 //! ([`nova_sim::sprite_layer::WORLD_PASSES`]): each beam, effect, smoke
 //! puff, escape pod and cargo box in its layer among the ships and the
 //! shots (rdm play-feel phase 4). On [`FakeFlight`]: each frame scripted,
-//! each effect raised on the view's own effects.
+//! each effect raised on the view's own effects and each pod put in the
+//! frame.
 
 use nova_sim::catalog::Explosion;
 use nova_sim::combat::ParticleBurst;
@@ -125,16 +126,12 @@ fn the_cursor_and_the_double_time_icon_are_drawn_after_the_brackets_and_under_th
     assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
 }
 
-/// Sets a pod adrift in `view` at `at`, as a dying ship's would be.
+/// Puts a shown pod adrift at `at` in the frame `view` draws, as the
+/// simulation sets a dying ship's adrift.
 fn pod_adrift(view: &mut Faked, at: Vec2) {
-    raise(
-        view,
-        &[CombatEvent::PodEjected {
-            ship: ShipRef::Npc(NpcId(9)),
-            at,
-            velocity: Vec2::ZERO,
-        }],
-    );
+    let pod = crate::flight::pods::pod_at(at, 100.0);
+    view.frame.pods.push(pod);
+    view.sim.frame_mut().pods.push(pod);
 }
 
 #[test]
@@ -158,6 +155,22 @@ fn an_escape_pod_is_drawn_above_a_disabled_ship_and_below_a_flying_one() {
     // `_boxLayer` 0x3b53ec, over `_disabledShipLayer` 0x3b53a0 and under
     // `_shipLayer` 0x3b541c.
     assert!(disabled < pod && pod < ship, "{disabled} {pod} {ship}");
+}
+
+#[test]
+fn the_frames_shown_pods_are_drawn_and_a_hidden_one_is_not() {
+    let frame = in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]);
+    let mut view = world(trading(), frame);
+    pod_adrift(&mut view, Vec2::new(30.0, 30.0));
+    let pods = |view: &Faked| {
+        world_list(view)
+            .iter()
+            .filter(|command| sprite_of(1095)(command))
+            .count()
+    };
+    assert_eq!(pods(&view), 1);
+    view.frame.pods[0].shown = false;
+    assert_eq!(pods(&view), 0, "hidden by the simulation");
 }
 
 #[test]
