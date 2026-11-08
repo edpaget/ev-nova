@@ -473,6 +473,21 @@ mod tests {
     }
 
     #[test]
+    fn no_ship_comes_out_of_a_closed_gate_by_either_reading() {
+        let closed = LandingSite {
+            gate_closed: true,
+            ..hypergate(129)
+        };
+        let sites = [planet(128, 0.0, 0.0), closed];
+        assert_eq!(picked(None, &sites, &[]), (None, vec![]), "the engine");
+        assert_eq!(
+            picked_by(THROUGH_GATES, None, &sites, &[]),
+            (None, vec![]),
+            "through gates"
+        );
+    }
+
+    #[test]
     fn a_gate_of_an_enemy_government_is_skipped() {
         let gate_of = |govt| LandingSite {
             govt,

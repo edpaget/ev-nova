@@ -81,6 +81,12 @@
 //! the original's systems, and the other reading, the new game's, drops it,
 //! so a gate or stellar anywhere the system lists may be picked
 //! ([`within_reach`], [`candidates_within`]). The new game's jump points sit past 999 on one axis.
+//! A hypergate stamped
+//! [`gate_closed`](crate::catalog::LandingSite::gate_closed), its jump
+//! points all closed in the new game, is never ok: no ship heads for it,
+//! leaves through it or comes out of it, under every branch. The original
+//! has no such gate.
+//!
 //! The gates among the candidates are [`usable_gates`], which the other
 //! readings of
 //! [`RuleKey::ArrivalsThroughGates`](crate::RuleKey::ArrivalsThroughGates)
@@ -157,7 +163,10 @@ pub fn candidates_within<'s>(
     let ok: Vec<&LandingSite> = sites
         .iter()
         .filter(|site| {
-            is_landable(site) && within_reach(site, reach) && !govts.npc_enemies(govt, site.govt)
+            is_landable(site)
+                && !site.gate_closed
+                && within_reach(site, reach)
+                && !govts.npc_enemies(govt, site.govt)
         })
         .collect();
     let inhabited = |site: &LandingSite| site.flags & StellarFlags::UNINHABITED == 0;
@@ -454,6 +463,36 @@ mod tests {
         assert_eq!(ids(Some(GovtId(141)), &no_wormhole, Admit::All), [128, 129]);
         let no_hypergate = [planet(128, 0.0, 0.0), wormhole(130)];
         assert_eq!(ids(Some(GovtId(140)), &no_hypergate, Admit::All), [128]);
+    }
+
+    /// A hypergate whose jump points are all closed, as the overlay
+    /// stamps it.
+    fn closed(id: i16) -> LandingSite {
+        LandingSite {
+            gate_closed: true,
+            ..hypergate(id)
+        }
+    }
+
+    #[test]
+    fn a_closed_hypergate_is_never_a_candidate_and_an_open_one_still_is() {
+        let sites = [planet(128, 0.0, 0.0), hypergate(129), closed(131)];
+        let pick = |govt| ids(Some(GovtId(govt)), &sites, Admit::All);
+        assert_eq!(pick(140), [129], "hypergates preferred");
+        assert_eq!(pick(128), [128, 129], "the default branch");
+        assert_eq!(ids(None, &sites, Admit::All), [128, 129]);
+        let usable: Vec<i16> = usable_gates(None, &sites, &govts(), RuleSource::Bible)
+            .into_iter()
+            .map(|site| site.id.0)
+            .collect();
+        assert_eq!(usable, [129], "the usable gates");
+        let only_closed = [planet(128, 0.0, 0.0), closed(131)];
+        assert_eq!(
+            ids(Some(GovtId(140)), &only_closed, Admit::All),
+            [128],
+            "no ok hypergate: the rest"
+        );
+        assert!(usable_gates(None, &only_closed, &govts(), RuleSource::Bible).is_empty());
     }
 
     #[test]
