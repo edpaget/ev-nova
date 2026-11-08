@@ -144,8 +144,22 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.settle_given_up_jump();
     }
 
+    /// Marks the arrival's effect as shown on the frame about to be drawn
+    /// ([`JumpEffect::presented`]), as `Screen::tick` does at its end,
+    /// which every draw follows: the white flash of an arrival without the
+    /// fades shows on that frame and is gone from the next tick's. It may
+    /// have started in the tick (the jump's arrival, a gate's exit after
+    /// its movie) or in input before it (a gate's exit with no movie), so
+    /// it is timed by the frames drawn, not by a tick's `dt`.
+    pub(super) fn present_jump_effect(&mut self) {
+        if let Some(effect) = &mut self.fade_in {
+            effect.presented();
+        }
+    }
+
     /// The jump's effect, while it plays: the warp and its fade to white
-    /// until the ship arrives, or else the arrival's fade-in (or flash).
+    /// until the ship arrives, or else the arrival's fade-in (or its white
+    /// flash, on the one frame drawn after the arrival).
     #[must_use]
     pub fn jump_effect(&self) -> Option<&JumpEffect> {
         self.jump.as_ref().or(self.fade_in.as_ref())
@@ -234,8 +248,10 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// ([`FlightFrame::warp_end_due`](nova_sim::flight_frame::FlightFrame::warp_end_due),
     /// read from the kept frame, which the steps and the effect's start
     /// have just filled), the ship arrives ([`FlightView::arrive`]), and
-    /// the rest of the effect, the fade-in or the white flash, plays over
-    /// the new system as the arrival's fade-in. A warp ended on double
+    /// the rest of the effect plays over the new system as the arrival's
+    /// fade-in: the fade-in from white, or, without the fades, the white
+    /// flash on the arrival's frame alone
+    /// ([`FlightView::present_jump_effect`]). A warp ended on double
     /// time's second pass has its frame between the passes drawn first
     /// ([`FlightView::holding_between_passes`]): that frame shows the old
     /// system, and the arrival follows on the next step, which stops

@@ -277,8 +277,9 @@
 //!   once. The ship comes out in the new system, which is read and laid
 //!   out, the message line says so ([`arrival_message_with`]), and the
 //!   screen fades in from white out of a hypergate
-//!   ([`JumpEffect::emerging`]) or flashes white out of a wormhole
-//!   ([`JumpEffect::flash`]). The request's line, the greeting and the
+//!   ([`JumpEffect::emerging`]), or shows white on one presented frame
+//!   with the Hyperspace Effects preference off; out of a wormhole it shows
+//!   no white, as the original never flushes the wormhole's. The request's line, the greeting and the
 //!   denial at a hypergate, and why a gate cannot be entered, are in the
 //!   gate's own words ([`request_line`], [`approach_greeting`],
 //!   [`HYPERGATE_DENIED`], [`gate_refusal_message`]).
@@ -1403,7 +1404,8 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// white.
     jump: Option<JumpEffect>,
     /// The rest of an arrival's effect, once the ship has arrived: the
-    /// fade-in from white, or the white flash. Flight goes on under it.
+    /// fade-in from white, or the white flash for one presented frame.
+    /// Flight goes on under it.
     fade_in: Option<JumpEffect>,
     /// The lines a double-time frame's second pass raised, worded, for the
     /// frame after (see the `between_passes` module): relayed once, at the

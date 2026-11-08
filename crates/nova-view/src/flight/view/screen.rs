@@ -73,9 +73,12 @@ impl<
     /// its passes is drawn ([`FlightView::holding_between_passes`]), that
     /// tick's steps then run in the new system
     /// ([`FlightView::arrival_frame`]). From then on the
-    /// rest of the effect, the fade-in or the white flash, plays over the
-    /// new system; that plays on with the map open too, as the original's
-    /// display fade does. A jump the session gave up instead is settled at
+    /// rest of the effect plays over the new system: the fade-in, which
+    /// plays on with the map open too, as the original's display fade
+    /// does, or, without the fades, the white flash, which shows on the
+    /// arrival's frame alone. The tick ends by marking the effect shown on
+    /// the frame about to be drawn ([`FlightView::present_jump_effect`]),
+    /// whichever early return the tick took. A jump the session gave up instead is settled at
     /// the top of the next tick ([`FlightView::settle_given_up_jump`]). The
     /// escort menu times out on every step the map is shut.
     ///
@@ -93,6 +96,7 @@ impl<
     /// runs under it.
     fn tick(&mut self, dt: Duration) {
         self.tick_then(dt);
+        self.present_jump_effect();
         self.sync_touch_controls();
     }
 

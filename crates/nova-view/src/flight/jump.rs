@@ -37,8 +37,33 @@
 //!
 //! When the Hyperspace Effects preference is off ([`JumpEffect::warp`]'s
 //! `fades` false), the session lights no `_hyperGamma`, so the scene
-//! never fades out, and the arrival frame shows solid white once,
-//! [`JumpPhase::Flash`] for [`ARRIVAL_FLASH_FOR`]; there is no fade-in.
+//! never fades out, and the arrival shows solid white for one presented
+//! frame, [`JumpPhase::Flash`]; there is no fade-in.
+//!
+//! The arrival (`_HandlePlayer` @0x6bbb8-0x6c625) paints the work area
+//! white (`ForeColor(30)`, `PaintRect` @0x6be49-0x6be65), copies it to the
+//! window (`CopyBits` @0x6bf1d) and flushes it (`QDFlushPortBuffer`
+//! @0x6bf3a), whatever the preference. Later in the same call it sets the
+//! new system up, repaints the frames in its colour (@0x6c5b0-0x6c5f6) and
+//! runs `_RefreshSAT` (@0x6c605), whose `_SWUpdateSpriteWorld` copies the
+//! work frame over the window and flushes it (@0xb94ae). So the white is
+//! on screen from one flush to the next inside the arrival, never to the
+//! arrival frame's own flush (`_PlayGame` @0x45e82), in single time and on
+//! either pass of double time. Mac OS X's beam-synced flushes hold each
+//! image for at least one display refresh, which one presented frame of
+//! ours stands for, as for the take-off's nav flash (the `departure`
+//! module of the flight view). How long the arrival's own work runs, which
+//! can hold the white longer on a slow machine, can't be replicated.
+//!
+//! So the flash is timed by the frames drawn, not by display time: it
+//! shows on the first frame drawn after it starts
+//! ([`JumpEffect::presented`]) and ends at the advance after it
+//! ([`JumpEffect::advance`]), whatever that advance's `dt`. It can start
+//! in a tick (the jump's arrival, a gate's exit after its movie) or in
+//! input (a gate's exit with no movie), and either way the next frame drawn
+//! is its one. The legacy pipeline's path past the flush
+//! (`_BlitPixieRectDrawProc` @0x6beb3) is not built: the engine runs the
+//! default pipeline.
 //!
 //! # The original's effect
 //!
@@ -57,7 +82,9 @@
 //!   the HUD whites out too; the flight view draws the fade over
 //!   everything.
 //! - @0x6bb5e-0x6c70b: the warp ends on the warp clock, the session's to
-//!   decide; @0x6be44-0x6bf3a: the arrival frame is painted solid white.
+//!   decide; @0x6be44-0x6bf3a: the arrival paints the work area solid
+//!   white and flushes it, before `_RefreshSAT` shows the new system at its
+//!   next flush (see "Without the fades").
 //! - `_HandlePlayer` @0x6840b-0x6841f: on the next frame `_FadeWhiteOut`
 //!   @0x54d1 fades the display back from white over 1.5 s, which
 //!   [`FADE_IN_FOR`] matches.
@@ -102,19 +129,31 @@
 //! still accelerates away), `_HandlePlayer` @0x683af (no `_FadeWhiteIn`)
 //! and `_PlayerEnterHypergate` @0x63c30 (no `_FadeWhiteOut`). The session
 //! holds the preference for the first two (`Session::set_hyperspace_effects`).
-//! The arrival frame @0x6be44 is painted white without testing it, which
-//! [`JumpPhase::Flash`] stands for. The phase text's other reading,
+//! The arrival's white @0x6be44 is painted without testing it, which
+//! [`JumpPhase::Flash`] stands for; with the fades on, the display fade to
+//! white already covers it. The phase text's other reading,
 //! arrival at once, is recorded in task `bible-vs-engine-settings`.
 //!
 //! # Gates
 //!
-//! Coming out of a hypergate or wormhole plays only the arrival's half,
-//! the ship having arrived at once. `_PlayerEnterHypergate` paints the
-//! work area white (`ForeColor(30)`, @0x63b44-0x63b5b), then fades the
-//! display back from white with `_FadeWhiteOut` unless the preference
-//! skips it (@0x63c25-0x63c40): [`JumpEffect::emerging`].
-//! `_PlayerEnterWormhole` paints the window white once (@0x643ea-0x64414)
-//! and never fades, whatever the preference: [`JumpEffect::flash`].
+//! Coming out of a hypergate plays only the arrival's half, the ship
+//! having arrived at once: [`JumpEffect::emerging`].
+//! `_PlayerEnterHypergate` paints the work area white (`ForeColor(30)`,
+//! @0x63b44-0x63b5b), copies it to the window (`CopyBits` @0x63c03) and
+//! flushes it (`QDFlushPortBuffer` @0x63c20), then fades the display back
+//! from white with `_FadeWhiteOut` unless the preference skips it
+//! (@0x63c25-0x63c40). Its `_RefreshSAT` (@0x63ede) shows the new system at
+//! the next flush. So with the preference off its white is the jump's, one
+//! presented frame ([`JumpPhase::Flash`]); with it on, the fade from white
+//! covers it ([`JumpPhase::FadeIn`]).
+//!
+//! Passing through a wormhole shows no white, whatever the preference, so
+//! it has no effect. `_PlayerEnterWormhole` paints the window port itself
+//! white (`SWSetPortToWindow` @0x643f5, `PaintRect` @0x64414) but nothing
+//! flushes it: none of the calls between it and `_RefreshSAT` (@0x64790)
+//! reaches `QDFlushPortBuffer`, and `_RefreshSAT`'s `_SWUpdateSpriteWorld`
+//! copies the work frame over the window before its first flush. It never
+//! fades either.
 //!
 //! # Texts under the white
 //!
@@ -147,16 +186,12 @@ pub const FADE_OUT_FOR: Duration = Duration::from_millis(1500);
 /// How long the new system takes to fade in: the original's 1.5 s, as its
 /// `_FadeWhiteOut` fades the display back from white.
 pub const FADE_IN_FOR: Duration = Duration::from_millis(1500);
-/// How long the arrival frame shows solid white when the jump plays
-/// without its fades: one frame of the original's 30 a second, ours, as
-/// its arrival frame is painted white whatever the preference.
-pub const ARRIVAL_FLASH_FOR: Duration = Duration::from_millis(33);
 /// The colour the screen fades to, at full alpha: white, as the original's
 /// `_FadeWhiteIn` and `_FadeWhiteOut` fade the display.
 pub const FADE_COLOR: Color = Color::WHITE;
 
 /// Where the effect is, each timed phase with how far through it, in
-/// `[0, 1)`.
+/// `[0, 1)`; the white flash is untimed, as it lasts one presented frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum JumpPhase {
     /// The ship warps, the screen not yet lit.
@@ -167,9 +202,10 @@ pub enum JumpPhase {
     White,
     /// The new system fades in.
     FadeIn(f32),
-    /// The arrival frame shows solid white, when the jump plays without
-    /// its fades.
-    Flash(f32),
+    /// The screen shows solid white, when the jump plays without its
+    /// fades: from the arrival until the first advance after a frame has
+    /// been drawn with it (see "Without the fades" in the module docs).
+    Flash,
     /// It is over.
     Done,
 }
@@ -178,12 +214,26 @@ pub enum JumpPhase {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct JumpEffect {
     /// Whether it fades in from white on arrival, as the Hyperspace
-    /// Effects preference asks; without, the arrival flashes white once.
+    /// Effects preference asks; without, the arrival flashes white for one
+    /// presented frame.
     fades: bool,
     /// How long it has faded to white, once lit.
     white: Option<Duration>,
     /// How long since the ship arrived, once it has.
     arrived: Option<Duration>,
+    /// How far an unfaded arrival's white flash has got.
+    flash: Flash,
+}
+
+/// How far the white flash of an arrival without the fades has got.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Flash {
+    /// No frame has been drawn with it yet.
+    Waiting,
+    /// A frame has been drawn with it: the next advance ends it.
+    Presented,
+    /// It is over.
+    Gone,
 }
 
 impl JumpEffect {
@@ -195,28 +245,24 @@ impl JumpEffect {
             fades,
             white: None,
             arrived: None,
+            flash: Flash::Waiting,
         }
     }
 
     /// The effect of coming out of a hypergate: the new system fades in
     /// from white ([`JumpPhase::FadeIn`], for [`FADE_IN_FOR`]) when `fades`,
     /// as the Hyperspace Effects preference is on, and otherwise the screen
-    /// shows solid white once ([`JumpPhase::Flash`]): the arrival's half,
-    /// the ship having arrived already. See "Gates" in the module docs.
+    /// shows solid white for one presented frame ([`JumpPhase::Flash`]):
+    /// the arrival's half, the ship having arrived already. See "Gates" in
+    /// the module docs.
     #[must_use]
     pub fn emerging(fades: bool) -> Self {
         Self {
             fades,
             white: None,
             arrived: Some(Duration::ZERO),
+            flash: Flash::Waiting,
         }
-    }
-
-    /// The effect of passing through a wormhole: the screen shows solid
-    /// white once ([`JumpPhase::Flash`]), whatever the preference.
-    #[must_use]
-    pub fn flash() -> Self {
-        Self::emerging(false)
     }
 
     /// Starts the fade to white, as `_FadeWhiteIn` does once `_hyperGamma`
@@ -237,6 +283,7 @@ impl JumpEffect {
             fades: true,
             white: None,
             arrived: Some(Duration::ZERO),
+            flash: Flash::Waiting,
         })
     }
 
@@ -247,12 +294,27 @@ impl JumpEffect {
     }
 
     /// Plays `dt` more of the effect: of its arrival's half once the ship
-    /// has arrived, else of its fade to white once lit.
+    /// has arrived, else of its fade to white once lit. An unfaded
+    /// arrival's white flash that a frame has shown is over, whatever `dt`.
     pub fn advance(&mut self, dt: Duration) {
         if let Some(arrived) = &mut self.arrived {
             *arrived = arrived.saturating_add(dt);
+            if self.flash == Flash::Presented {
+                self.flash = Flash::Gone;
+            }
         } else if let Some(white) = &mut self.white {
             *white = white.saturating_add(dt);
+        }
+    }
+
+    /// The frame about to be drawn shows the effect as it stands: an
+    /// unfaded arrival's white flash is marked shown, so the next
+    /// [`advance`](Self::advance) ends it. The fades run on their own
+    /// clock, so nothing else changes. See "Without the fades" in the
+    /// module docs.
+    pub fn presented(&mut self) {
+        if self.arrived.is_some() && !self.fades && self.flash == Flash::Waiting {
+            self.flash = Flash::Presented;
         }
     }
 
@@ -268,11 +330,11 @@ impl JumpEffect {
                     JumpPhase::Done
                 }
             }
-            (Some(at), _) => {
-                if at < ARRIVAL_FLASH_FOR {
-                    JumpPhase::Flash(fraction(at, ARRIVAL_FLASH_FOR))
-                } else {
+            (Some(_), _) => {
+                if self.flash == Flash::Gone {
                     JumpPhase::Done
+                } else {
+                    JumpPhase::Flash
                 }
             }
             (None, None) => JumpPhase::Warp,
@@ -328,7 +390,7 @@ impl JumpEffect {
             JumpPhase::Warp | JumpPhase::Done => 0,
             JumpPhase::FadeOut(p) => alpha(p),
             JumpPhase::FadeIn(p) => alpha(1.0 - p),
-            JumpPhase::White | JumpPhase::Flash(_) => u8::MAX,
+            JumpPhase::White | JumpPhase::Flash => u8::MAX,
         }
     }
 
@@ -463,17 +525,22 @@ mod tests {
     }
 
     #[test]
-    fn without_fades_the_arrival_flashes_white_once() {
+    fn without_fades_the_arrival_flashes_white_until_the_advance_after_it_is_drawn() {
         let mut effect = JumpEffect::warp(false);
         assert_eq!(effect.phase(), JumpPhase::Warp);
         effect.arrive();
-        assert_eq!(effect.phase(), JumpPhase::Flash(0.0));
+        assert_eq!(effect.phase(), JumpPhase::Flash);
         assert_eq!(effect.fade_alpha(), 255);
-        effect.advance(ms(32));
-        assert!(!effect.done());
-        effect.advance(ms(1));
-        assert!(effect.done());
-        assert_eq!(ARRIVAL_FLASH_FOR, ms(33));
+        effect.advance(ms(40));
+        assert_eq!(
+            effect.phase(),
+            JumpPhase::Flash,
+            "not drawn yet, as when input started it"
+        );
+        effect.presented();
+        assert_eq!(effect.phase(), JumpPhase::Flash, "the frame drawn shows it");
+        effect.advance(Duration::ZERO);
+        assert!(effect.done(), "only a frame drawn counts, not its dt");
     }
 
     #[test]
@@ -488,11 +555,37 @@ mod tests {
     }
 
     #[test]
-    fn out_of_a_hypergate_without_fades_and_out_of_a_wormhole_the_screen_flashes_white() {
-        for mut effect in [JumpEffect::emerging(false), JumpEffect::flash()] {
-            assert_eq!(effect.phase(), JumpPhase::Flash(0.0));
-            assert_eq!(effect.fade_alpha(), 255);
-            effect.advance(ARRIVAL_FLASH_FOR);
+    fn out_of_a_hypergate_without_fades_the_screen_flashes_white_for_one_presented_frame() {
+        let mut gate = JumpEffect::emerging(false);
+        assert_eq!(gate.phase(), JumpPhase::Flash);
+        assert_eq!(gate.fade_alpha(), 255);
+        gate.advance(ms(40));
+        assert_eq!(gate.phase(), JumpPhase::Flash, "not drawn yet");
+        gate.presented();
+        gate.advance(Duration::ZERO);
+        assert!(gate.done());
+    }
+
+    #[test]
+    fn presenting_leaves_a_fade_in_on_its_own_clock() {
+        let mut warping = JumpEffect::warp(true);
+        let before = warping;
+        warping.presented();
+        assert_eq!(warping, before, "before the arrival it changes nothing");
+        let mut lit_warp = lit(ms(300));
+        let before = lit_warp;
+        lit_warp.presented();
+        assert_eq!(lit_warp, before, "nor through the fade-out");
+        let mut arrived = JumpEffect::warp(true);
+        arrived.arrive();
+        for mut effect in [JumpEffect::emerging(true), arrived] {
+            let before = effect;
+            effect.presented();
+            assert_eq!(effect, before);
+            effect.advance(ms(750));
+            effect.presented();
+            assert_eq!(effect.phase(), JumpPhase::FadeIn(0.5));
+            effect.advance(ms(750));
             assert!(effect.done());
         }
     }
@@ -512,7 +605,6 @@ mod tests {
         effect.advance(ms(16));
         assert!(!effect.faded(), "the next pass's _FadeWhiteOut (@0x6841f)");
         assert!(!JumpEffect::emerging(true).faded(), "a gate lights nothing");
-        assert!(!JumpEffect::flash().faded());
         assert!(
             !lit(ms(100)).given_up().expect("lit").faded(),
             "given up, faded out"

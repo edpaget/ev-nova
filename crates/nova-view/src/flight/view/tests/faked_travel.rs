@@ -792,7 +792,10 @@ fn with_effects_off_the_arrival_flashes_white_once() {
         Some(Color::WHITE),
         "opaque white"
     );
-    view.fade_frame(ms(33));
+    // The white lasts one presented frame (`_HandlePlayer` @0x6bf3a to
+    // `_RefreshSAT`'s first flush, F2), not a time.
+    view.present_jump_effect();
+    view.fade_frame(ms(1));
     assert_eq!(view.jump_effect(), None, "no fade in");
     let mut on = faked(sol()).with_hyperspace_effects(false);
     on.set_hyperspace_effects(true);
@@ -806,6 +809,54 @@ fn with_effects_off_the_arrival_flashes_white_once() {
         ),
         "set back on, the next jump fades"
     );
+}
+
+/// The colour of the fade `view` draws over its screen, if any, as
+/// [`Screen::draw`] draws it.
+fn screen_fade(view: &Faked) -> Option<Color> {
+    let mut list = DrawList::new();
+    Screen::draw(view, &mut list);
+    fade(&list).map(|(_, color)| color)
+}
+
+/// Asserts that `view`, its warp's end ticked with the Hyperspace Effects
+/// off, arrived on that tick and drew the arrival's white on its frame,
+/// and that the next tick, with no step, draws the new system with no
+/// white: `_HandlePlayer` flushes the white (@0x6bf3a) and `_RefreshSAT`'s
+/// first flush (@0xb94ae) shows the new system inside the same arrival,
+/// one display refresh, one presented frame of ours (F2).
+#[track_caller]
+fn the_white_shows_on_the_arrivals_frame_alone(view: &mut Faked) {
+    assert!(sent_but_lines(view).contains(&FlightCommand::Arrive));
+    assert_eq!(screen_fade(view), Some(Color::WHITE), "the arrival's frame");
+    view.tick(ms(1));
+    assert_eq!(screen_fade(view), None, "the next tick's draw");
+    assert_eq!(view.jump_effect(), None);
+    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+}
+
+#[test]
+fn with_effects_off_the_arrivals_white_shows_on_its_frame_and_the_next_tick_shows_the_new_system() {
+    let mut view = faked(sol()).with_hyperspace_effects(false);
+    jump_now(&mut view);
+    super::faked_screen::warp_ends(&mut view);
+    view.sim
+        .queue_report(super::stepping::one_step(vec![PassReport::default()]));
+    view.tick(TICK);
+    the_white_shows_on_the_arrivals_frame_alone(&mut view);
+}
+
+#[test]
+fn a_first_pass_warp_end_in_double_time_flashes_on_its_own_frame_alone() {
+    let mut view = faked(sol()).with_hyperspace_effects(false);
+    jump_now(&mut view);
+    super::faked_screen::warp_ends(&mut view);
+    view.sim.queue_report(doubled_from(FlightFrame {
+        warp_end_due: true,
+        ..under_way(true)
+    }));
+    view.tick(TICK);
+    the_white_shows_on_the_arrivals_frame_alone(&mut view);
 }
 
 #[test]
