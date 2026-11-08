@@ -15,14 +15,17 @@
 //!
 //! | Bible | Record | Fields |
 //! |---|---|---|
-//! | `factions/` | `gövt` | `color` and `ship_color` from `color`, as `00RRGGBB` |
+//! | `factions/` | `gövt` | `color` and `ship_color` from `color`, as `00RRGGBB`; one that keeps the law (not `lawless`) `SmugPenalty` [`kits::LAW_SMUGGLE_PENALTY`], `ScanFine` [`kits::LAW_SCAN_FINE`] and `ScanMask` [`kits::LAWLESS_KIT_SCAN`], placeholders, so its scans find a lawless kit; a lawless one none |
 //! | `systems/` | `sÿst` | `x_pos`/`y_pos` from `map`; `govt` from `government`; `nav_def` its stellars, then its gates, each in ID order; the civilian traffic; no `con` links |
-//! | `stellars/` | `spöb` | `x_pos`/`y_pos` from `position`; `govt` from `owner`; `flags` from `services` and `kind` ([`records::stellar_flags`]); no `hyper_link`s |
+//! | `stellars/` | `spöb` | `x_pos`/`y_pos` from `position`; `govt` from `owner`; `flags` from `services` and `kind` ([`records::stellar_flags`]); no `hyper_link`s; a law-keeping owner's `TechLevel` [`kits::YARD_TECH_LEGAL`] and `MinStatus` 0, a lawless owner's or an unowned one's `TechLevel` [`kits::YARD_TECH_LAWLESS`] and `MinStatus` [`records::ANY_RECORD`] |
 //! | a stellar's body | `dësc` | the body, trimmed, at its `spöb`'s ID: the engine reads a stellar's landing text from the `dësc` with its `spöb`'s ID; an empty body has none |
-//! | a system's `jump_points` | hypergate `spöb` ([`gates`]) | numbered after the last stellar; `x_pos`/`y_pos` from `position`; `govt` from `owner`; `flags` `CAN_LAND`; `flags2` the hypergate bit; `hyper_link[0]` the partner point's gate; named for the partner's system; a random exit heading |
-//! | `ships/` hulls | `shïp` and `shän` ([`fleet`]) | `speed`, `shields`, `hull` and `cargo` as `Speed`, `Shield`, `Armor` and `Holds`; placeholder acceleration, turn rate, fuel and crew; the `shän` only `BaseXSize`/`BaseYSize` from `size` |
-//! | (placeholder) | `düde` 128 ([`fleet`]) | "Civilian traffic": every civilian hull at even odds, wimpy traders of no government |
-//! | `outfits/` | `oütf` ([`outfits`]) | its `name`, and `Cost` from `price`; massless, doing nothing, with no `Max` and never for sale (`TechLevel` 0x7fff); `mount`, `damage`, `range`, `reload` and `model` aren't read |
+//! | a system's `jump_points` | hypergate `spöb` ([`gates`]) | numbered after the last stellar; `x_pos`/`y_pos` from `position`; `govt` from `owner`; `flags` `CAN_LAND`; `flags2` the hypergate bit; `hyper_link[0]` the partner point's gate; named for the partner's system; a random exit heading; `MinStatus` [`records::ANY_RECORD`] |
+//! | `ships/`, hulls and variants | `shïp` and `shän` ([`fleet`]) | through the `base` chain: `speed`, `shields`, `hull` and `cargo` as `Speed`, `Shield`, `Armor` and `Holds`; placeholder acceleration, turn rate, fuel and crew; its kits as `DefaultItems`; its chain's hardpoints as `MaxGun` and `MaxTur`; its hardpoints' weapon outfits as stock weapons; the kit `fits` bits of its `role` as `Contribute`; the `shän` `BaseXSize`/`BaseYSize` from `size` and its hardpoints' and kits' as exit points |
+//! | (placeholder) | `düde` 128 ([`fleet`]) | "Civilian traffic": every civilian hull (no `base`, no `mods`) at even odds, wimpy traders of no government |
+//! | `outfits/` | `oütf` ([`outfits`]) | its `name`, and `Cost` from `price`; massless, with no `Max` and never for sale (`TechLevel` 0x7fff); a weapon (`damage` above 0, not a `bay`) a `ModType` 1 naming its `wëap`, `Flags` gun or turret; any other doing nothing; `model` isn't read |
+//! | a weapon outfit | `wëap` ([`outfits`]) | numbered in outfit id order; `damage`, `range` and `reload` as damage, life and `Reload` at a placeholder speed; unguided, turreted for a turret; its mount's `ExitType`; no graphic, sound or explosion |
+//! | `mods/` | `oütf` ([`kits`]) | numbered after the outfits; `Cost` from `price`; `Max` 1, `BuyRandom` 100, hidden unless it fits; its effects in the four `ModType` slots; its `fits` as a `Require` bit; `fitted_at` as `TechLevel` and, lawless, `ScanMask`; its hardpoints' outfits given by `OnPurchase` and taken back by `OnSell` |
+//! | a ship's chain hardpoints, a kit's hardpoints and `attention` | the store's fittings ([`GameData::fittings`], [`fleet`], [`kits`]) | each `shïp`'s own exit spots and each kit `oütf`'s, and each kit's attention, which `nova_sim::dock_scan` reads |
 //! | `starts/` | `chär` ([`fleet`]) | its hull, its system in `system[0]`, its cash, and a placeholder date |
 //! | a hull's `model`, `livery` and `size` | a ship stand-in ([`looks`]) | its model seen from above, painted by its livery, in pixels at [`fleet::PX_PER_METRE`]; else its size box in its livery's primary, or bare |
 //! | a stellar's `visual` | a stellar stand-in ([`looks`]) | a station's or outpost's model seen from above; else a disc in its look's first colour, its owner's, or bare grey |
@@ -63,8 +66,18 @@
 //!   records but no place in it, all named in one problem.
 //! - A jump point whose `to` names no jump point maps to a gate with no
 //!   link, which refuses its entry.
-//! - A start whose ship is no hull, or whose system isn't there, is left
+//! - A start whose ship isn't there, or whose system isn't there, is left
 //!   out.
+//! - A ship whose `base` chain loops or names a ship that isn't there is
+//!   left out, and a start in it with it. One with more than eight
+//!   default items or stock weapons keeps the first eight; one with more
+//!   than four hardpoints of a kind fires from the first four's places. A
+//!   mod kit or a hardpoint outfit it names itself that isn't there is
+//!   left out.
+//! - A kit needing more than four `ModType` slots keeps the first four;
+//!   one whose hardpoint names an outfit that isn't there doesn't give
+//!   it; one past the 64th distinct `fits` set is left out ([`kits`]).
+//! - A weapon past the last `wëap` ID does nothing ([`outfits`]).
 //! - A record past its kind's ID range is left out.
 //! - A stellar's `dialog` whose compiled `dialog/<file>.ink.json` is
 //!   missing maps no conversation. One whose knot the story lacks does the
@@ -93,11 +106,15 @@
 //! - `regions/` and `harshness`, and a system's `hazards`: Nova has no
 //!   region record, and hazards belong to a later hazards phase (nebulae,
 //!   murk, interference). They stay readable on the loaded `Galaxy`.
-//! - Ship variants (a `base` or `mods`) and `mods/`: `play-the-sample`
-//!   phase 3. `outfits/` map only as things a pilot can own
-//!   ([`outfits`]): no weapon or system reads them, and no hardpoint is
-//!   fitted, so the hulls are unarmed.
-//!   A livery's `decals` aren't drawn.
+//! - A kit's `hidden_cargo`: nothing in the new game is contraband cargo
+//!   yet. A kit's `attention` is read only as "any": how much more 2 is
+//!   noticed than 1 waits for the bible's law numbers.
+//! - A launcher's homing and ammunition, and `bay` hardpoints and outfits
+//!   as fighter bays: a launcher fires unguided, and a bay does nothing.
+//! - Loose outfits for sale: no yard sells one until the bible says which
+//!   yards sell which weapons.
+//! - Variants in traffic: the civilian traffic flies hulls alone.
+//! - A livery's `decals` aren't drawn, nor are mounted outfits' models.
 //! - Traffic: the bible authors none, so the civilian `düde` and each
 //!   system's traffic are placeholders ([`fleet`]), as are a hull's
 //!   acceleration, turn rate, fuel and crew and a start's date.
@@ -121,6 +138,7 @@ pub mod fixture;
 pub mod fleet;
 pub mod gates;
 pub mod ids;
+pub mod kits;
 pub mod looks;
 mod map;
 pub mod missions;
@@ -195,6 +213,7 @@ pub fn load(source: &impl Source, dir: &Path) -> NewGame {
         records,
         ids,
         problems: mapping,
+        fittings,
     } = map(&galaxy);
     problems.extend(mapping);
     let stand_ins = looks::stand_ins(&galaxy, &ids, source, &mut problems);
@@ -205,7 +224,8 @@ pub fn load(source: &impl Source, dir: &Path) -> NewGame {
         data: GameData::from_decoded(dir.to_path_buf(), records)
             .with_stand_ins(stand_ins)
             .with_dialogs(dialogs)
-            .with_storylines(storylines),
+            .with_storylines(storylines)
+            .with_fittings(fittings),
         ids,
         problems,
         lfs_pointers,

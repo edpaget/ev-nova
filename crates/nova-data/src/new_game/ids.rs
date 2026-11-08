@@ -4,9 +4,13 @@
 //! maps already give), counting up from 128, the first ID Nova gives
 //! data. Each kind has its range: [`GOVT_IDS`] for factions,
 //! [`SYSTEM_IDS`] and [`STELLAR_IDS`] for systems and stellars,
-//! [`SHIP_IDS`] for hulls, [`OUTFIT_IDS`] for outfits and
-//! [`CHARACTER_IDS`] for starts. A record past
-//! its range's end gets no ID, and the caller leaves it out.
+//! [`SHIP_IDS`] for ships, [`OUTFIT_IDS`] for outfits, [`WEAPON_IDS`]
+//! for the outfits that are weapons and [`CHARACTER_IDS`] for starts. A
+//! record past its range's end gets no ID, and the caller leaves it out.
+//!
+//! The mod kits share [`OUTFIT_IDS`] with the outfits, numbered after the
+//! last outfit's ID in kit id order (`super::kits`), so adding a kit
+//! renumbers no outfit.
 //!
 //! The jump points' gates share [`STELLAR_IDS`] with the stellars. They
 //! are numbered after the last stellar's ID, in (system id, point id)
@@ -42,6 +46,9 @@ pub const SHIP_IDS: RangeInclusive<i16> = 128..=895;
 /// set operators act on.
 pub const OUTFIT_IDS: RangeInclusive<i16> = 128..=639;
 
+/// The `wëap` IDs Nova gives data: 128 to 383.
+pub const WEAPON_IDS: RangeInclusive<i16> = 128..=383;
+
 /// The `chär` IDs the new game's starts take: 128 to 255.
 pub const CHARACTER_IDS: RangeInclusive<i16> = 128..=255;
 
@@ -60,12 +67,17 @@ pub struct IdTable {
     pub stellars: BTreeMap<Id, i16>,
     /// Each jump point's hypergate `spöb`, by `system/point`.
     pub gates: BTreeMap<PointRef, i16>,
-    /// Each hull's `shïp` and `shän`.
+    /// Each ship's `shïp` and `shän`, a hull's or a variant's.
     pub ships: BTreeMap<Id, i16>,
     /// Each start's `chär`.
     pub starts: BTreeMap<Id, i16>,
     /// Each outfit's `oütf`.
     pub outfits: BTreeMap<Id, i16>,
+    /// Each outfit's `wëap`, for the outfits that are weapons, by the
+    /// outfit's id.
+    pub weapons: BTreeMap<Id, i16>,
+    /// Each mod kit's `oütf`.
+    pub kits: BTreeMap<Id, i16>,
 }
 
 /// Numbers `ids`, in the order given, from the start of `range`: the
@@ -125,6 +137,7 @@ mod tests {
         assert_eq!(STELLAR_IDS, 128..=2175);
         assert_eq!(SHIP_IDS, 128..=895);
         assert_eq!(OUTFIT_IDS, 128..=639);
+        assert_eq!(WEAPON_IDS, 128..=383);
     }
 
     #[test]

@@ -13,8 +13,12 @@ use nova_galaxy_format::source::MemSource;
 
 use super::fleet::{PX_PER_METRE, START_DATE, TRAFFIC_SHIPS};
 use super::ids::CIVILIAN_DUDE;
+use super::kits::{
+    LAW_SCAN_FINE, LAW_SMUGGLE_PENALTY, LAWLESS_KIT_SCAN, YARD_TECH_LAWLESS, YARD_TECH_LEGAL,
+};
 use super::records::{
-    neutral_character, neutral_dude, neutral_govt, neutral_ship, neutral_ship_anim, neutral_stellar,
+    ANY_RECORD, neutral_character, neutral_dude, neutral_govt, neutral_ship, neutral_ship_anim,
+    neutral_stellar,
 };
 use super::*;
 use crate::decode::Record;
@@ -27,7 +31,7 @@ use crate::records::ship_anim::ShipAnim;
 use crate::records::stellar::{Stellar, flags, flags2};
 use crate::records::system::System;
 use crate::wire::flags::{Flags16, Flags32};
-use crate::wire::id::{GovtId, ShipId, StellarId, SystemId};
+use crate::wire::id::{GovtId, OutfitId, ShipId, StellarId, SystemId, WeaponId};
 use nova_galaxy_format::id::PointRef;
 
 /// The format's test galaxy with its mission's story compiled
@@ -153,9 +157,71 @@ fn a_faction_becomes_a_govt_with_its_name_and_colour() {
     let expected = Govt {
         color: 0x00AA_8800,
         ship_color: 0x00AA_8800,
+        smug_penalty: LAW_SMUGGLE_PENALTY,
+        scan_fine: LAW_SCAN_FINE,
+        scan_mask: Flags16(LAWLESS_KIT_SCAN),
         ..neutral_govt()
     };
-    assert_eq!(*league.record, expected);
+    assert_eq!(*league.record, expected, "it keeps the law");
+    assert_eq!((LAW_SMUGGLE_PENALTY, LAW_SCAN_FINE), (10, 500));
+}
+
+/// The fixture galaxy with `league` lawless.
+fn lawless_league() -> MemSource {
+    galaxy().with(
+        "factions/league.md",
+        "---\nname: League\nkind: minor\ncolor: \"#aa8800\"\nlawless: true\n---\n",
+    )
+}
+
+#[test]
+fn a_lawless_faction_s_govt_is_neutral_but_its_colour() {
+    let game = loaded(&lawless_league());
+    let (_, league): (_, Govt) = named(&game, 128);
+    let expected = Govt {
+        color: 0x00AA_8800,
+        ship_color: 0x00AA_8800,
+        ..neutral_govt()
+    };
+    assert_eq!(league, expected);
+}
+
+#[test]
+fn a_law_keeping_owner_s_stellar_lists_legal_kits_and_clears_by_record() {
+    let yard = stellar(&loaded(&galaxy()), 129);
+    assert_eq!((yard.tech_level, yard.min_status), (YARD_TECH_LEGAL, 0));
+    assert_eq!(YARD_TECH_LEGAL, 1);
+}
+
+#[test]
+fn a_lawless_or_missing_owner_s_stellar_lists_every_kit_and_clears_any_record() {
+    let game = loaded(&lawless_league());
+    let yard = stellar(&game, 129);
+    assert_eq!(
+        (yard.tech_level, yard.min_status),
+        (YARD_TECH_LAWLESS, ANY_RECORD)
+    );
+    let prime = stellar(&loaded(&galaxy()), 128);
+    assert_eq!(prime.govt, None);
+    assert_eq!(
+        (prime.tech_level, prime.min_status),
+        (YARD_TECH_LAWLESS, ANY_RECORD)
+    );
+    assert_eq!(YARD_TECH_LAWLESS, 2);
+}
+
+#[test]
+fn a_stellar_whose_owner_names_no_faction_is_lawless() {
+    let source = galaxy().with(
+        "stellars/alpha-yard.md",
+        "---\nname: Alpha Yard\nkind: station\nsystem: alpha\nposition: [0, 0]\nowner: guild\n\
+         visual: {asset: spire}\n---\n",
+    );
+    let yard = stellar(&loaded(&source), 129);
+    assert_eq!(
+        (yard.tech_level, yard.min_status),
+        (YARD_TECH_LAWLESS, ANY_RECORD)
+    );
 }
 
 #[test]
@@ -391,10 +457,20 @@ fn a_gate_heads_ships_out_at_random_and_sets_nothing_else() {
         flags: Flags32(flags::CAN_LAND),
         flags2: Flags16(flags2::HYPERGATE),
         hyper_link,
+        min_status: ANY_RECORD,
         ..neutral_stellar()
     };
     assert_eq!(stellar(&game, 130), expected);
     assert_eq!(expected.cust_snd_id, -1, "a random exit heading");
+}
+
+#[test]
+fn a_gate_clears_any_record() {
+    let game = loaded(&galaxy());
+    for gate in [130, 131] {
+        assert_eq!(stellar(&game, gate).min_status, ANY_RECORD, "{gate}");
+    }
+    assert_eq!(ANY_RECORD, -32767);
 }
 
 /// The fixture galaxy with `gamma`, holding the one-way point `drop` to
@@ -749,42 +825,44 @@ fn skiff_with_stats() -> MemSource {
     )
 }
 
+/// The ship `ship` of `game`.
+fn ship_of(game: &NewGame, ship: &str) -> Ship {
+    named::<Ship>(game, game.ids.ships[&id(ship)]).1
+}
+
 fn skiff(source: &MemSource) -> Ship {
-    named::<Ship>(&loaded(source), 128).1
+    ship_of(&loaded(source), "skiff")
 }
 
 #[test]
-fn each_hull_is_a_ship_numbered_from_128_with_its_name() {
+fn each_ship_is_a_ship_numbered_from_128_with_its_name() {
     let game = loaded(&galaxy());
-    assert_eq!(game.data.ids(Ship::TYPE), [128], "the skiff alone");
+    assert_eq!(game.data.ids(Ship::TYPE), [128, 129]);
     assert_eq!(
         game.ids
             .ships
             .iter()
             .map(|(s, &n)| (s.to_string(), n))
             .collect::<Vec<_>>(),
-        [("skiff".to_owned(), 128)]
+        [("armed-skiff".to_owned(), 128), ("skiff".to_owned(), 129)],
+        "a variant is a ship too"
     );
-    assert_eq!(named::<Ship>(&game, 128).0, "Skiff");
+    assert_eq!(named::<Ship>(&game, 128).0, "Armed skiff");
+    assert_eq!(named::<Ship>(&game, 129).0, "Skiff");
 }
 
 #[test]
-fn a_ship_with_mods_but_no_base_is_no_hull() {
+fn a_ship_with_mods_but_no_base_maps_but_is_no_traffic() {
     let source = galaxy().with(
         "ships/kitted.md",
         "---\nname: Kitted\nstyle: civilian\nrole: shuttle\nmodel: hull\n\
          size: {length: 8, beam: 4, collision_radius: 4}\nmods: [gun-mount]\n---\n",
     );
     let game = loaded(&source);
-    assert!(!game.ids.ships.contains_key(&id("kitted")));
-    assert_eq!(game.data.ids(Ship::TYPE), [128], "the skiff alone");
-}
-
-#[test]
-fn a_variant_is_not_mapped_and_is_no_problem() {
-    let game = loaded(&galaxy());
-    assert!(!game.ids.ships.contains_key(&id("armed-skiff")));
-    assert_eq!(problems(&game), Vec::<String>::new());
+    assert!(game.ids.ships.contains_key(&id("kitted")));
+    let (_, dude): (_, Dude) = named(&game, CIVILIAN_DUDE);
+    let skiff = Some(ShipId(game.ids.ships[&id("skiff")]));
+    assert_eq!(dude.ship_type[..2], [skiff, None], "the skiff alone");
 }
 
 #[test]
@@ -834,9 +912,277 @@ fn a_hull_sets_nothing_else() {
         holds: 10,
         fuel: 300,
         crew: 1,
+        contribute: crate::Flags64(1),
         ..neutral_ship()
     };
     assert_eq!(skiff(&skiff_with_stats()), expected);
+}
+
+/// The fixture galaxy with a variant of the skiff, `technical`, that sets
+/// its speed and adds the gun mount, and a variant of that, `heavy`, that
+/// sets its hull.
+fn variants() -> MemSource {
+    skiff_with_stats()
+        .with(
+            "ships/technical.md",
+            "---\nname: Technical\nbase: skiff\nstats: {speed: 350}\nmods: [gun-mount]\n---\n",
+        )
+        .with(
+            "ships/heavy.md",
+            "---\nname: Heavy\nbase: technical\nstats: {hull: 90}\n---\n",
+        )
+}
+
+#[test]
+fn a_variant_has_its_base_s_stats_with_its_own_over_them() {
+    let game = loaded(&variants());
+    assert_eq!(problems(&game), Vec::<String>::new());
+    let technical = ship_of(&game, "technical");
+    assert_eq!(
+        (
+            technical.speed,
+            technical.accel,
+            technical.armor,
+            technical.holds
+        ),
+        (350, 350, 50, 10)
+    );
+    let heavy = ship_of(&game, "heavy");
+    assert_eq!(
+        (heavy.speed, heavy.armor, heavy.shield, heavy.maneuver),
+        (350, 90, 30, 15),
+        "two steps down"
+    );
+}
+
+#[test]
+fn a_variant_s_kits_are_its_default_items_before_their_effects() {
+    let game = loaded(&variants());
+    let mount = Some(OutfitId(game.ids.kits[&id("gun-mount")]));
+    for name in ["technical", "heavy"] {
+        let ship = ship_of(&game, name);
+        assert_eq!(ship.default_items1_4, [mount, None, None, None], "{name}");
+        assert_eq!(ship.item_count1_4, [1, 0, 0, 0], "{name}");
+        assert_eq!(
+            ship.holds, 10,
+            "{name}: the kit's cargo comes from the item"
+        );
+    }
+}
+
+#[test]
+fn a_variant_draws_at_its_base_s_size_with_its_kits_mounts() {
+    let game = loaded(&variants());
+    let (_, anim): (_, ShipAnim) = named(&game, game.ids.ships[&id("technical")]);
+    assert_eq!((anim.base_x_size, anim.base_y_size), (4, 8));
+    assert_eq!(anim.turret_pos_x, [0; 4]);
+    assert_eq!(
+        anim.turret_pos_y, [-1; 4],
+        "the gun mount's bed in every turret point"
+    );
+    assert_eq!(
+        anim.gun_pos_y, [0; 4],
+        "the skiff with stats has no nose gun"
+    );
+}
+
+#[test]
+fn a_hull_s_hardpoints_are_its_slots_its_weapons_and_its_firing_positions() {
+    let game = loaded(&galaxy());
+    let skiff = ship_of(&game, "skiff");
+    assert_eq!((skiff.max_gun, skiff.max_tur), (1, 0), "its nose");
+    let blaster = Some(WeaponId(game.ids.weapons[&id("blaster")]));
+    assert_eq!(skiff.weap_type1_4, [blaster, None, None, None]);
+    assert_eq!(skiff.weap_count1_4, [1, 0, 0, 0]);
+    let (_, anim): (_, ShipAnim) = named(&game, game.ids.ships[&id("skiff")]);
+    assert_eq!((anim.gun_pos_x, anim.gun_pos_y), ([0; 4], [3; 4]));
+    let armed = ship_of(&game, "armed-skiff");
+    assert_eq!(
+        (armed.max_gun, armed.max_tur),
+        (1, 0),
+        "the kit's turret slot is its effect, not the chain's"
+    );
+    assert_eq!(armed.weap_type1_4, [blaster, None, None, None]);
+}
+
+#[test]
+fn a_kit_s_hardpoint_outfit_is_a_stock_weapon_of_the_ship_it_is_fitted_to() {
+    let game = loaded(&galaxy().with(
+        "mods/gun-mount.md",
+        "---\nname: Gun mount\nfits: [shuttle]\nfitted_at: lawless\nprice: 100\n\
+         hardpoints:\n  - id: bed\n    mount: turret\n    position: [0, -1]\n    outfit: blaster\n---\n",
+    ));
+    let armed = ship_of(&game, "armed-skiff");
+    let blaster = Some(WeaponId(game.ids.weapons[&id("blaster")]));
+    assert_eq!(armed.weap_type1_4, [blaster, None, None, None]);
+    assert_eq!(
+        armed.weap_count1_4,
+        [2, 0, 0, 0],
+        "the nose's and the bed's"
+    );
+}
+
+#[test]
+fn two_spots_of_a_kind_cycle_through_its_four_points() {
+    let game = loaded(&galaxy().with(
+        "ships/skiff.md",
+        "---\nname: Skiff\nstyle: civilian\nrole: shuttle\nmodel: hull\n\
+         size: {length: 8, beam: 4, collision_radius: 4}\n\
+         hardpoints:\n  - id: a\n    mount: fixed\n    position: [-2, 3]\n\
+         \x20 - id: b\n    mount: fixed\n    position: [2.4, 3.6]\n\
+         \x20 - id: c\n    mount: launcher\n    position: [0, -3]\n\
+         \x20 - id: d\n    mount: bay\n    position: [0, 0]\n---\n",
+    ));
+    let (_, anim): (_, ShipAnim) = named(&game, game.ids.ships[&id("skiff")]);
+    assert_eq!(anim.gun_pos_x, [-2, 2, -2, 2]);
+    assert_eq!(anim.gun_pos_y, [3, 4, 3, 4], "whole pixels");
+    assert_eq!((anim.guided_pos_x, anim.guided_pos_y), ([0; 4], [-3; 4]));
+    let skiff = ship_of(&game, "skiff");
+    assert_eq!((skiff.max_gun, skiff.max_tur), (3, 0), "a bay is no slot");
+}
+
+#[test]
+fn more_than_four_spots_of_a_kind_keep_the_first_four_and_are_a_problem() {
+    let hardpoints = (0..5)
+        .map(|n| format!("  - id: t{n}\n    mount: turret\n    position: [{n}, 0]\n"))
+        .collect::<Vec<_>>()
+        .concat();
+    let game = loaded(&galaxy().with(
+        "ships/skiff.md",
+        &format!(
+            "---\nname: Skiff\nstyle: civilian\nrole: shuttle\n\
+             size: {{length: 8, beam: 4, collision_radius: 4}}\nhardpoints:\n{hardpoints}---\n"
+        ),
+    ));
+    let (_, anim): (_, ShipAnim) = named(&game, game.ids.ships[&id("skiff")]);
+    assert_eq!(anim.turret_pos_x, [0, 1, 2, 3]);
+    let lines = problems(&game);
+    assert!(
+        lines.contains(
+            &"ships/skiff.md: it has more than four turret hardpoints; the first four are its \
+              firing positions"
+                .to_owned()
+        ),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn more_than_eight_default_items_is_a_problem_and_the_rest_are_left_out() {
+    let kits: Vec<String> = (0..9).map(|n| format!("k{n}")).collect();
+    let source = kits.iter().fold(galaxy(), |source, kit| {
+        source.with(
+            &format!("mods/{kit}.md"),
+            "---\nname: K\nfits: [shuttle]\nfitted_at: legal\nprice: 1\n---\n",
+        )
+    });
+    let game = loaded(&source.with(
+        "ships/armed-skiff.md",
+        &format!(
+            "---\nname: Armed skiff\nbase: skiff\nmods: [{}]\n---\n",
+            kits.join(", ")
+        ),
+    ));
+    assert_eq!(
+        problems(&game),
+        ["ships/armed-skiff.md: it has more than eight default items; 1 are left out"]
+    );
+    let armed = ship_of(&game, "armed-skiff");
+    let kit = |n: usize| Some(OutfitId(game.ids.kits[&id(&kits[n])]));
+    assert_eq!(armed.default_items5_8, [kit(4), kit(5), kit(6), kit(7)]);
+    assert_eq!(armed.item_count5_8, [1; 4]);
+}
+
+#[test]
+fn a_mod_kit_or_hardpoint_outfit_that_is_not_there_is_a_problem() {
+    let game = loaded(
+        &galaxy()
+            .with(
+                "ships/armed-skiff.md",
+                "---\nname: Armed skiff\nbase: skiff\nmods: [gun-mount, gone]\n---\n",
+            )
+            .with(
+                "ships/skiff.md",
+                "---\nname: Skiff\nstyle: civilian\nrole: shuttle\n\
+                 hardpoints:\n  - id: nose\n    mount: fixed\n    position: [0, 3]\n    outfit: lost\n---\n",
+            ),
+    );
+    assert_eq!(
+        problems(&game),
+        [
+            "ships/armed-skiff.md: its mod kit `gone` is not in mods/; it is left out",
+            "ships/skiff.md: its hardpoint `nose`'s outfit `lost` is not in outfits/; it is left out",
+        ],
+        "each against the file that names it, once"
+    );
+}
+
+#[test]
+fn a_ship_contributes_the_bit_of_every_kit_set_holding_its_role() {
+    let game = loaded(&galaxy());
+    assert_eq!(
+        skiff(&galaxy()).contribute.bits(),
+        1,
+        "the gun mount fits a shuttle"
+    );
+    let mount = game.ids.kits[&id("gun-mount")];
+    let (_, kit): (_, crate::records::outfit::Outfit) = named(&game, mount);
+    assert_eq!(kit.require.bits(), 1);
+    let crown = galaxy().with(
+        "ships/skiff.md",
+        "---\nname: Skiff\nstyle: crown\nrole: cruiser\n---\n",
+    );
+    assert_eq!(skiff(&crown).contribute.bits(), 0);
+}
+
+#[test]
+fn a_chain_that_loops_or_names_no_base_is_a_problem_and_left_out() {
+    let game = loaded(
+        &galaxy()
+            .with("ships/loop-a.md", "---\nname: A\nbase: loop-b\n---\n")
+            .with("ships/loop-b.md", "---\nname: B\nbase: loop-a\n---\n")
+            .with("ships/lost.md", "---\nname: Lost\nbase: zeppelin\n---\n"),
+    );
+    assert_eq!(
+        problems(&game),
+        [
+            "ships/loop-a.md: its `base` chain loops (loop-a -> loop-b -> loop-a); it is left out",
+            "ships/loop-b.md: its `base` chain loops (loop-b -> loop-a -> loop-b); it is left out",
+            "ships/lost.md: its base `zeppelin` is not in ships/; it is left out",
+        ]
+    );
+    for ship in ["loop-a", "loop-b", "lost"] {
+        assert!(!game.ids.ships.contains_key(&id(ship)), "{ship}");
+    }
+}
+
+#[test]
+fn a_base_that_failed_to_load_leaves_its_variant_out_unreported() {
+    let game = loaded(&galaxy().with("ships/skiff.md", "---\nname: Skiff\nstyle: nowhere\n---\n"));
+    assert!(!game.ids.ships.contains_key(&id("armed-skiff")));
+    let lines = problems(&game);
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.starts_with("ships/armed-skiff.md")),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn the_side_table_holds_each_class_s_chain_spots() {
+    let game = loaded(&galaxy());
+    let nose = vec![crate::Spot {
+        kind: crate::SpotKind::Gun,
+        at: (0, 3),
+    }];
+    let hulls = &game.data.fittings().hulls;
+    assert_eq!(hulls[&ShipId(game.ids.ships[&id("skiff")])], nose);
+    assert_eq!(
+        hulls[&ShipId(game.ids.ships[&id("armed-skiff")])],
+        nose,
+        "its base's, not its kit's"
+    );
 }
 
 #[test]
@@ -851,8 +1197,8 @@ fn a_stat_left_out_is_zero() {
 
 #[test]
 fn a_hull_s_anim_sets_only_its_size() {
-    let game = loaded(&galaxy());
-    let (_, anim): (_, ShipAnim) = named(&game, 128);
+    let game = loaded(&skiff_with_stats());
+    let (_, anim): (_, ShipAnim) = named(&game, game.ids.ships[&id("skiff")]);
     #[allow(clippy::cast_possible_truncation)]
     let px = |metres: f64| (metres * PX_PER_METRE).round() as i16;
     let expected = ShipAnim {
@@ -866,7 +1212,7 @@ fn a_hull_s_anim_sets_only_its_size() {
 
 #[test]
 fn a_hull_past_the_last_ship_id_is_a_problem_and_left_out() {
-    let source = (0..768).fold(galaxy(), |source, n| {
+    let source = (0..767).fold(galaxy(), |source, n| {
         source.with(
             &format!("ships/a{n:03}.md"),
             "---\nname: A\nstyle: civilian\nrole: shuttle\nmodel: hull\n\
@@ -882,7 +1228,11 @@ fn a_hull_past_the_last_ship_id_is_a_problem_and_left_out() {
         past,
         ["ships/skiff.md: it is past the last shïp ID, 895; it is left out"]
     );
-    assert_eq!(game.data.ids(Ship::TYPE).len(), 768);
+    assert_eq!(
+        game.data.ids(Ship::TYPE).len(),
+        768,
+        "the armed skiff among them"
+    );
     assert!(game.ids.starts.is_empty(), "the skiff's start goes with it");
     assert!(
         !problems(&game)
@@ -974,7 +1324,7 @@ fn a_start_is_a_char_with_its_name_ship_system_cash_and_the_placeholder_date() {
     let (day, month, year) = START_DATE;
     let expected = Character {
         cash: 1000,
-        ship_type: Some(ShipId(128)),
+        ship_type: Some(ShipId(game.ids.ships[&id("skiff")])),
         system,
         unknown_0x134: day,
         unknown_0x136: month,
@@ -985,22 +1335,49 @@ fn a_start_is_a_char_with_its_name_ship_system_cash_and_the_placeholder_date() {
 }
 
 #[test]
-fn a_start_in_a_ship_that_is_no_mapped_hull_is_a_problem_and_left_out() {
-    for ship in ["armed-skiff", "barge"] {
-        let source = galaxy().with(
+fn a_start_in_a_ship_that_is_not_there_is_a_problem_and_left_out() {
+    let source = galaxy().with(
+        "starts/first-flight.md",
+        "---\nname: First flight\nsystem: alpha\nship: barge\ncash: 1000\n---\n",
+    );
+    let game = loaded(&source);
+    assert_eq!(
+        problems(&game),
+        ["starts/first-flight.md: its ship `barge` is not in ships/; it is left out"]
+    );
+    assert_eq!(game.data.ids(Character::TYPE), Vec::<i16>::new());
+    assert!(game.ids.starts.is_empty());
+}
+
+#[test]
+fn a_start_in_a_variant_maps() {
+    let source = galaxy().with(
+        "starts/first-flight.md",
+        "---\nname: First flight\nsystem: alpha\nship: armed-skiff\ncash: 1000\n---\n",
+    );
+    let game = loaded(&source);
+    assert_eq!(problems(&game), Vec::<String>::new());
+    let (_, character): (_, Character) = named(&game, 128);
+    assert_eq!(
+        character.ship_type,
+        Some(ShipId(game.ids.ships[&id("armed-skiff")]))
+    );
+}
+
+#[test]
+fn a_start_in_a_ship_left_out_for_its_chain_is_left_out_unreported_again() {
+    let source = galaxy()
+        .with("ships/lost.md", "---\nname: Lost\nbase: zeppelin\n---\n")
+        .with(
             "starts/first-flight.md",
-            &format!("---\nname: First flight\nsystem: alpha\nship: {ship}\ncash: 1000\n---\n"),
+            "---\nname: First flight\nsystem: alpha\nship: lost\ncash: 1000\n---\n",
         );
-        let game = loaded(&source);
-        assert_eq!(
-            problems(&game),
-            [format!(
-                "starts/first-flight.md: its ship `{ship}` is no hull in ships/; it is left out"
-            )]
-        );
-        assert_eq!(game.data.ids(Character::TYPE), Vec::<i16>::new());
-        assert!(game.ids.starts.is_empty());
-    }
+    let game = loaded(&source);
+    assert_eq!(
+        problems(&game),
+        ["ships/lost.md: its base `zeppelin` is not in ships/; it is left out"]
+    );
+    assert!(game.ids.starts.is_empty());
 }
 
 #[test]
@@ -1091,4 +1468,25 @@ fn the_fixture_s_gates_keep_their_points_stabilities() {
         assert_eq!(at.gate, gate_of(gate), "{gate}");
         assert_eq!(at.stability, stability, "{gate}");
     }
+}
+
+#[test]
+fn the_sample_cut_maps_its_kits_weapon_and_yards_without_problems() {
+    let game = open(&super::fixture::sample_folder()).expect("the sample lists");
+    assert_eq!(problems(&game), Vec::<String>::new());
+    let kits: Vec<_> = game.ids.kits.keys().map(ToString::to_string).collect();
+    assert_eq!(kits, ["armour-plating", "gun-mount"]);
+    assert_eq!(
+        game.ids
+            .weapons
+            .keys()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        ["mass-driver"]
+    );
+    let yard = |id_text: &str| stellar(&game, game.ids.stellars[&id(id_text)]);
+    assert_eq!(yard("luyten-exchange").tech_level, YARD_TECH_LEGAL);
+    assert_eq!(yard("marrow-yard").tech_level, YARD_TECH_LAWLESS);
+    assert!(yard("luyten-exchange").flags.bits() & flags::OUTFITTER != 0);
+    assert!(yard("marrow-yard").flags.bits() & flags::OUTFITTER != 0);
 }

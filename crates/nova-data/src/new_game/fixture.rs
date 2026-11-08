@@ -52,7 +52,7 @@ pub fn folder() -> PathBuf {
 /// failure, copied in so no test reads game-bible.
 ///
 /// It holds the factions `commonwealth`, `association`, `harrow-band` and
-/// `marrow-commons`; the regions `commonwealth-rim` and
+/// `marrow-commons`, the last two lawless; the regions `commonwealth-rim` and
 /// `association-border`; the systems `luyten-crossing` (the
 /// commonwealth's), `brightwater` (the association's) and `marrow`, with
 /// the sample's jump points between them alone: the Luyten road
@@ -60,9 +60,14 @@ pub fn folder() -> PathBuf {
 /// Marrow road (`luyten-crossing/marrow-road` to `marrow/luyten-road`) and
 /// the far gate (`marrow/far-gate` to `brightwater/marrow-gate`), every
 /// one stable, the roads to the sample's other systems left out; the
-/// stellars `luyten-exchange` and `marrow-yard`, each with a bar, trade
-/// and fuel; the character `sector-organizer`, the missions' giver; the
-/// hull `light-freighter`, on a placeholder model; the start
+/// stellars `luyten-exchange`, the commonwealth's, a legal yard, and
+/// `marrow-yard`, the commons', a lawless one, each with a bar, trade, an
+/// outfitter and fuel (the full sample's Marrow Yard has no outfitter:
+/// the cut adds one, so a lawless yard is in reach); the character
+/// `sector-organizer`, the missions' giver; the hull `light-freighter`, on
+/// a placeholder model; the sample's mod kits `armour-plating` (legal) and
+/// `gun-mount` (lawless, with a turret bed carrying a `mass-driver`), and
+/// the outfit `mass-driver` (its model left out); the start
 /// `first-flight`, in it, at `luyten-crossing` (the sample starts at
 /// Ninefold, which the cut leaves out); and the storylines
 /// `holding-the-point` and `the-first-failure`, with the sample's four

@@ -751,8 +751,11 @@ mod tests {
         let game = loaded(&source);
         assert_eq!(
             problems(&game),
-            ["outfits/blaster.md: it is past the last oütf ID, 639; it is left out"],
-            "the outfit's problem alone"
+            [
+                "outfits/blaster.md: it is past the last oütf ID, 639; it is left out",
+                "mods/gun-mount.md: it is past the last oütf ID, 639; it is left out",
+            ],
+            "the outfit's problem, and the kit's after it, alone"
         );
         assert_eq!(toll(&game), None);
         assert!(game.data.storylines().missions.contains_key("parcel"));

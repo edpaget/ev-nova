@@ -3,12 +3,14 @@
 //! drawn as a [`StandIn`] the store keeps
 //! ([`GameData::with_stand_ins`](crate::store::GameData::with_stand_ins)).
 //!
-//! - **A hull** with a `size` is its model seen from above, placed at its
+//! - **A ship**, a hull or a variant, with a `size` (its own or its
+//!   nearest base's, as its `model` and `livery` are) is its model seen
+//!   from above, placed at its
 //!   length, its painted materials in its livery's colours, in pixels at
 //!   [`PX_PER_METRE`] (`nova_galaxy_media::top_down`). Without a model
 //!   that reads (a placeholder asset, an LFS pointer, a file that doesn't
 //!   decode), it is its size box in its livery's primary, or bare grey
-//!   ([`BARE`]) without a livery. A hull with no `size` has none, as it
+//!   ([`BARE`]) without a livery. A ship with no `size` has none, as it
 //!   has no `shän`, and draws as the view's crossed box.
 //! - **A station or outpost** whose `visual` is a model that reads is the
 //!   model seen from above in its own colours and units: it has no size,
@@ -26,9 +28,12 @@
 //! Each against the file that names the thing, and the record still
 //! draws:
 //!
-//! - a hull's `livery` that isn't in `liveries/`: it draws bare;
-//! - a hull's `model` or a stellar's `visual` asset that isn't in
+//! - a ship's own `livery` that isn't in `liveries/`: it draws bare;
+//! - a ship's own `model` or a stellar's `visual` asset that isn't in
 //!   `assets/`: it draws as its box or its disc;
+//!
+//! A variant that inherits a base's missing livery or model draws the same
+//! way, reported against the base alone.
 //! - an asset whose model file doesn't decode, against the asset, once:
 //!   whatever shows it draws as its box or its disc.
 //!
@@ -42,6 +47,7 @@
 use std::collections::BTreeMap;
 
 use nova_galaxy_format::asset::{Asset, Front};
+use nova_galaxy_format::fleet::resolve;
 use nova_galaxy_format::id::Id;
 use nova_galaxy_format::load::{Doc, Galaxy, Problem};
 use nova_galaxy_format::model::{Stellar as BibleStellar, StellarKind, Visual};
@@ -68,22 +74,28 @@ pub fn stand_ins(
     let mut stand_ins = BTreeMap::new();
     for (id, &nova) in &ids.ships {
         let doc = &galaxy.ships[id];
-        let ship = &doc.data;
+        let Ok(ship) = resolve(galaxy, id) else {
+            continue;
+        };
         let Some(size) = ship.size else { continue };
-        let livery = ship.livery.as_ref().and_then(|livery| {
+        // A field the ship inherits is reported against its base alone.
+        let mut inherited = Vec::new();
+        let livery = ship.livery.and_then(|livery| {
             let found = galaxy.liveries.get(livery).map(|l| &l.data.palette);
             if found.is_none() && absent(galaxy, &galaxy.liveries, "liveries", livery) {
-                problems.push(Problem::new(
+                let own = doc.data.livery.is_some();
+                (if own { &mut *problems } else { &mut inherited }).push(Problem::new(
                     &doc.path,
                     format!("its livery `{livery}` is not in liveries/; it draws bare"),
                 ));
             }
             found
         });
-        let asset = ship
-            .model
-            .as_ref()
-            .and_then(|model| asset(galaxy, model, &doc.path, "model", "its size box", problems));
+        let asset = ship.model.and_then(|model| {
+            let own = doc.data.model.is_some();
+            let to = if own { &mut *problems } else { &mut inherited };
+            asset(galaxy, model, &doc.path, "model", "its size box", to)
+        });
         let model = asset.and_then(|(id, asset)| models.read(id, asset, problems));
         let paint = asset.and_then(|(_, asset)| asset.data.paint.as_ref());
         let outline = top_down(model.map(|(m, f)| (m, *f)), size, paint, livery);
@@ -472,15 +484,57 @@ mod tests {
     }
 
     #[test]
-    fn only_hulls_have_stand_ins() {
-        // The armed skiff is a variant: no `shïp`, so no stand-in.
+    fn a_variant_draws_as_its_base_does() {
         let game = loaded(&with_hull());
-        let ships = game.ids.ships.len();
-        assert_eq!(ships, 1, "the skiff alone");
-        let stand_ins: Vec<_> = (128..=200)
-            .filter(|&nova| game.data.stand_in(StandInOf::Ship(ShipId(nova))).is_some())
-            .collect();
-        assert_eq!(stand_ins, [game.ids.ships[&id_of("skiff")]]);
+        assert_eq!(game.ids.ships.len(), 2, "the skiff and its armed variant");
+        let skiff = ship(&game, "skiff");
+        assert!(skiff.is_some());
+        assert_eq!(
+            ship(&game, "armed-skiff"),
+            skiff,
+            "its base's model and livery"
+        );
+    }
+
+    #[test]
+    fn a_variant_inheriting_a_missing_livery_is_reported_against_its_base_alone() {
+        let game = loaded(&with_hull().with(
+            "ships/skiff.md",
+            "---\nname: Skiff\nstyle: civilian\nrole: shuttle\nmodel: hull\nlivery: gone\n\
+             size: {length: 8, beam: 4, collision_radius: 4}\n---\n",
+        ));
+        let lines: Vec<_> = game.problems.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            lines,
+            ["ships/skiff.md: its livery `gone` is not in liveries/; it draws bare"]
+        );
+        assert!(ship(&game, "armed-skiff").is_some());
+    }
+
+    #[test]
+    fn a_variant_inheriting_a_missing_model_is_reported_against_its_base_alone() {
+        let game = loaded(&with_hull().with(
+            "ships/skiff.md",
+            "---\nname: Skiff\nstyle: civilian\nrole: shuttle\nmodel: gone\n\
+             size: {length: 8, beam: 4, collision_radius: 4}\n---\n",
+        ));
+        let lines: Vec<_> = game.problems.iter().map(ToString::to_string).collect();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].starts_with("ships/skiff.md: "), "{lines:?}");
+        assert!(ship(&game, "armed-skiff").is_some());
+    }
+
+    #[test]
+    fn a_variant_s_own_missing_livery_is_reported_against_it() {
+        let game = loaded(&with_hull().with(
+            "ships/armed-skiff.md",
+            "---\nname: Armed skiff\nbase: skiff\nmods: [gun-mount]\nlivery: gone\n---\n",
+        ));
+        let lines: Vec<_> = game.problems.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            lines,
+            ["ships/armed-skiff.md: its livery `gone` is not in liveries/; it draws bare"]
+        );
     }
 
     /// The format's galaxy with `alpha-yard` shown by `yard.glb`, a 4 by 1

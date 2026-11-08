@@ -13,6 +13,7 @@ use crate::records::ship::Ship;
 use crate::records::ship_anim::ShipAnim;
 use crate::records::stellar::{Stellar, flags};
 use crate::records::system::System;
+use crate::records::weapon::Weapon;
 use crate::wire::flags::{Flags16, Flags32, Flags64};
 use crate::wire::raw::RawArray;
 use crate::wire::string::MacString;
@@ -341,6 +342,76 @@ pub fn neutral_outfit() -> Outfit {
     }
 }
 
+/// A `wëap` that does nothing: no reload, life, damage, speed, flags,
+/// particles, beam, submunitions or ammunition limit; unguided
+/// (`Guidance` -1), using no ammunition (`AmmoType` -1), drawing no
+/// graphic (`Graphic` -1, so no `spïn` sheet is found and the view draws
+/// its shot as the placeholder box), silent (`Sound` -1), exploding into
+/// nothing (`ExplodType` -1) and leaving from the ship's centre
+/// (`ExitType` -1).
+#[must_use]
+pub fn neutral_weapon() -> Weapon {
+    Weapon {
+        reload: 0,
+        count: 0,
+        mass_dmg: 0,
+        energy_dmg: 0,
+        guidance: -1,
+        speed: 0,
+        ammo_type: -1,
+        graphic: -1,
+        inaccuracy: 0,
+        sound: -1,
+        impact: 0,
+        explod_type: -1,
+        prox_radius: 0,
+        blast_radius: 0,
+        flags: Flags16::default(),
+        seeker: Flags16::default(),
+        smoke_set: 0,
+        decay: 0,
+        particles: 0,
+        part_vel: 0,
+        part_life_min: 0,
+        part_life_max: 0,
+        part_color: 0,
+        beam_length: 0,
+        beam_width: 0,
+        falloff: 0,
+        beam_color: 0,
+        corona_color: 0,
+        sub_count: 0,
+        sub_type: None,
+        sub_theta: 0,
+        sub_limit: 0,
+        prox_safety: 0,
+        flags2: Flags16::default(),
+        ionization: 0,
+        hit_particles: 0,
+        hit_part_life: 0,
+        hit_part_vel: 0,
+        hit_part_color: 0,
+        recoil: 0,
+        exit_type: -1,
+        burst_count: 0,
+        burst_reload: 0,
+        jam_vuln: [0; 4],
+        flags3: Flags16::default(),
+        durability: 0,
+        guided_turn: 0,
+        max_ammo: 0,
+        li_density: 0,
+        li_amplitude: 0,
+        ionize_color: 0,
+        unknown_0x76: RawArray::default(),
+    }
+}
+
+/// The `spöb` `MinStatus` that clears a pilot of any legal record:
+/// -32767, which the clearance reads as "any record"
+/// (`nova_sim::landing::ANY_RECORD`).
+pub const ANY_RECORD: i16 = -32767;
+
 /// A `dësc` holding `text` alone: no picture, movie or flags.
 #[must_use]
 pub fn text_desc(text: &str) -> Desc {
@@ -543,6 +614,20 @@ mod tests {
     #[test]
     fn the_neutral_ship_anim_is_zero() {
         assert_eq!(neutral_ship_anim(), zeroed::<ShipAnim>(|_| {}));
+    }
+
+    #[test]
+    fn the_neutral_weapon_is_zero_but_its_unused_and_none_fields() {
+        let expected = zeroed::<Weapon>(|weapon| {
+            weapon.guidance = -1;
+            weapon.ammo_type = -1;
+            weapon.graphic = -1;
+            weapon.sound = -1;
+            weapon.explod_type = -1;
+            weapon.exit_type = -1;
+            weapon.sub_type = None;
+        });
+        assert_eq!(neutral_weapon(), expected);
     }
 
     #[test]

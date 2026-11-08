@@ -23,7 +23,7 @@ use nova_galaxy_format::model::JumpPoint;
 
 use super::ids::{IdTable, STELLAR_IDS};
 use super::map::{absent, govt, position};
-use super::records::neutral_stellar;
+use super::records::{ANY_RECORD, neutral_stellar};
 use crate::decode::Entry;
 use crate::records::stellar::{Stellar, flags, flags2};
 use crate::registry::AnyRecord;
@@ -76,7 +76,9 @@ pub fn number(
 /// `file`, numbered `nova`: at the
 /// point's position, held by its owner, landable, its one link the
 /// partner's gate, named for the partner's system, heading ships out at
-/// random (`CustSndID` -1). A partner that is no jump point is reported
+/// random (`CustSndID` -1), clearing any record ([`ANY_RECORD`]): holding
+/// a point is the storylines' work, through its owner and stability, and
+/// a convicted player is never trapped in a system. A partner that is no jump point is reported
 /// against the system's file and leaves the gate with no link, but not
 /// one in a system that failed to load or was left out for its ID.
 #[must_use]
@@ -113,6 +115,7 @@ pub fn gate(
         flags2: Flags16(flags2::HYPERGATE),
         hyper_link,
         govt: govt(galaxy, ids, point.owner.as_ref(), file, problems),
+        min_status: ANY_RECORD,
         ..neutral_stellar()
     };
     let name = galaxy
