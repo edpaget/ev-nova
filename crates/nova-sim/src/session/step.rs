@@ -1266,6 +1266,57 @@ mod tests {
     }
 
     #[test]
+    fn a_clear_on_a_flying_pass_before_a_rescue_on_the_second_pass_comes_with_its_pass() {
+        // The first pass begins out of the pod, so it runs the escort
+        // menu's block and its bookkeeping clears the kept order; its
+        // stray beam of `ExitType` 5 steps the pod word to 1 (see the
+        // `stray_words` module), and the second pass's pod flight runs it
+        // out and rescues the pilot (@0x68ddd). The clear comes with the
+        // first pass, and none is left for the next step.
+        let catalog = crate::session::stray_words::tests::beamed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.space.escorts.class_orders[2] = Some(crate::escort::EscortOrder::Hold);
+        session.space.traffic_due = false;
+        let report = steps(&mut session, &catalog, &firing(true), 3);
+        assert_eq!(report.steps.len(), 1, "rescued");
+        assert!(report.steps[0].rescued.is_some(), "on the second pass");
+        assert_eq!(cleared_by_pass(&report), [[Some(true)]]);
+        assert_eq!(session.space.escorts.class_orders[2], None, "cleared");
+        assert_eq!(session.out.escort_menu, None, "none left for the next step");
+    }
+
+    #[test]
+    fn a_class_order_kept_into_a_rescue_is_gone_before_the_next_pass_and_no_pass_reports_it() {
+        // The rescue's pass returns (`jmp 0x71113` @0x692ce) before the
+        // escort menu's block (@0x6df59) and the bookkeeping (@0x6e2e8),
+        // and `_ResetPlayer(0)` keeps the class table (@0x1d97e). The
+        // original's next pass clears it (@0x6e3bb-0x6e452), as the pod
+        // released every escort and `_SetupShipsInSystem` (@0x69114)
+        // places none marked. The engine resets the orders at the
+        // rescue's entry instead (`Session::enter_escorts`), which nothing
+        // reads before that pass: the dësc shows none, and the escort
+        // menu's rows show no order for a class with no ship out. So the
+        // rescue's step reports no block and the next pass clears nothing.
+        // The shuttle the rescue boards (`shïp` 128).
+        let catalog = FakePilotCatalog {
+            ship_records: vec![crate::testkit::ship(128, crate::testkit::FAST)],
+            ..catalog()
+        };
+        let mut session = in_the_pod(&catalog, 1);
+        session.space.escorts.class_orders[2] = Some(crate::escort::EscortOrder::Hold);
+        session.space.traffic_due = false;
+        let report = steps(&mut session, &catalog, &StepInput::default(), 3);
+        assert!(report.steps[0].rescued.is_some());
+        assert_eq!(cleared_by_pass(&report), [Vec::<Option<bool>>::new()]);
+        assert_eq!(session.space.escorts.class_orders, [None; 4], "reset");
+        assert_eq!(session.out.escort_menu, None, "none left for the next step");
+        assert_eq!(session.pod, None, "out of the pod");
+        session.take_rescue_desc();
+        let report = steps(&mut session, &catalog, &StepInput::default(), 1);
+        assert_eq!(cleared_by_pass(&report), [[Some(false)]]);
+    }
+
+    #[test]
     fn the_warps_end_stops_the_stepping_before_the_next_step() {
         let catalog = catalog();
         let mut session = crate::session::tests::bound_for_131(

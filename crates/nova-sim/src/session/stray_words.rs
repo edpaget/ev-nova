@@ -150,7 +150,7 @@ impl Session {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::catalog::WeaponRecord;
     use crate::chance::NeverFires;
@@ -216,7 +216,7 @@ mod tests {
     }
 
     /// [`armed`] with [`pod_beam`] for its weapon, its NPC firing one too.
-    fn beamed() -> FakePilotCatalog {
+    pub(in crate::session) fn beamed() -> FakePilotCatalog {
         FakePilotCatalog {
             weapons: vec![pod_beam()],
             ..armed()
