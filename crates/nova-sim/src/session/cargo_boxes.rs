@@ -12,7 +12,7 @@ use crate::geometry::Vec2;
 use crate::market::Good;
 use crate::pilot::Pilot;
 use crate::scoop::{
-    Haul, Scooper, Scooping, has_asteroid_scoop, haul, npc_in_ship_layer, npc_scoop,
+    Haul, Scooper, Scooping, has_asteroid_scoop, haul, npc_in_ship_layer, npc_scoop, npc_scoop_pods,
 };
 use crate::ship_layer::disabled;
 
@@ -106,6 +106,11 @@ impl Session {
     ///    ([`Npc::is_scooping`](crate::traffic::npc::Npc::is_scooping))
     ///    and in the ship layer ([`npc_in_ship_layer`]) takes every box it
     ///    touches ([`npc_scoop`]).
+    /// 4. Each taker, after its boxes, takes each shown escape pod it
+    ///    touches for box slot 0, by
+    ///    [`RuleKey::PodScoopsBoxZero`](crate::RuleKey::PodScoopsBoxZero)'s
+    ///    engine reading (see the `pod_scoop` module), as `_boxLayer`
+    ///    holds the boxes, then the pods.
     ///
     /// A ship touches a box by their placed masks, the ship's first
     /// (`_SWRLECollision` @0x3710c, [`Scooping::touches`]), laid out from
@@ -130,7 +135,8 @@ impl Session {
     /// wrap's reach differ, 15,000 pixels off screen, and they then stand
     /// apart in both. The player tests before
     /// the NPCs and each box is taken once, where the original's order
-    /// follows `SpriteWorld`'s layer history. There is no sound and no
+    /// follows `SpriteWorld`'s layer history; each takes its boxes before
+    /// its pods, as the box layer holds them. There is no sound and no
     /// message, and the HUD's cargo area is drawn afresh each frame, so
     /// the status redraw flag (@0x37199) needs no counterpart.
     pub(super) fn scoop_boxes(&mut self, stood: Vec2) {
@@ -140,6 +146,8 @@ impl Session {
         let masks = self.scoop_masks(stood);
         let sheets = self.space.sprite_masks.box_sheets();
         let walk = self.mask_walk();
+        let pods = self.pods_scooped();
+        let pod_sheet = self.pod_sheet();
         // The player defends no stellar.
         if !disabled(self.ship.condition, false) {
             let scooping = Scooping {
@@ -157,19 +165,14 @@ impl Session {
                 else {
                     break;
                 };
-                let good = match haul(taken.contents, Scooper::Player) {
-                    Haul::Commodity(commodity) => Some(Good::Commodity(commodity)),
-                    Haul::Junk(junk) => Some(Good::Junk(junk)),
-                    Haul::Nothing => None,
-                };
-                if let Some(good) = good {
-                    let tons = self.pilot.cargo.entry(good).or_insert(0);
-                    *tons = tons.saturating_add(1);
-                }
-                self.reset_precalced();
+                self.add_player_haul(haul(taken.contents, Scooper::Player));
+            }
+            if pods {
+                self.player_scoop_pods(&scooping, pod_sheet.as_ref());
             }
         }
         let (boxes, frames) = (&mut self.space.boxes, &self.statics.box_frames);
+        let adrift = &mut self.space.pods;
         for (npc, mask) in self.space.traffic.npcs_mut().iter_mut().zip(&masks.npcs) {
             if npc.is_scooping() && npc_in_ship_layer(npc) {
                 let scooping = Scooping {
@@ -180,8 +183,26 @@ impl Session {
                     ..Scooping::disc(npc.state.position, npc.hull.hit_radius)
                 };
                 npc_scoop(boxes, frames, &scooping, &mut npc.cargo);
+                if pods {
+                    npc_scoop_pods(boxes, adrift, pod_sheet.as_ref(), &scooping, &mut npc.cargo);
+                }
             }
         }
+    }
+
+    /// Adds what the player scooped, `haul`, to its hold, a ton of it, and
+    /// resets the precalced values (@0x371ac), an empty haul's too.
+    pub(super) fn add_player_haul(&mut self, haul: Haul) {
+        let good = match haul {
+            Haul::Commodity(commodity) => Some(Good::Commodity(commodity)),
+            Haul::Junk(junk) => Some(Good::Junk(junk)),
+            Haul::Nothing => None,
+        };
+        if let Some(good) = good {
+            let tons = self.pilot.cargo.entry(good).or_insert(0);
+            *tons = tons.saturating_add(1);
+        }
+        self.reset_precalced();
     }
 
     /// `_ShipCollisionHandler`'s scoop branch and `_HandleBoxes`' step, after

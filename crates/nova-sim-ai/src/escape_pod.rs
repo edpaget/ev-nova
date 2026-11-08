@@ -114,6 +114,18 @@ pub struct EscapePods {
 }
 
 impl EscapePods {
+    /// The pods `pods`, in slots 0 on: for nova-sim's scoop tests, which
+    /// place a pod exactly.
+    #[cfg(any(test, feature = "fixture"))]
+    #[must_use]
+    pub fn adrift(pods: &[Pod]) -> Self {
+        let mut adrift = Self::default();
+        for &pod in pods {
+            adrift.pods.insert(pod, None);
+        }
+        adrift
+    }
+
     /// Sets a pod adrift from a ship at `at` moving at `velocity`, drawing
     /// on `chance`, unless the `caps` hold the pool full; it faces a frame
     /// of shän 895's `frames` rotations (frame 0 without them). It takes
@@ -228,16 +240,13 @@ mod tests {
 
     /// A shown pod of `life`, drifting at (2, -1).
     fn adrift(life: f32) -> EscapePods {
-        let mut pods = EscapePods::default();
-        let pod = Pod {
+        EscapePods::adrift(&[Pod {
             position: Vec2::new(10.0, 20.0),
             velocity: Vec2::new(2.0, -1.0),
             life,
             frame: 0,
             shown: true,
-        };
-        pods.pods.insert(pod, None);
-        pods
+        }])
     }
 
     #[test]

@@ -116,7 +116,7 @@ use std::rc::Rc;
 use crate::cargo_box::{CargoBox, CargoBoxes, SlotBytes};
 use crate::catalog::outfit_mods;
 use crate::catalog::{BOX_GRAPHICS, JunkId, OutfitId, OutfitRecord};
-use crate::escape_pod::Pod;
+use crate::escape_pod::{EscapePods, Pod};
 use crate::geometry::Vec2;
 use crate::ship_layer::{ShipLayer, disabled};
 use crate::sprite_mask::{MaskWalk, PlacedMask, RleSheet};
@@ -372,6 +372,47 @@ pub fn npc_in_ship_layer(npc: &Npc) -> bool {
 #[must_use]
 pub fn pod_scoop(slot_zero: SlotBytes, by: Scooper) -> Option<Haul> {
     slot_zero.scoopable.then(|| haul(slot_zero.contents, by))
+}
+
+/// Takes the first shown pod of `pods`, in slot order, that `scooping`
+/// touches ([`Scooping::touches_pod`], the pods drawn from shän 895's
+/// `sheet`), for box slot 0 of `boxes`, as `by` scoops it
+/// ([`pod_scoop`]): the pod is hidden, box slot 0 is taken
+/// ([`CargoBoxes::take_slot_zero`]), and what it hauls is given. None when
+/// no shown pod touches, or slot 0 isn't scoopable, which no later pod in
+/// the pass changes.
+pub fn take_touching_pod(
+    boxes: &mut CargoBoxes,
+    pods: &mut EscapePods,
+    sheet: Option<&Rc<RleSheet>>,
+    scooping: &Scooping,
+    by: Scooper,
+) -> Option<Haul> {
+    let index = pods
+        .pods()
+        .iter()
+        .position(|pod| pod.shown && scooping.touches_pod(pod, sheet))?;
+    let haul = pod_scoop(boxes.slot_zero(), by)?;
+    pods.hide(index);
+    boxes.take_slot_zero();
+    Some(haul)
+}
+
+/// The NPC side of the scoop branch over the pods: a `scooping` NPC takes
+/// every shown pod of `pods` it touches for box slot 0
+/// ([`take_touching_pod`]), each commodity adding a ton of it to `hold`.
+pub fn npc_scoop_pods(
+    boxes: &mut CargoBoxes,
+    pods: &mut EscapePods,
+    sheet: Option<&Rc<RleSheet>>,
+    scooping: &Scooping,
+    hold: &mut NpcHold,
+) {
+    while let Some(haul) = take_touching_pod(boxes, pods, sheet, scooping, Scooper::Npc) {
+        if let Haul::Commodity(commodity) = haul {
+            hold.add(commodity, 1);
+        }
+    }
 }
 
 /// The NPC side of the scoop branch: a `scooping` NPC takes every
@@ -774,6 +815,123 @@ mod tests {
             frame: 0,
             shown: true,
         }
+    }
+
+    /// A table whose slot 0 holds a scoopable box of `contents` at
+    /// (500, 0), out of every test ship's reach.
+    fn box_zero(contents: Option<i16>) -> CargoBoxes {
+        let mut boxes = CargoBoxes::default();
+        boxes.spawn_scoopable(Vec2::new(500.0, 0.0), contents, 1, &mut NeverFires);
+        boxes
+    }
+
+    #[test]
+    fn a_touched_pod_is_hidden_and_takes_box_slot_0() {
+        let mut boxes = box_zero(Some(2));
+        let mut pods = EscapePods::adrift(&[pod_at(Vec2::new(90.0, 0.0)), pod_at(Vec2::ZERO)]);
+        let disc = Scooping::disc(Vec2::ZERO, 4.0);
+        let taken = take_touching_pod(&mut boxes, &mut pods, None, &disc, Scooper::Player);
+        assert_eq!(taken, Some(Haul::Commodity(2)));
+        assert!(boxes.boxes().is_empty(), "box slot 0 is gone");
+        let shown: Vec<bool> = pods.pods().iter().map(|pod| pod.shown).collect();
+        assert_eq!(shown, [true, false], "the touched pod alone hidden");
+        assert_eq!(
+            take_touching_pod(&mut boxes, &mut pods, None, &disc, Scooper::Player),
+            None,
+            "a hidden pod is not taken again"
+        );
+    }
+
+    #[test]
+    fn a_pod_takes_a_dead_slot_0_by_its_last_bytes() {
+        let mut boxes = box_zero(Some(4));
+        boxes.take_slot_zero();
+        let mut pods = EscapePods::adrift(&[pod_at(Vec2::ZERO), pod_at(Vec2::ZERO)]);
+        let disc = Scooping::disc(Vec2::ZERO, 4.0);
+        for _ in 0..2 {
+            assert_eq!(
+                take_touching_pod(&mut boxes, &mut pods, None, &disc, Scooper::Npc),
+                Some(Haul::Commodity(4)),
+                "once a pod"
+            );
+        }
+        assert_eq!(
+            take_touching_pod(&mut boxes, &mut pods, None, &disc, Scooper::Npc),
+            None
+        );
+    }
+
+    #[test]
+    fn a_pod_is_left_while_box_slot_0_is_not_scoopable() {
+        let mut boxes = CargoBoxes::default();
+        boxes.spawn(
+            &crate::flight::ShipState {
+                position: Vec2::new(500.0, 0.0),
+                velocity: Vec2::ZERO,
+                heading: 0.0,
+            },
+            None,
+            &mut NeverFires,
+        );
+        let mut pods = EscapePods::adrift(&[pod_at(Vec2::ZERO)]);
+        let disc = Scooping::disc(Vec2::ZERO, 4.0);
+        let before = (boxes.clone(), pods.clone());
+        assert_eq!(
+            take_touching_pod(&mut boxes, &mut pods, None, &disc, Scooper::Player),
+            None
+        );
+        assert_eq!((boxes, pods), before, "a jettisoned slot 0: nothing");
+    }
+
+    #[test]
+    fn a_pod_out_of_reach_is_left() {
+        let mut boxes = box_zero(Some(2));
+        let mut pods = EscapePods::adrift(&[pod_at(Vec2::new(30.0, 0.0))]);
+        let disc = Scooping::disc(Vec2::ZERO, 4.0);
+        assert_eq!(
+            take_touching_pod(&mut boxes, &mut pods, None, &disc, Scooper::Player),
+            None
+        );
+        assert!(pods.pods()[0].shown);
+        assert_eq!(boxes.boxes().len(), 1);
+    }
+
+    #[test]
+    fn a_scooping_npc_takes_every_pod_it_touches_into_its_own_hold() {
+        let mut boxes = box_zero(Some(3));
+        let mut pods = EscapePods::adrift(&[
+            pod_at(Vec2::ZERO),
+            pod_at(Vec2::new(60.0, 0.0)),
+            pod_at(Vec2::new(2.0, 0.0)),
+        ]);
+        let mut hold = NpcHold::default();
+        npc_scoop_pods(
+            &mut boxes,
+            &mut pods,
+            None,
+            &Scooping::disc(Vec2::ZERO, 4.0),
+            &mut hold,
+        );
+        assert_eq!(hold.tons(3), 2, "a ton a pod");
+        let shown: Vec<bool> = pods.pods().iter().map(|pod| pod.shown).collect();
+        assert_eq!(shown, [false, true, false]);
+    }
+
+    #[test]
+    fn a_scooping_npc_takes_a_junk_slot_0_for_nothing() {
+        let mut boxes = box_zero(Some(1003));
+        let mut pods = EscapePods::adrift(&[pod_at(Vec2::ZERO)]);
+        let mut hold = NpcHold::default();
+        npc_scoop_pods(
+            &mut boxes,
+            &mut pods,
+            None,
+            &Scooping::disc(Vec2::ZERO, 4.0),
+            &mut hold,
+        );
+        assert_eq!(hold, NpcHold::default());
+        assert!(!pods.pods()[0].shown, "the pod still hides");
+        assert!(boxes.boxes().is_empty(), "and box 0 still dies");
     }
 
     #[test]

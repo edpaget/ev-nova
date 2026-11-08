@@ -41,8 +41,9 @@ nova-sim-combat = { workspace = true, features = ["fixture"] }
 # nova-sim's tests call, `strength_armed`, `berths_taken`,
 # `queue_pirate_event`, `set_berth_person` (nova-view's and nova's tests
 # too), `write_berth_search`, `cache_odds` and `take_pirate_events` (with
-# `OnLine::take_pirate_events`); and `GateLanes::fixture`, lanes as
-# given, which nova-sim-story's news tests build.
+# `OnLine::take_pirate_events`); `GateLanes::fixture`, lanes as
+# given, which nova-sim-story's news tests build; and
+# `EscapePods::adrift`, pods placed exactly, for nova-sim's scoop tests.
 fixture = []
 
 [lints]

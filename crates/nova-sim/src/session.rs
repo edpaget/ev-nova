@@ -633,6 +633,7 @@ mod player_wrap;
 mod players_hits;
 mod plunder_ammo;
 mod plunder_loop;
+mod pod_scoop;
 mod port;
 mod port_desc;
 mod precalced;

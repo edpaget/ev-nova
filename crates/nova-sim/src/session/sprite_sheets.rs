@@ -9,7 +9,8 @@
 //! the player's and each NPC's sprite base (`HullRecord::sprite_base`),
 //! every weapon `Graphic` the arsenal holds and each a shot in flight
 //! shows (sub-munitions among them), each asteroid kind in the field and
-//! each box graphic in space; and, while the system lists a deadly
+//! each box graphic in space, and the escape pods' sheet (shän 895's)
+//! while any pod is adrift; and, while the system lists a deadly
 //! stellar, each stellar shown's `Type` and `DeadType` and graphic type
 //! 0's. The advance pass asks right after the player's move, before the
 //! scoop, its first reader, and again before its stellar hazards, so a
@@ -37,6 +38,7 @@ use super::{Session, Space};
 use crate::asteroid::KINDS;
 use crate::catalog::{MaskSheet, PilotCatalog, ShipId};
 use crate::combat::contact::ShipSprite;
+use crate::combat::hull::ESCAPE_POD_SHIP;
 use crate::combat::ship_frames::FrameSpec;
 use crate::deadly_stellar::is_deadly;
 use crate::flight::ShipState;
@@ -181,6 +183,10 @@ impl Session {
             .map(|weapon| MaskSheet::Shot(weapon.graphic));
         let mut wanted: Vec<MaskSheet> = ships.chain(weapons).collect();
         wanted.extend(self.space.content_sheets());
+        if !self.space.pods.is_empty() {
+            // The pods' sheet, shän 895's (see the `pod_scoop` module).
+            wanted.push(MaskSheet::Ship(arsenal.sprite_base(ESCAPE_POD_SHIP)));
+        }
         if self.chart.listed.iter().any(|site| is_deadly(site.flags2)) {
             let stellars = self
                 .chart
