@@ -429,47 +429,11 @@ impl Session {
             .sites
             .iter()
             .filter(|site| !site.destroyed)
-            .filter_map(|site| self.target_drawn_as(site, site))
+            .filter_map(|site| {
+                self.space
+                    .target_drawn_as(&self.statics, &self.setup, site.id, site)
+            })
             .collect()
-    }
-
-    /// `walked`, a listed stellar, as a shot can hit it drawn as `drawn`,
-    /// one of the stellars shown (itself, or its last slot's owner now):
-    /// the disc of `drawn`'s frame where its slot's rect is (see
-    /// [`Session::stellar_targets`]), with `walked`'s strength; none when
-    /// `drawn` draws no frame or `walked` can't be destroyed.
-    pub(super) fn target_drawn_as(
-        &self,
-        walked: &LandingSite,
-        drawn: &LandingSite,
-    ) -> Option<StellarTarget> {
-        let frame = self
-            .space
-            .drawn_frame_size(&self.statics, &self.setup, drawn)?;
-        let position = self.space.slot_centre(&self.statics, &self.setup, drawn)?;
-        self.stellar_target(walked.id, position, frame_radius(frame))
-    }
-
-    /// `stellar` as a shot can hit it, a disc of `radius` at `position`,
-    /// at its current strength; none when it can't be destroyed.
-    pub(super) fn stellar_target(
-        &self,
-        stellar: StellarId,
-        position: Vec2,
-        radius: f32,
-    ) -> Option<StellarTarget> {
-        let life = self.statics.lives.get(&stellar)?;
-        wreck::destroyable(life).then(|| StellarTarget {
-            stellar,
-            position,
-            radius,
-            strength: self
-                .space
-                .strength
-                .get(&stellar)
-                .copied()
-                .unwrap_or_else(|| wreck::full_strength(life)),
-        })
     }
 
     /// Keeps the strength each of `stellars` is left with after the
@@ -608,6 +572,45 @@ impl Session {
 }
 
 impl Space {
+    /// `walked`, a listed stellar, as a shot can hit it drawn as `drawn`,
+    /// one of the stellars shown (itself, or its last slot's owner now):
+    /// the disc of `drawn`'s frame where its slot's rect is (see
+    /// [`Session::stellar_targets`]), with `walked`'s strength; none when
+    /// `drawn` draws no frame or `walked` can't be destroyed.
+    pub(super) fn target_drawn_as(
+        &self,
+        statics: &Statics,
+        setup: &Setup,
+        walked: StellarId,
+        drawn: &LandingSite,
+    ) -> Option<StellarTarget> {
+        let frame = self.drawn_frame_size(statics, setup, drawn)?;
+        let position = self.slot_centre(statics, setup, drawn)?;
+        self.stellar_target(statics, walked, position, frame_radius(frame))
+    }
+
+    /// `stellar` as a shot can hit it, a disc of `radius` at `position`,
+    /// at its current strength; none when it can't be destroyed.
+    pub(super) fn stellar_target(
+        &self,
+        statics: &Statics,
+        stellar: StellarId,
+        position: Vec2,
+        radius: f32,
+    ) -> Option<StellarTarget> {
+        let life = statics.lives.get(&stellar)?;
+        wreck::destroyable(life).then(|| StellarTarget {
+            stellar,
+            position,
+            radius,
+            strength: self
+                .strength
+                .get(&stellar)
+                .copied()
+                .unwrap_or_else(|| wreck::full_strength(life)),
+        })
+    }
+
     /// Whether `stellar` has been dead since the last rebuild point: it
     /// is among the stellars shown, the last rebuild point found it
     /// destroyed, and no flight frame has found it whole since (see the

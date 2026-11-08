@@ -101,17 +101,20 @@ impl Session {
     /// the module docs): each walked stellar's disc, the fallback where no
     /// mask is read, under its ID with its strength. A stellar drawn is
     /// the disc of the stellar shown that draws it
-    /// ([`Session::target_drawn_as`]). A ghost is the disc of graphic type
-    /// 0's frame at its top left from the player's place now, which only
-    /// the fallback reads; with no such frame, it is none.
+    /// ([`Space::target_drawn_as`](super::Space::target_drawn_as)). A
+    /// ghost is the disc of graphic type 0's frame at its top left from
+    /// the player's place now, which only the fallback reads; with no such
+    /// frame, it is none.
     pub(super) fn shot_stellar_targets(&self) -> Vec<StellarTarget> {
+        let (statics, setup) = (&self.statics, &self.setup);
         self.shot_walk()
             .into_iter()
             .filter_map(|(walked, held)| match held {
-                Held::Drawn(drawn) => self.target_drawn_as(walked, drawn),
+                Held::Drawn(drawn) => self.space.target_drawn_as(statics, setup, walked.id, drawn),
                 Held::Ghost { top_left } => {
-                    let (centre, frame) = self.ship.ghost_centre(&self.statics, top_left)?;
-                    self.stellar_target(walked.id, centre, frame_radius(frame))
+                    let (centre, frame) = self.ship.ghost_centre(statics, top_left)?;
+                    self.space
+                        .stellar_target(statics, walked.id, centre, frame_radius(frame))
                 }
             })
             .collect()
