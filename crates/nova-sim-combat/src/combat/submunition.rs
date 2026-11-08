@@ -183,9 +183,22 @@ pub fn aim(parent: &Shot, shot: Shot, n: u32, sides: &Sides, chance: &mut dyn Ch
     } else {
         trig::accel(trig::whole(heading), shot.weapon.speed)
     };
+    // Its +0x2a: the slot it was given, or the slot of a ship its seek
+    // found instead.
+    let aimed_slot = if target == given {
+        shot.aimed_slot
+    } else {
+        target.and_then(|ship| {
+            targets
+                .iter()
+                .find(|found| found.ship == ship)
+                .map(|found| found.slot)
+        })
+    };
     Shot {
         target,
         aimed_at: target,
+        aimed_slot,
         heading,
         velocity,
         ..shot

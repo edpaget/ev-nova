@@ -391,6 +391,7 @@ impl Combat {
             id: ShotId::default(),
             target: Some(ship),
             aimed_at: Some(ship),
+            aimed_slot: Some(target.slot),
             jam: Jam::Clear,
             durability: spec.durability,
             generation: 0,

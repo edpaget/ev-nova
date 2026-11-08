@@ -162,6 +162,7 @@ impl Shot {
             self.jam = Jam::Asteroid(Some(slot));
             self.target = None;
             self.aimed_at = None;
+            self.aimed_slot = None;
         }
     }
 

@@ -23,7 +23,11 @@
 //!   seated jam 0 and not point defence, is made lost (998) by the
 //!   gone-ship rule on its first handling (@0x355f7-0x3561b), which tests
 //!   the child's own +0x2a: so a seeking child that found a live ship
-//!   keeps it and is not lost.
+//!   keeps it and is not lost, and one whose slot k a new ship takes
+//!   before that handling is aimed at the newcomer
+//!   ([`refilled_slot`](super::refilled_slot)). Here such a child holds
+//!   k ([`Shot::aimed_slot`]) and is aimed at no ship until then, and the
+//!   gone-ship rule makes it lost.
 //!
 //! Ship slot k is the player for k = 0 and the NPC of berth k otherwise
 //! ([`ship_slot`]). No call here plays a sound.
@@ -45,7 +49,6 @@
 
 use super::ShipRef;
 use super::projectile::{Jam, Shot, Target};
-use super::weapon::Guidance;
 use crate::rulebook::RuleSource;
 use crate::ship_layer::Slot;
 
@@ -94,9 +97,10 @@ impl LockedSlot {
     #[must_use]
     pub fn released_at(self, shot: &Shot, targets: &[Target]) -> Given {
         match (shot.jam, self) {
-            (Jam::Asteroid(Some(k)), Self::ShipSlot) => {
-                holder(k, targets).map_or(Given::EmptySlot, |ship| Given::Ship(Some(ship)))
-            }
+            (Jam::Asteroid(Some(k)), Self::ShipSlot) => holder(k, targets)
+                .map_or(Given::EmptySlot(ship_slot(k)), |ship| {
+                    Given::Ship(Some(ship))
+                }),
             _ => Given::Ship(shot.aimed_at),
         }
     }
@@ -108,7 +112,7 @@ pub enum Given {
     /// A ship, or none.
     Ship(Option<ShipRef>),
     /// A locked parent's ship slot that no active ship holds.
-    EmptySlot,
+    EmptySlot(Slot),
 }
 
 impl Given {
@@ -117,29 +121,24 @@ impl Given {
     pub fn ship(self) -> Option<ShipRef> {
         match self {
             Self::Ship(ship) => ship,
-            Self::EmptySlot => None,
+            Self::EmptySlot(_) => None,
         }
     }
 
-    /// Sub-munition `child`, aimed ([`aim`](super::submunition::aim)), as
-    /// it leaves the release: one given the empty slot that is still
-    /// aimed at it (its seek found no ship), seated clear and not point
-    /// defence, is lost ([`Jam::Lost`]), as the gone-ship rule makes it on
-    /// its first handling (@0x355f7-0x3561b). One that found a ship keeps
-    /// it; an interfered one stays interfered.
+    /// The ship slot a sub-munition of `parent` holds as it is given
+    /// this, among `targets` ([`Shot::aimed_slot`], its +0x2a): the empty
+    /// slot itself; a ship's slot, or, once that ship has left the fight,
+    /// the slot `parent` holds for it; none for no ship.
     #[must_use]
-    pub fn settle(self, child: Shot) -> Shot {
-        let lost = self == Self::EmptySlot
-            && child.target.is_none()
-            && child.jam == Jam::Clear
-            && child.weapon.guidance != Guidance::PointDefence;
-        if lost {
-            Shot {
-                jam: Jam::Lost,
-                ..child
-            }
-        } else {
-            child
+    pub fn slot(self, parent: &Shot, targets: &[Target]) -> Option<Slot> {
+        match self {
+            Self::EmptySlot(slot) => Some(slot),
+            Self::Ship(None) => None,
+            Self::Ship(Some(ship)) => targets
+                .iter()
+                .find(|target| target.ship == ship)
+                .map(|target| target.slot)
+                .or(parent.aimed_slot),
         }
     }
 }
@@ -288,7 +287,10 @@ mod tests {
             by.released_at(&locked(Some(0)), &targets),
             Given::Ship(Some(ShipRef::Player))
         );
-        assert_eq!(by.released_at(&locked(Some(5)), &targets), Given::EmptySlot);
+        assert_eq!(
+            by.released_at(&locked(Some(5)), &targets),
+            Given::EmptySlot(Slot::Berth(5))
+        );
         assert_eq!(by.released_at(&locked(None), &targets), Given::Ship(None));
         for k in [Some(3), Some(5), None] {
             assert_eq!(
@@ -308,22 +310,26 @@ mod tests {
     }
 
     #[test]
-    fn a_clear_child_left_aimed_at_the_empty_slot_is_lost() {
-        let child = shot(1, Jam::Clear, None);
-        assert_eq!(Given::EmptySlot.settle(child).jam, Jam::Lost);
-        assert_eq!(Given::EmptySlot.ship(), None);
-        // Given a ship, or none, it is left as it is.
-        assert_eq!(Given::Ship(None).settle(child).jam, Jam::Clear);
+    fn a_child_given_the_empty_slot_holds_it_and_no_ship() {
+        // Its loss waits for its first handling's gone-ship rule
+        // (@0x355f7-0x3561b), so a refill of the slot before then saves it.
+        let parent = shot(1, Jam::Asteroid(Some(5)), None);
+        let empty = Given::EmptySlot(Slot::Berth(5));
+        assert_eq!(empty.ship(), None);
+        assert_eq!(empty.slot(&parent, &[]), Some(Slot::Berth(5)));
+        assert_eq!(Given::Ship(None).slot(&parent, &[]), None);
         assert_eq!(Given::Ship(Some(npc(2))).ship(), Some(npc(2)));
     }
 
     #[test]
-    fn a_child_that_found_a_ship_an_interfered_one_or_point_defence_is_not_lost() {
-        let found = shot(1, Jam::Clear, Some(npc(2)));
-        assert_eq!(Given::EmptySlot.settle(found), found);
-        let interfered = shot(1, Jam::Interfered, None);
-        assert_eq!(Given::EmptySlot.settle(interfered), interfered);
-        let defence = shot(9, Jam::Clear, None);
-        assert_eq!(Given::EmptySlot.settle(defence), defence);
+    fn a_child_given_a_ship_holds_its_slot_or_the_parents_once_it_is_gone() {
+        let targets = [at(npc(3), Slot::Berth(3), Condition::Intact)];
+        let parent = Shot {
+            aimed_slot: Some(Slot::Berth(6)),
+            ..shot(1, Jam::Clear, Some(npc(6)))
+        };
+        let given = |ship| Given::Ship(Some(ship)).slot(&parent, &targets);
+        assert_eq!(given(npc(3)), Some(Slot::Berth(3)));
+        assert_eq!(given(npc(6)), Some(Slot::Berth(6)), "gone");
     }
 }

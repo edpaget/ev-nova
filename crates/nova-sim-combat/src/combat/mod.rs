@@ -435,6 +435,7 @@ mod player_berths;
 pub mod plunder;
 pub mod projectile;
 mod proximity;
+pub mod refilled_slot;
 pub mod report;
 pub mod script_explosions;
 pub mod ship_frames;
@@ -486,6 +487,7 @@ use projectile::{
     BombLaunch, DecayStep, Jam, LockAngle, ProximityFuse, Shot, ShotId, ShotLayer, Sight, Source,
     Target,
 };
+use refilled_slot::RefilledSlot;
 use report::{Reports, SimDiagnostic};
 use shot_slots::ShotSlots;
 use sides::{PassThrough, Sides, Ties};
@@ -1308,6 +1310,9 @@ pub struct Combat {
     /// How a shot locked on an asteroid reads the slot it holds
     /// ([`RuleKey::LockedShotShipSlot`](crate::RuleKey::LockedShotShipSlot)).
     locked_slot: LockedSlot,
+    /// What becomes of a shot whose ship's slot a new ship takes
+    /// ([`RuleKey::ReusedSlotShotTarget`](crate::RuleKey::ReusedSlotShotTarget)).
+    refilled_slot: RefilledSlot,
     /// Whether a planet-type beam hits a stellar
     /// ([`RuleKey::BeamStellars`](crate::RuleKey::BeamStellars)).
     beam_stellars: RuleSource,
@@ -2043,6 +2048,7 @@ impl Combat {
                 id: self.next_id(),
                 target: launch.target,
                 aimed_at,
+                aimed_slot: aimed_at.and_then(|ship| slot_of(targets, ship)),
                 source: Source::Ship(ties),
                 miss_roll: rolls.then(|| chance.below(muzzle.miss_class) + 1),
                 // Every ship's, the player's (slot 0) too (@0x3f0a9-0x3f143).
@@ -2899,9 +2905,12 @@ impl Combat {
     /// fly, and the release is heard all the same, its sound coming before
     /// its loop. A sub-munition whose weapon places no shot
     /// ([`WeaponSpec::spawns_shot`](weapon::WeaponSpec::spawns_shot)) ends it at the first, so none fly.
-    /// Given a locked parent's empty ship slot, each is aimed at no ship,
-    /// and one its seek leaves aimed at none is lost
-    /// ([`Given::settle`](locked_slot::Given::settle)).
+    /// Each holds the ship slot `given` names
+    /// ([`Given::slot`](locked_slot::Given::slot), the original's +0x2a),
+    /// unless its seek finds another ship: given a locked parent's empty
+    /// ship slot, it is aimed at no ship and holds that slot, so its first
+    /// handling's gone-ship rule makes it lost unless a new ship takes the
+    /// slot first ([`refilled_slot`]).
     fn release(
         &mut self,
         parent: &Shot,
@@ -2921,6 +2930,7 @@ impl Combat {
         // (+0x2c): its ship's class and plunder as they are now.
         let (turret_over, owner) = self.source_slot_reads(parent, fighters, arsenal);
         let target = given.ship();
+        let aimed_slot = given.slot(parent, sides.targets);
         let shots = submunition::release(parent, sub, (target, turret_over));
         if shots.is_empty() {
             return;
@@ -2944,6 +2954,7 @@ impl Combat {
             sound: Some(FireSound::at(SUBMUNITION_PRIORITY)),
         });
         for (mut shot, n) in shots.into_iter().zip(0..) {
+            shot.aimed_slot = aimed_slot;
             // `_SpawnShot` failing ends the loop (@0x3f32d-0x3f331).
             if !sub.spawns_shot() {
                 break;
@@ -2955,7 +2966,7 @@ impl Combat {
             shot.disable_only |= plunder::shot_disables(owner, target, sides.targets);
             shot.roll_at_launch(self.field.interference, self.field.speed_mult, chance);
             // Each seeks once seated, with its own roll and jam (@0x3f3cf).
-            let shot = given.settle(submunition::aim(parent, shot, n, sides, chance));
+            let shot = submunition::aim(parent, shot, n, sides, chance);
             self.insert_seated(&shot);
         }
     }
@@ -3448,6 +3459,15 @@ fn position_of(targets: &[Target], ship: ShipRef) -> Option<Vec2> {
         .map(|target| target.position)
 }
 
+/// The ship slot `ship` holds among `targets`, if it is in the fight: the
+/// slot a shot aimed at it holds ([`Shot::aimed_slot`]).
+fn slot_of(targets: &[Target], ship: ShipRef) -> Option<Slot> {
+    targets
+        .iter()
+        .find(|target| target.ship == ship)
+        .map(|target| target.slot)
+}
+
 /// The shield and armour `reserves` hold, together: what a hit takes is
 /// how much less this is after it.
 fn taken(reserves: &Reserves) -> f32 {
@@ -3709,6 +3729,7 @@ mod tests {
     mod plunder_fire;
     mod proximity_slots;
     mod rating_stretch;
+    mod refilled_slot;
     mod rock_blasts;
     mod shot_gain;
     mod shot_slots;

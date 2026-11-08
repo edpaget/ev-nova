@@ -582,6 +582,13 @@ pub struct Shot {
     /// point defence, and a sub-munition's own target. See
     /// [`Combat::targeted_damage`](super::Combat::targeted_damage).
     pub aimed_at: Option<ShipRef>,
+    /// The ship slot [`Shot::aimed_at`] names, the original's +0x2a read as
+    /// a slot: the slot its ship held as the shot was aimed, or, for a
+    /// sub-munition given a locked parent's empty ship slot, that slot.
+    /// None while it is aimed at no slot (-1). Once its ship has left the
+    /// fight, a new ship in this slot becomes its ship
+    /// ([`refilled_slot`](super::refilled_slot)).
+    pub aimed_slot: Option<Slot>,
     /// Whether it is jammed off its ship (the original's shot +0x30): a
     /// shot jammed any way hits no ship, and its damage counts as aimed
     /// at none.
@@ -832,6 +839,7 @@ impl Shot {
             id: ShotId::default(),
             target: None,
             aimed_at: None,
+            aimed_slot: None,
             jam: Jam::Clear,
             durability: weapon.durability,
             generation: 0,
@@ -984,7 +992,12 @@ impl Shot {
     /// not point defence, whose ship ([`Shot::aimed_at`], +0x2a) is not
     /// active among `targets` (destroyed, or out of the fight as it
     /// landed, jumped or was taken out: the slot's +0xb8) is lost, jam
-    /// 998, and aimed at nothing from then on. A jammed shot keeps its
+    /// 998, and aimed at nothing from then on. So is one aimed at no ship
+    /// that holds a slot ([`Shot::aimed_slot`]): a sub-munition given a
+    /// locked parent's empty slot. A new ship in its ship's slot has
+    /// already become its ship ([`refilled_slot`](super::refilled_slot)),
+    /// so what is lost here is a shot whose slot is empty, or any whose
+    /// ship is gone by the other reading. A jammed shot keeps its
     /// ship. Point defence (guidance 9) is aimed at no ship every tick
     /// and is never lost. A ship breaking up is still active, so a shot
     /// at it is not lost. A ship destroyed during a tick's resolution
@@ -994,20 +1007,22 @@ impl Shot {
     fn lose_a_gone_ship(&mut self, targets: &[Target]) {
         if self.weapon.guidance == Guidance::PointDefence {
             self.aimed_at = None;
+            self.aimed_slot = None;
             return;
         }
         if self.jam != Jam::Clear {
             return;
         }
-        let Some(ship) = self.aimed_at else {
-            return;
+        let gone = match self.aimed_at {
+            Some(ship) => !targets
+                .iter()
+                .any(|target| target.ship == ship && target.condition.active()),
+            None => self.aimed_slot.is_some(),
         };
-        let active = targets
-            .iter()
-            .any(|target| target.ship == ship && target.condition.active());
-        if !active {
+        if gone {
             self.jam = Jam::Lost;
             self.aimed_at = None;
+            self.aimed_slot = None;
             self.target = None;
         }
     }
@@ -1053,6 +1068,7 @@ impl Shot {
             if !self.lock_holds(guide) {
                 self.target = None;
                 self.aimed_at = None;
+                self.aimed_slot = None;
             }
             self.heading = homing_turn(self.heading, wanted, turn, guide.speed_mult);
         }
@@ -1175,7 +1191,8 @@ impl Shot {
     }
 
     /// Turns a shot a ship launched on its firer: its target and the ship
-    /// its damage is aimed at become the firer (+0x2a), and it is launched
+    /// its damage is aimed at become the firer (+0x2a, the firer's slot
+    /// [`Shot::firer_slot`]), and it is launched
     /// by no ship from then on ([`Source::Other`], +0x2c = -1), so it can
     /// hit only its firer, holds no reload, locks nothing, and its hit
     /// and blast are no one's. A shot no ship launched is left alone.
@@ -1183,6 +1200,7 @@ impl Shot {
         if matches!(self.source, Source::Ship(_)) {
             self.target = Some(self.firer);
             self.aimed_at = Some(self.firer);
+            self.aimed_slot = self.firer_slot;
             self.source = Source::Other;
         }
     }

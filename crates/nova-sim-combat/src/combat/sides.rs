@@ -393,7 +393,10 @@ impl Sides<'_> {
     /// Whether a shot no ship fired may hit `target` by what it is aimed
     /// at (branch 7, @0x44a71-0x44a88): any ship when it is aimed at none
     /// (+0x2a above 63), else the ship and the defenders of the stellar
-    /// its slot names ([`Sides::guards_slot`]). A locked shot is aimed at
+    /// its slot names ([`Sides::guards_slot`]): its mark's slot, or once
+    /// its mark has left the fight the slot it holds
+    /// ([`Shot::aimed_slot`]), which a sub-munition given an empty slot
+    /// holds too. A locked shot is aimed at
     /// its asteroid's slot read as a ship slot, at none once it let the
     /// slot go.
     fn marks(&self, shot: &Shot, target: &Target) -> bool {
@@ -403,12 +406,19 @@ impl Sides<'_> {
                     || Self::guards_slot(i64::try_from(k).unwrap_or(i64::MAX), target)
             });
         }
-        shot.aimed_at.is_none_or(|aimed| {
-            aimed == target.ship
-                || self
-                    .slot_of(aimed)
-                    .is_some_and(|slot| Self::guards_slot(slot, target))
-        })
+        // The slot it holds once its mark has left the fight, or as a
+        // sub-munition given an empty slot ([`Shot::aimed_slot`]).
+        let held = shot.aimed_slot.map(locked_slot::slot_number);
+        match shot.aimed_at {
+            None => held.is_none_or(|slot| Self::guards_slot(slot, target)),
+            Some(aimed) => {
+                aimed == target.ship
+                    || self
+                        .slot_of(aimed)
+                        .or(held)
+                        .is_some_and(|slot| Self::guards_slot(slot, target))
+            }
+        }
     }
 
     /// The ship-table slot of `ship`: the player's 0, an NPC's its berth;
@@ -1034,5 +1044,31 @@ mod tests {
             [false, false, false, false, false],
             "a mark gone from the fight names no slot"
         );
+    }
+
+    #[test]
+    fn a_shot_no_ship_fired_whose_mark_is_gone_reads_the_slot_it_holds() {
+        // Its +0x2a is still slot 3 (@0x44a71-0x44a88): it hits the
+        // defenders of the stellar slot 3 names, whether its mark left the
+        // fight or it was given the empty slot as a sub-munition.
+        let targets = [
+            defending(ShipRef::Player, None, 0),
+            defending(npc(5), Some(128), 5),
+            defending(npc(7), Some(131), 7),
+        ];
+        let sides = among(&targets);
+        for aimed_at in [Some(npc(9)), None] {
+            let shot = Shot {
+                source: Source::Other,
+                aimed_at,
+                aimed_slot: Some(crate::ship_layer::Slot::Berth(3)),
+                ..rolled(None)
+            };
+            let hits: Vec<bool> = targets
+                .iter()
+                .map(|target| sides.shot_can_hit(&shot, target))
+                .collect();
+            assert_eq!(hits, [false, false, true], "{aimed_at:?}");
+        }
     }
 }

@@ -98,6 +98,11 @@ impl Combat {
     /// ships lent afresh; or to the passes' end ([`Stretch::Done`]) (see
     /// `Combat::hit_stretch`).
     ///
+    /// Each stretch begins with every shot whose ship's slot a new ship
+    /// took following it ([`Combat::follow_refilled_slots`]), as the
+    /// passes read a shot's +0x2a as a slot: the refills of the ship
+    /// loop, the reinforcements and the player's launch and eject.
+    ///
     /// After [`Stretch::Answer`] the caller must call this again, with the
     /// ships lent afresh, until it gives [`Stretch::Done`], before starting
     /// any other phase; [`run_in_turn`](super::hit_turns::run_in_turn) is
@@ -114,6 +119,7 @@ impl Combat {
     ) -> Stretch {
         self.field = arena.field;
         self.note_slots(fighters);
+        self.follow_refilled_slots(fighters);
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
         let terms = (arena.govts, arena.arsenal);
@@ -346,6 +352,10 @@ impl Combat {
     /// end of life (@0x36195 → @0x35f0a → @0x3617c): the collision passes
     /// have already tested and let it go (`Combat::proximity_pass`).
     ///
+    /// Each stretch begins with every shot whose ship's slot a new ship
+    /// took following it ([`Combat::follow_refilled_slots`]), before the
+    /// gone-ship rule: the refills of the arrivals and the AI's launches.
+    ///
     /// The guidance is lent where each asteroid slot's asteroid is, by
     /// slot, as `_HandleShot` meets them: a homing `Seeker` 0x0002 shot may
     /// lock onto one, and a locked one steers at its slot's
@@ -366,6 +376,7 @@ impl Combat {
     ) -> Stretch {
         self.field = arena.field;
         self.note_slots(fighters);
+        self.follow_refilled_slots(fighters);
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
         let terms = (arena.govts, arena.arsenal);
