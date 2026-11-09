@@ -19,6 +19,11 @@
 //!   palette colour, else its owner's faction colour, else bare grey.
 //! - **A jump point's gate** is a ring in bare grey.
 //!
+//! - **The stars** are dots ([`STAR_DOTS`]): the bible has no star art,
+//!   so in place of the star sheet (`spïn` 700) each star the starfield
+//!   shows is a solid dot of 1 to 3 pixels in one of a few greys
+//!   ([`GameData::with_star_dots`](crate::store::GameData::with_star_dots)).
+//!
 //! A model draws whenever one of its asset's files reads as a model,
 //! whatever its `placeholder` flag, as `galaxy`'s contact sheet draws it
 //! (`nova_galaxy_media::read_model`).
@@ -57,8 +62,20 @@ use nova_galaxy_media::{BARE, Model, NoModel, Placement, read_model, rgb, silhou
 use super::fleet::PX_PER_METRE;
 use super::ids::IdTable;
 use super::map::absent;
-use crate::store::{StandIn, StandInOf};
+use crate::store::{StandIn, StandInOf, StarDot};
 use crate::wire::id::{ShipId, StellarId};
+
+/// The dots the new game's stars draw as: the bible has no star sheet
+/// (see the module docs). Each star picks one evenly, as it would a
+/// frame, so the single pixels, listed most, are the commonest.
+pub const STAR_DOTS: &[StarDot] = &[
+    StarDot { side: 1, grey: 96 },
+    StarDot { side: 1, grey: 160 },
+    StarDot { side: 1, grey: 224 },
+    StarDot { side: 2, grey: 128 },
+    StarDot { side: 2, grey: 200 },
+    StarDot { side: 3, grey: 255 },
+];
 
 /// The stand-in of each hull, stellar and gate of `galaxy` that has a
 /// record in `ids`, by its record, reading the models through `source`
@@ -289,6 +306,19 @@ mod tests {
 
     fn problems(game: &NewGame) -> Vec<String> {
         game.problems.iter().map(ToString::to_string).collect()
+    }
+
+    #[test]
+    fn the_stars_stand_in_as_dots_of_one_to_three_pixels_in_several_greys() {
+        let game = loaded(&galaxy());
+        let dots = game.data.star_dots();
+        assert!(!dots.is_empty());
+        assert!(
+            dots.iter().all(|dot| (1..=3).contains(&dot.side)),
+            "{dots:?}"
+        );
+        assert!(dots.iter().any(|dot| dot.grey != dots[0].grey), "{dots:?}");
+        assert_eq!(dots, STAR_DOTS);
     }
 
     #[test]

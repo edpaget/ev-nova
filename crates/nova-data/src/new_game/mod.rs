@@ -51,7 +51,8 @@
 //! The bible has models, not sprites, so nothing names a sprite: each hull,
 //! stellar and gate draws as its stand-in, kept on the store
 //! ([`GameData::stand_in`]) and read from the media through the same
-//! [`Source`].
+//! [`Source`]. Nor is there a star sheet: the stars draw as stand-in dots
+//! ([`GameData::star_dots`]).
 //!
 //! # Problems
 //!
@@ -226,6 +227,7 @@ pub fn load(source: &impl Source, dir: &Path) -> NewGame {
     NewGame {
         data: GameData::from_decoded(dir.to_path_buf(), records)
             .with_stand_ins(stand_ins)
+            .with_star_dots(looks::STAR_DOTS.to_vec())
             .with_dialogs(dialogs)
             .with_storylines(storylines)
             .with_fittings(fittings),

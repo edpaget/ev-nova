@@ -440,6 +440,18 @@ fn the_sample_folder_loads_without_problems() {
 }
 
 #[test]
+fn the_sample_s_stars_stand_in_as_dots_of_one_to_three_pixels_in_several_greys() {
+    let game = new_game::open(&new_game::fixture::sample_folder()).expect("lists");
+    let dots = game.data.star_dots();
+    assert!(!dots.is_empty());
+    assert!(
+        dots.iter().all(|dot| (1..=3).contains(&dot.side)),
+        "{dots:?}"
+    );
+    assert!(dots.iter().any(|dot| dot.grey != dots[0].grey), "{dots:?}");
+}
+
+#[test]
 fn the_sample_maps_four_missions_one_news_item_and_six_jump_points() {
     let game = new_game::open(&new_game::fixture::sample_folder()).expect("lists");
     let storylines = game.data.storylines();

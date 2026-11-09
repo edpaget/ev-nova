@@ -244,7 +244,7 @@ pub use self::sprite::{
     LayerError, LayerSprite, SheetScan, ShipLayer, ShipLayerInfos, ShipLayers, ShipSprite,
     ShipSpriteInfo, ShipSpriteWords, SpriteError,
 };
-pub use self::stand_in::{Outline, OutlineTriangle, StandIn, StandInOf};
+pub use self::stand_in::{Outline, OutlineTriangle, StandIn, StandInOf, StarDot};
 pub use self::stellar_sprite::{
     StellarSprite, StellarSpriteError, master_frame_count, stellar_spin_id,
 };
@@ -392,6 +392,9 @@ pub struct GameData {
     /// What each ship or stellar with no sprite draws instead: the new
     /// game's ([`GameData::with_stand_ins`]); none in a stock store.
     stand_ins: BTreeMap<StandInOf, StandIn>,
+    /// The dots the starfield draws as where it has no star sheet: the
+    /// new game's ([`GameData::with_star_dots`]); none in a stock store.
+    star_dots: Vec<StarDot>,
     /// The compiled conversations and each stellar's: the new game's
     /// ([`GameData::with_dialogs`]); none in a stock store.
     dialogs: Dialogs,
@@ -453,6 +456,7 @@ impl GameData {
             tests: Mutex::default(),
             sets: Mutex::default(),
             stand_ins: BTreeMap::new(),
+            star_dots: Vec::new(),
             dialogs: Dialogs::default(),
             storylines: Storylines::default(),
             fittings: Fittings::default(),
