@@ -47,9 +47,10 @@ use nova_view::ui::DescDialog;
 use nova_view::ui::DescriptionSource;
 use nova_view::ui::desc::{DESC_DIALOG, DescTemplates, PICTURE_DESC_DIALOG};
 use nova_view::ui::mission_dialogs::DescShown;
-use nova_view::ui::player_info::{PLAYER_INFO_DIALOG, YES_NO_DIALOG};
+use nova_view::ui::player_info::PLAYER_INFO_DIALOG;
 use nova_view::ui::prefs::PREFS_DIALOG;
 use nova_view::ui::text_input::TEXT_INPUT_DIALOG;
+use nova_view::ui::yes_no::YES_NO_DIALOG;
 use nova_view::{DrawList, Screen, ScreenAction};
 
 use nova_data::graphics::PICT;

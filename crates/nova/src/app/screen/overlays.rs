@@ -18,11 +18,10 @@ use nova_view::ui::catalog::DescriptionGraphics;
 use nova_view::ui::comm::{COMM_DIALOG, HAGGLE_DIALOG};
 use nova_view::ui::desc::{DESC_DIALOG, DescTemplates, PICTURE_DESC_DIALOG};
 use nova_view::ui::mission_dialogs::{DescShown, MissionDialogs};
-use nova_view::ui::player_info::{
-    BackgroundSizes, PLAYER_INFO_DIALOG, PlayerInfoScreen, YES_NO_DIALOG,
-};
+use nova_view::ui::player_info::{BackgroundSizes, PLAYER_INFO_DIALOG, PlayerInfoScreen};
 use nova_view::ui::plunder::{ASSIGNMENT_DIALOG, PLUNDER_DIALOG};
 use nova_view::ui::prefs::PREFS_DIALOG;
+use nova_view::ui::yes_no::YES_NO_DIALOG;
 use nova_view::ui::{
     AssignmentDialog, CommDialog, CommPress, DescriptionSource, DialogResources, FocusRing,
     HaggleDialog, PlunderDialog, PlunderShown, PrefsDialog,

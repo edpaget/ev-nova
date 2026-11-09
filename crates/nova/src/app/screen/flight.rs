@@ -27,9 +27,10 @@ use nova_view::spaceport::{ListLooks, OutfitterCatalog, ShipyardCatalog};
 use nova_view::ui::catalog::DescriptionGraphics;
 use nova_view::ui::desc::{DESC_DIALOG, DescTemplates, PICTURE_DESC_DIALOG};
 use nova_view::ui::mission_dialogs::{DescShown, MissionDialogs};
-use nova_view::ui::player_info::{BackgroundSizes, PLAYER_INFO_DIALOG, YES_NO_DIALOG};
+use nova_view::ui::player_info::{BackgroundSizes, PLAYER_INFO_DIALOG};
 use nova_view::ui::quantity::QUANTITY_DIALOG;
 use nova_view::ui::text_input::TEXT_INPUT_DIALOG;
+use nova_view::ui::yes_no::YES_NO_DIALOG;
 use nova_view::ui::{DescriptionSource, DialogResources};
 
 use super::port_dialogs::{close_mission_texts, close_port_dialogs};
