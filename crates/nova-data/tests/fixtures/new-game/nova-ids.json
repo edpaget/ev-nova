@@ -39,6 +39,7 @@
   "ships": {
     "cutter": 128,
     "hauler": 129,
+    "racked-hauler": 131,
     "warden-picket": 130
   },
   "starts": {

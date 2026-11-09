@@ -12,8 +12,12 @@
 //! points that cover every case a link can take (two from `hearth` to
 //! `verge`, a dead pair between `verge` and `drift`, and `drift`'s
 //! one-way back door to `verge`); the civilian hull `hauler`, in guild
-//! paint, the crown hull `cutter`, bare, and the wardens' crown hull
-//! `warden-picket`, in `warden-colours`, all on a placeholder model; the
+//! paint, priced 4000 and sold nowhere, the crown hull `cutter`, bare,
+//! 50,000 at `hearth-dock`, and the wardens' crown hull `warden-picket`,
+//! in `warden-colours`, unpriced and unsold, all on a placeholder model;
+//! the variant `racked-hauler`, the hauler with `cargo-racks` and a nose
+//! turret carrying a `mass-driver`, sold at `hearth-dock` for the
+//! hauler's price plus the racks' (6000), so the start can buy it; the
 //! outfits `dock-pass`, a Dock pass, and `mass-driver`, a turret weapon
 //! sold at `hearth-dock` alone (`sold_at`), so it is listed there only
 //! for a ship with a turret hardpoint; the legal mod kit `cargo-racks`,

@@ -40,8 +40,11 @@ use nova_galaxy_media::BARE;
 /// the two exchanges price; jump
 /// points two of which lead from `hearth` to `verge`, a dead pair between
 /// `verge` and `drift`, and `drift`'s one-way back door to `verge`; the
-/// civilian hull `hauler`, the crown hull `cutter` and the wardens'
-/// crown hull `warden-picket`, in their colours; the outfits
+/// civilian hull `hauler` (4000, sold nowhere), the crown hull `cutter`
+/// (50,000 at `hearth-dock`) and the wardens' crown hull `warden-picket`
+/// (unsold), in their colours, and the variant `racked-hauler`, the
+/// hauler with cargo racks and a turret mass driver, sold at
+/// `hearth-dock` with no price of its own; the outfits
 /// `dock-pass` and `mass-driver`, a turret sold at `hearth-dock`; the mod
 /// kits `cargo-racks` (legal) and `gun-mount` (lawless, adding a turret
 /// hardpoint); the start `dock-hand`, in the hauler in `hearth`; the
@@ -183,8 +186,12 @@ fn the_fixture_folder_holds_a_record_for_each_thing_it_maps() {
         [128, 130, 140],
         "the stellars with a body"
     );
-    assert_eq!(data.ids(Ship::TYPE), [128, 129, 130], "the three hulls");
-    assert_eq!(data.ids(ShipAnim::TYPE), [128, 129, 130]);
+    assert_eq!(
+        data.ids(Ship::TYPE),
+        [128, 129, 130, 131],
+        "the three hulls and the variant"
+    );
+    assert_eq!(data.ids(ShipAnim::TYPE), [128, 129, 130, 131]);
     assert_eq!(
         data.ids(Dude::TYPE),
         [128, 129],
@@ -318,6 +325,40 @@ fn the_mass_driver_is_sold_at_hearth_dock_alone_and_verge_workshop_is_a_lawless_
 }
 
 #[test]
+fn the_cutter_and_the_racked_hauler_are_sold_at_hearth_dock_alone_and_the_hauler_nowhere() {
+    use nova_data::new_game::records::OUTFIT_TECH_NEVER;
+    use nova_data::new_game::yards::SOLD_TECH_FIRST;
+
+    let game = new_game::open(&fixture()).expect("lists");
+    let ship = |ship: &str| named::<Ship>(&game.data, game.ids.ships[&id(ship)]).1;
+    let sale = |ship: &Ship| {
+        (
+            ship.cost,
+            ship.tech_level,
+            ship.buy_random,
+            ship.hire_random,
+        )
+    };
+    assert_eq!(sale(&ship("cutter")), (50_000, SOLD_TECH_FIRST, 100, 0));
+    assert_eq!(
+        sale(&ship("racked-hauler")),
+        (6000, SOLD_TECH_FIRST, 100, 0),
+        "the hauler's 4000 and its racks' 2000, at the mass driver's number: both \
+         are sold at Hearth Dock alone"
+    );
+    assert_eq!(sale(&ship("hauler")), (4000, OUTFIT_TECH_NEVER, 0, 0));
+    assert_eq!(sale(&ship("warden-picket")), (0, OUTFIT_TECH_NEVER, 0, 0));
+    let spob = |stellar: &str| named::<Stellar>(&game.data, game.ids.stellars[&id(stellar)]).1;
+    assert_eq!(
+        special_tech(&spob("hearth-dock")),
+        [3, -1, -1, -1, -1, -1, -1, -1]
+    );
+    for stellar in ["hearth-moon", "verge-camp", "verge-workshop"] {
+        assert_eq!(special_tech(&spob(stellar)), [-1; 8], "{stellar}");
+    }
+}
+
+#[test]
 fn the_trade_stellars_price_the_six_standard_goods_in_their_nibbles() {
     use nova_data::records::stellar::flags::{HIGH_PRICE, LOW_PRICE, MEDIUM_PRICE, price_bits};
     let game = new_game::open(&fixture()).expect("lists");
@@ -444,6 +485,7 @@ fn each_hull_is_a_ship_with_its_size_and_the_civilian_one_is_traffic() {
         [
             ("cutter".to_owned(), 128),
             ("hauler".to_owned(), 129),
+            ("racked-hauler".to_owned(), 131),
             ("warden-picket".to_owned(), 130)
         ]
     );
