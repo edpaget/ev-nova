@@ -74,7 +74,12 @@
 //!   the autopilot's while its ask stands (`FlightView::gate_pilot_frame`).
 //!   J's [`Answer::GatePilot`](nova_sim::flight_frame::Answer::GatePilot)
 //!   says the autopilot engaged, and `fixture::check_contract` checks the
-//!   frame after it shows the autopilot.
+//!   frame after it shows the autopilot. The nav area reads the same
+//!   field to show the autopilot and the system it flies toward
+//!   ([`NavDisplay::GatePilot`](crate::flight::hud::NavDisplay::GatePilot)),
+//!   and J's line when no gate serves the selection is a message
+//!   ([`SimMessage::NoGateLeadsThere`](nova_sim::SimMessage::NoGateLeadsThere)),
+//!   drained as any other.
 //! - **A fact the router reads between commands is a frame field**:
 //!   whether Recharge is enabled
 //!   ([`FlightFrame::recharge_enabled`](nova_sim::flight_frame::FlightFrame::recharge_enabled))
