@@ -262,7 +262,7 @@ impl Session {
     /// The escape ship the player can eject into now, if any
     /// ([`escape_ship_type`]): its fighter bays' rounds are the fighters
     /// aboard.
-    fn escape_ship(&self) -> Option<ShipId> {
+    pub(super) fn escape_ship(&self) -> Option<ShipId> {
         let sources = self.statics.ammo_outfits(self.setup.outfit_weapon_mods());
         let rounds = |weapon| outfit_rounds(&self.pilot.outfits, sources, weapon);
         escape_ship_type(self.statics.arsenal.weapons(), rounds, &self.statics.ships)

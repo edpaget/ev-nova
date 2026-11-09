@@ -218,6 +218,112 @@ mod tests {
         }
     }
 
+    /// Outfit 156 names the bay's fighters in its second mod alone, below
+    /// [`VIPERS`] (158), the bay's first-mod fighter outfit.
+    const LATER_VIPERS: OutfitId = OutfitId(156);
+
+    /// [`carrying`] with [`LATER_VIPERS`].
+    fn later_vipers() -> FakePilotCatalog {
+        let mut catalog = carrying();
+        catalog
+            .outfits
+            .push(outfit(LATER_VIPERS.0, &[(-1, 0), (MOD_AMMO, 149)]));
+        catalog
+    }
+
+    /// `catalog`'s pilot owning `later` of [`LATER_VIPERS`] and no
+    /// [`VIPERS`], with `escorts`, flying by `mods`.
+    fn flying_later(
+        catalog: &FakePilotCatalog,
+        later: u16,
+        escorts: Vec<crate::fleet::Escort>,
+        mods: RuleSource,
+    ) -> Session {
+        let mut pilot = pilot(catalog, 0, escorts);
+        pilot.outfits.insert(LATER_VIPERS, later);
+        Session::fly(catalog, pilot)
+            .expect("flies")
+            .with_rules(rules(mods))
+    }
+
+    #[test]
+    fn the_outfitters_bay_room_reads_the_first_mod_outfits_by_the_engine() {
+        // `_CanBuyOutfitItem` @0x4e8f6 reads the first mod alone.
+        let catalog = later_vipers();
+        for (mods, later) in [(RuleSource::Engine, false), (RuleSource::Bible, true)] {
+            let room = flying_later(&catalog, 0, Vec::new(), mods).fighter_room();
+            assert!(room.contains_key(&VIPERS), "{mods:?}");
+            assert_eq!(room.contains_key(&LATER_VIPERS), later, "{mods:?}");
+        }
+    }
+
+    #[test]
+    fn later_mod_fighters_are_none_aboard_by_the_engine() {
+        let catalog = later_vipers();
+        for (mods, aboard) in [(RuleSource::Engine, 0), (RuleSource::Bible, 2)] {
+            let session = flying_later(&catalog, 2, Vec::new(), mods);
+            assert_eq!(
+                session.launchers()[&OutfitId(157)].rounds,
+                aboard,
+                "{mods:?}: the Sell's count"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fighter_put_back_goes_to_the_first_mod_outfit_by_the_engine() {
+        // With no record of the Viper, the launch puts the round back.
+        let mut catalog = later_vipers();
+        catalog.ship_records.retain(|record| record.id != VIPER);
+        for (mods, holder) in [
+            (RuleSource::Engine, VIPERS),
+            (RuleSource::Bible, LATER_VIPERS),
+        ] {
+            let mut session = flying_later(&catalog, 0, Vec::new(), mods);
+            let sortie = crate::combat::Sortie {
+                carrier: crate::combat::ShipRef::Player,
+                bay: WeaponId(149),
+                ship: VIPER,
+                from: crate::flight::ShipState::default(),
+                heading: 0.0,
+                target: None,
+            };
+            assert_eq!(session.launch_fighters(&[sortie], &mut NeverFires), []);
+            assert_eq!(session.pilot().owned(holder), 1, "{mods:?}");
+        }
+    }
+
+    #[test]
+    fn later_mod_fighters_give_no_escape_ship_by_the_engine() {
+        let mut catalog = later_vipers();
+        for record in &mut catalog.ship_records {
+            if record.id == VIPER {
+                record.flags = crate::escape::ESCAPE_SHIP_FLAG;
+            }
+        }
+        for (mods, escape) in [(RuleSource::Engine, None), (RuleSource::Bible, Some(VIPER))] {
+            let session = flying_later(&catalog, 1, Vec::new(), mods);
+            assert_eq!(session.escape_ship(), escape, "{mods:?}");
+        }
+    }
+
+    #[test]
+    fn a_carried_fighter_counts_as_the_first_mod_outfit_by_the_engine() {
+        // `_PlayerHasFightersOfOutfitType` @0x801a/@0x80c2 reads the
+        // first mod alone; the fighter counts as the lowest-ID outfit.
+        use crate::control::PilotFacts;
+        let catalog = later_vipers();
+        let carried = vec![crate::session::fighters::tests::out()];
+        for (mods, holder, other) in [
+            (RuleSource::Engine, VIPERS, LATER_VIPERS),
+            (RuleSource::Bible, LATER_VIPERS, VIPERS),
+        ] {
+            let session = flying_later(&catalog, 0, carried.clone(), mods);
+            assert!(session.has_outfit(holder), "{mods:?}");
+            assert!(!session.has_outfit(other), "{mods:?}");
+        }
+    }
+
     #[test]
     fn a_boarded_fighters_room_reads_the_bays_last_outfit_in_any_slot() {
         // `_CanBuyFighter`'s scan (@0x5b95-0x5bd8) takes the bay's last
