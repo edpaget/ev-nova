@@ -545,6 +545,45 @@ mod tests {
         assert!(!traffic.word_of(pirate).expect("kept").thrusts(), "braking");
     }
 
+    /// A plunderer of the player at rest at the centre in slot 3, facing
+    /// the player 2000 up the screen in `condition`: the traffic after the
+    /// plunderer's low level at its slot, and the plunderer.
+    fn plundering_the_player(condition: crate::combat::hull::Condition) -> (Traffic, NpcId) {
+        let mut traffic = Traffic::with_interval(1);
+        let mut pirate = ship(0, PIRATES, AiType::Warship, 0.0, 0.0);
+        pirate.goal = Goal::Plunder {
+            ship: ShipRef::Player,
+            hopeless: false,
+        };
+        pirate.target = Some(ShipRef::Player);
+        let pirate = traffic.add_npc_at(pirate, 3);
+        let world = World {
+            player: Some(crate::ai::PlayerSide {
+                condition,
+                ..crate::ai::fixture::player(0.0, -2000.0)
+            }),
+            ..World::new(&[])
+        };
+        traffic.autopilot_in_dispatch(0, &world, &mut NeverFires);
+        (traffic, pirate)
+    }
+
+    #[test]
+    fn a_plunderer_reads_the_player_breaking_up_as_disabled_and_brakes() {
+        // `_IsDisabled` (@0x2ce6) of the player: its armour line holds of
+        // the player breaking up, as of an NPC (@0x8e866).
+        use crate::combat::hull::Condition;
+        let (traffic, pirate) = plundering_the_player(Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        });
+        assert!(traffic.slot_reads[&pirate].1, "read disabled");
+        assert!(!traffic.word_of(pirate).expect("kept").thrusts(), "braking");
+        let (traffic, pirate) = plundering_the_player(Condition::Intact);
+        assert!(!traffic.slot_reads[&pirate].1, "an intact player");
+        assert!(traffic.word_of(pirate).expect("kept").thrusts(), "closing");
+    }
+
     #[test]
     fn a_plunderer_reads_a_defence_ship_breaking_up_as_not_disabled_and_closes() {
         // `_IsDisabled`'s branch 3 (@0x2d6f): a stellar's defence ship is
