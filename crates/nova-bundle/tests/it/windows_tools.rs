@@ -3,8 +3,8 @@
 //! digest as the check reads it, and `tar` (Windows' own bsdtar, which
 //! reads zip) unpacking the named members of a zip shaped as WinSparkle's
 //! release, stripped, and the x64 directories of zips shaped as the two
-//! signing tools' NuGet packages (a `.nupkg` is a zip). Each works in a
-//! temporary directory it owns.
+//! signing tools' NuGet packages (a `.nupkg` is a zip, with no directory
+//! entries). Each works in a temporary directory it owns.
 
 use std::fs;
 use std::path::Path;
@@ -130,9 +130,14 @@ fn names(dir: &Path) -> Vec<String> {
     names
 }
 
-/// Zips the tree at `tree` (its `bin` directory and `[Content_Types].xml`,
-/// as a `.nupkg` holds them) to `nupkg`.
-fn zip(tree: &Path, nupkg: &Path) {
+/// Writes each `(member, bytes)` under `tree` and zips them to `nupkg`,
+/// listing the files alone, as a `.nupkg` holds them: NuGet writes no
+/// directory entries, so the fixture has none either, and its listing is
+/// checked for one before the unpack runs.
+fn zip(tree: &Path, nupkg: &Path, members: &[(&str, &[u8])]) {
+    for (member, bytes) in members {
+        write(&tree.join(member), bytes);
+    }
     StdProcess
         .run(
             &Invocation::new("tar")
@@ -141,9 +146,20 @@ fn zip(tree: &Path, nupkg: &Path) {
                 .arg(nupkg)
                 .arg("-C")
                 .arg(tree)
-                .args(["bin", "[Content_Types].xml"]),
+                .arg("--no-recursion")
+                .args(members.iter().map(|(member, _)| member)),
         )
         .expect("the fixture nupkg");
+    let listing = StdProcess
+        .run(&Invocation::new("tar").arg("-tf").arg(nupkg).captured())
+        .expect("the fixture's listing");
+    let listing = String::from_utf8(listing).expect("utf-8 names");
+    let entries: Vec<&str> = listing.lines().collect();
+    assert_eq!(entries.len(), members.len(), "{entries:?}");
+    assert!(
+        entries.iter().all(|entry| !entry.ends_with('/')),
+        "a directory entry: {entries:?}"
+    );
 }
 
 #[test]
@@ -154,27 +170,26 @@ fn tar_unpacks_the_signing_tools_from_nupkg_shaped_zips() {
     fs::create_dir_all(&layout.dlib_dir).expect("dlib dir");
     fs::create_dir_all(&layout.signtool_dir).expect("signtool dir");
 
-    let dlib_tree = dir.path().join("dlib-tree");
-    let x64 = dlib_tree.join("bin").join("x64");
-    write(&x64.join("Azure.CodeSigning.Dlib.dll"), b"the dlib");
-    write(&x64.join("Azure.Core.dll"), b"a dependency");
-    write(
-        &dlib_tree
-            .join("bin")
-            .join("x86")
-            .join("Azure.CodeSigning.Dlib.dll"),
-        b"x86",
+    zip(
+        &dir.path().join("dlib-tree"),
+        &layout.nupkg(&DLIB),
+        &[
+            ("bin/x64/Azure.CodeSigning.Dlib.dll", b"the dlib"),
+            ("bin/x64/Azure.Core.dll", b"a dependency"),
+            ("bin/x86/Azure.CodeSigning.Dlib.dll", b"x86"),
+            ("[Content_Types].xml", b"<Types/>"),
+        ],
     );
-    write(&dlib_tree.join("[Content_Types].xml"), b"<Types/>");
-    zip(&dlib_tree, &layout.nupkg(&DLIB));
-
-    let sdk_tree = dir.path().join("sdk-tree");
-    let bin = sdk_tree.join("bin").join("10.0.26100.0");
-    write(&bin.join("x64").join("signtool.exe"), b"signtool");
-    write(&bin.join("x64").join("signtool.exe.manifest"), b"manifest");
-    write(&bin.join("x86").join("signtool.exe"), b"x86");
-    write(&sdk_tree.join("[Content_Types].xml"), b"<Types/>");
-    zip(&sdk_tree, &layout.nupkg(&SIGNTOOL));
+    zip(
+        &dir.path().join("sdk-tree"),
+        &layout.nupkg(&SIGNTOOL),
+        &[
+            ("bin/10.0.26100.0/x64/signtool.exe", b"signtool"),
+            ("bin/10.0.26100.0/x64/signtool.exe.manifest", b"manifest"),
+            ("bin/10.0.26100.0/x86/signtool.exe", b"x86"),
+            ("[Content_Types].xml", b"<Types/>"),
+        ],
+    );
 
     let account = Account {
         endpoint: "https://eus.codesigning.azure.net/".into(),
