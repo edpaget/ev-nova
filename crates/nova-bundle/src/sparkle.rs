@@ -31,7 +31,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::bundle::{ARCH, Step};
-use crate::digest::{DigestTool, Pin};
+use crate::digest::{DigestTool, Pin, download};
 use crate::layout::Layout;
 use crate::ports::Invocation;
 
@@ -85,22 +85,7 @@ pub fn stage(layout: &Layout) -> Vec<Step> {
     let mut steps = vec![
         Step::RemoveDir(downloads.clone()),
         Step::CreateDir(downloads.clone()),
-        Step::Run(
-            Invocation::new("curl")
-                .args([
-                    "--fail",
-                    "--silent",
-                    "--show-error",
-                    "--location",
-                    "--proto",
-                    "=https",
-                    "--retry",
-                    "3",
-                    "--output",
-                ])
-                .arg(&archive)
-                .arg(URL),
-        ),
+        Step::Run(download(&archive, URL)),
         Step::CheckSha256 {
             path: archive.clone(),
             pin: PIN,

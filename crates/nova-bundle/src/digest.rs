@@ -65,6 +65,27 @@ impl DigestTool {
     }
 }
 
+/// `curl` downloading `url` to `output` over HTTPS alone, following
+/// redirects, retrying a transient failure and failing on an HTTP error,
+/// as every pinned download is fetched before its digest is checked.
+#[must_use]
+pub fn download(output: &Path, url: &str) -> Invocation {
+    Invocation::new("curl")
+        .args([
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--location",
+            "--proto",
+            "=https",
+            "--retry",
+            "3",
+            "--output",
+        ])
+        .arg(output)
+        .arg(url)
+}
+
 /// Digests `path` with `tool` and fails unless the digest is `pin`'s,
 /// ignoring case: a file that isn't the pinned one stops the run before
 /// anything uses it.

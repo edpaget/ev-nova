@@ -10,6 +10,8 @@
 //! (`infra/windows-signing/github.tf`), which only main's Windows `build`
 //! leg enters.
 
+pub mod tools;
+
 use crate::build_id;
 use crate::ports::Env;
 
