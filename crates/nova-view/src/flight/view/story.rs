@@ -1,18 +1,30 @@
 //! [`FlightView`]'s readouts of the new game's storylines over the
-//! [`FlightSim`] port: the offers' accepts the flight refused for room
-//! ([`FlightEvent::RoomRefused`]), each taken once. What the session
-//! raises is nova-sim's (`session/storylines.rs`); the router words and
-//! shows them.
+//! [`FlightSim`] port: the news heard in the system the ship is in
+//! ([`ScreenAsk::HeardNews`]), and the offers' accepts the flight refused
+//! for room ([`FlightEvent::RoomRefused`]), each taken once. What the
+//! session answers and raises is nova-sim's (`session/story_screens.rs`,
+//! `session/storylines.rs`); the router words and shows them.
 //!
 //! [`FlightEvent::RoomRefused`]: nova_sim::flight_frame::FlightEvent::RoomRefused
 
-use nova_sim::flight_frame::RoomRefusal;
+use nova_sim::flight_frame::{RoomRefusal, ScreenAnswer, ScreenAsk};
+use nova_sim::storylines::news::HeardNews;
 
 use crate::flight::sim_port::FlightSim;
 
 use super::FlightView;
 
 impl<C, S: FlightSim> FlightView<C, S> {
+    /// The news heard in the system the ship is in
+    /// ([`ScreenAsk::HeardNews`]), by release day then id: none for a
+    /// flight with nothing to answer.
+    pub fn heard_news(&mut self) -> Vec<HeardNews> {
+        match self.sim.screen(ScreenAsk::HeardNews) {
+            ScreenAnswer::HeardNews(news) => news,
+            _ => Vec::new(),
+        }
+    }
+
     /// The offers' accepts the flight refused for room since they were
     /// last taken, in order; taking them leaves none.
     pub fn take_room_refusals(&mut self) -> Vec<RoomRefusal> {

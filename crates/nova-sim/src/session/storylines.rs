@@ -348,7 +348,7 @@ impl Session {
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)] // shields compared as the refit leaves them
-mod tests {
+pub(super) mod tests {
     //! What the session forwards to the story layer and what reaches the
     //! pilot and the page; the rules themselves are pinned in
     //! `nova_sim_story::storylines`.
@@ -377,12 +377,12 @@ mod tests {
 
     const STORY: &str = "job story";
     const FILE: &str = "dialog/job.ink";
-    const DOCK: i16 = 128;
+    pub(in crate::session) const DOCK: i16 = 128;
 
     /// The job's story: an offer whose choices end in `accept`,
     /// `decline` and `defer` (or none), its completion, whose first line
     /// shows while `paid` is set, and the planet's own greeting.
-    fn loader() -> FakeLoader {
+    pub(in crate::session) fn loader() -> FakeLoader {
         let offer = FakeKnot::new("offer")
             .line("A job?", &[])
             .choice(FakeChoice::sticky("Take", &[]).line("Bay two.", &["outcome: accept"]))
@@ -430,7 +430,7 @@ mod tests {
 
     /// The job: offered at the dock, `tons` of plate back to the dock, its
     /// completion there setting `paid`.
-    fn job(tons: u32) -> StoryMission {
+    pub(in crate::session) fn job(tons: u32) -> StoryMission {
         StoryMission {
             objective: Some(deliver(tons, DOCK)),
             complete: Some(MissionCompletion {
@@ -445,7 +445,7 @@ mod tests {
 
     /// [`catalog`] with `missions`, the jump point `a/b` (stable), the
     /// news item `word` from system 130, and the dock greeting.
-    fn talking(missions: &[(&str, StoryMission)]) -> FakePilotCatalog {
+    pub(in crate::session) fn talking(missions: &[(&str, StoryMission)]) -> FakePilotCatalog {
         let mut storylines =
             nova_sim_catalog::fixture::storylines::storylines(missions, FILE, STORY);
         storylines.points = BTreeMap::from([(
@@ -477,20 +477,20 @@ mod tests {
     }
 
     /// A session of `catalog`'s, wired to [`loader`], in flight.
-    fn flying(catalog: &FakePilotCatalog) -> Session {
+    pub(in crate::session) fn flying(catalog: &FakePilotCatalog) -> Session {
         Session::start(catalog)
             .expect("starts")
             .with_dialog_loader(Rc::new(loader()))
     }
 
     /// Lands at the dock and settles the landing's story.
-    fn land(session: &mut Session, catalog: &FakePilotCatalog) {
+    pub(in crate::session) fn land(session: &mut Session, catalog: &FakePilotCatalog) {
         assert_eq!(land_now(session), Ok(StellarId(DOCK)));
         let _ = session.settle_script(catalog, &mut NeverFires);
     }
 
     /// Takes off from the dock and lands there again: a new visit.
-    fn visit_again(session: &mut Session, catalog: &FakePilotCatalog) {
+    pub(in crate::session) fn visit_again(session: &mut Session, catalog: &FakePilotCatalog) {
         assert_eq!(
             session.take_off(catalog, &mut NeverFires),
             Some(StellarId(DOCK))
@@ -499,18 +499,18 @@ mod tests {
         land(session, catalog);
     }
 
-    fn landed(catalog: &FakePilotCatalog) -> Session {
+    pub(in crate::session) fn landed(catalog: &FakePilotCatalog) -> Session {
         let mut session = flying(catalog);
         land(&mut session, catalog);
         session
     }
 
-    fn converse(session: &mut Session, converse: Converse) -> Answer {
+    pub(in crate::session) fn converse(session: &mut Session, converse: Converse) -> Answer {
         apply(session, FlightCommand::Converse(converse))
     }
 
     /// The lines of the page `answer` shows.
-    fn lines(answer: &Answer) -> Vec<String> {
+    pub(in crate::session) fn lines(answer: &Answer) -> Vec<String> {
         match answer {
             Answer::Conversation(page) => page.lines.clone(),
             other => panic!("not a page: {other:?}"),
@@ -759,7 +759,7 @@ mod tests {
 
     /// An event on day 3 that closes `a/b`, releasing `word`, and a toll
     /// offered at the dock once `a/b` is dead.
-    fn closing() -> [(&'static str, StoryMission); 2] {
+    pub(in crate::session) fn closing() -> [(&'static str, StoryMission); 2] {
         let close = StoryMission {
             requires: Requires {
                 not_before_day: Some(3),
