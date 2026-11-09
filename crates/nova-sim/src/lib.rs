@@ -467,6 +467,7 @@ pub mod map_lanes;
 pub mod map_panel;
 pub mod map_route;
 pub mod map_search;
+pub mod viewer_lanes;
 pub use nova_sim_ai::hail;
 pub use nova_sim_ai::hover;
 pub use nova_sim_ai::hyperspace;
