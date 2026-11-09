@@ -60,6 +60,11 @@
 //! so a change one scene makes (a completion that makes an offer hold)
 //! shows in the same visit.
 //!
+//! A bar can list the scenes again, whatever the visit has shown
+//! ([`Play::bar_scenes`]): the offers that hold there, then the stellar's
+//! own conversation. It never lists a completion, which settles at
+//! landing.
+//!
 //! [`StoryState::cargo_aboard`]: super::state::StoryState::cargo_aboard
 
 use std::collections::BTreeSet;
@@ -153,6 +158,22 @@ impl Play<'_> {
             .chain(offers)
             .chain(own)
             .find(|scene| !shown.contains(scene))
+    }
+
+    /// The scenes a bar at `stellar` lists now: the offers that hold
+    /// there (by mission id), then, when it has one (`has_own`), the
+    /// stellar's own conversation. Unlike [`Play::next_scene`] it doesn't
+    /// read what the visit has shown, and it never lists a completion,
+    /// which opens at landing alone (see the module docs).
+    #[must_use]
+    pub fn bar_scenes(&self, stellar: StellarId, has_own: bool) -> Vec<Scene> {
+        self.storylines
+            .missions
+            .iter()
+            .filter(|&(id, mission)| self.offer_holds(id, mission, stellar))
+            .map(|(id, _)| Scene::Offer(id.clone()))
+            .chain(has_own.then_some(Scene::Stellar(stellar)))
+            .collect()
     }
 
     /// Whether mission `id`'s completion is due at `stellar`: it is met,
@@ -1194,6 +1215,75 @@ mod tests {
             .missions
             .insert("job".to_owned(), MissionState::Done);
         assert_eq!(f.next(DOCK, &[], false), None, "done: not offered again");
+    }
+
+    impl Fixture {
+        fn bar(&mut self, stellar: i16, has_own: bool) -> Vec<Scene> {
+            self.play().bar_scenes(StellarId(stellar), has_own)
+        }
+    }
+
+    #[test]
+    fn the_bar_lists_the_offers_that_hold_by_id_then_the_stellar_s_own() {
+        let at_camp = |knot: &str| StoryMission {
+            requires: requiring(&["go"]),
+            ..offered_at(CAMP, FILE, knot)
+        };
+        let mut f = Fixture::new(&[
+            ("b-offer", at_camp("b")),
+            ("a-offer", at_camp("a")),
+            ("elsewhere", offered_at(DOCK, FILE, "x")),
+        ]);
+        assert_eq!(f.bar(CAMP, false), [], "requires fail");
+        assert_eq!(
+            f.bar(CAMP, true),
+            [Scene::Stellar(StellarId(CAMP))],
+            "its own still listed"
+        );
+        f.flags.set("go");
+        let both = [
+            Scene::Offer("a-offer".to_owned()),
+            Scene::Offer("b-offer".to_owned()),
+        ];
+        assert_eq!(f.bar(CAMP, false), both);
+        assert_eq!(
+            f.bar(CAMP, true),
+            [
+                both[0].clone(),
+                both[1].clone(),
+                Scene::Stellar(StellarId(CAMP))
+            ]
+        );
+        assert_eq!(f.bar(DOCK, false), [Scene::Offer("elsewhere".to_owned())]);
+    }
+
+    #[test]
+    fn the_bar_lists_an_unseen_or_offered_offer_but_not_a_decided_one() {
+        let mut f = Fixture::new(&[("job", job())]);
+        assert_eq!(f.bar(DOCK, false), [offer()], "unseen");
+        f.play().make_offer("job");
+        assert_eq!(f.bar(DOCK, false), [offer()], "offered, undecided");
+        for state in [MissionState::Declined, ACTIVE, MissionState::Done] {
+            f.story.missions.insert("job".to_owned(), state);
+            assert_eq!(f.bar(DOCK, false), [], "{state:?}");
+        }
+    }
+
+    #[test]
+    fn the_bar_never_lists_a_completion_due() {
+        let mut f = Fixture::new(&[("job", job())]);
+        f.story.missions.insert(
+            "job".to_owned(),
+            MissionState::Active {
+                cargo: 0,
+                met: true,
+            },
+        );
+        assert_eq!(
+            f.next(CAMP, &[], false),
+            Some(Scene::Completion("job".to_owned()))
+        );
+        assert_eq!(f.bar(CAMP, false), []);
     }
 
     #[test]
