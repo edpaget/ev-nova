@@ -50,7 +50,7 @@ const BUILT_IN: [(i16, fn() -> DialogTemplate); 10] = [
 /// The new game's dialogs, standing in for the interface file the bible
 /// doesn't author: each placeholder record mapped as the file's are, with
 /// no art, so a picture item is [`ItemSpec::MissingPicture`]; else the
-/// screen's own built-in layout ([`BUILT_IN`]); else an error naming the
+/// screen's own built-in layout (`BUILT_IN`); else an error naming the
 /// missing default. No screen can tell these from the file's.
 impl DialogResources for DefaultDialogs {
     fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {

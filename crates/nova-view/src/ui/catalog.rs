@@ -9,7 +9,8 @@ use nova_sim::DescMovie;
 use super::button::ButtonStyle;
 use super::dialog::DialogTemplate;
 
-/// The dialogs the interface file defines.
+/// The dialogs the interface file defines, or, for the new game without
+/// one, its placeholder dialogs.
 pub trait DialogResources {
     /// `DLOG` `id` with the items of the `DITL` it names; an error is a
     /// message ready to display. A picture item is
