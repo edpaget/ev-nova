@@ -53,6 +53,7 @@ mod new_game_port;
 mod new_game_routes;
 mod new_game_saved_ids;
 mod new_game_screens;
+mod new_game_trade;
 mod new_game_travel;
 mod news;
 mod outfitter;

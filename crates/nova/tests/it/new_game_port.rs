@@ -23,7 +23,9 @@
 //!   system, with its source and age.
 //! - **Services.** Bar, Trade Center, Outfitter and Shipyard each open
 //!   from their button, their buttons labelled on their items, and close
-//!   back to the spaceport through their own Leave or Done. The outfitter
+//!   back to the spaceport through their own Leave or Done. What the
+//!   Trade Center lists and trades, here and at Verge Camp, is
+//!   `new_game_trade`'s. The outfitter
 //!   lists the fixture's kit; no hull is for sale in the fixture yet, so
 //!   the shipyard opens over a variant of it with the cutter for sale.
 //!   The Mission BBS, with no mission offered, says so and closes back.
@@ -111,7 +113,7 @@ fn app(store: &MemoryPilots) -> Harness {
 }
 
 /// [`app`] over `data`.
-fn app_over(data: Rc<GameData>, store: &MemoryPilots) -> Harness {
+pub(crate) fn app_over(data: Rc<GameData>, store: &MemoryPilots) -> Harness {
     let rules = ruleset_rulebook(None, Ruleset::NewGame.profile().readings).0;
     Harness::wired_without_interface(data, store, |screen| {
         screen
@@ -122,7 +124,7 @@ fn app_over(data: Rc<GameData>, store: &MemoryPilots) -> Harness {
 
 /// Ada, a new pilot saved at once and changed by `edit`, resumed in a new
 /// app, flying where she was saved.
-fn resumed_after(edit: impl FnOnce(&mut Pilot)) -> (Harness, MemoryPilots) {
+pub(crate) fn resumed_after(edit: impl FnOnce(&mut Pilot)) -> (Harness, MemoryPilots) {
     resumed_over(&opened_from(&folder()), edit)
 }
 
@@ -167,7 +169,7 @@ fn selling_the_cutter() -> Rc<GameData> {
 }
 
 /// Carrying the dock job, so Hearth Dock offers it no more.
-fn on_the_dock_job(pilot: &mut Pilot) {
+pub(crate) fn on_the_dock_job(pilot: &mut Pilot) {
     pilot.story.missions.insert(
         "dock-job".to_owned(),
         MissionState::Active {
@@ -185,12 +187,12 @@ fn at_hearth_dock() -> Harness {
     game
 }
 
-fn spaceport(game: &Harness) -> &SpaceportView {
+pub(crate) fn spaceport(game: &Harness) -> &SpaceportView {
     game.app.screen().spaceport_view().expect("landed")
 }
 
 /// Clicks the spaceport's item `item`.
-fn click_port_item(game: &mut Harness, item: usize) {
+pub(crate) fn click_port_item(game: &mut Harness, item: usize) {
     let at = spaceport(game)
         .dialog()
         .expect("laid out")
@@ -200,7 +202,7 @@ fn click_port_item(game: &mut Harness, item: usize) {
     game.click(at);
 }
 
-fn pilot(game: &Harness) -> Pilot {
+pub(crate) fn pilot(game: &Harness) -> Pilot {
     game.app
         .screen()
         .flight_view()
@@ -520,7 +522,7 @@ fn holovid_lists_the_news_heard_here_with_its_source_and_age() {
 }
 
 /// The centre of `dialog`'s item `item`.
-fn centre_of(dialog: Option<&Dialog>, item: usize) -> Point {
+pub(crate) fn centre_of(dialog: Option<&Dialog>, item: usize) -> Point {
     dialog
         .expect("laid out")
         .item_bounds(item)
