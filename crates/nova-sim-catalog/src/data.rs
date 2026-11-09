@@ -167,9 +167,10 @@ impl PilotCatalog for GameData {
                 let short_name = record.short_name.as_str().to_owned();
                 Some(ShipRecord {
                     id: ShipId(id),
-                    name: ship
-                        .name
-                        .map_or_else(|| short_name.replace("\\n", " "), shown_name),
+                    name: ship.name.map_or_else(
+                        || short_name.replace("\\n", " "),
+                        |name| nova_data::shown_name(name).to_owned(),
+                    ),
                     short_name,
                     long_name: record.long_name.as_str().to_owned(),
                     fields: ship_fields(record),
@@ -598,14 +599,22 @@ impl PilotCatalog for GameData {
             stellars: self
                 .records::<Stellar>()
                 .filter_map(|(id, stellar)| {
-                    let name = stellar.ok()?.name.map(shown_name).unwrap_or_default();
+                    let name = stellar
+                        .ok()?
+                        .name
+                        .map(|name| nova_data::shown_name(name).to_owned())
+                        .unwrap_or_default();
                     Some((StellarId(id), name))
                 })
                 .collect(),
             systems: self
                 .records::<System>()
                 .filter_map(|(id, system)| {
-                    let name = system.ok()?.name.map(shown_name).unwrap_or_default();
+                    let name = system
+                        .ok()?
+                        .name
+                        .map(|name| nova_data::shown_name(name).to_owned())
+                        .unwrap_or_default();
                     Some((SystemId(id), name))
                 })
                 .collect(),
@@ -1411,13 +1420,6 @@ fn combat_govt(raw: i16) -> Option<GovtId> {
         COMBAT_ONLY..3000 => Some(GovtId(raw - COMBAT_ONLY)),
         _ => None,
     }
-}
-
-/// A resource's name as the game shows it: up to any ';', after which
-/// the designers kept their notes (stock `shïp` 361 is "Shuttle;Second-Hand
-/// - poor").
-fn shown_name(name: &str) -> String {
-    name.split(';').next().unwrap_or_default().to_owned()
 }
 
 /// A `shïp`'s `WeapType` slots 1-8 that name a weapon, each with its

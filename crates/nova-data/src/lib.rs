@@ -50,6 +50,8 @@
 //! Control-bit expressions are kept as the text the records store;
 //! [`expr`] parses them.
 //!
+//! [`name`] holds the rule for a resource's shown name: up to its first `;`.
+//!
 //! # Record types
 //!
 //! | Code | Struct | Bible | Size | Stock |
@@ -173,6 +175,7 @@ pub mod file;
 pub mod fonts;
 pub mod graphics;
 pub mod music;
+pub mod name;
 pub mod new_game;
 pub mod records;
 pub mod registry;
@@ -193,6 +196,7 @@ pub use expr::{
     ParseErrorKind, SetExpr, SetOp, SetOpKind, TestExpr, TestOperand, check_expressions,
 };
 pub use file::{FileReport, OUT_OF_SCOPE, decode_file};
+pub use name::shown_name;
 pub use registry::{AnyDecoded, AnyRecord, Registered, TYPES, decode_any};
 pub use store::{
     DialogPlace, Dialogs, FailedFile, Fittings, GameData, GateStability, IgnoredEntry,

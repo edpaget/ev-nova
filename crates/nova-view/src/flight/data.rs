@@ -217,7 +217,7 @@ impl CombatLooks for GameData {
         let sound = offset_sound(FIRST_WEAPON_SOUND, weapon.sound);
         let falloff = loaded_falloff(weapon.beam_length, weapon.falloff, weapon.li_density);
         Ok(WeaponLook {
-            name: resource_name(entry.name.unwrap_or_default()),
+            name: nova_data::shown_name(entry.name.unwrap_or_default()).to_owned(),
             sheet,
             sound,
             sound_ticks: sound.and_then(|sound| sound_ticks(self, sound)),
@@ -392,11 +392,6 @@ fn effect_sheet(data: &GameData, id: i16) -> Result<EffectSheet, String> {
         image_size: (spin.sheet.image_width(), spin.sheet.image_height()),
         clip_quirks: spin.sheet.clip_quirks(),
     })
-}
-
-/// A resource's name as the game shows it: up to any ';'.
-fn resource_name(name: &str) -> String {
-    name.split(';').next().unwrap_or_default().to_owned()
 }
 
 /// How long `snd ` `sound` lasts in `data`, in ticks rounded up: its

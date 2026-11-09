@@ -150,11 +150,12 @@ fn nebula(
     }
 }
 
-/// A resource's name up to any designer's note after a `;`, trimmed; if
-/// that leaves nothing, its type and ID.
+/// A resource's name up to any designer's note after a `;` (the cut is
+/// [`nova_data::shown_name`]'s), trimmed; if that leaves nothing, its type
+/// and ID.
 pub(crate) fn display_name(name: Option<&str>, kind: &str, id: i16) -> String {
     let name = name.unwrap_or_default();
-    let shown = name.split(';').next().unwrap_or_default().trim();
+    let shown = nova_data::shown_name(name).trim();
     if shown.is_empty() {
         format!("{kind} {id}")
     } else {
