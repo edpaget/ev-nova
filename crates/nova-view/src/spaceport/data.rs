@@ -1,13 +1,14 @@
 //! The spaceport's ports over the game data: a thin mapping from
-//! `GameData`'s `spöb` records, `PICT`s, `shän` base images, `shïp`
+//! `GameData`'s `spöb` records and stellar stand-ins (the new game's
+//! only, through [`outline_data`]), `PICT`s, `shän` base images, `shïp`
 //! movie files and `cölr` 128's list and grid colours.
 
-use nova_data::GameData;
 use nova_data::graphics::PICT;
 use nova_data::records::colors::Colors;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::stellar::Stellar;
+use nova_data::{GameData, StandInOf};
 use nova_sim::ShipId;
 
 use super::catalog::{PortRecord, SpaceportCatalog, StellarId};
@@ -15,6 +16,7 @@ use super::grid::{GridColors, GridLooks};
 use super::shipyard::{ShipBaseImages, ShipMovieFiles};
 use super::trade::{ListColors, ListLooks};
 use crate::color::Color;
+use crate::outline_data;
 
 /// The `cölr` the list and grid colours come from.
 const COLORS_ID: i16 = 128;
@@ -63,7 +65,9 @@ impl SpaceportCatalog for GameData {
             graphic_type: stellar.graphic_type,
             cust_snd_id: stellar.cust_snd_id,
             flags2: stellar.flags2.bits(),
-            stand_in: None,
+            stand_in: self
+                .stand_in(StandInOf::Stellar(nova_data::StellarId(id.0)))
+                .map(outline_data::stellar_stand_in),
         })
     }
 
@@ -96,14 +100,17 @@ impl ShipBaseImages for GameData {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
 
     use nova_data::Record;
+    use nova_data::StandIn;
     use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
     use nova_data::store::fixture::one_file;
 
     use nova_rsrc::fixture::ForkBuilder;
 
     use super::*;
+    use crate::outline::StellarStandIn;
 
     /// A `spöb` of graphic type `graphic_type`, with these `Flags`,
     /// `CustPicID`, `CustSndID` and `Flags2`.
@@ -169,6 +176,47 @@ mod tests {
                 flags2: 0,
                 stand_in: None,
             })
+        );
+    }
+
+    #[test]
+    fn a_stellars_port_carries_its_stand_in_in_the_views_terms() {
+        let outline = nova_data::Outline {
+            triangles: vec![nova_data::OutlineTriangle {
+                corners: [[0.0, 2.0], [1.0, -1.0], [-1.0, -1.0]],
+                color: [10, 20, 30],
+            }],
+        };
+        let data = data().with_stand_ins(BTreeMap::from([
+            (
+                StandInOf::Stellar(nova_data::StellarId(128)),
+                StandIn::Disc { color: [1, 2, 3] },
+            ),
+            (
+                StandInOf::Stellar(nova_data::StellarId(129)),
+                StandIn::Outline(outline.clone()),
+            ),
+            (
+                StandInOf::Ship(nova_data::ShipId(129)),
+                StandIn::Disc { color: [9; 3] },
+            ),
+        ]));
+        let stand_in = |id| data.stellar_port(StellarId(id)).expect("a record").stand_in;
+        assert_eq!(
+            stand_in(128),
+            Some(StellarStandIn::Disc(Color::rgba(1, 2, 3, 255)))
+        );
+        assert_eq!(
+            stand_in(129),
+            Some(outline_data::stellar_stand_in(&StandIn::Outline(outline)))
+        );
+    }
+
+    #[test]
+    fn a_stock_stellars_port_has_no_stand_in() {
+        assert_eq!(
+            data().stellar_port(StellarId(128)).expect("Earth").stand_in,
+            None
         );
     }
 
