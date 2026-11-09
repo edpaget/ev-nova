@@ -5,7 +5,7 @@
 //! [`Authenticode::from_env`] picks Artifact Signing when all of [`VARS`]
 //! are set and non-empty, and unsigned when none is. A mix is an error
 //! naming the missing variables, so a half-configured CI fails instead of
-//! shipping an unsigned build. The variables are named as the
+//! shipping an unsigned build ([`all_or_none`]'s rule). The variables are named as the
 //! `windows-signing` environment's variables
 //! (`infra/windows-signing/github.tf`), which only main's Windows `build`
 //! leg enters.
@@ -19,6 +19,7 @@ use std::path::PathBuf;
 
 use crate::build_id;
 use crate::bundle::{self, BundleError, execute, metadata};
+use crate::env_set::all_or_none;
 use crate::ports::{Env, Files, Process};
 use crate::spec::BundleSpec;
 use tools::AuthenticodeLayout;
@@ -118,20 +119,12 @@ pub fn sign_files(
 impl Authenticode {
     /// The mode the signing variables in `env` choose.
     pub fn from_env(env: &impl Env) -> Result<Self, AuthenticodeError> {
-        let values = VARS.map(|name| text(env, name));
-        let missing: Vec<_> = VARS
-            .iter()
-            .zip(&values)
-            .filter(|(_, value)| value.is_none())
-            .map(|(name, _)| *name)
-            .collect();
-        if missing.len() == VARS.len() {
+        let Some(values) =
+            all_or_none(env, VARS).map_err(|missing| AuthenticodeError::Partial { missing })?
+        else {
             return Ok(Self::Unsigned);
-        }
-        if !missing.is_empty() {
-            return Err(AuthenticodeError::Partial { missing });
-        }
-        let [endpoint, account, profile] = values.map(Option::unwrap_or_default);
+        };
+        let [endpoint, account, profile] = values.map(|value| value.to_string_lossy().into_owned());
         Ok(Self::ArtifactSigning(Account {
             endpoint,
             account,

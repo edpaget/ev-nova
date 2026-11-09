@@ -269,6 +269,7 @@ pub mod build_id;
 pub mod bundle;
 pub mod channel;
 pub mod digest;
+pub mod env_set;
 pub mod fonts;
 pub mod host;
 pub mod icon;
