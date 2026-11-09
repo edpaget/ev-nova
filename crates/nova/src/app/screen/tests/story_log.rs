@@ -226,6 +226,22 @@ fn i_in_flight_opens_the_missions_log_over_the_paused_flight() {
 }
 
 #[test]
+fn a_switch_in_under_the_missions_log_over_flight_gives_way_to_its_closes_zero() {
+    // The log stands in for the mission info, so its close owes the
+    // zero the `i` press's does (`info_dialog_gain`).
+    let mut screen = flying_on_the_job();
+    tap(&mut screen, MISSION_INFO_KEY);
+    assert!(shows(&screen, MISSIONS_HEADING), "{:?}", texts(&screen));
+    screen.focus_lost();
+    screen.focus_gained();
+    let gain = |screen: &AppScreen| flight(screen).session().expect("flying").speed_mult();
+    assert_eq!(gain(&screen), nova_sim::SpeedMult::FULL, "the switch-in's");
+    tap(&mut screen, Key::Enter);
+    assert_eq!(screen.showing(), Showing::Flight);
+    assert_eq!(gain(&screen), nova_sim::SpeedMult::ZERO, "the close's");
+}
+
+#[test]
 fn i_in_port_opens_the_missions_log_in_place_of_the_stock_info() {
     // The interface's mission info screen is there to open, but the
     // storyline missions take the log.
