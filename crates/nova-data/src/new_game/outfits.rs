@@ -3,11 +3,16 @@
 //!
 //! Each outfit is numbered within [`OUTFIT_IDS`](super::ids::OUTFIT_IDS) ([`number_outfits`]) and
 //! maps to an `oütf` ([`outfit`], over [`neutral_outfit`]) with the
-//! outfit's `name` and its `price` as `Cost`. It weighs nothing, has no
-//! limit on how many are owned, and is never for sale: its `TechLevel` is
-//! the original's "never listed" value, so no outfitter lists it under
-//! either reading of the tech level rule. Selling loose outfits waits for
-//! the bible to say which yards sell which.
+//! outfit's `name` and its `price` as `Cost`. It weighs nothing and has no
+//! limit on how many are owned.
+//!
+//! **Its mount.** Its `Require` is its `mount`'s bit
+//! ([`FitBits::mount_bit`]) and its `Flags` hold
+//! [`HIDE_UNLESS_REQUIRED`], so an outfitter neither lists nor sells it
+//! for a ship with no hardpoint of that mount: a hull's chain hardpoints
+//! and each owned kit's contribute their mounts' bits
+//! ([`super::kits`]). A mission's grant and a kit's `OnPurchase` read no
+//! `Require`, so they give it whatever the ship's mounts.
 //!
 //! **Weapons** ([`is_weapon`]). An outfit with `damage` above 0 and a
 //! `fixed`, `turret` or `launcher` mount is a weapon: it is numbered
@@ -16,7 +21,8 @@
 //! and maps to a `wëap` ([`weapon`]) as well. Its `oütf`'s first
 //! `ModType` is [`MOD_WEAPON`] naming that `wëap`, and its `Flags`
 //! [`OUTFIT_GUN`] (fixed, launcher) or [`OUTFIT_TURRET`] (turret), so it
-//! takes a gun or a turret slot. The `wëap`, over [`neutral_weapon`]:
+//! takes a gun or a turret slot, on top of [`HIDE_UNLESS_REQUIRED`].
+//! The `wëap`, over [`neutral_weapon`]:
 //!
 //! - `MassDmg` and `EnergyDmg` are its `damage`;
 //! - `Reload` is its `reload` seconds at [`TICKS_PER_SECOND`], rounded, at
@@ -46,13 +52,14 @@ use nova_galaxy_format::id::Id;
 use nova_galaxy_format::load::{Doc, Galaxy, Problem};
 
 use super::ids::{WEAPON_IDS, after_pins};
+use super::kits::{FitBits, HIDE_UNLESS_REQUIRED};
 use super::map::number;
 use super::records::{neutral_outfit, neutral_weapon};
 use crate::decode::Entry;
 use crate::records::outfit::Outfit;
 use crate::records::weapon::Weapon;
 use crate::registry::AnyRecord;
-use crate::wire::flags::Flags16;
+use crate::wire::flags::{Flags16, Flags64};
 
 /// The `oütf` `ModType` of a weapon: its `ModVal` names the `wëap`
 /// (`nova_sim::combat::armament::MOD_WEAPON`).
@@ -148,15 +155,18 @@ fn at_least_one(value: f64) -> i16 {
 pub fn outfit(nova: i16, doc: &Doc<BibleOutfit>, weapon: Option<i16>) -> Entry<AnyRecord> {
     let mut outfit = Outfit {
         cost: i32::try_from(doc.data.price).unwrap_or(i32::MAX),
+        flags: Flags16(HIDE_UNLESS_REQUIRED),
+        require: Flags64(FitBits::mount_bit(doc.data.mount)),
         ..neutral_outfit()
     };
     if let Some(weapon) = weapon {
         outfit.mod_type = MOD_WEAPON;
         outfit.mod_val = weapon;
-        outfit.flags = Flags16(match doc.data.mount {
+        let slot = match doc.data.mount {
             Mount::Turret => OUTFIT_TURRET,
             _ => OUTFIT_GUN,
-        });
+        };
+        outfit.flags = Flags16(HIDE_UNLESS_REQUIRED | slot);
     }
     Entry {
         id: nova,
@@ -198,6 +208,7 @@ mod tests {
 
     use nova_galaxy_format::source::MemSource;
 
+    use super::super::kits::{FitBits, HIDE_UNLESS_REQUIRED};
     use super::super::records::OUTFIT_TECH_NEVER;
     use super::super::tests::galaxy;
     use super::super::{NewGame, load};
@@ -271,7 +282,27 @@ mod tests {
         assert_eq!(slots, [(-1, 0); 4]);
         assert_eq!(outfit.buy_random, 0);
         assert_eq!(outfit.require_govt, -1);
-        assert_eq!(outfit.flags.bits(), 0);
+        assert_eq!(outfit.flags, Flags16(HIDE_UNLESS_REQUIRED));
+    }
+
+    #[test]
+    fn an_outfit_requires_its_mount_s_bit_and_hides_unless_the_ship_has_one() {
+        for (mount, damage) in [
+            (Mount::Fixed, 5),
+            (Mount::Turret, 5),
+            (Mount::Launcher, 5),
+            (Mount::Bay, 5),
+            (Mount::Fixed, 0),
+        ] {
+            let text = gun("Blaster", mount.as_str(), damage, 300, 0.5);
+            let (_, outfit) = named(&loaded(&galaxy().with("outfits/blaster.md", &text)), 128);
+            assert_eq!(outfit.require.bits(), FitBits::mount_bit(mount), "{text}");
+            assert_ne!(
+                outfit.flags.bits() & HIDE_UNLESS_REQUIRED,
+                0,
+                "{text}: hidden on a hull without the mount"
+            );
+        }
     }
 
     #[test]
@@ -348,7 +379,7 @@ mod tests {
         assert_eq!(SHOT_SPEED, 1000);
         let (_, outfit) = named(&game, 128);
         assert_eq!((outfit.mod_type, outfit.mod_val), (MOD_WEAPON, 128));
-        assert_eq!(outfit.flags, Flags16(OUTFIT_TURRET));
+        assert_eq!(outfit.flags, Flags16(OUTFIT_TURRET | HIDE_UNLESS_REQUIRED));
         assert_eq!(outfit.tech_level, OUTFIT_TECH_NEVER, "still never sold");
         assert_eq!(outfit.mass, 0);
         assert_eq!(outfit.buy_random, 0);
@@ -362,7 +393,11 @@ mod tests {
             let (_, weapon) = weapon_of(&game, 128);
             assert_eq!(weapon.guidance, -1, "{mount}");
             assert_eq!(weapon.exit_type, exit, "{mount}");
-            assert_eq!(named(&game, 128).1.flags, Flags16(OUTFIT_GUN), "{mount}");
+            assert_eq!(
+                named(&game, 128).1.flags,
+                Flags16(OUTFIT_GUN | HIDE_UNLESS_REQUIRED),
+                "{mount}"
+            );
         }
     }
 
@@ -406,7 +441,11 @@ mod tests {
             assert_eq!(game.data.ids(Weapon::TYPE), Vec::<i16>::new(), "{text}");
             assert!(game.ids.weapons.is_empty());
             let (_, outfit) = named(&game, 128);
-            assert_eq!((outfit.mod_type, outfit.flags.bits()), (-1, 0), "{text}");
+            assert_eq!(
+                (outfit.mod_type, outfit.flags.bits()),
+                (-1, HIDE_UNLESS_REQUIRED),
+                "{text}"
+            );
         }
     }
 

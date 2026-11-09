@@ -15,8 +15,9 @@
 //! - **The `oütf`** ([`kit`], over [`neutral_outfit`]): its `name`;
 //!   `Cost` its `price`; massless; `Max` 1, fitted once; `BuyRandom` 100,
 //!   for sale every day; `Flags` [`HIDE_UNLESS_REQUIRED`], so a kit that
-//!   doesn't fit the hull isn't listed; and not persistent, so it goes
-//!   with the hull when the ship changes.
+//!   doesn't fit the hull isn't listed; `Contribute` its hardpoints' mount
+//!   bits; and not persistent, so it goes with the hull when the ship
+//!   changes.
 //! - **Effects** ([`effect_slots`]), in the four `ModType`/`ModVal` slots,
 //!   in this order, an effect of 0 taking none: `hull` as
 //!   [`mod_type::MORE_ARMOR`], `shields` as [`mod_type::MORE_SHIELD`],
@@ -32,9 +33,18 @@
 //!   gun mount's gun arrives in the turret slot the kit adds and leaves
 //!   when it is sold.
 //! - **Which hulls** ([`FitBits`]). Every distinct `fits` set, its roles
-//!   sorted, gets a `Require` bit, numbered in kit id order. Each ship
-//!   class `Contribute`s the bit of every set holding its role
-//!   ([`FitBits::contributed`]), and each kit `Require`s its set's.
+//!   sorted, gets a `Require` bit, numbered in kit id order, in bits 0 to
+//!   59 ([`KIT_SETS`]). Each ship class `Contribute`s the bit of every set
+//!   holding its role ([`FitBits::contributed`]), and each kit `Require`s
+//!   its set's.
+//! - **Which mounts** ([`FitBits::mount_bit`]). The four bits above the
+//!   kit sets ([`MOUNT_BITS`]) are the mounts': `fixed` 60, `turret` 61,
+//!   `launcher` 62 and `bay` 63. A kit `Contribute`s the bit of each mount
+//!   its hardpoints add ([`FitBits::mounts`]), a ship class its chain
+//!   hardpoints' (`super::fleet`), and every outfit `Require`s its own
+//!   mount's (`super::outfits`). The outfitter counts an owned outfit's
+//!   `Contribute`, and a pilot owns its hull's kits, so a kit fitted as
+//!   built adds its mounts as a bought one does.
 //! - **Which yards** (`TechLevel`): a legal kit [`KIT_TECH_LEGAL`], a
 //!   lawless one [`KIT_TECH_LAWLESS`]. A law-keeping stellar has
 //!   [`YARD_TECH_LEGAL`] and a lawless or unowned one
@@ -51,13 +61,14 @@
 //! - A kit needing more than four slots keeps the first four and names
 //!   the rest.
 //! - A hardpoint's `outfit` naming no outfit is left out of the scripts.
-//! - Past 64 distinct `fits` sets, a kit of a later set is left out.
+//! - Past 60 distinct `fits` sets ([`KIT_SETS`]), a kit of a later set is
+//!   left out.
 //! - A kit past the last `oütf` ID is left out.
 
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
 
-use nova_galaxy_format::fleet::{ModKit, Mount, Role, Yard};
+use nova_galaxy_format::fleet::{Hardpoint, ModKit, Mount, Role, Yard};
 use nova_galaxy_format::id::Id;
 use nova_galaxy_format::load::{Doc, Galaxy, Problem};
 
@@ -122,13 +133,23 @@ pub const LAW_SMUGGLE_PENALTY: i16 = 10;
 /// placeholder until the bible gives the law's numbers).
 pub const LAW_SCAN_FINE: i16 = 500;
 
-/// Every kit's `BuyRandom`: always for sale.
-const ALWAYS: i16 = 100;
+/// Every kit's and every sold outfit's `BuyRandom`: always for sale.
+pub(super) const ALWAYS: i16 = 100;
+
+/// How many distinct `fits` sets get a `Require` bit: bits 0 to 59, the
+/// four above them being [`MOUNT_BITS`].
+pub const KIT_SETS: usize = 60;
+
+/// The `Require` bits reserved for mounts ([`FitBits::mount_bit`]): the
+/// four above the kit sets'.
+pub const MOUNT_BITS: u64 = u64::MAX << KIT_SETS;
 
 /// How many `ModType` slots an `oütf` has.
 const SLOTS: usize = 4;
 
-/// The `Require` bits of the kits' `fits` sets.
+/// The 64 `Require` bits: the kits' `fits` sets in bits 0 to 59
+/// ([`KIT_SETS`]), and each mount's in the four above them
+/// ([`MOUNT_BITS`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FitBits {
     /// Each set, its roles sorted, and its bit.
@@ -139,7 +160,8 @@ pub struct FitBits {
 
 impl FitBits {
     /// Gives each distinct `fits` set of `galaxy`'s kits a bit, in kit id
-    /// order; a kit of a set past the 64th is reported and left out.
+    /// order; a kit of a set past the [`KIT_SETS`]th is reported and left
+    /// out.
     pub fn of(galaxy: &Galaxy, problems: &mut Vec<Problem>) -> Self {
         let mut bits = Self::default();
         for (id, doc) in &galaxy.mods {
@@ -148,7 +170,7 @@ impl FitBits {
             set.dedup();
             let bit = match bits.sets.iter().find(|(known, _)| *known == set) {
                 Some(&(_, bit)) => bit,
-                None if bits.sets.len() < 64 => {
+                None if bits.sets.len() < KIT_SETS => {
                     let bit = 1u64 << bits.sets.len();
                     bits.sets.push((set, bit));
                     bit
@@ -156,7 +178,7 @@ impl FitBits {
                 None => {
                     problems.push(Problem::new(
                         &doc.path,
-                        "its `fits` is past the 64th distinct set of roles; it is left out",
+                        "its `fits` is past the 60th distinct set of roles; it is left out",
                     ));
                     continue;
                 }
@@ -164,6 +186,27 @@ impl FitBits {
             bits.kits.insert(id.clone(), bit);
         }
         bits
+    }
+
+    /// The bit a hardpoint of `mount` contributes and an outfit of
+    /// `mount` requires: `fixed` bit 60, `turret` 61, `launcher` 62 and
+    /// `bay` 63.
+    #[must_use]
+    pub const fn mount_bit(mount: Mount) -> u64 {
+        let place = match mount {
+            Mount::Fixed => 0,
+            Mount::Turret => 1,
+            Mount::Launcher => 2,
+            Mount::Bay => 3,
+        };
+        1 << (KIT_SETS + place)
+    }
+
+    /// The bits of the mounts of `hardpoints`, each once.
+    pub fn mounts<'a>(hardpoints: impl IntoIterator<Item = &'a Hardpoint>) -> u64 {
+        hardpoints
+            .into_iter()
+            .fold(0, |bits, hardpoint| bits | Self::mount_bit(hardpoint.mount))
     }
 
     /// The bit kit `id` requires, if it was given one.
@@ -317,6 +360,7 @@ pub fn kit(
         },
         scan_mask: Flags16(if lawless { LAWLESS_KIT_SCAN } else { 0 }),
         require: Flags64(require),
+        contribute: Flags64(FitBits::mounts(&data.hardpoints)),
         mod_type: pairs[0].0,
         mod_val: pairs[0].1,
         mod_type2: pairs[1].0,
@@ -605,7 +649,63 @@ mod tests {
     }
 
     #[test]
-    fn a_kit_past_the_64th_fits_set_is_reported_and_left_out() {
+    fn each_mount_has_its_own_bit_above_the_kit_sets() {
+        let bits =
+            [Mount::Fixed, Mount::Turret, Mount::Launcher, Mount::Bay].map(FitBits::mount_bit);
+        assert_eq!(bits, [1 << 60, 1 << 61, 1 << 62, 1 << 63]);
+        assert_eq!(bits.iter().fold(0, |all, bit| all | bit), MOUNT_BITS);
+        assert_eq!(KIT_SETS, 60);
+        assert_eq!(MOUNT_BITS, u64::MAX << KIT_SETS, "the four bits above");
+    }
+
+    #[test]
+    fn a_kit_contributes_the_bit_of_each_mount_it_adds() {
+        let game = loaded(&sample_kits());
+        assert_eq!(
+            kit_of(&game, "gun-mount").contribute.bits(),
+            FitBits::mount_bit(Mount::Turret),
+            "the turret bed alone"
+        );
+        assert_eq!(
+            kit_of(&game, "armour-plating").contribute.bits(),
+            0,
+            "no hardpoints"
+        );
+        let game = loaded(&galaxy().with(
+            "mods/gun-mount.md",
+            "---\nname: Gun mount\nfits: [shuttle]\nfitted_at: lawless\nprice: 100\n\
+             hardpoints:\n  - id: a\n    mount: fixed\n    position: [0, 1]\n\
+             \x20 - id: b\n    mount: launcher\n    position: [0, 2]\n\
+             \x20 - id: c\n    mount: bay\n    position: [0, 3]\n\
+             \x20 - id: d\n    mount: fixed\n    position: [0, 4]\n---\n",
+        ));
+        assert_eq!(
+            kit_of(&game, "gun-mount").contribute.bits(),
+            FitBits::mount_bit(Mount::Fixed)
+                | FitBits::mount_bit(Mount::Launcher)
+                | FitBits::mount_bit(Mount::Bay)
+        );
+    }
+
+    #[test]
+    fn every_kit_set_bit_is_below_the_mount_bits() {
+        let source = (1..=60u32).fold(galaxy(), |source, n| {
+            source.with(&format!("mods/k{n:03}.md"), &kit_of_set(n))
+        });
+        let game = loaded(&source);
+        assert_eq!(problems(&game), Vec::<String>::new());
+        let all = game
+            .ids
+            .kits
+            .values()
+            .fold(0, |all, &nova| all | outfit(&game, nova).require.bits());
+        assert_eq!(all & MOUNT_BITS, 0, "{all:#x}");
+        assert_eq!(all.count_ones(), 60);
+    }
+
+    /// A legal kit fitting the roles of the bits of `n`, so each `n` below
+    /// 128 is its own `fits` set.
+    fn kit_of_set(n: u32) -> String {
         const ROLES: [&str; 7] = [
             "shuttle",
             "freighter",
@@ -615,29 +715,31 @@ mod tests {
             "raider",
             "gunboat",
         ];
-        // 7 roles give 127 non-empty sets: number the first 66 by their
-        // bits.
-        let source = (1..=65u32).fold(galaxy(), |source, n| {
-            let roles: Vec<&str> = (0..7)
-                .filter(|bit| n & (1 << bit) != 0)
-                .map(|bit| ROLES[bit])
-                .collect();
-            source.with(
-                &format!("mods/k{n:03}.md"),
-                &format!(
-                    "---\nname: K\nfits: [{}]\nfitted_at: legal\nprice: 1\n---\n",
-                    roles.join(", ")
-                ),
-            )
+        let roles: Vec<&str> = (0..7)
+            .filter(|bit| n & (1 << bit) != 0)
+            .map(|bit| ROLES[bit])
+            .collect();
+        format!(
+            "---\nname: K\nfits: [{}]\nfitted_at: legal\nprice: 1\n---\n",
+            roles.join(", ")
+        )
+    }
+
+    #[test]
+    fn a_kit_past_the_60th_fits_set_is_reported_and_left_out() {
+        // 7 roles give 127 non-empty sets: number the first 61 by their
+        // bits (the fixture's gun mount shares k001's).
+        let source = (1..=61u32).fold(galaxy(), |source, n| {
+            source.with(&format!("mods/k{n:03}.md"), &kit_of_set(n))
         });
         let game = loaded(&source);
         let lines = problems(&game);
         assert_eq!(
             lines,
-            ["mods/k065.md: its `fits` is past the 64th distinct set of roles; it is left out"]
+            ["mods/k061.md: its `fits` is past the 60th distinct set of roles; it is left out"]
         );
-        assert!(!game.ids.kits.contains_key(&id("k065")));
-        assert!(game.ids.kits.contains_key(&id("k064")));
+        assert!(!game.ids.kits.contains_key(&id("k061")));
+        assert!(game.ids.kits.contains_key(&id("k060")));
     }
 
     #[test]

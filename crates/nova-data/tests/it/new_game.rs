@@ -546,6 +546,11 @@ fn the_dock_pass_is_an_outfit_the_dock_job_lends_and_takes_back() {
     let (name, pass) = named::<Outfit>(&game.data, 128);
     assert_eq!(name, "Dock pass");
     assert_eq!(pass.cost, 0);
+    assert_eq!(
+        pass.require.bits(),
+        nova_data::new_game::kits::FitBits::mount_bit(nova_galaxy_format::fleet::Mount::Fixed),
+        "its `fixed` mount"
+    );
     let job = &game.data.storylines().missions["dock-job"];
     assert_eq!(job.on_accept.grant_outfits, [nova_data::OutfitId(128)]);
     assert_eq!(job.on_accept.remove_outfits, []);

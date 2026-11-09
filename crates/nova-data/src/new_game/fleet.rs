@@ -21,7 +21,10 @@
 //!   outfits its hardpoints and its kits' hardpoints carry are its stock
 //!   weapons, one a hardpoint, so the traffic fires them. It contributes
 //!   the `Require` bit of every kit `fits` set holding its `role`
-//!   ([`FitBits`]). A chain that loops, or names a base that isn't there,
+//!   ([`FitBits`]), and the mount bit of each of its chain's hardpoints
+//!   ([`FitBits::mounts`]): its kits' hardpoints come with the kits' own
+//!   `Contribute`, since a pilot owns its hull's kits. A chain that loops,
+//!   or names a base that isn't there,
 //!   leaves the ship out.
 //! - **Size and firing positions** ([`ship_anim`]). A ship's `shän` sets
 //!   `BaseXSize` (the beam) and `BaseYSize` (the length), in pixels at
@@ -202,8 +205,8 @@ fn resolved<'a>(galaxy: &'a Galaxy, id: &Id) -> Option<Resolved<'a>> {
 }
 
 /// The `shïp` of the ship `id`, numbered `nova` (see the module docs), its
-/// kits' `oütf`s and its weapons' `wëap`s from `ids`, its `Contribute` from
-/// `fit`.
+/// kits' `oütf`s and its weapons' `wëap`s from `ids`, its `Contribute` its
+/// role's kit sets in `fit` and its chain hardpoints' mounts.
 #[must_use]
 pub fn ship(
     galaxy: &Galaxy,
@@ -245,7 +248,10 @@ pub fn ship(
         crew: 1,
         max_gun: mounted(&[Mount::Fixed, Mount::Launcher]),
         max_tur: mounted(&[Mount::Turret]),
-        contribute: Flags64(fit.contributed(resolved.role)),
+        contribute: Flags64(
+            fit.contributed(resolved.role)
+                | FitBits::mounts(chain.iter().map(|placed| placed.hardpoint)),
+        ),
         ..neutral_ship()
     };
     let items = default_items(galaxy, ids, doc, &resolved, problems);

@@ -1197,7 +1197,7 @@ fn a_mod_kit_or_hardpoint_outfit_that_is_not_there_is_a_problem() {
 fn a_ship_contributes_the_bit_of_every_kit_set_holding_its_role() {
     let game = loaded(&galaxy());
     assert_eq!(
-        skiff(&galaxy()).contribute.bits(),
+        skiff(&skiff_with_stats()).contribute.bits(),
         1,
         "the gun mount fits a shuttle"
     );
@@ -1209,6 +1209,40 @@ fn a_ship_contributes_the_bit_of_every_kit_set_holding_its_role() {
         "---\nname: Skiff\nstyle: crown\nrole: cruiser\n---\n",
     );
     assert_eq!(skiff(&crown).contribute.bits(), 0);
+}
+
+#[test]
+fn a_ship_contributes_the_mount_bit_of_each_of_its_chain_s_hardpoints() {
+    use super::kits::FitBits;
+    use nova_galaxy_format::fleet::Mount;
+
+    let game = loaded(&galaxy());
+    let fixed = FitBits::mount_bit(Mount::Fixed);
+    assert_eq!(
+        ship_of(&game, "skiff").contribute.bits(),
+        1 | fixed,
+        "its role's set and its nose gun"
+    );
+    assert_eq!(
+        ship_of(&game, "armed-skiff").contribute.bits(),
+        1 | fixed,
+        "the gun mount's turret bed comes with the kit's own Contribute"
+    );
+    let all = galaxy().with(
+        "ships/skiff.md",
+        "---\nname: Skiff\nstyle: civilian\nrole: cruiser\nmodel: hull\n\
+         size: {length: 8, beam: 4, collision_radius: 4}\n\
+         hardpoints:\n  - id: a\n    mount: turret\n    position: [0, 1]\n\
+         \x20 - id: b\n    mount: launcher\n    position: [0, 2]\n\
+         \x20 - id: c\n    mount: bay\n    position: [0, 3]\n---\n",
+    );
+    assert_eq!(
+        skiff(&all).contribute.bits(),
+        FitBits::mount_bit(Mount::Turret)
+            | FitBits::mount_bit(Mount::Launcher)
+            | FitBits::mount_bit(Mount::Bay),
+        "no role set, and no fixed hardpoint"
+    );
 }
 
 #[test]
