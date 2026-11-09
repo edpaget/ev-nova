@@ -324,7 +324,8 @@ pub fn quote_eligible(npc: &Npc, person: &NpcPerson, view: &QuoteView, npcs: &[N
         return Eligible::No;
     }
     let flag = |bit: u16| person.flags & bit != 0;
-    let disabled = npc.condition == Condition::Disabled;
+    // `_IsDisabled` (@0x33d20); `flying` has excluded a ship breaking up.
+    let disabled = npc.is_disabled();
     let mut eligible = if flag(QUOTE_IF_DISABLED) {
         disabled
     } else {
