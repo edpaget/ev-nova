@@ -882,4 +882,8 @@ exclude_re = [
     # A role's fit bits: each `fits` set holds its own bit, so OR-ing the
     # sets' bits together and XOR-ing them give the same mask.
     "nova-data/src/new_game/kits\\.rs:[0-9]+:[0-9]+: replace \\| with \\^ in FitBits::contributed$",
+    # A stellar's `spöb` flags: the service bits sit in the low byte and
+    # the goods' price nibbles at bits 8 to 31, so the two share no bit
+    # and `^` makes the same flags as `|`.
+    "nova-data/src/new_game/map\\.rs:[0-9]+:[0-9]+: replace \\| with \\^ in stellar$",
 ]
