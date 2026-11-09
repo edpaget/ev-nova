@@ -900,17 +900,14 @@ fn a_dock_scan_s_find_is_read_when_traffic_control_then_denies() {
     assert_eq!(view.message(), Some(the_find().as_str()));
     super::faked_travel::faked_tick(&mut view);
     assert_eq!(view.message(), Some(the_find().as_str()));
-    assert_eq!(
-        view.take_landing_notes(),
-        Vec::<String>::new(),
-        "not landed"
-    );
 }
 
-/// A landing in the press that scanned blanks the line, as every landing
-/// does, but keeps the find's words for the router, once.
+/// A landing blanks the line, as every landing does, a find with it.
+/// The session never lands a press that scans (`session/dock_scan.rs`:
+/// a request granted elsewhere answers requested), so no find is lost
+/// this way.
 #[test]
-fn a_dock_scan_s_find_is_kept_when_the_press_lands() {
+fn a_landing_blanks_the_line_whatever_the_press_said() {
     let mut view = scanning();
     scanned_then(
         &mut view,
@@ -919,12 +916,11 @@ fn a_dock_scan_s_find_is_kept_when_the_press_lands() {
         )),
     );
     assert_eq!(view.message(), None);
-    assert_eq!(view.take_landing_notes(), [the_find()]);
-    assert_eq!(view.take_landing_notes(), Vec::<String>::new(), "taken");
 }
 
-/// A press that is neither denied nor landed says the find in its order,
-/// as before.
+/// A press that is granted, as one granted at another stellar is when
+/// traffic control has scanned it, says the find in its order, as
+/// before: it keeps the line.
 #[test]
 fn a_dock_scan_s_find_in_a_requested_press_is_said_in_its_order() {
     let mut view = scanning();
@@ -938,5 +934,4 @@ fn a_dock_scan_s_find_in_a_requested_press_is_said_in_its_order() {
         )),
     );
     assert_eq!(view.message(), Some(the_find().as_str()));
-    assert_eq!(view.take_landing_notes(), Vec::<String>::new());
 }

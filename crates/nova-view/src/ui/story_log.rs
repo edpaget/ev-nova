@@ -1,5 +1,5 @@
-//! The story log: the new game's own read-only panel for its news, its
-//! active missions and what traffic control's dock scan found.
+//! The story log: the new game's own read-only panel for its news and its
+//! active missions.
 //!
 //! The new game ships no interface file, so the stock screens laid out
 //! from a `DLOG` (the bar's news, `DLOG` 1014; the mission info screen,
@@ -19,7 +19,6 @@
 //! - [`missions_log`]: the active storyline missions, each its title, its
 //!   objective, the cargo aboard while there is some, and where to go once
 //!   it is met.
-//! - [`notes_log`]: what traffic control's scan found as the ship landed.
 //!
 //! **The cut.** The log scrolls nothing. When the entries don't all fit
 //! above the close hint, the last ones (the oldest news) are cut whole,
@@ -41,7 +40,7 @@ use nova_sim::{StellarId, SystemId};
 
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect, frame_rect};
-use crate::geometry::{Bounds, Point};
+use crate::geometry::Point;
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
 use crate::spaceport::conversation::{CHOICE_COLOR, CLOSE_HINT, FONT, GAP, INSET, PANEL, SIZE};
@@ -52,8 +51,6 @@ use crate::text::{TextMetrics, wrap};
 pub const NEWS_HEADING: &str = "News";
 /// The missions log's heading.
 pub const MISSIONS_HEADING: &str = "Missions";
-/// The dock scan's notes' heading.
-pub const NOTES_HEADING: &str = "Traffic control";
 /// What a source names a system the flight doesn't name.
 pub const UNKNOWN_SYSTEM: &str = "an unknown system";
 /// What an objective names a stellar the flight doesn't name.
@@ -165,19 +162,6 @@ pub fn missions_log(rows: &[StoryRow], names: &Names) -> StoryLog {
                 }
             })
             .collect(),
-        cut_word: "more",
-    }
-}
-
-/// The dock scan's notes: one untitled entry of `lines`.
-#[must_use]
-pub fn notes_log(lines: Vec<String>) -> StoryLog {
-    StoryLog {
-        heading: NOTES_HEADING.to_owned(),
-        entries: vec![LogEntry {
-            title: String::new(),
-            lines,
-        }],
         cut_word: "more",
     }
 }
@@ -333,15 +317,6 @@ impl Screen for StoryLogScreen {
         for line in self.layout() {
             list.text_in(FONT, line.text, line.origin, SIZE, None, line.color);
         }
-    }
-}
-
-/// The panel's text area: [`PANEL`] less [`INSET`] on every side.
-#[must_use]
-pub fn text_area() -> Bounds {
-    Bounds {
-        min: Point::new(PANEL.min.x + INSET, PANEL.min.y + INSET),
-        max: Point::new(PANEL.max.x - INSET, PANEL.max.y - INSET),
     }
 }
 

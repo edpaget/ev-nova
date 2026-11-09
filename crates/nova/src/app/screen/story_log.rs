@@ -1,22 +1,16 @@
 //! [`AppScreen`]'s story log: the new game's own read-only panel
-//! ([`StoryLogScreen`]) for its news, its active storyline missions and
-//! what traffic control's dock scan found, opened over the spaceport or
+//! ([`StoryLogScreen`]) for its news and its active storyline missions,
+//! opened over the spaceport or
 //! over the paused flight. It is one of the router's overlays: while it
 //! is open it takes every input in front of what is under it, flight
 //! stays paused under it, and it is drawn over it.
 //!
-//! A landed visit's pages come in this order:
-//!
-//! 1. **The landed find.** As the spaceport opens, the words of the dock
-//!    scan's find in the press that landed
-//!    ([`FlightView::take_landing_notes`]) open first, as the landing
-//!    blanked the message line that would have said them.
-//! 2. **The conversations**, one after another (see the `conversation`
-//!    module), once the find is closed.
-//! 3. **The news**, once a visit, when the last conversation has closed
-//!    (or there was none) and the system the ship is in has heard any
-//!    ([`FlightView::heard_news`]). The flag that keeps it to once a
-//!    visit resets as the spaceport opens.
+//! **The news** opens once a visit, as the landed visit's last page: when
+//! the last conversation has closed (or there was none) and the system
+//! the ship is in has heard any ([`FlightView::heard_news`]). The flag
+//! that keeps it to once a visit resets as the spaceport opens. A dock
+//! scan's find needs no page here: a press that scans never lands, and
+//! the message line keeps the find over a denial (`FlightView::land`).
 //!
 //! **The missions.** The mission info key, in flight or in port, opens the
 //! missions log in place of the stock mission info screen when the
@@ -32,11 +26,14 @@
 //!
 //! A router with no metrics shows none of it. The spaceport dropped (a
 //! take-off, the pilot put away) and flight dropped drop it.
+//!
+//! [`FlightView::heard_news`]: nova_view::flight::FlightView::heard_news
+//! [`FlightView::close_info_dialog`]: nova_view::flight::FlightView::close_info_dialog
+//! [`FlightView::take_room_refusals`]: nova_view::flight::FlightView::take_room_refusals
 
 use nova_sim::MissionInfo;
-use nova_view::flight::FlightView;
 use nova_view::spaceport::conversation::room_refusal_text;
-use nova_view::ui::story_log::{StoryLog, StoryLogScreen, missions_log, news_log, notes_log};
+use nova_view::ui::story_log::{StoryLog, StoryLogScreen, missions_log, news_log};
 use nova_view::{Input, Screen, ScreenAction};
 
 use super::{AppScreen, ENTERED};
@@ -44,8 +41,6 @@ use super::{AppScreen, ENTERED};
 /// What comes after the open log closes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum AfterLog {
-    /// The visit's conversations: the landed find was shown first.
-    Conversations,
     /// The mission info key's log over flight: its close tells flight.
     InfoOverFlight,
     /// Nothing.
@@ -75,19 +70,11 @@ impl AppScreen {
         true
     }
 
-    /// The landed visit's first pages, as the spaceport opens: the news
-    /// not read yet this visit, and the landed find first if there was
-    /// one, else the conversations (see the module docs).
+    /// The landed visit's first pages, as the spaceport opens: its news
+    /// not offered yet, and its conversations (see the module docs).
     pub(super) fn open_landed_pages(&mut self) {
         self.news_read = false;
-        let notes = self
-            .flight
-            .as_mut()
-            .map(FlightView::take_landing_notes)
-            .unwrap_or_default();
-        if notes.is_empty() || !self.open_story_log(notes_log(notes), AfterLog::Conversations) {
-            self.open_conversation();
-        }
+        self.open_conversation();
     }
 
     /// Opens the news heard where the ship is, once a visit, when there is
@@ -144,7 +131,6 @@ impl AppScreen {
         let then = open.then;
         self.story_log = None;
         match then {
-            AfterLog::Conversations => self.open_conversation(),
             AfterLog::InfoOverFlight => {
                 if let Some(flight) = &mut self.flight {
                     flight.close_info_dialog();

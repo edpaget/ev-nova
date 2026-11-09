@@ -111,6 +111,14 @@ fn just_text(screen: &StoryLogScreen) -> Vec<String> {
     texts(screen).into_iter().map(|(text, ..)| text).collect()
 }
 
+/// The panel's text area: [`PANEL`] less [`INSET`] on every side.
+fn text_area() -> crate::geometry::Bounds {
+    crate::geometry::Bounds {
+        min: Point::new(PANEL.min.x + INSET, PANEL.min.y + INSET),
+        max: Point::new(PANEL.max.x - INSET, PANEL.max.y - INSET),
+    }
+}
+
 /// Asserts every line drawn on `screen` lies within the panel's text
 /// area, its bottom included.
 fn assert_inside(screen: &StoryLogScreen) {
@@ -247,18 +255,16 @@ fn a_take_point_s_line_names_its_gate_and_holder() {
 }
 
 #[test]
-fn the_notes_are_one_untitled_entry_under_traffic_control() {
-    let log = notes_log(vec!["Found.".to_owned()]);
-    assert_eq!(log.heading, NOTES_HEADING);
-    assert_eq!(
-        log.entries,
-        [LogEntry {
+fn an_untitled_entry_draws_its_lines_alone() {
+    let shown = screen(StoryLog {
+        heading: "Log".to_owned(),
+        entries: vec![LogEntry {
             title: String::new(),
             lines: vec!["Found.".to_owned()],
-        }]
-    );
-    let shown = screen(log);
-    assert_eq!(just_text(&shown), [NOTES_HEADING, "Found.", CLOSE_HINT]);
+        }],
+        cut_word: "more",
+    });
+    assert_eq!(just_text(&shown), ["Log", "Found.", CLOSE_HINT]);
 }
 
 /// Line `n`'s top, `gaps` gaps down.
@@ -313,9 +319,12 @@ fn it_draws_a_black_panel_the_heading_each_title_and_its_lines_then_the_hint() {
 #[test]
 fn long_lines_wrap_within_the_panel() {
     let long = "word ".repeat(30);
-    let shown = screen(notes_log(vec![long.trim_end().to_owned()]));
+    let shown = screen(news_log(
+        &[heard("Long", long.trim_end(), 130, 0)],
+        &names(),
+    ));
     let drawn = just_text(&shown);
-    assert_eq!(drawn.len(), 4, "{drawn:?}");
+    assert_eq!(drawn.len(), 6, "{drawn:?}");
     assert_inside(&shown);
 }
 
@@ -415,11 +424,6 @@ fn the_fixture_s_news_and_missions_fit_the_panel() {
     for log in [
         news_log(&fixture_news(), &names()),
         missions_log(&[dock_job(10, false), the_road()], &names()),
-        notes_log(vec![
-            "Your ship is searched before landing: the Gun mount is found. You have been \
-             fined 500 credits."
-                .to_owned(),
-        ]),
     ] {
         let entries = log.entries.len();
         let shown = screen(log);
@@ -436,12 +440,88 @@ fn the_fixture_s_news_and_missions_fit_the_panel() {
 
 #[test]
 fn nothing_moves_on_a_tick_and_it_debugs_its_log() {
-    let mut shown = screen(notes_log(vec!["Found.".to_owned()]));
+    let mut shown = screen(news_log(&[heard("Found.", "Here.", 130, 0)], &names()));
     let before = texts(&shown);
     shown.tick(Duration::from_secs(1));
     assert_eq!(texts(&shown), before);
     let debug = format!("{shown:?}");
     assert!(debug.starts_with("StoryLogScreen {"), "{debug}");
     assert!(debug.contains("Found."), "{debug}");
-    assert_eq!(shown.log().heading, NOTES_HEADING);
+    assert_eq!(shown.log().heading, NEWS_HEADING);
+}
+
+/// Metrics with whole-number rows: 6 wide a character, 12 a line, so the
+/// panel's 360 of text area falls on whole lines and gaps.
+#[derive(Clone, Copy, Debug)]
+struct Grid;
+
+impl TextMetrics for Grid {
+    fn width(&self, _font: crate::font::Font, _size: f32, text: &str) -> f32 {
+        text.chars().count() as f32 * 6.0
+    }
+
+    fn line_height(&self, _font: crate::font::Font, _size: f32) -> f32 {
+        12.0
+    }
+}
+
+/// An entry of a title and `lines` more short lines.
+fn rows(lines: usize) -> LogEntry {
+    LogEntry {
+        title: "T".to_owned(),
+        lines: vec!["l".to_owned(); lines],
+    }
+}
+
+/// What a log of `entries` draws, on [`Grid`].
+fn laid_out(entries: Vec<LogEntry>) -> Vec<String> {
+    let shown = StoryLogScreen::new(
+        StoryLog {
+            heading: "Log".to_owned(),
+            entries,
+            cut_word: "more",
+        },
+        Rc::new(Grid),
+    );
+    just_text(&shown)
+}
+
+// On Grid the heading takes a row, an entry its gap and its rows, the cut
+// line a row, and the hint its gap and a row: 360 = 12 * rows + 12 * gaps.
+
+#[test]
+fn an_entry_ending_exactly_at_the_foot_with_the_hint_fits() {
+    // Heading 1 + entry 26 + hint 1 rows and 2 gaps: 28 * 12 + 24 = 360.
+    let drawn = laid_out(vec![rows(25)]);
+    assert_eq!(drawn.len(), 1 + 26 + 1, "whole: {drawn:?}");
+    assert_eq!(drawn.last().map(String::as_str), Some(CLOSE_HINT));
+}
+
+#[test]
+fn an_entry_one_row_past_the_foot_is_cut() {
+    let drawn = laid_out(vec![rows(26)]);
+    assert_eq!(drawn, ["Log", "And 1 more item.", CLOSE_HINT]);
+}
+
+#[test]
+fn an_entry_with_others_after_it_leaves_a_row_for_the_cut_line() {
+    // The first would fit alone, but not with the cut line below it.
+    let drawn = laid_out(vec![rows(25), rows(0)]);
+    assert_eq!(drawn, ["Log", "And 2 more items.", CLOSE_HINT]);
+    // One row shorter it fits with the cut line, and the second, which
+    // needs its own gap and row, is cut.
+    let drawn = laid_out(vec![rows(24), rows(0)]);
+    assert_eq!(drawn.len(), 1 + 25 + 1 + 1, "{drawn:?}");
+    assert_eq!(drawn[drawn.len() - 2], "And 1 more item.");
+}
+
+#[test]
+fn the_last_entry_needs_no_row_for_a_cut_line() {
+    // Heading 1 + 1 + 24 + hint 1 rows and 3 gaps: 27 * 12 + 36 = 360.
+    let drawn = laid_out(vec![rows(0), rows(23)]);
+    assert_eq!(drawn.len(), 1 + 1 + 24 + 1, "both whole: {drawn:?}");
+    assert!(
+        !drawn.iter().any(|text| text.starts_with("And ")),
+        "{drawn:?}"
+    );
 }

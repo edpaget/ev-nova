@@ -13,8 +13,7 @@
 //! ([`FlightView::close_conversation`]), and the router asks for the next
 //! conversation, showing it, or dropping the screen once the session has
 //! none left, when the visit's news opens, once (see the `story_log`
-//! module, which also opens a landed dock scan's find before the first
-//! conversation). An accept the flight refused for room is told on the
+//! module). An accept the flight refused for room is told on the
 //! page it was decided on. The spaceport dropped (a take-off, the pilot
 //! put away) drops it with it. What each conversation plays is the
 //! session's.

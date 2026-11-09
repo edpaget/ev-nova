@@ -567,6 +567,13 @@ mod tests {
     }
 
     #[test]
+    fn only_a_changed_decision_counts_as_a_change() {
+        assert!(Decision::Changed.changed());
+        assert!(!Decision::Unchanged.changed());
+        assert!(!Decision::NoRoom { tons: 10, room: 9 }.changed());
+    }
+
+    #[test]
     fn an_unknown_mission_changes_nothing() {
         let mut f = Fixture::new(&[]);
         assert!(!f.play().make_offer("job"));

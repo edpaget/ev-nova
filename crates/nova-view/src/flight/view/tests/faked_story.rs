@@ -78,3 +78,13 @@ fn i_opening_on_storyline_rows_alone_hands_the_info_to_the_router() {
     assert_eq!(view.take_mission_info_request(), Some(info));
     assert_eq!(view.message(), None, "nothing said");
 }
+
+#[test]
+fn the_names_are_the_opening_s() {
+    let mut fake = FakeFlight::new();
+    let mut names = nova_sim::flight_frame::Names::default();
+    names.systems.insert(SystemId(130), "Hearth".to_owned());
+    fake.set_names(names.clone());
+    let view = scripted_over(catalog(), fake, &Rulebook::default());
+    assert_eq!(view.names(), &names);
+}

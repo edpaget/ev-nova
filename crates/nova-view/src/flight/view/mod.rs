@@ -1294,9 +1294,6 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     faded_keys: faded_keys::FadedKeys,
     /// The stellar landed on, until the router takes it.
     pending_landing: Option<StellarId>,
-    /// The words of the dock scan's find in the press that landed, until
-    /// the router takes them (see the `story` module).
-    landing_notes: Vec<String>,
     /// The `dësc` movies flight plays, and whether they play (see the
     /// `movies` module).
     movies: crate::movie::Movies,

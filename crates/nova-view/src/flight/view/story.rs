@@ -32,13 +32,6 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
-    /// The words of the dock scan's find in the press that landed
-    /// (`FlightView::land`), once: the landing blanks the message line,
-    /// so the router shows them as the spaceport opens.
-    pub fn take_landing_notes(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.landing_notes)
-    }
-
     /// The offers' accepts the flight refused for room since they were
     /// last taken, in order; taking them leaves none.
     pub fn take_room_refusals(&mut self) -> Vec<RoomRefusal> {

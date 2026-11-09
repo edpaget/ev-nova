@@ -41,8 +41,9 @@ impl<
     /// request's line, or "No response."), shows first, so a
     /// refusal in the same press replaces it, except the new game's dock
     /// scan's find ([`SimMessage::DockScanned`]): it is said after the
-    /// refusal, keeping the line, and on a landing, which blanks the line,
-    /// it is kept for the router ([`FlightView::take_landing_notes`]). A landing hands the router
+    /// refusal, keeping the line. A press that scans never lands: the
+    /// session answers it requested or refused (`session/dock_scan.rs`).
+    /// A landing hands the router
     /// the stellar ([`FlightView::take_landing`]) and lets go of what the
     /// view keeps of the fight; over a cleared hypergate the course map
     /// opens offering its links ([`FlightCommand::OpenHypergate`]), and
@@ -82,7 +83,6 @@ impl<
         let scans = self.say_press_messages(&pressed);
         match pressed {
             Answer::LandPress(LandPress::Outcome(LandOutcome::Landed(stellar))) => {
-                self.landing_notes = scans.into_iter().map(|(text, _)| text).collect();
                 self.blank_message();
                 self.effects.clear();
                 // The escorts keep theirs through the landing (see the
@@ -139,18 +139,14 @@ impl<
         requested
     }
 
-    /// Says the press's messages, in order, but for a press that lands or
-    /// is refused, whose dock scan's find ([`SimMessage::DockScanned`])
-    /// is held back and handed back worded: the refusal's line or the
-    /// landing's blank would replace it, and the player must read what
-    /// was found and fined. Stock never raises a find.
+    /// Says the press's messages, in order, but for a refused press, whose
+    /// dock scan's find ([`SimMessage::DockScanned`]) is held back and
+    /// handed back worded: the refusal's line would replace it, and the
+    /// player must read what was found and fined. Stock never raises a
+    /// find.
     fn say_press_messages(&mut self, pressed: &Answer) -> Said {
         let messages = self.drain().take_messages();
-        let holds = matches!(
-            pressed,
-            Answer::LandRefused { .. }
-                | Answer::LandPress(LandPress::Outcome(LandOutcome::Landed(_)))
-        );
+        let holds = matches!(pressed, Answer::LandRefused { .. });
         let (scans, rest): (Vec<_>, Vec<_>) = messages
             .into_iter()
             .partition(|message| holds && matches!(message, SimMessage::DockScanned { .. }));
