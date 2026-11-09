@@ -226,6 +226,7 @@ mod spin_sprite;
 mod sprite;
 mod stand_in;
 mod stellar_sprite;
+mod stock_art;
 mod storylines;
 #[cfg(test)]
 mod tests;
@@ -250,6 +251,7 @@ pub use self::stand_in::{Outline, OutlineTriangle, StandIn, StandInOf, StarDot};
 pub use self::stellar_sprite::{
     StellarSprite, StellarSpriteError, master_frame_count, stellar_spin_id,
 };
+pub use self::stock_art::StockArt;
 pub use self::storylines::{
     GateStability, MissionCompletion, MissionObjective, MissionOffer, NewsItem, Outcome, PointAt,
     PointState, Requires, StoryEffects, StoryMission, Storylines,

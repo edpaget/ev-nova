@@ -41,6 +41,12 @@ impl GameData {
     pub fn ship_line(&self, id: ShipId) -> Option<&ShipLine> {
         self.ship_lines.get(&id)
     }
+
+    /// Every ship type's lineage, by ascending ID: the new game's; none
+    /// in a stock store.
+    pub fn ship_lines(&self) -> impl Iterator<Item = (ShipId, &ShipLine)> {
+        self.ship_lines.iter().map(|(&id, line)| (id, line))
+    }
 }
 
 #[cfg(test)]
@@ -65,6 +71,7 @@ mod tests {
         let loaded = store_of(&[]);
         for data in [&decoded, &empty, &loaded] {
             assert_eq!(data.ship_line(ShipId(128)), None);
+            assert_eq!(data.ship_lines().count(), 0);
         }
     }
 
@@ -79,6 +86,10 @@ mod tests {
         assert_eq!(data.ship_line(ShipId(128)), Some(&hull));
         assert_eq!(data.ship_line(ShipId(129)), Some(&variant));
         assert_eq!(data.ship_line(ShipId(130)), None);
+        assert_eq!(
+            data.ship_lines().collect::<Vec<_>>(),
+            [(ShipId(128), &hull), (ShipId(129), &variant)]
+        );
     }
 
     #[test]
