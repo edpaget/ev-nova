@@ -21,6 +21,9 @@
 //! | `factions/` | `gövt` | `color` and `ship_color` from `color`, as `00RRGGBB`; one that keeps the law (not `lawless`) `SmugPenalty` [`kits::LAW_SMUGGLE_PENALTY`], `ScanFine` [`kits::LAW_SCAN_FINE`] and `ScanMask` [`kits::LAWLESS_KIT_SCAN`], placeholders, so its scans find a lawless kit; a lawless one none |
 //! | `systems/` | `sÿst` | `x_pos`/`y_pos` from `map`; `govt` from `government`; `nav_def` its stellars, then its gates, each in ID order; the civilian traffic; no `con` links |
 //! | `stellars/` | `spöb` | `x_pos`/`y_pos` from `position`; `govt` from `owner`; `flags` from `services` and `kind` ([`records::stellar_flags`]); no `hyper_link`s; a law-keeping owner's `TechLevel` [`kits::YARD_TECH_LEGAL`] and `MinStatus` 0, a lawless owner's or an unowned one's `TechLevel` [`kits::YARD_TECH_LAWLESS`] and `MinStatus` [`records::ANY_RECORD`] |
+//! | `goods/`, the standard ones | `STR#` 4000, 4001, 4003 and 4004 ([`goods`]) | the first six goods by the ID table, each in its slot: the name, lower-cased, with a `:` (placeholders), and its `price` as text; six entries each, empty for an unused slot; none when no good takes a slot |
+//! | `goods/`, the rest | `jünk` ([`goods`]) | named for the good: `BasePrice` its `price`, `LCName` its name lower-cased, `Abbrev` its name, blank `BuyOn` and `SellOn`, no flags and no `ScanMask` |
+//! | a stellar's `prices` | `spöb` `Flags`' price nibbles, and each `jünk`'s `SoldAt`/`BoughtAt` ([`goods`]) | a standard good's level as its slot's low, medium or high bit ([`crate::records::stellar::flags::price_bits`]); a special good's `low` stellars as `SoldAt` and `high` ones as `BoughtAt`, in `spöb` ID order; only at a stellar with `trade` |
 //! | a stellar's body | `dësc` | the body, trimmed, at its `spöb`'s ID: the engine reads a stellar's landing text from the `dësc` with its `spöb`'s ID; an empty body has none |
 //! | a system's `jump_points` | hypergate `spöb` ([`gates`]) | unpinned, numbered after the unpinned stellars; `x_pos`/`y_pos` from `position`; `govt` from `owner`; `flags` `CAN_LAND`; `flags2` the hypergate bit; `hyper_link[0]` the partner point's gate; named for the partner's system; a random exit heading; `MinStatus` [`records::ANY_RECORD`] |
 //! | `ships/`, hulls and variants | `shïp` and `shän` ([`fleet`]) | through the `base` chain: `speed`, `shields`, `hull` and `cargo` as `Speed`, `Shield`, `Armor` and `Holds`; placeholder acceleration, turn rate, fuel and crew; its kits as `DefaultItems`; its chain's hardpoints as `MaxGun` and `MaxTur`; its hardpoints' weapon outfits as stock weapons; the kit `fits` bits of its `role` as `Contribute`; the `shän` `BaseXSize`/`BaseYSize` from `size` and its hardpoints' and kits' as exit points |
@@ -77,6 +80,11 @@
 //!   records but no place in it, all named in one problem.
 //! - A jump point whose `to` names no jump point maps to a gate with no
 //!   link, which refuses its entry.
+//! - A stellar's price for a good that isn't in `goods/` is left out. So
+//!   is a special good's `medium` price, and its price at a ninth stellar
+//!   at one level, by `spöb` ID. A good priced above 32767 is priced at
+//!   32767. A stellar with `prices` and no `trade` service trades nothing
+//!   ([`goods`]).
 //! - A start whose ship isn't there, or whose system isn't there, is left
 //!   out.
 //! - A ship whose `base` chain loops or names a ship that isn't there is
@@ -152,8 +160,12 @@
 //! - A stellar's generated look beyond its first colour, and a faction's
 //!   `kind`: Nova has nothing like them yet (the planet shader and 3D come
 //!   with `engine-3d`).
-//! - Commodity prices: a trade centre's price levels (the upper `Flags`
-//!   bits) stay unset, so it trades nothing until the bible prices goods.
+//! - A good's legality (a `jünk`'s `ScanMask`, contraband), the `jünk`
+//!   flags (tribbles, perishable), prices that move with what a port has
+//!   heard, and `STR#` 4002 (mission cargo): they wait on the spaceport's
+//!   design. A trade centre that prices nothing still opens an empty
+//!   exchange: the original's clearing of its trade bit isn't ported
+//!   (rdm:phase/ports-and-story/phase-5-load-object-data-junk-and-trade-flag).
 //!
 //! The IDs are pinned by the folder's table, so adding a record moves no
 //! other record and a pilot saved before keeps its place ([`ids`]).

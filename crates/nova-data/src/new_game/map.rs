@@ -2,8 +2,9 @@
 //! per kind over the neutral records of [`super::records`]: factions,
 //! systems and stellars here, the jump points' gates in [`super::gates`],
 //! ships, traffic and starts in [`super::fleet`], outfits and weapons in
-//! [`super::outfits`], mod kits in [`super::kits`] and the `take_point`
-//! missions' guards and blockades in [`super::blockades`]. The module docs of
+//! [`super::outfits`], mod kits in [`super::kits`], the `take_point`
+//! missions' guards and blockades in [`super::blockades`], and goods and
+//! a stellar's prices in [`super::goods`]. The module docs of
 //! [`super`] list what maps to what, and each problem.
 
 use std::collections::BTreeMap;
@@ -51,10 +52,10 @@ pub struct Mapped {
     pub fittings: Fittings,
 }
 
-/// Maps `galaxy`'s factions, systems, stellars, jump points, ships,
+/// Maps `galaxy`'s factions, systems, stellars, goods, jump points, ships,
 /// starts, outfits, mod kits and `take_point` blockades to `gövt`, `sÿst`,
-/// `spöb`, `dësc`, `shïp`, `shän`, `düde`, `chär`, `oütf`, `wëap` and
-/// `mïsn` records, and their fittings,
+/// `spöb`, `dësc`, `STR#`, `jünk`, `shïp`, `shän`, `düde`, `chär`, `oütf`,
+/// `wëap` and `mïsn` records, and their fittings,
 /// plus the placeholder `ïntf` status bar, which a flight frame always
 /// needs, so even an empty galaxy maps it. Nothing is pinned: see
 /// [`map_pinned`].
