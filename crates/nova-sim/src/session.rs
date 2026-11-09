@@ -39,13 +39,13 @@
 //! The player plots a course to a system on the star map: the fewest
 //! jumps along the hyperlinks, which the
 //! session's [`HyperlinkRule`] (the engine's, one way along each system's
-//! own links, unless `Session::with_hyperlinks` says otherwise) lets it
+//! own links, unless the rulebook's `hyperlinks` key reads otherwise) lets it
 //! follow. J
 //! ([`Session::begin_jump`]) is accepted when the
 //! [`hyperspace`](crate::hyperspace) rules allow a jump to the next system
 //! on it, with the no-jump zone applying where the session's
 //! [`JumpZoneRule`] says (the engine's, only in a system with a stellar
-//! that is no gate, unless `Session::with_jump_zone` says otherwise).
+//! that is no gate, unless the rulebook's `jump_zone` key reads otherwise).
 //! The ship then flies the pre-jump stage on its own, the player's
 //! controls ignored: it brakes and turns to the map bearing of that system
 //! as [`pre_jump`] says ([`Session::preparing_jump`]), and the jump begins
@@ -56,8 +56,8 @@
 //! the rest of the course still ahead. A ship with a multi-jump outfit
 //! passes on along the course in the same jump, as many systems as
 //! [`hops_per_jump`] gives, and enters only the last; the session's
-//! [`MultiJumpRule`] (the engine's unless `Session::with_multi_jump`
-//! says otherwise) decides whether the chain costs one jump's fuel and
+//! [`MultiJumpRule`] (the engine's unless the rulebook's `multi_jump` key
+//! reads otherwise) decides whether the chain costs one jump's fuel and
 //! days or each hop's. An arrival that made no hop clears the course, or
 //! drops its first hop when that stands at the arrival, and each rebuild
 //! point rewrites a hidden hop to the system at its place and cuts the
@@ -100,7 +100,7 @@
 //! Hyper Select ([`Session::select_next_system`], the original's `\`
 //! key) cycles the selection through the systems linked with the one the
 //! ship is in, as the session's [`HyperSelectRule`] says (the engine's
-//! unless `Session::with_hyper_select` says otherwise). By the engine's
+//! unless the rulebook's `hyper_select` key reads otherwise). By the engine's
 //! reading each press steps to the next Con slot that holds a link, moves
 //! only the selection and keeps the course; by
 //! [`HyperSelectRule::OneJumpCourse`] it leaves a one-jump course.
@@ -808,7 +808,7 @@ use crate::control::ScriptNote;
 use crate::date::{self, GameDate};
 use crate::flight::{Controls, FlightRules, ShipState, player_step};
 use crate::fuel::regenerate;
-#[cfg(any(test, doc))]
+#[cfg(doc)]
 use crate::gate::WormholeRule;
 use crate::gate::{
     self, GateArrivalRule, GateKind, GateRefusal, emerge, has_links, hypergate_exit, wormhole_exit,
@@ -818,12 +818,14 @@ use crate::glow::step_glow;
 use crate::govt::{Governments, HALF_JAMMING};
 use crate::grant::{GrantStock, Granted, PersonGrant};
 use crate::handling::Handling;
+#[cfg(any(test, doc))]
+use crate::hyperspace::MultiJumpRule;
 use crate::hyperspace::{
     CoLocated, JUMP_FUEL, JumpReadiness, JumpRefusal, RouteError, StarMap, arrival, check_jump,
     hold_jump, hops_per_jump, jump_zone,
 };
-#[cfg(any(test, doc))]
-use crate::hyperspace::{HyperSelectRule, HyperlinkRule, JumpZoneRule, MultiJumpRule};
+#[cfg(doc)]
+use crate::hyperspace::{HyperSelectRule, HyperlinkRule, JumpZoneRule};
 use crate::landing::{LandOutcome, LandingRefusal, Standing, land_or_select};
 use crate::legal::{self, Crime, LegalCode};
 use crate::market::{self, Direction, EscortHolds, Goods, Market, Markup, Order, TradeRefusal};
@@ -1676,72 +1678,6 @@ impl Session {
     #[must_use]
     pub fn rules(&self) -> &Rulebook {
         self.setup.rules()
-    }
-
-    /// This session with multi-jumps following `rule`; the engine's by
-    /// default.
-    ///
-    /// For the tests: no production code calls it, so only they set this reading.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn with_multi_jump(mut self, rule: MultiJumpRule) -> Self {
-        self.setup.multi_jump = rule;
-        self
-    }
-
-    /// This session with Hyper Select following `rule`; the engine's by
-    /// default.
-    ///
-    /// For the tests: no production code calls it, so only they set this reading.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn with_hyper_select(mut self, rule: HyperSelectRule) -> Self {
-        self.setup.hyper_select = rule;
-        self
-    }
-
-    /// This session with jumps following the hyperlinks under `rule`; the
-    /// engine's by default.
-    ///
-    /// For the tests: no production code calls it, so only they set this reading.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn with_hyperlinks(mut self, rule: HyperlinkRule) -> Self {
-        self.setup.hyperlinks = rule;
-        self
-    }
-
-    /// This session with the no-jump zone applying where `rule` says; the
-    /// engine's by default, only in a system with an ordinary stellar.
-    ///
-    /// For the tests: no production code calls it, so only they set this reading.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn with_jump_zone(mut self, rule: JumpZoneRule) -> Self {
-        self.setup.jump_zone = rule;
-        self
-    }
-
-    /// This session with ships coming out of hypergates and wormholes as
-    /// `rule` says; the engine's by default.
-    ///
-    /// For the tests: no production code calls it, so only they set this reading.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn with_gate_arrival(mut self, rule: GateArrivalRule) -> Self {
-        self.setup.gate_arrival = rule;
-        self
-    }
-
-    /// This session with unlinked wormholes leading where `rule` says; the
-    /// engine's by default.
-    ///
-    /// For the tests: no production code calls it, so only they set this reading.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn with_wormholes(mut self, rule: WormholeRule) -> Self {
-        self.setup.wormholes = rule;
-        self
     }
 
     /// The head of an advance pass in flight: the warp-ups and the
@@ -3139,7 +3075,7 @@ impl Session {
             jump_zone(
                 &self.chart.sites,
                 self.ship.fit.stats.jump_distance,
-                self.setup.jump_zone,
+                self.setup.jump_zone(),
             ),
         )
     }
@@ -3428,7 +3364,7 @@ impl Session {
         // last hop's stand-in on the multi-jump branch, else the raw Con
         // target, by the engine's `arrival_system`.
         let multi_jump =
-            on_course && hops_per_jump(self.ship.fit.stats.multi_jump, self.setup.multi_jump) > 1;
+            on_course && hops_per_jump(self.ship.fit.stats.multi_jump, self.setup.multi_jump()) > 1;
         let written = arrival_system::jump_system(&self.setup, multi_jump, at, raw);
         // The arrival written as the player's system and explored at once
         // (@0x6be0b, @0x6be12). The written system shares its stand-in's
@@ -3968,7 +3904,7 @@ impl Session {
     /// Enters the wormhole whose entry is pending and gives the system the
     /// ship comes out in: through the wormhole [`wormhole_exit`] rolls on
     /// `chance`, under the session's [`WormholeRule`] (the engine's unless
-    /// `Session::with_wormholes` says otherwise), read from `catalog`.
+    /// the rulebook's `wormhole_exit` key reads otherwise), read from `catalog`.
     /// Any outcome ends the entry and lets go of the nav selection, the
     /// mode kept, as the take-off's tail the original's wormhole joins
     /// does (@0x66edb-0x66f40, @0x674d2). With no exit it beeps
@@ -3979,7 +3915,7 @@ impl Session {
     ///
     /// Out of a hypergate or wormhole the ship comes out as the session's
     /// [`GateArrivalRule`] says (the engine's unless
-    /// `Session::with_gate_arrival` says otherwise): by the engine's at
+    /// the rulebook's `gate_arrival` key reads otherwise): by the engine's at
     /// the exit gate, as [`emerge`] says, with no day passing; like a jump,
     /// where a jump between the two systems arrives, with a jump's days
     /// passing, each stepping the planetary events on `chance`. Either way
@@ -4029,9 +3965,14 @@ impl Session {
                 .galaxy
                 .holder(id, self.statics.listers(id), player)
         };
-        let Some(exit) =
-            wormhole_exit(here, player, &sites, owner_of, self.setup.wormholes, chance)
-        else {
+        let Some(exit) = wormhole_exit(
+            here,
+            player,
+            &sites,
+            owner_of,
+            self.setup.wormholes(),
+            chance,
+        ) else {
             self.refuse_no_exit(catalog, chance);
             return Err(GateRefusal::NoExit);
         };
@@ -4078,7 +4019,7 @@ impl Session {
         if !exit_elsewhere {
             self.stellar_pass(PassKind::Entry, GateHolds::Entered(entered), chance);
         }
-        let ship = match self.setup.gate_arrival {
+        let ship = match self.setup.gate_arrival() {
             GateArrivalRule::Engine => emerge(exit, self.top_speed(), chance),
             GateArrivalRule::LikeJump => {
                 let map = |id| self.chart.galaxy.position(id).unwrap_or_default();
@@ -7024,7 +6965,11 @@ impl Chart {
         setup: &Setup,
         to: SystemId,
     ) -> Result<&'a [SystemId], RouteError> {
-        match self.galaxy.map().route(pilot.system, to, setup.hyperlinks) {
+        match self
+            .galaxy
+            .map()
+            .route(pilot.system, to, setup.hyperlinks())
+        {
             Ok(route) => {
                 pilot.restart_course(pilot.system);
                 pilot.course = route;
@@ -8692,9 +8637,13 @@ pub(super) mod tests {
     /// `catalog`'s session under `rule`, its course plotted to 131 and the
     /// ship at the centre.
     fn at_the_centre(catalog: &FakePilotCatalog, rule: JumpZoneRule) -> Session {
-        let mut session = Session::start(catalog)
-            .expect("starts")
-            .with_jump_zone(rule);
+        let mut session =
+            Session::start(catalog)
+                .expect("starts")
+                .with_rules(crate::session::setup::reading(
+                    crate::rulebook::RuleKey::JumpZone,
+                    rule,
+                ));
         session.plot_course(SystemId(131)).expect("a route");
         session.ship.player.position = Vec2::ZERO;
         session
@@ -12335,9 +12284,13 @@ pub(super) mod tests {
 
     /// Plots a course to 134, flies out and begins the jump.
     pub(super) fn bound_for_134(catalog: &FakePilotCatalog, rule: MultiJumpRule) -> Session {
-        let mut session = Session::start(catalog)
-            .expect("starts")
-            .with_multi_jump(rule);
+        let mut session =
+            Session::start(catalog)
+                .expect("starts")
+                .with_rules(crate::session::setup::reading(
+                    crate::rulebook::RuleKey::MultiJump,
+                    rule,
+                ));
         session.plot_course(SystemId(134)).expect("a route");
         assert_eq!(session.course(), ids(&[131, 132, 134]));
         fly_out(&mut session, &catalog);
@@ -28692,9 +28645,13 @@ pub(super) mod tests {
 
     #[test]
     fn the_one_jump_course_reading_still_plots_a_one_jump_course() {
-        let mut session = Session::start(&hub())
-            .expect("starts")
-            .with_hyper_select(HyperSelectRule::OneJumpCourse);
+        let mut session =
+            Session::start(&hub())
+                .expect("starts")
+                .with_rules(crate::session::setup::reading(
+                    crate::rulebook::RuleKey::HyperSelect,
+                    HyperSelectRule::OneJumpCourse,
+                ));
         session.plot_course(SystemId(132)).expect("a route");
         assert_eq!(session.select_next_system(), Some(SystemId(131)));
         assert_eq!(session.course(), ids(&[131]));
@@ -28776,19 +28733,26 @@ pub(super) mod tests {
             Err(RouteError::Unreachable)
         );
         assert_eq!(session.course(), [], "cleared");
-        let mut session = Session::start(&hub())
-            .expect("starts")
-            .with_hyperlinks(HyperlinkRule::BothWays);
+        let mut session =
+            Session::start(&hub())
+                .expect("starts")
+                .with_rules(crate::session::setup::reading(
+                    crate::rulebook::RuleKey::Hyperlinks,
+                    HyperlinkRule::BothWays,
+                ));
         assert_eq!(session.plot_course(SystemId(136)), Ok(&ids(&[136])[..]));
     }
 
     #[test]
     fn hyper_select_by_the_one_jump_course_reading_never_jumps_against_a_one_way_link() {
         let cycle = |hyperlinks| {
-            let mut session = Session::start(&hub())
-                .expect("starts")
-                .with_hyper_select(HyperSelectRule::OneJumpCourse)
-                .with_hyperlinks(hyperlinks);
+            let mut session = Session::start(&hub()).expect("starts").with_rules(
+                crate::session::setup::reading(crate::rulebook::RuleKey::Hyperlinks, hyperlinks)
+                    .with_override(
+                        crate::rulebook::RuleKey::HyperSelect,
+                        crate::rulebook::RuleSource::Bible,
+                    ),
+            );
             (0..4)
                 .map(|_| session.select_next_system().expect("one"))
                 .collect::<Vec<_>>()
@@ -28799,9 +28763,13 @@ pub(super) mod tests {
 
     #[test]
     fn hyper_select_by_the_one_jump_course_reading_cycles_every_jump() {
-        let mut session = Session::start(&hub())
-            .expect("starts")
-            .with_hyper_select(HyperSelectRule::OneJumpCourse);
+        let mut session =
+            Session::start(&hub())
+                .expect("starts")
+                .with_rules(crate::session::setup::reading(
+                    crate::rulebook::RuleKey::HyperSelect,
+                    HyperSelectRule::OneJumpCourse,
+                ));
         assert_eq!(session.select_next_system(), Some(SystemId(131)));
         assert_eq!(session.select_next_system(), Some(SystemId(134)));
         session.plot_course(SystemId(132)).expect("a route");
@@ -29308,7 +29276,10 @@ pub(super) mod tests {
     #[test]
     fn by_the_bible_a_wormhole_rolls_over_the_unlinked_ones_only() {
         let catalog = wormholes();
-        let mut session = at_wormhole(&catalog).with_wormholes(WormholeRule::UnlinkedOnly);
+        let mut session = at_wormhole(&catalog).with_rules(crate::session::setup::reading(
+            crate::rulebook::RuleKey::WormholeExit,
+            WormholeRule::UnlinkedOnly,
+        ));
         let mut chance = Scripted::default();
         assert_eq!(
             session.enter_wormhole(&catalog, &mut chance),
@@ -29361,7 +29332,10 @@ pub(super) mod tests {
             disasters: surplus().disasters,
             ..gated()
         };
-        let mut session = at_gate(&catalog).with_gate_arrival(GateArrivalRule::LikeJump);
+        let mut session = at_gate(&catalog).with_rules(crate::session::setup::reading(
+            crate::rulebook::RuleKey::GateArrival,
+            GateArrivalRule::LikeJump,
+        ));
         let mut chance = Scripted::answering(&[true]);
         assert_eq!(
             session.enter_hypergate(Some(SystemId(131)), &catalog, &mut chance),
@@ -29620,7 +29594,10 @@ pub(super) mod tests {
     #[test]
     fn a_gate_like_a_jump_draws_its_days_before_the_population() {
         let catalog = with_event(busy(gated()));
-        let mut session = at_gate(&catalog).with_gate_arrival(GateArrivalRule::LikeJump);
+        let mut session = at_gate(&catalog).with_rules(crate::session::setup::reading(
+            crate::rulebook::RuleKey::GateArrival,
+            GateArrivalRule::LikeJump,
+        ));
         let mut chance = Logged::default();
         session
             .enter_hypergate(Some(SystemId(131)), &catalog, &mut chance)

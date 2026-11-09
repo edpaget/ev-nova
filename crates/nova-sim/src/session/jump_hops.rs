@@ -80,7 +80,7 @@ impl Session {
             return made;
         }
         made.on_course = true;
-        for _ in 1..hops_per_jump(self.ship.fit.stats.multi_jump, self.setup.multi_jump) {
+        for _ in 1..hops_per_jump(self.ship.fit.stats.multi_jump, self.setup.multi_jump()) {
             // The hop after the one being made: the hops passed are
             // spooled off already.
             let next = self.pilot.course.get(1);
@@ -90,7 +90,7 @@ impl Session {
             // By `PerHop` a further hop is made only if the fuel, less the
             // hops' already owed, pays for it too; its fuel is taken with
             // the first's, its days pass with the first's.
-            if self.setup.multi_jump == MultiJumpRule::PerHop {
+            if self.setup.multi_jump() == MultiJumpRule::PerHop {
                 let owed = JUMP_FUEL * f32::from(made.jumps);
                 if self.pilot.reserves.fuel.now - owed < JUMP_FUEL {
                     break;

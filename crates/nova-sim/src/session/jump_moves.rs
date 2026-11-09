@@ -203,7 +203,6 @@ pub(super) mod tests {
     use crate::chance::NeverFires;
     use crate::control::{Script, ScriptNote, SetOp};
     use crate::geometry::Vec2;
-    use crate::hyperspace::MultiJumpRule;
     use crate::pilot::{ExploredLevel, Pilot};
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::session::Session;
@@ -271,8 +270,7 @@ pub(super) mod tests {
     pub(in crate::session) fn flown(catalog: &FakePilotCatalog, rules: Rulebook) -> Session {
         let mut session = Session::fly(catalog, Pilot::new(catalog, "").expect("starts"))
             .expect("flies")
-            .with_rules(rules)
-            .with_multi_jump(MultiJumpRule::Engine);
+            .with_rules(rules);
         let _ = session.settle_script(catalog, &mut NeverFires);
         session
     }

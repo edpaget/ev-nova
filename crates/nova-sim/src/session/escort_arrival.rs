@@ -143,7 +143,7 @@ mod tests {
     use crate::chance::NeverFires;
     use crate::escort::{EscortCommand, EscortGroup, EscortOrder, FormationSlot, KEEP_FORMATION};
     use crate::fleet::OrderWord;
-    use crate::gate::{GateArrivalRule, GateKind};
+    use crate::gate::GateKind;
     use crate::geometry::Vec2;
     use crate::pilot::Escort;
     use crate::reserves::Reserves;
@@ -479,8 +479,10 @@ mod tests {
         let npc = hired_npc(&session);
         assert!(npc.emerging(), "led out of the gate: {:?}", npc.mode);
         // Like a jump, it stays on its provisional slot.
-        let mut session = hired_in_flight(&catalog, Rulebook::default())
-            .with_gate_arrival(GateArrivalRule::LikeJump);
+        let mut session = hired_in_flight(
+            &catalog,
+            Rulebook::default().with_override(RuleKey::GateArrival, RuleSource::Bible),
+        );
         exit_gate_raising(&mut session, &catalog, GateKind::Hypergate, &mut NeverFires);
         let npc = hired_npc(&session);
         assert_eq!(npc.mode, Mode::Flying, "like a jump");

@@ -65,7 +65,7 @@ impl Session {
         exit: Vec2,
         chance: &mut (impl Chance + ?Sized),
     ) {
-        if self.setup.gate_arrival == GateArrivalRule::LikeJump {
+        if self.setup.gate_arrival() == GateArrivalRule::LikeJump {
             return;
         }
         let led: Vec<NpcId> = self.player_led().map(|npc| npc.id).collect();
@@ -649,8 +649,10 @@ pub(in crate::session) mod tests {
     #[test]
     fn like_a_jump_the_led_ships_are_left_as_a_jumps_arrival_leaves_them() {
         let catalog = catalog();
-        let mut session =
-            flying(&catalog, Rulebook::default()).with_gate_arrival(GateArrivalRule::LikeJump);
+        let mut session = flying(
+            &catalog,
+            Rulebook::default().with_override(RuleKey::GateArrival, RuleSource::Bible),
+        );
         exit_gate_raising(&mut session, &catalog, GateKind::Hypergate, &mut NeverFires);
         let hired = session.space.escorts.fleet[0].expect("placed");
         let npc = session.space.npc(hired).expect("here").clone();
