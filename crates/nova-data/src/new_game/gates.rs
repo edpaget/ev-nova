@@ -16,12 +16,13 @@
 //! its point's static owner's.
 
 use std::collections::BTreeMap;
+use std::ops::RangeInclusive;
 
 use nova_galaxy_format::id::{Id, PointRef};
 use nova_galaxy_format::load::{Galaxy, Problem};
 use nova_galaxy_format::model::JumpPoint;
 
-use super::ids::{IdTable, STELLAR_IDS};
+use super::ids::{IdTable, allocate_pinned};
 use super::map::{absent, govt, position};
 use super::records::{ANY_RECORD, neutral_stellar};
 use crate::decode::Entry;
@@ -34,40 +35,35 @@ use crate::wire::id::StellarId;
 pub const NAV_SLOTS: usize = 16;
 
 /// Numbers the jump points of the systems in `systems`, in (system id,
-/// point id) order, from the ID after `stellars`' last (128 with none),
-/// within [`STELLAR_IDS`], reporting each past its end against its
-/// system's file.
+/// point id) order: each `pins` names keeps its pin, and each other takes
+/// the next of `free`, the [`STELLAR_IDS`](super::ids::STELLAR_IDS) after the stellars' (see
+/// [`super::ids`]). Each `free` has no ID left for is reported against
+/// its system's file.
 pub fn number(
     galaxy: &Galaxy,
     systems: &BTreeMap<Id, i16>,
-    stellars: &BTreeMap<Id, i16>,
+    pins: &BTreeMap<PointRef, i16>,
+    free: &mut RangeInclusive<i16>,
     problems: &mut Vec<Problem>,
 ) -> BTreeMap<PointRef, i16> {
-    let first = stellars
-        .values()
-        .max()
-        .map_or(*STELLAR_IDS.start(), |last| last.saturating_add(1));
-    let last = *STELLAR_IDS.end();
-    let mut next = first..=last;
-    let mut gates = BTreeMap::new();
+    let last = *free.end();
+    let mut points = Vec::new();
     for system in systems.keys() {
-        let doc = &galaxy.systems[system];
-        let mut points: Vec<&JumpPoint> = doc.data.jump_points.iter().collect();
-        points.sort_by(|a, b| a.id.cmp(&b.id));
-        for point in points {
-            match next.next() {
-                Some(nova) => {
-                    gates.insert(PointRef::new(system, &point.id), nova);
-                }
-                None => problems.push(Problem::new(
-                    &doc.path,
-                    format!(
-                        "its jump point `{}` is past the last spöb ID, {last}; it is left out",
-                        point.id
-                    ),
-                )),
-            }
-        }
+        let mut ids: Vec<&Id> = (galaxy.systems[system].data.jump_points.iter())
+            .map(|point| &point.id)
+            .collect();
+        ids.sort();
+        points.extend(ids.into_iter().map(|point| PointRef::new(system, point)));
+    }
+    let (gates, past) = allocate_pinned(&points, pins, free);
+    for at in past {
+        problems.push(Problem::new(
+            &galaxy.systems[&at.system()].path,
+            format!(
+                "its jump point `{}` is past the last spöb ID, {last}; it is left out",
+                at.point()
+            ),
+        ));
     }
     gates
 }
@@ -142,19 +138,22 @@ pub fn nav_def(
     file: &str,
     problems: &mut Vec<Problem>,
 ) -> [Option<StellarId>; NAV_SLOTS] {
-    // In ID order: the tables iterate in id order, which numbered them.
-    let stellars: Vec<(i16, String)> = ids
+    // The tables iterate in bible id order, which pins can break, so sort
+    // each by ID.
+    let mut stellars: Vec<(i16, String)> = ids
         .stellars
         .iter()
         .filter(|(stellar, _)| galaxy.stellars[*stellar].data.system == *id)
         .map(|(stellar, &nova)| (nova, format!("`{stellar}`")))
         .collect();
-    let gates: Vec<(i16, String)> = ids
+    let mut gates: Vec<(i16, String)> = ids
         .gates
         .iter()
         .filter(|(point, _)| point.system() == *id)
         .map(|(point, &nova)| (nova, format!("`{point}`")))
         .collect();
+    stellars.sort_unstable();
+    gates.sort_unstable();
     let kept_gates = gates.len().min(NAV_SLOTS);
     let kept_stellars = stellars.len().min(NAV_SLOTS - kept_gates);
     let left_out: Vec<&str> = stellars[kept_stellars..]

@@ -7,8 +7,11 @@
 //! only.
 //!
 //! - **Numbering** ([`number_kits`]). The kits share
-//!   [`OUTFIT_IDS`] with the outfits, numbered after the last outfit's ID
-//!   in kit id order, so adding a kit renumbers no outfit.
+//!   [`OUTFIT_IDS`](super::ids::OUTFIT_IDS) with the outfits: a pinned kit
+//!   keeps its ID, and the unpinned ones are numbered after the highest
+//!   pinned outfit or kit and the unpinned outfits, in kit id order, so
+//!   adding a kit renumbers no outfit and adding an outfit no pinned kit
+//!   ([`super::ids`]).
 //! - **The `oütf`** ([`kit`], over [`neutral_outfit`]): its `name`;
 //!   `Cost` its `price`; massless; `Max` 1, fitted once; `BuyRandom` 100,
 //!   for sale every day; `Flags` [`HIDE_UNLESS_REQUIRED`], so a kit that
@@ -52,13 +55,14 @@
 //! - A kit past the last `oütf` ID is left out.
 
 use std::collections::BTreeMap;
+use std::ops::RangeInclusive;
 
 use nova_galaxy_format::fleet::{ModKit, Mount, Role, Yard};
 use nova_galaxy_format::id::Id;
 use nova_galaxy_format::load::{Doc, Galaxy, Problem};
 
 use super::fleet::{maneuver, saturated as word, spot};
-use super::ids::OUTFIT_IDS;
+use super::ids::allocate_pinned;
 use super::map::absent;
 use super::records::neutral_outfit;
 use crate::decode::Entry;
@@ -180,34 +184,24 @@ impl FitBits {
 }
 
 /// Numbers the kits of `galaxy` that have a fit bit in `fit`, in id
-/// order, within [`OUTFIT_IDS`] after `outfits`' last ID (128 with none),
-/// reporting each past its end.
+/// order: each `pins` names keeps its pin, and each other takes the next
+/// of `free`, the [`OUTFIT_IDS`](super::ids::OUTFIT_IDS) after the outfits' (see
+/// [`super::ids`]). Each `free` has no ID left for is reported.
 pub fn number_kits(
     galaxy: &Galaxy,
-    outfits: &BTreeMap<Id, i16>,
     fit: &FitBits,
+    pins: &BTreeMap<Id, i16>,
+    free: &mut RangeInclusive<i16>,
     problems: &mut Vec<Problem>,
 ) -> BTreeMap<Id, i16> {
-    let first = outfits
-        .values()
-        .max()
-        .map_or(*OUTFIT_IDS.start(), |last| last.saturating_add(1));
-    let last = *OUTFIT_IDS.end();
-    let mut next = first..=last;
-    let mut kits = BTreeMap::new();
-    for (id, doc) in &galaxy.mods {
-        if fit.required(id).is_none() {
-            continue;
-        }
-        match next.next() {
-            Some(nova) => {
-                kits.insert(id.clone(), nova);
-            }
-            None => problems.push(Problem::new(
-                &doc.path,
-                format!("it is past the last oütf ID, {last}; it is left out"),
-            )),
-        }
+    let last = *free.end();
+    let fitted = galaxy.mods.keys().filter(|id| fit.required(id).is_some());
+    let (kits, past) = allocate_pinned(fitted, pins, free);
+    for id in past {
+        problems.push(Problem::new(
+            &galaxy.mods[id].path,
+            format!("it is past the last oütf ID, {last}; it is left out"),
+        ));
     }
     kits
 }

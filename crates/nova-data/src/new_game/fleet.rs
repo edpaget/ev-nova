@@ -56,7 +56,7 @@ use nova_galaxy_format::id::Id;
 use nova_galaxy_format::load::{Doc, Galaxy, Problem};
 use nova_galaxy_format::model::Start;
 
-use super::ids::{CHARACTER_IDS, CIVILIAN_DUDE, IdTable, SHIP_IDS};
+use super::ids::{CHARACTER_IDS, CIVILIAN_DUDE, IdTable, SHIP_IDS, after_pins};
 use super::kits::FitBits;
 use super::map::{absent, number};
 use super::records::{neutral_character, neutral_dude, neutral_ship, neutral_ship_anim};
@@ -126,9 +126,14 @@ pub fn hulls(galaxy: &Galaxy) -> impl Iterator<Item = (&Id, &Doc<BibleShip>)> {
 }
 
 /// Numbers the ships of `galaxy` whose `base` chain resolves within
-/// [`SHIP_IDS`]; each whose chain loops or names a base that isn't there
+/// [`SHIP_IDS`], each `pins` names at its pin and the others after the
+/// highest pin ([`super::ids`]); each whose chain loops or names a base that isn't there
 /// is reported and left out, a base that failed to load unreported.
-pub fn number_ships(galaxy: &Galaxy, problems: &mut Vec<Problem>) -> BTreeMap<Id, i16> {
+pub fn number_ships(
+    galaxy: &Galaxy,
+    pins: &BTreeMap<Id, i16>,
+    problems: &mut Vec<Problem>,
+) -> BTreeMap<Id, i16> {
     let resolved: Vec<_> = galaxy
         .ships
         .iter()
@@ -156,7 +161,8 @@ pub fn number_ships(galaxy: &Galaxy, problems: &mut Vec<Problem>) -> BTreeMap<Id
             }
         })
         .collect();
-    number(resolved, SHIP_IDS, "shïp", problems)
+    let mut free = after_pins(SHIP_IDS, pins.values());
+    number(resolved, pins, &mut free, "shïp", problems)
 }
 
 /// `stat` as a record's word: none is 0, and one past `i16` the most.
@@ -470,15 +476,17 @@ pub fn ship_anim(
 /// hull.
 #[must_use]
 pub fn civilian_traffic(galaxy: &Galaxy, ships: &BTreeMap<Id, i16>) -> Option<Entry<AnyRecord>> {
-    let civilian: Vec<i16> = ships
+    let mut civilian: Vec<i16> = ships
         .iter()
         .filter(|(ship, _)| {
             hulls(galaxy)
                 .any(|(hull, doc)| hull == *ship && doc.data.style == Some(Style::Civilian))
         })
         .map(|(_, &nova)| nova)
-        .take(16)
         .collect();
+    // `ships` iterates in bible id order, which pins can break.
+    civilian.sort_unstable();
+    civilian.truncate(16);
     if civilian.is_empty() {
         return None;
     }
@@ -499,12 +507,15 @@ pub fn civilian_traffic(galaxy: &Galaxy, ships: &BTreeMap<Id, i16>) -> Option<En
 }
 
 /// The starts of `galaxy` whose ship is mapped, a hull or a variant, and
-/// whose system has a record, numbered within [`CHARACTER_IDS`]. Each other is reported
+/// whose system has a record, numbered within [`CHARACTER_IDS`], each
+/// `pins` names at its pin and the others after the highest pin, so a
+/// start added later never comes before a pinned one. Each other is reported
 /// and left out, but not for a file that failed to load or a record left
 /// out for its ID.
 pub fn number_starts(
     galaxy: &Galaxy,
     ids: &IdTable,
+    pins: &BTreeMap<Id, i16>,
     problems: &mut Vec<Problem>,
 ) -> BTreeMap<Id, i16> {
     let mapped: Vec<(&Id, &Doc<Start>)> = galaxy
@@ -533,7 +544,8 @@ pub fn number_starts(
             has_ship && has_system
         })
         .collect();
-    number(mapped, CHARACTER_IDS, "chär", problems)
+    let mut free = after_pins(CHARACTER_IDS, pins.values());
+    number(mapped, pins, &mut free, "chär", problems)
 }
 
 /// The `chär` of the start `doc`, numbered `nova` (see the module docs).

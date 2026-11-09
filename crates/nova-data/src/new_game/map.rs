@@ -15,7 +15,8 @@ use nova_galaxy_format::model::{Faction, Position, Stellar as BibleStellar};
 use super::fleet::{self, TRAFFIC_SHIPS};
 use super::gates;
 use super::ids::{
-    CIVILIAN_DUDE, DEFAULT_INTERFACE, GOVT_IDS, IdTable, STELLAR_IDS, SYSTEM_IDS, allocate,
+    CIVILIAN_DUDE, DEFAULT_INTERFACE, GOVT_IDS, IdTable, OUTFIT_IDS, STELLAR_IDS, SYSTEM_IDS,
+    after_pins, allocate_pinned,
 };
 use super::kits::{
     self, FitBits, LAW_SCAN_FINE, LAW_SMUGGLE_PENALTY, LAWLESS_KIT_SCAN, YARD_TECH_LAWLESS,
@@ -53,46 +54,20 @@ pub struct Mapped {
 /// starts, outfits and mod kits to `gövt`, `sÿst`, `spöb`, `dësc`, `shïp`,
 /// `shän`, `düde`, `chär`, `oütf` and `wëap` records, and their fittings,
 /// plus the placeholder `ïntf` status bar, which a flight frame always
-/// needs, so even an empty galaxy maps it.
+/// needs, so even an empty galaxy maps it. Nothing is pinned: see
+/// [`map_pinned`].
 #[must_use]
 pub fn map(galaxy: &Galaxy) -> Mapped {
+    map_pinned(galaxy, &IdTable::default())
+}
+
+/// [`map`], with each record `pins` names keeping its pinned ID, and each
+/// other numbered after the highest pin of its range
+/// ([`super::ids`]).
+#[must_use]
+pub fn map_pinned(galaxy: &Galaxy, pins: &IdTable) -> Mapped {
     let mut problems = Vec::new();
-    let factions = number(&galaxy.factions, GOVT_IDS, "gövt", &mut problems);
-    let systems = number(&galaxy.systems, SYSTEM_IDS, "sÿst", &mut problems);
-    let placed: BTreeMap<&Id, &Doc<BibleStellar>> = galaxy
-        .stellars
-        .iter()
-        .filter(|(_, doc)| {
-            let system = &doc.data.system;
-            let has_record = systems.contains_key(system);
-            if !has_record && absent(galaxy, &galaxy.systems, "systems", system) {
-                problems.push(Problem::new(
-                    &doc.path,
-                    format!("its system `{system}` is not in systems/; it is left out"),
-                ));
-            }
-            has_record
-        })
-        .collect();
-    let stellars = number(placed, STELLAR_IDS, "spöb", &mut problems);
-    let gates = gates::number(galaxy, &systems, &stellars, &mut problems);
-    let ships = fleet::number_ships(galaxy, &mut problems);
-    let outfits = outfits::number_outfits(galaxy, &mut problems);
-    let weapons = outfits::number_weapons(galaxy, &mut problems);
-    let fit = FitBits::of(galaxy, &mut problems);
-    let kits = kits::number_kits(galaxy, &outfits, &fit, &mut problems);
-    let mut ids = IdTable {
-        factions,
-        systems,
-        stellars,
-        gates,
-        ships,
-        starts: BTreeMap::new(),
-        outfits,
-        weapons,
-        kits,
-    };
-    ids.starts = fleet::number_starts(galaxy, &ids, &mut problems);
+    let (ids, fit) = number_all(galaxy, pins, &mut problems);
     let traffic = fleet::civilian_traffic(galaxy, &ids.ships);
     let mut records = Vec::new();
     for (id, &nova) in &ids.factions {
@@ -151,6 +126,61 @@ pub fn map(galaxy: &Galaxy) -> Mapped {
     }
 }
 
+/// Every record's ID under `pins`, and the kits' fit bits, which number
+/// them.
+fn number_all(galaxy: &Galaxy, pins: &IdTable, problems: &mut Vec<Problem>) -> (IdTable, FitBits) {
+    let mut free = after_pins(GOVT_IDS, pins.factions.values());
+    let factions = number(
+        &galaxy.factions,
+        &pins.factions,
+        &mut free,
+        "gövt",
+        problems,
+    );
+    let mut free = after_pins(SYSTEM_IDS, pins.systems.values());
+    let systems = number(&galaxy.systems, &pins.systems, &mut free, "sÿst", problems);
+    let placed: BTreeMap<&Id, &Doc<BibleStellar>> = galaxy
+        .stellars
+        .iter()
+        .filter(|(_, doc)| {
+            let system = &doc.data.system;
+            let has_record = systems.contains_key(system);
+            if !has_record && absent(galaxy, &galaxy.systems, "systems", system) {
+                problems.push(Problem::new(
+                    &doc.path,
+                    format!("its system `{system}` is not in systems/; it is left out"),
+                ));
+            }
+            has_record
+        })
+        .collect();
+    let mut free = after_pins(
+        STELLAR_IDS,
+        pins.stellars.values().chain(pins.gates.values()),
+    );
+    let stellars = number(placed, &pins.stellars, &mut free, "spöb", problems);
+    let gates = gates::number(galaxy, &systems, &pins.gates, &mut free, problems);
+    let ships = fleet::number_ships(galaxy, &pins.ships, problems);
+    let mut free = after_pins(OUTFIT_IDS, pins.outfits.values().chain(pins.kits.values()));
+    let outfits = outfits::number_outfits(galaxy, &pins.outfits, &mut free, problems);
+    let weapons = outfits::number_weapons(galaxy, &pins.weapons, problems);
+    let fit = FitBits::of(galaxy, problems);
+    let kits = kits::number_kits(galaxy, &fit, &pins.kits, &mut free, problems);
+    let mut ids = IdTable {
+        factions,
+        systems,
+        stellars,
+        gates,
+        ships,
+        starts: BTreeMap::new(),
+        outfits,
+        weapons,
+        kits,
+    };
+    ids.starts = fleet::number_starts(galaxy, &ids, &pins.starts, problems);
+    (ids, fit)
+}
+
 /// Pushes the `shïp`s and `shän`s of `ids`' ships, the `oütf`s and
 /// `wëap`s of its outfits and the `oütf`s of its kits onto `records`, and
 /// gives their fittings.
@@ -194,17 +224,19 @@ fn fittings(
     fittings
 }
 
-/// Numbers `docs` in id order from the start of `range`, reporting each
-/// past its end, as `what`, against its file.
+/// Numbers `docs` in id order: each `pins` names keeps its pin, and each
+/// other takes the next of `free`. Each `free` has no ID left for is
+/// reported, as `what`, against its file.
 pub(super) fn number<'a, T: 'a>(
     docs: impl IntoIterator<Item = (&'a Id, &'a Doc<T>)>,
-    range: RangeInclusive<i16>,
+    pins: &BTreeMap<Id, i16>,
+    free: &mut RangeInclusive<i16>,
     what: &str,
     problems: &mut Vec<Problem>,
 ) -> BTreeMap<Id, i16> {
-    let last = *range.end();
+    let last = *free.end();
     let docs: BTreeMap<&Id, &Doc<T>> = docs.into_iter().collect();
-    let (table, past) = allocate(docs.keys().copied(), range);
+    let (table, past) = allocate_pinned(docs.keys().copied(), pins, free);
     for id in past {
         problems.push(Problem::new(
             &docs[id].path,

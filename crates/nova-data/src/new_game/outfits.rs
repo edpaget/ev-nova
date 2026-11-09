@@ -1,7 +1,7 @@
 //! Outfits as `oütf`s: something a pilot can own, so a mission can grant
 //! and remove one ([`super::missions`]), and a weapon when it is one.
 //!
-//! Each outfit is numbered within [`OUTFIT_IDS`] ([`number_outfits`]) and
+//! Each outfit is numbered within [`OUTFIT_IDS`](super::ids::OUTFIT_IDS) ([`number_outfits`]) and
 //! maps to an `oütf` ([`outfit`], over [`neutral_outfit`]) with the
 //! outfit's `name` and its `price` as `Cost`. It weighs nothing, has no
 //! limit on how many are owned, and is never for sale: its `TechLevel` is
@@ -11,7 +11,8 @@
 //!
 //! **Weapons** ([`is_weapon`]). An outfit with `damage` above 0 and a
 //! `fixed`, `turret` or `launcher` mount is a weapon: it is numbered
-//! again within [`WEAPON_IDS`] ([`number_weapons`]), in outfit id order,
+//! again within [`WEAPON_IDS`] ([`number_weapons`]), in outfit id order
+//! and pinned by the outfit's id,
 //! and maps to a `wëap` ([`weapon`]) as well. Its `oütf`'s first
 //! `ModType` is [`MOD_WEAPON`] naming that `wëap`, and its `Flags`
 //! [`OUTFIT_GUN`] (fixed, launcher) or [`OUTFIT_TURRET`] (turret), so it
@@ -38,12 +39,13 @@
 //! does nothing.
 
 use std::collections::BTreeMap;
+use std::ops::RangeInclusive;
 
 use nova_galaxy_format::fleet::{Mount, Outfit as BibleOutfit};
 use nova_galaxy_format::id::Id;
 use nova_galaxy_format::load::{Doc, Galaxy, Problem};
 
-use super::ids::{OUTFIT_IDS, WEAPON_IDS};
+use super::ids::{WEAPON_IDS, after_pins};
 use super::map::number;
 use super::records::{neutral_outfit, neutral_weapon};
 use crate::decode::Entry;
@@ -77,9 +79,17 @@ pub const TICKS_PER_SECOND: f64 = 30.0;
 /// The `Guidance` of a turret that fires unguided shots.
 const TURRETED: i16 = 4;
 
-/// Numbers the outfits of `galaxy` within [`OUTFIT_IDS`].
-pub fn number_outfits(galaxy: &Galaxy, problems: &mut Vec<Problem>) -> BTreeMap<Id, i16> {
-    number(&galaxy.outfits, OUTFIT_IDS, "oütf", problems)
+/// Numbers the outfits of `galaxy` within
+/// [`OUTFIT_IDS`](super::ids::OUTFIT_IDS): each `pins`
+/// names at its pin, and each other from `free`, which the kits number on
+/// from after.
+pub fn number_outfits(
+    galaxy: &Galaxy,
+    pins: &BTreeMap<Id, i16>,
+    free: &mut RangeInclusive<i16>,
+    problems: &mut Vec<Problem>,
+) -> BTreeMap<Id, i16> {
+    number(&galaxy.outfits, pins, free, "oütf", problems)
 }
 
 /// Whether `outfit` is a weapon: it does damage from a `fixed`, `turret`
@@ -90,13 +100,19 @@ pub fn is_weapon(outfit: &BibleOutfit) -> bool {
 }
 
 /// Numbers the outfits of `galaxy` that are weapons within [`WEAPON_IDS`],
-/// in id order.
-pub fn number_weapons(galaxy: &Galaxy, problems: &mut Vec<Problem>) -> BTreeMap<Id, i16> {
+/// in id order, each `pins` names (by its outfit's id) at its pin and the
+/// others after the highest pin.
+pub fn number_weapons(
+    galaxy: &Galaxy,
+    pins: &BTreeMap<Id, i16>,
+    problems: &mut Vec<Problem>,
+) -> BTreeMap<Id, i16> {
     let weapons = galaxy
         .outfits
         .iter()
         .filter(|(_, doc)| is_weapon(&doc.data));
-    number(weapons, WEAPON_IDS, "wëap", problems)
+    let mut free = after_pins(WEAPON_IDS, pins.values());
+    number(weapons, pins, &mut free, "wëap", problems)
 }
 
 /// The `ExitType` a shot from a hardpoint of `mount` leaves from: 0 the

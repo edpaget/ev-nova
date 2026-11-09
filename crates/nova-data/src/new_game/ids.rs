@@ -1,29 +1,39 @@
 //! Nova IDs for the bible's ids: one pure allocation, per kind.
 //!
-//! Within a kind, records are numbered in id order (the order the loader's
-//! maps already give), counting up from 128, the first ID Nova gives
-//! data. Each kind has its range: [`GOVT_IDS`] for factions,
-//! [`SYSTEM_IDS`] and [`STELLAR_IDS`] for systems and stellars,
-//! [`SHIP_IDS`] for ships, [`OUTFIT_IDS`] for outfits, [`WEAPON_IDS`]
-//! for the outfits that are weapons and [`CHARACTER_IDS`] for starts. A
-//! record past its range's end gets no ID, and the caller leaves it out.
+//! Each kind has its range: [`GOVT_IDS`] for factions, [`SYSTEM_IDS`] and
+//! [`STELLAR_IDS`] for systems and stellars, [`SHIP_IDS`] for ships,
+//! [`OUTFIT_IDS`] for outfits, [`WEAPON_IDS`] for the outfits that are
+//! weapons and [`CHARACTER_IDS`] for starts. The one traffic `düde` is
+//! [`CIVILIAN_DUDE`] and the one `ïntf` [`DEFAULT_INTERFACE`]; neither
+//! depends on the data.
 //!
-//! The mod kits share [`OUTFIT_IDS`] with the outfits, numbered after the
-//! last outfit's ID in kit id order (`super::kits`), so adding a kit
-//! renumbers no outfit.
+//! # Pinning
 //!
-//! The jump points' gates share [`STELLAR_IDS`] with the stellars. They
-//! are numbered after the last stellar's ID, in (system id, point id)
-//! order, so adding a gate renumbers no stellar. The one traffic `düde`
-//! is [`CIVILIAN_DUDE`].
+//! A saved pilot holds its system, stellar, ship and escorts by Nova ID,
+//! so the IDs must not move as the data grows. The data folder's ID
+//! table, `nova-ids.json` ([`super::pins`]), pins them:
 //!
-//! Known limit: an ID depends on how many ids sort before it, so adding a
-//! file renumbers every record of its kind after it, and every gate after
-//! a new stellar. A start's `chär` means New Pilot saves new-game pilots,
-//! and a saved pilot holds its system, stellar and ship by ID, so a pilot
-//! saved before a data file was added can load into another system or
-//! ship. That is accepted while the sample is under development; pinning
-//! the IDs is the `new-game-id-pinning` task.
+//! - A record the table names keeps the ID it gives.
+//! - Every other record is numbered in its kind's id order (the order the
+//!   loader's maps give), from one above the highest ID the table holds in
+//!   its range, or from 128, the first ID Nova gives data, when it holds
+//!   none ([`after_pins`], [`allocate_pinned`]).
+//! - Two kinds share a range. The jump points' gates share
+//!   [`STELLAR_IDS`]: the unpinned stellars come first, then the unpinned
+//!   gates in (system id, point id) order. The mod kits share
+//!   [`OUTFIT_IDS`]: the unpinned outfits, then the unpinned kits in kit
+//!   id order. "The highest ID the table holds" counts both kinds' pins.
+//! - An entry whose record has left the folder is retired: it stays in
+//!   the table, so its ID, and every ID below the highest, is never handed
+//!   out again.
+//! - A record past its range's end gets no ID, and the caller leaves it
+//!   out.
+//!
+//! With no table, or an empty one, nothing is pinned: every kind numbers
+//! from 128, and the gates and kits come after the last stellar and
+//! outfit. Loading never writes the table; `nova-dump --pin-ids
+//! <GAME_DATA>` does, an authoring step to run whenever a record is
+//! added.
 
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
@@ -92,15 +102,43 @@ pub fn allocate<'a>(
     ids: impl IntoIterator<Item = &'a Id>,
     range: RangeInclusive<i16>,
 ) -> (BTreeMap<Id, i16>, Vec<&'a Id>) {
+    let mut free = range;
+    allocate_pinned(ids, &BTreeMap::new(), &mut free)
+}
+
+/// The IDs of `range` left for unpinned records: those above every one
+/// of `pinned`, which lie within it, or the whole range with none.
+#[must_use]
+pub fn after_pins<'a>(
+    range: RangeInclusive<i16>,
+    pinned: impl IntoIterator<Item = &'a i16>,
+) -> RangeInclusive<i16> {
+    let start = pinned
+        .into_iter()
+        .max()
+        .map_or(*range.start(), |&highest| highest + 1);
+    start..=*range.end()
+}
+
+/// Numbers `keys` in the order given: each `pins` names keeps its pin,
+/// and each other takes the next ID of `free`. The table of those
+/// numbered, and the unpinned ones `free` had no ID left for, in order.
+///
+/// Two kinds that share a range number from one `free` in turn, so the
+/// second's unpinned records come after the first's.
+pub fn allocate_pinned<'a, K: Ord + Clone + 'a>(
+    keys: impl IntoIterator<Item = &'a K>,
+    pins: &BTreeMap<K, i16>,
+    free: &mut RangeInclusive<i16>,
+) -> (BTreeMap<K, i16>, Vec<&'a K>) {
     let mut table = BTreeMap::new();
     let mut past = Vec::new();
-    let mut next = range;
-    for id in ids {
-        match next.next() {
+    for key in keys {
+        match pins.get(key).copied().or_else(|| free.next()) {
             Some(nova) => {
-                table.insert(id.clone(), nova);
+                table.insert(key.clone(), nova);
             }
-            None => past.push(id),
+            None => past.push(key),
         }
     }
     (table, past)
@@ -134,6 +172,65 @@ mod tests {
             [(id("a"), 128), (id("b"), 129)]
         );
         assert_eq!(past, [&id("c"), &id("d")]);
+    }
+
+    fn pins(entries: &[(&str, i16)]) -> BTreeMap<Id, i16> {
+        entries
+            .iter()
+            .map(|&(text, nova)| (id(text), nova))
+            .collect()
+    }
+
+    #[test]
+    fn a_pinned_id_keeps_its_id_whatever_its_sort_position() {
+        let pinned = pins(&[("zeta", 128)]);
+        let mut free = after_pins(SYSTEM_IDS, pinned.values());
+        let ids = [id("alpha"), id("zeta")];
+        let (table, past) = allocate_pinned(&ids, &pinned, &mut free);
+        assert_eq!(
+            table.into_iter().collect::<Vec<_>>(),
+            [(id("alpha"), 129), (id("zeta"), 128)]
+        );
+        assert!(past.is_empty());
+    }
+
+    #[test]
+    fn unpinned_ids_start_above_the_highest_pin_a_retired_one_included() {
+        let pinned = pins(&[("beta", 130), ("gone", 140)]);
+        let mut free = after_pins(SYSTEM_IDS, pinned.values());
+        let ids = [id("alpha"), id("beta"), id("gamma")];
+        let (table, _) = allocate_pinned(&ids, &pinned, &mut free);
+        assert_eq!(
+            table.into_iter().collect::<Vec<_>>(),
+            [(id("alpha"), 141), (id("beta"), 130), (id("gamma"), 142)],
+            "128, 129 and 131 to 139 are never handed out"
+        );
+    }
+
+    #[test]
+    fn no_pins_number_from_the_range_s_start() {
+        assert_eq!(after_pins(SYSTEM_IDS, &[]), SYSTEM_IDS);
+        assert_eq!(after_pins(128..=200, &[150, 140]), 151..=200);
+    }
+
+    #[test]
+    fn unpinned_ids_past_the_range_s_end_get_none_and_pinned_ones_keep_theirs() {
+        let pinned = pins(&[("b", 129)]);
+        let mut free = after_pins(128..=129, pinned.values());
+        let ids = [id("a"), id("b"), id("c")];
+        let (table, past) = allocate_pinned(&ids, &pinned, &mut free);
+        assert_eq!(table.into_iter().collect::<Vec<_>>(), [(id("b"), 129)]);
+        assert_eq!(past, [&id("a"), &id("c")]);
+    }
+
+    #[test]
+    fn a_shared_range_numbers_on_where_the_first_kind_stopped() {
+        let mut free = after_pins(128..=200, &[]);
+        let first = [id("a"), id("b")];
+        let second = [id("c")];
+        let (_, _) = allocate_pinned(&first, &BTreeMap::new(), &mut free);
+        let (table, _) = allocate_pinned(&second, &BTreeMap::new(), &mut free);
+        assert_eq!(table[&id("c")], 130);
     }
 
     #[test]

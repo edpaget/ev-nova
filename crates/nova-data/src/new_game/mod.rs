@@ -10,22 +10,25 @@
 //! # What maps to what
 //!
 //! Each record's resource name is the bible's `name`, and its ID comes
-//! from [`ids`]: within a kind, in id order, from 128. A field the bible
-//! has no word for is neutral ([`records`]: zero, blank, none, no flags).
+//! from [`ids`]: the ID the folder's table pins it at, or, unpinned,
+//! within a kind in id order after the highest pin of its range (from 128
+//! with none). A field the bible has no word for is neutral ([`records`]:
+//! zero, blank, none, no flags).
 //!
 //! | Bible | Record | Fields |
 //! |---|---|---|
+//! | `nova-ids.json` | every record's ID ([`pins`], [`ids`]) | the Nova ID each record keeps, by kind and bible id; written only by `nova-dump --pin-ids` |
 //! | `factions/` | `gövt` | `color` and `ship_color` from `color`, as `00RRGGBB`; one that keeps the law (not `lawless`) `SmugPenalty` [`kits::LAW_SMUGGLE_PENALTY`], `ScanFine` [`kits::LAW_SCAN_FINE`] and `ScanMask` [`kits::LAWLESS_KIT_SCAN`], placeholders, so its scans find a lawless kit; a lawless one none |
 //! | `systems/` | `sÿst` | `x_pos`/`y_pos` from `map`; `govt` from `government`; `nav_def` its stellars, then its gates, each in ID order; the civilian traffic; no `con` links |
 //! | `stellars/` | `spöb` | `x_pos`/`y_pos` from `position`; `govt` from `owner`; `flags` from `services` and `kind` ([`records::stellar_flags`]); no `hyper_link`s; a law-keeping owner's `TechLevel` [`kits::YARD_TECH_LEGAL`] and `MinStatus` 0, a lawless owner's or an unowned one's `TechLevel` [`kits::YARD_TECH_LAWLESS`] and `MinStatus` [`records::ANY_RECORD`] |
 //! | a stellar's body | `dësc` | the body, trimmed, at its `spöb`'s ID: the engine reads a stellar's landing text from the `dësc` with its `spöb`'s ID; an empty body has none |
-//! | a system's `jump_points` | hypergate `spöb` ([`gates`]) | numbered after the last stellar; `x_pos`/`y_pos` from `position`; `govt` from `owner`; `flags` `CAN_LAND`; `flags2` the hypergate bit; `hyper_link[0]` the partner point's gate; named for the partner's system; a random exit heading; `MinStatus` [`records::ANY_RECORD`] |
+//! | a system's `jump_points` | hypergate `spöb` ([`gates`]) | unpinned, numbered after the unpinned stellars; `x_pos`/`y_pos` from `position`; `govt` from `owner`; `flags` `CAN_LAND`; `flags2` the hypergate bit; `hyper_link[0]` the partner point's gate; named for the partner's system; a random exit heading; `MinStatus` [`records::ANY_RECORD`] |
 //! | `ships/`, hulls and variants | `shïp` and `shän` ([`fleet`]) | through the `base` chain: `speed`, `shields`, `hull` and `cargo` as `Speed`, `Shield`, `Armor` and `Holds`; placeholder acceleration, turn rate, fuel and crew; its kits as `DefaultItems`; its chain's hardpoints as `MaxGun` and `MaxTur`; its hardpoints' weapon outfits as stock weapons; the kit `fits` bits of its `role` as `Contribute`; the `shän` `BaseXSize`/`BaseYSize` from `size` and its hardpoints' and kits' as exit points |
 //! | (placeholder) | `düde` 128 ([`fleet`]) | "Civilian traffic": every civilian hull (no `base`, no `mods`) at even odds, wimpy traders of no government |
 //! | (placeholder) | `ïntf` 128 ([`records::default_interface`]) | "Default status bar": a radar over the shield, armour and fuel gauges and the nav, weapon, target and cargo readouts, no background picture |
 //! | `outfits/` | `oütf` ([`outfits`]) | its `name`, and `Cost` from `price`; massless, with no `Max` and never for sale (`TechLevel` 0x7fff); a weapon (`damage` above 0, not a `bay`) a `ModType` 1 naming its `wëap`, `Flags` gun or turret; any other doing nothing; `model` isn't read |
-//! | a weapon outfit | `wëap` ([`outfits`]) | numbered in outfit id order; `damage`, `range` and `reload` as damage, life and `Reload` at a placeholder speed; unguided, turreted for a turret; its mount's `ExitType`; drawn as the placeholder box, with no sound or explosion |
-//! | `mods/` | `oütf` ([`kits`]) | numbered after the outfits; `Cost` from `price`; `Max` 1, `BuyRandom` 100, hidden unless it fits; its effects in the four `ModType` slots; its `fits` as a `Require` bit; `fitted_at` as `TechLevel` and, lawless, `ScanMask`; its hardpoints' outfits given by `OnPurchase` and taken back by `OnSell` |
+//! | a weapon outfit | `wëap` ([`outfits`]) | pinned by, and numbered in, outfit id order; `damage`, `range` and `reload` as damage, life and `Reload` at a placeholder speed; unguided, turreted for a turret; its mount's `ExitType`; drawn as the placeholder box, with no sound or explosion |
+//! | `mods/` | `oütf` ([`kits`]) | unpinned, numbered after the unpinned outfits; `Cost` from `price`; `Max` 1, `BuyRandom` 100, hidden unless it fits; its effects in the four `ModType` slots; its `fits` as a `Require` bit; `fitted_at` as `TechLevel` and, lawless, `ScanMask`; its hardpoints' outfits given by `OnPurchase` and taken back by `OnSell` |
 //! | a ship's chain hardpoints, a kit's hardpoints and `attention` | the store's fittings ([`GameData::fittings`], [`fleet`], [`kits`]) | each `shïp`'s own exit spots and each kit `oütf`'s, and each kit's attention, which `nova_sim::dock_scan` reads |
 //! | `starts/` | `chär` ([`fleet`]) | its hull, its system in `system[0]`, its cash, and a placeholder date |
 //! | a hull's `model`, `livery` and `size` | a ship stand-in ([`looks`]) | its model seen from above, painted by its livery, in pixels at [`fleet::PX_PER_METRE`]; else its size box in its livery's primary, or bare |
@@ -81,6 +84,12 @@
 //!   it; one past the 64th distinct `fits` set is left out ([`kits`]).
 //! - A weapon past the last `wëap` ID does nothing ([`outfits`]).
 //! - A record past its kind's ID range is left out.
+//! - The ID table, `nova-ids.json` ([`pins`]): one that doesn't parse or
+//!   names an unknown kind is ignored whole, and every record is unpinned;
+//!   an entry with a malformed key, an ID outside its range, or an ID an
+//!   earlier entry of its range holds is ignored; and a table that leaves
+//!   out a mapped record says how many, names the first and says to run
+//!   `nova-dump --pin-ids`. A folder with no table is no problem.
 //! - A stellar's `dialog` whose compiled `dialog/<file>.ink.json` is
 //!   missing maps no conversation. One whose knot the story lacks does the
 //!   same once [`NewGame::check_dialogs`] has asked the dialog port
@@ -133,8 +142,8 @@
 //! - Commodity prices: a trade centre's price levels (the upper `Flags`
 //!   bits) stay unset, so it trades nothing until the bible prices goods.
 //!
-//! IDs aren't pinned: adding a data file renumbers what follows it, and a
-//! pilot saved before can load into another place ([`ids`]).
+//! The IDs are pinned by the folder's table, so adding a record moves no
+//! other record and a pilot saved before keeps its place ([`ids`]).
 
 pub mod dialogs;
 #[cfg(any(test, feature = "fixture"))]
@@ -147,6 +156,7 @@ pub mod looks;
 mod map;
 pub mod missions;
 pub mod outfits;
+pub mod pins;
 pub mod records;
 #[cfg(test)]
 mod tests;
@@ -160,7 +170,7 @@ use nova_galaxy_format::source::{DirSource, Source};
 pub use nova_galaxy_format::load::Problem;
 
 pub use self::ids::IdTable;
-pub use self::map::{Mapped, map};
+pub use self::map::{Mapped, map, map_pinned};
 use crate::store::GameData;
 
 /// A new game's data, loaded and mapped.
@@ -205,10 +215,13 @@ pub fn open(dir: &Path) -> Result<NewGame, ListError> {
 }
 
 /// Loads the new game's data from `source`, read from the folder `dir`:
-/// the format's loader, the LFS check over its media, the mapping, then
-/// the stand-ins ([`looks`]), whose models are read from `source` too.
+/// the format's loader, the ID table ([`pins`]), the LFS check over its
+/// media, the mapping under the table's pins, then the stand-ins
+/// ([`looks`]), whose models are read from `source` too. It never writes
+/// the table.
 pub fn load(source: &impl Source, dir: &Path) -> NewGame {
     let (galaxy, mut problems) = nova_galaxy_format::load::load(source);
+    let pins = pins::read(source, &mut problems);
     let lfs_pointers = lfs_pointers(&galaxy, source)
         .into_iter()
         .map(str::to_owned)
@@ -218,8 +231,9 @@ pub fn load(source: &impl Source, dir: &Path) -> NewGame {
         ids,
         problems: mapping,
         fittings,
-    } = map(&galaxy);
+    } = map_pinned(&galaxy, pins.as_ref().unwrap_or(&IdTable::default()));
     problems.extend(mapping);
+    problems.extend(pins.and_then(|pins| pins::unpinned(&pins, &ids, dir)));
     let stand_ins = looks::stand_ins(&galaxy, &ids, source, &mut problems);
     let compiled = dialogs::compiled(&galaxy, source, &mut problems);
     let dialogs = dialogs::read(&galaxy, &ids, &compiled, &mut problems);
