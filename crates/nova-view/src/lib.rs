@@ -99,6 +99,7 @@ pub mod movie;
 pub mod movie_frame;
 pub mod navigator;
 pub mod outline;
+pub(crate) mod outline_data;
 pub mod oval;
 pub mod preferences;
 pub mod scaling;

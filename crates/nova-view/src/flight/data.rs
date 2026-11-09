@@ -32,7 +32,8 @@ use super::escorts::{EscortMenuColors, EscortMenuLooks};
 use crate::color::Color;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
-use crate::outline::{Outline, OutlineTriangle};
+use crate::outline::Outline;
+use crate::outline_data::{self, opaque};
 use crate::sheet_image::SheetImage;
 
 /// Scans the sheet and its layers on every call, reading their sizes,
@@ -84,30 +85,9 @@ impl ShipSprites for GameData {
     /// has stand-ins), in the view's points and colours.
     fn ship_outline(&self, id: ShipId) -> Option<Outline> {
         match self.stand_in(StandInOf::Ship(id))? {
-            StandIn::Outline(outline) => Some(view_outline(outline)),
+            StandIn::Outline(outline) => Some(outline_data::outline(outline)),
             StandIn::Disc { .. } | StandIn::Ring { .. } => None,
         }
-    }
-}
-
-/// `outline`, as the data draws it (`f64` corners, RGB bytes), in the
-/// view's points and opaque colours.
-pub(crate) fn view_outline(outline: &nova_data::Outline) -> Outline {
-    // A pixel's place in an `f32`: what the view draws in.
-    #[allow(clippy::cast_possible_truncation)]
-    let point = |[x, y]: [f64; 2]| Point::new(x as f32, y as f32);
-    Outline {
-        triangles: outline
-            .triangles
-            .iter()
-            .map(|triangle| {
-                let [r, g, b] = triangle.color;
-                OutlineTriangle {
-                    corners: triangle.corners.map(point),
-                    color: Color::rgba(r, g, b, 255),
-                }
-            })
-            .collect(),
     }
 }
 
@@ -346,7 +326,7 @@ impl CombatLooks for GameData {
                 .iter()
                 .map(|dot| StarDot {
                     side: dot.side,
-                    color: Color::rgba(dot.grey, dot.grey, dot.grey, 255),
+                    color: opaque([dot.grey; 3]),
                 })
                 .collect(),
         )
@@ -446,6 +426,8 @@ impl EscortMenuLooks for GameData {
 mod tests {
 
     use nova_data::Record;
+
+    use crate::outline::OutlineTriangle;
     use nova_data::graphics::fixture::{Cicn, Ctab, DirectBits, PictBuilder, RledBuilder};
     use nova_data::graphics::{PICT, RLED};
     use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
