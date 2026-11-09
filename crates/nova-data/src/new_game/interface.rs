@@ -116,11 +116,10 @@ fn dialog(
     id: i16,
     title: &str,
     (width, height): (i16, i16),
-    items: impl FnOnce(&Place) -> Vec<DialogItem>,
+    items: Vec<DialogItem>,
 ) -> (i16, DefaultDialog) {
     let left = (VIEW.0 - width) / 2;
     let top = (VIEW.1 - height) / 2;
-    let place = Place { height };
     (
         id,
         DefaultDialog {
@@ -139,21 +138,15 @@ fn dialog(
                 title: MacString::from(title),
                 position: Some(CENTRED),
             },
-            items: items(&place),
+            items,
         },
     )
 }
 
-/// Where a dialog `height` tall parks its unused items.
-struct Place {
-    height: i16,
-}
-
-impl Place {
-    /// An unused item, parked below the dialog.
-    fn parked(&self) -> DialogItem {
-        item(at(0, self.height + 20, 10, 10), false, ItemKind::User)
-    }
+/// An unused item, parked below the dialog: at the foot of the view,
+/// which no dialog reaches below.
+fn parked() -> DialogItem {
+    item(at(0, VIEW.1, 10, 10), false, ItemKind::User)
 }
 
 /// The box at (`x`, `y`), `w` x `h`, in a dialog's own coordinates.
@@ -207,10 +200,13 @@ fn static_text(x: i16, y: i16, w: i16, h: i16, text: &str) -> DialogItem {
 /// (11), Mission BBS (10) and Trade Center (7) on the left, Shipyard (9),
 /// Outfitter (8), Recharge (4) and Leave (12) on the right.
 fn spaceport() -> (i16, DefaultDialog) {
-    dialog(1000, "Default spaceport", (618, 472), |p| {
+    dialog(
+        1000,
+        "Default spaceport",
+        (618, 472),
         vec![
-            p.parked(),
-            p.parked(),
+            parked(),
+            parked(),
             area(159, 252, 303, 18),
             user(471, 370, 145, 25),
             user(3, 3, 612, 240),
@@ -221,35 +217,49 @@ fn spaceport() -> (i16, DefaultDialog) {
             user(3, 329, 145, 25),
             user(3, 288, 145, 25),
             user(471, 411, 145, 25),
-        ]
-    })
+        ],
+    )
 }
 
 /// The Trade Center: Done (1), the header (3), eight rows (4-11), the
 /// summary (12), Buy (13), Sell (14) and the event line (15).
 fn trade_center() -> (i16, DefaultDialog) {
-    dialog(1001, "Default trade center", (426, 252), |p| {
-        let mut items = vec![user(272, 221, 99, 25), p.parked(), area(38, 9, 352, 17)];
-        items.extend((0..8).map(|row| user(38, 25 + 13 * row, 352, 13)));
-        items.extend([
+    dialog(
+        1001,
+        "Default trade center",
+        (426, 252),
+        vec![
+            user(272, 221, 99, 25),
+            parked(),
+            area(38, 9, 352, 16),
+            user(38, 25, 352, 13),
+            user(38, 38, 352, 13),
+            user(38, 51, 352, 13),
+            user(38, 64, 352, 13),
+            user(38, 77, 352, 13),
+            user(38, 90, 352, 13),
+            user(38, 103, 352, 13),
+            user(38, 116, 352, 13),
             area(38, 132, 352, 56),
             user(60, 221, 99, 25),
             user(166, 221, 99, 25),
             area(41, 192, 346, 24),
-        ]);
-        items
-    })
+        ],
+    )
 }
 
 /// The outfitter: the grid (5) and its arrows (10, 11) on the left, the
 /// description (6) over the picture (8) and the info box (9) on the
 /// right, and Buy (7), Sell (4) and Done (1) along the bottom.
 fn outfitter() -> (i16, DefaultDialog) {
-    dialog(1002, "Default outfitter", (640, 321), |p| {
+    dialog(
+        1002,
+        "Default outfitter",
+        (640, 321),
         vec![
             user(528, 289, 99, 25),
-            p.parked(),
-            p.parked(),
+            parked(),
+            parked(),
             user(422, 289, 99, 25),
             user(9, 8, 333, 271),
             area(352, 8, 279, 140),
@@ -258,180 +268,223 @@ fn outfitter() -> (i16, DefaultDialog) {
             area(490, 156, 141, 123),
             user(148, 288, 25, 25),
             user(178, 288, 25, 25),
-        ]
-    })
+        ],
+    )
 }
 
 /// The shipyard: as the outfitter, with Info (10), Buy Ship (1) and Done
 /// (7) along the bottom and the grid's arrows at 12 and 13.
 fn shipyard() -> (i16, DefaultDialog) {
-    dialog(1004, "Default shipyard", (640, 323), |p| {
+    dialog(
+        1004,
+        "Default shipyard",
+        (640, 323),
         vec![
             user(422, 289, 99, 25),
-            p.parked(),
-            p.parked(),
-            p.parked(),
+            parked(),
+            parked(),
+            parked(),
             user(9, 8, 333, 271),
             area(352, 8, 279, 140),
             user(528, 289, 99, 25),
             area(352, 156, 130, 123),
             area(490, 156, 141, 123),
             user(316, 289, 99, 25),
-            p.parked(),
+            parked(),
             user(141, 288, 25, 25),
             user(171, 288, 25, 25),
-        ]
-    })
+        ],
+    )
 }
 
 /// The shipyard's info panel: Done (1), the title (3) and the text (5).
 fn ship_info() -> (i16, DefaultDialog) {
-    dialog(1005, "Default ship info", (250, 285), |p| {
+    dialog(
+        1005,
+        "Default ship info",
+        (250, 285),
         vec![
             user(86, 253, 74, 25),
-            p.parked(),
+            parked(),
             area(3, 3, 240, 24),
-            p.parked(),
+            parked(),
             area(9, 32, 234, 214),
-        ]
-    })
+        ],
+    )
 }
 
 /// The mission computer: Accept (1), the list (2) and its bar (3), the
 /// text (4), the mission's name (5), Leave (7), the heading (8) and the
 /// date (11).
 fn mission_computer() -> (i16, DefaultDialog) {
-    dialog(1006, "Default mission computer", (510, 201), |p| {
+    dialog(
+        1006,
+        "Default mission computer",
+        (510, 201),
         vec![
             user(266, 170, 99, 25),
             user(10, 30, 195, 144),
             user(205, 30, 15, 144),
             area(233, 60, 267, 93),
             area(233, 34, 269, 21),
-            p.parked(),
+            parked(),
             user(368, 170, 99, 25),
             area(14, 3, 290, 15),
-            p.parked(),
-            p.parked(),
+            parked(),
+            parked(),
             area(311, 3, 187, 15),
-        ]
-    })
+        ],
+    )
 }
 
 /// The missions log: Done (1), the list (2), the heading (3), the text
 /// (4), Abort (5) and the date (7).
 fn missions_log() -> (i16, DefaultDialog) {
-    dialog(1012, "Default missions log", (471, 155), |p| {
+    dialog(
+        1012,
+        "Default missions log",
+        (471, 155),
         vec![
             user(290, 125, 99, 25),
             user(9, 24, 195, 84),
             user(13, 4, 193, 14),
             area(218, 26, 242, 91),
             user(57, 125, 99, 25),
-            p.parked(),
+            parked(),
             area(343, 4, 122, 14),
-        ]
-    })
+        ],
+    )
 }
 
 /// The bar: Leave (1), Gamble (2), Holovid (3), Hire Escort (5) and the
 /// text (7).
 fn bar() -> (i16, DefaultDialog) {
-    dialog(1013, "Default bar", (263, 185), |p| {
+    dialog(
+        1013,
+        "Default bar",
+        (263, 185),
         vec![
             area(156, 154, 99, 26),
             area(156, 125, 99, 26),
             area(6, 154, 146, 26),
-            p.parked(),
+            parked(),
             area(6, 125, 146, 26),
-            p.parked(),
+            parked(),
             area(16, 10, 230, 106),
-        ]
-    })
+        ],
+    )
 }
 
 /// The news: the window alone, which the news draws itself.
 fn news() -> (i16, DefaultDialog) {
-    dialog(1014, "Default news", (300, 230), |_| Vec::new())
+    dialog(1014, "Default news", (300, 230), Vec::new())
 }
 
 /// A mission's offer: Accept (1), Refuse (2), the text (3), OK (6) and
 /// the text's arrows (9, 10).
 fn mission_offer() -> (i16, DefaultDialog) {
-    dialog(1016, "Default mission offer", (441, 317), |p| {
+    dialog(
+        1016,
+        "Default mission offer",
+        (441, 317),
         vec![
             area(225, 285, 99, 25),
             area(117, 285, 99, 25),
             area(12, 9, 415, 267),
-            p.parked(),
-            p.parked(),
+            parked(),
+            parked(),
             area(173, 285, 99, 25),
-            p.parked(),
-            p.parked(),
+            parked(),
+            parked(),
             area(340, 287, 23, 23),
             area(373, 287, 23, 23),
-        ]
-    })
+        ],
+    )
 }
 
 /// The player info: Done (1), four tabs (2-5), the content (6) and
 /// Jettison (7).
 fn player_info() -> (i16, DefaultDialog) {
-    dialog(1017, "Default player info", (413, 227), |_| {
-        let mut items = vec![user(293, 195, 99, 25)];
-        items.extend((0..4).map(|tab| user(7 + 100 * tab, 8, 99, 25)));
-        items.extend([area(4, 40, 405, 141), user(60, 195, 150, 25)]);
-        items
-    })
+    dialog(
+        1017,
+        "Default player info",
+        (413, 227),
+        vec![
+            user(293, 195, 99, 25),
+            user(7, 8, 99, 25),
+            user(107, 8, 99, 25),
+            user(207, 8, 99, 25),
+            user(307, 8, 99, 25),
+            area(4, 40, 405, 141),
+            user(60, 195, 150, 25),
+        ],
+    )
 }
 
 /// The race: Leave (1), Help (2) and the four racers (3-6).
 fn race() -> (i16, DefaultDialog) {
-    dialog(1023, "Default race", (470, 230), |_| {
-        let mut items = vec![area(243, 196, 99, 25), area(129, 196, 99, 25)];
-        items.extend((0..4).map(|racer| area(13 + 115 * racer, 88, 100, 100)));
-        items
-    })
+    dialog(
+        1023,
+        "Default race",
+        (470, 230),
+        vec![
+            area(243, 196, 99, 25),
+            area(129, 196, 99, 25),
+            area(13, 88, 100, 100),
+            area(128, 88, 100, 100),
+            area(243, 88, 100, 100),
+            area(358, 88, 100, 100),
+        ],
+    )
 }
 
 /// A note: OK (1) and the text (3), the icon's place (4) left empty.
 fn note() -> (i16, DefaultDialog) {
-    dialog(3000, "Default note", (357, 150), |p| {
+    dialog(
+        3000,
+        "Default note",
+        (357, 150),
         vec![
             button(282, 118, 70, 20, "OK"),
-            p.parked(),
+            parked(),
             static_text(52, 5, 295, 99, ""),
             area(7, 5, 32, 32),
-        ]
-    })
+        ],
+    )
 }
 
 /// A yes-or-no question: OK (1), the question (3), the icon's place (4)
 /// left empty, and Cancel (5).
 fn question() -> (i16, DefaultDialog) {
-    dialog(3002, "Default question", (355, 109), |p| {
+    dialog(
+        3002,
+        "Default question",
+        (355, 109),
         vec![
             button(263, 75, 70, 20, "OK"),
-            p.parked(),
+            parked(),
             static_text(52, 5, 295, 50, ""),
             area(7, 5, 32, 32),
             button(181, 75, 70, 20, "Cancel"),
-        ]
-    })
+        ],
+    )
 }
 
 /// A text: Done (1), the text (3) and its arrows (5, 6).
 fn text_dialog() -> (i16, DefaultDialog) {
-    dialog(3003, "Default text", (441, 313), |p| {
+    dialog(
+        3003,
+        "Default text",
+        (441, 313),
         vec![
             user(173, 281, 99, 25),
-            p.parked(),
+            parked(),
             area(11, 10, 417, 262),
-            p.parked(),
+            parked(),
             area(330, 282, 23, 23),
             area(363, 282, 23, 23),
-        ]
-    })
+        ],
+    )
 }
 
 /// The preferences: OK (1) and Key Settings (16); the effects toggles
@@ -441,7 +494,10 @@ fn text_dialog() -> (i16, DefaultDialog) {
 /// (4), value (5) and arrows (7 up, 6 down) under them, the music
 /// volume's place (3) below that.
 fn preferences() -> (i16, DefaultDialog) {
-    dialog(4003, "Default preferences", (336, 278), |p| {
+    dialog(
+        4003,
+        "Default preferences",
+        (336, 278),
         vec![
             button(225, 245, 70, 20, "OK"),
             check(171, 55, 154, 18, "Scaling"),
@@ -459,13 +515,13 @@ fn preferences() -> (i16, DefaultDialog) {
             check(11, 77, 154, 18, "Running Lights"),
             check(11, 99, 154, 18, "Weapon Effects"),
             button(49, 245, 135, 20, "Key Settings"),
-            p.parked(),
+            parked(),
             check(11, 143, 154, 18, "Parallax Starfield"),
-            p.parked(),
+            parked(),
             check(171, 121, 136, 18, "Sound"),
             check(171, 143, 154, 18, "Hyperspace Effects"),
-        ]
-    })
+        ],
+    )
 }
 
 #[cfg(test)]
@@ -506,6 +562,42 @@ mod tests {
             assert!(width > 0 && height > 0, "{id}: {bounds:?}");
             assert!(inside(bounds, VIEW.0, VIEW.1), "{id}: {bounds:?}");
             assert_eq!(dialog.dlog.position, Some(CENTRED), "{id}");
+        }
+    }
+
+    #[test]
+    fn every_default_sits_in_the_middle_of_the_view() {
+        for (id, dialog) in default_dialogs().iter() {
+            let r = dialog.dlog.bounds;
+            let across = (r.left - (VIEW.0 - r.right)).abs();
+            let down = (r.top - (VIEW.1 - r.bottom)).abs();
+            assert!(across <= 1 && down <= 1, "{id}: {r:?}");
+        }
+    }
+
+    /// Items that share a place because a dialog shows one or the other:
+    /// the offer's lone button (6) stands where Accept (1) and Refuse (2)
+    /// do, for an offer that can't be refused.
+    const ALTERNATIVES: [(i16, usize, usize); 2] = [(1016, 1, 6), (1016, 2, 6)];
+
+    #[test]
+    fn no_two_items_a_dialog_shows_overlap() {
+        for (id, dialog) in default_dialogs().iter() {
+            let (width, height) = size(&dialog.dlog);
+            let shown: Vec<(usize, Rect)> = (1..)
+                .zip(dialog.items.iter().map(|item| item.bounds))
+                .filter(|(_, r)| inside(*r, width, height))
+                .collect();
+            for (i, (n, a)) in shown.iter().enumerate() {
+                for (m, b) in &shown[i + 1..] {
+                    let apart = a.bottom <= b.top
+                        || b.bottom <= a.top
+                        || a.right <= b.left
+                        || b.right <= a.left;
+                    let alternatives = ALTERNATIVES.contains(&(id, *n, *m));
+                    assert!(apart || alternatives, "{id}: items {n} and {m} overlap");
+                }
+            }
         }
     }
 
