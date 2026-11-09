@@ -623,6 +623,10 @@ mod tests {
     /// `nova_view::flight::hud::CARGO_CREDITS_VALUE_BASELINE`.
     const CARGO_DEEPEST: i16 = 82;
 
+    /// A cheap sanity check against hand-copied nova-view baselines, which
+    /// go stale if nova-view moves one. The authoritative check is the
+    /// wiring test over nova-view's real drawing,
+    /// `nova`'s `sample_status_bar::the_sample_draws_every_readout_inside_its_area`.
     #[test]
     fn every_default_readout_area_holds_its_readout() {
         let intf = default_interface();

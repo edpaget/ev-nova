@@ -171,3 +171,52 @@ fn the_sample_draws_its_status_bar_and_radar() {
         .collect();
     assert_eq!(unavailable, Vec::<&String>::new());
 }
+
+/// Every text the bar draws (every text right of the bar's origin) lies,
+/// its first line's top-left corner and its height, inside one of the nav,
+/// weapon, target and cargo areas as placed, and inside the view. Read
+/// against nova-view's real drawing, so it holds whatever baselines
+/// nova-view picks; it catches an area too short for its readout.
+#[test]
+fn the_sample_draws_every_readout_inside_its_area() {
+    let store = MemoryPilots::new();
+    let game = flying_the_sample(&store);
+    let view = game.app.screen().flight_view().expect("flying");
+    let bar = view.status_bar().expect("a status bar");
+    let (width, height) = view.view_size();
+    let origin = bar_origin(bar, width);
+    let layout = &bar.layout;
+    let areas = [
+        ("nav", layout.nav),
+        ("weapon", layout.weap),
+        ("target", layout.targ),
+        ("cargo", layout.cargo),
+    ]
+    .map(|(what, area)| (what, area.offset(origin)));
+    let mut list = DrawList::new();
+    view.draw(&mut list);
+
+    let texts: Vec<(&String, Point, f32)> = list
+        .iter()
+        .filter_map(|command| match command {
+            DrawCommand::Text {
+                text,
+                origin: at,
+                size,
+                ..
+            } if at.x >= origin.x => Some((text, *at, *size)),
+            _ => None,
+        })
+        .collect();
+    assert!(!texts.is_empty(), "the bar draws its readouts");
+    for &(text, at, size) in &texts {
+        let bottom = Point::new(at.x, at.y + size);
+        assert!(
+            areas
+                .iter()
+                .any(|&(_, area)| inside(area, at) && inside(area, bottom)),
+            "{text:?} at {at:?} (size {size}) lies outside every area: {areas:?}"
+        );
+        assert!(bottom.y <= height, "{text:?} at {at:?} below the view");
+    }
+}
