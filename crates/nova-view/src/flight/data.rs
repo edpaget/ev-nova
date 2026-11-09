@@ -32,7 +32,7 @@ use super::catalog::{
 use super::escorts::{EscortMenuColors, EscortMenuLooks};
 use crate::color::Color;
 use crate::font::Font;
-use crate::geometry::{Bounds, Point};
+use crate::geometry::Bounds;
 use crate::outline::Outline;
 use crate::outline_data::{self, opaque};
 use crate::sheet_image::SheetImage;
@@ -152,14 +152,14 @@ impl StatusBars for GameData {
             None => return Err(format!("no ïntf {id}")),
         };
         Ok(StatusBarLayout {
-            radar: bounds(intf.radar_area),
-            shield: bounds(intf.shield_area),
-            armor: bounds(intf.armor_area),
-            fuel: bounds(intf.fuel_area),
-            nav: bounds(intf.nav_area),
-            weap: bounds(intf.weap_area),
-            targ: bounds(intf.targ_area),
-            cargo: bounds(intf.cargo_area),
+            radar: Bounds::from(intf.radar_area),
+            shield: Bounds::from(intf.shield_area),
+            armor: Bounds::from(intf.armor_area),
+            fuel: Bounds::from(intf.fuel_area),
+            nav: Bounds::from(intf.nav_area),
+            weap: Bounds::from(intf.weap_area),
+            targ: Bounds::from(intf.targ_area),
+            cargo: Bounds::from(intf.cargo_area),
             bright_text: Color::from_rgb24(intf.bright_text),
             dim_text: Color::from_rgb24(intf.dim_text),
             bright_radar: Color::from_rgb24(intf.bright_radar),
@@ -417,13 +417,6 @@ fn offset_sound(first: i16, index: i16) -> Option<SoundId> {
     (index >= 0).then(|| SoundId(first.saturating_add(index)))
 }
 
-fn bounds(rect: nova_data::Rect) -> Bounds {
-    Bounds {
-        min: Point::new(f32::from(rect.left), f32::from(rect.top)),
-        max: Point::new(f32::from(rect.right), f32::from(rect.bottom)),
-    }
-}
-
 /// The `cölr` the escort menu's colours come from.
 const COLORS_ID: i16 = 128;
 
@@ -458,6 +451,7 @@ mod tests {
     use nova_rsrc::fixture::ForkBuilder;
 
     use super::*;
+    use crate::geometry::Point;
 
     fn store(resources: &[(ResType, i16, Vec<u8>)]) -> GameData {
         let fork = resources
