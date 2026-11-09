@@ -260,6 +260,8 @@
 
 use std::collections::BTreeMap;
 
+use nova_data::records::stellar;
+
 use crate::catalog::{
     CommodityStrings, DisasterId, DisasterRecord, JunkId, JunkRecord, PilotCatalog, StellarId,
     StringPatch,
@@ -452,17 +454,18 @@ pub struct Commodity {
 /// when the stellar does not trade it (or there is no such commodity).
 /// A nibble with several bits takes the lowest level it names, as
 /// `_CalcPortDemand` tests low, then medium, then high (@0x56b1-0x5794).
+/// The bits are nova-data's ([`stellar::flags::price_bits`]).
 #[must_use]
 pub fn price_level(flags: u32, commodity: u8) -> Option<PriceLevel> {
     if commodity >= COMMODITIES {
         return None;
     }
-    let nibble = (flags >> (28 - 4 * u32::from(commodity))) & 0xF;
-    if nibble & 1 != 0 {
+    let nibble = (flags >> stellar::flags::price_shift(commodity)) & 0xF;
+    if nibble & stellar::flags::LOW_PRICE != 0 {
         Some(PriceLevel::Low)
-    } else if nibble & 2 != 0 {
+    } else if nibble & stellar::flags::MEDIUM_PRICE != 0 {
         Some(PriceLevel::Medium)
-    } else if nibble & 4 != 0 {
+    } else if nibble & stellar::flags::HIGH_PRICE != 0 {
         Some(PriceLevel::High)
     } else {
         None

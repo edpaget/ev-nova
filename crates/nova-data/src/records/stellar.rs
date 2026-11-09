@@ -119,9 +119,10 @@ impl Record for Stellar {
     const SIZE: Option<usize> = Some(1118);
 }
 
-/// The Bible's service bits of [`Stellar::flags`], the one place they are
-/// spelled out: the new game's mapping sets them, and
-/// `nova_sim_state::StellarFlags` reads them for landing.
+/// The Bible's service bits of [`Stellar::flags`] and its price levels,
+/// the one place they are spelled out: the new game's mapping sets them,
+/// `nova_sim_state::StellarFlags` reads the service bits for landing and
+/// `nova_sim_state::market::price_level` the price levels.
 pub mod flags {
     /// Can land or dock here.
     pub const CAN_LAND: u32 = 0x01;
@@ -140,6 +141,30 @@ pub mod flags {
     pub const BAR: u32 = 0x40;
     /// Can be landed on only once it has been destroyed.
     pub const ONLY_WHEN_DESTROYED: u32 = 0x80;
+
+    /// A commodity's price-level bit for low, in its nibble
+    /// ([`price_bits`]).
+    pub const LOW_PRICE: u32 = 1;
+    /// A commodity's price-level bit for medium, in its nibble.
+    pub const MEDIUM_PRICE: u32 = 2;
+    /// A commodity's price-level bit for high, in its nibble.
+    pub const HIGH_PRICE: u32 = 4;
+
+    /// The shift of standard commodity `commodity`'s price-level nibble:
+    /// food (0) at bit 28 down to equipment (5) at bit 8. A stellar with
+    /// the trade-centre bit trades the commodity whose nibble is set.
+    #[must_use]
+    pub const fn price_shift(commodity: u8) -> u32 {
+        28 - 4 * commodity as u32
+    }
+
+    /// The bits of `flags` that price standard commodity `commodity`
+    /// (0 food to 5 equipment) at `level_bit` ([`LOW_PRICE`],
+    /// [`MEDIUM_PRICE`] or [`HIGH_PRICE`]).
+    #[must_use]
+    pub const fn price_bits(commodity: u8, level_bit: u32) -> u32 {
+        level_bit << price_shift(commodity)
+    }
 }
 
 /// The Bible's gate bits of [`Stellar::flags2`], the one place they are
@@ -177,6 +202,21 @@ mod tests {
             ],
             [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80]
         );
+    }
+
+    #[test]
+    fn the_price_bits_are_the_bibles() {
+        use flags::{HIGH_PRICE, LOW_PRICE, MEDIUM_PRICE, price_bits};
+        assert_eq!([LOW_PRICE, MEDIUM_PRICE, HIGH_PRICE], [1, 2, 4]);
+        assert_eq!(price_bits(0, LOW_PRICE), 0x1000_0000, "food low");
+        assert_eq!(price_bits(0, HIGH_PRICE), 0x4000_0000, "food high");
+        assert_eq!(
+            price_bits(1, MEDIUM_PRICE),
+            0x0200_0000,
+            "industrial medium"
+        );
+        assert_eq!(price_bits(5, HIGH_PRICE), 0x0000_0400, "equipment high");
+        assert_eq!(price_bits(5, LOW_PRICE), 0x0000_0100, "equipment low");
     }
 
     #[test]
