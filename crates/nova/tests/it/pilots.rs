@@ -53,6 +53,7 @@ use nova_view::geometry::Point;
 use nova_view::menu::MenuChoice;
 use nova_view::menu::fixture::main_screen_resources;
 use nova_view::spaceport::SpaceportView;
+use nova_view::ui::DialogResources;
 use nova_view::{MenuCommand, MouseButton};
 use winit::event::ElementState;
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -471,7 +472,7 @@ impl Harness {
     ) -> Self {
         Self::assembled_with(
             data,
-            interface(),
+            Some(Rc::new(interface())),
             store,
             AudioSettings::default(),
             true,
@@ -518,7 +519,33 @@ impl Harness {
     ) -> Self {
         let mut harness = Self::assembled_with(
             data,
-            interface(),
+            Some(Rc::new(interface())),
+            store,
+            AudioSettings::default(),
+            false,
+            true,
+            wire,
+        );
+        harness.missing_ok = true;
+        harness
+    }
+
+    /// [`Harness::wired`] over a new game with no interface file: its
+    /// dialogs are what `nova::interface::wire` gives the new game when
+    /// the file doesn't open, as `main` builds the app, and wiring them
+    /// warns of nothing.
+    pub(crate) fn wired_without_interface(
+        data: Rc<GameData>,
+        store: &MemoryPilots,
+        wire: impl FnOnce(AppScreen) -> AppScreen,
+    ) -> Self {
+        let no_file: Result<InterfaceData, _> = Err("no interface file");
+        let interface = nova::interface::wire(nova::ruleset::Ruleset::NewGame, no_file);
+        assert_eq!(interface.warnings, Vec::<String>::new());
+        assert!(interface.file.is_none(), "no file for the renderer");
+        let mut harness = Self::assembled_with(
+            data,
+            interface.dialogs,
             store,
             AudioSettings::default(),
             false,
@@ -538,14 +565,22 @@ impl Harness {
         launch: bool,
         appeared: bool,
     ) -> Self {
-        Self::assembled_with(data, ui, store, settings, launch, appeared, |screen| screen)
+        Self::assembled_with(
+            data,
+            Some(Rc::new(ui)),
+            store,
+            settings,
+            launch,
+            appeared,
+            |screen| screen,
+        )
     }
 
-    /// [`Harness::assembled_from`], its router wired further by `wire`
-    /// before the appear.
+    /// [`Harness::assembled_from`], its dialogs from `dialogs` (none
+    /// without), its router wired further by `wire` before the appear.
     fn assembled_with(
         data: Rc<GameData>,
-        ui: InterfaceData,
+        dialogs: Option<Rc<dyn DialogResources>>,
         store: &MemoryPilots,
         settings: AudioSettings,
         launch: bool,
@@ -554,9 +589,10 @@ impl Harness {
     ) -> Self {
         let metrics = Rc::new(GlyphonMetrics::new(&FontFaces::bundled()));
         let keeper = PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>);
-        let mut screen = start_screen(Rc::clone(&data))
-            .with_pilots(Some(keeper), metrics.clone())
-            .with_dialogs(Rc::new(ui), metrics);
+        let mut screen = start_screen(Rc::clone(&data)).with_pilots(Some(keeper), metrics.clone());
+        if let Some(dialogs) = dialogs {
+            screen = screen.with_dialogs(dialogs, metrics);
+        }
         screen = wire(screen);
         if launch {
             screen = screen.open_last_pilot();

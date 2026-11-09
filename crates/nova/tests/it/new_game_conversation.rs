@@ -73,7 +73,7 @@ fn opened() -> Rc<GameData> {
 }
 
 /// The new game's `folder` as the app opens it, with no problems.
-fn opened_from(folder: &std::path::Path) -> Rc<GameData> {
+pub(crate) fn opened_from(folder: &std::path::Path) -> Rc<GameData> {
     let NewGameOpened::Loaded(loaded) = DiskData.open_new_game(folder) else {
         panic!("{} opens", folder.display());
     };
