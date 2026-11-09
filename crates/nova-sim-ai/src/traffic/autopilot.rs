@@ -588,7 +588,8 @@ impl TopSpeeds {
 /// It flies among `sites`, the gates among them as wide as `type_widths`
 /// says ([`gate_entry::gate_reach`]), the ship its goal is about (the
 /// lead it follows, the ship it fights or inspects) at `other`, when it is
-/// there, disabled as `other_disabled` says (a stand-off ship's band halves
+/// there, disabled as `other_disabled` says (its `_IsDisabled`, @0x2ce6,
+/// as `Traffic::disabled_at_slot` reads it: a stand-off ship's band halves
 /// against a disabled target, see [`stand_off`](crate::ai::stand_off)),
 /// with `beside` what it reads beside that ship ([`Beside`]), at its top
 /// speed `speeds.own`, its burst out of a gate or glide in capped at

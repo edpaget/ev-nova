@@ -75,7 +75,6 @@ use crate::ai::waiting_pursuit;
 use crate::ai::{Goal, Surroundings, swarm};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
-use crate::combat::hull::Condition;
 use crate::flight::ShipState;
 use crate::traffic::inertialess::Inertia;
 use crate::trig;
@@ -256,15 +255,19 @@ impl Traffic {
         }
     }
 
-    /// Whether `ship` is disabled at the slot, in `world`.
+    /// Whether `_IsDisabled` (@0x2ce6) holds of `ship` at the slot, in
+    /// `world`: the player disabled or breaking up
+    /// ([`Condition::disabled`](crate::combat::hull::Condition::disabled));
+    /// an NPC as [`Npc::is_disabled`] reads it,
+    /// which a stellar's defence ship breaking up is not (@0x2d6f). Goal
+    /// 0xd's dock-or-fight reads it with no `_IsDying` (@0x8e866), so a
+    /// plunderer at a victim breaking up brakes for its dock.
     fn disabled_at_slot(&self, ship: ShipRef, world: &World) -> bool {
         match ship {
             ShipRef::Player => world
                 .player
-                .is_some_and(|player| player.condition == Condition::Disabled),
-            ShipRef::Npc(id) => {
-                (self.npcs.iter()).any(|npc| npc.id == id && npc.condition == Condition::Disabled)
-            }
+                .is_some_and(|player| player.condition.disabled()),
+            ShipRef::Npc(id) => (self.npcs.iter()).any(|npc| npc.id == id && npc.is_disabled()),
         }
     }
 
@@ -498,6 +501,57 @@ mod tests {
             MineOrder::Stop,
             "goal 0x11 with no box: sub 0 (@0x88636)"
         );
+    }
+
+    /// A victim 2000 up the screen in slot 5, made as `victim` says, and a
+    /// plunderer of it at rest at the centre in slot 3, facing it: the
+    /// traffic after the plunderer's low level at its slot, and the
+    /// plunderer.
+    fn plundering(victim: impl Fn(Npc) -> Npc) -> (Traffic, NpcId) {
+        let mut traffic = Traffic::with_interval(1);
+        let target = traffic.add_npc_at(
+            victim(ship(0, TRADERS, AiType::WimpyTrader, 0.0, -2000.0)),
+            5,
+        );
+        let mut pirate = ship(0, PIRATES, AiType::Warship, 0.0, 0.0);
+        pirate.goal = Goal::Plunder {
+            ship: ShipRef::Npc(target),
+            hopeless: false,
+        };
+        pirate.target = Some(ShipRef::Npc(target));
+        let pirate = traffic.add_npc_at(pirate, 3);
+        let index = traffic.npcs().iter().position(|npc| npc.id == pirate);
+        traffic.autopilot_in_dispatch(index.expect("there"), &World::new(&[]), &mut NeverFires);
+        (traffic, pirate)
+    }
+
+    fn dying(npc: Npc) -> Npc {
+        Npc {
+            condition: crate::combat::hull::Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            },
+            ..npc
+        }
+    }
+
+    #[test]
+    fn a_plunderer_reads_its_victim_breaking_up_as_disabled_and_brakes() {
+        // `_IsDisabled` (@0x2ce6) has no dying test: the armour line holds
+        // of a ship breaking up, so goal 0xd's low level brakes for its
+        // dock (@0x8e866).
+        let (traffic, pirate) = plundering(dying);
+        assert!(traffic.slot_reads[&pirate].1, "read disabled");
+        assert!(!traffic.word_of(pirate).expect("kept").thrusts(), "braking");
+    }
+
+    #[test]
+    fn a_plunderer_reads_a_defence_ship_breaking_up_as_not_disabled_and_closes() {
+        // `_IsDisabled`'s branch 3 (@0x2d6f): a stellar's defence ship is
+        // never disabled by its armour.
+        let (traffic, pirate) = plundering(crate::traffic::fixture::breaking_up_guard);
+        assert!(!traffic.slot_reads[&pirate].1, "not disabled");
+        assert!(traffic.word_of(pirate).expect("kept").thrusts(), "closing");
     }
 
     #[test]

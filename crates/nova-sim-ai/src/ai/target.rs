@@ -369,10 +369,8 @@ pub fn mission_hunt(npc: &Npc, around: &Surroundings) -> Option<bool> {
         .filter(|mark| mark.behav == ShipBehav::AttackPlayer)?;
     let player = around.player.as_ref()?;
     Some(
-        !matches!(
-            player.condition,
-            Condition::Disabled | Condition::Dying { .. } | Condition::Destroyed
-        ) || fire::destroys(npc),
+        !(player.condition.disabled() || player.condition == Condition::Destroyed)
+            || fire::destroys(npc),
     )
 }
 

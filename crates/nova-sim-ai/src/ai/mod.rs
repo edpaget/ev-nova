@@ -1040,6 +1040,28 @@ impl<'a> Surroundings<'a> {
         matches!(self.condition_of(ship), Some(Condition::Dying { .. }))
     }
 
+    /// `_IsDisabled` (@0x2ce6-0x2e0d) of `ship`, as the high level reads
+    /// its target: the stand-off band's halving (@0x8e4ca) and the
+    /// plunder's dock-or-fight (@0x8e866). The player reads
+    /// [`Condition::disabled`]: disabled or breaking up. An NPC reads
+    /// [`Npc::is_disabled`]: the same, but for a stellar's defence ship,
+    /// which `_IsDisabled` never calls disabled by its armour and so not
+    /// while it breaks up (branch 3, @0x2d6f). A ship not in the system,
+    /// or destroyed (its slot inactive), is not disabled.
+    ///
+    /// `_IsDisabled` has no dying test, so a quarry breaking up reads
+    /// disabled. The plunder's read (@0x8e856) tests only the slot, not
+    /// `_IsDying`, so a plunderer at a victim breaking up docks rather than
+    /// fights. The band's read follows the attack block's `_IsDying` drop
+    /// (@0x8e3ef, [`attack_drop`]), so it never sees one breaking up.
+    #[must_use]
+    pub fn is_disabled(&self, ship: ShipRef) -> bool {
+        match ship {
+            ShipRef::Player => self.player.is_some_and(|p| p.condition.disabled()),
+            ShipRef::Npc(id) => self.npc(id).is_some_and(Npc::is_disabled),
+        }
+    }
+
     /// Whether `ship` is [`standing`](Self::standing) and done arriving
     /// ([`Npc::arrived`]). None of the original's routines reads this: the
     /// only arrival they test of another ship is goal 0x15, through
@@ -2596,6 +2618,47 @@ mod tests {
         let around = Surroundings::new(&[], &npcs);
         assert!(!around.active(ShipRef::Npc(NpcId(1))));
         assert!(!around.standing(ShipRef::Npc(NpcId(1))));
+    }
+
+    #[test]
+    fn is_disabled_reads_disabled_and_breaking_up_ships_but_not_a_breaking_up_guard() {
+        let dying = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        let with = |id, condition| Npc {
+            condition,
+            ..npc(id, AiType::Warship)
+        };
+        let npcs = [
+            npc(1, AiType::Warship),
+            with(2, Condition::Disabled),
+            with(3, dying),
+            crate::traffic::fixture::breaking_up_guard(npc(4, AiType::Warship)),
+            with(5, Condition::Destroyed),
+        ];
+        let mut around = Surroundings::new(&[], &npcs);
+        let read: Vec<bool> = (1..=6)
+            .map(|id| around.is_disabled(ShipRef::Npc(NpcId(id))))
+            .collect();
+        assert_eq!(
+            read,
+            [false, true, true, false, false, false],
+            "intact, disabled, breaking up, a defence ship breaking up (@0x2d6f), \
+             destroyed (inactive slot), absent"
+        );
+        assert!(!around.is_disabled(P), "no player");
+        for (condition, disabled) in [
+            (Condition::Intact, false),
+            (Condition::Disabled, true),
+            (dying, true),
+        ] {
+            around.player = Some(PlayerSide {
+                condition,
+                ..fixture::player(0.0, 0.0)
+            });
+            assert_eq!(around.is_disabled(P), disabled, "{condition:?}");
+        }
     }
 
     #[test]

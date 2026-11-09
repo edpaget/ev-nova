@@ -651,7 +651,7 @@ fn launches_after_passes(npc: &Npc, around: &Surroundings, second: Option<Weapon
         pursuit::frame_of(
             npc,
             &at,
-            disabled_not_dying(around, ship),
+            around.is_disabled(ship),
             swarm::lead(npc, around),
             around.weapons,
         )
@@ -729,13 +729,8 @@ fn asks_turret(npc: &Npc, around: &Surroundings) -> bool {
         return false;
     };
     let swarm = swarm::lead(npc, around);
-    let Some(frame) = pursuit::frame_of(
-        npc,
-        &at,
-        disabled_not_dying(around, ship),
-        swarm,
-        around.weapons,
-    ) else {
+    let Some(frame) = pursuit::frame_of(npc, &at, around.is_disabled(ship), swarm, around.weapons)
+    else {
         return false;
     };
     frame.iter().any(|body| match body.manoeuvre {
@@ -758,16 +753,6 @@ fn in_fire_box(npc: &Npc, at: &ShipState) -> bool {
         whole.abs() <= pursuit::FIRE_BOX
     };
     near(off.x) && near(off.y)
-}
-
-/// Whether `ship` is disabled and not breaking up, as the stand-off
-/// ship's target is read for `_IsDisabled` (@0x8e4ca). Narrower than
-/// [`Condition::disabled`], which counts a ship breaking up too. The two
-/// agree on every ship the frames here read it of: the attack block has
-/// dropped a target breaking up by then (@0x8e3ef), and a pirate's think
-/// has dropped a victim breaking up (@0x8c315-0x8c328).
-fn disabled_not_dying(around: &Surroundings, ship: ShipRef) -> bool {
-    around.condition_of(ship) == Some(Condition::Disabled)
 }
 
 /// The bay the snipe's `_AILaunchFighter` after the passes (@0x8732f)
@@ -928,7 +913,7 @@ fn sight<'a>(
     let frame = pursuit::frame_of(
         npc,
         &sight.at,
-        disabled_not_dying(around, ship),
+        around.is_disabled(ship),
         swarm::lead(npc, around),
         around.weapons,
     )?;
@@ -2018,6 +2003,27 @@ mod tests {
             |condition| trigger_at_npc(&npc, 600.0, 0.0, |other| other.condition = condition).only;
         assert_eq!(at(Condition::Intact), id(128));
         assert_eq!(at(Condition::Disabled), None);
+    }
+
+    /// A unit pin of [`Surroundings::is_disabled`] in the point defence's
+    /// frame (`_IsDisabled` @0x8e4ca), not a change the player sees: in
+    /// the real flow the attack block drops a target breaking up first
+    /// ([`attack_drop`](crate::ai::attack_drop), `_IsDying` @0x8e3ef), so
+    /// the band never reads one.
+    #[test]
+    fn a_stand_off_ship_asks_its_point_defence_by_the_half_band_at_a_quarry_breaking_up() {
+        // 600 to the side, facing up: within the full band of 850 it snipes
+        // at rest, asking; beyond the half band of 425 it approaches facing
+        // away, asking nothing.
+        let npc = standing_off(ATTACK, true);
+        assert!(!trigger_at_npc(&npc, 600.0, 0.0, breaking_up).point_defence);
+        let guard = |other: &mut Npc| {
+            *other = crate::traffic::fixture::breaking_up_guard(other.clone());
+        };
+        assert!(
+            trigger_at_npc(&npc, 600.0, 0.0, guard).point_defence,
+            "a defence ship breaking up is not disabled (@0x2d6f): the full band"
+        );
     }
 
     /// A target 100 above [`SHOOTER`] crossing right at 4 a tick, the
@@ -3297,9 +3303,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_plunderers_snipe_launches_at_a_ship_gliding_in_or_breaking_up_and_not_at_one_destroyed() {
-        // The snipe's `_AILaunchFighter` reads the slot alone (@0x813ab).
+    /// A hopeless plunderer of NPC 2 with a bay of two rounds.
+    fn plundering_sniper() -> Npc {
         let mut npc = shooter(
             &[gun(128, 1, 1), bay(150)],
             Goal::Plunder {
@@ -3308,20 +3313,49 @@ mod tests {
             },
         );
         npc.rounds = LauncherRounds::from([(WeaponId(150), 2)]);
-        let launches_after = |target: &dyn Fn(&mut Npc)| {
-            let mut other = crate::traffic::fixture::npc(2, ShipStats::new(FAST, &[]));
-            other.state.position = SHOOTER + Vec2::new(0.0, -200.0);
-            target(&mut other);
-            let npcs = [npc.clone(), other];
-            let around = Surroundings::new(&[], &npcs);
-            trigger(&npc, &around, FireRules::default()).bays_after
-        };
-        assert!(launches_after(&|_| {}), "flying");
-        assert!(launches_after(
-            &|other| other.mode = Mode::JumpingIn { tick: 1 }
-        ));
-        assert!(launches_after(&breaking_up));
-        assert!(!launches_after(&destroyed));
+        npc
+    }
+
+    /// Whether `npc` launches after its passes at NPC 2, 200 above it,
+    /// made as `target` says.
+    fn launches_after_at(npc: &Npc, target: &dyn Fn(&mut Npc)) -> bool {
+        let mut other = crate::traffic::fixture::npc(2, ShipStats::new(FAST, &[]));
+        other.state.position = SHOOTER + Vec2::new(0.0, -200.0);
+        target(&mut other);
+        let npcs = [npc.clone(), other];
+        let around = Surroundings::new(&[], &npcs);
+        trigger(npc, &around, FireRules::default()).bays_after
+    }
+
+    #[test]
+    fn a_plunderers_snipe_launches_at_a_ship_gliding_in_and_not_at_one_breaking_up_or_destroyed() {
+        // The snipe's `_AILaunchFighter` reads the slot alone (@0x813ab).
+        // At a victim breaking up the high level reads `_IsDisabled`
+        // (@0x8e866), which holds of it, and docks: no snipe flies.
+        let npc = plundering_sniper();
+        assert!(launches_after_at(&npc, &|_| {}), "flying");
+        assert!(launches_after_at(&npc, &|other| other.mode = Mode::JumpingIn { tick: 1 }));
+        assert!(!launches_after_at(&npc, &breaking_up), "it docks");
+        assert!(!launches_after_at(&npc, &destroyed));
+    }
+
+    #[test]
+    fn a_plunderers_kept_snipe_launches_at_a_victim_breaking_up() {
+        // The low level runs the substate it kept and reads only its own
+        // `_IsDisabled` (@0x85216, @0x87e38), never its target's.
+        let mut npc = plundering_sniper();
+        npc.pursuit.frame = Some(pursuit::Frame {
+            goal: npc.goal,
+            bodies: [
+                Some(pursuit::Body {
+                    manoeuvre: Manoeuvre::Snipe,
+                    heading: 0,
+                }),
+                None,
+            ],
+            speed_cap: None,
+        });
+        assert!(launches_after_at(&npc, &breaking_up));
     }
 
     /// A launcher of `id` firing rounds of weapon `id + 10`.
