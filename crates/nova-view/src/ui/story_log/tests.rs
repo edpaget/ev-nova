@@ -525,3 +525,35 @@ fn the_last_entry_needs_no_row_for_a_cut_line() {
         "{drawn:?}"
     );
 }
+
+#[test]
+fn with_no_news_the_log_says_nothing_has_been_heard() {
+    let log = news_log(&[], &names());
+    assert_eq!(log.heading, NEWS_HEADING);
+    assert_eq!(
+        log.entries,
+        [LogEntry {
+            title: String::new(),
+            lines: vec![NOTHING_HEARD.to_owned()],
+        }]
+    );
+    assert_eq!(NOTHING_HEARD, "Nothing heard here yet.");
+}
+
+#[test]
+fn a_log_is_silent_unless_given_its_sounds_which_play_as_it_opens_and_closes() {
+    let mut silent = screen(news_log(&fixture_news(), &names()));
+    assert_eq!(silent.take_sounds(), []);
+    key(&mut silent, Key::Escape, false);
+    assert_eq!(silent.take_sounds(), [], "the landing's pop stays silent");
+
+    let opened = Sound::Ui(crate::sound::UiSound::NewsOpened);
+    let closed = Sound::Ui(crate::sound::UiSound::NewsClosed);
+    let mut sounding = screen(news_log(&fixture_news(), &names())).with_sounds(opened, closed);
+    assert_eq!(sounding.take_sounds(), [opened], "as it opens");
+    assert_eq!(sounding.take_sounds(), [], "once");
+    assert!(!key(&mut sounding, Key::KeyA, false));
+    assert_eq!(sounding.take_sounds(), [], "nothing closed");
+    assert!(key(&mut sounding, Key::Escape, false));
+    assert_eq!(sounding.take_sounds(), [closed], "as it closes");
+}

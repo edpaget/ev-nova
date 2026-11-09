@@ -69,3 +69,22 @@ fn close_sends_converse_close_and_says_whether_one_was_open() {
         ]
     );
 }
+
+#[test]
+fn open_bar_scene_sends_its_index_and_hands_back_the_page_or_none() {
+    let mut view = docked();
+    view.sim
+        .queue_answer(Answer::Conversation(page(&["A job?"], &["Take it"])));
+    assert_eq!(
+        view.open_bar_scene(1),
+        Some(page(&["A job?"], &["Take it"]))
+    );
+    assert_eq!(view.open_bar_scene(0), None, "refused");
+    assert_eq!(
+        sent(&view),
+        [
+            FlightCommand::Converse(Converse::OpenListed(1)),
+            FlightCommand::Converse(Converse::OpenListed(0)),
+        ]
+    );
+}

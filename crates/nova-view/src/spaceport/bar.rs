@@ -86,10 +86,17 @@
 //!
 //! Leave, Return, Enter and Escape leave the bar. Without its dialog, the
 //! bar says why, and Return or Escape still leaves.
+//!
+//! Under [`RuleKey::BarStory`](nova_sim::RuleKey::BarStory)'s other
+//! reading, the new game's, the bar is also given the story it hosts
+//! ([`BarScreen::set_story`]): its slots, items 9 to 12, list the scenes
+//! to open, and Holovid asks for the news heard in the system in place of
+//! the drawn news (see the [`story`] module).
 
 use std::rc::Rc;
 use std::time::Duration;
 
+use nova_sim::flight_frame::BarStory;
 use nova_sim::gamble::Bet;
 use nova_sim::hire::HIRE_ESCORT;
 use nova_sim::mission::screens::{FIRST_OFFER_TICKS, mac_ticks};
@@ -245,6 +252,11 @@ struct Asks {
     news: bool,
     /// What Gamble opens: Gamble was pressed.
     gamble: bool,
+    /// The story's scene a slot asked for, by its index into the
+    /// story's scenes (the [`story`] module).
+    scene: Option<usize>,
+    /// The story's news: Holovid was pressed while the bar hosts a story.
+    story_news: bool,
     /// The course map the map key asked for: the bar's, or the hire
     /// screen's.
     map: Option<PortMap>,
@@ -276,6 +288,8 @@ pub struct BarScreen {
     race: Option<RaceScreen>,
     /// The mission offers, once given.
     offering: Option<VenueOffers>,
+    /// The story it hosts, once given (the [`story`] module).
+    story: Option<BarStory>,
     /// The movies its offers and its hire screen's ship loop play.
     movies: Movies,
     /// What the bar has asked for since each was last taken.
@@ -328,7 +342,7 @@ impl BarScreen {
                     found.enabled = true;
                 }
             }
-            let roles = [
+            let mut roles = vec![
                 (LEAVE_ITEM, Role::Button(LEAVE_LABEL.to_owned())),
                 (GAMBLE_ITEM, Role::Button(GAMBLE_LABEL.to_owned())),
                 (HOLOVID_ITEM, Role::Button(HOLOVID_LABEL.to_owned())),
@@ -347,11 +361,13 @@ impl BarScreen {
                     },
                 ),
             ];
+            story::slot_roles(&mut template, &mut roles);
             let mut dialog = Dialog::new(&template, &roles, Rc::clone(&metrics))
                 .with_buttons(ButtonSkin::NOVA, style)
                 .with_default(Some(LEAVE_ITEM))
                 .with_cancel(Some(LEAVE_ITEM));
             dialog.set_greyed(HIRE_ITEM, !room);
+            story::show_slots(&mut dialog, None);
             Ok(Laid {
                 dialog,
                 picture,
@@ -377,6 +393,7 @@ impl BarScreen {
             ),
             race: None,
             offering: None,
+            story: None,
             movies: Movies::none(),
             asks: Asks::default(),
             closed: false,
@@ -864,7 +881,7 @@ impl BarScreen {
         match command {
             Command::Play(PlayCommand::GalaxyMap) => self.asks.map = Some(PortMap::Bar),
             Command::Bar(BarCommand::Hire) => self.ask(),
-            Command::Bar(BarCommand::News) => self.asks.news = true,
+            Command::Bar(BarCommand::News) => self.ask_news(),
             Command::Bar(BarCommand::Gamble) => self.asks.gamble = true,
             _ => return false,
         }
@@ -902,20 +919,21 @@ impl BarScreen {
     /// Activates dialog item `item`: Leave leaves, and Hire Escort,
     /// Holovid and Gamble ask, Gamble left drawn pressed, as
     /// `_TrackBarButtons` (@0x26fd5) never redraws on release and the
-    /// Gamble branch draws no buttons before it (@0x49136). Anything else
+    /// Gamble branch draws no buttons before it (@0x49136). A story slot
+    /// showing a scene asks for it (the [`story`] module); anything else
     /// does nothing.
     fn activate(&mut self, item: usize) {
         match item {
             LEAVE_ITEM => self.closed = true,
             HIRE_ITEM => self.ask(),
-            HOLOVID_ITEM => self.asks.news = true,
+            HOLOVID_ITEM => self.ask_news(),
             GAMBLE_ITEM => {
                 self.asks.gamble = true;
                 if let Ok(laid) = &mut self.laid {
                     laid.dialog.hold_pressed(Some(GAMBLE_ITEM));
                 }
             }
-            _ => {}
+            _ => self.activate_slot(item),
         }
     }
 }
@@ -1141,6 +1159,9 @@ impl Screen for BarScreen {
 
 #[cfg(test)]
 pub(crate) mod pad;
+pub mod story;
+
+pub use story::{OWN_CONVERSATION_LABEL, STORY_ITEMS};
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
@@ -1193,7 +1214,7 @@ mod tests {
     /// Stock "Bar": `DLOG` 1013, 263 x 185 and centred, and its ten
     /// disabled user items as `DITL` 1013 has them, 4, 6 and 8-10 parked
     /// outside it.
-    fn template() -> DialogTemplate {
+    pub(super) fn template() -> DialogTemplate {
         DialogTemplate {
             bounds: rect(40.0, 40.0, 263.0, 185.0),
             placement: Placement::Center,
@@ -1306,6 +1327,22 @@ mod tests {
         )
     }
 
+    /// Viking's bar laid out over `template` alone, its fleet with room.
+    pub(super) fn bar_over(template: DialogTemplate) -> BarScreen {
+        let art = Rc::new(FakeArt {
+            asked: RefCell::default(),
+            pictures: BTreeSet::new(),
+            graphic: None,
+        });
+        BarScreen::new(
+            Ok((plain_only(template), Rc::new(MonoMetrics))),
+            StellarId(157),
+            hiring(&art),
+            ButtonStyle::STOCK,
+            true,
+        )
+    }
+
     pub(super) fn bar() -> BarScreen {
         bar_of(
             &Rc::new(FakeArt {
@@ -1323,7 +1360,7 @@ mod tests {
         list.iter().cloned().collect()
     }
 
-    fn texts(screen: &BarScreen) -> Vec<(String, Color)> {
+    pub(super) fn texts(screen: &BarScreen) -> Vec<(String, Color)> {
         drawn(screen)
             .into_iter()
             .filter_map(|command| match command {

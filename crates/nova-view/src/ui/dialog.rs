@@ -761,6 +761,20 @@ impl Dialog {
         }
     }
 
+    /// Relabels button `item` (from 1) with `label`. An item that is not a
+    /// button, or no such item, changes nothing.
+    pub fn set_label(&mut self, item: usize, label: &str) {
+        let Some(found) = item
+            .checked_sub(1)
+            .and_then(|index| self.items.get_mut(index))
+        else {
+            return;
+        };
+        if let Widget::Button(button) = &mut found.widget {
+            label.clone_into(&mut button.label);
+        }
+    }
+
     /// Replaces the text of item `item` (from 1) with `rows`, in its font,
     /// size and box and shown from the first row. An item that is not text,
     /// or no such item, changes nothing.
@@ -2252,6 +2266,30 @@ mod tests {
         for other in [0, 1, 2, 4, 99] {
             assert_eq!(dialog.text(other), None, "item {other}");
         }
+    }
+
+    #[test]
+    fn set_label_relabels_a_button_and_nothing_else() {
+        let words = |dialog: &Dialog| -> Vec<String> {
+            drawn(dialog)
+                .into_iter()
+                .filter_map(|command| match command {
+                    DrawCommand::Text { text, .. } => Some(text),
+                    _ => None,
+                })
+                .collect()
+        };
+        let mut dialog = dialog(&yes_no(), &[]);
+        let before = drawn(&dialog);
+        for other in [0, 2, 3, 4, 99] {
+            dialog.set_label(other, "Other");
+        }
+        assert_eq!(drawn(&dialog), before, "only buttons change");
+        dialog.set_label(5, "Not now");
+        let words = words(&dialog);
+        assert!(words.contains(&"Not now".to_owned()), "{words:?}");
+        assert!(!words.contains(&"Cancel".to_owned()), "{words:?}");
+        assert!(words.contains(&"OK".to_owned()), "{words:?}");
     }
 
     #[test]

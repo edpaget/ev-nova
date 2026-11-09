@@ -25,7 +25,10 @@
 //! and a last line names how many: "And 2 older items."
 //!
 //! **Input.** Return, Enter, Escape or a click closes it
-//! ([`StoryLogScreen::take_closed`]). It takes every input while it is
+//! ([`StoryLogScreen::take_closed`]). It is silent, unless given the
+//! sounds it plays as it opens and closes
+//! ([`StoryLogScreen::with_sounds`]): the bar's Holovid log beeps as the
+//! stock news does. It takes every input while it is
 //! open, so the screen under it gets none.
 //!
 //! Where it opens is the router's (the `nova` crate's
@@ -43,6 +46,7 @@ use crate::draw::{DrawList, fill_rect, frame_rect};
 use crate::geometry::Point;
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
+use crate::sound::Sound;
 use crate::spaceport::conversation::{CHOICE_COLOR, CLOSE_HINT, FONT, GAP, INSET, PANEL, SIZE};
 use crate::spaceport::credits::{TON, TONS};
 use crate::text::{TextMetrics, wrap};
@@ -55,6 +59,9 @@ pub const MISSIONS_HEADING: &str = "Missions";
 pub const UNKNOWN_SYSTEM: &str = "an unknown system";
 /// What an objective names a stellar the flight doesn't name.
 pub const UNKNOWN_STELLAR: &str = "an unknown place";
+/// The news log's one line when nothing has been heard: only the bar's
+/// Holovid opens it so, as the landing's news opens only with news.
+pub const NOTHING_HEARD: &str = "Nothing heard here yet.";
 
 /// A log to show: a heading, then its entries in order.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -90,19 +97,27 @@ pub fn news_source(from: SystemId, age: u32, names: &Names) -> String {
 }
 
 /// The news log of `news`, given oldest first (the session's order,
-/// release day then id), listed newest first.
+/// release day then id), listed newest first; with none, one untitled
+/// entry, [`NOTHING_HEARD`].
 #[must_use]
 pub fn news_log(news: &[HeardNews], names: &Names) -> StoryLog {
+    let mut entries: Vec<LogEntry> = news
+        .iter()
+        .rev()
+        .map(|item| LogEntry {
+            title: item.headline.clone(),
+            lines: vec![news_source(item.from, item.age, names), item.text.clone()],
+        })
+        .collect();
+    if entries.is_empty() {
+        entries.push(LogEntry {
+            title: String::new(),
+            lines: vec![NOTHING_HEARD.to_owned()],
+        });
+    }
     StoryLog {
         heading: NEWS_HEADING.to_owned(),
-        entries: news
-            .iter()
-            .rev()
-            .map(|item| LogEntry {
-                title: item.headline.clone(),
-                lines: vec![news_source(item.from, item.age, names), item.text.clone()],
-            })
-            .collect(),
+        entries,
         cut_word: "older",
     }
 }
@@ -180,6 +195,11 @@ pub struct StoryLogScreen {
     log: StoryLog,
     metrics: Rc<dyn TextMetrics>,
     closed: bool,
+    /// The sound it plays as it closes, if given
+    /// ([`StoryLogScreen::with_sounds`]).
+    close_sound: Option<Sound>,
+    /// Its sounds not taken yet.
+    sounds: Vec<Sound>,
 }
 
 impl std::fmt::Debug for StoryLogScreen {
@@ -199,7 +219,20 @@ impl StoryLogScreen {
             log,
             metrics,
             closed: false,
+            close_sound: None,
+            sounds: Vec::new(),
         }
+    }
+
+    /// The screen playing `open` as it opens and `close` as it closes, as
+    /// the bar's Holovid log beeps as the stock news does (`_beepSnd[1]`
+    /// and `[2]`, @0x4814e; see the `spaceport::news` module). Without
+    /// them it is silent, as the landing's news is.
+    #[must_use]
+    pub fn with_sounds(mut self, open: Sound, close: Sound) -> Self {
+        self.sounds.push(open);
+        self.close_sound = Some(close);
+        self
     }
 
     /// The log it shows.
@@ -302,10 +335,18 @@ impl Screen for StoryLogScreen {
                 pressed: true,
                 repeat: false,
             }
-            | Input::PointerButton { pressed: true, .. } => self.closed = true,
+            | Input::PointerButton { pressed: true, .. } => {
+                self.closed = true;
+                self.sounds.extend(self.close_sound);
+            }
             _ => {}
         }
         ScreenAction::None
+    }
+
+    /// Its opening and closing sounds, when given, in order.
+    fn take_sounds(&mut self) -> Vec<Sound> {
+        std::mem::take(&mut self.sounds)
     }
 
     /// Nothing moves on its own.

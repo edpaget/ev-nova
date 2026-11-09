@@ -1,5 +1,6 @@
 //! [`FlightView`]'s conversation over the [`FlightSim`] port: the landed
-//! stellar's conversation opened, a choice taken on its page, and closed.
+//! stellar's conversation opened (the next one due, or one its bar lists),
+//! a choice taken on its page, and closed.
 //! Each sends its [`FlightCommand::Converse`] and hands back the page the
 //! flight answers, `None` when it refuses (no conversation here, a choice
 //! it doesn't offer, or a flight that never started). What a
@@ -18,6 +19,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// it has none left.
     pub fn open_conversation(&mut self) -> Option<ConversationPage> {
         self.converse(Converse::Open)
+    }
+
+    /// Opens the scene at `index` of the landed stellar's bar's listing
+    /// ([`Converse::OpenListed`], over
+    /// [`FlightView::bar_story`]'s scenes): its first page, or `None` when
+    /// the flight refuses it.
+    pub fn open_bar_scene(&mut self, index: usize) -> Option<ConversationPage> {
+        self.converse(Converse::OpenListed(index))
     }
 
     /// Takes the choice at `index` on the open conversation's page

@@ -6,7 +6,7 @@
 use super::faked_shops::docked;
 use super::*;
 use nova_sim::flight_frame::{
-    FlightEvent, RoomRefusal, ScreenAnswer, ScreenAsk, StoryObjective, StoryRow,
+    BarScene, BarStory, FlightEvent, RoomRefusal, ScreenAnswer, ScreenAsk, StoryObjective, StoryRow,
 };
 use nova_sim::storylines::news::HeardNews;
 use nova_sim::{MissionInfo, MissionInfoPress, SystemId};
@@ -50,6 +50,19 @@ fn the_news_asked_is_handed_back_as_the_flight_answered() {
     assert_eq!(view.heard_news(), news);
     assert_eq!(view.sim.screens_asked(), [ScreenAsk::HeardNews]);
     assert_eq!(view.heard_news(), [], "nothing answered");
+}
+
+#[test]
+fn the_bar_story_asked_is_handed_back_as_the_flight_answered_or_none() {
+    let mut view = docked();
+    let story = BarStory {
+        scenes: vec![BarScene::Stellar],
+        news: vec![heard("one", 3)],
+    };
+    view.sim.queue_screen(ScreenAnswer::BarStory(story.clone()));
+    assert_eq!(view.bar_story(), Some(story));
+    assert_eq!(view.sim.screens_asked(), [ScreenAsk::BarStory]);
+    assert_eq!(view.bar_story(), None, "nothing answered: no story here");
 }
 
 /// A deliver row of 10 tons of Plate to 129, aboard.

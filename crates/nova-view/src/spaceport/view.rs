@@ -187,6 +187,7 @@ use nova_sim::{
     services,
 };
 
+mod bar_story;
 mod close_keys;
 mod computer_keys;
 mod flushing_layers;
@@ -2718,6 +2719,7 @@ impl SpaceportView {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 pub(in crate::spaceport) mod tests {
+    mod bar_story;
     mod close_keys;
     mod covered_aids;
     mod flushing_layers;

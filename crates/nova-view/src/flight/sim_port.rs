@@ -155,7 +155,10 @@
 //!   `session/screen/`, pinned there, and sampled in
 //!   `fixture::sample_screen_asks`: the news heard where the ship is
 //!   ([`ScreenAsk::HeardNews`], answered in `session/story_screens.rs`)
-//!   is one. **A screen's new readout of an answer it already has is a
+//!   is one, and the story the landed stellar's bar hosts
+//!   ([`ScreenAsk::BarStory`], answered in `session/bar_story.rs`) is
+//!   another, opened from with [`FlightCommand::Converse`]'s
+//!   `OpenListed`. **A screen's new readout of an answer it already has is a
 //!   field of that answer**: the new game's storyline missions ride the
 //!   mission info ([`MissionInfo::story`](nova_sim::MissionInfo::story)),
 //!   so the mission info key stays one ask and one press answer.
