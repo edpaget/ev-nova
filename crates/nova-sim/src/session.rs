@@ -1660,13 +1660,11 @@ impl Session {
             rules.source_for(RuleKey::OutfitWeaponMods) != self.setup.outfit_weapon_mods();
         self.setup.rules = rules;
         // The armament is mounted by `RuleKey::OutfitWeaponMods`, as the
-        // rounds are read by it: a new reading mounts it again, as the
-        // refit does, its fold kept whole, so the two never read the mods
-        // differently (see the `outfit_weapon_mods` module).
+        // rounds are read by it: a new reading mounts it again, so the two
+        // never read the mods differently (see the `outfit_weapon_mods`
+        // module).
         if remount {
-            let fold = self.ship.fit.armament.fold();
-            self.ship.mount(&self.pilot, &self.statics, &self.setup);
-            self.ship.fit.armament = std::mem::take(&mut self.ship.fit.armament).with_fold(fold);
+            self.ship.remount(&self.pilot, &self.statics, &self.setup);
         }
         self
     }

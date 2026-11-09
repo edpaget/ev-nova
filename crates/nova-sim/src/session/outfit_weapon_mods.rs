@@ -37,6 +37,22 @@
 //! The outfitter's bay room (`_CanBuyOutfitItem` @0x4e8f6) reads the first
 //! mod alone, so it is keyed.
 
+use super::{PlayerShip, Setup, Statics};
+use crate::pilot::Pilot;
+
+impl PlayerShip {
+    /// Mounts `pilot`'s armament again (`PlayerShip::mount`) for a new
+    /// reading of [`RuleKey::OutfitWeaponMods`](crate::rulebook::RuleKey::OutfitWeaponMods)
+    /// in `setup`, as [`Session::with_rules`](super::Session::with_rules)
+    /// does: where the refit keeps only the exit cursors and the fold set,
+    /// a remount keeps the whole fold, as no reading of the rules moves it.
+    pub(super) fn remount(&mut self, pilot: &Pilot, statics: &Statics, setup: &Setup) {
+        let fold = self.fit.armament.fold();
+        self.mount(pilot, statics, setup);
+        self.fit.armament = std::mem::take(&mut self.fit.armament).with_fold(fold);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::catalog::{OutfitId, StockWeapon, WeaponId};
@@ -133,6 +149,23 @@ mod tests {
         assert_eq!(session.secondary_line_count(), Some(5));
         session = session.with_rules(Rulebook::default());
         assert_eq!(rockets_mounted(&session), 0, "and back");
+    }
+
+    #[test]
+    fn a_remount_mounts_by_the_setups_reading_and_keeps_the_whole_fold() {
+        let mut session = loaded(&[(LATER_LAUNCHER, 1)], RuleSource::Engine);
+        let fold = crate::combat::armament::Fold {
+            set: 2,
+            dir: -1,
+            since_fire: 7,
+        };
+        *session.ship.fit.armament.fold_mut() = fold;
+        session.setup.rules = rules(RuleSource::Bible);
+        session
+            .ship
+            .remount(&session.pilot, &session.statics, &session.setup);
+        assert_eq!(rockets_mounted(&session), 1);
+        assert_eq!(session.ship.fit.armament.fold(), fold);
     }
 
     #[test]
