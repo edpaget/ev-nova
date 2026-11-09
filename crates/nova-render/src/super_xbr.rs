@@ -151,12 +151,12 @@ fn enlarge_with(image: &Image, threads: usize) -> Image {
 const MIN_BAND_TEXELS: usize = 16_384;
 
 /// A premultiplied RGBA texel, each channel 0 to 1.
-type Texel = [f32; 4];
+pub(crate) type Texel = [f32; 4];
 
 /// An image as the passes work on it: premultiplied texels in `f32`, row
-/// by row.
+/// by row. The crate's box filter ([`crate::box_filter`]) shares it.
 #[derive(Clone, Debug, PartialEq)]
-struct Plane {
+pub(crate) struct Plane {
     width: usize,
     height: usize,
     texels: Vec<Texel>,
@@ -176,7 +176,7 @@ impl Plane {
     /// A `width` x `height` plane, each texel `texel(x, y)`, its rows
     /// computed in bands on up to `threads` threads, each band at least
     /// [`MIN_BAND_TEXELS`].
-    fn from_fn(
+    pub(crate) fn from_fn(
         width: usize,
         height: usize,
         threads: usize,
@@ -207,7 +207,7 @@ impl Plane {
     }
 
     /// `image`'s texels, premultiplied.
-    fn premultiplied(image: &Image) -> Self {
+    pub(crate) fn premultiplied(image: &Image) -> Self {
         let unit = |byte: u8| f32::from(byte) / 255.0;
         let texels = image
             .pixels()
@@ -223,7 +223,7 @@ impl Plane {
     }
 
     /// The texel at (`x`, `y`), inside the plane.
-    fn texel(&self, x: usize, y: usize) -> Texel {
+    pub(crate) fn texel(&self, x: usize, y: usize) -> Texel {
         self.texels[y * self.width + x]
     }
 
@@ -236,7 +236,7 @@ impl Plane {
     /// The plane as a straight-alpha image: each colour clamped to at most
     /// its alpha and un-premultiplied, and a texel with no alpha left
     /// clear.
-    fn straight(&self) -> Image {
+    pub(crate) fn straight(&self) -> Image {
         let byte = |v: f32| (v * 255.0).round().clamp(0.0, 255.0) as u8;
         let pixels = self
             .texels

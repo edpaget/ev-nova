@@ -6,10 +6,21 @@
 //! data's ship sheets are read ([`GameImages::ship_frames`]'s way): its
 //! `rlëD` under the images' readings, or its `PICT` pair cut. Each frame
 //! is then scaled to the hull by the key's [`Scale`], to
-//! [`Scale::apply`]'s size of each side, with QuickDraw's averaging
-//! stretch ([`stretched`], which averages alpha too). Scaling as it
-//! decodes keeps every layer, glow, cut, colorize and 8-bit path as it is,
-//! and the layers stay centred and aligned, as they share the ratio.
+//! [`Scale::apply`]'s size of each side, by the crate's box filter
+//! ([`resized`]), which averages premultiplied colour by the area each
+//! source pixel covers. Scaling as it decodes keeps every layer, glow, cut,
+//! colorize and 8-bit path as it is, and the layers stay centred and
+//! aligned, as they share the ratio.
+//!
+//! It doesn't use QuickDraw's stretch (`crate::quickdraw_stretch`): that
+//! averages straight RGBA channel by channel, alpha included, as the
+//! original's picture draws do, which stretch the mask apart. A decoded
+//! sprite's transparent pixels are clear (`[0, 0, 0, 0]`) and sprites are
+//! drawn with straight alpha, so each shrunk edge would mix in that black
+//! and be faded by alpha again when drawn: a dark fringe round every hull.
+//! The box filter keeps an edge's colour and lowers only its alpha. The
+//! borrowed look is the new game's own, so there is no draw of the
+//! original's to match.
 //!
 //! Without stock art, or without that ship in it, the key is
 //! [`ImageError::Missing`]. It never reads the game data, and no game-data
@@ -19,13 +30,13 @@
 use std::borrow::Borrow;
 use std::rc::Rc;
 
-use nova_data::graphics::{DeepImage, Image, PixelDepth, decode_rled_with};
+use nova_data::graphics::{Image, decode_rled_with};
 use nova_data::stock_look::Scale;
 use nova_data::{GameData, SheetKind, ShipId, ShipImage, StockArt};
 
 use super::GameImages;
+use crate::box_filter::resized;
 use crate::images::ImageError;
-use crate::quickdraw_stretch::stretched;
 
 impl<D: Borrow<GameData>> GameImages<D> {
     /// These images, with a borrowed look's frames
@@ -67,14 +78,14 @@ impl<D: Borrow<GameData>> GameImages<D> {
     }
 }
 
-/// `frame` stretched to `scale` of each side, or as it is at 1:1.
+/// `frame` resized to `scale` of each side by the box filter, or as it is
+/// at 1:1.
 fn scaled(frame: Image, scale: Scale) -> Image {
     if scale == Scale::ONE {
         return frame;
     }
     let (width, height) = (scale.apply(frame.width()), scale.apply(frame.height()));
-    let deep = DeepImage::new(frame, PixelDepth::Direct32).expect("a direct image has any size");
-    stretched(&deep, width, height)
+    resized(&frame, width, height)
 }
 
 #[cfg(test)]
@@ -130,6 +141,48 @@ mod tests {
             .deep_frames(stock(ShipImage::Base, scale), 300)
             .unwrap();
         assert_eq!(deep.len(), base.len());
+    }
+
+    const RED: [u8; 4] = [255, 0, 0, 255];
+    const CLEAR: [u8; 4] = [0; 4];
+
+    fn row(pixels: &[[u8; 4]]) -> Image {
+        Image::from_rgba(pixels.len() as u32, 1, pixels.concat()).unwrap()
+    }
+
+    #[test]
+    fn a_shrunk_edge_keeps_its_colour_and_loses_only_alpha() {
+        // Sprites are drawn with straight alpha, so an edge pixel half
+        // over clear stays red at half its alpha, never darkened.
+        let shrunk = scaled(row(&[RED, RED, RED, CLEAR, CLEAR, CLEAR]), Scale::of(1, 2));
+        assert_eq!((shrunk.width(), shrunk.height()), (3, 1));
+        assert_eq!(shrunk.pixel(0, 0), Some(RED));
+        assert_eq!(shrunk.pixel(1, 0), Some([255, 0, 0, 128]));
+        assert_eq!(shrunk.pixel(2, 0), Some(CLEAR), "all clear stays clear");
+    }
+
+    #[test]
+    fn an_enlarged_edge_keeps_its_colour_and_loses_only_alpha() {
+        // The middle of three covers half of each of the two (and the one
+        // row rounds to two).
+        let enlarged = scaled(row(&[RED, CLEAR]), Scale::of(3, 2));
+        assert_eq!((enlarged.width(), enlarged.height()), (3, 2));
+        assert_eq!(enlarged.pixel(0, 0), Some(RED));
+        assert_eq!(enlarged.pixel(1, 0), Some([255, 0, 0, 128]));
+        assert_eq!(enlarged.pixel(2, 0), Some(CLEAR));
+    }
+
+    #[test]
+    fn a_shrink_averages_by_the_area_each_pixel_covers() {
+        // Three columns to two: each takes one whole and half of the
+        // middle, both axes alike.
+        let blue = [0, 0, 255, 255];
+        let image =
+            Image::from_rgba(3, 3, [[RED; 3], [RED; 3], [blue; 3]].concat().concat()).unwrap();
+        let shrunk = scaled(image, Scale::of(2, 3));
+        assert_eq!((shrunk.width(), shrunk.height()), (2, 2));
+        assert_eq!(shrunk.pixel(0, 0), Some(RED));
+        assert_eq!(shrunk.pixel(1, 1), Some([85, 0, 170, 255]));
     }
 
     #[test]
