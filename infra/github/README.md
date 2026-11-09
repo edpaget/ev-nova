@@ -424,7 +424,7 @@ are manual by operator choice and must never be loosened by hand.
 | Setting | Managed by | Value |
 |---|---|---|
 | Actions enabled | `github_actions_repository_permissions.enabled` | `true` |
-| Allowed actions | `github_actions_repository_permissions.allowed_actions` and `allowed_actions_config` | `selected`: GitHub-owned, no verified creators, `Swatinem/rust-cache@*`, `jdx/mise-action@*` |
+| Allowed actions | `github_actions_repository_permissions.allowed_actions` and `allowed_actions_config` | `selected`: GitHub-owned, no verified creators, `Swatinem/rust-cache@*`, `jdx/mise-action@*`, `azure/login@*` |
 | SHA pinning | `github_actions_repository_permissions.sha_pinning_required` | `true`: every external `uses:` is a full commit SHA with the release tag in a trailing comment |
 | Default `GITHUB_TOKEN` permissions | `github_workflow_repository_permissions.default_workflow_permissions` | `read` |
 | Actions may approve PRs | `github_workflow_repository_permissions.can_approve_pull_request_reviews` | `false` |
