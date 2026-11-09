@@ -12,10 +12,18 @@
 //! (`new_game::records::default_interface`); how a layout draws,
 //! nova-view's (`flight::hud`, `flight::radar`).
 
+use nova_data::new_game;
+use nova_data::records::stellar::Stellar;
+use nova_data::records::system::System;
+use nova_render::FontFaces;
+use nova_render::wgpu::GlyphonMetrics;
+use nova_sim::Reserves;
 use nova_sim::fixture::MemoryPilots;
 use nova_view::flight::catalog::StatusBarLayout;
-use nova_view::flight::hud::bar_origin;
+use nova_view::flight::hud::{self, HudState, NavDestination, NavDisplay, bar_origin};
+use nova_view::flight::radar::RadarScene;
 use nova_view::geometry::Bounds;
+use nova_view::text::TextMetrics;
 use nova_view::{Color, DrawCommand, DrawList, Point, Screen};
 
 use crate::common::{draw, fly_the_sample};
@@ -180,5 +188,102 @@ fn the_sample_draws_every_readout_inside_its_area() {
             "{text:?} at {at:?} (size {size}) lies outside every area: {areas:?}"
         );
         assert!(bottom.y <= height, "{text:?} at {at:?} below the view");
+    }
+}
+
+/// The gate autopilot's two nav lines (rdm:phase/play-the-sample/phase-10-new-game-autopilot-hud),
+/// drawn by nova-view's real HUD on the sample's placeholder bar for each
+/// of the sample's systems, and for an unexplored one, over its longest
+/// gate name, fit the nav area: each line, as wide as the bundled font
+/// measures it at the layout's size, lies between the area's sides, and
+/// each line's box (its top, a line height deep) inside the area. What the
+/// lines say is nova-view's (`flight::hud`); the names are the sample's
+/// own, read from its data.
+#[test]
+fn the_autopilots_nav_lines_fit_the_placeholder_nav_area() {
+    let sample = new_game::open(&new_game::fixture::sample_folder()).expect("the sample lists");
+    let systems: Vec<String> = sample
+        .data
+        .records::<System>()
+        .filter_map(|(_, entry)| entry.ok()?.name.map(str::to_owned))
+        .collect();
+    assert!(!systems.is_empty(), "the sample's systems");
+    let gate = sample
+        .ids
+        .gates
+        .values()
+        .filter_map(|&id| sample.data.get::<Stellar>(id)?.ok()?.name)
+        .max_by(|a, b| a.len().cmp(&b.len()))
+        .expect("the sample's gates")
+        .to_owned();
+
+    let store = MemoryPilots::new();
+    let (flying, _) = fly_the_sample(&store);
+    let view = flying.app.screen().flight_view().expect("flying");
+    let bar = view.status_bar().expect("a status bar");
+    let width = view.view_size().0;
+    let layout = &bar.layout;
+    let nav = layout.nav.offset(bar_origin(bar, width));
+    let metrics = GlyphonMetrics::new(&FontFaces::bundled());
+    let radar = RadarScene::default();
+    let line_height = metrics.line_height(layout.font, layout.font_size);
+
+    let destinations = systems
+        .into_iter()
+        .map(NavDestination::Named)
+        .chain([NavDestination::Unexplored]);
+    for to in destinations {
+        let state = HudState {
+            radar: &radar,
+            blink_on: false,
+            reserves: Reserves::default(),
+            nav: NavDisplay::GatePilot {
+                to: to.clone(),
+                gate: Some(gate.clone()),
+            },
+            cargo: None,
+            disabled: false,
+        };
+        let mut list = DrawList::new();
+        hud::draw(&mut list, bar, &state, Some(&metrics), width);
+        let lines: Vec<(&String, Point)> = list
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text {
+                    text, origin: at, ..
+                } if (nav.min.x..=nav.max.x).contains(&at.x)
+                    && (nav.min.y - line_height..=nav.max.y).contains(&at.y) =>
+                {
+                    Some((text, *at))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            lines
+                .iter()
+                .map(|(text, _)| text.as_str())
+                .collect::<Vec<_>>(),
+            [hud::gate_pilot_label(&to).as_str(), gate.as_str()],
+            "{to:?}: the autopilot's two lines"
+        );
+        for (text, at) in lines {
+            let right = at.x + metrics.width(layout.font, layout.font_size, text);
+            assert!(
+                at.x >= nav.min.x && right <= nav.max.x,
+                "{text:?} spans {}..{right}, outside the nav area's {}..{}",
+                at.x,
+                nav.min.x,
+                nav.max.x
+            );
+            assert!(
+                at.y >= nav.min.y && at.y + line_height <= nav.max.y,
+                "{text:?} spans {}..{}, outside the nav area's {}..{}",
+                at.y,
+                at.y + line_height,
+                nav.min.y,
+                nav.max.y
+            );
+        }
     }
 }
