@@ -330,6 +330,20 @@ pub enum Service {
     Refuel,
 }
 
+impl Service {
+    /// The service as written in data.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Service::Bar => "bar",
+            Service::Trade => "trade",
+            Service::Outfitter => "outfitter",
+            Service::Shipyard => "shipyard",
+            Service::Refuel => "refuel",
+        }
+    }
+}
+
 /// A storyline (`storylines/<id>.md`): a thread of missions.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -744,6 +758,20 @@ pub(crate) mod tests {
         ];
         for (kind, text) in types {
             assert_eq!(kind.as_str(), text);
+        }
+    }
+
+    #[test]
+    fn a_service_is_named_as_in_data() {
+        let services = [
+            (Service::Bar, "bar"),
+            (Service::Trade, "trade"),
+            (Service::Outfitter, "outfitter"),
+            (Service::Shipyard, "shipyard"),
+            (Service::Refuel, "refuel"),
+        ];
+        for (service, text) in services {
+            assert_eq!(service.as_str(), text);
         }
     }
 
