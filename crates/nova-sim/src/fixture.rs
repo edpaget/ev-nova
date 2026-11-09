@@ -3,7 +3,8 @@
 //! storyline walker, [`StoryWalker`], which drives a session through a
 //! mission chain from a script of [`Step`]s (see the `walker` module); and
 //! [`bits_allowing`], the control bits that make a test hold, for setting
-//! a pilot up directly; [`disable`], for disabling a ship directly;
+//! a pilot up directly; [`disable`] and [`destroy`], for disabling or
+//! destroying a ship directly;
 //! [`set_player_condition`], for downing or repairing the player directly;
 //! [`set_player_ion`] and [`set_player_tractor`], for ionizing or
 //! holding the player directly; [`put_player_over`], for bringing the player over a ship to board it;
@@ -62,6 +63,20 @@ pub fn disable(session: &mut Session, id: NpcId) {
         npc.reserves.armor.now = 1.0;
         npc.condition = Condition::Disabled;
     }
+}
+
+/// Destroys NPC `id` in `session`, if it is in the system, as the fight
+/// does once it has broken up: its condition destroyed, then taken out of
+/// the system, so its [`Fate::Destroyed`](crate::story::Fate::Destroyed)
+/// is raised for the next settling and, for a mission's special ship, it
+/// is counted lost. For a test that needs a ship gone without a fight,
+/// which [`disable`] doesn't give: a disabled ship raises no fate.
+pub fn destroy(session: &mut Session, id: NpcId) {
+    let Some(npc) = session.npc_mut(id) else {
+        return;
+    };
+    npc.condition = Condition::Destroyed;
+    session.take_out_the_destroyed(&mut crate::chance::NeverFires);
 }
 
 /// Repairs NPC `id` in `session`, if it is in the system, its shield and

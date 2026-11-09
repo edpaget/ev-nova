@@ -59,10 +59,12 @@
 //!   entry from or to the point's gate meets nothing. The guards are the
 //!   mission's blockade, a hidden stock `mïsn` the storylines start while
 //!   the mission is active and unmet and end once it isn't
-//!   (at the end of [`Session::settle_storylines`] and as a pilot starts
-//!   flying). The blockade's goals-met moment meets the mission
-//!   ([`Play::beat_holder`]) and settles the storylines before the
-//!   moment's settling returns. See the `blockades` module.
+//!   ([`Session::sync_blockades`], at the end of
+//!   [`Session::settle_storylines`] and as a pilot is loaded). The
+//!   blockade's goals-met moment meets the mission
+//!   ([`Session::blockade_broken`], [`Play::beat_holder`]) and settles the
+//!   storylines before the moment's settling returns. See the
+//!   `blockades` module.
 //! - **News.** [`Session::heard_news`] lists what a system has heard over
 //!   the galaxy's lanes ([`news::heard`]).
 

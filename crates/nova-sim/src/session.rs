@@ -451,6 +451,7 @@ mod auto_refuel;
 mod aux_ships;
 #[cfg(test)]
 mod berth_marks;
+mod blockades;
 mod board_attempt;
 mod board_repair;
 mod brackets;
@@ -1475,6 +1476,11 @@ impl Session {
         session.run.register_storylines(&session.statics);
         session.run.register_nebulae(&session.statics);
         session.run.register_slots(&session.pilot);
+        // A pilot whose save and data disagree has its blockades put
+        // right before its system is set up (see the `blockades` module).
+        // The load draws on no chance, so a blockade started here draws
+        // as `NeverFires` does.
+        session.sync_blockades(&mut crate::chance::NeverFires);
         session.set_player_system(system, here, Dock::AsItWas);
         // A load and the main screen are rebuild points (@0x751cf,
         // @0x75324, @0x1a354, @0x1a8ca, @0x1b003, @0x457ee): the view
@@ -2691,8 +2697,9 @@ impl Session {
     /// dying branch dropped it (see the `disabled_mission_escorts` module);
     /// one destroyed with neither between, its slot inactive, leaves the
     /// rest to re-form at the next pass's head
-    /// ([`Session::reform_on_swarm_change`]).
-    fn take_out_the_destroyed(&mut self, chance: &mut dyn Chance) {
+    /// ([`Session::reform_on_swarm_change`]). Crate-visible for
+    /// `fixture::destroy`.
+    pub(crate) fn take_out_the_destroyed(&mut self, chance: &mut dyn Chance) {
         let destroyed: Vec<NpcId> = self
             .space
             .traffic

@@ -68,11 +68,13 @@ impl Chart {
 impl Session {
     /// Settles what the storylines played in the entry just run: the jump
     /// points ([`Chart::sync_points`]), then the outfit changes they
-    /// queued ([`Session::apply_story_outfits`]), drawing on `chance`.
+    /// queued ([`Session::apply_story_outfits`]), then the blockades
+    /// ([`Session::sync_blockades`]), drawing on `chance`.
     pub(super) fn settle_storylines(&mut self, chance: &mut dyn Chance) {
         self.chart
             .sync_points(&self.statics, &mut self.pilot, &mut self.out);
         self.apply_story_outfits(chance);
+        self.sync_blockades(chance);
     }
 }
 

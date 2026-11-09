@@ -63,7 +63,9 @@
 //! and auto-aborts a mission of `Flags` 0x0001 ([`Session::auto_abort`]).
 //! A mission of no goal is met at its first check, unless its ships come
 //! later (`ShipStart` 1) with `Flags` 0x0001: then it waits for them
-//! (see [`check_goals`]).
+//! (see [`check_goals`]). For the new game's blockade of a `take_point`
+//! mission, the moment then meets that mission ([`Session::blockade_broken`];
+//! see the `blockades` module).
 //!
 //! **The auto-abort as the ships spawn**: a mission of `Flags` 0x0001
 //! also auto-aborts, whatever its goal, once per slot as its special
@@ -465,7 +467,9 @@ impl Session {
     /// ([`SpecialShips::ship_done`], under either reading of
     /// [`RuleKey::ShipDoneOnce`]), its `ShipDoneText`, its
     /// `OnShipDone` with a `ShipGoal`, then with `Flags` 0x0001 its
-    /// auto-abort, while the slot still holds it.
+    /// auto-abort, while the slot still holds it; then, for the new game's
+    /// blockade of a `take_point` mission, the holder beaten
+    /// ([`Session::blockade_broken`]).
     fn ship_goals_met(&mut self, slot: u8, record: &MissionRecord, chance: &mut dyn Chance) {
         if let Some(active) = self.slot_holding(slot, record.id) {
             active.ships.ship_done = true;
@@ -475,6 +479,7 @@ impl Session {
             self.run_mission_script(slot, &record.on_ship_done, chance);
         }
         self.abort_on_spawn(slot, record, chance);
+        self.blockade_broken(record.id, chance);
     }
 
     /// Auto-aborts `record`, the mission in `slot`, when it has `Flags`
