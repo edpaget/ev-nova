@@ -28,6 +28,11 @@
 //!   original compares them (@0x6e9d-0x6eb4). Being derelict does not
 //!   count, and nor does a class below 0. A mission's `AvailStel` and its
 //!   random destinations read it (see `nova_sim::mission`).
+//! - **Has class** ([`Governments::has_class`], listed by
+//!   [`Governments::of_class`]): a government holds a class when one of its
+//!   `Class1-4` is that class; -1 is an unused slot and matches nothing.
+//!   Being derelict does not count. The `ModType` marks of IFF scramblers
+//!   and inhibitors and a mission's map reach by class read it.
 //! - A government the table does not hold has no classes and no flags.
 //! - `MaxOdds` ([`Governments::max_odds`]) is a fraction, `MaxOdds / 100`,
 //!   no less than [`MIN_ODDS`] (`_LoadObjectData` @0x7bbb3); an
@@ -294,6 +299,26 @@ impl Governments {
             .any(|(&one, other)| one >= 0 && one == other)
     }
 
+    /// Whether `govt` holds `class` in one of its `Class1-4` (see the
+    /// module docs): never for an independent, a government the table
+    /// does not hold, or `class` -1 (an unused slot). Being derelict does
+    /// not count. Any other class below 0 is read literally, unlike
+    /// [`Self::shared_class`].
+    #[must_use]
+    pub fn has_class(&self, govt: Option<GovtId>, class: i16) -> bool {
+        class != UNUSED
+            && self
+                .record(govt)
+                .is_some_and(|record| record.classes.contains(&class))
+    }
+
+    /// Every government that holds `class` in one of its `Class1-4`
+    /// ([`Self::has_class`]), by ascending ID.
+    pub fn of_class(&self, class: i16) -> impl Iterator<Item = GovtId> + '_ {
+        self.ids()
+            .filter(move |&govt| self.has_class(Some(govt), class))
+    }
+
     /// Whether ships of `a` and `b` are enemies to an NPC: both have a
     /// government, different ones, that are enemies.
     #[must_use]
@@ -491,6 +516,58 @@ mod tests {
         );
         assert!(!govts.shared_class(id(128), None), "an independent");
         assert!(!govts.shared_class(None, id(128)));
+    }
+
+    #[test]
+    fn has_class_reads_every_slot() {
+        let govts = Governments::new([
+            GovtRecord {
+                classes: [5, -1, -1, 8],
+                ..govt(128)
+            },
+            GovtRecord {
+                flags: DERELICT,
+                classes: [6, -1, -1, -1],
+                ..govt(129)
+            },
+            GovtRecord {
+                classes: [-2, -1, -1, -1],
+                ..govt(130)
+            },
+        ]);
+        let id = |id| Some(GovtId(id));
+        assert!(govts.has_class(id(128), 5), "slot 1");
+        assert!(govts.has_class(id(128), 8), "slot 4");
+        assert!(!govts.has_class(id(128), 6), "in no slot");
+        assert!(govts.has_class(id(129), 6), "derelict does not count");
+        assert!(!govts.has_class(None, 5), "an independent");
+        assert!(!govts.has_class(id(999), 5), "a government not held");
+        assert!(!govts.has_class(id(128), -1), "-1 is an unused slot");
+        assert!(govts.has_class(id(130), -2), "a -2 slot is read literally");
+    }
+
+    #[test]
+    fn of_class_lists_holders_by_id() {
+        let govts = Governments::new([
+            GovtRecord {
+                classes: [7, -1, -1, -1],
+                ..govt(130)
+            },
+            GovtRecord {
+                classes: [1, -1, 7, -1],
+                ..govt(128)
+            },
+            GovtRecord {
+                classes: [2, -1, -1, -1],
+                ..govt(129)
+            },
+        ]);
+        assert_eq!(
+            govts.of_class(7).collect::<Vec<_>>(),
+            [GovtId(128), GovtId(130)]
+        );
+        assert_eq!(govts.of_class(99).count(), 0);
+        assert_eq!(govts.of_class(-1).count(), 0);
     }
 
     #[test]
