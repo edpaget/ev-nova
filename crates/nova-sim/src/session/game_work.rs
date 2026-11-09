@@ -270,7 +270,7 @@ impl PlayerHead {
         let dead = condition == Condition::Destroyed;
         Self {
             dying: matches!(condition, Condition::Dying { .. } | Condition::Destroyed),
-            disabled: matches!(condition, Condition::Disabled | Condition::Dying { .. }),
+            disabled: condition.disabled(),
             dead,
             returned: pod.is_some() && !dead,
         }

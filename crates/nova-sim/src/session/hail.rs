@@ -326,12 +326,14 @@ impl Session {
         // `_HandlePlayerCommunication` refuses a target whose hyperspace
         // state (+0x50) is above 0 (@0x62089-0x6209c) before it reads the
         // government: "No response." if it is disabled (`_IsDisabled`
-        // @0x62610-0x62644), else "entering hyperspace" (@0x6264e-0x62676).
+        // @0x62610-0x62644, which holds of a ship breaking up but not of a
+        // stellar's defence ship, @0x2d6f), else "entering hyperspace"
+        // (@0x6264e-0x62676).
         // `_AIMakeShipStopJumping` zeroes it before a leaderless ship's
         // wait (+0x4c), which the hail does not read, so a ship holding
         // its course after its glide ([`Mode::Coasting`]) answers.
         if !npc.arrived() {
-            return Err(if npc.condition == Condition::Disabled {
+            return Err(if npc.is_disabled() {
                 HailRefusal::NoResponse
             } else {
                 HailRefusal::InHyperspace
@@ -1164,6 +1166,22 @@ pub(super) mod tests {
         npc(&mut session).condition = Condition::Disabled;
         let (hailed, asked) = hail_with(&mut session, &catalog, &opening(0));
         assert_eq!(hailed, Err(HailRefusal::NoResponse), "@0x62610-0x62644");
+        assert!(asked.is_empty(), "{asked:?}");
+    }
+
+    #[test]
+    fn a_ship_breaking_up_as_it_glides_in_gives_no_response() {
+        // `_IsDisabled` (@0x62610-0x62644) has no dying test: its armour
+        // line holds of a ship breaking up.
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        npc(&mut session).mode = Mode::JumpingIn { tick: 0 };
+        npc(&mut session).condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        let (hailed, asked) = hail_with(&mut session, &catalog, &opening(0));
+        assert_eq!(hailed, Err(HailRefusal::NoResponse));
         assert!(asked.is_empty(), "{asked:?}");
     }
 
