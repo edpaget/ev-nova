@@ -2,6 +2,13 @@
 //! there, download and check WinSparkle ([`winsparkle::stage`]), stage the
 //! icon and the WiX source, and run `wix build`.
 //!
+//! When the host signs ([`Authenticode::ArtifactSigning`]), the signing
+//! tools are staged once ([`tools::stage`]) right after the DLL's pin
+//! check, the staged `WinSparkle.dll` is signed and verified before the
+//! WiX source names it, and the `.msi` is signed and verified after
+//! `wix build` ([`sign_and_verify`]). Unsigned, the sequence has no
+//! signing step at all.
+//!
 //! [`plan`] is the sequence as data; [`pack`] runs it through the ports,
 //! stopping at the first failure. Neither builds anything: the
 //! executables are packed as they are.
@@ -16,6 +23,9 @@ use super::layout::InstallerLayout;
 use super::wxs::wxs;
 use super::{EXES, InstallerError, winsparkle};
 use crate::appcast::Platform;
+use crate::authenticode::Authenticode;
+use crate::authenticode::sign::sign_and_verify;
+use crate::authenticode::tools::{self, AuthenticodeLayout};
 use crate::bundle::{self, BundleError, Step, execute, metadata};
 use crate::channel::{FeedStatus, feed_status};
 use crate::icon::ICON;
@@ -33,11 +43,13 @@ pub fn wix_build(wix: &OsStr, layout: &InstallerLayout) -> Invocation {
         .arg(layout.wxs())
 }
 
-/// The steps that pack `spec`'s installer under `layout` with `wix`.
+/// The steps that pack `spec`'s installer under `layout` with `wix`,
+/// signed as `signing` says (see the module docs).
 pub fn plan(
     spec: &BundleSpec,
     layout: &InstallerLayout,
     wix: &OsStr,
+    signing: &Authenticode,
 ) -> Result<Vec<Step>, InstallerError> {
     let source = wxs(spec, layout)?;
     // The same icon nova.exe embeds, made from the same `.icns`.
@@ -48,6 +60,14 @@ pub fn plan(
         Step::CreateDir(layout.out.clone()),
     ];
     steps.extend(winsparkle::stage(layout));
+    let tools = AuthenticodeLayout::new(&spec.target_dir);
+    let signs = matches!(signing, Authenticode::ArtifactSigning(_));
+    if let Authenticode::ArtifactSigning(account) = signing {
+        // The checked DLL, signed in place: it no longer matches its pin,
+        // so the signature comes after the check and before wix packs it.
+        steps.extend(tools::stage(&tools, account));
+        steps.extend(sign_and_verify(&tools, &[layout.winsparkle_dll()]));
+    }
     steps.extend([
         Step::Write {
             path: layout.icon(),
@@ -59,11 +79,14 @@ pub fn plan(
         },
         Step::Run(wix_build(wix, layout)),
     ]);
+    if signs {
+        steps.extend(sign_and_verify(&tools, &[layout.msi()]));
+    }
     Ok(steps)
 }
 
-/// A packed installer: the `.msi`, and the update feed the build names,
-/// or why it names none.
+/// A packed installer: the `.msi`, the update feed the build names, or
+/// why it names none, and how it was signed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Packed {
     /// The `.msi`.
@@ -72,6 +95,8 @@ pub struct Packed {
     /// channel and key (`nova_winres::windows_update_feed`, pinned to
     /// [`feed_status`] by a test).
     pub feed: FeedStatus,
+    /// How the staged `WinSparkle.dll` and the `.msi` were signed.
+    pub signing: Authenticode,
 }
 
 /// Packs the installer. Fails before staging anything when an executable
@@ -91,12 +116,13 @@ pub fn pack(
     {
         return Err(InstallerError::MissingExe(missing));
     }
-    for step in plan(&spec, &layout, &host.wix)? {
+    for step in plan(&spec, &layout, &host.wix, &host.signing)? {
         execute(&step, process, files)?;
     }
     Ok(Packed {
         msi: layout.msi(),
         feed: feed_status(&spec, host.channel, Platform::Windows),
+        signing: host.signing.clone(),
     })
 }
 
@@ -109,6 +135,8 @@ mod tests {
     use super::*;
     use crate::appcast::Channel;
     use crate::appcast::key::PublicKey;
+    use crate::authenticode::Account;
+    use crate::authenticode::sign::{sign, verify};
     use crate::channel::{UpdateFeed, feed_url};
     use crate::digest::DigestTool;
     use crate::ports::RunError;
@@ -126,6 +154,7 @@ mod tests {
             exes: None,
             out: None,
             channel: None,
+            signing: Authenticode::Unsigned,
         }
     }
 
@@ -181,7 +210,7 @@ mod tests {
     fn plans_staging_the_icon_and_source_then_wix_build() {
         let spec = spec();
         let layout = InstallerLayout::new(&spec.target_dir, None, None).expect("layout");
-        let steps = plan(&spec, &layout, OsStr::new("wix")).expect("plan");
+        let steps = plan(&spec, &layout, OsStr::new("wix"), &Authenticode::Unsigned).expect("plan");
         let staging = spec.target_dir.join("installer").join("staging");
         let out = spec.target_dir.join("installer").join("out");
         let mut expected = vec![
@@ -217,7 +246,13 @@ mod tests {
     fn the_wix_given_is_the_one_run() {
         let spec = spec();
         let layout = InstallerLayout::new(&spec.target_dir, None, None).expect("layout");
-        let steps = plan(&spec, &layout, OsStr::new("D:/wix/wix.exe")).expect("plan");
+        let steps = plan(
+            &spec,
+            &layout,
+            OsStr::new("D:/wix/wix.exe"),
+            &Authenticode::Unsigned,
+        )
+        .expect("plan");
         let Some(Step::Run(invocation)) = steps.last() else {
             panic!("{steps:?}");
         };
@@ -230,7 +265,7 @@ mod tests {
         spec.version = "0.300.0".into();
         let layout = InstallerLayout::new(&spec.target_dir, None, None).expect("layout");
         assert!(matches!(
-            plan(&spec, &layout, OsStr::new("wix")),
+            plan(&spec, &layout, OsStr::new("wix"), &Authenticode::Unsigned),
             Err(InstallerError::VersionTooLarge(_))
         ));
     }
@@ -245,6 +280,7 @@ mod tests {
             &Packed {
                 msi: layout.msi(),
                 feed: FeedStatus::Development,
+                signing: Authenticode::Unsigned,
             }
         );
         let runs = packed.runs();
@@ -557,5 +593,165 @@ mod tests {
             .expect("the game");
         game["metadata"]["bundle"]["update_public_key"] = key.to_base64().into();
         serde_json::to_vec(&metadata).expect("json")
+    }
+
+    fn account() -> Account {
+        Account {
+            endpoint: "https://eus.codesigning.azure.net/".into(),
+            account: "ev-nova-signing".into(),
+            profile: "ev-nova-public".into(),
+            correlation: None,
+        }
+    }
+
+    fn signing_host() -> InstallerHost {
+        host().for_signing(Authenticode::ArtifactSigning(account()))
+    }
+
+    fn is_signtool(i: &Invocation, command: &str) -> bool {
+        Path::new(&i.program).ends_with("signtool.exe")
+            && i.args.first().is_some_and(|a| a == command)
+    }
+
+    #[test]
+    fn signing_signs_the_checked_dll_before_wix_and_the_msi_after() {
+        let spec = spec();
+        let layout = InstallerLayout::new(&spec.target_dir, None, None).expect("layout");
+        let tools_layout = AuthenticodeLayout::new(&spec.target_dir);
+        let unsigned =
+            plan(&spec, &layout, OsStr::new("wix"), &Authenticode::Unsigned).expect("plan");
+        let signed = plan(
+            &spec,
+            &layout,
+            OsStr::new("wix"),
+            &Authenticode::ArtifactSigning(account()),
+        )
+        .expect("plan");
+        // Up to and including the DLL's pin check, the same.
+        let pinned = unsigned
+            .iter()
+            .position(|s| matches!(s, Step::CheckSha256 { pin, .. } if *pin == winsparkle::DLL_PIN))
+            .expect("the DLL's pin check")
+            + 1;
+        assert_eq!(signed[..pinned], unsigned[..pinned]);
+        // Then the tools, once, and the staged DLL signed and verified.
+        let mut expected = tools::stage(&tools_layout, &account());
+        expected.extend(sign_and_verify(&tools_layout, &[layout.winsparkle_dll()]));
+        // Then the icon, the source and wix, as unsigned.
+        expected.extend(unsigned[pinned..].iter().cloned());
+        // Then the .msi signed and verified.
+        expected.extend(sign_and_verify(&tools_layout, &[layout.msi()]));
+        assert_eq!(signed[pinned..], expected);
+        assert_eq!(
+            signed
+                .iter()
+                .filter(
+                    |s| matches!(s, Step::Write { path, .. } if *path == tools_layout.metadata())
+                )
+                .count(),
+            1,
+            "the tools are staged once"
+        );
+    }
+
+    #[test]
+    fn a_signed_pack_runs_the_tools_between_the_dll_check_and_wix() {
+        let packed = pack_with(&signing_host(), |_| None, |_| false);
+        let spec = spec();
+        let layout = InstallerLayout::new(&spec.target_dir, None, None).expect("layout");
+        let tools_layout = AuthenticodeLayout::new(&spec.target_dir);
+        assert_eq!(
+            packed.result.as_ref().expect("packed").signing,
+            Authenticode::ArtifactSigning(account())
+        );
+        let runs = packed.runs();
+        let programs: Vec<_> = runs
+            .iter()
+            .map(|i| {
+                Path::new(&i.program)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            })
+            .collect();
+        assert_eq!(
+            programs,
+            [
+                "cargo.exe",
+                "curl",
+                "certutil",
+                "tar",
+                "tar",
+                "certutil",
+                "curl",
+                "certutil",
+                "tar",
+                "curl",
+                "certutil",
+                "tar",
+                "signtool.exe",
+                "signtool.exe",
+                "wix",
+                "signtool.exe",
+                "signtool.exe",
+            ]
+        );
+        let dll = layout.winsparkle_dll();
+        let msi = layout.msi();
+        assert_eq!(
+            [&runs[12], &runs[13], &runs[15], &runs[16]],
+            [
+                &sign(&tools_layout, &dll),
+                &verify(&tools_layout, &dll),
+                &sign(&tools_layout, &msi),
+                &verify(&tools_layout, &msi),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unsigned_pack_downloads_no_tool_and_runs_no_signtool() {
+        let packed = pack_with(&host(), |_| None, |_| false);
+        assert_eq!(
+            packed.result.as_ref().expect("packed").signing,
+            Authenticode::Unsigned
+        );
+        let runs = packed.runs();
+        assert_eq!(runs.iter().filter(|i| i.program == "curl").count(), 1);
+        assert!(
+            !runs
+                .iter()
+                .any(|i| is_signtool(i, "sign") || is_signtool(i, "verify"))
+        );
+    }
+
+    #[test]
+    fn a_failing_dll_sign_stops_before_wix() {
+        let packed = pack_with(&signing_host(), failing(|i| is_signtool(i, "sign")), |_| {
+            false
+        });
+        let message = packed.result.as_ref().expect_err("fails").to_string();
+        assert!(message.contains("WinSparkle.dll"), "{message}");
+        let runs = packed.runs();
+        assert!(!runs.iter().any(|i| i.program == "wix"), "{runs:?}");
+        assert!(!runs.iter().any(|i| is_signtool(i, "verify")), "{runs:?}");
+    }
+
+    #[test]
+    fn a_failing_msi_verify_fails_the_pack() {
+        let packed = pack_with(
+            &signing_host(),
+            |i| {
+                (is_signtool(i, "verify")
+                    && i.args
+                        .last()
+                        .is_some_and(|a| Path::new(a).ends_with(super::super::MSI)))
+                .then_some(Err(RunError::Failed(Some(2))))
+            },
+            |_| false,
+        );
+        let message = packed.result.as_ref().expect_err("fails").to_string();
+        assert!(message.contains("verify /pa /tw"), "{message}");
+        assert!(packed.runs().iter().any(|i| i.program == "wix"));
     }
 }

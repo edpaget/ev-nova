@@ -5,6 +5,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use crate::appcast::Channel;
+use crate::authenticode::Authenticode;
 
 /// The packer's usage line.
 pub const USAGE: &str = "usage: nova-installer [--exes <DIR>] [OUT_DIR]   \
@@ -28,6 +29,10 @@ pub struct InstallerHost {
     /// `None` for a development build. [`installer_host`] leaves it `None`,
     /// and `main` sets it ([`InstallerHost::for_channel`]).
     pub channel: Option<Channel>,
+    /// How the staged `WinSparkle.dll` and the `.msi` are signed
+    /// (`Authenticode::from_env`). [`installer_host`] leaves it unsigned,
+    /// and `main` sets it ([`InstallerHost::for_signing`]).
+    pub signing: Authenticode,
 }
 
 impl InstallerHost {
@@ -35,6 +40,12 @@ impl InstallerHost {
     #[must_use]
     pub fn for_channel(self, channel: Option<Channel>) -> Self {
         Self { channel, ..self }
+    }
+
+    /// The host signing with `signing`.
+    #[must_use]
+    pub fn for_signing(self, signing: Authenticode) -> Self {
+        Self { signing, ..self }
     }
 }
 
@@ -87,12 +98,14 @@ pub fn installer_host(
         exes,
         out,
         channel: None,
+        signing: Authenticode::Unsigned,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::authenticode::Account;
 
     fn cwd() -> PathBuf {
         Path::new("/work").join("ev-nova")
@@ -116,7 +129,34 @@ mod tests {
                 exes: None,
                 out: None,
                 channel: None,
+                signing: Authenticode::Unsigned,
             })
+        );
+    }
+
+    #[test]
+    fn the_signing_is_set_on_the_host_and_nothing_else_changes() {
+        let host = parse(&["dist"]).expect("host");
+        let account = Account {
+            endpoint: "https://eus.codesigning.azure.net/".into(),
+            account: "a".into(),
+            profile: "p".into(),
+            correlation: None,
+        };
+        let signed = host
+            .clone()
+            .for_signing(Authenticode::ArtifactSigning(account.clone()));
+        assert_eq!(signed.signing, Authenticode::ArtifactSigning(account));
+        assert_eq!(
+            InstallerHost {
+                signing: Authenticode::Unsigned,
+                ..signed.clone()
+            },
+            host
+        );
+        assert_eq!(
+            signed.for_signing(Authenticode::Unsigned).signing,
+            Authenticode::Unsigned
         );
     }
 

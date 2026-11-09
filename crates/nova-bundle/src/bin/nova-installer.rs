@@ -13,12 +13,19 @@
 //! nova's build script read it: the packer prints on stderr which update
 //! feed that build names (`nova_bundle::channel::FeedStatus`).
 //!
-//! Exits 2 on a usage error, a non-Windows host or an unknown channel, and
-//! 1 when a step fails.
+//! `ARTIFACT_SIGNING_ENDPOINT`, `ARTIFACT_SIGNING_ACCOUNT` and
+//! `ARTIFACT_SIGNING_PROFILE`, all set, sign the staged `WinSparkle.dll`
+//! (after its pin check, before `wix build`) and the `.msi` with Artifact
+//! Signing, which needs a prior `az login`; with none set the installer is
+//! unsigned (`nova_bundle::authenticode`). The packer prints which.
+//!
+//! Exits 2 on a usage error, a non-Windows host, an unknown channel or a
+//! partial set of signing variables, and 1 when a step fails.
 
 use std::env;
 use std::process::ExitCode;
 
+use nova_bundle::authenticode::Authenticode;
 use nova_bundle::channel;
 use nova_bundle::installer::host::installer_host;
 use nova_bundle::installer::plan::pack;
@@ -52,9 +59,17 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    let host = match Authenticode::from_env(&StdEnv) {
+        Ok(signing) => host.for_signing(signing),
+        Err(e) => {
+            eprintln!("nova-installer: {e}");
+            return ExitCode::from(2);
+        }
+    };
     match pack(&mut StdProcess, &mut StdFiles, &host) {
         Ok(packed) => {
             eprintln!("nova-installer: {}", packed.feed.describe());
+            eprintln!("nova-installer: {}", packed.signing.describe());
             println!("{}", packed.msi.display());
             ExitCode::SUCCESS
         }
