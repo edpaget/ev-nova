@@ -7,7 +7,8 @@
 //! the offered rounds as, afresh: by the engine it scans the 512 records
 //! in order for the first whose *first* mod is `ModType` 3 naming the
 //! rounds (@0x93cdc-0x93d08), and by the other reading of
-//! [`RuleKey::PlunderAmmoOutfit`] the first with such a mod in any slot
+//! [`RuleKey::OutfitWeaponMods`](crate::rulebook::RuleKey::OutfitWeaponMods)
+//! the first with such a mod in any slot
 //! ([`board::ammo_outfit`](crate::board::ammo_outfit)). When none
 //! matches, the press beeps [`SimSound::Refused`](crate::sound::SimSound::Refused)
 //! (`snd ` 153, @0x93d0a-0x93d2f) and takes nothing: the offer stays, as
@@ -40,18 +41,19 @@
 
 use super::Session;
 use crate::catalog::{OutfitId, WeaponId};
-use crate::rulebook::RuleKey;
 
 impl Session {
     /// The outfit a boarding's Ammo press takes the rounds of weapon
-    /// `slot` as, as [`RuleKey::PlunderAmmoOutfit`] reads it (see the
+    /// `slot` as, as
+    /// [`RuleKey::OutfitWeaponMods`](crate::rulebook::RuleKey::OutfitWeaponMods)
+    /// reads it (see the
     /// module docs): none when none matches.
     pub(super) fn ammo_outfit(&self, slot: WeaponId) -> Option<OutfitId> {
         crate::board::ammo_outfit(
             &self.statics.outfits,
-            &self.statics.ammo_outfits,
+            self.statics.named_ammo_outfits(),
             slot,
-            self.setup.rules.source_for(RuleKey::PlunderAmmoOutfit),
+            self.setup.outfit_weapon_mods(),
         )
     }
 
@@ -108,7 +110,7 @@ mod tests {
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::session::Session;
     use crate::session::tests::{
-        ROCKET, ROCKETS_OFFERED, ammo_aboard, ammo_boarding, ammo_session, take,
+        ROCKET, ROCKETS_OFFERED, ammo_aboard, ammo_boarding, ammo_boarding_by, ammo_session, take,
     };
     use crate::sound::SimSound;
     use crate::testkit::{FakePilotCatalog, outfit};
@@ -218,8 +220,7 @@ mod tests {
             Vec::<u32>::new(),
             "no self-destruct armed"
         );
-        let bible =
-            Rulebook::default().with_override(RuleKey::PlunderAmmoOutfit, RuleSource::Bible);
+        let bible = Rulebook::default().with_override(RuleKey::OutfitWeaponMods, RuleSource::Bible);
         let mut session = ammo_session(&catalog).with_rules(bible);
         assert_eq!(
             take(&mut session, Take::Ammo, &[]).0,
@@ -244,6 +245,20 @@ mod tests {
     }
 
     #[test]
+    fn the_dialog_names_later_slot_rounds_whatever_the_key() {
+        // `_PlunderDialogUpdate` scans every slot (@0x92c59-0x92c81).
+        let catalog = named_in_a_later_slot();
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let rules = Rulebook::default().with_override(RuleKey::OutfitWeaponMods, source);
+            let (_, opened) = ammo_boarding_by(&catalog, rules);
+            let Ok(Boarding::Opened(view)) = opened else {
+                panic!("{opened:?}");
+            };
+            assert_eq!(view.ammo, Some(ROCKETS_OFFERED), "{source:?}");
+        }
+    }
+
+    #[test]
     fn rounds_no_outfit_names_are_offered_and_their_press_refused() {
         let mut catalog = ammo_aboard(1, 20);
         catalog.outfits.retain(|record| record.id != OutfitId(310));
@@ -258,7 +273,7 @@ mod tests {
             };
             assert_eq!(view.ammo, Some(unnamed), "{source:?}");
             let mut session = session
-                .with_rules(Rulebook::default().with_override(RuleKey::PlunderAmmoOutfit, source));
+                .with_rules(Rulebook::default().with_override(RuleKey::OutfitWeaponMods, source));
             session.take_sounds();
             assert_eq!(take(&mut session, Take::Ammo, &[]).0, Taken::Missed);
             assert_eq!(session.take_sounds(), [SimSound::Refused], "{source:?}");

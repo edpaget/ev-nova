@@ -14,7 +14,7 @@ use crate::combat::Rules;
 use crate::combat::armament::Armament;
 use crate::combat::weapon::WeaponSpec;
 use crate::flight::Controls;
-use crate::testkit::{FakePilotCatalog, weapon, work, work_with};
+use crate::testkit::{FakePilotCatalog, Passive, Picking, weapon, work, work_with};
 use crate::traffic::npc::Npc;
 use std::cell::Cell;
 
@@ -42,6 +42,14 @@ fn single(id: i16) -> WeaponRecord {
     }
 }
 
+/// An NPC's pick of weapon `id` alone.
+fn picking(id: i16) -> Trigger {
+    Trigger {
+        only: Some(WeaponId(id)),
+        ..Trigger::default()
+    }
+}
+
 /// `session`'s NPC 0 holding its place, its trigger `trigger`.
 fn hold(session: &mut Session, trigger: Trigger) {
     let npc = &mut session.space.traffic.npcs_mut()[0];
@@ -57,17 +65,24 @@ fn fired_by(events: &[CombatEvent], ship: ShipRef) -> bool {
 }
 
 /// The passes, from 0, of the first `passes` of `session` on which `ship`
-/// fired.
+/// fired, its traffic deciding as `behaviour` says.
 fn fire_passes(
     session: &mut Session,
     catalog: &FakePilotCatalog,
-    ship: ShipRef,
+    (ship, behaviour): (ShipRef, &dyn Behaviour),
     passes: u32,
 ) -> Vec<u32> {
     session.take_combat_events();
     (0..passes)
         .filter(|_| {
-            work(session, catalog, Controls::default());
+            work_with(
+                session,
+                catalog,
+                Controls::default(),
+                behaviour,
+                Rules::default(),
+                &mut NeverFires,
+            );
             fired_by(&session.take_combat_events(), ship)
         })
         .collect()
@@ -135,9 +150,12 @@ fn an_npcs_one_at_a_time_weapon_fires_again_reload_ticks_after_its_shots_last_mo
     let catalog = arming(blaster(128), single(129), 0);
     // Facing away from the player, its shots meet no one.
     let mut session = facing_an_npc(&catalog, 0);
-    hold(&mut session, FIRE);
+    // It picks its weapon again each think, as the fight clears a fired
+    // pick.
+    let repicking = Picking(WeaponId(129));
+    hold(&mut session, picking(129));
     assert_eq!(
-        fire_passes(&mut session, &catalog, NPC, 25),
+        fire_passes(&mut session, &catalog, (NPC, &repicking), 25),
         [0, 12, 24],
         "Reload ticks after its last move"
     );
@@ -145,9 +163,9 @@ fn an_npcs_one_at_a_time_weapon_fires_again_reload_ticks_after_its_shots_last_mo
     // passes take it on pass 6, before `_HandleShot` could hold the
     // reload again.
     let mut session = with_an_npc_at(&catalog, 750, 700, 180);
-    hold(&mut session, FIRE);
+    hold(&mut session, picking(129));
     assert_eq!(
-        fire_passes(&mut session, &catalog, NPC, 9),
+        fire_passes(&mut session, &catalog, (NPC, &repicking), 9),
         [0, 7],
         "Reload ticks after its last move, onto its victim"
     );
@@ -164,7 +182,7 @@ fn the_players_one_at_a_time_weapon_fires_again_reload_ticks_after_its_shots_las
     let mut session = with_an_npc_at(&catalog, 750, 850, 0);
     session.hold_trigger(FIRE);
     assert_eq!(
-        fire_passes(&mut session, &catalog, ShipRef::Player, 14),
+        fire_passes(&mut session, &catalog, (ShipRef::Player, &Passive), 14),
         [0, 13]
     );
 }
@@ -189,7 +207,7 @@ impl Behaviour for Waiting {
         Trigger {
             point_defence: self.fighting.get(),
             ..if self.fighting.get() {
-                FIRE
+                picking(129)
             } else {
                 Trigger::default()
             }
@@ -304,7 +322,7 @@ fn a_contact_hit_lands_before_a_spent_shots_blast_of_the_same_pass() {
     let mut session = with_an_npc_at(&catalog, 780, 720, 225);
     assert_eq!(session.npcs()[0].state.position, Vec2::new(30.0, -30.0));
     session.hold_trigger(FIRE);
-    hold(&mut session, FIRE);
+    hold(&mut session, picking(129));
     work(&mut session, &catalog, Controls::default());
     session.hold_trigger(Trigger::default());
     hold(&mut session, Trigger::default());

@@ -11,7 +11,7 @@ use super::faked_hud::barred;
 use super::*;
 use crate::flight::rescue_screen::RESCUE_FADE_FOR;
 use nova_sim::flight_frame::{
-    FlightEvent, PassReport, RaisedLine, RescueTexts, ShipPlace, StepReport, StepRun,
+    FlightEvent, PassExit, PassReport, RaisedLine, RescueTexts, ShipPlace, StepReport, StepRun,
 };
 use nova_sim::{MissionTextKind, PlayerFate, SessionEvent, TextBar};
 
@@ -24,8 +24,13 @@ const NEW_BACKGROUND: u32 = 0x0010_0000;
 /// A view over Sol with the player in the escape pod, its looks read and
 /// its status bar chosen.
 fn in_the_pod() -> Faked {
+    pod_over(catalog())
+}
+
+/// [`in_the_pod`] over `catalog`.
+fn pod_over(catalog: FakeCatalog) -> Faked {
     barred(
-        catalog(),
+        catalog,
         FlightFrame {
             fate: PlayerFate::Ejected { ticks_left: 1 },
             system_background: Some(POD_BACKGROUND),
@@ -95,10 +100,9 @@ fn rescue_into(
     view.sim.queue_report_telling(
         StepReport {
             steps: vec![StepRun {
-                rescued: Some(ShipPlace {
-                    position: Vec2::new(50.0, 50.0),
-                    heading: 90.0,
-                }),
+                rescued: Some(rescued_on(0)),
+                // The rest of the rescue's pass, among the new system.
+                passes: vec![PassReport::default()],
                 rescue_texts: marks,
                 ..StepRun::default()
             }],
@@ -108,6 +112,20 @@ fn rescue_into(
         events,
     );
     view.tick(TICK);
+}
+
+/// The pod's rescue settled on pass `pass`, putting the ship at 50, 50
+/// heading 90, with nothing before it.
+fn rescued_on(pass: usize) -> PassExit {
+    PassExit {
+        pass,
+        place: ShipPlace {
+            position: Vec2::new(50.0, 50.0),
+            heading: 90.0,
+        },
+        before: Vec::new(),
+        comm: 0,
+    }
 }
 
 /// The reserves the texts below note: unlike the pod's or the rescued
@@ -715,12 +733,12 @@ fn doubled_pod_step(rescued: bool, first: Option<&str>, held: Vec<RaisedLine>) -
         done: nova_sim::Help::Repair,
     };
     let first = first.map(note);
-    let passes = vec![PassReport {
+    let first_pass = PassReport {
         ships: pod_between_passes().ships,
         player_position: Vec2::new(30.0, -20.0),
         double_time: true,
         ..PassReport::default()
-    }];
+    };
     StepReport {
         steps: vec![StepRun {
             before: vec![(ShipRef::Player, ShipPlace::default())],
@@ -728,15 +746,10 @@ fn doubled_pod_step(rescued: bool, first: Option<&str>, held: Vec<RaisedLine>) -
             last_line: first.map(RaisedLine::Comm),
             between_passes: Some(Box::new(pod_between_passes())),
             second_pass_lines: held,
-            rescued: rescued.then_some(ShipPlace {
-                position: Vec2::new(50.0, 50.0),
-                heading: 90.0,
-            }),
-            passes: if rescued {
-                passes
-            } else {
-                vec![passes[0].clone(), PassReport::default()]
-            },
+            rescued: rescued.then(|| rescued_on(1)),
+            // A rescue's second pass is the rest of it, among the new
+            // system.
+            passes: vec![first_pass, PassReport::default()],
             ..StepRun::default()
         }],
         stopped: rescued,
@@ -825,4 +838,166 @@ fn a_second_pass_rescues_line_shows_under_its_first_text_not_on_the_pod_frame() 
     );
     ticks(&mut view, 2 * RESCUE_FADE_FOR);
     assert!(!texts(&drawn(&view)).contains(&NO_ACTIVE_MISSIONS.to_owned()));
+}
+
+// The rest of the rescue's pass, shown after its screen.
+
+/// [`in_the_pod`] whose catalog has the looks of `bööm` 128.
+fn in_a_booming_pod() -> Faked {
+    pod_over(FakeCatalog {
+        booms: crate::flight::fake_catalog::armed(0, &[]).booms,
+        ..catalog()
+    })
+}
+
+/// An explosion of `bööm` 128 by the rescued ship.
+fn boom_by_the_rescue() -> CombatEvent {
+    CombatEvent::Exploded {
+        at: Vec2::new(50.0, 50.0),
+        explosion: nova_sim::catalog::Explosion::decode(0).expect("type 0"),
+        size: 0.0,
+    }
+}
+
+/// The rest of a pass after the rescue, among the new system, raising
+/// `combat`.
+fn rest_raising(combat: Vec<CombatEvent>) -> PassReport {
+    PassReport {
+        combat,
+        player_position: Vec2::new(50.0, 50.0),
+        ..PassReport::default()
+    }
+}
+
+/// Ticks `view` through the step `run`, which rescues its pod, leaving
+/// [`rescued_frame`].
+fn rescue_running(view: &mut Faked, run: StepRun) {
+    view.sim.queue_report_telling(
+        StepReport {
+            steps: vec![run],
+            stopped: true,
+        },
+        rescued_frame(),
+        vec![
+            FlightEvent::Session(SessionEvent::SystemChanged),
+            FlightEvent::RescueDesc(rescued(13999)),
+        ],
+    );
+    view.tick(TICK);
+}
+
+/// Ticks a rescued `view` through its screen, its `dësc` taken, until
+/// flight steps again.
+fn through_the_screen(view: &mut Faked) {
+    ticks(view, 2 * RESCUE_FADE_FOR);
+    assert!(view.take_rescue_desc().is_some(), "the desc");
+    ticks(view, RESCUE_FADE_FOR);
+    assert!(view.rescuing(), "the screen's last fade to come");
+    view.tick(TICK);
+    ticks(view, RESCUE_FADE_FOR);
+    assert!(!view.rescuing(), "flying on");
+}
+
+#[test]
+fn an_advance_pass_rescues_rest_shows_after_the_screen_in_the_new_scene() {
+    let mut view = in_a_booming_pod();
+    rescue_running(
+        &mut view,
+        StepRun {
+            rescued: Some(rescued_on(0)),
+            passes: vec![rest_raising(vec![boom_by_the_rescue()])],
+            ..StepRun::default()
+        },
+    );
+    assert_eq!(view.effects().explosions(), [], "not under the fade out");
+    ticks(&mut view, RESCUE_FADE_FOR);
+    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+    assert_eq!(view.effects().explosions(), [], "not under the black");
+    through_the_screen(&mut view);
+    let explosions = view.effects().explosions();
+    assert_eq!(explosions.len(), 1, "after the screen: {explosions:?}");
+    assert_eq!(explosions[0].at, Point::new(50.0, 50.0), "in the new scene");
+}
+
+#[test]
+fn the_lines_after_a_rescue_show_after_its_screen_on_the_emptied_line() {
+    let mut view = in_the_pod();
+    view.say_for("Before the rescue.", 10_000);
+    rescue_running(
+        &mut view,
+        StepRun {
+            rescued: Some(rescued_on(0)),
+            passes: vec![rest_raising(Vec::new())],
+            rescue_lines: vec![RaisedLine::Message(SimMessage::NoActiveMissions)],
+            ..StepRun::default()
+        },
+    );
+    assert_ne!(view.message(), Some(NO_ACTIVE_MISSIONS), "not on the pod");
+    ticks(&mut view, 2 * RESCUE_FADE_FOR);
+    assert_eq!(view.message(), None, "_ResetPlayer emptied it (@0x1d904)");
+    view.take_rescue_desc();
+    ticks(&mut view, RESCUE_FADE_FOR);
+    view.tick(TICK);
+    ticks(&mut view, RESCUE_FADE_FOR);
+    assert!(!view.rescuing());
+    assert_eq!(view.message(), Some(NO_ACTIVE_MISSIONS), "after the screen");
+}
+
+#[test]
+fn an_advance_pass_rescue_in_double_time_fades_over_the_tick_starts_frame_and_flight_first_draws_its_frame_between()
+ {
+    let mut view = in_the_pod();
+    view.tick(TICK);
+    let tick_start = drawn(&view);
+    let mut between = rescued_frame();
+    between.ships[0].position = Vec2::new(60.0, 50.0);
+    let second = PassReport {
+        double_time: true,
+        ..rest_raising(Vec::new())
+    };
+    rescue_running(
+        &mut view,
+        StepRun {
+            before: vec![(ShipRef::Player, ShipPlace::default())],
+            rescued: Some(rescued_on(0)),
+            between_passes: Some(Box::new(between.clone())),
+            passes: vec![second.clone(), second],
+            ..StepRun::default()
+        },
+    );
+    assert_eq!(
+        drawn(&view),
+        tick_start,
+        "the pod's frame as the tick began"
+    );
+    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(130)));
+    through_the_screen(&mut view);
+    assert_eq!(view.drawn(), &between, "flight's first frame is it");
+    view.sim
+        .queue_report(super::stepping::one_step(vec![PassReport::default()]));
+    view.tick(TICK);
+    assert_eq!(view.drawn(), &rescued_frame(), "the next step lets it go");
+}
+
+#[test]
+fn a_second_pass_rescue_fades_over_its_frame_between_and_shows_its_rest_after() {
+    let mut view = in_a_booming_pod();
+    view.tick(TICK);
+    let mut report = doubled_pod_step(true, None, Vec::new());
+    report.steps[0].passes[1] = rest_raising(vec![boom_by_the_rescue()]);
+    view.sim.queue_report_telling(
+        report,
+        rescued_frame(),
+        vec![
+            FlightEvent::Session(SessionEvent::SystemChanged),
+            FlightEvent::RescueDesc(rescued(13999)),
+        ],
+    );
+    view.tick(TICK);
+    assert_eq!(view.drawn(), &pod_between_passes(), "its frame between");
+    assert_eq!(view.effects().explosions(), [], "its rest waits");
+    through_the_screen(&mut view);
+    let explosions = view.effects().explosions();
+    assert_eq!(explosions.len(), 1, "after the screen: {explosions:?}");
+    assert_eq!(explosions[0].at, Point::new(50.0, 50.0), "in the new scene");
 }

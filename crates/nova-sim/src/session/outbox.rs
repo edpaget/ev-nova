@@ -22,6 +22,7 @@ use crate::player_wrap::PlayerWrap;
 use crate::sound::SimSound;
 use crate::storylines::effects::OutfitChange;
 
+use super::settled_in_pass::SettledExit;
 use super::{InterfaceLoad, MissionShown, PersonQuote, SessionEvent, TextBar};
 
 /// What the session fills for the view to take, in `Session`'s former
@@ -64,11 +65,26 @@ pub(super) struct Outbox {
     /// pass, raised as each pass ends (see the `step` module).
     #[cfg(test)]
     pub(super) second_pass_lines: Vec<Vec<RaisedLine>>,
+    /// What a test raises just before a pass's exit settles, as the
+    /// pass's work before the exit would (see the `settled_in_pass`
+    /// module).
+    #[cfg(test)]
+    pub(super) before_exit_lines: Vec<RaisedLine>,
     /// The lines double time's second pass has raised so far, in order,
-    /// while that pass runs: held off their kinds' lists and the line
-    /// raised last, for the frame after (see the `step` module); `None`
-    /// outside it. Never saved.
+    /// while that pass runs, or those raised after a rescue in a frame's
+    /// step to its end: held off their kinds' lists and the line raised
+    /// last, for the frame after or the end of the rescue's screen (see
+    /// the `step` and `settled_in_pass` modules); `None` outside them.
+    /// Never saved.
     pub(super) second_pass: Option<Vec<RaisedLine>>,
+    /// The exit a pass of the step under way settled (see the
+    /// `settled_in_pass` module), until the step takes it after that pass
+    /// (see the `step` module); never saved.
+    pub(super) exit: Option<SettledExit>,
+    /// Whether a frame's step is under way (`Session::step`), so an exit
+    /// is recorded for its report and a rescue holds the lines raised
+    /// after it (see the `settled_in_pass` module); never saved.
+    pub(super) in_step: bool,
     /// What the player's fighters met as it left systems since this was
     /// last taken.
     pub(super) fighter_notes: Vec<FighterNote>,
@@ -137,8 +153,8 @@ impl Outbox {
     /// Raises `line`: puts it on its kind's list (the messages, the comm
     /// notes or the quotes) and records it as the line raised last, as
     /// `_DisplayComm` replaces its slot with each line (@0x90251-0x90265).
-    /// While double time's second pass runs, it is held there instead
-    /// ([`Outbox::second_pass`]).
+    /// While double time's second pass runs, or after a rescue in a
+    /// frame's step, it is held there instead ([`Outbox::second_pass`]).
     pub(super) fn raise(&mut self, line: RaisedLine) {
         if let Some(held) = &mut self.second_pass {
             held.push(line);

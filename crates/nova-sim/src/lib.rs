@@ -123,6 +123,8 @@
 //!   and where the escape pod is taken.
 //! - [`npc_escape`]: what a dying NPC leaves behind: its crew's escape
 //!   pods, its person's pod, and its one roll for an escape ship.
+//! - [`escape_pod`]: the NPCs' escape pods adrift: their spawn, drift,
+//!   fade-out and slots ([`EscapePods`](escape_pod::EscapePods)).
 //! - [`escort`]: the player's escorts: their [`EscortClass`], the
 //!   [`EscortOrder`] each follows, the [`EscortCommand`]s the player gives
 //!   an [`EscortGroup`] and what one changed ([`Commanded`]), the escort
@@ -352,6 +354,10 @@
 //!   ([`Shipyard`]), their price, what the ship flown trades in for, and
 //!   buying a new one ([`ShipPurchase`]): which outfits carry over, the
 //!   cargo kept and the default items fitted.
+//! - [`slot_pool`]: the original's first-free tables, a new item taking
+//!   the lowest free slot and each walked in slot order
+//!   ([`SlotPool`](slot_pool::SlotPool)): the cargo boxes and escape pods
+//!   here, the view's explosions and smoke.
 //! - [`sound`]: the [`SimSound`] events a session emits as it thrusts,
 //!   lands, takes off and jumps, and the [`SoundCue`] each one plays
 //!   ([`SimSound::cue`]): its `snd ` and the original's priority.
@@ -402,6 +408,7 @@
 pub use nova_sim_ai::ai;
 pub use nova_sim_ai::brackets;
 pub use nova_sim_ai::cargo_box;
+pub use nova_sim_ai::escape_pod;
 pub use nova_sim_base::afterburner;
 pub use nova_sim_base::blink;
 pub use nova_sim_base::chance;
@@ -516,6 +523,7 @@ pub mod save;
 pub mod saves;
 pub use nova_sim_ai::scan;
 pub use nova_sim_ai::scoop;
+pub use nova_sim_ai::slot_pool;
 pub use nova_sim_combat::self_repair;
 pub mod session;
 pub use nova_sim_catalog::sound;

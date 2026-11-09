@@ -10,7 +10,7 @@ use super::faked_world::{raise, world};
 use super::live_keys::latches_its_close;
 use super::*;
 use crate::flight::flash::ShieldFlash;
-use crate::flight::jump::{ARRIVAL_FLASH_FOR, FADE_IN_FOR, JumpPhase};
+use crate::flight::jump::{FADE_IN_FOR, JumpPhase};
 use nova_sim::flight_frame::FlightEvent;
 use nova_sim::landing::LandOutcome;
 use nova_sim::{GateKind, GateRefusal, LandPress, LandingRefusal, SessionEvent, SimSound};
@@ -320,11 +320,14 @@ fn landing_lets_go_of_the_line_the_effects_the_flashes_and_the_glows() {
     assert_eq!(held, Some(alt), "an alt held");
     view.say_for(TOO_FAR_PLANET, TOO_FAR_TICKS);
     assert_ne!(*view.effects(), Effects::default());
+    // A landing keeps the sounds not yet taken, as no landing stops one
+    // (F6 of rdm:phase/combat-and-flight/phase-13-second-pass-and-arrival-left-outs):
+    // take them first, so this is about the sprites.
+    view.drained_sounds();
     press_l(&mut view, landed(128));
     assert_eq!(view.take_landing(), Some(StellarId(128)));
     assert_eq!(view.message(), None, "forgotten once the ship lands");
     assert_eq!(*view.effects(), Effects::default());
-    assert!(view.effects().pods().is_empty());
     assert!(view.flashes.is_empty(), "the shield flashes");
     assert_eq!(view.glows.drawn(ShipRef::Player), None, "the weapon glow");
     assert_eq!(
@@ -456,16 +459,28 @@ fn closing_the_hypergate_map_on_a_pick_comes_out_of_its_gate_fading_in_from_whit
 }
 
 #[test]
-fn without_hyperspace_effects_a_hypergate_flashes_white() {
+fn without_hyperspace_effects_a_hypergate_flashes_white_for_one_presented_frame() {
+    // `_PlayerEnterHypergate` flushes its white (@0x63c20) and
+    // `_RefreshSAT` shows the new system at its next flush (F3). The
+    // close comes in input, so the next tick's frame is the white's.
     let mut view = at_the_hypergate().with_hyperspace_effects(false);
     came_out_in_alpha(&mut view, SimMessage::ExitedHypergate(SystemId(131)));
     close_on(&mut view, Some(SystemId(131)), arrived());
     assert_eq!(
         view.jump_effect().map(JumpEffect::phase),
-        Some(JumpPhase::Flash(0.0))
+        Some(JumpPhase::Flash)
     );
-    view.fade_frame(ARRIVAL_FLASH_FOR);
-    assert_eq!(view.jump_effect(), None);
+    view.tick(ms(1));
+    assert_eq!(
+        view.jump_effect().map(JumpEffect::phase),
+        Some(JumpPhase::Flash),
+        "the tick after the close draws it"
+    );
+    let mut list = DrawList::new();
+    Screen::draw(&view, &mut list);
+    assert_eq!(fade(&list).map(|(_, color)| color), Some(Color::WHITE));
+    view.tick(ms(1));
+    assert_eq!(view.jump_effect(), None, "gone from the next");
 }
 
 #[test]
@@ -541,7 +556,7 @@ fn closing_the_hypergate_map_redraws_the_radar_at_once_leaving_the_cadence() {
 }
 
 #[test]
-fn l_at_a_wormhole_passes_through_it_with_a_flash_whatever_the_preference() {
+fn l_at_a_wormhole_passes_through_it_with_no_white_whatever_the_preference() {
     for effects in [true, false] {
         let mut view = faked(sol()).with_hyperspace_effects(effects);
         view.track_held(&key(Key::ArrowUp, true));
@@ -557,11 +572,13 @@ fn l_at_a_wormhole_passes_through_it_with_a_flash_whatever_the_preference() {
         );
         assert!(!view.map_open());
         assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
-        assert_eq!(
-            view.jump_effect().map(JumpEffect::phase),
-            Some(JumpPhase::Flash(0.0)),
-            "effects {effects}"
-        );
+        // `_PlayerEnterWormhole` paints the window white (@0x64414) but
+        // never flushes it before `_RefreshSAT` copies the new system over
+        // it (F3).
+        assert_eq!(view.jump_effect(), None, "effects {effects}");
+        let mut list = DrawList::new();
+        view.draw_fades(&mut list);
+        assert!(list.is_empty(), "effects {effects}: no white");
         assert_eq!(
             view.held_keys(),
             [Key::ArrowUp, BOARD_KEY].into_iter().collect(),
@@ -608,6 +625,10 @@ fn a_wormhole_with_no_exit_lays_the_scene_out_afresh_once_from_the_flights_event
         }],
     );
     assert_ne!(*view.effects(), Effects::default());
+    // The layout keeps the sounds not yet taken (F6 of
+    // rdm:phase/combat-and-flight/phase-13-second-pass-and-arrival-left-outs):
+    // take them first, so this is about the sprites.
+    view.drained_sounds();
     let mut flash = ShieldFlash::default();
     flash.hit(false);
     view.flashes.insert(ShipRef::Player, flash);
@@ -1035,11 +1056,11 @@ fn a_command_sent_under_a_refused_gate_is_refused_unsent() {
     assert_eq!(view.send_gated(FlightCommand::Jump), Answer::Refused);
     assert_eq!(sent(&view), [], "nothing sent");
     assert_eq!(
-        view.send_gated(FlightCommand::Arrive),
+        view.send_gated(FlightCommand::TakeOff),
         Answer::Jumped(SystemId(131)),
         "a command no key gates is sent"
     );
-    assert_eq!(sent(&view), [FlightCommand::Arrive]);
+    assert_eq!(sent(&view), [FlightCommand::TakeOff]);
 }
 
 // The request's, the greeting's and the take-off's lines over the

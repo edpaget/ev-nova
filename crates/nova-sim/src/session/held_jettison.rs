@@ -146,6 +146,7 @@ mod tests {
         session.pilot.cargo.insert(Good::Commodity(0), 5);
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &crate::ai::NovaAi::default(),
             Rules::default(),
             &mut NeverFires,

@@ -70,13 +70,10 @@ fn warship_and_enemy(mode: Mode, goal: Goal, velocity: Vec2) -> (Traffic, NpcId,
 }
 
 /// Asserts `id` holds its fire through its wait: its trigger, as
-/// `_HandleShip` fires it, holds neither gun nor launcher.
+/// `_HandleShip` fires it, holds no pick.
 fn assert_fire_held(traffic: &Traffic, id: NpcId) {
     let trigger = fire::gated(of(traffic, id));
-    assert!(
-        !trigger.primary && trigger.secondary.is_none() && trigger.only.is_none(),
-        "{trigger:?}"
-    );
+    assert!(trigger.only.is_none(), "{trigger:?}");
 }
 
 #[test]

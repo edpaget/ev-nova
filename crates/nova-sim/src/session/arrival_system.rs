@@ -179,7 +179,6 @@ mod tests {
     use crate::chance::NeverFires;
     use crate::control::SetExpr;
     use crate::gate::{GateKind, WORMHOLE};
-    use crate::hyperspace::MultiJumpRule;
     use crate::navigation::NavMode;
     use crate::rulebook::Rulebook;
     use crate::session::jump_exploration::tests::watching_explored;
@@ -377,7 +376,7 @@ mod tests {
             ..chained(base, 2)
         };
         for source in RuleSource::ALL {
-            let mut session = shadowing(&catalog, source).with_multi_jump(MultiJumpRule::default());
+            let mut session = shadowing(&catalog, source);
             let arrived = jump_as_131_shows(&mut session, &catalog);
             let (system, stellar) = by(source, (134, 141), (131, 140));
             assert_eq!(arrived, Some(SystemId(system)), "{source:?}");
@@ -417,7 +416,7 @@ mod tests {
             ..chained(base, 2)
         };
         for source in RuleSource::ALL {
-            let mut session = shadowing(&catalog, source).with_multi_jump(MultiJumpRule::default());
+            let mut session = shadowing(&catalog, source);
             assert_eq!(
                 session.select_next_system(),
                 Some(SystemId(134)),

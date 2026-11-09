@@ -12,10 +12,10 @@
 //! so it runs for a dying, destroyed or podded player too. Landed, no pass
 //! runs. The routine plays no sound.
 //!
-//! Each table is carried by its owner: the ship slots and boxes
-//! (`Traffic::carry`, `CargoBoxes::carry`), the shots, beams and kept slot
-//! positions (`Combat::carry`), and the view's own explosions, pods and
-//! smoke, which it carries from [`PassReport::wrap`]. Stellars, asteroids,
+//! Each table is carried by its owner: the ship slots, boxes and escape
+//! pods (`Traffic::carry`, `CargoBoxes::carry`, `EscapePods::carry`), the
+//! shots, beams and kept slot positions (`Combat::carry`), and the view's
+//! own explosions and smoke, which it carries from [`PassReport::wrap`]. Stellars, asteroids,
 //! stars, particles and every velocity stay, as no code in the routine reads
 //! them. So every asteroid on screen is culled on the wrap's pass
 //! (`Asteroids::step`) and the edge spawn refills the field, the stars
@@ -47,10 +47,12 @@ impl PlayerShip {
 }
 
 impl Space {
-    /// Carries the ships, boxes and fight by `wrap` (see the module docs).
+    /// Carries the ships, boxes, pods and fight by `wrap` (see the module
+    /// docs).
     fn carry(&mut self, wrap: &PlayerWrap) {
         let left = self.traffic.carry(wrap);
         self.boxes.carry(wrap);
+        self.pods.carry(wrap);
         self.combat
             .carry(wrap, left.into_iter().map(ShipRef::Npc).collect());
     }
@@ -120,6 +122,7 @@ mod tests {
         let behaviour = crate::ai::NovaAi::default();
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &behaviour,
             Rules::default(),
             &mut NeverFires,
@@ -190,6 +193,32 @@ mod tests {
         let before = session.cargo_boxes().to_vec();
         pass(&mut session, &catalog);
         let after = session.cargo_boxes();
+        assert_eq!(
+            after[0].position,
+            before[0].position + SHIFT + before[0].velocity
+        );
+        assert_eq!(after[1].position, before[1].position + before[1].velocity);
+    }
+
+    #[test]
+    fn the_pods_near_it_come_along_and_those_beyond_stay() {
+        let catalog = catalog();
+        let mut session = flying(&catalog);
+        session.ship.player.position = PAST;
+        let spawn = session
+            .setup
+            .pod_spawn(&session.statics, crate::SpeedMult::FULL);
+        for at in [
+            PAST + Vec2::new(-200.0, 50.0),
+            PAST + Vec2::new(-WRAP_EDGE * 2.0, 0.0),
+        ] {
+            session
+                .space
+                .spawn_pod(at, Vec2::ZERO, spawn, &mut NeverFires);
+        }
+        let before = session.escape_pods().to_vec();
+        pass(&mut session, &catalog);
+        let after = session.escape_pods();
         assert_eq!(
             after[0].position,
             before[0].position + SHIFT + before[0].velocity

@@ -125,7 +125,20 @@
 //! **The new ship** (0x6f74d-0x6f969). Every outfit without `Flags`
 //! 0x0004 is dropped (@0x6f7ae-0x6f7db), the class's stock weapons and
 //! their ammunition fitted (@0x6f7dd-0x6f8b5) and its default outfits
-//! added (@0x6f8c0-0x6f8fc), as a capture fits them. The original's
+//! added (@0x6f8c0-0x6f8fc), as a capture fits them. The original zeroes
+//! the whole weapon array and writes the class's stock alone into it
+//! before `_ShipStatsToSystemInfo` (@0x6f8bb) folds it, so by the
+//! engine's reading of [`RuleKey::EjectPersistentWeapons`] each
+//! persistent outfit whose first mod is `ModType` 1 or 3 is held to what
+//! the stock leaves for its weapon (or rounds), by ascending ID
+//! (`nova_sim::ship_change::hold_to_stock`, the fold's first pass
+//! @0xcb55-0xcbf0): lost when the class stocks none, as the Vell-os
+//! weapons are in stock, cut when it stocks fewer. By the other reading
+//! every persistent outfit keeps its count. The stock top-up follows,
+//! which with the hold is the whole fold, as a stock weapon's outfit is
+//! the lowest-ID holder of it; the default outfits come last, after the
+//! fold, so the hold never sees them and a default weapon outfit the
+//! class doesn't stock survives by both readings. The original's
 //! weapon rebuild sets each stock load on its ammunition's slot, a later
 //! weapon of one ammunition replacing an earlier one's (@0x6f884,
 //! @0x6f88e), where the engine's fit takes the largest load of an
@@ -198,7 +211,7 @@ use crate::outfitter::OutfitFlags;
 use crate::player_fate::{POD_TICKS, PlayerCommand};
 use crate::reserves::shield_points;
 use crate::rulebook::{RuleKey, RuleSource};
-use crate::ship_change::{OutfitCarry, carried_outfits};
+use crate::ship_change::{OutfitCarry, carried_outfits, hold_to_stock};
 use crate::ship_layer::Slot;
 use crate::skill::random_skill_level;
 use crate::sound::{SimSound, WARP_UP_HALTS};
@@ -249,9 +262,9 @@ impl Session {
     /// The escape ship the player can eject into now, if any
     /// ([`escape_ship_type`]): its fighter bays' rounds are the fighters
     /// aboard.
-    fn escape_ship(&self) -> Option<ShipId> {
-        let rounds =
-            |weapon| outfit_rounds(&self.pilot.outfits, &self.statics.ammo_outfits, weapon);
+    pub(super) fn escape_ship(&self) -> Option<ShipId> {
+        let sources = self.statics.ammo_outfits(self.setup.outfit_weapon_mods());
+        let rounds = |weapon| outfit_rounds(&self.pilot.outfits, sources, weapon);
         escape_ship_type(self.statics.arsenal.weapons(), rounds, &self.statics.ships)
     }
 
@@ -434,31 +447,44 @@ impl Session {
     }
 
     /// The player's ship becomes class `record`, keeping only its
-    /// persistent outfits, with `defaults` added and the class's stock
-    /// weapons and ammunition fitted (see the module docs), holding its
-    /// reserves to the new most until the caller sets them. The eject
-    /// passes the class's defaults; the rescue, which adds none, passes
-    /// none. The carry reads the outfit counts (@0x6f7b5-0x6f7db) before
-    /// the weapon array is cleared (@0x6f7dd-0x6f7fc), so a purchase's
-    /// held stock is lost, a persistent outfit too (see the
-    /// `held_readers` module); the rescue's holds none, as the eject's
-    /// change of class folded it.
+    /// persistent outfits, by the engine's reading of
+    /// [`RuleKey::EjectPersistentWeapons`] each weapon or ammunition one
+    /// held to the class's stock of it, then the class's stock weapons
+    /// and ammunition fitted and `defaults` added last (@0x6f8c0-0x6f8fc,
+    /// after the fold @0x6f8bb), so the hold never sees them (see the
+    /// module docs); its reserves are held to the new most until the
+    /// caller sets them. The eject passes the class's defaults; the
+    /// rescue, which adds none, passes none. The carry reads the outfit
+    /// counts (@0x6f7b5-0x6f7db) before the weapon array is cleared
+    /// (@0x6f7dd-0x6f7fc), so a purchase's held stock is lost, a
+    /// persistent outfit too (see the `held_readers` module); the
+    /// rescue's holds none, as the eject's change of class folded it.
     pub(super) fn board_class(&mut self, record: &ShipRecord, defaults: &BTreeMap<OutfitId, u16>) {
         let mut outfits = carried_outfits(
             &self.ship.counted_outfits(&self.pilot),
             OutfitCarry::Persistent {
                 mask: OutfitFlags::PERSISTENT,
             },
-            defaults,
+            &BTreeMap::new(),
             None,
             None,
             &self.statics.outfits,
         );
+        let mods = self.setup.outfit_weapon_mods();
         let fits = self
             .statics
             .arsenal
-            .stock_fits(record.id, &self.statics.outfits);
-        fit_stock(&mut outfits, &fits, &self.statics.outfits);
+            .stock_fits(record.id, &self.statics.outfits, mods);
+        if self.setup.rules.source_for(RuleKey::EjectPersistentWeapons) == RuleSource::Engine {
+            hold_to_stock(&mut outfits, &fits, &self.statics.outfits);
+        }
+        // The hold's first pass and this top-up are the whole fold: the
+        // fit's outfit is the lowest-ID holder of its weapon.
+        fit_stock(&mut outfits, &fits, &self.statics.outfits, mods);
+        for (&id, &count) in defaults {
+            let owned = outfits.entry(id).or_default();
+            *owned = owned.saturating_add(count);
+        }
         let change = ClassChange {
             outfits,
             reserves: super::ReservePolicy::Hold,
@@ -1636,6 +1662,7 @@ pub(super) mod tests {
         };
         session.tick_again(
             crate::flight::Controls::default(),
+            &crate::testkit::catalog(),
             &Firing,
             Rules::default(),
             &mut NeverFires,
@@ -2228,6 +2255,209 @@ pub(super) mod tests {
                 "{source:?}: {:?}",
                 session.ship.player.velocity
             );
+        }
+    }
+
+    /// A persistent launcher of [`GUN_WEAPON`], which the pod doesn't
+    /// stock.
+    const KEPT_GUN: i16 = 310;
+    /// Persistent ammunition for [`GUN_WEAPON`].
+    const KEPT_ROUNDS: i16 = 311;
+    /// A persistent launcher of the pod's stock blaster, `wëap` 128, whose
+    /// stock outfit is 250.
+    const KEPT_BLASTER: i16 = 312;
+    /// A launcher of [`POD_WEAPON`] the pod's defaults hold.
+    const POD_GUN: i16 = 313;
+    const GUN_WEAPON: i16 = 129;
+    const POD_WEAPON: i16 = 130;
+
+    /// `ejecting(100)` with [`KEPT_GUN`], [`KEPT_ROUNDS`], [`KEPT_BLASTER`]
+    /// and [`POD_GUN`], and the weapons they name.
+    fn ejecting_armed() -> FakePilotCatalog {
+        use crate::combat::armament::{MOD_AMMO, MOD_WEAPON};
+        let mut catalog = ejecting(100);
+        let persistent = |id, mods: &[(i16, i16)]| crate::catalog::OutfitRecord {
+            flags: OutfitFlags::PERSISTENT,
+            ..outfit(id, mods)
+        };
+        catalog.outfits.extend([
+            persistent(KEPT_GUN, &[(MOD_WEAPON, GUN_WEAPON)]),
+            persistent(KEPT_ROUNDS, &[(MOD_AMMO, GUN_WEAPON)]),
+            persistent(KEPT_BLASTER, &[(MOD_WEAPON, 128)]),
+            outfit(POD_GUN, &[(MOD_WEAPON, POD_WEAPON)]),
+        ]);
+        catalog.weapons.extend([
+            crate::testkit::weapon(GUN_WEAPON),
+            crate::testkit::weapon(POD_WEAPON),
+        ]);
+        catalog
+    }
+
+    /// `catalog`'s player, owning [`KEPT`] and `owned`, ejected into the
+    /// pod by `source`'s reading of `eject_persistent_weapons`: what it
+    /// owns, and the weapons it mounts.
+    fn ejected_by(
+        catalog: &FakePilotCatalog,
+        owned: &[(i16, u16)],
+        source: RuleSource,
+    ) -> (Vec<(i16, u16)>, Vec<WeaponId>) {
+        let rules = crate::rulebook::Rulebook::default()
+            .with_override(RuleKey::EjectPersistentWeapons, source);
+        let mut session = flying(catalog, &[POD, KEPT]).with_rules(rules);
+        for &(id, count) in owned {
+            session.pilot.outfits.insert(OutfitId(id), count);
+        }
+        session.ship.condition = Condition::Disabled;
+        assert_eq!(eject_check(&mut session, true), EJECTED, "{source:?}");
+        assert!(in_the_pod(&session), "{source:?}");
+        let outfits = session
+            .pilot
+            .outfits
+            .iter()
+            .map(|(id, &n)| (id.0, n))
+            .collect();
+        let mounts = session
+            .ship
+            .fit
+            .armament
+            .mounts()
+            .iter()
+            .map(|mount| mount.spec.id)
+            .collect();
+        (outfits, mounts)
+    }
+
+    #[test]
+    fn the_eject_loses_a_persistent_weapon_the_pod_does_not_stock_by_the_engine_and_keeps_it_by_the_other_reading()
+     {
+        let catalog = ejecting_armed();
+        let owned = [(KEPT_GUN, 1), (KEPT_ROUNDS, 5)];
+        assert_eq!(
+            ejected_by(&catalog, &owned, RuleSource::Engine),
+            (
+                vec![(250, 1), (KEPT, 1), (POD_ITEM, 2)],
+                vec![WeaponId(128)]
+            ),
+            "the launcher and its rounds held to the pod's stock of none"
+        );
+        let (outfits, mounts) = ejected_by(&catalog, &owned, RuleSource::Bible);
+        assert_eq!(
+            outfits,
+            [
+                (250, 1),
+                (KEPT, 1),
+                (POD_ITEM, 2),
+                (KEPT_GUN, 1),
+                (KEPT_ROUNDS, 5)
+            ]
+        );
+        assert!(mounts.contains(&WeaponId(GUN_WEAPON)), "{mounts:?}");
+        assert!(mounts.contains(&WeaponId(128)), "{mounts:?}");
+    }
+
+    #[test]
+    fn the_eject_cuts_a_persistent_weapon_to_the_pods_stock_by_the_engine_alone() {
+        let catalog = ejecting_armed();
+        let owned = [(KEPT_BLASTER, 2)];
+        assert_eq!(
+            ejected_by(&catalog, &owned, RuleSource::Engine).0,
+            [(KEPT, 1), (POD_ITEM, 2), (KEPT_BLASTER, 1)],
+            "cut to the stock's 1, and the stock blaster's 250 gains nothing"
+        );
+        assert_eq!(
+            ejected_by(&catalog, &owned, RuleSource::Bible).0,
+            [(KEPT, 1), (POD_ITEM, 2), (KEPT_BLASTER, 2)]
+        );
+    }
+
+    #[test]
+    fn the_pods_default_weapon_survives_the_eject_by_both_readings() {
+        let mut catalog = ejecting_armed();
+        for record in &mut catalog.ship_records {
+            if record.id == ESCAPE_POD_SHIP {
+                record.defaults.push((OutfitId(POD_GUN), 1));
+            }
+        }
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let (outfits, mounts) = ejected_by(&catalog, &[], source);
+            assert_eq!(
+                outfits,
+                [(250, 1), (KEPT, 1), (POD_ITEM, 2), (POD_GUN, 1)],
+                "{source:?}: the defaults land after the hold"
+            );
+            assert!(mounts.contains(&WeaponId(POD_WEAPON)), "{source:?}");
+        }
+    }
+
+    #[test]
+    fn the_pods_stock_goes_to_its_first_mod_holder_by_the_engine() {
+        // Outfit 249 names the pod's stock blaster in its second mod
+        // alone, below 250 (`_LoadObjectData` @0x7aab8).
+        let mut catalog = ejecting_armed();
+        catalog.outfits.push(outfit(
+            249,
+            &[(-1, 0), (crate::combat::armament::MOD_WEAPON, 128)],
+        ));
+        for (source, holder) in [(RuleSource::Engine, 250), (RuleSource::Bible, 249)] {
+            let rules = crate::rulebook::Rulebook::default()
+                .with_override(RuleKey::OutfitWeaponMods, source);
+            let mut session = flying(&catalog, &[POD, KEPT]).with_rules(rules);
+            session.ship.condition = Condition::Disabled;
+            assert_eq!(eject_check(&mut session, true), EJECTED, "{source:?}");
+            assert!(in_the_pod(&session), "{source:?}");
+            assert_eq!(
+                session.pilot.outfits.get(&OutfitId(holder)),
+                Some(&1),
+                "{source:?}"
+            );
+            assert!(
+                session
+                    .ship
+                    .fit
+                    .armament
+                    .mounts()
+                    .iter()
+                    .any(|mount| mount.spec.id == WeaponId(128)),
+                "{source:?}: the blaster mounts either way"
+            );
+        }
+    }
+
+    /// The pod's `shïp` defaults land after the whole fold, top-up
+    /// included (@0x6f8c0-0x6f8fc, after @0x6f8bb): a default naming the
+    /// stock blaster's own outfit adds to the stock's 1, where adding it
+    /// before `hold_to_stock` or `fit_stock` would leave the top-up nothing
+    /// to do.
+    #[test]
+    fn the_pods_default_of_its_stock_weapons_outfit_adds_to_the_stock_by_both_readings() {
+        let mut catalog = ejecting_armed();
+        for record in &mut catalog.ship_records {
+            if record.id == ESCAPE_POD_SHIP {
+                record.defaults.push((OutfitId(250), 1));
+            }
+        }
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let rules = crate::rulebook::Rulebook::default()
+                .with_override(RuleKey::EjectPersistentWeapons, source);
+            let mut session = flying(&catalog, &[POD, KEPT]).with_rules(rules);
+            session.ship.condition = Condition::Disabled;
+            assert_eq!(eject_check(&mut session, true), EJECTED, "{source:?}");
+            assert!(in_the_pod(&session), "{source:?}");
+            assert_eq!(
+                session.pilot.outfits.get(&OutfitId(250)),
+                Some(&2),
+                "{source:?}: the stock's 1 plus the default's 1"
+            );
+            let blasters: u32 = session
+                .ship
+                .fit
+                .armament
+                .mounts()
+                .iter()
+                .filter(|mount| mount.spec.id == WeaponId(128))
+                .map(|mount| mount.count)
+                .sum();
+            assert_eq!(blasters, 2, "{source:?}: the mounts carry both");
         }
     }
 

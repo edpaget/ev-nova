@@ -7,12 +7,12 @@
 //! that reads each rule.
 
 use crate::catalog::{StellarId, SystemId};
-use crate::hyperspace::HyperlinkRule;
+use crate::hyperspace::{HyperlinkRule, RouteError};
 use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::session::Session;
 use crate::session::kept_rescues::tests::by;
-use crate::session::tests::alternates;
+use crate::session::tests::{alternates, hub};
 use crate::testkit::{FakePilotCatalog, hiding_bit, planet, star};
 
 fn ids(systems: &[i16]) -> Vec<SystemId> {
@@ -167,6 +167,25 @@ fn a_load_rewrites_a_kept_course_only_as_the_rule_it_is_given_says() {
         assert_eq!(
             session.course(),
             by(source, ids(&[134, 132]), ids(&[131, 132])),
+            "{source:?}"
+        );
+    }
+}
+
+#[test]
+fn a_load_follows_the_hyperlinks_rule_it_is_given() {
+    // 136 lists 130 one way: by the engine 130 can't jump to it, by the
+    // other reading it can.
+    let catalog = hub();
+    for source in RuleSource::ALL {
+        let mut session = loaded(
+            &catalog,
+            pilot(&catalog),
+            &rules(RuleKey::Hyperlinks, source),
+        );
+        assert_eq!(
+            session.plot_course(SystemId(136)).map(<[SystemId]>::to_vec),
+            by(source, Err(RouteError::Unreachable), Ok(ids(&[136]))),
             "{source:?}"
         );
     }

@@ -4,8 +4,9 @@
 //! **The stage** (+0x50). The brake holds it at 1.0 (@0x6b6aa); the first
 //! frame the ship is slow enough, or at once when it can expedite its
 //! jumps, it is set to 2.0 and the clock stamped (@0x6b5e9-0x6b5f5;
-//! [`Session::start_warp`]). From then on, each pass of a player not
-//! disabled (-0x2cb, @0x6baf7):
+//! [`Session::start_warp`]). Each pass a folding ship unfolds first
+//! (@0x6b59c-0x6b5cb, see the `ship_display` module). From then on, each
+//! pass of a player not disabled (-0x2cb, @0x6baf7):
 //!
 //! 1. the ships it leads take its jump ([`Session::make_escorts_hyper`],
 //!    `_MakeEscortsHyperWithParent` @0x6bb0a);
@@ -16,11 +17,17 @@
 //!    velocity is multiplied by [`WARP_DRAG`], 0.98 (@0x6bb32-0x6bb59;
 //!    [`drag_by`]);
 //! 4. the warp end ([`warp::warp_end`], @0x6bb5e-0x6c70b): its natural
-//!    end marks the jump's end due ([`Session::warp_end_due`]); its
-//!    fallback end halts the warp-ups and plays the warp-out on its own
-//!    pass (@0x6c6a8-0x6c706), and arms the natural end of the next pass,
-//!    whose arrival ([`Session::arrive`]) halts nothing and plays the
-//!    warp-out only if it is not still playing (@0x6bbe1);
+//!    end marks the jump's end due ([`Session::warp_end_due`]) and returns
+//!    at once, the pass running none of steps 5 to 7, nor the
+//!    ionization, the afterburner's burn or the fuel's regeneration
+//!    (@0x6d96d), as the arrival leaves `_HandlePlayer` by its epilogue
+//!    (`jmp 0x71113` @0x6c625); the pass then arrives
+//!    ([`Session::arrive`]) and runs its rest among the new system (see
+//!    the `settled_in_pass` module). Its fallback end halts the warp-ups
+//!    and plays the warp-out on its own pass (@0x6c6a8-0x6c706), runs on,
+//!    and arms the natural end of the next pass, whose arrival halts
+//!    nothing and plays the warp-out only if it is not still playing
+//!    (@0x6bbe1);
 //! 5. the turn to the bearing, the player's turn block (@0x6c899), as the
 //!    stage sets the auto-turn (@0x6b0d3) with the bearing as +0x68;
 //! 6. **the move-off** (@0x6d097-0x6d343): once it faces within
@@ -54,25 +61,27 @@
 //! original fades the screen to white (`_FadeWhiteIn` @0x546f:
 //! `CGDisplayFade` to white over 1.5 s, not synchronous, so the game runs
 //! on under it); the view does it. `_PlayGame` sets it to −1.0 after the
-//! priming pass of a game's start (@0x45811). The gate's other two bytes
-//! are `_settings`+0xc, Run In A Window (`_LoadPrefs` @0xcee54, key
-//! `RunInAWindow`), under which the original fades no display, and the
-//! priming flag *0x3b5178: the engine fades its own frame, in a window
-//! too, and runs no priming pass.
+//! priming pass of a game's start (@0x4581c, `PlayerShip::reset_white`).
+//! The gate's other two bytes are `_settings`+0xc, Run In A Window
+//! (`_LoadPrefs` @0xcee54, key `RunInAWindow`), under which the original
+//! fades no display, and the priming flag *0x3b5178, `_ignoreKeys`: the
+//! engine fades its own frame, in a window too, and a priming pass skips
+//! the block, as its callers run it only on a frame's passes (see the
+//! `priming_passes` module).
 //!
 //! **Ordering against the original.** The warp end is decided in the
-//! player's pass, as the original's is, and the view arrives
-//! ([`Session::arrive`]) in the same step, before the frame is drawn, so
-//! no frame falls between them. On double time's second pass the frame
-//! between the passes is drawn first, as the original draws it, and the
-//! view arrives on the next step, which stops before it runs. The
-//! original, though, arrives inside `_HandlePlayer` on that pass
-//! (@0x6bc0d-0x6c620, then `jmp 0x71113` @0x6c625), so the rest of its
-//! pass runs among the new system and the AI loop's +0x74 test (@0x4428c)
-//! skips the old system's ships. The engine only marks the end due, so
-//! that whole pass still runs over the old system. That crosses the
-//! arrival's boundary, and is filed as
-//! rdm:task/warp-end-pass-runs-the-old-system.
+//! player's pass, as the original's is, and the arrival settles in that
+//! pass ([`Session::settle_exit`]), on either of double time's passes, so
+//! the rest of the pass runs among the new system and no ship of the old
+//! one thinks, flies, fires or hits after it. Built by
+//! rdm:phase/combat-and-flight/phase-18-warp-end-pass-runs-the-old-system.
+//! The target brackets and the Red Alert's blink run before the move here
+//! (`Session::work_from_key_block`), so before the exit, where the
+//! original runs them after it, among the new system (`_HandleNavTargetSprites`,
+//! `_HandleWeapTargetSprites` @0x444fa, @0x444ff, `_HandleAlertSprite`
+//! @0x4451e). That crosses no boundary: the arrival hides the icon and
+//! ends its blink, and lets go of the targets, so neither shows on the
+//! arrival's frame either way.
 //!
 //! Left out: the disabled player's warp-stage branch (@0x6c70d-0x6c723,
 //! +0x50 of −999.0 to 0), which no engine state reaches: a disabled
@@ -157,10 +166,11 @@ impl Session {
     }
 
     /// Whether the warp has ended, so the jump arrives
-    /// ([`Session::arrive`]): its natural end, or a pass after its
-    /// fallback (see the module docs).
+    /// ([`Session::arrive`]) in the pass, as the pass reads it between the
+    /// end's test and the arrival (see the `settled_in_pass` module): its
+    /// natural end, or a pass after its fallback (see the module docs).
     #[must_use]
-    pub fn warp_end_due(&self) -> bool {
+    pub(super) fn warp_end_due(&self) -> bool {
         self.ship.warp_end_due(self.mode.jump())
     }
 
@@ -184,21 +194,26 @@ impl Session {
     }
 
     /// One pass of the warp stage toward `bearing` under `controls` (see
-    /// the module docs, steps 1-7), the aim already set.
-    pub(super) fn fly_warp_stage(&mut self, bearing: Option<i16>, controls: Controls) {
+    /// the module docs, steps 1-7), the aim already set: whether the warp
+    /// ended naturally on it, which returns before the turn, as the
+    /// arrival leaves `_HandlePlayer` by its epilogue (`jmp 0x71113`
+    /// @0x6c625; see the `settled_in_pass` module).
+    pub(super) fn fly_warp_stage(&mut self, bearing: Option<i16>, controls: Controls) -> bool {
         let gain = self.speed_mult();
         let staged = self.ship.warp.warp.stage > 1.0;
+        // A folding ship unfolds as it warps (@0x6b59c-0x6b5cb, before the
+        // stage's block @0x6baf7; see the `ship_display` module).
+        self.ship.jump_unfold();
         if staged {
             self.make_escorts_hyper();
             self.ship.warp.warp.stage = grown(self.ship.warp.warp.stage, gain);
             if !self.ship.fit.stats.fast_jump {
                 self.ship.player.velocity = drag_by(self.ship.player.velocity, WARP_DRAG);
             }
-            self.warp_end_tick();
+            if self.warp_end_tick() {
+                return true;
+            }
         }
-        // A folding ship unfolds as it warps (see the `ship_display`
-        // module).
-        self.ship.jump_unfold();
         let handling = self
             .ship
             .flying_handling(&self.pilot, &self.setup, self.mode.jump());
@@ -256,6 +271,7 @@ impl Session {
             },
             controls.thrust,
         );
+        false
     }
 
     /// One pass of a jump's pre-jump stage, bound for `to` on `bearing`,
@@ -339,7 +355,11 @@ impl Session {
                 bearing,
                 warp: Some(warp),
             });
-            self.fly_warp_stage(bearing, controls);
+            // The natural end returns before the ionization, the burn and
+            // the stage's next step (@0x6c625).
+            if self.fly_warp_stage(bearing, controls) {
+                return;
+            }
             self.ship
                 .ionize_tick(&self.pilot, &self.setup, self.speed_mult());
             self.burn_afterburner();
@@ -373,8 +393,9 @@ impl Session {
         }
     }
 
-    /// One pass of the warp end ([`warp::warp_end`]).
-    fn warp_end_tick(&mut self) {
+    /// One pass of the warp end ([`warp::warp_end`]): whether it ended
+    /// naturally, so the jump arrives in this pass.
+    fn warp_end_tick(&mut self) -> bool {
         let since = mac_ticks(self.warp_clock().unwrap_or(0));
         let playing =
             self.ship.warp.warp_ups.playing(false) || self.ship.warp.warp_ups.playing(true);
@@ -386,7 +407,7 @@ impl Session {
             playing,
             &mut self.ship.warp.warp.sound_done,
         ) {
-            WarpEnd::Running => {}
+            WarpEnd::Running => false,
             WarpEnd::Natural => {
                 self.ship.warp.warp.end_due = true;
                 // The warp ends whichever way the ship faces: one still
@@ -399,6 +420,7 @@ impl Session {
                 {
                     self.mode = Mode::Jumping(Jump::Hyperspace { to, warp });
                 }
+                true
             }
             WarpEnd::Fallback => {
                 // 128 then 129 halted (@0x6c6a8-0x6c6d2), then the
@@ -407,6 +429,7 @@ impl Session {
                     .halt_sounds(&mut self.out, &crate::sound::WARP_UP_HALTS);
                 self.ship.sound_warp_out(&self.statics, &mut self.out);
                 self.ship.warp.warp.fell_back = true;
+                false
             }
         }
     }
@@ -437,6 +460,13 @@ impl PlayerShip {
         if self.warp.warp.gamma >= 0.0 {
             self.warp.warp.gamma = -1.0;
         }
+    }
+
+    /// `_PlayGame`'s `_hyperGamma` = −1.0 after its priming pass
+    /// (@0x4581c), whatever it was: the screen's white out (see the
+    /// `priming_passes` module).
+    pub(super) fn reset_white(&mut self) {
+        self.warp.warp.gamma = -1.0;
     }
 
     /// Sets `_hyperGamma` to `gamma`, for the tests.
@@ -701,6 +731,7 @@ pub(super) mod tests {
         assert_eq!(session.warp_clock(), Some(1));
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &crate::ai::NovaAi::default(),
             crate::Rules::default(),
             &mut NeverFires,
@@ -847,6 +878,17 @@ pub(super) mod tests {
         assert_eq!(session.warp_clock(), Some(clock));
     }
 
+    /// Ticks `session` until its warp clock reads `clock`, the stage held
+    /// below the end's 30 after each pass, so the warp runs on past its
+    /// end for the move-off's tests.
+    fn tick_to_held_short(session: &mut Session, clock: u32) {
+        while session.warp_clock().is_some_and(|now| now < clock) {
+            tick(session);
+            session.ship.warp.warp.stage = session.ship.warp.warp.stage.min(20.0);
+        }
+        assert_eq!(session.warp_clock(), Some(clock));
+    }
+
     #[test]
     fn the_move_off_moves_the_position_by_v_along_the_whole_degree_heading() {
         // 0.35 × 364 / 1.69 = 75.4 Mac ticks: v first above 0 at clock 38.
@@ -871,7 +913,7 @@ pub(super) mod tests {
     #[test]
     fn the_move_off_is_capped_at_50_a_pass_and_held_by_no_speed_cap() {
         let mut session = jumping(&catalog());
-        tick_to(&mut session, 300);
+        tick_to_held_short(&mut session, 300);
         let at = session.ship.player.position;
         tick(&mut session);
         assert_eq!(session.ship.player.position, at + trig::accel(90, 50.0));
@@ -944,7 +986,7 @@ pub(super) mod tests {
         assert_eq!(session.hyper_gamma(), -1.0, "out of a warp");
         tick(&mut session);
         assert_eq!(session.hyper_gamma(), 0.0, "raised to 0 in the stage");
-        tick_to(&mut session, 200);
+        tick_to_held_short(&mut session, 200);
         let v = warp::move_off_speed(400, warp::warp_factor(0), 364, false);
         assert!(warp::hyper_gamma(v) > 100.0, "{v}");
         assert_eq!(session.hyper_gamma(), warp::hyper_gamma(v));
@@ -955,7 +997,9 @@ pub(super) mod tests {
             warp::hyper_gamma(v),
             "set after the clamp"
         );
-        session.arrive(&catalog, &mut NeverFires).expect("arrives");
+        while session.jumping().is_some() {
+            tick(&mut session);
+        }
         tick(&mut session);
         assert_eq!(session.hyper_gamma(), -1.0, "out of the stage");
     }
@@ -1092,10 +1136,7 @@ pub(super) mod tests {
         assert!(!session.ship.warp.warp_ups.playing(false), "halted");
         assert!(session.ship.warp.warp_out.playing(), "130 plays");
         tick(&mut session);
-        assert!(session.warp_end_due(), "the pass after");
-        assert!(session.ship.warp_stage(session.mode.jump()) > 30.0);
-        assert!(session.take_sounds().is_empty(), "the pass after");
-        session.arrive(&catalog, &mut NeverFires).expect("arrives");
+        assert_eq!(session.jumping(), None, "arrived on the pass after");
         let arrival = session.take_sounds();
         assert!(
             !arrival.contains(&SimSound::Halt(&WARP_UP_HALTS)),
@@ -1122,9 +1163,7 @@ pub(super) mod tests {
         );
         assert!(!session.ship.warp.warp_out.playing());
         tick(&mut session);
-        assert!(session.warp_end_due());
-        session.take_sounds();
-        session.arrive(&catalog, &mut NeverFires).expect("arrives");
+        assert_eq!(session.jumping(), None, "arrived on the pass after");
         assert_eq!(
             session.take_sounds()[..1],
             [SimSound::Arrived],
@@ -1142,19 +1181,18 @@ pub(super) mod tests {
         session.take_sounds();
         let before = sounds_to(&mut session, 165);
         assert!(session.ship.warp.warp_ups.playing(false));
-        assert!(!session.warp_end_due());
+        assert!(session.jumping().is_some());
         tick(&mut session);
         assert!(!session.ship.warp.warp_ups.playing(false));
-        assert!(session.warp_end_due(), "the natural end");
+        assert_eq!(session.jumping(), None, "the natural end arrives");
         assert!(
-            before.is_empty() && session.take_sounds().is_empty(),
+            before.is_empty(),
             "the natural end sounds only at the arrival: {before:?}"
         );
-        session.arrive(&catalog, &mut NeverFires).expect("arrives");
         assert_eq!(
             session.take_sounds()[..2],
             [SimSound::Halt(&WARP_UP_HALTS), SimSound::Arrived],
-            "the warp-out, the warp-ups already over"
+            "the warp-out, the warp-ups already over, in the arrival's pass"
         );
     }
 
@@ -1171,6 +1209,7 @@ pub(super) mod tests {
     fn again(session: &mut Session) {
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &crate::ai::NovaAi::default(),
             crate::Rules::default(),
             &mut NeverFires,
@@ -1204,9 +1243,11 @@ pub(super) mod tests {
         );
         assert!(!session.ship.warp.warp_ups.playing(true), "halted");
         again(&mut session);
-        assert!(session.warp_end_due(), "the next pass, frame 97's second");
-        session.take_sounds();
-        session.arrive(&catalog, &mut NeverFires).expect("arrives");
+        assert_eq!(
+            session.jumping(),
+            None,
+            "arrived on the next pass, frame 97's second"
+        );
         let arrival = session.take_sounds();
         assert!(
             !arrival.contains(&SimSound::Halt(&WARP_UP_HALTS))
@@ -1223,10 +1264,14 @@ pub(super) mod tests {
         let mut session = jumping_in_double_time(&catalog);
         frames(&mut session, 114);
         assert!(session.ship.warp.warp_ups.playing(true));
-        assert!(!session.warp_end_due(), "frame 114");
-        frames(&mut session, 1);
+        assert!(session.jumping().is_some(), "frame 114");
+        tick(&mut session);
         assert!(!session.ship.warp.warp_ups.playing(true));
-        assert!(session.warp_end_due(), "frame 115, the natural end");
+        assert_eq!(
+            session.jumping(),
+            None,
+            "frame 115's advance pass, the natural end"
+        );
     }
 
     #[test]
@@ -1265,7 +1310,77 @@ pub(super) mod tests {
         }
         assert_eq!(session.ship.warp_stage(session.mode.jump()), 30.0);
         tick(&mut session);
-        assert!(session.warp_end_due());
+        assert_eq!(session.jumping(), None, "arrived");
+    }
+
+    /// [`bound_for_131`]'s ship of `catalog` on a jump whose warp sounds
+    /// last 0 ticks, run to the pass before its natural end: no warp-up
+    /// plays, so the 29th pass, at a stage of 31, ends it.
+    fn a_pass_before_the_end(catalog: &FakePilotCatalog) -> Session {
+        let mut session = bound_for_131(catalog, OUT, Vec2::ZERO, 90.0);
+        session.statics_mut().warp_sounds = [0, 0];
+        session.begin_jump().expect("jumps");
+        for _ in 0..28 {
+            tick(&mut session);
+        }
+        assert_eq!(session.ship.warp_stage(session.mode.jump()), 30.0);
+        session
+    }
+
+    #[test]
+    fn the_pass_a_warp_ends_moves_the_ship_no_further_after_the_end() {
+        // `jmp 0x71113` (@0x6c625) skips the turn (@0x6c770), the move-off
+        // and the position step (@0x6d097-0x6d4eb), the thrust and the
+        // fuel's regeneration (@0x6d96d).
+        let catalog = catalog();
+        let mut session = a_pass_before_the_end(&catalog);
+        // Off the bearing, so a turn would show; thrusting, so a stop
+        // would sound; and regenerating fuel below a full tank.
+        session.ship.player.heading = 80.0;
+        session.ship.thrusting = true;
+        session.ship.fit.stats.fuel_regen = 5.0;
+        session.pilot.reserves.fuel.now = 250.0;
+        session.take_sounds();
+        // The arrival alone, nothing of the pass after it.
+        let mut arrived = session.clone();
+        arrived.mode = Mode::Jumping(Jump::Hyperspace {
+            to: SystemId(131),
+            warp: 0,
+        });
+        arrived.ship.player.velocity = drag_by(arrived.ship.player.velocity, WARP_DRAG);
+        arrived.arrive(&catalog, &mut NeverFires).expect("arrives");
+        tick(&mut session);
+        assert_eq!(session.jumping(), None, "arrived in the pass");
+        assert_eq!(session.ship.player.position, arrived.ship.player.position);
+        assert_eq!(session.ship.player.velocity, arrived.ship.player.velocity);
+        assert_eq!(session.ship.player.heading, 80.0, "no turn");
+        assert_eq!(
+            session.pilot.reserves.fuel.now, 150.0,
+            "the jump's fuel, no regeneration"
+        );
+        let sounds = session.take_sounds();
+        assert!(sounds.contains(&SimSound::Arrived), "{sounds:?}");
+        assert!(
+            !sounds.contains(&SimSound::ThrustStopped),
+            "no thrust after the end: {sounds:?}"
+        );
+    }
+
+    #[test]
+    fn the_unfold_runs_before_the_warps_end() {
+        // @0x6b59c-0x6b5cb comes before the stage's block (@0x6baf7) and
+        // its end (@0x6bbb8).
+        use crate::combat::ship_frames::FOLDS;
+        let catalog = crate::session::ship_display::tests::displaying(FOLDS, 6);
+        let mut session = a_pass_before_the_end(&catalog);
+        session.ship.fit.armament.fold_mut().set = 5;
+        session.ship.fit.armament.fold_mut().dir = 0;
+        let bearing = session.chart.jump_aim(&session.pilot, SystemId(131));
+        assert!(
+            session.fly_warp_stage(bearing, Controls::default()),
+            "the natural end"
+        );
+        assert_eq!(session.ship.fit.armament.fold().dir, -1, "unfolding");
     }
 
     /// The reachability movies phase 4 (`_ShowTextDialog`'s faded branches
@@ -1357,8 +1472,9 @@ pub(super) mod tests {
         assert_eq!(session.preparing_jump(), Some(SystemId(131)), "turning");
         assert!(!session.warp_end_due());
         tick(&mut session);
-        assert_eq!(session.jumping(), Some(SystemId(131)));
-        assert!(session.warp_end_due());
+        // The arrival reads a jump begun (`Jump::Hyperspace`).
+        assert_eq!(session.jumping(), None, "arrived");
+        assert_eq!(session.pilot.system, SystemId(131));
     }
 
     // The frame's gain.
@@ -1375,7 +1491,7 @@ pub(super) mod tests {
     #[test]
     fn at_half_gain_the_move_off_moves_half_as_far() {
         let mut session = jumping(&catalog());
-        tick_to(&mut session, 300);
+        tick_to_held_short(&mut session, 300);
         let at = session.ship.player.position;
         let half = SpeedMult::new(0.5);
         session.at_gain(half);

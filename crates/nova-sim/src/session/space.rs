@@ -1,5 +1,6 @@
 //! What is in the system around the player: the traffic, the fight and
-//! its strikes, the cargo boxes jettisons left, the asteroid field, the
+//! its strikes, the cargo boxes jettisons left, the escape pods adrift,
+//! the asteroid field, the
 //! stellars' damage and the sprites shown, the message line, the
 //! escorts' and encounters' state ([`Escorts`]), and the escorts' voice
 //! channel (see the `voices` module). The coordinators that
@@ -69,12 +70,9 @@ pub(super) struct Space {
     pub(super) queued_in_frame: Vec<crate::traffic::plunder::PirateEvent>,
     /// Whether the system is to be populated on the next traffic tick in
     /// flight: from the session's start, and after a relocation that
-    /// resets the traffic while landed. A take-off populates at once.
+    /// resets the traffic while landed. A take-off populates at once, as
+    /// game entry does in flight (see the `priming_passes` module).
     pub(super) traffic_due: bool,
-    /// The gain of game entry's third stellar pass, while its gates' step
-    /// is owed to the setup `traffic_due` waits for (see the
-    /// `stellar_passes` module); never saved.
-    pub(super) entry_gate_pass_owed: Option<crate::SpeedMult>,
     /// The heading each ship in the fight was drawn at after the last
     /// pass ([`Session::game_work`](super::Session::game_work)): its heading as that pass ended, which the
     /// view draws before the next. Each ship's shots leave from the exit
@@ -87,6 +85,9 @@ pub(super) struct Space {
     /// The cargo boxes jettisons left in space (see the `cargo_boxes`
     /// module); never saved, as the original saves none.
     pub(super) boxes: crate::cargo_box::CargoBoxes,
+    /// The NPCs' escape pods adrift (see the `escape_pods` module); never
+    /// saved, as the original saves none.
+    pub(super) pods: crate::escape_pod::EscapePods,
     /// The asteroid field about the player (see the `asteroids` module);
     /// never saved, as the original saves none.
     pub(super) asteroids: crate::asteroid::Asteroids,
@@ -232,15 +233,6 @@ pub(super) struct Escorts {
     /// written to its berth too (see
     /// [`berth_marks`](crate::traffic::berth_marks)). Never saved.
     pub(super) commanded: BTreeSet<NpcId>,
-    /// Whether the next class-order bookkeeping is skipped, once: set by a
-    /// jump's arrival under the engine's readings of
-    /// [`RuleKey::EscortOrders`](crate::rulebook::RuleKey::EscortOrders)
-    /// and [`RuleKey::ArrivalOrders`](crate::rulebook::RuleKey::ArrivalOrders),
-    /// which keeps the orders through the arrival's pass as `_HandlePlayer`
-    /// returns on the arrival frame (@0x6c625) before the bookkeeping
-    /// (@0x6e2e8); taken by the first bookkeeping after it, and cleared by
-    /// every other entry (see the `class_orders` module). Never saved.
-    pub(super) skip_bookkeeping: bool,
     /// Whether the records not placed yet hold the berths a pilot load
     /// packed them into (see the `loaded_berths` module), as
     /// `_LoadPilotData` spawns each into its slot at once, so one leaving
@@ -248,12 +240,6 @@ pub(super) struct Escorts {
     /// `Session::load`, spent as the fleet is first placed. Never saved:
     /// a load sets it afresh.
     pub(super) loaded_berths_held: bool,
-    /// The gain of game entry's `_PrepareAllSprites` (@0x1a36c), while
-    /// the display step it gives the escorts `_LoadPilotData` spawned is
-    /// owed to the setup that places them (`traffic_due`'s; see the
-    /// `prepare_frames` module): set by `Session::enter_game` in a system
-    /// not yet set up, taken as the escorts enter. Never saved.
-    pub(super) entry_display_owed: Option<crate::SpeedMult>,
     /// The kept escorts' displays the view is owed: the prepares that
     /// displayed each NPC since the last flight pass, and each kept
     /// escort's old and new NPC since the last placement (see the
@@ -297,10 +283,10 @@ impl Space {
             #[cfg(test)]
             queued_in_frame: Vec::new(),
             traffic_due: true,
-            entry_gate_pass_owed: None,
             drawn: BTreeMap::new(),
             combat: Combat::default(),
             boxes: crate::cargo_box::CargoBoxes::default(),
+            pods: crate::escape_pod::EscapePods::default(),
             asteroids: crate::asteroid::Asteroids::default(),
             asteroid_kill: None,
             // A session starts or loads in flight, as `_DoNewPilot`
@@ -332,9 +318,7 @@ impl Space {
                 restock: false,
                 class_orders: [None; 4],
                 commanded: BTreeSet::new(),
-                skip_bookkeeping: false,
                 loaded_berths_held: false,
-                entry_display_owed: None,
                 carry: super::display_carry::DisplayCarry::default(),
                 quote_clock: persons::QuoteClock::default(),
             },

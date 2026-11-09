@@ -101,3 +101,26 @@ fn a_locked_missile_passes_through_the_ship_it_was_fired_at() {
         assert_eq!(combat.take_strikes().is_empty(), !hits, "{jam:?}");
     }
 }
+
+#[test]
+fn a_locked_missile_hits_the_ship_in_the_ship_slot_of_its_asteroids() {
+    // B is in berth 2: a missile locked on asteroid slot 2 reads it as
+    // B's ship slot (@0x44828), unless the other reading is set.
+    for (k, source, hits) in [
+        (2, RuleSource::Engine, true),
+        (3, RuleSource::Engine, false),
+        (2, RuleSource::Bible, false),
+    ] {
+        let mut ships = [Ship::at(1, 0.0, 300.0), Ship::at(2, 0.0, -60.0)];
+        let mut combat = Combat::default();
+        combat.set_locked_shot_ship_slot(source);
+        aimed_at_b(&mut combat);
+        let shot = combat.shots_mut().first_mut().expect("in flight");
+        (shot.jam, shot.target, shot.aimed_at) = (Jam::Asteroid(Some(k)), None, None);
+        // Its last move, from (0, -50) to (0, -70), crosses B.
+        shot.moved_from = Some(Vec2::new(0.0, -50.0));
+        shot.position = Vec2::new(0.0, -70.0);
+        phase::test_hits(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(ships[1].reserves.shield.now < 10.0, hits, "{k} {source:?}");
+    }
+}

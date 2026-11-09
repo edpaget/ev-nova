@@ -231,7 +231,6 @@ impl Session {
             | FlightCommand::OpenHypergate
             | FlightCommand::EnterHypergate(_)
             | FlightCommand::EnterWormhole
-            | FlightCommand::Arrive
             | FlightCommand::TakeOff
             | FlightCommand::LeaveIfDue
             | FlightCommand::LandEscorts

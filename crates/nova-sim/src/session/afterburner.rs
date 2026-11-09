@@ -619,6 +619,7 @@ mod tests {
         work(&mut session, &catalog, held(false, true));
         session.tick_again(
             held(false, true),
+            &crate::testkit::catalog(),
             &crate::ai::NovaAi::default(),
             crate::combat::Rules::default(),
             &mut crate::chance::NeverFires,

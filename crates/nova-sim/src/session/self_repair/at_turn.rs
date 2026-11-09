@@ -279,6 +279,7 @@ fn a_ship_disabled_before_double_times_second_pass_is_repaired_at_its_turn_of_it
     let mut chance = Ranged::of(&[(REPAIR_ODDS, 0)]);
     session.tick_again(
         Controls::default(),
+        &crate::testkit::catalog(),
         &watching,
         Rules::default(),
         &mut chance,

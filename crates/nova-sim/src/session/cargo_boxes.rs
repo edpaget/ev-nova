@@ -12,7 +12,7 @@ use crate::geometry::Vec2;
 use crate::market::Good;
 use crate::pilot::Pilot;
 use crate::scoop::{
-    Haul, Scooper, Scooping, has_asteroid_scoop, haul, npc_in_ship_layer, npc_scoop,
+    Haul, Scooper, Scooping, has_asteroid_scoop, haul, npc_in_ship_layer, npc_scoop, npc_scoop_pods,
 };
 use crate::ship_layer::disabled;
 
@@ -106,6 +106,11 @@ impl Session {
     ///    ([`Npc::is_scooping`](crate::traffic::npc::Npc::is_scooping))
     ///    and in the ship layer ([`npc_in_ship_layer`]) takes every box it
     ///    touches ([`npc_scoop`]).
+    /// 4. Each taker, after its boxes, takes each shown escape pod it
+    ///    touches for box slot 0, by
+    ///    [`RuleKey::PodScoopsBoxZero`](crate::RuleKey::PodScoopsBoxZero)'s
+    ///    engine reading (see the `pod_scoop` module), as `_boxLayer`
+    ///    holds the boxes, then the pods.
     ///
     /// A ship touches a box by their placed masks, the ship's first
     /// (`_SWRLECollision` @0x3710c, [`Scooping::touches`]), laid out from
@@ -130,7 +135,8 @@ impl Session {
     /// wrap's reach differ, 15,000 pixels off screen, and they then stand
     /// apart in both. The player tests before
     /// the NPCs and each box is taken once, where the original's order
-    /// follows `SpriteWorld`'s layer history. There is no sound and no
+    /// follows `SpriteWorld`'s layer history; each takes its boxes before
+    /// its pods, as the box layer holds them. There is no sound and no
     /// message, and the HUD's cargo area is drawn afresh each frame, so
     /// the status redraw flag (@0x37199) needs no counterpart.
     pub(super) fn scoop_boxes(&mut self, stood: Vec2) {
@@ -140,6 +146,8 @@ impl Session {
         let masks = self.scoop_masks(stood);
         let sheets = self.space.sprite_masks.box_sheets();
         let walk = self.mask_walk();
+        let pods = self.pods_scooped();
+        let pod_sheet = self.pod_sheet();
         // The player defends no stellar.
         if !disabled(self.ship.condition, false) {
             let scooping = Scooping {
@@ -157,19 +165,14 @@ impl Session {
                 else {
                     break;
                 };
-                let good = match haul(taken.contents, Scooper::Player) {
-                    Haul::Commodity(commodity) => Some(Good::Commodity(commodity)),
-                    Haul::Junk(junk) => Some(Good::Junk(junk)),
-                    Haul::Nothing => None,
-                };
-                if let Some(good) = good {
-                    let tons = self.pilot.cargo.entry(good).or_insert(0);
-                    *tons = tons.saturating_add(1);
-                }
-                self.reset_precalced();
+                self.add_player_haul(haul(taken.contents, Scooper::Player));
+            }
+            if pods {
+                self.player_scoop_pods(&scooping, pod_sheet.as_ref());
             }
         }
         let (boxes, frames) = (&mut self.space.boxes, &self.statics.box_frames);
+        let adrift = &mut self.space.pods;
         for (npc, mask) in self.space.traffic.npcs_mut().iter_mut().zip(&masks.npcs) {
             if npc.is_scooping() && npc_in_ship_layer(npc) {
                 let scooping = Scooping {
@@ -180,18 +183,41 @@ impl Session {
                     ..Scooping::disc(npc.state.position, npc.hull.hit_radius)
                 };
                 npc_scoop(boxes, frames, &scooping, &mut npc.cargo);
+                if pods {
+                    npc_scoop_pods(boxes, adrift, pod_sheet.as_ref(), &scooping, &mut npc.cargo);
+                }
             }
         }
+    }
+
+    /// Adds what the player scooped, `haul`, to its hold, a ton of it, and
+    /// resets the precalced values (@0x371ac), an empty haul's too.
+    pub(super) fn add_player_haul(&mut self, haul: Haul) {
+        let good = match haul {
+            Haul::Commodity(commodity) => Some(Good::Commodity(commodity)),
+            Haul::Junk(junk) => Some(Good::Junk(junk)),
+            Haul::Nothing => None,
+        };
+        if let Some(good) = good {
+            let tons = self.pilot.cargo.entry(good).or_insert(0);
+            *tons = tons.saturating_add(1);
+        }
+        self.reset_precalced();
     }
 
     /// `_ShipCollisionHandler`'s scoop branch and `_HandleBoxes`' step, after
     /// this pass's player move and the player's display step, the player
     /// having stood at `stood` before the move (see the `contact_masks`
     /// module): the boxes the ships touch are scooped
-    /// ([`Session::scoop_boxes`]), then the boxes step.
+    /// ([`Session::scoop_boxes`]), then the boxes step, then the escape
+    /// pods (`_HandleEscapePods` @0x44513, after `_HandleBoxes`). See the
+    /// `escape_pods` module for why they step before the ship loop, and
+    /// why a pod the step takes below 0 holds its slot through the ship
+    /// loop's spawns.
     pub(super) fn scoop_after_display(&mut self, stood: Vec2) {
         self.scoop_boxes(stood);
         self.space.boxes_tick(self.speed_mult());
+        self.space.pods_tick(self.speed_mult());
     }
 }
 
@@ -1182,7 +1208,13 @@ mod tests {
 
     /// Runs double time's second pass on `session` under `controls`.
     fn again(session: &mut Session, controls: Controls) {
-        session.tick_again(controls, &Passive, Rules::default(), &mut NeverFires);
+        session.tick_again(
+            controls,
+            &crate::testkit::catalog(),
+            &Passive,
+            Rules::default(),
+            &mut NeverFires,
+        );
     }
 
     /// [`scooper`] holding nothing in double time, its sheets read in
@@ -1350,5 +1382,22 @@ mod tests {
             again(&mut session, Controls::default());
             assert_eq!(session.cargo_boxes().is_empty(), taken, "{at:?}");
         }
+    }
+
+    #[test]
+    fn the_rulebook_says_whether_the_cargo_boxes_are_capped() {
+        use crate::cargo_box::CargoBoxes;
+        use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+        let catalog = catalog();
+        let session = |rules: Rulebook| Session::start(&catalog).expect("starts").with_rules(rules);
+        assert_eq!(
+            session(Rulebook::default()).space.boxes,
+            CargoBoxes::default()
+        );
+        let mut capped = CargoBoxes::default();
+        capped.set_combat_caps(RuleSource::Engine);
+        assert_ne!(capped, CargoBoxes::default());
+        let engine = Rulebook::default().with_override(RuleKey::CombatCaps, RuleSource::Engine);
+        assert_eq!(session(engine).space.boxes, capped);
     }
 }

@@ -18,15 +18,28 @@
 //! last ship's by the engine, none by the other reading.
 //!
 //! It lives as long as the [`Traffic`](crate::traffic::Traffic) holding
-//! it, as its berths' persons do: across systems, but not across a new
-//! traffic. The original keeps a slot's pick through a pilot load or a new
-//! game until the app quits; that is recorded only (rdm phase
-//! weapons-fidelity/phase-17-fire-gates-left-out-of-phase-5).
+//! it, and is handed on to the next through
+//! [`KeptBerths`](super::kept_berths::KeptBerths), as its berths'
+//! persons are: the original keeps a slot's pick through a relocation, a
+//! pilot load and a new game until the app quits.
 
 use crate::catalog::WeaponId;
 
+#[cfg(any(test, feature = "fixture"))]
+use super::Traffic;
 use super::berth_kept::BerthKept;
 
 /// The pick each berth's last ship left, and the reading a new ship takes
 /// it by (see the module docs).
 pub type BerthPicks = BerthKept<WeaponId>;
+
+#[cfg(any(test, feature = "fixture"))]
+impl Traffic {
+    /// Writes `pick` as the pick of the ship last in `berth`, for tests
+    /// that set a berth's word up.
+    ///
+    /// Kept for nova-sim's kept-berths tests (`session::kept_berths`).
+    pub fn write_berth_pick(&mut self, berth: u32, pick: Option<WeaponId>) {
+        self.berth_picks.write(berth, pick);
+    }
+}

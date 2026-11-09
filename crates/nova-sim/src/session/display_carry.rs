@@ -268,8 +268,9 @@ mod tests {
         pilot.escorts.push(fleet_escort(129));
         let mut session = Session::load(&catalog, pilot, &Rulebook::default()).expect("loads");
         session.open_saved(crate::session::SavedOpening::AtLaunch, &mut NeverFires);
-        session.enter_game(HALF, &mut NeverFires);
-        session.populate(&catalog, &mut NeverFires);
+        // The entry sets the ships up, placing them (see the
+        // `priming_passes` module).
+        crate::testkit::enter_game(&mut session, &catalog, HALF, &mut NeverFires);
         escort_id(&session);
         assert_eq!(session.take_carried_displays(), Some(Vec::new()));
     }

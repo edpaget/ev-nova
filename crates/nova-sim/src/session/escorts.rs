@@ -82,7 +82,7 @@
 //! jump's arrival, by the engine reading of
 //! [`RuleKey::ArrivalOrders`](crate::RuleKey::ArrivalOrders), resets
 //! nothing as they enter: the orders stand through the arrival's pass,
-//! whose bookkeeping is skipped (`_HandlePlayer` returns @0x6c625), so a
+//! which runs no bookkeeping (`_HandlePlayer` returns @0x6c625), so a
 //! mission escort set up in the new system thinks once under its class's
 //! order while the hired escorts and fighters glide in past their think
 //! (@0x8fcf5); the next pass's bookkeeping clears every class, every ship
@@ -261,9 +261,9 @@ impl Session {
     /// The escorts enter the system (see the module docs): by the
     /// engine their standing orders are reset, but on a `jump`'s arrival by
     /// the engine reading of [`RuleKey::ArrivalOrders`], which keeps them
-    /// and has the next bookkeeping skipped
-    /// ([`Escorts::skip_bookkeeping`](super::space::Escorts)) so the one
-    /// after it clears them; by the other reading of
+    /// through the arrival's pass, whose rest runs no bookkeeping (see the
+    /// `settled_in_pass` module), so the next pass's clears them; by the
+    /// other reading of
     /// [`RuleKey::EscortOrders`] each ship of the player's placed, or come
     /// with the system as a mission's, is marked when its class keeps an
     /// order ([`Space::mark_kept_orders`]), so the kept orders stand
@@ -286,10 +286,6 @@ impl Session {
     /// One that kept no skill rolls one on `chance`, and one that kept no afterburner, having no NPC (a
     /// loaded pilot's), rolls it on `chance`, as `_LoadPilotData`'s
     /// `_SpawnEscort` does (@0x75a25; see the `afterburner_roll` module).
-    /// At the first setup after a game entry, the escorts a load spawned
-    /// then take the display the entry's `_PrepareAllSprites` gave them
-    /// (@0x1a36c), at its gain, drawing on `chance`
-    /// ([`Session::prepare_entered_escorts`]).
     pub(super) fn enter_escorts(
         &mut self,
         berths: &[u32],
@@ -302,16 +298,16 @@ impl Session {
         self.space.escorts.commanded.clear();
         let rules = &self.setup.rules;
         let engine = rules.source_for(RuleKey::EscortOrders) == RuleSource::Engine;
-        // A jump's arrival keeps the orders through its pass, whose
-        // bookkeeping is skipped; the next pass's clears them, every ship
-        // placed being unmarked (see the module docs).
-        let skip = engine && jump && rules.source_for(RuleKey::ArrivalOrders) == RuleSource::Engine;
-        self.space.escorts.skip_bookkeeping = skip;
+        // A jump's arrival keeps the orders through its pass, which
+        // returns before the bookkeeping (@0x6c625); the next pass's
+        // clears them, every ship placed being unmarked (see the
+        // `class_orders` module).
+        let arrival_keeps = jump && rules.source_for(RuleKey::ArrivalOrders) == RuleSource::Engine;
         // The reset leaves the pilot's copy of the class table, which an
         // escort with no NPC takes its word from (see
         // [`KeptEscort::order_word`]): in the original the next pass's
         // loop 2 clears it, before any save (see the `class_table` module).
-        let reset = engine && !skip;
+        let reset = engine && !arrival_keeps;
         if reset {
             for escort in &mut self.pilot.escorts {
                 escort.order = None;
@@ -401,7 +397,6 @@ impl Session {
         }
         self.space.traffic.reserve(BTreeSet::new());
         self.space.escorts.restock = false;
-        self.prepare_entered_escorts(chance);
     }
 
     /// Escort `index` as an NPC in the system at the first free berth, its
@@ -1511,8 +1506,8 @@ pub(super) mod tests {
         defend_all(&mut session);
         assert!(crate::save::encode(session.pilot()).contains("\"defend\""));
         assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
-        // The arrival's pass, then the next's bookkeeping, which resets a
-        // jump's by the engine (`RuleKey::ArrivalOrders`).
+        // The passes after the arrival, the first's bookkeeping resetting
+        // a jump's by the engine (`RuleKey::ArrivalOrders`).
         tick(&mut session, &catalog);
         tick(&mut session, &catalog);
         let jumped = orders(&session);
@@ -2306,7 +2301,7 @@ pub(super) mod tests {
         let (mut session, escort) = past_the_lead_in(catalog, flags2);
         let mut to_the_end = 0;
         let mut ahead = session.clone();
-        while !ahead.warp_end_due() {
+        while ahead.jumping().is_some() {
             warp_pass(&mut ahead, catalog);
             to_the_end += 1;
             assert!(to_the_end < 1000, "the warp never ended");
@@ -2382,15 +2377,16 @@ pub(super) mod tests {
     /// 0x0400, @0x834e6-0x8350b), which its type lacks, though it would
     /// stay cloaked in formation (0x0800): so it uncloaks on its first
     /// think (`_DoShipUncloak` @0xdf55) and fades out at 0.75 a pass. It
-    /// arrives with the fade it had at the warp's end, stepped once more
-    /// by the arrival's `_PrepareAllSprites` (@0x6c59c).
+    /// arrives on the warp's end's pass with the fade the pass before
+    /// left it, stepped by the arrival's `_PrepareAllSprites` (@0x6c59c)
+    /// and by its display in the rest of that pass (@0x444ad).
     #[test]
     fn a_cloaked_escort_fades_out_through_the_warp_and_arrives_with_that_fade() {
         use crate::cloak::{CLOAK_TRAVELLING, FADE_FULL, FADE_RATE};
         let catalog = fleeted();
         let (mut session, escort) = cloaked_near_the_warp_end(&catalog, CLOAK_TRAVELLING);
         let mut passes: u16 = 0;
-        while !session.warp_end_due() {
+        while passes + 1 < CLOAKED_BEFORE_THE_END {
             warp_pass(&mut session, &catalog);
             passes += 1;
             assert_eq!(
@@ -2402,18 +2398,16 @@ pub(super) mod tests {
                 "pass {passes}"
             );
         }
-        assert_eq!(passes, CLOAKED_BEFORE_THE_END);
-        let at_the_end = FADE_FULL - FADE_RATE * f32::from(passes);
-        assert_eq!(at_the_end, 17.0);
-        assert_eq!(
-            session.arrive(&catalog, &mut NeverFires),
-            Some(SystemId(131))
-        );
+        let before_the_end = FADE_FULL - FADE_RATE * f32::from(passes);
+        assert_eq!(before_the_end, 17.75);
+        warp_pass(&mut session, &catalog);
+        assert_eq!(session.jumping(), None, "the arrival's pass");
+        assert_eq!(session.pilot.system, SystemId(131));
         assert_cloak_kept(
             &session,
             escort,
             Cloak {
-                fade: at_the_end - FADE_RATE,
+                fade: before_the_end - 2.0 * FADE_RATE,
                 direction: -1,
             },
         );
@@ -2421,7 +2415,10 @@ pub(super) mod tests {
 
     /// With the jump's term (`Flags2` 0x0400), which holds in goal 0xb
     /// (@0x834e6-0x8350b), the escort stays fully cloaked through the
-    /// warp and arrives so.
+    /// warp and arrives so; its first think in the new system, on the
+    /// arrival's pass (`jmp 0x71113` @0x6c625, see the `settled_in_pass`
+    /// module), out of goal 0xb, starts its uncloak, and its display there
+    /// steps it once.
     #[test]
     fn a_cloaked_escort_with_the_jump_cloak_stays_cloaked_through_the_warp() {
         use crate::cloak::{CLOAK_JUMPING, CLOAK_TRAVELLING};
@@ -2429,7 +2426,7 @@ pub(super) mod tests {
         let (mut session, escort) =
             cloaked_near_the_warp_end(&catalog, CLOAK_JUMPING | CLOAK_TRAVELLING);
         let mut passes = 0;
-        while !session.warp_end_due() {
+        while passes + 1 < CLOAKED_BEFORE_THE_END {
             warp_pass(&mut session, &catalog);
             passes += 1;
             assert_eq!(
@@ -2438,12 +2435,17 @@ pub(super) mod tests {
                 "pass {passes}"
             );
         }
-        assert_eq!(passes, CLOAKED_BEFORE_THE_END);
-        assert_eq!(
-            session.arrive(&catalog, &mut NeverFires),
-            Some(SystemId(131))
+        warp_pass(&mut session, &catalog);
+        assert_eq!(session.jumping(), None, "the arrival's pass");
+        assert_eq!(session.pilot.system, SystemId(131));
+        assert_cloak_kept(
+            &session,
+            escort,
+            Cloak {
+                fade: crate::cloak::FADE_FULL - crate::cloak::FADE_RATE,
+                direction: -1,
+            },
         );
-        assert_cloak_kept(&session, escort, FULLY_CLOAKED);
     }
 
     /// By the original's formation flight
@@ -3354,8 +3356,8 @@ pub(super) mod tests {
             session.command_escorts(EscortGroup::All, EscortCommand::Hold, &mut NeverFires);
             assert_eq!(orders(&session), [Some(EscortOrder::Hold); 2]);
             session.arrive(&catalog, &mut NeverFires).expect("arrives");
-            // By the engine the arrival's pass keeps it and the next
-            // pass's bookkeeping clears it (`RuleKey::ArrivalOrders`).
+            // By the engine the arrival keeps it and the next pass's
+            // bookkeeping clears it (`RuleKey::ArrivalOrders`).
             tick(&mut session, &catalog);
             tick(&mut session, &catalog);
             assert_eq!(orders(&session), [kept; 2], "{source:?}");

@@ -641,14 +641,17 @@ fn by_the_engine_escape_returns_with_the_pilot_held_and_enter_resumes_it() {
     screen.input(&key(Key::ArrowUp, true));
     screen.tick(TICK * 10);
     screen.input(&key(Key::ArrowUp, false));
-    let left = ship(&screen).position;
+    let left = ship(&screen);
     let writes = store.writes();
     escape_to_menu(&mut screen);
     assert_eq!(store.writes(), writes, "in flight, nothing saved");
     assert!(screen.flight_view().is_none());
     assert_eq!(held_name(&screen), "Ada");
     enter_ship(&mut screen);
-    assert_eq!(ship(&screen).position, left, "where it left off");
+    // Where it left off, less the entry's two priming passes' drift (how
+    // far is nova-sim's to pin).
+    let drift = (ship(&screen).position - left.position).length();
+    assert!(drift <= 2.0 * left.velocity.length() + 1e-3, "{drift}");
     assert_eq!(store.writes(), writes);
 }
 

@@ -4,10 +4,12 @@
 //! the `story` module's "Checked for phase 8").
 //!
 //! Only a shot of a planet-type weapon (`Flags2` 0x0400) can hit one,
-//! and only once it has flown past its `ProxSafety`. A stellar is a
-//! circle of the radius the session gives it: the original tests the
-//! shot's sprite against the stellar's, pixel by pixel, and the engine
-//! takes the disc the player sees instead. A hit takes `MassDmg` plus
+//! and only once it has flown past its `ProxSafety`. The original tests
+//! the shot's sprite against the stellar's, pixel by pixel, the shot
+//! first, and so does the engine where the session lends both masks
+//! ([`stellar_contact`](super::stellar_contact)); where it can't, or by
+//! the other reading, a stellar is a disc of the radius the session gives
+//! it, and a shot's move is swept to it ([`entered`]). A hit takes `MassDmg` plus
 //! `EnergyDmg` off its strength, with no shield and no kind of damage.
 //! Beams never hit a stellar by the engine's reading of
 //! [`RuleKey::BeamStellars`](crate::RuleKey::BeamStellars); the Bible's
@@ -76,25 +78,15 @@ pub fn can_hit(shot: &Shot) -> bool {
     shot.weapon.planet_type() && shot.fuse_armed()
 }
 
-/// The stellar among `stellars`, by its index, that `shot`, having flown
-/// here from `was`, met, and where it first came within its radius: the
-/// first still standing in the order they are given, which is the
-/// system's list (`nav_def`), as `_CheckShotProximities`' stellar loop
-/// walks it and stops at the first it hits (@0x37230-0x37527), not the
-/// nearest along the move; none when the shot cannot hit one.
+/// Where `shot`, having flown here from `was`, first came within
+/// `stellar`'s disc, if it did: the engine's swept test, which the
+/// proximity pass keeps where a mask can't be read and by the other
+/// reading of [`RuleKey::ShotContact`](crate::RuleKey::ShotContact) (see
+/// [`stellar_contact`](super::stellar_contact)).
 #[must_use]
-pub fn met(shot: &Shot, was: Vec2, stellars: &[StellarTarget]) -> Option<(usize, Vec2)> {
-    if !can_hit(shot) {
-        return None;
-    }
-    stellars
-        .iter()
-        .enumerate()
-        .filter(|(_, stellar)| !shot_down(stellar.strength))
-        .find_map(|(index, stellar)| {
-            let t = contact(was, shot.position, stellar.position, stellar.radius)?;
-            Some((index, was + (shot.position - was) * t))
-        })
+pub fn entered(shot: &Shot, was: Vec2, stellar: &StellarTarget) -> Option<Vec2> {
+    let t = contact(was, shot.position, stellar.position, stellar.radius)?;
+    Some(was + (shot.position - was) * t)
 }
 
 #[cfg(test)]

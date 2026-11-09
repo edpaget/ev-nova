@@ -310,7 +310,8 @@ impl AppScreen {
                     self.refuse_new_pilot(UNUSABLE_NAME);
                     return ScreenAction::None;
                 }
-                let pilot = match Pilot::new(self.data.as_ref(), &name) {
+                let mods = self.rules.source_for(RuleKey::OutfitWeaponMods);
+                let pilot = match Pilot::new_reading(self.data.as_ref(), &name, mods) {
                     Ok(pilot) => pilot
                         .with_nickname(kept_name(&nickname))
                         .with_gender(gender)

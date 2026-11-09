@@ -2,7 +2,8 @@
 //! ([`nova_sim::sprite_layer::WORLD_PASSES`]): each beam, effect, smoke
 //! puff, escape pod and cargo box in its layer among the ships and the
 //! shots (rdm play-feel phase 4). On [`FakeFlight`]: each frame scripted,
-//! each effect raised on the view's own effects.
+//! each effect raised on the view's own effects and each pod put in the
+//! frame.
 
 use nova_sim::catalog::Explosion;
 use nova_sim::combat::ParticleBurst;
@@ -125,16 +126,12 @@ fn the_cursor_and_the_double_time_icon_are_drawn_after_the_brackets_and_under_th
     assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
 }
 
-/// Sets a pod adrift in `view` at `at`, as a dying ship's would be.
+/// Puts a shown pod adrift at `at` in the frame `view` draws, as the
+/// simulation sets a dying ship's adrift.
 fn pod_adrift(view: &mut Faked, at: Vec2) {
-    raise(
-        view,
-        &[CombatEvent::PodEjected {
-            ship: ShipRef::Npc(NpcId(9)),
-            at,
-            velocity: Vec2::ZERO,
-        }],
-    );
+    let pod = crate::flight::pods::pod_at(at, 100.0);
+    view.frame.pods.push(pod);
+    view.sim.frame_mut().pods.push(pod);
 }
 
 #[test]
@@ -161,6 +158,22 @@ fn an_escape_pod_is_drawn_above_a_disabled_ship_and_below_a_flying_one() {
 }
 
 #[test]
+fn the_frames_shown_pods_are_drawn_and_a_hidden_one_is_not() {
+    let frame = in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]);
+    let mut view = world(trading(), frame);
+    pod_adrift(&mut view, Vec2::new(30.0, 30.0));
+    let pods = |view: &Faked| {
+        world_list(view)
+            .iter()
+            .filter(|command| sprite_of(1095)(command))
+            .count()
+    };
+    assert_eq!(pods(&view), 1);
+    view.frame.pods[0].shown = false;
+    assert_eq!(pods(&view), 0, "hidden by the simulation");
+}
+
+#[test]
 fn an_escape_pod_is_drawn_over_the_cargo_boxes() {
     let frame = FlightFrame {
         cargo_boxes: vec![box_at(Vec2::new(-20.0, 20.0))],
@@ -174,6 +187,50 @@ fn an_escape_pod_is_drawn_over_the_cargo_boxes() {
     // The 64 boxes of `_boxData`, then the 32 pods of `_podData`
     // (`_InitSprites` @0x1fb89-0x1fd57).
     assert!(cargo_box < pod, "{cargo_box} {pod}");
+}
+
+#[test]
+fn a_box_in_a_freed_lower_slot_is_drawn_under_an_older_box_in_a_higher_slot() {
+    // The frame lists the boxes in slot order: the newer box (frame 5)
+    // took freed slot 0, the older one (frame 9) holds slot 1. They
+    // overlap, so the one drawn later is on top (`_boxLayer`'s slot
+    // order, @0x1fb89-0x1fc6b).
+    let newer = FrameBox {
+        frame: 5,
+        ..box_at(Vec2::new(-20.0, 20.0))
+    };
+    let older = FrameBox {
+        frame: 9,
+        ..box_at(Vec2::new(-18.0, 20.0))
+    };
+    let frame = FlightFrame {
+        cargo_boxes: vec![newer, older],
+        ..in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)])
+    };
+    let view = world(trading(), frame);
+    let camera = Camera::centred_on_in(Point::new(0.0, 0.0), VIEW_SIZE);
+    let shown: Vec<u16> = view
+        .shown_boxes(&camera)
+        .iter()
+        .map(|shown| shown.frame)
+        .collect();
+    assert_eq!(shown, [5, 9], "the frame's order is kept");
+    let list = world_list(&view);
+    let drawn_at = |frame: u16| {
+        list.iter()
+            .position(|command| {
+                matches!(
+                    command,
+                    DrawCommand::Sprite { image, .. } if image.id == 500 && image.frame == frame
+                )
+            })
+            .unwrap_or_else(|| panic!("box frame {frame} drawn"))
+    };
+    let (newer, older) = (drawn_at(5), drawn_at(9));
+    assert!(
+        newer < older,
+        "the newer box is drawn under: {newer} {older}"
+    );
 }
 
 #[test]

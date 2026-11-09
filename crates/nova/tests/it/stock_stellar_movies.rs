@@ -309,7 +309,10 @@ fn a_stock_landing_hypergate_and_wormhole_with_movies_on_start_no_movie() {
         .expect("a stock wormhole");
     let player = projector();
     let mut driver = resumed_over(&data, (system, wormhole), &[], &player, true);
-    driver.land_twice();
+    // Over the wormhole at rest once entry's passes have run, the first
+    // press passes through; a second, at the exit, would find the ship
+    // moving too fast.
+    driver.press(Key::KeyL);
     assert_eq!(driver.showing(), Showing::Flight, "no movie");
     let message = driver
         .app

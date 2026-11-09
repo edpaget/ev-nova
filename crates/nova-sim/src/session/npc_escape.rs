@@ -74,8 +74,8 @@
 //!
 //! [`PodEjected`]: crate::combat::CombatEvent::PodEjected
 
+use super::escape_pods::PodSpawn;
 use super::{Session, Space, Statics};
-use crate::SpeedMult;
 use crate::chance::Chance;
 use crate::combat::armament::{Rounds, inaccuracy};
 use crate::combat::hull::Condition;
@@ -148,10 +148,11 @@ impl Session {
             return;
         }
         let frame = self.field().frame;
-        let gain = self.speed_mult();
+        let spawn = self.setup.pod_spawn(&self.statics, self.speed_mult());
         let (pods, escape) = timers(was, at_step.dying);
         if let Some(timer) = pods {
-            self.space.eject_pods(&self.statics, id, timer, frame, gain);
+            self.space
+                .eject_pods(&self.statics, id, timer, frame, spawn, chance);
         }
         if let Some(timer) = escape {
             self.escape_roll(id, timer, chance);
@@ -242,14 +243,17 @@ impl Session {
 
 impl Space {
     /// NPC `id`'s person's pod and crew pod, its death timer at `timer`,
-    /// on `frame`, the crew pods spaced at the frame's `gain`.
+    /// on `frame`, the crew pods spaced at the frame's gain, each set
+    /// adrift as `spawn` says, drawing on `chance` (see the
+    /// `escape_pods` module).
     fn eject_pods(
         &mut self,
         statics: &Statics,
         id: NpcId,
         timer: i32,
         frame: i32,
-        gain: SpeedMult,
+        spawn: PodSpawn,
+        chance: &mut dyn Chance,
     ) {
         let Some(npc) = self.npc(id) else {
             return;
@@ -267,17 +271,19 @@ impl Space {
             i32::from(npc.hull.pod_count),
             i32::from(npc.pods_left),
             frame,
-            gain,
+            spawn.gain,
         );
         let (at, velocity) = (npc.state.position, npc.state.velocity);
         if person {
             self.combat.eject_pod(ShipRef::Npc(id), at, velocity);
+            self.spawn_pod(at, velocity, spawn, chance);
         }
         if crew {
             if let Some(npc) = self.npc_mut(id) {
                 npc.pods_left -= 1;
             }
             self.combat.eject_pod(ShipRef::Npc(id), at, velocity);
+            self.spawn_pod(at, velocity, spawn, chance);
         }
     }
 }
@@ -538,6 +544,61 @@ mod tests {
         let expected: Vec<i16> = std::iter::once(50).chain(later).collect();
         assert_eq!(expected, [50, 58, 78, 98]);
         assert_eq!(ticks, expected);
+    }
+
+    #[test]
+    fn an_ejected_pod_is_set_adrift_where_its_ship_is_and_a_later_pass_steps_it() {
+        let catalog = escaping(0);
+        let mut session = flying(&catalog, RuleSource::Engine);
+        session.space.traffic.add_npc(doomed(100, 10));
+        let mut ejected = None;
+        for tick in 0..60_i16 {
+            session.space.frame = tick + 2;
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Passive,
+                Rules::default(),
+                &mut Rolls::default(),
+            );
+            ejected = session
+                .take_combat_events()
+                .into_iter()
+                .find_map(|event| match event {
+                    CombatEvent::PodEjected { at, velocity, .. } => Some((at, velocity)),
+                    _ => None,
+                });
+            if ejected.is_some() {
+                break;
+            }
+        }
+        let (at, velocity) = ejected.expect("a pod by tick 50");
+        let [pod] = session.escape_pods() else {
+            panic!("one pod: {:?}", session.escape_pods());
+        };
+        let pod = *pod;
+        assert!(pod.shown);
+        // Pushed off by its own draws, then one step on.
+        assert_eq!(
+            pod.position,
+            crate::flight::moved(at, pod.velocity, crate::SpeedMult::FULL)
+        );
+        assert_ne!(pod.velocity, velocity, "pushed off");
+        let mut frame = crate::flight_frame::FlightFrame::default();
+        session.fill_frame(&mut frame);
+        assert_eq!(frame.pods, [pod]);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            Rules::default(),
+            &mut Rolls::default(),
+        );
+        let stepped = session.escape_pods()[0];
+        assert_eq!(stepped.life, pod.life - 1.0);
+        assert_eq!(stepped.position, pod.position + pod.velocity);
     }
 
     #[test]

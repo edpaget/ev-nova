@@ -1558,11 +1558,13 @@ fn pilot(screen: &AppScreen) -> &nova_sim::Pilot {
     flight(screen).sim().pilot().expect("flying")
 }
 
-/// `pilot` as its last save has it, from before entering play marked
-/// the intro seen.
-fn unseen(pilot: &nova_sim::Pilot) -> nova_sim::Pilot {
+/// `pilot` as its last save, `saved`, has it, from before entering play
+/// marked the intro seen and its priming passes' class-order bookkeeping
+/// rewrote the kept orders (nova-sim's to pin).
+fn unseen(pilot: &nova_sim::Pilot, saved: &nova_sim::Pilot) -> nova_sim::Pilot {
     nova_sim::Pilot {
         seen_intro: false,
+        class_orders: saved.class_orders,
         ..pilot.clone()
     }
 }

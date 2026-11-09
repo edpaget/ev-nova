@@ -1446,6 +1446,7 @@ mod tests {
         session.set_double_time_key(true);
         session.tick_again(
             crate::flight::Controls::default(),
+            &crate::testkit::catalog(),
             &LookedOver,
             crate::Rules::default(),
             &mut chance,

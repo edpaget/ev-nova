@@ -34,7 +34,7 @@ impl Session {
         *reserves = super::super::reserves(pilot);
         *cargo = self.ship.status_cargo(pilot, statics, &self.setup);
         *secondary = self.ship.secondary();
-        *secondary_line_count = self.ship.secondary_line_count(pilot, statics);
+        *secondary_line_count = self.ship.secondary_line_count(pilot, statics, &self.setup);
         let counted = self.ship.counted_outfits(pilot);
         *radar_gear = super::super::radar::radar_gear(&counted, statics);
         *interference = self.chart.interference(pilot, statics, &counted);

@@ -665,6 +665,7 @@ mod tests {
         assert_eq!(session.space.gate_sprites[&StellarId(300)], expected);
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &NovaAi::default(),
             Rules::default(),
             &mut NeverFires,

@@ -42,7 +42,12 @@
 //! ([`RuleKey::ShipChangeDefaultWeapons`](crate::RuleKey::ShipChangeDefaultWeapons);
 //! by its other reading the defaults' first mods are added to the arrays
 //! too). An outfit naming a weapon only in a later mod is no holder and
-//! is left alone, and so is one whose first mod names a weapon outside
+//! is left alone, as the engine's reading of
+//! [`RuleKey::OutfitWeaponMods`](crate::RuleKey::OutfitWeaponMods) has
+//! it; the fold reads the first mod under both readings, as the key's
+//! other reading reaches only the arrays' builders and the stock holders
+//! ([`Arsenal::stock_fits`](crate::combat::armament::Arsenal::stock_fits)).
+//! So is one whose first mod names a weapon outside
 //! the arrays, `wëap` 128 to 383 ([`FOLDED_WEAPONS`]): pass 1 and pass 3
 //! skip it (@0xcb6f-0xcb78, @0xcbb0-0xcbb9), so a default item naming
 //! `wëap` 384 or above, or a negative ID, keeps its count.
@@ -92,6 +97,7 @@ use std::collections::BTreeMap;
 
 use crate::catalog::{OutfitId, OutfitRecord, WeaponId};
 pub use crate::combat::armament::Arrays;
+use crate::combat::armament::StockFit;
 use crate::has_max::{ItemRoom, item_limit};
 use crate::outfitter::{Hardpoints, OutfitFlags};
 use crate::rulebook::RuleSource;
@@ -196,10 +202,66 @@ pub fn carried_outfits(
 /// mod names it. An outfit left with none is no longer listed.
 pub fn fold(outfits: &mut BTreeMap<OutfitId, u16>, arrays: &Arrays, records: &[OutfitRecord]) {
     let mut left = arrays.clone();
+    let sorted = folded_holders(records);
+    first_pass(outfits, &mut left, &sorted);
+    for record in &sorted {
+        let (mod_type, weapon) = record.mods[0];
+        let Some(array) = left.array(mod_type) else {
+            continue;
+        };
+        if let Some(have) = array.remove(&WeaponId(weapon))
+            && have.is_positive()
+        {
+            let count = outfits.entry(record.id).or_default();
+            *count = count.saturating_add(u16::try_from(have).unwrap_or(u16::MAX));
+        }
+    }
+    outfits.retain(|_, count| *count > 0);
+}
+
+/// Holds each of `outfits` of `records` whose first mod names a weapon
+/// (or its rounds) to what a ship class's stock `fits` leave for it, by
+/// ascending outfit ID, as the eject does: it rebuilds the weapon array
+/// from the escape class's stock alone (`_HandlePlayer` @0x6f7dd-0x6f8b5)
+/// and then folds it (@0x6f8bb), so the fold's first pass (@0xcb55-0xcbf0;
+/// see the module docs) holds the outfits carried to the class's stock. A
+/// [`MOD_WEAPON`](crate::combat::armament::MOD_WEAPON) fit counts for the
+/// weapon array and a [`MOD_AMMO`](crate::combat::armament::MOD_AMMO) one
+/// for the rounds. An outfit whose weapon the class doesn't stock is lost,
+/// and no longer listed; the fold's surplus pass is not run, so nothing
+/// is added: the stock's top-up is the caller's.
+pub fn hold_to_stock(
+    outfits: &mut BTreeMap<OutfitId, u16>,
+    fits: &[StockFit],
+    records: &[OutfitRecord],
+) {
+    let mut stock = Arrays::default();
+    for fit in fits {
+        if let Some(array) = stock.array(fit.mod_type) {
+            let entry = array.entry(fit.weapon).or_default();
+            *entry = entry.saturating_add(i64::from(fit.count));
+        }
+    }
+    first_pass(outfits, &mut stock, &folded_holders(records));
+    outfits.retain(|_, count| *count > 0);
+}
+
+/// The outfits among `records` whose first mod names a weapon in
+/// [`FOLDED_WEAPONS`], by ascending ID: the ones the fold reads.
+fn folded_holders(records: &[OutfitRecord]) -> Vec<&OutfitRecord> {
     let mut sorted: Vec<&OutfitRecord> = records.iter().collect();
     sorted.sort_by_key(|record| record.id);
     sorted.retain(|record| FOLDED_WEAPONS.contains(&record.mods[0].1));
-    for record in &sorted {
+    sorted
+}
+
+/// The fold's first pass (@0xcb55-0xcbf0) over `sorted`, the holders by
+/// ascending ID: each owned one of `outfits` whose first mod is
+/// `ModType` 1 or 3 held to what `left` has left for its weapon (or
+/// rounds), taking that from it. A holder left with none stays listed
+/// at 0.
+fn first_pass(outfits: &mut BTreeMap<OutfitId, u16>, left: &mut Arrays, sorted: &[&OutfitRecord]) {
+    for record in sorted {
         let (mod_type, weapon) = record.mods[0];
         let (Some(array), Some(count)) = (left.array(mod_type), outfits.get_mut(&record.id)) else {
             continue;
@@ -214,19 +276,6 @@ pub fn fold(outfits: &mut BTreeMap<OutfitId, u16>, arrays: &Arrays, records: &[O
             *have -= owned;
         }
     }
-    for record in &sorted {
-        let (mod_type, weapon) = record.mods[0];
-        let Some(array) = left.array(mod_type) else {
-            continue;
-        };
-        if let Some(have) = array.remove(&WeaponId(weapon))
-            && have.is_positive()
-        {
-            let count = outfits.entry(record.id).or_default();
-            *count = count.saturating_add(u16::try_from(have).unwrap_or(u16::MAX));
-        }
-    }
-    outfits.retain(|_, count| *count > 0);
 }
 
 /// Holds each of `outfits` that has a record among `records` to its
@@ -1095,6 +1144,120 @@ mod tests {
                 &holders(),
             ),
             map(&[(441, 1)])
+        );
+    }
+
+    // The hold to a class's stock.
+
+    /// 450 launches weapon 310 and 451 is its ammunition; 452 and 453 both
+    /// launch 311; 454 has no weapon mod, 455 names 310 in a later mod
+    /// only and 456 names weapon 400, past the arrays; 457 is ammunition
+    /// for 312 and 458 launches 313.
+    fn stocked() -> Vec<OutfitRecord> {
+        vec![
+            outfit(450, &[(MOD_WEAPON, 310)]),
+            outfit(451, &[(MOD_AMMO, 310)]),
+            outfit(453, &[(MOD_WEAPON, 311)]),
+            outfit(452, &[(MOD_WEAPON, 311)]),
+            outfit(454, &[(MORE_SHIELD, 1)]),
+            outfit(455, &[(MORE_SHIELD, 1), (MOD_WEAPON, 310)]),
+            outfit(456, &[(MOD_WEAPON, 400)]),
+            outfit(457, &[(MOD_AMMO, 312)]),
+            outfit(458, &[(MOD_WEAPON, 313)]),
+        ]
+    }
+
+    /// A stock fit of `count` of `weapon` (or its rounds, for
+    /// [`MOD_AMMO`]) on `outfit`.
+    fn fit(outfit: i16, mod_type: i16, weapon: i16, count: u16) -> StockFit {
+        StockFit {
+            outfit: OutfitId(outfit),
+            mod_type,
+            weapon: WeaponId(weapon),
+            count,
+        }
+    }
+
+    /// `owned` of [`stocked`] held to `fits`.
+    fn held_to(owned: &[(i16, u16)], fits: &[StockFit]) -> BTreeMap<OutfitId, u16> {
+        let mut outfits = map(owned);
+        hold_to_stock(&mut outfits, fits, &stocked());
+        outfits
+    }
+
+    #[test]
+    fn the_hold_loses_a_weapon_or_ammunition_outfit_the_class_does_not_stock() {
+        assert_eq!(held_to(&[(450, 1)], &[]), map(&[]), "no stock at all");
+        assert_eq!(
+            held_to(&[(450, 1), (451, 5)], &[fit(452, MOD_WEAPON, 311, 1)]),
+            map(&[]),
+            "another weapon stocked"
+        );
+        assert_eq!(
+            held_to(&[(451, 5)], &[fit(457, MOD_AMMO, 312, 9)]),
+            map(&[]),
+            "other rounds stocked"
+        );
+    }
+
+    #[test]
+    fn the_hold_cuts_an_outfit_to_the_stock_and_keeps_one_under_it() {
+        assert_eq!(
+            held_to(&[(450, 2)], &[fit(450, MOD_WEAPON, 310, 1)]),
+            map(&[(450, 1)])
+        );
+        assert_eq!(
+            held_to(&[(450, 1)], &[fit(450, MOD_WEAPON, 310, 3)]),
+            map(&[(450, 1)]),
+            "the hold adds nothing"
+        );
+        assert_eq!(
+            held_to(&[(451, 7)], &[fit(451, MOD_AMMO, 310, 4)]),
+            map(&[(451, 4)])
+        );
+    }
+
+    #[test]
+    fn the_hold_gives_the_lower_id_its_count_first_and_the_higher_what_is_left() {
+        assert_eq!(
+            held_to(&[(452, 2), (453, 2)], &[fit(452, MOD_WEAPON, 311, 3)]),
+            map(&[(452, 2), (453, 1)])
+        );
+        assert_eq!(
+            held_to(&[(452, 3), (453, 2)], &[fit(452, MOD_WEAPON, 311, 3)]),
+            map(&[(452, 3)])
+        );
+    }
+
+    #[test]
+    fn the_hold_leaves_an_outfit_whose_first_mod_names_no_folded_weapon() {
+        let owned = [(454, 1), (455, 2), (456, 3)];
+        assert_eq!(held_to(&owned, &[]), map(&owned));
+        assert_eq!(
+            held_to(&[(999, 2)], &[]),
+            map(&[(999, 2)]),
+            "nor one with no record"
+        );
+    }
+
+    #[test]
+    fn the_hold_reads_weapon_fits_for_launchers_and_ammunition_fits_for_rounds() {
+        assert_eq!(
+            held_to(&[(457, 4)], &[fit(450, MOD_WEAPON, 312, 9)]),
+            map(&[]),
+            "a launcher fit holds up no ammunition"
+        );
+        assert_eq!(
+            held_to(&[(458, 1)], &[fit(457, MOD_AMMO, 313, 9)]),
+            map(&[]),
+            "an ammunition fit holds up no launcher"
+        );
+        assert_eq!(
+            held_to(
+                &[(457, 4), (458, 1)],
+                &[fit(457, MOD_AMMO, 312, 9), fit(458, MOD_WEAPON, 313, 1)]
+            ),
+            map(&[(457, 4), (458, 1)])
         );
     }
 }

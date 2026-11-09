@@ -539,7 +539,6 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         landed,
         jump_under_way,
         warping,
-        warp_end_due,
         fate,
         hold_expired,
         leave_due,
@@ -556,6 +555,7 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         shots,
         beams,
         cargo_boxes,
+        pods,
         asteroids,
         stellars,
         radar_stellars,
@@ -592,7 +592,6 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         },
         jump_under_way: !jump_under_way,
         warping: !warping,
-        warp_end_due: !warp_end_due,
         fate: if *fate == PlayerFate::Flying {
             PlayerFate::GameOver
         } else {
@@ -651,6 +650,13 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
             frame: 0,
             fade: 0,
             graphic: 0,
+        }),
+        pods: one_or_none(pods, || nova_sim::escape_pod::Pod {
+            position: Vec2::ZERO,
+            velocity: Vec2::ZERO,
+            life: 0.0,
+            frame: 0,
+            shown: false,
         }),
         asteroids: one_or_none(asteroids, || FrameAsteroid {
             position: Vec2::ZERO,
@@ -936,16 +942,13 @@ fn unlike_nav(nav: NavMode) -> NavMode {
 ///   ([`FlightCommand::SelectWeapon`]) is answered done or refused, never
 ///   with anything else, and the frame after it equals the frame before,
 ///   as the press is taken by the next step;
-/// - **the travel facts agree**: a frame's warp end is due only while the
-///   jump itself is under way ([`FlightFrame::warping`]), the jump itself
-///   only while a jump is under way, a leave is due only while landed, and
+/// - **the travel facts agree**: the jump itself
+///   ([`FlightFrame::warping`]) only while a jump is under way, a leave is
+///   due only while landed, and
 ///   the hold has expired only with the fate
 ///   [`PlayerFate::Holding`]` { ticks_left: 0 }`, [`PlayerFate::Fading`] or
 ///   [`PlayerFate::GameOver`]: an expired hold reads `Holding { ticks_left:
 ///   0 }` until the fade begins ([`FlightCommand::BeginFade`]);
-/// - **no arrival before the warp's end**: with the warp's end not due,
-///   [`FlightCommand::Arrive`] is refused, and the frame after it equals
-///   the frame before;
 /// - **the fade waits for the hold**: before the hold has expired,
 ///   [`FlightCommand::BeginFade`] and [`FlightCommand::EndPlay`] are
 ///   refused, and the frame after them equals the frame before;
@@ -1259,9 +1262,6 @@ fn check_plunder(sim: &mut impl FlightSim, once: &FlightFrame) -> Result<(), Str
 /// fade, `once` the frame filled before.
 fn check_travel(sim: &mut impl FlightSim, once: &FlightFrame) -> Result<(), String> {
     let facts = |what: &str| Err(format!("the travel facts agree: {what}"));
-    if once.warp_end_due && !once.warping {
-        return facts("the warp's end is due with no warp");
-    }
     if once.warping && !once.jump_under_way {
         return facts("a warp with no jump under way");
     }
@@ -1275,14 +1275,6 @@ fn check_travel(sim: &mut impl FlightSim, once: &FlightFrame) -> Result<(), Stri
         )
     {
         return facts(&format!("the hold expired with the fate {:?}", once.fate));
-    }
-    if !once.warp_end_due {
-        refused_unchanged(
-            sim,
-            once,
-            FlightCommand::Arrive,
-            "no arrival before the warp's end",
-        )?;
     }
     if !once.hold_expired {
         for command in [FlightCommand::BeginFade, FlightCommand::EndPlay] {
@@ -2187,18 +2179,12 @@ mod tests {
         AnswersTheSelect,
         /// Weapon Select changes the frame.
         SelectChangesTheFrame,
-        /// The warp's end is due with no warp.
-        WarpEndsUnwarped,
         /// A warp with no jump under way.
         WarpsWithoutAJump,
         /// A leave is due in flight.
         LeavesInFlight,
         /// The hold has expired with the player flying.
         ExpiresFlying,
-        /// The arrival is answered before the warp's end.
-        ArrivesEarly,
-        /// The arrival refused changes the frame.
-        ArrivalChangesTheFrame,
         /// The fade begins before the hold has expired.
         FadesEarly,
         /// Play ends before the hold has expired.
@@ -2281,10 +2267,6 @@ mod tests {
                     .push(record::radar_stellar(StellarId(9999), Vec2::ZERO)),
                 Fault::RowsOutOfOrder => into.hud.escort_rows.swap(0, 1),
                 Fault::FliesWithNoRow => into.hud.escorts_flying = true,
-                Fault::WarpEndsUnwarped => {
-                    into.warp_end_due = true;
-                    into.jump_under_way = true;
-                }
                 Fault::WarpsWithoutAJump => into.warping = true,
                 Fault::LeavesInFlight => into.leave_due = true,
                 Fault::ExpiresFlying => into.hold_expired = true,
@@ -2303,7 +2285,6 @@ mod tests {
         fn apply(&mut self, command: FlightCommand) -> Answer {
             let click = matches!(command, FlightCommand::ClickInSpace { .. });
             let select = matches!(command, FlightCommand::SelectWeapon { .. });
-            let arrive = matches!(command, FlightCommand::Arrive);
             let fade = matches!(command, FlightCommand::BeginFade);
             let end = matches!(command, FlightCommand::EndPlay);
             let jump = matches!(command, FlightCommand::Jump);
@@ -2325,14 +2306,6 @@ mod tests {
                     open: false,
                 },
                 Fault::PlunderChangesTheFrame if plunder => {
-                    self.fake.set_frame(stellar(129));
-                    Answer::Refused
-                }
-                Fault::ArrivesEarly if arrive => Answer::Arrived {
-                    system: SystemId(131),
-                    combat: Vec::new(),
-                },
-                Fault::ArrivalChangesTheFrame if arrive => {
                     self.fake.set_frame(stellar(129));
                     Answer::Refused
                 }
@@ -2766,10 +2739,6 @@ mod tests {
     #[test]
     fn travel_facts_that_disagree_break_the_contract() {
         for (fault, what) in [
-            (
-                Fault::WarpEndsUnwarped,
-                "the warp's end is due with no warp",
-            ),
             (Fault::WarpsWithoutAJump, "a warp with no jump under way"),
             (Fault::LeavesInFlight, "a leave due in flight"),
             (
@@ -2784,22 +2753,6 @@ mod tests {
                 "{fault:?}"
             );
         }
-    }
-
-    #[test]
-    fn an_arrival_before_the_warps_end_breaks_the_contract() {
-        let answered = clause(Fault::ArrivesEarly);
-        assert!(
-            answered.starts_with("no arrival before the warp's end"),
-            "{answered}"
-        );
-        assert!(answered.contains("answered"), "{answered}");
-        let changed = clause(Fault::ArrivalChangesTheFrame);
-        assert!(
-            changed.starts_with("no arrival before the warp's end"),
-            "{changed}"
-        );
-        assert!(changed.contains("the frame was"), "{changed}");
     }
 
     #[test]
@@ -2854,7 +2807,6 @@ mod tests {
         let warping = FlightFrame {
             jump_under_way: true,
             warping: true,
-            warp_end_due: true,
             ..stellar(128)
         };
         let leaving = FlightFrame {
@@ -3070,7 +3022,6 @@ mod tests {
             landed: Some(StellarId(128)),
             jump_under_way: true,
             warping: true,
-            warp_end_due: true,
             fate: PlayerFate::Fading,
             hold_expired: true,
             leave_due: true,
@@ -3109,7 +3060,6 @@ mod tests {
                 landed,
                 jump_under_way,
                 warping,
-                warp_end_due,
                 fate,
                 hold_expired,
                 leave_due,
@@ -3126,6 +3076,7 @@ mod tests {
                 shots,
                 beams,
                 cargo_boxes,
+                pods,
                 asteroids,
                 stellars,
                 radar_stellars,
@@ -3152,6 +3103,7 @@ mod tests {
             assert_ne!(other.shots, *shots);
             assert_ne!(other.beams, *beams);
             assert_ne!(other.cargo_boxes, *cargo_boxes);
+            assert_ne!(other.pods, *pods);
             assert_ne!(other.asteroids, *asteroids);
             assert_ne!(other.stellars, *stellars);
             assert_ne!(other.radar_stellars, *radar_stellars);
@@ -3170,7 +3122,6 @@ mod tests {
             assert_ne!(other.landed, *landed);
             assert_ne!(other.jump_under_way, *jump_under_way);
             assert_ne!(other.warping, *warping);
-            assert_ne!(other.warp_end_due, *warp_end_due);
             assert_ne!(other.fate, *fate);
             assert_ne!(other.hold_expired, *hold_expired);
             assert_ne!(other.leave_due, *leave_due);

@@ -13,7 +13,8 @@
 //!   slot ([`slot_word`]), the flights that ended there (a landing, a jump
 //!   begun), the berths' last headings, the top speeds, the leaders' warps,
 //!   the tractors' holders (a freed slot by its record, see
-//!   [`tractor_hold`]) and the ships in the regroup pause. Every steering
+//!   [`tractor_hold`]; the held ship's holder re-read at its step) and the
+//!   ships in the regroup pause. Every steering
 //!   read (the quarry, the swarm lead, the guard, the sight of the leader,
 //!   the disabled) is the low level's, at each ship's own slot of
 //!   `_AIDispatch`'s loop, before the loop moves any ship (the traffic's
@@ -72,7 +73,6 @@ use super::{
 };
 use crate::ai::Goal;
 use crate::chance::Chance;
-use crate::combat::ShipRef;
 use crate::flight::NpcFormation;
 use crate::speed_mult::SpeedMult;
 
@@ -128,8 +128,9 @@ pub struct FlyPass {
     leader_berths: BTreeMap<NpcId, u32>,
     /// The ships a tractor's hold may name, as the half began, each freed
     /// slot by its record; a ship freed at its step of the half by its
-    /// record from there on, and one launched into a berth since as it
-    /// stands (see [`tractor_hold`]).
+    /// record from there on, and each held ship's holder re-read as it
+    /// stands at the held ship's step, a launch into a berth since among
+    /// them ([`tractor_hold::Holders::read_live`]).
     holders: tractor_hold::Holders,
     /// The frame's gain as the half began ([`World::speed_mult`]), which
     /// its end reads ([`Traffic::end_fly`], which gets no world).
@@ -264,13 +265,13 @@ impl Traffic {
     ) -> Option<Outcome> {
         let index = self.npcs.iter().position(|npc| npc.id == id)?;
         let speeds = *pass.speeds.get(&id)?;
-        // A holder launched since the pass began, into the berth of the
-        // ship this one's hold named (`Traffic::slot_taken`), is read as it
-        // stands, as its slot is.
-        if let Some(ShipRef::Npc(holder)) = self.npcs[index].tractor.map(|lock| lock.holder)
-            && let Some(launched) = self.npcs.iter().find(|npc| npc.id == holder)
-        {
-            pass.holders.launched(launched);
+        // Its holder is read as the loop has left it at this step, as its
+        // slot is (@0x3401f-0x34032, @0x353e2-0x3540c): a lower slot moved,
+        // a higher one not, the player moved, a holder launched since the
+        // pass began into the berth its hold named (`Traffic::slot_taken`)
+        // as it stands.
+        if let Some(lock) = self.npcs[index].tractor {
+            pass.holders.read_live(lock.holder, &self.npcs, world);
         }
         let npc = &mut self.npcs[index];
         let outcome = fly_one(pass, npc, speeds, world, chance);
@@ -526,6 +527,7 @@ mod tests {
     use crate::catalog::StellarId;
     use crate::catalog::{LandingSite, ShipId};
     use crate::chance::NeverFires;
+    use crate::combat::ShipRef;
     use crate::combat::hull::Condition;
     use crate::flight::ShipState;
     use crate::geometry::Vec2;

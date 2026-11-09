@@ -5,7 +5,9 @@
 //! with its reload step, before its fire. That the player's hold is
 //! decided before the pass's collision passes dose it is the session's
 //! order (`nova_sim::Session::pass_after_move`), which its ionization
-//! tests pin.
+//! tests pin. An NPC's point defence (`_AIDispatch` @0x4429d) reads its
+//! reloads before its hold, so it isn't held on the fight its dose lands;
+//! pinned here.
 
 use super::*;
 
@@ -15,6 +17,14 @@ fn held_gun() -> WeaponRecord {
         reload: 0,
         seeker: ion::CANT_FIRE_IONIZED,
         ..blaster()
+    }
+}
+
+/// A point-defence quad of `Seeker` 0x0020.
+fn held_defence() -> WeaponRecord {
+    WeaponRecord {
+        seeker: ion::CANT_FIRE_IONIZED,
+        ..quad()
     }
 }
 
@@ -95,4 +105,55 @@ fn every_fighters_shed_is_cleared_as_the_fight_ends() {
     phase::close_tick(&mut combat, &mut ships, &NovaDisable);
     assert_eq!(ships[0].ion.shed, 0.0);
     assert_eq!(ships[1].ion.shed, 0.0);
+}
+
+/// `_AIDispatch`'s point defence (@0x4429d) reads each mount's reload
+/// before `_HandleShip`'s hold (@0x338d6-0x338f0). So the point-defence
+/// shot an NPC makes on the fight its dose lands isn't held, and its next
+/// ordinary fire is.
+#[test]
+fn an_npcs_point_defence_fires_on_the_fight_its_dose_lands_and_its_fire_is_held() {
+    let mut combat = Combat::default();
+    let mut ships = missile_attack(held_defence());
+    ships[0].armament = Armament::new([
+        (WeaponSpec::new(&held_defence()), 1),
+        (WeaponSpec::new(&held_gun()), 1),
+    ]);
+    ships[0].ion_capacity = 100.0;
+    missile_in_flight(&mut combat, &mut ships);
+    combat.take_events();
+    ships[0].trigger = Trigger {
+        only: Some(held_gun().id),
+        ..QUIET
+    };
+    bolt_landing_on(&mut combat, Vec2::ZERO);
+    phase::test_hits(&mut combat, &mut ships, &NovaDisable);
+    assert_eq!(ships[0].ion.charge, 100.0, "dosed to a factor of 1");
+    assert_eq!(fired(&combat.take_events(), A), 0, "no stray fire");
+
+    phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
+    assert_eq!(
+        fired(&combat.take_events(), A),
+        1,
+        "its point defence fires on the fight it is ionized"
+    );
+    assert!(
+        combat
+            .shots()
+            .iter()
+            .any(|shot| shot.weapon.guidance == Guidance::PointDefence)
+    );
+    assert_eq!(
+        ships[0].armament.mounts()[0].reload,
+        5.0,
+        "reloading, not held"
+    );
+
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+    assert_eq!(
+        fired(&combat.take_events(), A),
+        0,
+        "its ordinary fire is held"
+    );
+    assert_eq!(ships[0].armament.mounts()[1].reload, ion::HELD_RELOAD);
 }

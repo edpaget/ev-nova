@@ -158,7 +158,7 @@ impl Session {
             })
             .map(|(slot, _)| slot)
             .collect();
-        let position = match self.setup.gate_arrival {
+        let position = match self.setup.gate_arrival() {
             GateArrivalRule::Engine => exit,
             GateArrivalRule::LikeJump => self.ship.player.position,
         };
@@ -566,7 +566,7 @@ pub(super) mod tests {
         take_off(&mut session, &catalog);
         exit_gate_raising(&mut session, &catalog, GateKind::Hypergate, &mut NeverFires);
         let firing = Trigger {
-            primary: true,
+            only: Some(crate::catalog::WeaponId(128)),
             ..Trigger::default()
         };
         for npc in session.space.traffic.npcs_mut() {
@@ -708,7 +708,10 @@ pub(super) mod tests {
     #[test]
     fn under_the_jump_like_arrival_followers_come_out_where_the_player_arrives() {
         let catalog = gated(following(0, 0), ALWAYS_FOLLOWS_THROUGH_HYPERGATE);
-        let mut session = accepted(&catalog).with_gate_arrival(GateArrivalRule::LikeJump);
+        let mut session = accepted(&catalog).with_rules(crate::session::setup::reading(
+            crate::rulebook::RuleKey::GateArrival,
+            GateArrivalRule::LikeJump,
+        ));
         take_off(&mut session, &catalog);
         exit_gate(&mut session, &catalog, GateKind::Hypergate, &mut NeverFires);
         let player = *session.player();

@@ -16,10 +16,6 @@
 //!
 //! Left out:
 //!
-//! - the order within the boxes' layer: the engine draws the cargo boxes
-//!   in their table's order (`Session::cargo_boxes`), the original in
-//!   slot order (rdm:task/cargo-box-slot-order); the explosions, smoke
-//!   puffs and escape pods draw in slot order;
 //! - `_FloaterDrawCallback`'s guards (@0x38b34-0x38b4c): it draws nothing
 //!   while switched out (`0x3b50e0`), which the engine's flight has no
 //!   state for, or while the world's byte +0xe8 is 0, `SpriteWorld`
@@ -284,8 +280,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Draws the escape pods, murked as the player sees them where the
     /// frame has its ship.
     fn draw_pods(&self, list: &mut DrawList, camera: &Camera) {
-        self.effects
-            .draw_pods(list, camera, &self.looks, self.seen_murk());
+        let pods = &self.drawn().pods;
+        super::super::pods::draw_pods(list, camera, &self.looks, self.seen_murk(), pods);
     }
 
     /// Draws the explosions, murked as the player sees them where the

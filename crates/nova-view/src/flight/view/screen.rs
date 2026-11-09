@@ -50,6 +50,10 @@ impl<
     /// let them ([`FlightView::held_keys_frame`]; see the module docs), L
     /// and I too ([`FlightView::faded_keys_frame`]).
     fn input(&mut self, input: &Input) -> ScreenAction {
+        // An arrival held for the frame after the one drawn lays out
+        // first, as the original read the press after it (see the
+        // `between_passes` module).
+        self.arrive_held();
         let action = self.take_input(input);
         self.sync_touch_controls();
         action
@@ -66,16 +70,20 @@ impl<
     /// open nothing moves. The session flies on through the whole jump, its
     /// warp included: the jump's effect starts once the jump has begun,
     /// fades to white from the first step the session's `_hyperGamma` is
-    /// above 0 ([`FlightFrame::hyper_gamma`](nova_sim::flight_frame::FlightFrame::hyper_gamma)), and the ship arrives on the step
-    /// the session says the warp has ended ([`FlightFrame::warp_end_due`](nova_sim::flight_frame::FlightFrame::warp_end_due)),
-    /// whose steps stop there, before the frame is drawn, or, on a
-    /// double time second pass, on the next step, after the frame between
-    /// its passes is drawn ([`FlightView::holding_between_passes`]), that
-    /// tick's steps then run in the new system
-    /// ([`FlightView::arrival_frame`]). From then on the
-    /// rest of the effect, the fade-in or the white flash, plays over the
-    /// new system; that plays on with the map open too, as the original's
-    /// display fade does. A jump the session gave up instead is settled at
+    /// above 0 ([`FlightFrame::hyper_gamma`](nova_sim::flight_frame::FlightFrame::hyper_gamma)), and the ship arrives in the pass
+    /// the step reports its arrival in
+    /// ([`StepRun::arrival`](nova_sim::flight_frame::StepRun::arrival)),
+    /// whose steps stop after it, laid out where the replay reaches that
+    /// pass ([`FlightView::arrive_in_step`]), or, on double time's held
+    /// second pass, at the next catch-up after the frame between its
+    /// passes is presented (the `between_passes` module). From then on the
+    /// rest of the effect plays over the new system: the fade-in, which
+    /// plays on with the map open too, as the original's display fade
+    /// does, or, without the fades, the white flash, which shows on the
+    /// first frame presented after the arrival alone. The tick ends by
+    /// marking the effect and a held frame between shown on the frame
+    /// about to be drawn ([`FlightView::present_jump_effect`]), whichever
+    /// early return the tick took. A jump the session gave up instead is settled at
     /// the top of the next tick ([`FlightView::settle_given_up_jump`]). The
     /// escort menu times out on every step the map is shut.
     ///
@@ -93,6 +101,7 @@ impl<
     /// runs under it.
     fn tick(&mut self, dt: Duration) {
         self.tick_then(dt);
+        self.present_jump_effect();
         self.sync_touch_controls();
     }
 
@@ -292,7 +301,6 @@ impl<
         if let Some(effect) = &mut self.jump {
             effect.advance(dt);
         }
-        self.arrival_frame(steps);
         self.advance_hud();
         self.writing_in_frame = false;
     }

@@ -3,8 +3,10 @@
 //! `wëap`, `sÿst`, `spöb`, `jünk`, `öops`, `düde`, `flët`, `gövt`,
 //! `mïsn` and `röid` records, its string lists and its stellar and
 //! asteroid sprites; and a `shän`'s blink fields as a [`Blink`]. The
-//! run-length tokens a sprite touches by are read in [`rle_sheets`].
+//! run-length tokens a sprite touches by are read in [`rle_sheets`], and a
+//! ship's loaded base-sprite frame in [`hull_frames`].
 
+mod hull_frames;
 mod rle_sheets;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -1193,17 +1195,21 @@ impl CombatCatalog for GameData {
     }
 
     fn hulls(&self) -> Vec<HullRecord> {
-        // The first ship of each `BaseImage`, filled in ascending ID as
-        // `_LoadExtendedShipSprites` is called (@0x23eeb).
+        // The first ship of each `BaseImage` and its loaded frame, filled
+        // in ascending ID as `_LoadExtendedShipSprites` is called
+        // (@0x23eeb); a later ship clones its sprite (@0x22817).
         let mut first_of_image = BTreeMap::new();
         self.records::<Ship>()
             .filter_map(|(id, ship)| {
                 let record = ship.ok()?.record;
                 let shan = self.get::<ShipAnim>(id).and_then(Result::ok);
-                let sprite_base = shan.as_ref().map_or(ShipId(id), |anim| {
+                let (sprite_base, frame) = shan.as_ref().map_or((ShipId(id), None), |anim| {
                     *first_of_image
                         .entry(anim.record.base_image_id)
-                        .or_insert(ShipId(id))
+                        .or_insert_with(|| {
+                            let sizes = (anim.record.base_x_size, anim.record.base_y_size);
+                            (ShipId(id), hull_frames::base_frame(self, ShipId(id), sizes))
+                        })
                 });
                 let (size, height, exits, display) = match shan {
                     Some(anim) => (
@@ -1227,6 +1233,7 @@ impl CombatCatalog for GameData {
                     weapons: stock_weapons(record),
                     size,
                     height,
+                    frame,
                     strength: record.strength,
                     key_carried: record.key_carried,
                     cost: record.cost,
@@ -4499,7 +4506,7 @@ mod tests {
             (ShipAnim::TYPE, 128, anim(24, 40)),
             (ShipAnim::TYPE, 131, short(anim(30, 30))),
         ]);
-        let record = |id, size, height, exits| HullRecord {
+        let record = |id, size, height, frame, exits| HullRecord {
             id: ShipId(id),
             flags: 0x0130,
             flags2: 0,
@@ -4528,6 +4535,7 @@ mod tests {
             ],
             size,
             height,
+            frame,
             strength: 325,
             key_carried: Some(ShipId(140)),
             cost: -1,
@@ -4540,11 +4548,21 @@ mod tests {
         assert_eq!(
             data.hulls(),
             [
-                record(128, Some(24), Some(40), Some(ShipExits::default())),
-                record(130, None, None, None),
-                record(131, None, None, None)
+                record(
+                    128,
+                    Some(24),
+                    Some(40),
+                    Some(FrameSize {
+                        width: 24,
+                        height: 40
+                    }),
+                    Some(ShipExits::default())
+                ),
+                record(130, None, None, None, None),
+                record(131, None, None, None, None)
             ],
-            "by ID, the undecodable shïp left out; without a shän that can be read, no size"
+            "by ID, the undecodable shïp left out; without a shän that can be read, no size; \
+             with no rlëD, the frame is the shän's sizes"
         );
         assert_eq!(store(&[]).hulls(), []);
     }

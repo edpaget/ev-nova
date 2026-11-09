@@ -201,8 +201,8 @@ pub struct Target {
     pub radius: f32,
     /// Its sprite's width, in pixels, as `_GetMasterShipSpriteXSize`
     /// reads it, which a beam's cone sizes it by
-    /// ([`cone`](super::beam::cone)): its `shän`'s `BaseXSize`, which every
-    /// stock sheet's frame width equals, or
+    /// ([`cone`](super::beam::cone)): its hull's loaded frame width
+    /// ([`HullSpec::sprite_size`](super::hull::HullSpec::sprite_size)), or
     /// [`NO_SPRITE_WIDTH`](super::beam::NO_SPRITE_WIDTH) with none.
     pub sprite_x: f32,
     /// Whether it has a sprite sheet: a proximity fuse sizes a ship of
@@ -230,8 +230,8 @@ pub struct Target {
 
 impl Target {
     /// Its sprite's width as a proximity fuse reads it, `_GetSpriteXSize`
-    /// of its sprite (@0x26d4-0x2702): its current frame's width, which
-    /// is its [`Target::sprite_x`] for every stock sheet, or
+    /// of its sprite (@0x26d4-0x2702): its current frame's width, its
+    /// [`Target::sprite_x`] (every frame of a sheet is its size), or
     /// [`NO_SHEET_WIDTH`] with no sheet.
     #[must_use]
     pub fn fuse_width(&self) -> f32 {
@@ -241,6 +241,31 @@ impl Target {
             NO_SHEET_WIDTH
         }
     }
+}
+
+/// The ship slot `ship` holds among `targets`, if it is in the fight,
+/// active or not: the slot a shot aimed at it holds
+/// ([`Shot::aimed_slot`], its +0x2a). Every reading of a ship's slot
+/// among the fight's targets goes through this.
+#[must_use]
+pub fn slot_among(targets: &[Target], ship: ShipRef) -> Option<Slot> {
+    targets
+        .iter()
+        .find(|target| target.ship == ship)
+        .map(|target| target.slot)
+}
+
+/// `ship` among `targets` while it is active
+/// ([`Condition::active`](super::hull::Condition::active)): not
+/// destroyed, landed, jumped or taken out, breaking up included. A shot
+/// whose ship this finds none for has lost it: its slot is followed
+/// ([`refilled_slot::follow`](super::refilled_slot::follow)), or the shot
+/// is lost (`Shot::lose_a_gone_ship`), by this one test.
+#[must_use]
+pub fn active_among(targets: &[Target], ship: ShipRef) -> Option<&Target> {
+    targets
+        .iter()
+        .find(|target| target.ship == ship && target.condition.active())
 }
 
 /// The width `_GetSpriteXSize` gives a sprite of no frames (@0x26fc).
@@ -582,6 +607,13 @@ pub struct Shot {
     /// point defence, and a sub-munition's own target. See
     /// [`Combat::targeted_damage`](super::Combat::targeted_damage).
     pub aimed_at: Option<ShipRef>,
+    /// The ship slot [`Shot::aimed_at`] names, the original's +0x2a read as
+    /// a slot: the slot its ship held as the shot was aimed, or, for a
+    /// sub-munition given a locked parent's empty ship slot, that slot.
+    /// None while it is aimed at no slot (-1). Once its ship has left the
+    /// fight, a new ship in this slot becomes its ship
+    /// ([`refilled_slot`](super::refilled_slot)).
+    pub aimed_slot: Option<Slot>,
     /// Whether it is jammed off its ship (the original's shot +0x30): a
     /// shot jammed any way hits no ship, and its damage counts as aimed
     /// at none.
@@ -629,10 +661,9 @@ pub struct Shot {
     /// [`Combat`](super::Combat) gives it as it puts it in flight: the
     /// shots in flight are kept in slot order.
     pub slot: usize,
-    /// Its spin timer, the original's +0x1c, a float: it starts on its
-    /// slot's leftover, as `_SpawnShot` never writes it
-    /// ([`ShotSlots::spin`](super::shot_slots::ShotSlots::spin)), which
-    /// [`Combat`](super::Combat) gives it as it puts it in flight, and
+    /// Its spin timer, the original's +0x1c, a float: it starts at 0, as
+    /// `_SpawnShot` writes it (@0x3e9c2) and
+    /// [`Combat`](super::Combat) seats it as it puts it in flight, and
     /// gains the frame's gain at each visit of a spinning shot
     /// ([`spin_timer::pass`](super::spin_timer::pass)).
     pub spin_timer: f32,
@@ -832,6 +863,7 @@ impl Shot {
             id: ShotId::default(),
             target: None,
             aimed_at: None,
+            aimed_slot: None,
             jam: Jam::Clear,
             durability: weapon.durability,
             generation: 0,
@@ -984,7 +1016,12 @@ impl Shot {
     /// not point defence, whose ship ([`Shot::aimed_at`], +0x2a) is not
     /// active among `targets` (destroyed, or out of the fight as it
     /// landed, jumped or was taken out: the slot's +0xb8) is lost, jam
-    /// 998, and aimed at nothing from then on. A jammed shot keeps its
+    /// 998, and aimed at nothing from then on. So is one aimed at no ship
+    /// that holds a slot ([`Shot::aimed_slot`]): a sub-munition given a
+    /// locked parent's empty slot. A new ship in its ship's slot has
+    /// already become its ship ([`refilled_slot`](super::refilled_slot)),
+    /// so what is lost here is a shot whose slot is empty, or any whose
+    /// ship is gone by the other reading. A jammed shot keeps its
     /// ship. Point defence (guidance 9) is aimed at no ship every tick
     /// and is never lost. A ship breaking up is still active, so a shot
     /// at it is not lost. A ship destroyed during a tick's resolution
@@ -994,20 +1031,20 @@ impl Shot {
     fn lose_a_gone_ship(&mut self, targets: &[Target]) {
         if self.weapon.guidance == Guidance::PointDefence {
             self.aimed_at = None;
+            self.aimed_slot = None;
             return;
         }
         if self.jam != Jam::Clear {
             return;
         }
-        let Some(ship) = self.aimed_at else {
-            return;
+        let gone = match self.aimed_at {
+            Some(ship) => active_among(targets, ship).is_none(),
+            None => self.aimed_slot.is_some(),
         };
-        let active = targets
-            .iter()
-            .any(|target| target.ship == ship && target.condition.active());
-        if !active {
+        if gone {
             self.jam = Jam::Lost;
             self.aimed_at = None;
+            self.aimed_slot = None;
             self.target = None;
         }
     }
@@ -1039,11 +1076,7 @@ impl Shot {
         }
         let seeks = self.jam == Jam::Clear;
         let targets = guide.targets;
-        let target = self.target.and_then(|ship| {
-            targets
-                .iter()
-                .find(|target| target.ship == ship && target.condition.active())
-        });
+        let target = self.target.and_then(|ship| active_among(targets, ship));
         let delay = f64::from(HOMING_DELAY) * guide.speed_mult.get();
         if let Some(target) = target.filter(|_| self.age() > delay) {
             let wanted = trig::intercept_angle(self.position, target.position);
@@ -1053,6 +1086,7 @@ impl Shot {
             if !self.lock_holds(guide) {
                 self.target = None;
                 self.aimed_at = None;
+                self.aimed_slot = None;
             }
             self.heading = homing_turn(self.heading, wanted, turn, guide.speed_mult);
         }
@@ -1175,7 +1209,8 @@ impl Shot {
     }
 
     /// Turns a shot a ship launched on its firer: its target and the ship
-    /// its damage is aimed at become the firer (+0x2a), and it is launched
+    /// its damage is aimed at become the firer (+0x2a, the firer's slot
+    /// [`Shot::firer_slot`]), and it is launched
     /// by no ship from then on ([`Source::Other`], +0x2c = -1), so it can
     /// hit only its firer, holds no reload, locks nothing, and its hit
     /// and blast are no one's. A shot no ship launched is left alone.
@@ -1183,6 +1218,7 @@ impl Shot {
         if matches!(self.source, Source::Ship(_)) {
             self.target = Some(self.firer);
             self.aimed_at = Some(self.firer);
+            self.aimed_slot = self.firer_slot;
             self.source = Source::Other;
         }
     }
@@ -2994,6 +3030,16 @@ mod tests {
     }
 
     #[test]
+    fn a_point_defence_shot_holds_no_slot() {
+        let mut defence = Shot {
+            aimed_slot: Some(crate::ship_layer::Slot::Berth(2)),
+            ..aimed_at_two(9)
+        };
+        step(&mut defence, &[]);
+        assert_eq!(defence.aimed_slot, None);
+    }
+
+    #[test]
     fn a_shot_whose_ship_is_breaking_up_stays_clear_and_one_destroyed_is_lost() {
         let dying = target(
             2,
@@ -3325,6 +3371,39 @@ mod tests {
             &mut Ranged::of(&[(500, 0)]),
         );
         assert_eq!(other.target, Some(TARGET), "no ship launched it");
+    }
+
+    #[test]
+    fn a_missile_turned_on_its_firer_holds_its_slot_and_follows_a_newcomer_in_it() {
+        // Its +0x2a becomes its firer's slot, so once the firer has left
+        // the fight a ship that takes its berth is the one it is aimed at
+        // ([`refilled_slot`](super::super::refilled_slot)).
+        let berth = crate::ship_layer::Slot::Berth(1);
+        let jammer = [jamming([30, 0, 0, 0])];
+        let firer = Target {
+            ship: FIRER,
+            ..target(1, 160.0, -1000.0, Condition::Intact)
+        };
+        let mut shot = Shot {
+            jam_rolls: [71, 0, 0, 0],
+            firer_slot: Some(berth),
+            ..seeking(TURNS_ON_FIRER, Some(TARGET))
+        };
+        let ships = [below(), firer];
+        guided(
+            &mut shot,
+            16,
+            (&ships, &jammer),
+            &mut Ranged::of(&[(500, 0)]),
+        );
+        assert_eq!((shot.aimed_at, shot.aimed_slot), (Some(FIRER), Some(berth)));
+        let newcomer = Target {
+            slot: berth,
+            ..target(5, 160.0, -1000.0, Condition::Intact)
+        };
+        super::super::refilled_slot::follow(&mut shot, &[below(), newcomer]);
+        let five = ShipRef::Npc(NpcId(5));
+        assert_eq!((shot.target, shot.aimed_at), (Some(five), Some(five)));
     }
 
     #[test]

@@ -13,7 +13,7 @@ use nova_data::GameData;
 use nova_sim::hyperspace::MIN_JUMP_DISTANCE;
 use nova_sim::jump_arrival::ARRIVAL_RADIUS;
 use nova_sim::stats::HYPERSPACE_DISTANCE;
-use nova_sim::{Controls, NeverFires, OutfitId, Pilot, PilotCatalog, Session};
+use nova_sim::{Controls, OutfitId, Pilot, PilotCatalog, Session};
 
 #[test]
 fn a_stock_jump_arrives_1350_out_on_the_side_it_left_at_top_speed() {
@@ -42,15 +42,21 @@ fn a_stock_jump_arrives_1350_out_on_the_side_it_left_at_top_speed() {
         crate::passes::work(&mut session, &data, thrust);
     }
     session.begin_jump().expect("jumps");
+    // The pass the warp ends arrives in it, turning no further (`jmp
+    // 0x71113` @0x6c625).
+    let mut heading = session.player().heading;
     for _ in 0..10_000 {
-        if session.warp_end_due() {
+        if session.jumping().is_none() && session.preparing_jump().is_none() {
             break;
         }
+        heading = session.player().heading;
         crate::passes::work(&mut session, &data, nova_sim::Controls::default());
     }
-    assert!(session.warp_end_due(), "the warp ends");
-    let heading = session.player().heading;
-    assert_eq!(session.arrive(&data, &mut NeverFires), Some(next));
+    assert_eq!(
+        session.system(),
+        next,
+        "the warp ends, arriving in its pass"
+    );
 
     let player = *session.player();
     assert!(

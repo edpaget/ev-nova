@@ -134,7 +134,7 @@ impl Session {
         let base = self.statics.arsenal.sprite_base(npc.ship);
         if self
             .ship
-            .stow_fighter(&mut self.pilot, &self.statics, npc.ship, base)
+            .stow_fighter(&mut self.pilot, &self.statics, &self.setup, npc.ship, base)
         {
             self.mark_boarded(npc.id);
             self.leave(npc.id);

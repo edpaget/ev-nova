@@ -39,6 +39,20 @@ use crate::geometry::Vec2;
 use crate::sprite_mask::PlacedMask;
 use crate::story::DrawnSheet;
 
+/// The mask sheet of `sheet` as `site` draws it: its `Type`'s graphic, its
+/// `DeadType`'s, or graphic type 0's; none for no frame, or a `DeadType`
+/// it has none of. Every reader of a stellar's mask maps the sheet drawn
+/// by it (this module and the `contact_masks` module).
+pub(super) fn drawn_mask_sheet(site: &LandingSite, sheet: DrawnSheet) -> Option<MaskSheet> {
+    let graphic = match sheet {
+        DrawnSheet::Type => site.graphic,
+        DrawnSheet::Dead => site.dead_graphic?,
+        DrawnSheet::TypeZero => 0,
+        DrawnSheet::NoFrame => return None,
+    };
+    Some(MaskSheet::Stellar(graphic))
+}
+
 impl Space {
     /// The mask of `site`, one of the stellars shown, showing `frame`, the
     /// player at `player` (see the module docs); none when its slot shows
@@ -52,14 +66,8 @@ impl Space {
         frame: u16,
     ) -> Option<PlacedMask> {
         let layout = self.slot_layout(statics, setup, site, player)?;
-        let graphic = match layout.sheet {
-            DrawnSheet::Type => site.graphic,
-            DrawnSheet::Dead => site.dead_graphic?,
-            DrawnSheet::TypeZero => 0,
-            DrawnSheet::NoFrame => return None,
-        };
         self.sprite_masks.placed(
-            MaskSheet::Stellar(graphic),
+            drawn_mask_sheet(site, layout.sheet)?,
             frame,
             layout.top_left,
             layout.size,
@@ -119,7 +127,7 @@ impl Session {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use nova_sim_base::fixture::rle::sheet;
 
     use super::*;
@@ -135,7 +143,7 @@ mod tests {
     use crate::testkit::{FakePilotCatalog, Passive, planet, work};
 
     /// A stellar's frames' side.
-    const SIDE: u32 = 40;
+    pub(in crate::session) const SIDE: u32 = 40;
 
     /// The rows of a frame `side` square, `drawn` at each pixel it says,
     /// as `'#'`, or as `run` where `run` is set.
@@ -168,12 +176,12 @@ mod tests {
     }
 
     /// A ring [`SIDE`] square, drawn as pixels.
-    fn ringed() -> RleSheet {
+    pub(in crate::session) fn ringed() -> RleSheet {
         sheet_of(&[square(SIDE, ring, false)])
     }
 
     /// A frame `side` square, every pixel drawn.
-    fn solid(side: u32) -> RleSheet {
+    pub(in crate::session) fn solid(side: u32) -> RleSheet {
         sheet_of(&[square(side, |_, _| true, false)])
     }
 
@@ -444,6 +452,7 @@ mod tests {
         assert_ne!(session.ship.condition, Condition::Destroyed, "the dot");
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &Passive,
             Rules::default(),
             &mut NeverFires,
@@ -607,6 +616,7 @@ mod tests {
         assert_eq!(session.stellar_frame(deadly.id), 0);
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &Passive,
             Rules::default(),
             &mut NeverFires,
@@ -765,6 +775,7 @@ mod tests {
         let again = |session: &mut Session| {
             session.tick_again(
                 Controls::default(),
+                &crate::testkit::catalog(),
                 &Passive,
                 Rules::default(),
                 &mut NeverFires,

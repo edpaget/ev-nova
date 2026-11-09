@@ -38,14 +38,15 @@
 //! flight's first frame it lets go of its keys and pointer, so its cursor
 //! starts hidden (`_PlayGame` zeroes the cursor's fade @0x45822), its
 //! escort menu is shut (`escortMenuOnscreen` = 0 @0x1a39e), and it is
-//! ticked once with no time and no key held: the warm-up frame
-//! (`_DoPlayGameWork(1)` under `_ignoreKeys` and `_gameFrozen`
-//! @0x1a37d-0x1a397, and `_PlayGame` @0x457f3-0x45819), which settles
-//! the asteroid field and catches up with the session's events but runs
-//! no step. Under the black of that frame, flight also reads the sheets
-//! and target cards of the ship types the system's traffic will bring
-//! ([`FlightView::warm_up_traffic`]), so the first step, which fills the
-//! system, doesn't stall on reading them. The load or New Pilot already ran the rebuilds the original
+//! ticked once with no time and no key held: the warm-up frame, which
+//! settles the asteroid field and catches up with the session's events,
+//! those of the entry's two priming passes among them (`_DoPlayGameWork(1)`
+//! under `_ignoreKeys` and `_gameFrozen` @0x1a37d-0x1a397, and `_PlayGame`
+//! @0x457f3-0x45819, which the edge's [`enter_game`] runs with the
+//! system's ships set up), but runs no step. Under the black of that
+//! frame, flight also reads the sheets and target cards of the ship types
+//! the system's traffic brings ([`FlightView::warm_up_traffic`]), so the
+//! first step doesn't stall on reading them. The load or New Pilot already ran the rebuilds the original
 //! makes at entry (`_PropagateMissionBitEffects`,
 //! `_ResetPlayerPrecalcedValues`, `_HandleStellarSystemVisibility`), and
 //! nothing changes the game on the main screen between that rebuild and

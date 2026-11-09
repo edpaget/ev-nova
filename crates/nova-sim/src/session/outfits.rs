@@ -596,8 +596,7 @@ mod tests {
         session.grant_outfit(JUMPS_2, &mut NeverFires);
         assert_eq!(explored(&session), ids(&[130, 131, 132]));
         let mut both = self::session(&catalog)
-            .with_rules(rules)
-            .with_hyperlinks(crate::HyperlinkRule::BothWays);
+            .with_rules(rules.with_override(RuleKey::Hyperlinks, RuleSource::Bible));
         both.grant_outfit(JUMPS_2, &mut NeverFires);
         assert_eq!(explored(&both), ids(&[130, 131, 132, 133]));
     }

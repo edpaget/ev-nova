@@ -40,6 +40,12 @@
 //!   moves by the push on the next pass.
 //! - **Each NPC's fire** reads the ships of earlier slots where their own
 //!   flight left them, and those of later slots where they stood.
+//! - **A held NPC reads its holder as the loop has left it**: its pull and
+//!   release read the holder's slot live (@0x3401f-0x34032,
+//!   @0x353e2-0x3540c), so a holder of an earlier slot is read after its
+//!   flight, one of a later slot as the last pass left it, and the player
+//!   as the world of its flight holds it (see the traffic's
+//!   `tractor_hold`).
 //! - **The loop's lines** are raised at their NPC's turn: its self-repair
 //!   line, then its quote roll's quote, then its display's shockwave's
 //!   downing lines (`_DamageShip` @0x2da89). Each goes through
@@ -168,8 +174,9 @@ impl Session {
     /// quote takes its slot among the loop's lines, the higher slot's
     /// replacing the lower's (`_DisplayComm` @0x9024b, @0x90251); the
     /// reinforcements' lines (`_HandleReinforcements` @0x44504) come after
-    /// every roll. On the advance pass the quote clock then moves on a
-    /// tick, after the loop; the second pass reads it unmoved.
+    /// every roll. On a frame's advance pass the quote clock then moves on
+    /// a tick, after the loop ([`Session::pass_from_key_block`]); the
+    /// second pass reads it unmoved.
     #[allow(clippy::too_many_arguments)] // the pass's collaborators, and the quotes' catalog
     pub(super) fn ship_loop(
         &mut self,
@@ -269,9 +276,6 @@ impl Session {
         if let Some(fly) = fly {
             self.space.traffic.end_fly(fly);
         }
-        // The quote clock moves on once a frame, on the advance pass, after
-        // its rolls; the second pass reads it unmoved.
-        let advance = !matches!(motion, Motion::Again);
         match motion {
             Motion::Fly(marks) => {
                 self.after_traffic_motion(&marks, &mut &mut *chance);
@@ -290,9 +294,6 @@ impl Session {
                     self.mission_ships_left(&marks);
                 }
             }
-        }
-        if advance && quotes.is_some() {
-            self.space.tick_quote_clock();
         }
         self.lay_out_displayed();
         self.space.traffic.step_fades(self.speed_mult());
@@ -423,6 +424,7 @@ mod tests {
     fn again(session: &mut Session) {
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &Keep,
             Rules::default(),
             &mut NeverFires,
@@ -1062,6 +1064,39 @@ mod tests {
         pass(&mut session, &catalog, &Holds);
         assert_eq!(target(&session, earlier), None);
         assert_eq!(target(&session, later), None);
+    }
+
+    /// The velocity a disabled ship at berth 2, held by an inertialess
+    /// holder at berth `holder_berth`, ends a pass at, both starting at
+    /// (3, -2): a holder whose flight moves it first pulls it toward its
+    /// moved velocity, one flown after it pulls it toward its own.
+    fn held_after_a_pass(holder_berth: u32) -> Vec2 {
+        let catalog = armed();
+        let mut session = empty(&catalog);
+        let start = Vec2::new(3.0, -2.0);
+        let holder = place(&mut session, holder_berth, Vec2::new(600.0, 0.0), start);
+        let ship = session.space.npc_mut(holder).expect("there");
+        ship.stats.inertialess_hull = true;
+        let held = place(&mut session, 2, Vec2::new(-600.0, 0.0), start);
+        crate::fixture::disable(&mut session, held);
+        let ship = session.space.npc_mut(held).expect("there");
+        ship.tractor = Some(crate::combat::impact::TractorLock::by(ShipRef::Npc(holder)));
+        again(&mut session);
+        let moved = state(&session, holder).velocity;
+        assert_ne!(moved, start, "the holder's flight changes its velocity");
+        state(&session, held).velocity
+    }
+
+    #[test]
+    fn a_held_npc_reads_its_holder_as_the_loop_has_left_it() {
+        // `_HandleShip`'s pull reads the holder's slot live
+        // (@0x3401f-0x34032): the berth order decides which velocity a
+        // held ship is pulled toward (pinned in the traffic's
+        // `tractor_live_tests`).
+        let after = held_after_a_pass(1);
+        let before = held_after_a_pass(3);
+        assert_ne!(after, before, "the lower holder had moved");
+        assert!(after.x < before.x && after.y > before.y, "{after:?}");
     }
 
     #[test]

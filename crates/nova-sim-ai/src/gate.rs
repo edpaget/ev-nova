@@ -96,6 +96,7 @@ use crate::chance::Chance;
 use crate::flight::{ShipState, facing};
 use crate::hyperspace::StarMap;
 pub use crate::landing::{GateKind, HYPERGATE, WORMHOLE};
+use crate::rulebook::RuleSource;
 
 /// The fraction of its top speed a ship leaves a gate at: the original's
 /// 0.5 (the float at 0xdd694).
@@ -125,6 +126,9 @@ pub enum GateRefusal {
 }
 
 /// Where a ship comes out of a hypergate or wormhole.
+///
+/// The rulebook's [`RuleKey::GateArrival`](crate::RuleKey::GateArrival)
+/// chooses it, by its [`RuleSource`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum GateArrivalRule {
     /// The original engine's reading (`_PlayerEnterHypergate` @0x639f7,
@@ -139,7 +143,21 @@ pub enum GateArrivalRule {
     LikeJump,
 }
 
+impl From<RuleSource> for GateArrivalRule {
+    /// The reading [`RuleKey::GateArrival`](crate::RuleKey::GateArrival) gives:
+    /// the engine's, or `LikeJump` for [`RuleSource::Bible`].
+    fn from(source: RuleSource) -> Self {
+        match source {
+            RuleSource::Engine => Self::Engine,
+            RuleSource::Bible => Self::LikeJump,
+        }
+    }
+}
+
 /// Which wormhole a wormhole without links leads to.
+///
+/// The rulebook's [`RuleKey::WormholeExit`](crate::RuleKey::WormholeExit)
+/// chooses it, by its [`RuleSource`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum WormholeRule {
     /// The original engine's reading: a random pick among every other
@@ -150,6 +168,17 @@ pub enum WormholeRule {
     /// The Bible's reading: a random pick among the other unlinked
     /// wormholes in other systems only.
     UnlinkedOnly,
+}
+
+impl From<RuleSource> for WormholeRule {
+    /// The reading [`RuleKey::WormholeExit`](crate::RuleKey::WormholeExit) gives:
+    /// the engine's, or `UnlinkedOnly` for [`RuleSource::Bible`].
+    fn from(source: RuleSource) -> Self {
+        match source {
+            RuleSource::Engine => Self::Engine,
+            RuleSource::Bible => Self::UnlinkedOnly,
+        }
+    }
 }
 
 /// Whether `link` is a link at all: a stellar ID the original counts
@@ -444,6 +473,27 @@ mod tests {
     use crate::hyperspace::CoLocated;
     use nova_sim_base::fixture::Scripted;
     use nova_sim_catalog::fixture::star;
+
+    #[test]
+    fn a_gate_arrival_rule_follows_its_source() {
+        assert_eq!(
+            GateArrivalRule::from(RuleSource::Engine),
+            GateArrivalRule::Engine
+        );
+        assert_eq!(
+            GateArrivalRule::from(RuleSource::Bible),
+            GateArrivalRule::LikeJump
+        );
+    }
+
+    #[test]
+    fn a_wormhole_rule_follows_its_source() {
+        assert_eq!(WormholeRule::from(RuleSource::Engine), WormholeRule::Engine);
+        assert_eq!(
+            WormholeRule::from(RuleSource::Bible),
+            WormholeRule::UnlinkedOnly
+        );
+    }
 
     #[test]
     fn the_next_gate_pick_steps_on_and_shift_steps_back_each_wrapping() {

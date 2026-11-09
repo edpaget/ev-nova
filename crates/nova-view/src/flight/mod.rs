@@ -34,8 +34,8 @@
 //!   system, and the colorize that mixes it toward its background.
 //! - `pen`: the `Pen` the HUD's panels set their text with, and
 //!   `_DrawCenteredText`'s centring.
-//! - [`pods`]: the NPCs' escape pods adrift, from the fight's
-//!   `PodEjected` events: their drift, their fade and their pool.
+//! - [`pods`]: drawing the NPCs' escape pods the simulation keeps, from
+//!   the frame: their place, their fade and their murk.
 //! - [`radar`]: the radar's view model, the marks `_DrawStatusRadar`
 //!   draws for a [`RadarScene`](radar::RadarScene) snapshot.
 //! - [`shot_fade`]: how a shot fades in and out, and how a translucent
@@ -45,8 +45,6 @@
 //! - [`sim_port`]: the [`FlightSim`] port, what the flight view needs of
 //!   the flight it shows: a frame, a step, the player's commands and the
 //!   events to drain.
-//! - `slot_pool`: the original's fixed sprite tables, a new item taking
-//!   the first free slot and each drawn in slot order.
 //! - [`smoke`]: the puffs a smoking shot leaves.
 //! - [`sprite`]: [`rotation_frame`], which frame of the ship's sheet shows
 //!   its heading.
@@ -96,7 +94,6 @@ pub mod ship_layers;
 pub mod shot_fade;
 pub mod sim_adapter;
 pub mod sim_port;
-pub(crate) mod slot_pool;
 pub mod smoke;
 pub mod solid_runs;
 pub mod sprite;

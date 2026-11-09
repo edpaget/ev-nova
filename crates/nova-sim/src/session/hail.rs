@@ -2545,7 +2545,7 @@ pub(super) mod tests {
         let mut session = targeting(&catalog);
         session.pilot.reserves.fuel.now = 40.0;
         npc(&mut session).trigger = Trigger {
-            primary: true,
+            only: Some(crate::catalog::WeaponId(128)),
             ..Trigger::default()
         };
         hail(&mut session, &catalog);

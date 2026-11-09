@@ -1723,11 +1723,21 @@ pub struct HullRecord {
     /// Its `WeapType` slots 1-8 that name a weapon, in slot order.
     pub weapons: Vec<StockWeapon>,
     /// Its `shän`'s `BaseXSize`, in pixels, or `None` when it has no
-    /// `shän` that can be read.
+    /// `shän` that can be read. The hull measures by [`HullRecord::frame`]
+    /// when it has one; this is the fallback.
     pub size: Option<i16>,
     /// Its `shän`'s `BaseYSize`, in pixels, or `None` when it has no
-    /// `shän` that can be read.
+    /// `shän` that can be read. The hull measures by [`HullRecord::frame`]
+    /// when it has one; this is the fallback.
     pub height: Option<i16>,
+    /// Its loaded base sprite's frame, as `_LoadExtendedShipSprites` makes
+    /// it (@0x227d6-0x2298b), which `_GetSpriteXSize`/`_GetSpriteYSize`
+    /// read: its sprite base's `BaseImage` `rlëD` header width and height
+    /// (@0x228b5), or with no `rlëD` (a `PICT` sheet, @0x2291d) the sprite
+    /// base's `shän` `BaseXSize`/`BaseYSize` when both are positive; none
+    /// without a `shän`. A ship sharing an earlier ship's `BaseImage`
+    /// clones that ship's sprite (@0x22817), so it takes the base's frame.
+    pub frame: Option<FrameSize>,
     /// Its `Strength`: how strong it counts in a fight.
     pub strength: i16,
     /// Its `KeyCarried`: the ship a weapon of `Flags2` 0x0080 needs

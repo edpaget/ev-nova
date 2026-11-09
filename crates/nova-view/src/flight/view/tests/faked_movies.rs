@@ -768,8 +768,9 @@ fn a_wormhole_entry_plays_its_own_desc_movie_before_passing_through() {
         Some(FlightCommand::EnterWormhole)
     );
     assert_eq!(
-        view.jump_effect().map(JumpEffect::phase),
-        Some(JumpPhase::Flash(0.0))
+        view.jump_effect(),
+        None,
+        "the wormhole's white is never flushed (F3)"
     );
 }
 

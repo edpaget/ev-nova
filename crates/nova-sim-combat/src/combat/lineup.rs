@@ -23,6 +23,7 @@
 //! condition there, so it reads as [`reread`] would read it.
 
 use super::hull::DisableRule;
+use super::locked_slot::LockedSlot;
 use super::planet_type::BeamPlanetFlag;
 use super::projectile::{Sight, Target};
 use super::sides::{PassThrough, Sides};
@@ -51,17 +52,20 @@ pub(super) struct Lineup<'a> {
     pub(super) pass_through: PassThrough,
     /// Which of its weapon's bits makes a beam planet-type.
     pub(super) beam_planet_flag: BeamPlanetFlag,
+    /// How a shot locked on an asteroid reads the slot it holds.
+    pub(super) locked_slot: LockedSlot,
 }
 
 impl<'a> Lineup<'a> {
     /// The ships of `fighters`, each where it is for the blasts, and seen
     /// at its place among `seen_at`, by `govts`' relations,
-    /// `pass_through`'s player and `beam_planet_flag`'s beam bit.
+    /// `pass_through`'s player, `beam_planet_flag`'s beam bit and
+    /// `locked_slot`'s reading of a locked shot.
     pub(super) fn new(
         fighters: &[Fighter],
         seen_at: &[Vec2],
         govts: &'a Governments,
-        (pass_through, beam_planet_flag): (PassThrough, BeamPlanetFlag),
+        (pass_through, beam_planet_flag, locked_slot): (PassThrough, BeamPlanetFlag, LockedSlot),
     ) -> Self {
         let world: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
         let seen = world
@@ -79,6 +83,7 @@ impl<'a> Lineup<'a> {
             govts,
             pass_through,
             beam_planet_flag,
+            locked_slot,
         }
     }
 
@@ -89,6 +94,7 @@ impl<'a> Lineup<'a> {
             govts: self.govts,
             pass_through: self.pass_through,
             beam_planet_flag: self.beam_planet_flag,
+            locked_slot: self.locked_slot,
         }
     }
 

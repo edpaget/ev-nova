@@ -829,6 +829,7 @@ fn double_times_second_pass_counts_the_clock_down_again() {
     session.call_for_reinforcements(warship, false, None);
     session.tick_again(
         Controls::default(),
+        &crate::testkit::catalog(),
         &crate::ai::NovaAi::default(),
         Rules::default(),
         &mut NeverFires,
@@ -849,6 +850,7 @@ fn a_fleet_arriving_on_the_second_pass_is_noted_drawn_with_that_passs_ships() {
     let before = session.npcs().len();
     session.tick_again(
         Controls::default(),
+        &crate::testkit::catalog(),
         &crate::ai::NovaAi::default(),
         Rules::default(),
         &mut NeverFires,

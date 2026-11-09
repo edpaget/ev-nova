@@ -23,9 +23,9 @@
 //! the double-time key's latch reads the heading and the warp-ups, which
 //! nothing between the two sites moves.
 //!
-//! **Each step**, stopped before it once the warp has ended
-//! ([`Session::warp_end_due`]: the arrival comes first) or the hold after
-//! the player's explosion has run out ([`Session::hold_expired`]):
+//! **Each step**, stopped before it once the hold after the player's
+//! explosion has run out ([`Session::hold_expired`]), and after one an
+//! exit settled on (below):
 //!
 //! 1. each ship's state is recorded, which the view draws from; the
 //!    frame's gain is taken; and while the gate autopilot is engaged its
@@ -36,7 +36,7 @@
 //!    [`Session::game_work`]), or, on the first step after a comm, escort
 //!    or info dialog's zero, the rest of the frame it opened on, at gain 0
 //!    ([`Session::rest_of_opening_pass`], see the `opening_rest` module),
-//!    then its comm notes are taken;
+//!    then the exit it settled, if any, and its comm notes are taken;
 //! 3. the NPCs answer what the session left them
 //!    ([`Session::answer_strikes`]): the pass answers every hit it lands
 //!    as its phase settles, the beams' and shockwaves' included, as
@@ -58,14 +58,12 @@
 //! 4. in double time, the frame as it stands is reported
 //!    ([`StepRun::between_passes`]), as that is what the original draws
 //!    (`_PlayGame` @0x45d96-0x45e82), then the second pass
-//!    (`_DoPlayGameWork(0)` @0x45f31, [`Session::tick_again`]), the rescue
-//!    asked after it
-//!    ([`Session::rescue_if_due`]), the strikes answered, the attack
-//!    quotes left said, and its own report. Its ship loop ran the quote
+//!    (`_DoPlayGameWork(0)` @0x45f31, [`Session::tick_again`]), the exit
+//!    it settled taken, the strikes answered, the attack quotes left
+//!    said, and its own report. Its ship loop ran the quote
 //!    roll on the clock unmoved, with no countdown, as `_HandleComm` runs
 //!    on the advance pass alone. The lines the second pass raises, the
-//!    rescue's among them,
-//!    are held apart while it runs ([`StepRun::second_pass_lines`]), off
+//!    arrival's among them, are held apart while it runs ([`StepRun::second_pass_lines`]), off
 //!    the step's comm, its quotes, the messages and its last line. The
 //!    original's `_DisplayComm` draws its line into the background and
 //!    work frames at once (@0x90294-0x90390), and the line reaches the
@@ -74,7 +72,7 @@
 //!    the frame's last step holds them: as the next step begins, an
 //!    earlier step's are folded back into its own streams, its messages
 //!    onto those not yet drained, so the view replays that step in full.
-//!    A step the warp's end or the hold's expiry stops after keeps them.
+//!    A step an exit or the hold's expiry stops after keeps them.
 //! 5. the line the step raised last, whatever its kind
 //!    ([`StepRun::last_line`]): `_DisplayComm` replaces its one slot with
 //!    each line (@0x90251-0x90265), so the frame ends on the last raised,
@@ -83,26 +81,36 @@
 //!    first step: a line raised before it (a press the view says at once,
 //!    a note or quote the inbox held) is older than any the steps raise.
 //!    The frame drops a pass's escort-menu block left from before its
-//!    first step too, and each step drops one a rescue's unreported pass
-//!    left. And whether a jump collapsed under the white on the step
+//!    first step too. And whether a jump collapsed under the white on the step
 //!    ([`StepRun::lit_collapse`], see the `jump_collapse` module), read
 //!    per step, so neither double time's second pass nor a catch-up
 //!    tick's later steps lose it.
 //!
-//! **The rescue.** The escape pod's rescue settles on the pass the pod's
-//! countdown runs out (`_HandlePlayer` runs it in place of the rest of
-//! that pass's player handling, @0x68ddd) and ends the stepping, so its
-//! `dësc` opens before the next step; the view lays itself out where it
-//! put the ship (@0x68fab). The pass is not reported, and its quotes and
-//! fight events wait for the next frame's take; its comm and its last
-//! line are taken all the same, on either pass, so a note shows before
-//! the `dësc` opens. A rescue on the second pass still reports the frame
-//! between the passes, the pod where the first pass left it, and holds
-//! that pass's lines: the original's `_HandlePlayer` reaches the pod's
-//! countdown on either pass (@0x68ddd), and its `_FadeScreenOut` flushes
-//! and fades the screen as frame n's draw left it (@0x5358, @0x53a4), so
-//! the view fades out over that frame and shows the lines under the
-//! rescue's first text.
+//! **The exits.** The jump's arrival and the escape pod's rescue settle
+//! inside the pass that reaches them, on either pass, and the rest of
+//! that pass runs among the new system (see the `settled_in_pass`
+//! module). Every pass is answered and reported whatever exit it had: the
+//! step reports where the exit came ([`StepRun::arrival`],
+//! [`StepRun::rescued`]: which pass, the player's place, the fight's
+//! events before it and how many comm notes came before it), and the pass
+//! report at that index is the rest of the pass. The exit's step ends the
+//! stepping, so the texts the arrival or the rescue queued, the
+//! defections and the rescue's `dësc` open before the next step.
+//!
+//! In double time, an exit on the advance pass leaves the frame between
+//! the passes in the new system, and the second pass runs there; one on
+//! the second pass leaves it in the old, the pod where the first pass left
+//! it, as the original draws it before that pass (a rescue's
+//! `_FadeScreenOut` flushes and fades frame n's draw, @0x5358, @0x53a4).
+//! The arrival's line comes with the second pass's held lines.
+//!
+//! A rescue's lines split at it: those raised before it come with the
+//! step as any line does (on the second pass, among its held lines),
+//! and those raised after it, in the rest of its pass and an advance-pass
+//! rescue's second pass, are held to the step's end
+//! ([`StepRun::rescue_lines`]), as `_ResetPlayer` empties the message line
+//! (`_commCount` @0x1d8ff-0x1d904) and the view shows them after its
+//! rescue screen.
 
 use crate::ai::Behaviour;
 use crate::catalog::{CommCatalog, PilotCatalog, TrafficCatalog};
@@ -113,6 +121,7 @@ use crate::flight_frame::{
 };
 
 use super::Session;
+use super::settled_in_pass::{Exit, SettledExit};
 
 /// What a frame's steps read of the catalog: the traffic's, the pilot's
 /// and the comm's ([`Session::step`]).
@@ -147,22 +156,24 @@ impl Session {
         self.hold_input(input);
         self.out.last_line = None;
         self.out.escort_menu = None;
+        self.out.in_step = true;
         for _ in 0..steps {
-            if self.warp_end_due() || self.hold_expired() {
+            if self.hold_expired() {
                 into.stopped = true;
-                return;
+                break;
             }
             if let Some(earlier) = into.steps.last_mut() {
                 self.fold_back_held_lines(earlier);
             }
             let run = self.run_step(input, collab);
-            let rescued = run.rescued.is_some();
+            let exited = run.arrival.is_some() || run.rescued.is_some();
             into.steps.push(run);
-            if rescued {
+            if exited {
                 into.stopped = true;
-                return;
+                break;
             }
         }
+        self.out.in_step = false;
     }
 
     /// Holds `input`'s holds and settings, in the order the view set them.
@@ -196,7 +207,7 @@ impl Session {
             ..StepRun::default()
         };
         let controls = self.pilot_controls(input.controls);
-        let rescued = if self.take_opening_rest() {
+        if self.take_opening_rest() {
             // The rest of the frame a dialog opened on, at the gain its
             // zero left (see the `opening_rest` module).
             self.rest_of_opening_pass(
@@ -206,7 +217,6 @@ impl Session {
                 collab.rules,
                 &mut *collab.chance,
             );
-            false
         } else {
             self.adjust_time();
             self.game_work_quoting(
@@ -216,15 +226,10 @@ impl Session {
                 collab.behaviour,
                 collab.rules,
                 &mut *collab.chance,
-            )
-        };
-        run.comm = self.take_comm();
-        if rescued {
-            run.rescued = Some(ShipPlace::from(*self.player()));
-            run.rescue_texts = self.ship.fate.rescue_texts.take();
-            self.take_step_ends(&mut run);
-            return run;
+            );
         }
+        self.take_exit(&mut run, 0);
+        run.comm = self.take_comm();
         self.answer_strikes(collab.behaviour);
         self.say_attack_quotes_left(catalog, &mut *collab.chance);
         run.passes.push(self.pass_report());
@@ -235,9 +240,14 @@ impl Session {
         run.between_passes = Some(self.frame_between_passes());
         #[cfg(test)]
         self.give_test_command_between_passes(&mut *collab.chance);
-        self.out.second_pass = Some(Vec::new());
+        // An advance-pass rescue's hold stays open through the second
+        // pass (see the `settled_in_pass` module).
+        if run.rescued.is_none() {
+            self.out.second_pass = Some(Vec::new());
+        }
         self.tick_again_quoting(
             controls,
+            &catalog,
             Some(quotes),
             collab.behaviour,
             collab.rules,
@@ -245,21 +255,46 @@ impl Session {
         );
         #[cfg(test)]
         self.raise_test_second_pass_lines();
-        if self.rescue_if_due(&catalog, &mut *collab.chance) {
-            run.second_pass_lines = self.close_second_pass();
-            run.comm.extend(self.take_comm());
-            run.rescued = Some(ShipPlace::from(*self.player()));
-            run.rescue_texts = self.ship.fate.rescue_texts.take();
-            self.take_step_ends(&mut run);
-            return run;
-        }
+        self.take_exit(&mut run, 1);
         self.answer_strikes(collab.behaviour);
         self.say_attack_quotes_left(catalog, &mut *collab.chance);
         run.passes.push(self.pass_report());
         run.comm.extend(self.take_comm());
-        run.second_pass_lines = self.close_second_pass();
+        if run.rescued.is_none() {
+            run.second_pass_lines = self.close_second_pass();
+        }
         self.take_step_ends(&mut run);
         run
+    }
+
+    /// Takes the exit a step's `pass` settled, if any, into `run`: the
+    /// arrival or the rescue, its pass and its count of comm notes before
+    /// it among the step's, and a rescue's texts; a rescue on the second
+    /// pass gives the lines it held before it as the step's second-pass
+    /// lines (see the module docs).
+    fn take_exit(&mut self, run: &mut StepRun, pass: usize) {
+        let Some(SettledExit {
+            exit,
+            mut report,
+            held_before,
+        }) = self.out.exit.take()
+        else {
+            return;
+        };
+        report.pass = pass;
+        // The notes the step took before this pass, then this pass's
+        // before the exit.
+        report.comm += run.comm.len();
+        match exit {
+            Exit::Arrival => run.arrival = Some(report),
+            Exit::Rescue => {
+                run.rescued = Some(report);
+                run.rescue_texts = self.ship.fate.rescue_texts.take();
+                if let Some(lines) = held_before {
+                    run.second_pass_lines = lines;
+                }
+            }
+        }
     }
 
     /// Ends double time's second pass's hold on its lines: the lines it
@@ -320,15 +355,13 @@ impl Session {
         frame
     }
 
-    /// What `run`'s step leaves at its end, taken into it: the line it
-    /// raised last, and whether a jump collapsed under the white on it
-    /// (see the module docs). A wrap a rescue's unreported pass left is
-    /// dropped, as the view lays itself out afresh, and so is its
-    /// escort-menu block, as the rescue returns before the fade
-    /// (@0x68ddd, @0x692ce).
+    /// What `run`'s step leaves at its end, taken into it: the lines a
+    /// rescue on it held after it, the line it raised last, and whether a
+    /// jump collapsed under the white on it (see the module docs).
     fn take_step_ends(&mut self, run: &mut StepRun) {
-        self.out.player_wrap = None;
-        self.out.escort_menu = None;
+        if run.rescued.is_some() {
+            run.rescue_lines = self.close_second_pass();
+        }
         run.last_line = self.out.last_line.take();
         run.lit_collapse = std::mem::take(&mut self.out.lit_collapse);
     }
@@ -469,11 +502,12 @@ mod tests {
         session.out.last_line = None;
         session.out.escort_menu = None;
         let mut took = Vec::new();
+        session.out.in_step = true;
         for _ in 0..count {
-            if session.warp_end_due() || session.hold_expired() {
+            if session.hold_expired() {
                 break;
             }
-            let rescued = session.game_work_quoting(
+            session.game_work_quoting(
                 input.controls,
                 catalog,
                 Some(catalog),
@@ -481,48 +515,51 @@ mod tests {
                 Rules::default(),
                 chance,
             );
+            let mut exits = vec![session.out.exit.take()];
             let mut comm = session.take_comm();
             let mut passes = Vec::new();
-            if rescued {
-                took.push(step_took(session, comm, passes));
-                break;
-            }
             session.answer_strikes(&behaviour);
             session.say_attack_quotes_left(catalog, chance);
             passes.push(pass_took(session));
+            let rescued = |exits: &[Option<SettledExit>]| {
+                exits.iter().flatten().any(|exit| exit.exit == Exit::Rescue)
+            };
             if session.double_time() {
                 if let Some((group, command)) = session.out.command_between_passes.take() {
                     session.command_escorts(group, command, chance);
                 }
                 session.tick_again_quoting(
                     input.controls,
+                    catalog,
                     Some(catalog),
                     &behaviour,
                     Rules::default(),
                     chance,
                 );
                 session.raise_test_second_pass_lines();
-                if session.rescue_if_due(catalog, chance) {
-                    comm.extend(session.take_comm());
-                    took.push(step_took(session, comm, passes));
-                    break;
-                }
+                exits.push(session.out.exit.take());
                 session.answer_strikes(&behaviour);
                 session.say_attack_quotes_left(catalog, chance);
                 passes.push(pass_took(session));
                 comm.extend(session.take_comm());
             }
+            // The rescue's hold on the lines after it.
+            if rescued(&exits) {
+                session.out.second_pass = None;
+            }
             took.push(step_took(session, comm, passes));
+            if exits.iter().any(Option::is_some) {
+                break;
+            }
         }
+        session.out.in_step = false;
         took
     }
 
     /// What a step took by hand, its `comm` and its `passes`' takes: then
-    /// the line it raised last and where a rescue's texts fell. The
-    /// escort-menu block of a pass the rescue ended is dropped.
+    /// the line it raised last and where a rescue's texts fell.
     fn step_took(session: &mut Session, comm: Vec<CommNote>, passes: Vec<Took>) -> StepTook {
         let line = session.out.last_line.take();
-        session.out.escort_menu = None;
         let rescue_texts = session.ship.fate.rescue_texts.take();
         (comm, passes, line, rescue_texts)
     }
@@ -689,6 +726,7 @@ mod tests {
                 if hand.double_time() {
                     hand.tick_again_quoting(
                         input.controls,
+                        &catalog,
                         Some(&catalog),
                         &behaviour,
                         Rules::default(),
@@ -856,22 +894,111 @@ mod tests {
         assert_eq!(report.steps.len(), 1, "no later step");
         assert!(report.stopped);
         let run = &report.steps[0];
-        assert_eq!(run.passes, [], "the pass is not reported");
+        assert_eq!(run.passes.len(), 1, "the rest of the pass reported");
+        assert_eq!(run.passes[0].quotes, [quote], "its quotes taken with it");
         assert_eq!(run.comm, [note], "its comm taken");
-        let player = session.player();
-        assert_eq!(
-            run.rescued,
-            Some(ShipPlace {
-                position: player.position,
-                heading: player.heading,
-            })
-        );
-        assert_eq!(session.take_quotes(), [quote], "its quotes not taken");
+        let rescued = run.rescued.as_ref().expect("rescued");
+        assert_eq!(rescued.comm, 1, "the note raised before the rescue");
+        assert_eq!(rescued.place, ShipPlace::from(*session.player()));
         assert_eq!(
             session.take_rescue_desc().map(|desc| desc.id),
             Some(13999),
             "rescued"
         );
+    }
+
+    /// [`catalog`] with the shuttle the rescue boards (`shïp` 128), so
+    /// its `_ResetPlayer` takes the pilot out of the pod.
+    fn rescuing() -> FakePilotCatalog {
+        FakePilotCatalog {
+            ship_records: vec![crate::testkit::ship(128, crate::testkit::FAST)],
+            ..catalog()
+        }
+    }
+
+    #[test]
+    fn an_advance_pass_rescue_reports_the_rest_of_its_pass_among_the_new_system() {
+        let catalog = rescuing();
+        let mut session = in_the_pod(&catalog, 1);
+        // A ship of the system left, gone with it.
+        let left = session.space.traffic.add_npc(crate::testkit::npc(
+            1,
+            crate::stats::ShipStats::new(crate::testkit::FAST, &[]),
+        ));
+        let report = steps(&mut session, &catalog, &StepInput::default(), 3);
+        let run = &report.steps[0];
+        let rescued = run.rescued.as_ref().expect("rescued");
+        assert_eq!(rescued.pass, 0);
+        assert_eq!(rescued.place.position, crate::session::rescue::RESCUE_AT);
+        let pass = &run.passes[0];
+        assert_eq!(pass.player_position, crate::session::rescue::RESCUE_AT);
+        assert!(
+            pass.ships
+                .iter()
+                .all(|ship| ship.ship != ShipRef::Npc(left)),
+            "the new system's ships: {:?}",
+            pass.ships
+        );
+        assert_eq!(run.rescue_lines, [], "none raised after it");
+    }
+
+    #[test]
+    fn an_advance_pass_rescue_in_double_time_reports_the_frame_between_in_the_new_system_and_its_second_pass()
+     {
+        let catalog = rescuing();
+        let mut session = in_the_pod(&catalog, 1);
+        let report = steps(&mut session, &catalog, &doubled(), 3);
+        assert_eq!(report.steps.len(), 1, "no later step");
+        let run = &report.steps[0];
+        assert_eq!(run.rescued.as_ref().map(|exit| exit.pass), Some(0));
+        assert_eq!(run.passes.len(), 2, "both passes");
+        let between = run.between_passes.as_ref().expect("the frame between");
+        assert_eq!(between.system, session.pilot.system, "the new system");
+        assert!(
+            !matches!(between.fate, crate::PlayerFate::Ejected { .. }),
+            "out of the pod"
+        );
+        assert_eq!(between.player().position, crate::session::rescue::RESCUE_AT);
+    }
+
+    #[test]
+    fn a_line_raised_after_the_rescue_is_in_its_rescue_lines() {
+        let catalog = rescuing();
+        let mut session = in_the_pod(&catalog, 1);
+        messages_drained(&mut session);
+        session.out.second_pass_lines.push(three_lines());
+        let report = steps(&mut session, &catalog, &doubled(), 3);
+        let run = &report.steps[0];
+        assert_eq!(run.rescued.as_ref().map(|exit| exit.pass), Some(0));
+        assert_eq!(run.rescue_lines, three_lines(), "in the order raised");
+        assert_eq!(
+            run.second_pass_lines,
+            [],
+            "the rescue's hold, not the pass's"
+        );
+        assert_eq!(run.comm, [], "not on the step's comm");
+        assert_eq!(run.passes[1].quotes, [], "nor on its pass's quotes");
+        assert!(
+            !messages_drained(&mut session).contains(&crate::SimMessage::NoActiveMissions),
+            "nor drained"
+        );
+        assert_eq!(session.out.second_pass, None, "the hold closed");
+    }
+
+    #[test]
+    fn a_lone_passs_rescue_holds_no_lines() {
+        let catalog = rescuing();
+        let mut session = in_the_pod(&catalog, 1);
+        let rescued = session.game_work(
+            Controls::default(),
+            &catalog,
+            &crate::ai::NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
+        assert!(rescued);
+        assert_eq!(session.out.second_pass, None, "no hold");
+        assert_eq!(session.out.exit, None, "no exit recorded");
     }
 
     #[test]
@@ -907,10 +1034,7 @@ mod tests {
     fn a_rescue_on_the_second_pass_reports_the_frame_between_and_holds_its_lines() {
         let catalog = catalog();
         let mut session = in_the_pod(&catalog, 2);
-        let input = StepInput {
-            double_time_key: true,
-            ..StepInput::default()
-        };
+        let input = doubled();
         let mut hand = session.clone();
         let report = steps(&mut session, &catalog, &input, 3);
         let expected = by_hand(&mut hand, &catalog, &input, 3);
@@ -919,7 +1043,7 @@ mod tests {
         assert_eq!(report.steps.len(), 1, "no later step");
         assert!(report.stopped);
         let run = &report.steps[0];
-        assert_eq!(run.passes.len(), 1, "the advance pass alone");
+        assert_eq!(run.passes.len(), 2, "the second pass's rest reported too");
         let between = run.between_passes.as_ref().expect("the pod drawn");
         assert_eq!(
             between.player().position,
@@ -930,21 +1054,19 @@ mod tests {
             matches!(between.fate, crate::PlayerFate::Ejected { .. }),
             "not yet rescued"
         );
-        let player = session.player();
+        let rescued = run.rescued.as_ref().expect("rescued");
+        assert_eq!(rescued.pass, 1);
+        assert_eq!(rescued.place, ShipPlace::from(*session.player()));
         assert_eq!(
-            run.rescued,
-            Some(ShipPlace {
-                position: player.position,
-                heading: player.heading,
-            })
+            run.passes[1].player_position,
+            crate::session::rescue::RESCUE_AT,
+            "its rest among the new system"
         );
         let mut session = in_the_pod(&catalog, 2);
         steps(&mut session, &catalog, &input, 0);
         session.ship.fate.rescue_due = false;
         let mut copy = session.clone();
-        copy.out
-            .second_pass_lines
-            .push(vec![RaisedLine::Comm(repaired())]);
+        copy.out.before_exit_lines = vec![RaisedLine::Comm(repaired())];
         let report = steps(&mut copy, &catalog, &input, 1);
         assert_eq!(
             copy.take_rescue_desc().map(|desc| desc.id),
@@ -959,6 +1081,26 @@ mod tests {
         );
         assert_eq!(report.steps[0].last_line, None, "the first pass's");
         assert_eq!(copy.take_comm(), [], "none left for the next take");
+    }
+
+    #[test]
+    fn a_second_pass_rescue_reports_its_rest_and_splits_its_lines() {
+        let catalog = rescuing();
+        let mut session = in_the_pod(&catalog, 2);
+        session.out.before_exit_lines = vec![RaisedLine::Comm(repaired())];
+        session.out.second_pass_lines.push(three_lines());
+        let report = steps(&mut session, &catalog, &doubled(), 1);
+        let run = &report.steps[0];
+        assert_eq!(run.rescued.as_ref().map(|exit| exit.pass), Some(1));
+        assert_eq!(run.passes.len(), 2, "its rest reported");
+        assert_eq!(
+            run.second_pass_lines,
+            [RaisedLine::Comm(repaired())],
+            "the lines before the rescue"
+        );
+        assert_eq!(run.rescue_lines, three_lines(), "the lines after it");
+        assert_eq!(run.comm, []);
+        assert_eq!(session.out.second_pass, None, "the hold closed");
     }
 
     /// An ally's note that it has repaired the player.
@@ -1066,9 +1208,15 @@ mod tests {
         frames(&mut session, 96);
         session.out.second_pass_lines.push(three_lines());
         let report = steps(&mut session, &catalog, &doubled(), 3);
-        assert_eq!(report.steps.len(), 1, "stopped before the next");
+        assert_eq!(report.steps.len(), 1, "stopped after the arrival's step");
         assert!(report.stopped);
-        assert_eq!(report.steps[0].second_pass_lines, three_lines());
+        let run = &report.steps[0];
+        assert_eq!(run.arrival.as_ref().map(|exit| exit.pass), Some(1));
+        assert!(
+            run.second_pass_lines.ends_with(&three_lines()),
+            "{:?}",
+            run.second_pass_lines
+        );
     }
 
     #[test]
@@ -1246,7 +1394,11 @@ mod tests {
     }
 
     #[test]
-    fn a_clear_before_a_rescue_on_the_second_pass_comes_with_its_pass() {
+    fn a_pod_pass_before_a_rescue_on_the_second_pass_runs_no_menu_block_and_comes_with_its_pass() {
+        // The pod's frames return (@0x68ddd) before the escort menu's
+        // block (@0x6df59) and the class-order bookkeeping (@0x6e2e8), so
+        // the pod's pass before the rescue runs and reports no block, nor
+        // does the rest of the rescue's (@0x692ce).
         let catalog = catalog();
         let mut session = in_the_pod(&catalog, 2);
         session.space.escorts.class_orders[2] = Some(crate::escort::EscortOrder::Hold);
@@ -1259,12 +1411,76 @@ mod tests {
         let report = steps(&mut session, &catalog, &input, 3);
         assert_eq!(report.steps.len(), 1, "rescued");
         assert!(report.steps[0].rescued.is_some());
-        assert_eq!(cleared_by_pass(&report), [[Some(true)]]);
+        assert_eq!(
+            cleared_by_pass(&report),
+            [[None, None]],
+            "the pod's pass, then the rescue's rest"
+        );
         assert_eq!(session.out.escort_menu, None, "none left for the next step");
     }
 
     #[test]
-    fn the_warps_end_stops_the_stepping_before_the_next_step() {
+    fn a_clear_on_a_flying_pass_before_a_rescue_on_the_second_pass_comes_with_its_pass() {
+        // The first pass begins out of the pod, so it runs the escort
+        // menu's block and its bookkeeping clears the kept order; its
+        // stray beam of `ExitType` 5 steps the pod word to 1 (see the
+        // `stray_words` module), and the second pass's pod flight runs it
+        // out and rescues the pilot (@0x68ddd). The clear comes with the
+        // first pass, and none is left for the next step.
+        let catalog = crate::session::stray_words::tests::beamed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.space.escorts.class_orders[2] = Some(crate::escort::EscortOrder::Hold);
+        session.space.traffic_due = false;
+        let report = steps(&mut session, &catalog, &firing(true), 3);
+        assert_eq!(report.steps.len(), 1, "rescued");
+        assert!(report.steps[0].rescued.is_some(), "on the second pass");
+        assert_eq!(
+            cleared_by_pass(&report),
+            [[Some(true), None]],
+            "the rescue's rest runs no block"
+        );
+        assert_eq!(session.space.escorts.class_orders[2], None, "cleared");
+        assert_eq!(session.out.escort_menu, None, "none left for the next step");
+    }
+
+    #[test]
+    fn a_class_order_kept_into_a_rescue_is_gone_before_the_next_pass_and_no_pass_reports_it() {
+        // The rescue's pass returns (`jmp 0x71113` @0x692ce) before the
+        // escort menu's block (@0x6df59) and the bookkeeping (@0x6e2e8),
+        // and `_ResetPlayer(0)` keeps the class table (@0x1d97e). The
+        // original's next pass clears it (@0x6e3bb-0x6e452), as the pod
+        // released every escort and `_SetupShipsInSystem` (@0x69114)
+        // places none marked. The engine resets the orders at the
+        // rescue's entry instead (`Session::enter_escorts`), which nothing
+        // reads before that pass: the dësc shows none, and the escort
+        // menu's rows show no order for a class with no ship out. So the
+        // rescue's pass reports its rest with no block, and the next pass
+        // clears nothing.
+        // The shuttle the rescue boards (`shïp` 128).
+        let catalog = FakePilotCatalog {
+            ship_records: vec![crate::testkit::ship(128, crate::testkit::FAST)],
+            ..catalog()
+        };
+        let mut session = in_the_pod(&catalog, 1);
+        session.space.escorts.class_orders[2] = Some(crate::escort::EscortOrder::Hold);
+        session.space.traffic_due = false;
+        let report = steps(&mut session, &catalog, &StepInput::default(), 3);
+        assert!(report.steps[0].rescued.is_some());
+        assert_eq!(
+            cleared_by_pass(&report),
+            [[None]],
+            "the rescue's rest runs no block"
+        );
+        assert_eq!(session.space.escorts.class_orders, [None; 4], "reset");
+        assert_eq!(session.out.escort_menu, None, "none left for the next step");
+        assert_eq!(session.pod, None, "out of the pod");
+        session.take_rescue_desc();
+        let report = steps(&mut session, &catalog, &StepInput::default(), 1);
+        assert_eq!(cleared_by_pass(&report), [[Some(false)]]);
+    }
+
+    #[test]
+    fn a_warps_end_arrives_in_its_pass_and_ends_the_stepping_after_its_step() {
         let catalog = catalog();
         let mut session = crate::session::tests::bound_for_131(
             &catalog,
@@ -1275,15 +1491,24 @@ mod tests {
         session.begin_jump().expect("jumps");
         let mut ran = 0;
         let mut probe = session.clone();
-        while !probe.warp_end_due() {
-            steps(&mut probe, &catalog, &StepInput::default(), 1);
+        while steps(&mut probe, &catalog, &StepInput::default(), 1).steps[0]
+            .arrival
+            .is_none()
+        {
             ran += 1;
             assert!(ran < 2000, "the warp never ends");
         }
-        let report = steps(&mut session, &catalog, &StepInput::default(), ran + 5);
-        assert_eq!(report.steps.len(), ran as usize);
+        for _ in 0..ran {
+            steps(&mut session, &catalog, &StepInput::default(), 1);
+        }
+        let report = steps(&mut session, &catalog, &StepInput::default(), 3);
+        assert_eq!(report.steps.len(), 1, "no later step");
         assert!(report.stopped);
-        assert!(session.warp_end_due());
+        let arrival = report.steps[0].arrival.as_ref().expect("arrived");
+        assert_eq!(arrival.pass, 0);
+        assert_eq!(arrival.place, ShipPlace::from(*session.player()));
+        assert_eq!(session.jumping(), None, "arrived in the pass");
+        assert_eq!(session.pilot.system, crate::catalog::SystemId(131));
     }
 
     #[test]
@@ -1381,29 +1606,73 @@ mod tests {
     }
 
     #[test]
-    fn a_warp_end_on_the_second_pass_reports_a_frame_not_yet_arrived() {
+    fn a_warp_end_on_the_second_pass_reports_the_frame_between_in_the_old_system() {
         use crate::session::warp_stage::tests::{frames, jumping_in_double_time, with_a_warp_out};
         use crate::sound::{SimSound, WARP_UP_HALTS};
         let catalog = with_a_warp_out();
         let mut session = jumping_in_double_time(&catalog);
         frames(&mut session, 96);
         session.take_sounds();
-        let input = StepInput {
-            double_time_key: true,
-            ..StepInput::default()
-        };
-        let report = steps(&mut session, &catalog, &input, 1);
+        let from = session.pilot.system;
+        // A ship of the system left, gone with it.
+        let left = session.space.traffic.add_npc(crate::testkit::npc(
+            1,
+            crate::stats::ShipStats::new(crate::testkit::FAST, &[]),
+        ));
+        session.out.second_pass_lines.push(three_lines());
+        let report = steps(&mut session, &catalog, &doubled(), 1);
         let sounds = session.take_sounds();
         assert!(
             sounds.contains(&SimSound::Halt(&WARP_UP_HALTS)) && sounds.contains(&SimSound::Arrived),
             "the halt and the warp-out raised with that step: {sounds:?}"
         );
-        let frame = report.steps[0].between_passes.as_ref().expect("reported");
-        assert!(!frame.warp_end_due, "the frame between its passes");
-        assert!(session.warp_end_due(), "the second pass ended the warp");
-        let next = steps(&mut session, &catalog, &input, 1);
-        assert_eq!(next.steps, []);
-        assert!(next.stopped);
+        let run = &report.steps[0];
+        assert_eq!(run.arrival.as_ref().map(|exit| exit.pass), Some(1));
+        let frame = run.between_passes.as_ref().expect("reported");
+        assert_eq!(frame.system, from, "the frame between its passes");
+        assert!(frame.warping);
+        assert_eq!(run.passes.len(), 2);
+        assert!(
+            run.passes[0]
+                .ships
+                .iter()
+                .any(|ship| ship.ship == ShipRef::Npc(left)),
+            "the first pass in the old system"
+        );
+        assert!(
+            run.passes[1]
+                .ships
+                .iter()
+                .all(|ship| ship.ship != ShipRef::Npc(left)),
+            "the second among the new system's ships"
+        );
+        assert_eq!(
+            run.second_pass_lines.first(),
+            Some(&RaisedLine::Message(crate::SimMessage::Arrived(
+                crate::catalog::SystemId(131)
+            ))),
+            "the arrival's line first"
+        );
+        assert!(run.second_pass_lines.ends_with(&three_lines()));
+        assert_eq!(session.jumping(), None, "the second pass arrived");
+        let next = steps(&mut session, &catalog, &doubled(), 1);
+        assert_eq!(next.steps.len(), 1, "the new system steps on");
+        assert!(!next.stopped);
+    }
+
+    #[test]
+    fn a_second_pass_arrival_splits_the_steps_comm_at_it() {
+        use crate::session::warp_stage::tests::{frames, jumping_in_double_time, with_a_warp_out};
+        let catalog = with_a_warp_out();
+        let mut session = jumping_in_double_time(&catalog);
+        frames(&mut session, 96);
+        session.out.comm.push(repaired());
+        let report = steps(&mut session, &catalog, &doubled(), 1);
+        let run = &report.steps[0];
+        let arrival = run.arrival.as_ref().expect("arrived");
+        assert_eq!(arrival.pass, 1);
+        assert_eq!(run.comm, [repaired()]);
+        assert_eq!(arrival.comm, 1, "the advance pass's note before it");
     }
 
     #[test]
@@ -1414,14 +1683,19 @@ mod tests {
         let catalog = flagged(0x0001);
         let mut session = jumping_in_double_time(&catalog);
         frames(&mut session, 114);
-        assert!(!session.warp_end_due(), "frame 114");
-        let input = StepInput {
-            double_time_key: true,
-            ..StepInput::default()
-        };
-        let report = steps(&mut session, &catalog, &input, 1);
-        let frame = report.steps[0].between_passes.as_ref().expect("reported");
-        assert!(frame.warp_end_due, "the view arrives on that tick");
+        assert!(session.jumping().is_some(), "frame 114");
+        let report = steps(&mut session, &catalog, &doubled(), 1);
+        let run = &report.steps[0];
+        assert_eq!(run.arrival.as_ref().map(|exit| exit.pass), Some(0));
+        let frame = run.between_passes.as_ref().expect("reported");
+        assert_eq!(
+            frame.system,
+            crate::catalog::SystemId(131),
+            "the new system"
+        );
+        assert!(!frame.warping);
+        assert_eq!(run.passes.len(), 2, "the second pass runs among it");
+        assert_eq!(session.pilot.system, crate::catalog::SystemId(131));
     }
 
     #[test]
@@ -1457,6 +1731,7 @@ mod tests {
         session.ship.player.position = Vec2::new(WRAP_EDGE + 1.0, 0.0);
         let report = steps(&mut session, &catalog, &StepInput::default(), 1);
         assert!(report.steps[0].rescued.is_some());
+        assert_eq!(report.steps[0].passes[0].wrap, None, "on no report");
         assert_eq!(session.out.player_wrap, None, "dropped");
     }
 }

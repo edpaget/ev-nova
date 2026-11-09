@@ -223,6 +223,7 @@ mod tests {
             session.set_double_time_key(true);
             session.tick_again(
                 Controls::default(),
+                &crate::testkit::catalog(),
                 &WimpyTrader::default(),
                 crate::Rules::default(),
                 &mut Draws::of(&[0; 64]),
@@ -388,6 +389,21 @@ mod tests {
         assert!(!session.warp_end_due(), "past the lead-in, not at the end");
     }
 
+    /// How many traffic ticks `session` runs, from now, before the one
+    /// its warp ends and it arrives on.
+    fn ticks_before_the_arrival(session: &Session, catalog: &FakePilotCatalog) -> u32 {
+        let mut ahead = session.clone();
+        let mut ticks = 0;
+        loop {
+            traffic_tick(&mut ahead, catalog);
+            if ahead.jumping().is_none() {
+                return ticks;
+            }
+            ticks += 1;
+            assert!(ticks < 1000, "the warp never ended");
+        }
+    }
+
     /// Whether `session`'s sounds taken now hold the refuel's, the warp
     /// raising its own among them.
     fn took_the_refuels_sound(session: &mut Session) -> bool {
@@ -414,8 +430,8 @@ mod tests {
         let (mut session, helper) = refuelled_in_a_jump(&catalog, 200.0, 300.0);
         session.space.npc_mut(helper).expect("here").state.position = Vec2::new(-400.0, OUT.y);
         past_the_lead_in(&mut session, &catalog, |_| {});
-        let mut passes = 0;
-        while !session.warp_end_due() {
+        let before = ticks_before_the_arrival(&session, &catalog);
+        for passes in 0..before {
             let was = session.space.npc(helper).expect("here").state.position.x;
             let player_was = session.ship.player.position.x;
             assert!(traffic_tick(&mut session, &catalog).is_empty());
@@ -432,8 +448,6 @@ mod tests {
                 session.ship.player.position.x >= player_was,
                 "the player moves off, pass {passes}"
             );
-            passes += 1;
-            assert!(passes < 1000, "the warp never ended");
         }
         assert!(session.ship.player.position.x > 1000.0, "well off");
     }
@@ -459,14 +473,12 @@ mod tests {
             assert!(passes < 1000, "the player never moved off");
         }
         let at_rest = session.space.npc(helper).expect("here").state;
-        while !session.warp_end_due() {
+        for _ in 0..ticks_before_the_arrival(&session, &catalog) {
             assert_eq!(session.reserves().fuel.now, 100.0, "the clamp's, no more");
             assert!(traffic_tick(&mut session, &catalog).is_empty());
             let npc = session.space.npc(helper).expect("here");
             assert_eq!(npc.goal, Goal::Assist(Help::Refuel));
             assert_eq!(npc.docking.map(|docking| docking.sub), Some(DockSub::Close));
-            passes += 1;
-            assert!(passes < 1000, "the warp never ended");
         }
         // It turns onto the player from where it stopped, then flies.
         let npc = session.space.npc(helper).expect("here");

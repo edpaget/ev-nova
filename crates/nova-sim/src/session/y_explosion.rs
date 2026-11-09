@@ -77,7 +77,7 @@ impl Session {
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::session) mod tests {
     use crate::catalog::{BoomId, Explosion, SoundId, StellarId, StellarLife, SystemId};
     use crate::chance::NeverFires;
     use crate::combat::CombatEvent;
@@ -99,7 +99,9 @@ mod tests {
     /// [`catalog`] with 140, 131's stellar, at (100, 200), and 128 (130's)
     /// and 140 exploding in `bööm` 132, which sounds `snd ` 302; and
     /// `crons`.
-    fn exploding(crons: Vec<crate::catalog::CronRecord>) -> FakePilotCatalog {
+    pub(in crate::session) fn exploding(
+        crons: Vec<crate::catalog::CronRecord>,
+    ) -> FakePilotCatalog {
         let mut catalog = FakePilotCatalog {
             crons,
             boom_sounds: vec![(BoomId(132), SoundId(302))],
@@ -117,7 +119,7 @@ mod tests {
         catalog
     }
 
-    fn flown(catalog: &FakePilotCatalog, rules: Rulebook) -> Session {
+    pub(in crate::session) fn flown(catalog: &FakePilotCatalog, rules: Rulebook) -> Session {
         let mut session = Session::fly(catalog, Pilot::new(catalog, "").expect("starts"))
             .expect("flies")
             .with_rules(rules);
@@ -132,7 +134,7 @@ mod tests {
     }
 
     /// The explosions among `events` a `Y` reports, where each is.
-    fn heard_booms(events: &[CombatEvent]) -> Vec<Vec2> {
+    pub(in crate::session) fn heard_booms(events: &[CombatEvent]) -> Vec<Vec2> {
         events
             .iter()
             .filter_map(|event| match *event {

@@ -332,13 +332,14 @@ pub(super) mod tests {
                 crate::Rules::default(),
                 &mut NeverFires,
             );
-            if session.warp_end_due() {
+            if session.jumping().is_none() && session.preparing_jump().is_none() {
                 break;
             }
         }
-        assert!(
-            session.arrive(catalog, &mut NeverFires).is_some(),
-            "arrived"
+        assert_eq!(
+            session.system(),
+            crate::catalog::SystemId(131),
+            "arrived in the warp's last pass"
         );
     }
 

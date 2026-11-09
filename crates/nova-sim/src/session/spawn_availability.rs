@@ -135,7 +135,8 @@ impl Session {
     /// `_PropagateMissionBitEffects` caches the shïp, përs and flët tests
     /// (@0x997c3-0x9987a).
     pub(crate) fn propagate_spawn_availability(&mut self) {
-        self.run.refreshed = RefreshedFacts::of(&self.ship.facts(&self.pilot, &self.statics));
+        self.run.refreshed =
+            RefreshedFacts::of(&self.ship.facts(&self.pilot, &self.statics, &self.setup));
     }
 
     /// Every test the galaxy refresh caches: the missions' `AvailBits`
@@ -180,7 +181,11 @@ mod tests {
         let mut session = Session::fly(&catalog, pilot).expect("flies");
         session.set_control_bit(bit(12), true);
         let start = session.pilot().system();
-        let snapshot = RefreshedFacts::of(&session.ship.facts(&session.pilot, &session.statics));
+        let snapshot = RefreshedFacts::of(&session.ship.facts(
+            &session.pilot,
+            &session.statics,
+            &session.setup,
+        ));
         let check = |facts: &dyn PilotFacts| {
             assert!(facts.bit(bit(12)));
             assert!(!facts.bit(bit(13)));
@@ -192,7 +197,11 @@ mod tests {
             assert!(facts.explored(start));
             assert!(!facts.explored(SystemId(start.0 + 1)));
         };
-        check(&session.ship.facts(&session.pilot, &session.statics));
+        check(
+            &session
+                .ship
+                .facts(&session.pilot, &session.statics, &session.setup),
+        );
         check(&snapshot);
         // A later change to the pilot leaves the snapshot as it was.
         session.set_control_bit(bit(12), false);
@@ -203,7 +212,7 @@ mod tests {
         assert!(
             !session
                 .ship
-                .facts(&session.pilot, &session.statics)
+                .facts(&session.pilot, &session.statics, &session.setup)
                 .bit(bit(12))
         );
     }
@@ -215,7 +224,11 @@ mod tests {
             Session::fly(&catalog, Pilot::new(&catalog, "Ada").expect("starts")).expect("flies");
         assert_eq!(
             session.run.refreshed,
-            RefreshedFacts::of(&session.ship.facts(&session.pilot, &session.statics))
+            RefreshedFacts::of(&session.ship.facts(
+                &session.pilot,
+                &session.statics,
+                &session.setup
+            ))
         );
         session.set_control_bit(bit(7), true);
         assert!(!session.run.refreshed.bit(bit(7)), "not yet");

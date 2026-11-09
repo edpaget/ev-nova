@@ -13,13 +13,10 @@
 //! stands ([`BerthKept::left`]).
 //!
 //! It lives as long as the [`Traffic`](crate::traffic::Traffic) holding
-//! it: across systems, but not across a new traffic, where the
-//! original's table keeps the picks and exit cursors until the app quits,
-//! as it does the odds, search timers, voice variants, persons and
-//! formation places the traffic hands on
-//! ([`kept_berths`](super::kept_berths)). Whether to hand
-//! the picks and cursors on too is the user's to decide: rdm task
-//! carry-slot-picks-and-exits-across-app-life.
+//! it, across systems, and a traffic hands its words on to the next
+//! ([`kept_berths`](super::kept_berths),
+//! [`BerthKept::take_words_of`]), as the original's table keeps them
+//! until the app quits; the next keeps its own reading.
 
 use std::collections::BTreeMap;
 

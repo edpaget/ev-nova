@@ -3,7 +3,8 @@
 //! adapter.
 //!
 //! A ship's base sheet is its `shän`'s base image, an `rlëD` or a cut
-//! `PICT` pair (`GameData::ship_sprite_words`). A
+//! `PICT` pair (`GameData::ship_sprite_words`); either way its frame is
+//! the loaded sprite's, as [`super::hull_frames`] reads it. A
 //! stellar graphic's is `spïn` 1000 + its type's, an `rlëD` or a cut
 //! `PICT` pair (`GameData::spin_words`), as is a shot's, `spïn` 3000 + its
 //! weapon's `Graphic` (none below 0), an asteroid kind's, `spïn` 800 +

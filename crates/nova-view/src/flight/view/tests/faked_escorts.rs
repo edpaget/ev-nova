@@ -607,16 +607,19 @@ fn menu_up() -> Faked {
 
 #[test]
 fn a_jumps_arrival_shuts_the_menu_open_through_the_warp_silently() {
-    use super::faked_travel::{at_the_warps_end, jump_now};
+    use super::faked_travel::{arrival_report, jump_now, queue_arrival};
     let mut view = menu_up();
     jump_now(&mut view);
     assert!(view.escort_menu().is_open(), "open through the warp");
-    at_the_warps_end(&mut view, Vec::new());
-    view.arrival_frame(0);
-    assert!(
-        sent(&view).contains(&FlightCommand::Arrive),
-        "it arrived: {:?}",
-        sent(&view)
+    queue_arrival(
+        &mut view,
+        arrival_report(0, nova_sim::flight_frame::ShipPlace::default()),
+    );
+    view.tick(TICK);
+    assert_eq!(
+        view.scene().map(SystemScene::id),
+        Some(SystemId(131)),
+        "it arrived on the step that reports it"
     );
     assert!(!view.escort_menu().is_open(), "shut on the arrival's frame");
     assert_eq!(ui_heard(&mut view), [], "silent");

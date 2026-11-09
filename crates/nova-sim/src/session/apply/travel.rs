@@ -30,9 +30,6 @@ impl Session {
     ///   [`FlightCommand::EnterWormhole`] run [`Session::enter_hypergate`]
     ///   and [`Session::enter_wormhole`]: [`Answer::Arrived`] or
     ///   [`Answer::GateRefused`].
-    /// - [`FlightCommand::Arrive`] runs [`Session::arrive`] once the warp
-    ///   has ended ([`Session::warp_end_due`]): [`Answer::Arrived`], and
-    ///   refused before then, the pending move's settling with it.
     /// - [`FlightCommand::TakeOff`] and [`FlightCommand::LeaveIfDue`] run
     ///   [`Session::leave_port`] and [`Session::leave_if_due`]:
     ///   [`Answer::Departed`], or refused when the ship is not landed or no
@@ -45,12 +42,13 @@ impl Session {
     ///   [`Session::begin_fade`] and [`Session::end_play`]: done when the
     ///   fade began or play ended, refused at any other stage.
     ///
-    /// An arrival answers, with the system, the fight's events still
+    /// A gate's arrival answers, with the system, the fight's events still
     /// pending ([`Session::take_combat_events`]): the explosions the jump
     /// left, a crön's `Y` on its days among them, which the view shows on
-    /// the arrival's first frame. The gates, the arrival, the take-offs,
-    /// the escorts' landing and the settling read the catalog: with none
-    /// they are refused.
+    /// the arrival's first frame. A jump's arrival settles in its pass
+    /// instead, and its step reports it (see the `settled_in_pass`
+    /// module). The gates, the take-offs, the escorts' landing and the
+    /// settling read the catalog: with none they are refused.
     pub(super) fn apply_travel(
         &mut self,
         command: FlightCommand,
@@ -106,9 +104,6 @@ impl Session {
                         Ok(system) => self.arrived(system),
                         Err(refusal) => Answer::GateRefused(refusal),
                     },
-                    FlightCommand::Arrive if self.warp_end_due() => self
-                        .arrive(catalog, chance)
-                        .map_or(Answer::Refused, |system| self.arrived(system)),
                     FlightCommand::TakeOff => self
                         .leave_port(catalog, chance)
                         .map_or(Answer::Refused, Answer::Departed),
@@ -143,7 +138,6 @@ mod tests {
     use crate::catalog::{StellarId, SystemId};
     use crate::chance::NeverFires;
     use crate::combat::hull::Condition;
-    use crate::flight::Controls;
     use crate::gate::{GateKind, GateRefusal};
     use crate::hyperspace::JumpRefusal;
     use crate::landing::{LandOutcome, LandingRefusal};
@@ -151,7 +145,7 @@ mod tests {
     use crate::session::tests::{at_gate, at_wormhole, expired_hold, gated, wormholes};
     use crate::session::{LandPress, StellarPick};
     use crate::sound::SimSound;
-    use crate::testkit::{FakePilotCatalog, begin_jump_now, catalog, fly_out, land_now, work};
+    use crate::testkit::{FakePilotCatalog, catalog, fly_out, land_now};
 
     /// Runs `command` on `session`, handed `catalog`, on a chance that
     /// never fires.
@@ -185,19 +179,6 @@ mod tests {
         fly_out(&mut session, catalog);
         session.take_sounds();
         session
-    }
-
-    /// [`ready`]'s session jumped, worked to the warp's end.
-    fn at_the_warps_end(catalog: &FakePilotCatalog) -> Session {
-        let mut session = ready(catalog);
-        begin_jump_now(&mut session, catalog).expect("jumps");
-        for _ in 0..1000 {
-            if session.warp_end_due() {
-                return session;
-            }
-            work(&mut session, catalog, Controls::default());
-        }
-        panic!("the warp never ended");
     }
 
     #[test]
@@ -410,14 +391,13 @@ mod tests {
     }
 
     #[test]
-    fn the_gates_the_arrival_the_take_offs_and_the_settling_are_refused_with_no_catalog() {
+    fn the_gates_the_take_offs_and_the_settling_are_refused_with_no_catalog() {
         let catalog = gated();
         let mut session = at_gate(&catalog);
         for command in [
             FlightCommand::OpenHypergate,
             FlightCommand::EnterHypergate(Some(SystemId(131))),
             FlightCommand::EnterWormhole,
-            FlightCommand::Arrive,
             FlightCommand::TakeOff,
             FlightCommand::LeaveIfDue,
             FlightCommand::SettleScript,
@@ -433,43 +413,6 @@ mod tests {
             Answer::Offered(vec![SystemId(131), SystemId(132)]),
             "the entry still pending"
         );
-    }
-
-    #[test]
-    fn the_arrival_waits_for_the_warps_end_then_answers_the_system_and_the_fights_events() {
-        let catalog = catalog();
-        let mut session = ready(&catalog);
-        assert_eq!(
-            apply_with(&mut session, &catalog, FlightCommand::Arrive),
-            Answer::Refused,
-            "no jump"
-        );
-        begin_jump_now(&mut session, &catalog).expect("jumps");
-        assert!(!session.warp_end_due());
-        let before = session.clone();
-        assert_eq!(
-            apply_with(&mut session, &catalog, FlightCommand::Arrive),
-            Answer::Refused,
-            "the warp hasn't ended"
-        );
-        assert_eq!(session, before, "nothing settled");
-        let mut session = at_the_warps_end(&catalog);
-        let boom = crate::catalog::Explosion {
-            boom: crate::catalog::BoomId(130),
-            extra: false,
-        };
-        session
-            .space
-            .combat
-            .explode(crate::geometry::Vec2::ZERO, boom);
-        let answer = apply_with(&mut session, &catalog, FlightCommand::Arrive);
-        let Answer::Arrived { system, combat } = answer else {
-            panic!("arrived: {answer:?}");
-        };
-        assert_eq!(system, SystemId(131));
-        assert_eq!(session.system(), SystemId(131));
-        assert_eq!(combat.len(), 1, "the event pending: {combat:?}");
-        assert_eq!(session.take_combat_events(), [], "taken");
     }
 
     #[test]

@@ -1,13 +1,16 @@
 //! [`FlightView`]'s jump and arrival, over the [`FlightSim`] port: J's
 //! frame and the jump it sends ([`FlightCommand::Jump`]), the jump's
-//! effect read from the frame (the jump under way, the warp, the
-//! `_hyperGamma` and the warp's end), and the arrival it sends
-//! ([`FlightCommand::Arrive`]) and catches up with, its pending
-//! explosions from the answer ([`Answer::Arrived`]). The arrival's words
-//! name what the flight names ([`FlightView::word`], the date
+//! effect read from the frame (the jump under way, the warp and the
+//! `_hyperGamma`), and the arrival a step reports in its pass
+//! ([`StepRun::arrival`](nova_sim::flight_frame::StepRun::arrival),
+//! [`FlightView::arrive_in_step`]), caught up with where that pass is
+//! replayed, or, on double time's held second pass, at the frame after
+//! (see the `between_passes` module). A gate's arrival answers with its
+//! pending explosions ([`Answer::Arrived`]). The arrival's words name
+//! what the flight names ([`FlightView::word`], the date
 //! [`FlightFrame::long_date`](nova_sim::flight_frame::FlightFrame::long_date)).
 
-use nova_sim::flight_frame::{Answer, FlightCommand};
+use nova_sim::flight_frame::{Answer, FlightCommand, PassExit};
 use nova_sim::{CombatEvent, Condition, SimMessage};
 
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
@@ -122,7 +125,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// tick still shows the fade to white where it had got, as the
     /// original's asynchronous `CGDisplayFade` runs on under it.
     pub(super) fn settle_given_up_jump(&mut self) {
-        if self.jump.is_none() || self.jump_under_way() {
+        // An arrival held for the frame after is no jump given up.
+        if self.jump.is_none() || self.jump_under_way() || self.holds_arrival() {
             return;
         }
         if let Some(fade) = self.jump.take().and_then(JumpEffect::given_up) {
@@ -144,8 +148,38 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.settle_given_up_jump();
     }
 
+    /// The rest of the jump's effect, played over the new system as the
+    /// arrival's fade-in: the fade-in from white, or, without the fades,
+    /// the white flash on the first frame presented after it
+    /// ([`FlightView::present_jump_effect`]).
+    pub(super) fn arrival_effect(&mut self) {
+        self.fade_in = self
+            .jump
+            .take()
+            .map(|mut effect| {
+                effect.arrive();
+                effect
+            })
+            .filter(|effect| !effect.done());
+    }
+
+    /// Marks the arrival's effect as shown on the frame about to be drawn
+    /// ([`JumpEffect::presented`]), as `Screen::tick` does at its end,
+    /// which every draw follows: the white flash of an arrival without the
+    /// fades shows on that frame and is gone from the next tick's. It may
+    /// have started in the tick (the jump's arrival, a gate's exit after
+    /// its movie) or in input before it (a gate's exit with no movie), so
+    /// it is timed by the frames drawn, not by a tick's `dt`.
+    pub(super) fn present_jump_effect(&mut self) {
+        if let Some(effect) = &mut self.fade_in {
+            effect.presented();
+        }
+        self.present_held_arrival();
+    }
+
     /// The jump's effect, while it plays: the warp and its fade to white
-    /// until the ship arrives, or else the arrival's fade-in (or flash).
+    /// until the ship arrives, or else the arrival's fade-in (or its white
+    /// flash, on the one frame drawn after the arrival).
     #[must_use]
     pub fn jump_effect(&self) -> Option<&JumpEffect> {
         self.jump.as_ref().or(self.fade_in.as_ref())
@@ -194,18 +228,16 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
-    /// Shows the explosions the jump left pending, `combat` as the
-    /// arrival's answer carries them ([`Answer::Arrived`]), a crön's `Y`
-    /// on its days among them, in the scene just laid out, so they are on
-    /// the arrival's first frame: the original keeps its explod table
-    /// through the arrival (only `_ResetPlayer` empties it, @0x1d7fb).
-    /// The jump's explorations and days run inside the arrival pass's
-    /// `_HandlePlayer` (@0x43e19), and that pass goes on to its own
-    /// `_HandleExplods` (@0x444e1), which advances them once before the
-    /// frame is drawn. The view stepped that pass
-    /// ([`FlightView::step_effects`]) before the arrival made them, so the
-    /// one step here stands for it, at that pass's gain: the frame the
-    /// catch-up refilled holds it
+    /// Shows the explosions a gate's arrival left pending, `combat` as its
+    /// answer carries them ([`Answer::Arrived`]), a crön's `Y` on its days
+    /// among them, in the scene just laid out, so they are on the
+    /// arrival's first frame: the original keeps its explod table through
+    /// the arrival (only `_ResetPlayer` empties it, @0x1d7fb). A jump's
+    /// arrival reports them with the pass it settled in, which the view
+    /// replays in the new scene. A gate's arrival comes between steps, so
+    /// the one step here stands for its pass's `_HandleExplods`
+    /// (@0x444e1), at that pass's gain: the frame the catch-up refilled
+    /// holds it
     /// ([`FlightFrame::speed_mult`](nova_sim::flight_frame::FlightFrame::speed_mult)),
     /// as an arrival writes no gain. The arrival's `_PrepareAllSprites`
     /// (@0x6c59c, `_HandleExplods` @0x3a7ce) advances nothing, as it runs
@@ -219,7 +251,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         let chance = &mut self.effects_chance;
         let gain = self.frame.speed_mult;
         for event in combat {
-            self.effects.apply(event, &scene, &self.looks, gain, chance);
+            self.effects.apply(event, &scene, &self.looks, chance);
         }
         if !combat.is_empty() {
             self.effects.step(&[], &scene, &self.looks, gain, chance);
@@ -227,56 +259,70 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 }
 
+impl<C, S: FlightSim> FlightView<C, S> {
+    /// Steps the explosions once more after the pass a jump's arrival
+    /// settled in, `pass`, replayed in the new scene: the arrival's own (a
+    /// crön's `Y` on its days, @0x43e19) go off inside `_HandlePlayer`,
+    /// before that pass's `_HandleExplods` (@0x444e1) advances them once,
+    /// where a pass's replay sets its explosions off after its step. The
+    /// layout cleared every other, so only that pass's are stepped, at
+    /// its gain
+    /// ([`PassReport::speed_mult`](nova_sim::flight_frame::PassReport::speed_mult)).
+    pub(super) fn step_arrival_explosions(&mut self, pass: &nova_sim::flight_frame::PassReport) {
+        let scene = self.presentation.scene(pass.player_position);
+        self.effects.show_step(
+            &crate::flight::effects::Breakups::default(),
+            &scene,
+            &self.looks,
+            pass.speed_mult,
+        );
+    }
+}
+
 /// The arrival, which lays the new system out ([`FlightView::catch_up`]).
 impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> FlightView<C, S> {
-    /// A tick's arrival, as `Screen::tick` runs it after the steps and the
-    /// effect's advance: on the frame that says the warp has ended
-    /// ([`FlightFrame::warp_end_due`](nova_sim::flight_frame::FlightFrame::warp_end_due),
-    /// read from the kept frame, which the steps and the effect's start
-    /// have just filled), the ship arrives ([`FlightView::arrive`]), and
-    /// the rest of the effect, the fade-in or the white flash, plays over
-    /// the new system as the arrival's fade-in. A warp ended on double
-    /// time's second pass has its frame between the passes drawn first
-    /// ([`FlightView::holding_between_passes`]): that frame shows the old
-    /// system, and the arrival follows on the next step, which stops
-    /// before it runs. That arrival then runs the tick's `steps`, which
-    /// the stop left unrun, in the new system, its arrival line said first:
-    /// the original draws frame 98 after one `_DoPlayGameWork(1)` there
-    /// (@0x45bc1-0x45bc8), so the frame shows that pass, between its
-    /// passes in double time, drawn at its target. One ended on the first
-    /// pass is in that frame already, so the ship arrives as in single
-    /// time, and the arrival's layout drops the hold.
-    pub(super) fn arrival_frame(&mut self, steps: u32) {
-        if !self.frame.warp_end_due {
-            return;
-        }
-        if self.holding_between_passes() && !self.drawn().warp_end_due {
-            self.arrival_waited = true;
-            return;
-        }
-        self.arrive();
-        self.fade_in = self
-            .jump
-            .take()
-            .map(|mut effect| {
-                effect.arrive();
-                effect
-            })
-            .filter(|effect| !effect.done());
-        if std::mem::take(&mut self.arrival_waited) {
-            self.run_steps(steps, None);
-            // The layout drew from the arrival's place; the frame is the
-            // pass's, at its target.
-            self.alpha = 1.0;
-        }
+    /// The jump's arrival a step reported in its pass, `exit`
+    /// ([`StepRun::arrival`](nova_sim::flight_frame::StepRun::arrival)), as
+    /// [`FlightView::step_frame`] reaches that pass: the new system laid
+    /// out and its arrival line said ([`FlightView::arrived`]), the ship
+    /// drawn from where the arrival put it, and the rest of the jump's
+    /// effect played over the new system ([`FlightView::arrival_effect`]).
+    /// The pass's own report then carries the explosions the jump left
+    /// pending, which its replay steps once.
+    pub(super) fn arrive_in_step(&mut self, exit: &PassExit) {
+        self.arrived(&[]);
+        self.previous = exit.place;
+        self.arrival_effect();
     }
 
-    /// Ends the jump ([`FlightCommand::Arrive`]): the ship arrives in the
-    /// next system, caught up with as [`FlightView::arrived`] says.
-    pub(super) fn arrive(&mut self) {
-        if let Answer::Arrived { combat, .. } = self.send(FlightCommand::Arrive) {
-            self.arrived(&combat);
+    /// The arrival double time's held second pass settled, once the frame
+    /// between its passes has been presented (see the `between_passes`
+    /// module): the hold taken, the new system laid out and its arrival
+    /// line said, the second pass replayed in the new scene with the
+    /// breakups heard as it was held, its escort-menu block run, the rest
+    /// of the jump's effect played over the new system, and the lines the
+    /// pass held relayed after the arrival's line. Whether it laid out.
+    pub(super) fn arrive_held(&mut self) -> bool {
+        let Some(exit) = self
+            .between_passes
+            .as_mut()
+            .and_then(super::between_passes::BetweenPasses::take_presented_arrival)
+        else {
+            return false;
+        };
+        let Some(held) = self.between_passes.take() else {
+            return false;
+        };
+        let lines = std::mem::take(&mut self.held_lines);
+        self.arrived(&[]);
+        let anchor = self.anchor();
+        self.replay_held(held, anchor, true);
+        self.previous = exit.place;
+        self.arrival_effect();
+        for (text, ticks) in lines {
+            self.relay(text, ticks);
         }
+        true
     }
 
     /// Catches up with the ship having arrived in a system, `combat` the

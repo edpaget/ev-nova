@@ -71,10 +71,11 @@ impl DrawnBox {
 /// Where the view draws the ships: the port the hover test reads.
 pub trait DrawnShips {
     /// The box NPC `id` is drawn in, or would be when it is hidden, or is
-    /// boxed in where its slot has not displayed it yet, or `None` when it
-    /// has no box: its slot never laid out this run
-    /// (`nova_sim::Session::hover_place`), or no sprite slot (the
-    /// original's null sprite, @0x38171), which the engine never has.
+    /// boxed in where its slot has not displayed it yet (where its slot
+    /// was last laid out, or at the window's top-left in a slot never laid
+    /// out this run: `nova_sim::Session::hover_place`), or `None` when it
+    /// has no box: no sprite slot (the original's null sprite, @0x38171),
+    /// which the engine never has.
     fn npc(&self, id: NpcId) -> Option<DrawnBox>;
     /// The box the player's ship is drawn in, or `None` when it has none.
     fn player(&self) -> Option<DrawnBox>;

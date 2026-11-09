@@ -7,8 +7,13 @@
 //! - A shot releases its weapon's [`Submunitions`] on a proximity hit
 //!   ([`Fuse::Proximity`](super::projectile::Fuse::Proximity)), aimed at
 //!   the ship it hit, and at the end of its life, aimed at the ship its
-//!   damage is aimed at ([`Shot::aimed_at`], none once it is lost),
-//!   unless its weapon releases none then (`Flags2` 0x0020). A shot that
+//!   damage is aimed at ([`Shot::aimed_at`], none once it is lost), or,
+//!   locked on an asteroid, at the ship in the ship slot of its
+//!   asteroid's, by
+//!   [`RuleKey::LockedShotShipSlot`](crate::RuleKey::LockedShotShipSlot)'s
+//!   engine reading ([`locked_slot`](super::locked_slot): one released at
+//!   an empty slot, and aimed at none once seated, is lost), unless its
+//!   weapon releases none then (`Flags2` 0x0020). A shot that
 //!   touches a ship releases none: the sprite collision passes call
 //!   `_HandleShipHit` with `spawnSubs` 0 (@0x37095), the proximity pass
 //!   with 1 (@0x37678). It releases
@@ -76,7 +81,7 @@
 //! [`Submunitions`]: super::weapon::Submunitions
 
 use super::ShipRef;
-use super::projectile::{Shot, ShotLayer, Source};
+use super::projectile::{Shot, ShotLayer, Source, slot_among};
 use super::sides::Sides;
 use super::weapon::{Guidance, WeaponSpec};
 use crate::chance::Chance;
@@ -137,10 +142,12 @@ pub fn aim(parent: &Shot, shot: Shot, n: u32, sides: &Sides, chance: &mut dyn Ch
         // The seated shot itself, its target -1 (@0x3f3c3). Clearing the
         // target changes nothing it finds: it is the given one, which the
         // seek falls back to, and a homing shot that may hit only it finds
-        // it or nothing. A shot no ship fired reads `aimed_at`.
+        // it or nothing. A shot no ship fired reads `aimed_at` and the
+        // slot it holds, both cleared with +0x2a, so it may hit any ship.
         let mut seeking = shot;
         seeking.target = None;
         seeking.aimed_at = None;
+        seeking.aimed_slot = None;
         let nearest = targets
             .iter()
             .filter(|ship| seeking.can_hit(ship, sides))
@@ -178,9 +185,17 @@ pub fn aim(parent: &Shot, shot: Shot, n: u32, sides: &Sides, chance: &mut dyn Ch
     } else {
         trig::accel(trig::whole(heading), shot.weapon.speed)
     };
+    // Its +0x2a: the slot it was given, or the slot of a ship its seek
+    // found instead.
+    let aimed_slot = if target == given {
+        shot.aimed_slot
+    } else {
+        target.and_then(|ship| slot_among(targets, ship))
+    };
     Shot {
         target,
         aimed_at: target,
+        aimed_slot,
         heading,
         velocity,
         ..shot
@@ -317,6 +332,31 @@ mod tests {
             ..shot
         };
         aim(&seeking, shot, 0, &among(targets), &mut Draws::of(&[]))
+    }
+
+    #[test]
+    fn a_sub_munition_holds_its_given_slot_or_that_of_the_ship_its_seek_found() {
+        // Its +0x2a: the slot it was given (@0x3f328), unless its seek
+        // found another ship (@0x3f3cf).
+        let plain = parent(0, 1, 0, 0, 0);
+        let [shot] = release(&plain, &sub(0), (None, false))[..] else {
+            panic!("one sub-munition");
+        };
+        let given = Shot {
+            aimed_slot: Some(Slot::Berth(5)),
+            ..shot
+        };
+        let aimed = aim(&plain, given, 0, &among(&[]), &mut Draws::of(&[]));
+        assert_eq!(aimed.aimed_slot, Some(Slot::Berth(5)));
+        let near = Target {
+            slot: Slot::Berth(4),
+            ..ship(NEAR, 100.0, 100.0)
+        };
+        let found = seated(Vec2::new(100.0, 50.0), (None, Jam::Clear), None, &[near]);
+        assert_eq!(
+            (found.target, found.aimed_slot),
+            (Some(NEAR), Some(Slot::Berth(4)))
+        );
     }
 
     #[test]
@@ -709,6 +749,33 @@ mod tests {
             &mut Draws::of(&[]),
         );
         assert_eq!(subs[0].target, Some(NEAR));
+    }
+
+    #[test]
+    fn a_seeking_sub_munition_no_ship_fired_seeks_past_the_slot_it_holds() {
+        // The seek asks with +0x2a -1 (@0x3f3c3), so a child of a shot no
+        // ship fired that holds slot 5 still finds a nearby ship that
+        // defends no stellar (@0x44a71-0x44a88), and holds its slot.
+        let unowned = Shot {
+            source: Source::Other,
+            ..parent(-1, 1, 0, 0, 0x0010)
+        };
+        let [shot] = release(&unowned, &sub(-1), (None, false))[..] else {
+            panic!("one sub-munition");
+        };
+        let holding = Shot {
+            aimed_slot: Some(Slot::Berth(5)),
+            ..shot
+        };
+        let near = Target {
+            slot: Slot::Berth(4),
+            ..ship(NEAR, 100.0, 60.0)
+        };
+        let aimed = aim(&unowned, holding, 0, &among(&[near]), &mut Draws::of(&[]));
+        assert_eq!(
+            (aimed.target, aimed.aimed_slot),
+            (Some(NEAR), Some(Slot::Berth(4)))
+        );
     }
 
     #[test]

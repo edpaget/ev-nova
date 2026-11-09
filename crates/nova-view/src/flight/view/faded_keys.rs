@@ -22,8 +22,9 @@
 //! - The jump still under way, its warp not ended: every gate read +0x50
 //!   above 0. P and Y refuse with their beep (@0x7039a-0x703bd, @0x61f87),
 //!   and M, L and I say nothing. All are dropped.
-//! - The warp's end due ([`FlightFrame::warp_end_due`], the arrival about
-//!   to run): M's and L's blocks ran with +0x50 above 0, so M is latched
+//! - The jump's arrival in a step's pass
+//!   ([`StepRun::arrival`](nova_sim::flight_frame::StepRun::arrival)): M's
+//!   and L's blocks ran with +0x50 above 0, so M is latched
 //!   and lost (@0x6a89f) and L waits (@0x6a95d). The pass ends @0x6c625
 //!   before P's, Y's and I's blocks. So P and Y stay kept for the first
 //!   read after the arrival, and I, like L, waits on its latch.
@@ -47,11 +48,8 @@
 //!
 //! **After the settle.** Once no jump is under way, a key still kept acts
 //! as a plain press if it is down and is dropped if not; L and I act on
-//! their latches ([`FlightView::faded_keys_frame`]). Double time's held
-//! arrival leaves the jump under way for a tick that runs no step. The
-//! warp's end settles that tick too: M pressed in it is latched and lost
-//! as on the arrival's pass (@0x6a89f), P and Y stay kept, and L and I
-//! wait on their latches. A key that opens something from there ends the tick: flight stops
+//! their latches ([`FlightView::faded_keys_frame`]). A key that opens
+//! something from there ends the tick: flight stops
 //! under what it opened, as the original's modal call stops the pass.
 //!
 //! **The latches.** With its key down, a failed gate (a jump, or the
@@ -292,13 +290,17 @@ impl<
 
     /// Right after a tick's steps, which began with a jump under way as
     /// `jumping` says, once one has run: settles the keys kept by what the
-    /// steps left (see the module docs). The warp's end settles even a tick
-    /// that ran no step: double time's held arrival stops before its step.
+    /// steps left (see the module docs).
     pub(super) fn settle_faded_keys(&mut self, jumping: bool) {
         if !jumping {
             return;
         }
-        if self.frame.warp_end_due {
+        if self
+            .step_report
+            .steps
+            .iter()
+            .any(|run| run.arrival.is_some())
+        {
             self.faded_keys.kept.retain(|&command| {
                 command == Command::Play(PlayCommand::PlayerInfo) || is_hail(command)
             });

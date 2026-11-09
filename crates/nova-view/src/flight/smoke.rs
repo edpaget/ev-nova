@@ -54,11 +54,11 @@
 //! (@0x35ccf, @0x2e3bc), which the engine never has.
 
 use nova_sim::player_wrap::PlayerWrap;
+use nova_sim::slot_pool::SlotPool;
 use nova_sim::{SpeedMult, Vec2};
 
 use super::catalog::SmokeSheet;
 use super::murk::SeenMurk;
-use super::slot_pool::SlotPool;
 use crate::draw::lights_tint;
 use crate::system::camera::Camera;
 use crate::{Blend, DrawList, ImageKey, Point};

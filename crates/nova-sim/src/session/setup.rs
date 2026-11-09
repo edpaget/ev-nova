@@ -2,6 +2,13 @@
 //! `with_*` builders set, which only those builders,
 //! [`Session::set_sound_quiet`](super::Session::set_sound_quiet) and
 //! [`Session::set_sprite_load`](super::Session::set_sprite_load) write.
+//!
+//! The travel rules (a multi-jump's hops, Hyper Select, the hyperlinks,
+//! the no-jump zone, a gate's arrival and an unlinked wormhole's exit)
+//! are not held apart: each is read from the rule set's key where it
+//! decides, by the accessors here, so whatever sets the rule set
+//! (`Session::with_rules`, or `Session::load` with the rulebook it is
+//! given) sets them.
 
 use std::rc::Rc;
 
@@ -12,7 +19,7 @@ use crate::gate::{GateArrivalRule, WormholeRule};
 use crate::hire::{HireTerms, NovaHire};
 use crate::hyperspace::{HyperSelectRule, HyperlinkRule, JumpZoneRule, MultiJumpRule};
 use crate::person::{NovaPersons, PersonRules};
-use crate::rulebook::Rulebook;
+use crate::rulebook::{RuleKey, Rulebook};
 
 use super::{Session, control, hire, ship_change};
 
@@ -20,18 +27,6 @@ use super::{Session, control, hire, ship_change};
 /// former field order.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Setup {
-    /// The rule a multi-jump follows.
-    pub(super) multi_jump: MultiJumpRule,
-    /// The rule Hyper Select follows.
-    pub(super) hyper_select: HyperSelectRule,
-    /// The rule jumps along the hyperlinks follow.
-    pub(super) hyperlinks: HyperlinkRule,
-    /// The rule for where the no-jump zone applies.
-    pub(super) jump_zone: JumpZoneRule,
-    /// The rule a ship coming out of a gate follows.
-    pub(super) gate_arrival: GateArrivalRule,
-    /// The rule an unlinked wormhole follows.
-    pub(super) wormholes: WormholeRule,
     /// The fee and wage of a hire (see [`Session::with_hire_terms`]).
     pub(super) hire_terms: hire::Shared<dyn HireTerms>,
     /// The control-bit test a ship's `Availability` for hire goes through
@@ -75,12 +70,6 @@ impl Default for Setup {
     /// sprite loaded, the `l33t` mode off, and no dialog loader.
     fn default() -> Self {
         Self {
-            multi_jump: MultiJumpRule::default(),
-            hyper_select: HyperSelectRule::default(),
-            hyperlinks: HyperlinkRule::default(),
-            jump_zone: JumpZoneRule::default(),
-            gate_arrival: GateArrivalRule::default(),
-            wormholes: WormholeRule::default(),
             hire_terms: hire::Shared(Rc::new(NovaHire::default())),
             control_bits: hire::Shared(Rc::new(NovaBits)),
             sound_quiet: false,
@@ -94,4 +83,57 @@ impl Default for Setup {
             dialogs: None,
         }
     }
+}
+
+impl Setup {
+    /// How [`RuleKey::MultiJump`] reads: how a multi-jump chains a jump's
+    /// hops.
+    pub(super) fn multi_jump(&self) -> MultiJumpRule {
+        MultiJumpRule::from(self.rules.source_for(RuleKey::MultiJump))
+    }
+
+    /// How [`RuleKey::HyperSelect`] reads: which systems Hyper Select
+    /// cycles through.
+    pub(super) fn hyper_select(&self) -> HyperSelectRule {
+        HyperSelectRule::from(self.rules.source_for(RuleKey::HyperSelect))
+    }
+
+    /// How [`RuleKey::Hyperlinks`] reads: which systems a jump can reach.
+    pub(super) fn hyperlinks(&self) -> HyperlinkRule {
+        HyperlinkRule::from(self.rules.source_for(RuleKey::Hyperlinks))
+    }
+
+    /// How [`RuleKey::JumpZone`] reads: where the no-jump zone applies.
+    pub(super) fn jump_zone(&self) -> JumpZoneRule {
+        JumpZoneRule::from(self.rules.source_for(RuleKey::JumpZone))
+    }
+
+    /// How [`RuleKey::GateArrival`] reads: where a ship comes out of a
+    /// hypergate or wormhole.
+    pub(super) fn gate_arrival(&self) -> GateArrivalRule {
+        GateArrivalRule::from(self.rules.source_for(RuleKey::GateArrival))
+    }
+
+    /// How [`RuleKey::WormholeExit`] reads: which wormhole an unlinked
+    /// wormhole leads to.
+    pub(super) fn wormholes(&self) -> WormholeRule {
+        WormholeRule::from(self.rules.source_for(RuleKey::WormholeExit))
+    }
+}
+
+/// The default rulebook with `key` read so that it gives the travel rule
+/// `rule`: [`RuleSource::Engine`](crate::rulebook::RuleSource::Engine)
+/// for the engine's reading and
+/// [`RuleSource::Bible`](crate::rulebook::RuleSource::Bible) for the other,
+/// as `R::from` maps them.
+#[cfg(test)]
+pub(crate) fn reading<R>(key: crate::rulebook::RuleKey, rule: R) -> Rulebook
+where
+    R: From<crate::rulebook::RuleSource> + Copy + PartialEq + std::fmt::Debug,
+{
+    let source = crate::rulebook::RuleSource::ALL
+        .into_iter()
+        .find(|&source| R::from(source) == rule)
+        .unwrap_or_else(|| panic!("no source reads {rule:?}"));
+    Rulebook::default().with_override(key, source)
 }

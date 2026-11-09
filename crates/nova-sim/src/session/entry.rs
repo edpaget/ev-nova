@@ -1016,6 +1016,8 @@ impl Session {
         }
         if resets.has(Reset::Combat) {
             self.space.combat.clear();
+            // `_killShots` frees the escape pods too (@0x39e75-0x39e84).
+            self.space.clear_pods();
         }
         if resets.has(Reset::Explosions) {
             self.kill_explosions();
@@ -1087,8 +1089,9 @@ impl Session {
             TrafficStep::Reset => {
                 self.give_back_aux_ships(&BTreeSet::new());
                 self.refund_defenders(&BTreeSet::new());
-                // The berths' odds, search timers and persons outlast the
-                // traffic, as the original's ship table does (see the
+                // The berths' odds, search timers, persons, picks and exit
+                // cursors outlast the traffic, as the original's ship
+                // table does (see the
                 // `kept_berths` module), and the stellars' defences, as its
                 // stellar records do (see the `stellar_defence` module).
                 let kept = self.space.traffic.kept_berths();

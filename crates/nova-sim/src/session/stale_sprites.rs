@@ -38,8 +38,10 @@
 //!   `_SWRLECollision` there and crash; the engine kills nothing (record
 //!   only).
 //!
-//! Those are [`RuleKey::StaleStellarSprite`]'s engine reading. By the
-//! other reading a hidden stellar kills nothing. Each sprite touches by
+//! Those are [`RuleKey::StaleStellarSprite`]'s engine reading
+//! ([`Session::held_sprite`]). By the other reading a hidden stellar kills
+//! nothing. The same held sprite is what a planet-type shot strikes a
+//! destroyable stellar by (see the `shot_stellars` module). Each sprite touches by
 //! its placed mask, its sheet's run-length tokens (see the `deadly_masks`
 //! module, rdm:phase/play-feel-8/phase-1-sprite-pixel-masks), and by its
 //! disc, half the larger side of its frame across and centred on its
@@ -90,32 +92,37 @@ impl Session {
     /// The sprite each listed deadly stellar holding one kills by, in slot
     /// order, by [`RuleKey::StaleStellarSprite`] (see the module docs).
     pub(super) fn deadly_sprites(&self) -> Vec<DeadlySprite> {
-        let stale = self.setup.rules.source_for(RuleKey::StaleStellarSprite) == RuleSource::Engine;
         self.chart
             .listed
             .iter()
             .filter(|site| is_deadly(site.flags2))
-            .filter_map(|listed| {
-                let shown = self.chart.shown_site(listed);
-                let sprite = match shown {
-                    Some(_) => SlotSprite::Own,
-                    None if stale => self.space.stellar_sprites.sprite_of(listed.id, false),
-                    None => SlotSprite::None,
-                };
-                match sprite {
-                    SlotSprite::Own => self.drawn_sprite(shown?),
-                    SlotSprite::Owner(owner) => {
-                        let owner = self.chart.sites.iter().find(|site| site.id == owner)?;
-                        self.drawn_sprite(owner)
-                    }
-                    SlotSprite::Ghost { top_left } => Some(DeadlySprite {
-                        disc: self.ship.ghost_disc(&self.statics, top_left)?,
-                        mask: self.space.ghost_mask(&self.statics, top_left),
-                    }),
-                    SlotSprite::None => None,
+            .filter_map(|listed| match self.held_sprite(listed) {
+                SlotSprite::Own => self.drawn_sprite(self.chart.shown_site(listed)?),
+                SlotSprite::Owner(owner) => {
+                    let owner = self.chart.sites.iter().find(|site| site.id == owner)?;
+                    self.drawn_sprite(owner)
                 }
+                SlotSprite::Ghost { top_left } => Some(DeadlySprite {
+                    disc: self.ship.ghost_disc(&self.statics, top_left)?,
+                    mask: self.space.ghost_mask(&self.statics, top_left),
+                }),
+                SlotSprite::None => None,
             })
             .collect()
+    }
+
+    /// The sprite `listed`, one of the system's listed stellars, holds, by
+    /// [`RuleKey::StaleStellarSprite`] (see the module docs): its own while
+    /// it is shown; else, by the engine reading, its last slot's, and none
+    /// by the other.
+    pub(super) fn held_sprite(&self, listed: &LandingSite) -> SlotSprite {
+        if self.chart.shown_site(listed).is_some() {
+            return SlotSprite::Own;
+        }
+        match self.setup.rules.source_for(RuleKey::StaleStellarSprite) {
+            RuleSource::Engine => self.space.stellar_sprites.sprite_of(listed.id, false),
+            RuleSource::Bible => SlotSprite::None,
+        }
     }
 
     /// `site`'s sprite, one of the stellars shown, as it is drawn: its disc
@@ -148,6 +155,23 @@ impl PlayerShip {
     /// The disc of an unowned slot placed at `top_left` from the player:
     /// graphic type 0's frame there, none when it cannot be read.
     fn ghost_disc(&self, statics: &Statics, top_left: (i32, i32)) -> Option<DeadlyDisc> {
+        let (at, frame) = self.ghost_centre(statics, top_left)?;
+        Some(DeadlyDisc {
+            at,
+            radius: sprite_radius(frame),
+        })
+    }
+
+    /// Where an unowned slot placed at `top_left` from the player is, and
+    /// the frame it holds: the centre of graphic type 0's frame there,
+    /// from the player's place now, with that frame; none when it cannot
+    /// be read. Both the deadly pass ([`PlayerShip::ghost_disc`]) and the
+    /// shot pass (`Session::shot_stellar_targets`) place a ghost by it.
+    pub(super) fn ghost_centre(
+        &self,
+        statics: &Statics,
+        top_left: (i32, i32),
+    ) -> Option<(Vec2, (u32, u32))> {
         let frame = statics.fallback_frame?;
         // A screen offset and a sprite's side are far within a float's
         // exact range.
@@ -156,10 +180,7 @@ impl PlayerShip {
             Vec2::new(top_left.0 as f32, top_left.1 as f32),
             Vec2::new(frame.0 as f32, frame.1 as f32),
         );
-        Some(DeadlyDisc {
-            at: self.player.position + corner + size * 0.5,
-            radius: sprite_radius(frame),
-        })
+        Some((self.player.position + corner + size * 0.5, frame))
     }
 }
 
@@ -191,14 +212,14 @@ impl Space {
 
 impl Chart {
     /// `listed` among the stellars shown, as they hold it now.
-    fn shown_site(&self, listed: &LandingSite) -> Option<&LandingSite> {
+    pub(super) fn shown_site(&self, listed: &LandingSite) -> Option<&LandingSite> {
         self.sites.iter().find(|site| site.id == listed.id)
     }
 }
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     use crate::deadly_stellar::DEADLY_STELLAR;
@@ -233,7 +254,11 @@ mod tests {
 
     /// Two rebuild points: `first` shown at the first, `then` at the
     /// second, from the player's place.
-    fn shown_then(session: &mut Session, first: &[LandingSite], then: &[LandingSite]) {
+    pub(in crate::session) fn shown_then(
+        session: &mut Session,
+        first: &[LandingSite],
+        then: &[LandingSite],
+    ) {
         session.chart.sites = first.to_vec();
         session.rebuild_sprite_pool();
         session.chart.sites = then.to_vec();

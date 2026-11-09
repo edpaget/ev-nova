@@ -25,9 +25,9 @@ use nova_sim_catalog::fixture::weapon;
 
 /// What [`Marking`] has every thinking NPC fire.
 const MARKED: Trigger = Trigger {
-    primary: true,
+    primary: false,
     secondary: None,
-    only: None,
+    only: Some(WeaponId(128)),
     bays: false,
     bays_after: false,
     point_defence: true,

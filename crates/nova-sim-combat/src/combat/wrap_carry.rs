@@ -24,10 +24,11 @@
 //! unmoved asteroid or ship is met at its position plus the delta, where
 //! its sprite stood, and a shot left behind, which stayed in the world but
 //! not on screen, meets everything a delta back, so a hit it lands stays
-//! where the shot is. The walks' places are the only ones that shift: a
-//! blast, a fuse and a stellar read world positions in the original too
-//! (`_CheckShotProximities`, `stellar::met`), so they read them here. The
-//! pass ends the shift (`Combat::hit_stretch`).
+//! where the shot is; a shot's mask against a stellar's is carried back
+//! the same way (`stellar_contact`). The walks' places are the only ones
+//! that shift: a blast, a fuse and a stellar's disc read world positions
+//! in the original too (`_CheckShotProximities`, `stellar::entered`), so
+//! they read them here. The pass ends the shift (`Combat::hit_stretch`).
 
 use super::Combat;
 use super::ShipRef;
@@ -84,7 +85,10 @@ impl Combat {
         }
     }
 
-    /// Where the contact walks meet the asteroid standing at `at`.
+    /// Where the contact walks meet the asteroid standing at `at`, and the
+    /// proximity pass the sprite of the stellar standing there
+    /// ([`stellar_contact`](super::stellar_contact)): the wrap carries
+    /// neither.
     pub(super) fn rock_sprite(&self, at: Vec2) -> Vec2 {
         self.wrap_pass.as_ref().map_or(at, |pass| at + pass.delta)
     }

@@ -288,9 +288,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// previous ship's at that slot ([`nova_sim::RuleKey::HiddenShipHoverBox`]
     /// chooses). A ship its slot has not displayed yet is boxed where its
     /// slot was last laid out, at that offset from where the player is
-    /// drawn, in its slot's last frames, or has no box in a slot never laid
-    /// out ([`FrameShip::hover`], `nova_sim::Session::hover_place`;
-    /// [`nova_sim::RuleKey::UndisplayedShips`] chooses).
+    /// drawn, in its slot's last frames, or at the view's top-left, the
+    /// original window's (0, 0), in a slot never laid out, where
+    /// `_InitSprites`' clone left its rect
+    /// ([`Camera::sprite_rect_at_window_origin`]; [`FrameShip::hover`],
+    /// `nova_sim::Session::hover_place`;
+    /// [`nova_sim::RuleKey::UndisplayedShips`] chooses). The sheet that
+    /// sizes such a box, often `shïp` 128's, is read with the frame that
+    /// names it, as every framed type's is
+    /// ([`FlightView::read_npc_sheets`]).
     pub(super) fn drawn_boxes(&self) -> DrawnBoxes {
         let npcs = self
             .drawn()
@@ -308,8 +314,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
-    /// The box NPC `npc` is drawn in, or none when its slot never laid out
-    /// (see [`FlightView::drawn_boxes`]).
+    /// The box NPC `npc` is drawn in, or none for a ship whose slot holds
+    /// no frames (see [`FlightView::drawn_boxes`]).
     fn npc_box(&self, npc: &FrameShip) -> Option<nova_sim::DrawnBox> {
         let framed = npc.framed?;
         let size = drawn_size(self.npc_sheets.get(&framed), self.npc_outlines.get(&framed));
@@ -317,7 +323,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         let rect = match npc.hover {
             nova_sim::HoverPlace::Own => camera.sprite_rect(self.shown_npc(npc).0, size),
             nova_sim::HoverPlace::Stale(offset) => camera.sprite_rect_from(offset, size),
-            nova_sim::HoverPlace::Unplaced => return None,
+            nova_sim::HoverPlace::Cloned => camera.sprite_rect_at_window_origin(size),
         };
         Some(nova_sim::DrawnBox::at(rect))
     }

@@ -359,6 +359,7 @@ pub(super) mod tests {
         work(&mut session, &catalog);
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &crate::ai::NovaAi::default(),
             Rules::default(),
             &mut NeverFires,
@@ -675,5 +676,56 @@ pub(super) mod tests {
             *session = session.clone().with_rules(blessing_now);
             session.pilot.ranks.insert(crate::catalog::RankId(200));
         }));
+    }
+
+    /// [`armed_128`]'s session with the player beside stellar 128, its
+    /// record `record`, and a hired escort of government `govt` at rest
+    /// at (30, -90): 50 from the stellar, nearer than the player.
+    fn with_hired_escort(
+        record: i16,
+        govt: Option<GovtId>,
+    ) -> (Session, crate::traffic::npc::NpcId, FakePilotCatalog) {
+        const HIRED: crate::catalog::ShipId = crate::catalog::ShipId(202);
+        let mut catalog = armed_128();
+        catalog.ship_records.push(ship(HIRED.0, FAST));
+        let mut session = beside_128(&catalog, record);
+        // Populated now, so the first pass doesn't place the escort afresh.
+        session.populate(&catalog, &mut NeverFires);
+        session.pilot.escorts.push(crate::pilot::Escort {
+            ship: HIRED,
+            reserves: crate::reserves::Reserves::full(30.0, 45.0, 300.0),
+            order: None,
+            carried: false,
+            wage: None,
+            person: None,
+            mark: None,
+            voice: None,
+            berth: None,
+        });
+        let id = session.place_escort(0, &mut NeverFires).expect("placed");
+        session.space.escorts.fleet = vec![Some(id)];
+        let npc = session.space.npc_mut(id).expect("here");
+        npc.state.position = Vec2::new(30.0, -90.0);
+        npc.state.velocity = Vec2::ZERO;
+        npc.govt = govt;
+        (session, id, catalog)
+    }
+
+    #[test]
+    fn a_criminal_players_hired_escort_draws_fire_and_a_clean_players_does_not() {
+        let (mut session, escort, catalog) = with_hired_escort(-7, None);
+        work(&mut session, &catalog);
+        assert_eq!(fired(&mut session), [StellarId(128)]);
+        let shots = gun_shots(&session);
+        assert_eq!(shots.len(), 1);
+        assert_eq!(
+            shots[0].aimed_at,
+            Some(crate::combat::ShipRef::Npc(escort)),
+            "the nearer of the criminal player's side"
+        );
+        let (mut session, _, catalog) = with_hired_escort(0, Some(TRADERS));
+        work(&mut session, &catalog);
+        assert!(fired(&mut session).is_empty(), "judged as the clean player");
+        assert!(gun_shots(&session).is_empty());
     }
 }

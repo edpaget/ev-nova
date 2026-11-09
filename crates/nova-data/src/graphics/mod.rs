@@ -17,6 +17,10 @@
 //! merges a shrunk picture's pixels by that depth, and [`widen_five`] is
 //! the 16-bit decode's rule for widening a 5-bit channel.
 //!
+//! [`scan_rled`] reads an `rlëD`'s size, count and runs without decoding a
+//! pixel, and [`rled_frame`] reads only its header's frame size, as the
+//! original makes a sprite from one.
+//!
 //! [`apply_mask`] gives a decoded picture its alpha from a second picture,
 //! its mask, as Nova masks its button caps. [`cut_pict_sheet`] cuts a
 //! decoded sprites picture and its mask into a [`SpriteSheet`], as the
@@ -172,7 +176,8 @@ pub use pict::{PICT, PictFrame, decode_pict, decode_pict_deep, pict_frame, scan_
 pub use pict_sheet::{FrameLimit, SheetMask, cut_pict_sheet};
 pub use rle_words::{RleWords, rled_words, sheet_rle_words};
 pub use rled::{
-    RLED, RledInfo, RledReadings, decode_rled, decode_rled_as, decode_rled_with, scan_rled,
+    RLED, RledFrameSize, RledInfo, RledReadings, decode_rled, decode_rled_as, decode_rled_with,
+    rled_frame, scan_rled,
 };
 pub use rled_clipped::{ClipCut, decode_rled_clipped};
 pub use rled8::EightBitReading;

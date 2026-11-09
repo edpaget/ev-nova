@@ -8,15 +8,12 @@
 //! weapon's `BeamWidth` (+0x72), or the `BeamWidth` is 0 or less, the
 //! index steps and the timer goes back to 0 (@0x35884-0x358c4).
 //!
-//! `_SpawnShot` never writes +0x1c (no store to it @0x3e550-0x3f143), and
-//! neither does anything else but the step, so a new shot starts on the
-//! timer its slot's last spinning shot left
-//! ([`ShotSlots::spin`](super::shot_slots::ShotSlots::spin)).
+//! `_SpawnShot` writes every new shot's +0x1c 0.0 (@0x3e9c2), so each
+//! shot's timer starts at 0 (weapons-fidelity phase 35's "no store to
+//! +0x1c" was a misreading).
 //!
 //! [`pass`] is one visit, which the shot's spin
-//! ([`Shot::spin_visit`](super::projectile::Shot::spin_visit)) and its
-//! slot's timer ([`ShotSlots::keep_spin`](super::shot_slots::ShotSlots::keep_spin))
-//! run on.
+//! ([`Shot::spin_visit`](super::projectile::Shot::spin_visit)) runs on.
 
 use crate::speed_mult::SpeedMult;
 

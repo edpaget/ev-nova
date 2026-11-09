@@ -123,6 +123,9 @@ pub const ARRIVAL_DISTANCE: f32 = MIN_JUMP_DISTANCE + ARRIVAL_MARGIN;
 /// (`_HandlePlayer` @0x6c25b-0x6c27a).
 pub const NO_BUOY: i16 = -1;
 /// How a multi-jump outfit (`oütf` `ModType` 32) chains a jump's hops.
+///
+/// The rulebook's [`RuleKey::MultiJump`](crate::RuleKey::MultiJump)
+/// chooses it, by its [`RuleSource`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MultiJumpRule {
     /// The original engine's reading, and the organ's own text ("multiple
@@ -139,6 +142,17 @@ pub enum MultiJumpRule {
     PerHop,
 }
 
+impl From<RuleSource> for MultiJumpRule {
+    /// The reading [`RuleKey::MultiJump`](crate::RuleKey::MultiJump) gives:
+    /// the engine's, or `PerHop` for [`RuleSource::Bible`].
+    fn from(source: RuleSource) -> Self {
+        match source {
+            RuleSource::Engine => Self::Engine,
+            RuleSource::Bible => Self::PerHop,
+        }
+    }
+}
+
 /// How many hops one jump makes along the course, for a ship whose
 /// outfits give `multi_jump`, under `rule`: at least one.
 #[must_use]
@@ -151,6 +165,9 @@ pub fn hops_per_jump(multi_jump: u32, rule: MultiJumpRule) -> u32 {
 
 /// Which systems Hyper Select (the original's `\` key) cycles the
 /// hyperspace destination through, and where it starts.
+///
+/// The rulebook's [`RuleKey::HyperSelect`](crate::RuleKey::HyperSelect)
+/// chooses it, by its [`RuleSource`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum HyperSelectRule {
     /// The original engine's reading: the current system's own 16 raw
@@ -180,8 +197,22 @@ pub enum HyperSelectRule {
     OneJumpCourse,
 }
 
+impl From<RuleSource> for HyperSelectRule {
+    /// The reading [`RuleKey::HyperSelect`](crate::RuleKey::HyperSelect) gives:
+    /// the engine's, or `OneJumpCourse` for [`RuleSource::Bible`].
+    fn from(source: RuleSource) -> Self {
+        match source {
+            RuleSource::Engine => Self::Engine,
+            RuleSource::Bible => Self::OneJumpCourse,
+        }
+    }
+}
+
 /// Which systems a jump from a system can reach, and so which links a
 /// route follows.
+///
+/// The rulebook's [`RuleKey::Hyperlinks`](crate::RuleKey::Hyperlinks)
+/// chooses it, by its [`RuleSource`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum HyperlinkRule {
     /// The original engine's reading: a jump reaches only the systems the
@@ -203,6 +234,17 @@ pub enum HyperlinkRule {
     /// Every link joins its two systems both ways, whichever of them
     /// lists it, as the galaxy map draws it ([`StarMap::neighbours`]).
     BothWays,
+}
+
+impl From<RuleSource> for HyperlinkRule {
+    /// The reading [`RuleKey::Hyperlinks`](crate::RuleKey::Hyperlinks) gives:
+    /// the engine's, or `BothWays` for [`RuleSource::Bible`].
+    fn from(source: RuleSource) -> Self {
+        match source {
+            RuleSource::Engine => Self::Engine,
+            RuleSource::Bible => Self::BothWays,
+        }
+    }
 }
 
 /// The system Hyper Select picks next from `from` by the
@@ -840,6 +882,9 @@ impl StarMap {
 }
 
 /// Where the no-jump zone applies.
+///
+/// The rulebook's [`RuleKey::JumpZone`](crate::RuleKey::JumpZone)
+/// chooses it, by its [`RuleSource`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum JumpZoneRule {
     /// The original engine's reading: the zone (`_ShipHyperSafeDist`)
@@ -859,6 +904,17 @@ pub enum JumpZoneRule {
     /// The Nova Bible's reading, which states no exception: the jump
     /// distance applies in every system.
     Always,
+}
+
+impl From<RuleSource> for JumpZoneRule {
+    /// The reading [`RuleKey::JumpZone`](crate::RuleKey::JumpZone) gives:
+    /// the engine's, or `Always` for [`RuleSource::Bible`].
+    fn from(source: RuleSource) -> Self {
+        match source {
+            RuleSource::Engine => Self::Engine,
+            RuleSource::Bible => Self::Always,
+        }
+    }
 }
 
 /// The distance from the centre a ship must be to jump, given the current
@@ -1145,6 +1201,42 @@ mod tests {
             replaced(),
             "2 and 3 share a place"
         );
+    }
+
+    #[test]
+    fn a_multi_jump_rule_follows_its_source() {
+        assert_eq!(
+            MultiJumpRule::from(RuleSource::Engine),
+            MultiJumpRule::Engine
+        );
+        assert_eq!(
+            MultiJumpRule::from(RuleSource::Bible),
+            MultiJumpRule::PerHop
+        );
+    }
+
+    #[test]
+    fn a_hyper_select_rule_follows_its_source() {
+        assert_eq!(
+            HyperSelectRule::from(RuleSource::Engine),
+            HyperSelectRule::Engine
+        );
+        assert_eq!(
+            HyperSelectRule::from(RuleSource::Bible),
+            HyperSelectRule::OneJumpCourse
+        );
+    }
+
+    #[test]
+    fn a_hyperlink_rule_follows_its_source() {
+        assert_eq!(HyperlinkRule::from(RuleSource::Engine), Engine);
+        assert_eq!(HyperlinkRule::from(RuleSource::Bible), BothWays);
+    }
+
+    #[test]
+    fn a_jump_zone_rule_follows_its_source() {
+        assert_eq!(JumpZoneRule::from(RuleSource::Engine), JumpZoneRule::Engine);
+        assert_eq!(JumpZoneRule::from(RuleSource::Bible), JumpZoneRule::Always);
     }
 
     #[test]

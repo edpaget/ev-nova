@@ -328,13 +328,27 @@ impl<C> SessionFlight<C> {
     }
 
     /// Enters play from the main screen at `gain`, the `_gSpeedMult` the
-    /// last game of the run left (`nova_sim::Session::enter_game`), and
-    /// says whether it did: a failed session enters nothing.
+    /// last game of the run left (`nova_sim::Session::enter_game`), its
+    /// priming passes handed the catalog the view shared
+    /// ([`SessionFlight::share_catalog`]), the flight's chance, AI and
+    /// rules, as a step is; and says whether it did: a failed session, or
+    /// one whose catalog was never shared, enters nothing.
     pub fn enter_game(&mut self, gain: SpeedMult) -> bool {
-        let Ok(session) = &mut self.session else {
+        let (Ok(session), Some(catalog)) = (&mut self.session, &self.catalog) else {
             return false;
         };
-        session.enter_game(gain, &mut self.chance);
+        let rules = Rules {
+            disable: &*self.disable_rule,
+            defence: &*self.defence_rule,
+            law: &*self.law,
+        };
+        let mut collab = StepCollaborators {
+            catalog: &*catalog.0,
+            behaviour: &*self.behaviour,
+            rules,
+            chance: &mut self.chance,
+        };
+        session.enter_game(gain, &mut collab);
         true
     }
 
@@ -661,7 +675,6 @@ mod tests {
         for command in [
             FlightCommand::Jump,
             FlightCommand::Land,
-            FlightCommand::Arrive,
             FlightCommand::TakeOff,
             FlightCommand::LeaveIfDue,
             FlightCommand::LandEscorts,

@@ -20,6 +20,7 @@ use crate::ai::fire;
 use crate::ai::pirate::PirateWarship;
 use crate::ai::pursuit::Pursuit;
 use crate::ai::{Behaviour, Decision, Goal, Reaction, Surroundings, react};
+use crate::catalog::WeaponId;
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
 use crate::combat::fixture::strike;
@@ -35,7 +36,7 @@ fn n(id: u32) -> ShipRef {
 
 /// A pirate stand-in: it keeps whatever goal it holds (as
 /// `_PirateWarshipAI` returns on goal 0x16, @0x8c2ee, and keeps attacking
-/// the player), always pulls its primary trigger, and targets its goal's
+/// the player), always picks its gun, and targets its goal's
 /// quarry. It answers a strike on itself as its victim, and the player's
 /// strike on another ship as a Good Samaritan.
 #[derive(Debug)]
@@ -55,7 +56,7 @@ impl Behaviour for Turned {
 
     fn trigger(&self, _: &Npc, _: &Surroundings) -> Trigger {
         Trigger {
-            primary: true,
+            only: Some(GUN),
             ..Trigger::default()
         }
     }
@@ -76,6 +77,9 @@ impl Behaviour for Turned {
     }
 }
 
+/// The gun the pirate picks.
+const GUN: WeaponId = WeaponId(128);
+
 /// The player, 400 below the centre.
 fn world() -> World<'static> {
     World {
@@ -85,12 +89,12 @@ fn world() -> World<'static> {
 }
 
 /// NPC 1, a pirate at rest at the centre with `ticks` of its count wait
-/// left, its primary trigger pulled.
+/// left, its gun picked.
 fn pirate(ticks: u32) -> Npc {
     let mut pirate = npc(1, ShipStats::new(FAST, &[]));
     count_waiting(&mut pirate, ticks);
     pirate.trigger = Trigger {
-        primary: true,
+        only: Some(GUN),
         ..Trigger::default()
     };
     pirate
@@ -128,10 +132,10 @@ fn holds_then_attacks(traffic: &mut Traffic, held: u32) {
             Pursuit::default(),
             "the high level returned on tick {tick_after}"
         );
-        assert!(pirate.trigger.primary, "its AI pulls the trigger");
+        assert_eq!(pirate.trigger.only, Some(GUN), "its AI picks its gun");
         if tick_after < held {
             assert!(
-                !fire::gated(pirate).primary,
+                fire::gated(pirate).only.is_none(),
                 "the gate holds its fire after tick {tick_after}"
             );
         }
@@ -140,7 +144,7 @@ fn holds_then_attacks(traffic: &mut Traffic, held: u32) {
     tick(traffic, &Turned);
     let pirate = &traffic.npcs()[0];
     assert!(pirate.pursuit.frame.is_some(), "it flies its fight");
-    assert!(fire::gated(pirate).primary, "and fires");
+    assert_eq!(fire::gated(pirate).only, Some(GUN), "and fires");
     assert_ne!(pirate.state, at, "it turns or thrusts toward the player");
     assert_eq!(pirate.goal, Goal::Attack(ShipRef::Player));
 }

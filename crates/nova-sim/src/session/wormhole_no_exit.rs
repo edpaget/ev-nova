@@ -80,6 +80,8 @@ impl Session {
         // The kill flags (@0x66f40-0x66f6f) and the beams
         // (@0x66fc4-0x66fe6).
         self.space.combat.clear();
+        // `_killShots` frees the escape pods too (@0x39e75-0x39e84).
+        self.space.clear_pods();
         self.kill_explosions();
         self.space.clear_boxes();
         self.space.kill_asteroids();

@@ -70,9 +70,11 @@ pub enum SpriteLayer {
     /// @0x1fb89-0x1fc6b), then the 32 escape pods of `_podData`
     /// (@0x1fc71-0x1fd57), so the pods draw over the boxes. Nothing moves
     /// them, so each draws in slot order, a new one taking the first free
-    /// slot (`_SpawnEscapePod` @0x45564); uncapped, the view's pods are
-    /// still first-free (`nova_view::flight::pods`). The view draws the
-    /// boxes in their table's order (rdm:task/cargo-box-slot-order).
+    /// slot (`_SpawnBox` @0x3dd94, `_SpawnScoopableBox` @0x3e3f8,
+    /// `_SpawnEscapePod` @0x45564); uncapped, the pods are still
+    /// first-free. The session keeps both tables by slot
+    /// (`nova_sim::cargo_box`, `nova_sim::escape_pod`), and the view draws
+    /// each in that order.
     Boxes,
     /// 0x3b52d0 (`_smokeLayer`): the 64 smoke puffs of `_smokeData`
     /// (@0x1fe6f-0x1ff63), cloned from `_masterSmokeSprite`; `_SpawnSmoke`

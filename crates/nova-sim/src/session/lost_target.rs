@@ -175,6 +175,7 @@ mod tests {
         assert_eq!(session.chart.target, Some(NpcId(0)));
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &Idling,
             Rules::default(),
             &mut NeverFires,

@@ -31,6 +31,17 @@
 //!    player was dying at the top of `_HandlePlayer`; then the cloak key
 //!    and upkeep (@0x705b7-0x70827, see the `player_cloak` module),
 //!    reading whether it was disabled there.
+//!
+//!    A pass the pod's frames return on (`jne 0x71113` @0x68ddd, the
+//!    pod countdown above 0 at the pass's head on a player that isn't
+//!    destroyed, `PlayerHead::returned`) runs none of steps 1 to 3: a
+//!    breakup beside a running pod word, which a stray beam fired intact
+//!    can leave (see the `stray_words` module), stalls with no klaxon, and
+//!    the pod rescues the pilot. The eject's own pass sets the countdown
+//!    after the test and runs them all. The rest of a pass the rescue or
+//!    the arrival settled in (`jmp 0x71113` @0x692ce, @0x6c625; see the
+//!    `settled_in_pass` module) runs none of them either. Steps 4 to 6
+//!    run pod or not, as `_HandleShipDisplay` runs for slot 0.
 //! 4. The player's display step, at the frame's gain
 //!    (`Session::speed_mult`, see the `display_gain` module): its cloak's
 //!    fade steps (`_HandleShipDisplay` @0x2d088-0x2d17e for slot 0, pod or
@@ -93,6 +104,13 @@ impl Session {
     /// the pass, drawing on `chance`: `_HandlePlayer` up to its key block
     /// (see the module docs, steps 1 to 3).
     pub(super) fn player_display_head(&mut self, head: PlayerHead, chance: &mut dyn Chance) {
+        // The pod's frames return (@0x68ddd) before all of these. A timer
+        // the display set still ends its starting frame: the display finds
+        // it above 0 and puffs (@0x2dd01).
+        if head.returned {
+            self.ship.condition.settle_start();
+            return;
+        }
         self.ship.condition.count_down();
         self.space
             .escort_menu_block(&mut self.pilot, &self.statics, &mut self.out, head.dead);
@@ -122,7 +140,9 @@ impl Session {
         head: PlayerHead,
         chance: &mut dyn Chance,
     ) {
-        self.player_cloak_tick(head.disabled);
+        if !head.returned {
+            self.player_cloak_tick(head.disabled);
+        }
         self.ship
             .step_cloak_fade(&self.pilot, &self.statics, self.speed_mult());
         let was_destroyed = self.ship.condition == Condition::Destroyed;

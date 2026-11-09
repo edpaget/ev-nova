@@ -372,6 +372,18 @@ impl Camera {
         self.rect_at(top_left, size)
     }
 
+    /// The rect, in world coordinates, of a sprite whose frame is `size`
+    /// with its top left at the view's top left: the screen point that
+    /// stands for the original window's (0, 0), in the frame of reference
+    /// the [`anchor`](Camera::anchor) is measured in. A ship slot no
+    /// display has laid out keeps the rect `_InitSprites`' clone left it
+    /// at, the sprite world's (0, 0) (`_SWCloneSprite` @0x1f135,
+    /// `nova_sim::HoverPlace::Cloned`).
+    #[must_use]
+    pub fn sprite_rect_at_window_origin(&self, size: (u32, u32)) -> SpriteRect {
+        self.rect_at(Point::new(0.0, 0.0), size)
+    }
+
     /// The world rect of `size` whose top left is drawn at screen point
     /// `top_left`.
     fn rect_at(&self, top_left: Point, (width, height): (u32, u32)) -> SpriteRect {
@@ -737,6 +749,21 @@ mod tests {
             screen(camera.sprite_rect_from(Vec2::new(-30.9, 12.9), (8, 5))),
             at(381.0, 394.0)
         );
+    }
+
+    #[test]
+    fn a_sprites_rect_at_the_window_origin_has_its_top_left_at_the_views_top_left() {
+        // `_InitSprites`' clone keeps the master's unlocated rect, at the
+        // sprite world's (0, 0): the window's top-left, whatever the
+        // anchor or the camera's center.
+        for camera in [
+            on_fraction(),
+            Camera::centred_on_in(at(-3.5, 7.25), (1365.0, 768.0)),
+        ] {
+            let rect = camera.sprite_rect_at_window_origin((7, 6));
+            assert_eq!(camera.world_to_screen(top_left(rect)), at(0.0, 0.0));
+            assert_eq!((rect.width, rect.height), (7, 6));
+        }
     }
 
     #[test]

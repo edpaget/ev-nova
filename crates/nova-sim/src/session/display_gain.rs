@@ -275,6 +275,7 @@ pub(in crate::session) mod tests {
         let before = session.npcs().len();
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &crate::ai::NovaAi::default(),
             Rules::default(),
             &mut NeverFires,

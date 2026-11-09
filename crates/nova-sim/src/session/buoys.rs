@@ -185,7 +185,10 @@ mod tests {
     fn a_hypergate_or_wormhole_exit_shows_no_buoy() {
         for rule in [GateArrivalRule::Engine, GateArrivalRule::LikeJump] {
             let gates = buoyed(gated(), 131, 2);
-            let mut session = at_gate(&gates).with_gate_arrival(rule);
+            let mut session = at_gate(&gates).with_rules(crate::session::setup::reading(
+                crate::rulebook::RuleKey::GateArrival,
+                rule,
+            ));
             session
                 .enter_hypergate(Some(SystemId(131)), &gates, &mut NeverFires)
                 .expect("enters");
@@ -195,7 +198,10 @@ mod tests {
                 "{rule:?}"
             );
             let holes = buoyed(wormholes(), 131, 2);
-            let mut session = at_wormhole(&holes).with_gate_arrival(rule);
+            let mut session = at_wormhole(&holes).with_rules(crate::session::setup::reading(
+                crate::rulebook::RuleKey::GateArrival,
+                rule,
+            ));
             session
                 .enter_wormhole(&holes, &mut Scripted::rolling(&[0]))
                 .expect("enters");

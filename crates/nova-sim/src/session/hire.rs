@@ -175,7 +175,7 @@ impl Session {
     /// with a bar.
     pub fn escorts_for_hire(&mut self, chance: &mut dyn Chance) -> Option<HireList> {
         let site = self.chart.bar_site(self.mode.landed())?;
-        let facts = self.ship.facts(&self.pilot, &self.statics);
+        let facts = self.ship.facts(&self.pilot, &self.statics, &self.setup);
         let bar = Bar {
             ships: &self.statics.ships,
             site: &site,

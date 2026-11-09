@@ -1,8 +1,9 @@
 //! The board reach over the stock data (rdm ship-handling-fidelity phase
-//! 17): every stock ship has a `shän` of positive `BaseXSize` and
-//! `BaseYSize`, its board reach is half of each on its axis, and no stock
-//! class's sizes differ, so its reach is the same on both axes. Skips,
-//! passing, when `NOVA_DATA` is unset.
+//! 17, combat-and-flight phase 8): every stock ship has a `shän` of
+//! positive `BaseXSize` and `BaseYSize` and a loaded base-sprite frame of
+//! the same size, its board reach is half its frame on each axis, and no
+//! stock class's sizes differ, so its reach is the same on both axes.
+//! Skips, passing, when `NOVA_DATA` is unset.
 
 use crate::common;
 
@@ -12,7 +13,7 @@ use nova_sim::{CombatCatalog, Vec2};
 
 #[test]
 #[allow(clippy::float_cmp)]
-fn every_stock_ship_reaches_half_its_shän_sizes_and_the_same_on_both_axes() {
+fn every_stock_ship_reaches_half_its_frame_its_shän_sizes_and_the_same_on_both_axes() {
     let Some(dir) = common::nova_data() else {
         return;
     };
@@ -24,6 +25,13 @@ fn every_stock_ship_reaches_half_its_shän_sizes_and_the_same_on_both_axes() {
             panic!("{:?} has no shän sizes", record.id);
         };
         assert!(width > 0 && height > 0, "{:?}", record.id);
+        let frame = record.frame.expect("every stock ship has a frame");
+        assert_eq!(
+            (frame.width, frame.height),
+            (width.unsigned_abs().into(), height.unsigned_abs().into()),
+            "{:?}: its frame is its shän's sizes",
+            record.id
+        );
         let reach = HullSpec::new(&record).board_reach;
         assert_eq!(
             reach,

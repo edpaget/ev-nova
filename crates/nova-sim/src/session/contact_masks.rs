@@ -16,6 +16,18 @@
 //! after them (@0x444ad), which is the original's order too (see the
 //! `ship_display` module).
 //!
+//! **The stellars** ([`Session::contact_sprites`]'s `stellars`). Each
+//! destroyable listed stellar holding a sprite whose sheet was read, as
+//! its slot last showed it ([`Session::shot_stellar_sprites`], see the
+//! `shot_stellars` module): the sheet it draws (`Type`, `DeadType` or
+//! graphic type 0's, as the deadly stellars map it), the frame its slot
+//! shows, its place and the sizes its slot is placed by, for the
+//! proximity pass's `_SWRLECollision(shot, stellar)` (@0x372a8, see
+//! `nova_sim::combat::stellar`). A hidden stellar is lent its last slot's
+//! sprite under its own ID: its owner's now, or the ghost fixed on
+//! screen. The collision passes come before this pass's sprite tick, so
+//! the frame is the one the last pass's left.
+//!
 //! **The scoop** ([`Session::scoop_masks`]). `_ShipCollisionHandler`'s
 //! scoop branch (@0x370ab-0x371ac) runs in the collision passes, after
 //! `_HandlePlayer` turned the player and its display drew it (@0x43e29),
@@ -83,6 +95,7 @@ impl Session {
             ships: self.ship_sprites(),
             shots: masks.shot_sheets(),
             asteroids: masks.asteroid_sheets(),
+            stellars: self.shot_stellar_sprites(),
             speed_mult: self.time.gain().get(),
             walk: self.mask_walk(),
             reading: ShotContact::from(self.setup.rules.source_for(RuleKey::ShotContact)),
@@ -124,14 +137,17 @@ impl Session {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use nova_sim_base::fixture::rle::sheet;
 
+    use std::rc::Rc;
+
     use super::*;
-    use crate::catalog::{MaskSheet, ShipId};
+    use crate::catalog::{MaskSheet, ShipId, StellarId};
     use crate::chance::NeverFires;
     use crate::combat::Rules;
     use crate::combat::armament::Trigger;
+    use crate::combat::contact::{SpriteAt, StellarSprite};
     use crate::flight::{Controls, Turn};
     use crate::rulebook::{RuleSource, Rulebook};
     use crate::session::tests::{armed, facing_an_npc};
@@ -139,7 +155,7 @@ mod tests {
     use crate::testkit::{FakePilotCatalog, Passive, work};
 
     /// The rows of a frame `side` square, drawn where `drawn` says.
-    fn square(side: u32, drawn: impl Fn(u32, u32) -> bool) -> RleSheet {
+    pub(in crate::session) fn square(side: u32, drawn: impl Fn(u32, u32) -> bool) -> RleSheet {
         let rows: Vec<String> = (0..side)
             .map(|y| {
                 (0..side)
@@ -159,7 +175,7 @@ mod tests {
 
     /// [`armed`]'s catalog, the NPC 40 square, drawn only in its left
     /// quarter, and the blaster's shot 2 square.
-    fn left_quartered() -> FakePilotCatalog {
+    pub(in crate::session) fn left_quartered() -> FakePilotCatalog {
         let mut catalog = armed();
         catalog.rle_sheets = vec![
             (NPC_SHIP, square(40, |x, _| x < 10)),
@@ -170,7 +186,11 @@ mod tests {
 
     /// `catalog`'s session with the player at rest at the centre, facing
     /// up at its NPC 100 above at `npc_x`, its trigger held, by `rules`.
-    fn shooting(catalog: &FakePilotCatalog, npc_x: f32, rules: Rulebook) -> Session {
+    pub(in crate::session) fn shooting(
+        catalog: &FakePilotCatalog,
+        npc_x: f32,
+        rules: Rulebook,
+    ) -> Session {
         let mut session = facing_an_npc(catalog, 180).with_rules(rules);
         session.ship.player.position = Vec2::ZERO;
         session.ship.player.velocity = Vec2::ZERO;
@@ -279,6 +299,7 @@ mod tests {
         });
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &Passive,
             Rules::default(),
             &mut NeverFires,
@@ -480,5 +501,219 @@ mod tests {
         assert!(!struck(&mut original, &catalog, 12), "a run never touches");
         let mut other = shooting(&catalog, 0.0, drawn);
         assert!(struck(&mut other, &catalog, 12));
+    }
+
+    // Stellars.
+
+    use crate::catalog::{LandingSite, SiteAnimation};
+    use crate::combat::weapon::PLANET_TYPE;
+    use crate::session::deadly_masks::drawn_mask_sheet;
+    use crate::story::DrawnSheet;
+    use crate::testkit::{life, planet};
+
+    /// Stellar 128's graphic type, 3.
+    const TYPE_3: MaskSheet = MaskSheet::Stellar(3);
+
+    /// Stellar 128 of graphic type 3, 40 square, at (`x`, -100).
+    fn stellar_at(x: f32) -> LandingSite {
+        LandingSite {
+            graphic: 3,
+            frame_size: Some((40, 40)),
+            ..planet(128, x, -100.0)
+        }
+    }
+
+    /// `catalog` with 128 of `Strength` 100 and the player's (and the
+    /// NPC's) blaster planet-type.
+    pub(in crate::session) fn planet_typed(mut catalog: FakePilotCatalog) -> FakePilotCatalog {
+        for weapon in &mut catalog.weapons {
+            weapon.flags2 |= PLANET_TYPE;
+        }
+        catalog.living([life(128, 2)])
+    }
+
+    /// `session` showing and listing only `site`.
+    fn showing(session: &mut Session, site: LandingSite) {
+        session.chart.listed = vec![site];
+        session.chart.sites = vec![site];
+    }
+
+    /// What the contact passes are lent of stellar 128.
+    fn lent_128(session: &Session) -> Option<StellarSprite> {
+        session
+            .contact_sprites()
+            .stellars
+            .into_iter()
+            .find(|(id, _)| *id == StellarId(128))
+            .map(|(_, sprite)| sprite)
+    }
+
+    #[test]
+    fn a_shown_destroyable_stellar_is_lent_at_its_place_on_the_frame_its_slot_shows() {
+        let two_frames = sheet(&[&["#"], &["#"]]);
+        let mut catalog = planet_typed(armed());
+        catalog.rle_sheets = vec![(TYPE_3, two_frames)];
+        let mut session = facing_an_npc(&catalog, 180);
+        let site = LandingSite {
+            animation: SiteAnimation {
+                delay: 1,
+                type_frames: 2,
+                type_sheet_frames: 2,
+                ..SiteAnimation::default()
+            },
+            ..stellar_at(70.0)
+        };
+        showing(&mut session, site);
+        for _ in 0..12 {
+            if session.stellar_frame(site.id) != 0 {
+                break;
+            }
+            work(&mut session, &catalog, Controls::default());
+        }
+        let frame = session.stellar_frame(site.id);
+        assert_ne!(frame, 0, "its animation stepped");
+        let sprite = lent_128(&session).expect("lent");
+        let read = session.space.sprite_masks.sheet(TYPE_3).expect("read");
+        assert!(Rc::ptr_eq(&sprite.sheet, read));
+        assert_eq!(sprite.frame, frame);
+        assert_eq!(sprite.at, SpriteAt::Place(site.position));
+        assert_eq!((sprite.size, sprite.placed_as), ((40, 40), (40, 40)));
+    }
+
+    #[test]
+    fn a_frozen_slot_is_lent_its_stale_frames_sheet_placed_as_32_square() {
+        use crate::rulebook::RuleSource;
+        // Its `Type` counts no frames; its `DeadType`, graphic 5, 40 by
+        // 30, is the sheet its slot kept showing as it froze.
+        let mut catalog = planet_typed(armed());
+        catalog.rle_sheets = vec![(TYPE_3, solid_square(40)), (DEAD_5, solid_square(30))];
+        let mut session = facing_an_npc(&catalog, 180);
+        let site = LandingSite {
+            type_counts_frames: false,
+            dead_graphic: Some(5),
+            dead_frame_size: Some((40, 30)),
+            ..stellar_at(70.0)
+        };
+        showing(&mut session, site);
+        let sites = session.chart.sites.clone();
+        let rebuilt = &mut session.space.rebuilt;
+        rebuilt.frame(&sites, |id| id == site.id, RuleSource::Engine);
+        rebuilt.frame(&sites, |_| false, RuleSource::Engine);
+        assert!(session.frame_frozen(site.id));
+        session.load_sprite_masks(&catalog);
+        let sprite = lent_128(&session).expect("lent");
+        let dead = session.space.sprite_masks.sheet(DEAD_5).expect("read");
+        assert!(Rc::ptr_eq(&sprite.sheet, dead), "its `DeadType`'s");
+        assert_eq!((sprite.size, sprite.placed_as), ((40, 30), (32, 32)));
+    }
+
+    /// Stellar 128's `DeadType`, graphic type 5.
+    const DEAD_5: MaskSheet = MaskSheet::Stellar(5);
+
+    /// A sheet of one frame `side` square, every pixel drawn.
+    fn solid_square(side: u32) -> RleSheet {
+        square(side, |_, _| true)
+    }
+
+    #[test]
+    fn a_stellar_whose_sheet_was_not_read_or_that_cannot_be_destroyed_is_not_lent() {
+        let mut catalog = planet_typed(armed());
+        catalog.rle_sheets = vec![(TYPE_3, solid_square(40))];
+        let mut session = facing_an_npc(&catalog, 180);
+        showing(&mut session, stellar_at(70.0));
+        assert_eq!(lent_128(&session), None, "not asked yet");
+        session.load_sprite_masks(&catalog);
+        assert!(lent_128(&session).is_some());
+        let unread = LandingSite {
+            graphic: 4,
+            ..stellar_at(70.0)
+        };
+        showing(&mut session, unread);
+        session.load_sprite_masks(&catalog);
+        assert_eq!(lent_128(&session), None, "graphic type 4 isn't read");
+        let destroyed = LandingSite {
+            destroyed: true,
+            dead_graphic: Some(3),
+            dead_frame_size: Some((40, 40)),
+            ..stellar_at(70.0)
+        };
+        showing(&mut session, destroyed);
+        assert_eq!(lent_128(&session), None, "destroyed");
+        let mut lifeless = armed();
+        lifeless.rle_sheets = vec![(TYPE_3, solid_square(40))];
+        let mut session = facing_an_npc(&lifeless, 180);
+        showing(&mut session, stellar_at(70.0));
+        session.space.sprite_masks.load(&lifeless, TYPE_3);
+        assert_eq!(lent_128(&session), None, "of no `Strength`");
+    }
+
+    #[test]
+    fn the_sheet_drawn_maps_to_its_graphic_type() {
+        let site = LandingSite {
+            dead_graphic: Some(5),
+            ..stellar_at(0.0)
+        };
+        assert_eq!(drawn_mask_sheet(&site, DrawnSheet::Type), Some(TYPE_3));
+        assert_eq!(drawn_mask_sheet(&site, DrawnSheet::Dead), Some(DEAD_5));
+        assert_eq!(
+            drawn_mask_sheet(&site, DrawnSheet::TypeZero),
+            Some(MaskSheet::Stellar(0))
+        );
+        assert_eq!(drawn_mask_sheet(&site, DrawnSheet::NoFrame), None);
+        assert_eq!(drawn_mask_sheet(&stellar_at(0.0), DrawnSheet::Dead), None);
+    }
+
+    /// Whether `catalog`'s session asks for any stellar's sheet in a pass,
+    /// showing and listing `site`: the stellar sheets it asked.
+    fn stellar_sheets_asked(catalog: &FakePilotCatalog, site: LandingSite) -> Vec<MaskSheet> {
+        let mut session = facing_an_npc(catalog, 180);
+        showing(&mut session, site);
+        work(&mut session, catalog, Controls::default());
+        catalog
+            .rle_sheets_asked
+            .borrow()
+            .iter()
+            .copied()
+            .filter(|sheet| matches!(sheet, MaskSheet::Stellar(_)))
+            .collect()
+    }
+
+    #[test]
+    fn the_stellars_sheets_are_asked_while_the_arsenal_holds_a_planet_type_weapon() {
+        let site = LandingSite {
+            dead_graphic: Some(5),
+            ..stellar_at(70.0)
+        };
+        let mut asked = stellar_sheets_asked(&planet_typed(armed()), site);
+        asked.sort_unstable();
+        assert_eq!(asked, [MaskSheet::Stellar(0), TYPE_3, DEAD_5]);
+        let ordinary = armed().living([life(128, 2)]);
+        assert_eq!(stellar_sheets_asked(&ordinary, site), []);
+    }
+
+    /// `catalog`'s session shooting up at 128, at (`x`, -100), its NPC
+    /// out of the way: whether 128's strength fell in 12 passes.
+    fn stellar_struck(catalog: &FakePilotCatalog, x: f32) -> bool {
+        let mut session = shooting(catalog, 900.0, Rulebook::default());
+        showing(&mut session, stellar_at(x));
+        for _ in 0..12 {
+            work(&mut session, catalog, Controls::default());
+        }
+        session
+            .space
+            .strength
+            .get(&StellarId(128))
+            .is_some_and(|&left| left < 100)
+    }
+
+    #[test]
+    fn a_planet_type_shot_strikes_a_stellar_by_its_mask_and_misses_where_only_the_disc_meets_it() {
+        let mut catalog = planet_typed(left_quartered());
+        catalog.rle_sheets.push((TYPE_3, square(40, |x, _| x < 10)));
+        assert!(!stellar_struck(&catalog, 0.0), "through its clear middle");
+        assert!(stellar_struck(&catalog, 15.0), "over its drawn quarter");
+        // With no stellar sheet, the disc meets it in the middle.
+        let discs = planet_typed(left_quartered());
+        assert!(stellar_struck(&discs, 0.0));
     }
 }
