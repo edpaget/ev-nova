@@ -28,6 +28,7 @@
 //! | a `take_point`'s `held_by` | a guard `düde` ([`blockades`]) | "<faction> guards", numbered after 128 in faction id order, unpinned: the holder's ships (those whose livery names it) at even odds, of its `gövt`, flown as placeholder warships ([`blockades::GUARD_AI`]) |
 //! | a `take_point` objective | a hidden blockade `mïsn` ([`blockades`]) | its point's system as `ShipSyst`, its gate's nav slot as `ShipStart`, the holder's guards as `ShipDude`, [`blockades::BLOCKADE_SHIPS`] of them (a placeholder), chase off as `ShipGoal`, attacking the player; never offered, never completed by a landing; the store's objective names it |
 //! | (placeholder) | `ïntf` 128 ([`records::default_interface`]) | "Default status bar": a radar over the shield, armour and fuel gauges and the nav, weapon, target and cargo readouts, no background picture |
+//! | (placeholder) | the dialogs ([`interface::default_dialogs`]) | a `DLOG` and its items, titled "Default spaceport" and so on, for each dialog the view has no built-in layout for: the spaceport and every screen it opens, the text, note and question dialogs, the player info and the preferences; each fits the 640 x 480 view, with no art; the app reads them when the folder has no interface file (`nova::interface`) |
 //! | `outfits/` | `oütf` ([`outfits`]) | its `name`, and `Cost` from `price`; massless, with no `Max` and never for sale (`TechLevel` 0x7fff); a weapon (`damage` above 0, not a `bay`) a `ModType` 1 naming its `wëap`, `Flags` gun or turret; any other doing nothing; `model` isn't read |
 //! | a weapon outfit | `wëap` ([`outfits`]) | pinned by, and numbered in, outfit id order; `damage`, `range` and `reload` as damage, life and `Reload` at a placeholder speed; unguided, turreted for a turret; its mount's `ExitType`; drawn as the placeholder box, with no sound or explosion |
 //! | `mods/` | `oütf` ([`kits`]) | unpinned, numbered after the unpinned outfits; `Cost` from `price`; `Max` 1, `BuyRandom` 100, hidden unless it fits; its effects in the four `ModType` slots; its `fits` as a `Require` bit; `fitted_at` as `TechLevel` and, lawless, `ScanMask`; its hardpoints' outfits given by `OnPurchase` and taken back by `OnSell` |
@@ -124,6 +125,8 @@
 //!
 //! - The status bar: the bible authors no interface, so `ïntf` 128 is a
 //!   placeholder with no art ([`records::default_interface`]).
+//! - The dialogs: the bible authors no interface file either, so each
+//!   dialog is a placeholder with no art ([`interface::default_dialogs`]).
 //! - `regions/` and `harshness`, and a system's `hazards`: Nova has no
 //!   region record, and hazards belong to a later hazards phase (nebulae,
 //!   murk, interference). They stay readable on the loaded `Galaxy`.
@@ -162,6 +165,7 @@ pub mod fixture;
 pub mod fleet;
 pub mod gates;
 pub mod ids;
+pub mod interface;
 pub mod kits;
 pub mod looks;
 mod map;
