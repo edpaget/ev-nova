@@ -14,10 +14,12 @@ use crate::load::Galaxy;
 
 /// A ship (`ships/<id>.md`): a hull class, or a variant of one.
 ///
-/// A variant names a `base` ship and inherits every field it leaves out.
-/// Its `stats` are merged field by field, its `hardpoints` are added to
-/// the base's (one with the same `id` replaces the base's), and its `mods`
-/// are added to the base's. The finished ship must end up with a `style`,
+/// A variant names a `base` ship and inherits every field it leaves out,
+/// except `sold_at`: where a ship is sold is its own. Its `stats` are
+/// merged field by field, its `hardpoints` are added to the base's (one
+/// with the same `id` replaces the base's), and its `mods` are added to
+/// the base's. A variant that leaves out `price` costs its base's plus
+/// the kits it adds. The finished ship must end up with a `style`,
 /// `role`, `model` and `size`.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -52,6 +54,15 @@ pub struct Ship {
     /// Mod kits fitted (`mods/<id>.md`), on top of the base's.
     #[serde(default)]
     pub mods: Vec<Id>,
+    /// What it costs at a shipyard. A variant that leaves it out costs
+    /// its base's, plus the price of each kit it adds.
+    #[serde(default)]
+    pub price: Option<u32>,
+    /// The stellars whose shipyard sells it (`stellars/<id>.md`, each
+    /// with the `shipyard` service). Left out or empty, no shipyard sells
+    /// it. A variant doesn't inherit its base's.
+    #[serde(default)]
+    pub sold_at: Vec<Id>,
 }
 
 /// A ship's design language. See `mechanics/ships.md`.
@@ -342,6 +353,12 @@ pub struct Resolved<'a> {
     pub stats: Stats,
     /// The stats with every kit's effects added. A stat nobody gives is 0.
     pub totals: Totals,
+    /// What it costs: the nearest `price` in the chain, plus the price of
+    /// every kit added below the ship that gave it (by the ship itself
+    /// and each base between). A kit that doesn't exist adds nothing.
+    /// `None` when no ship in the chain gives a price. Wide, so a sum of
+    /// prices can't overflow.
+    pub price: Option<u64>,
 }
 
 /// A hardpoint and the ship or mod kit that adds it.
@@ -471,7 +488,19 @@ pub fn resolve<'a>(galaxy: &'a Galaxy, id: &Id) -> Result<Resolved<'a>, ResolveE
         }));
     }
 
+    let kit_price = |kit: &Id| galaxy.mods.get(kit).map_or(0, |k| u64::from(k.data.price));
+    let mut added = 0;
+    let mut price = None;
+    for (_, ship) in &chain {
+        if let Some(own) = ship.price {
+            price = Some(u64::from(own) + added);
+            break;
+        }
+        added += ship.mods.iter().map(kit_price).sum::<u64>();
+    }
+
     Ok(Resolved {
+        price,
         name: &chain[0].1.name,
         chain: chain.iter().map(|(i, _)| (*i).clone()).collect(),
         style: nearest(&|s| s.style.is_some()).and_then(|s| s.style),
@@ -635,6 +664,25 @@ mod tests {
     }
 
     #[test]
+    fn a_hull_reads_its_price_and_the_stellars_that_sell_it() {
+        let ship: Ship =
+            read("name: Cutter\nprice: 40000\nsold_at: [hearth-dock, marrow-yard]\n").unwrap();
+        assert_eq!(ship.price, Some(40000));
+        let yards: Vec<&str> = ship.sold_at.iter().map(Id::as_str).collect();
+        assert_eq!(yards, ["hearth-dock", "marrow-yard"]);
+
+        let bare: Ship = read("name: Cutter\n").unwrap();
+        assert_eq!(bare.price, None);
+        assert!(bare.sold_at.is_empty(), "sold nowhere when left out");
+    }
+
+    #[test]
+    fn a_ship_sold_at_a_malformed_id_is_an_error() {
+        let read = read::<Ship>("name: Cutter\nprice: 40000\nsold_at: [Hearth Dock]\n");
+        assert!(read.is_err(), "{read:?}");
+    }
+
+    #[test]
     fn a_livery_reads_its_palette() {
         let livery: Livery = read(
             "name: Registry\nfaction: association\n\
@@ -773,6 +821,119 @@ mod tests {
                     attention: 0,
                 }
             );
+        }
+
+        const RACK: (&str, &str) = (
+            "mods/rack.md",
+            "---\nname: Rack\nfits: [shuttle]\nfitted_at: legal\nprice: 30\n---\n",
+        );
+        const PLATE: (&str, &str) = (
+            "mods/plate.md",
+            "---\nname: Plate\nfits: [shuttle]\nfitted_at: legal\nprice: 7\n---\n",
+        );
+
+        fn price_of(extra: &[(&str, &str)], ship: &str) -> Option<u64> {
+            resolve(&galaxy_with(extra), &id(ship)).unwrap().price
+        }
+
+        #[test]
+        fn a_hull_s_price_is_its_own() {
+            let price = price_of(
+                &[(
+                    "ships/priced.md",
+                    "---\nname: Priced\nbase: skiff\nprice: 900\n---\n",
+                )],
+                "priced",
+            );
+            assert_eq!(price, Some(900));
+        }
+
+        #[test]
+        fn a_variant_with_no_price_costs_its_base_s_and_its_own_kits() {
+            let price = price_of(
+                &[
+                    RACK,
+                    PLATE,
+                    (
+                        "ships/priced.md",
+                        "---\nname: Priced\nbase: skiff\nprice: 900\nmods: [rack]\n---\n",
+                    ),
+                    (
+                        "ships/plated.md",
+                        "---\nname: Plated\nbase: priced\nmods: [plate]\n---\n",
+                    ),
+                ],
+                "plated",
+            );
+            assert_eq!(price, Some(907), "the base carries its rack already");
+        }
+
+        #[test]
+        fn a_variant_s_own_price_wins_and_adds_no_kits() {
+            let price = price_of(
+                &[
+                    PLATE,
+                    (
+                        "ships/priced.md",
+                        "---\nname: Priced\nbase: skiff\nprice: 900\n---\n",
+                    ),
+                    (
+                        "ships/plated.md",
+                        "---\nname: Plated\nbase: priced\nprice: 1200\nmods: [plate]\n---\n",
+                    ),
+                ],
+                "plated",
+            );
+            assert_eq!(price, Some(1200));
+        }
+
+        #[test]
+        fn a_grand_variant_with_no_price_adds_the_kits_of_every_ship_below_the_price() {
+            let price = price_of(
+                &[
+                    RACK,
+                    PLATE,
+                    (
+                        "ships/priced.md",
+                        "---\nname: Priced\nbase: skiff\nprice: 900\n---\n",
+                    ),
+                    (
+                        "ships/racked.md",
+                        "---\nname: Racked\nbase: priced\nmods: [rack]\n---\n",
+                    ),
+                    (
+                        "ships/plated.md",
+                        "---\nname: Plated\nbase: racked\nmods: [plate]\n---\n",
+                    ),
+                ],
+                "plated",
+            );
+            assert_eq!(price, Some(937));
+        }
+
+        #[test]
+        fn a_kit_not_in_mods_adds_nothing_to_the_price() {
+            let price = price_of(
+                &[
+                    PLATE,
+                    (
+                        "ships/priced.md",
+                        "---\nname: Priced\nbase: skiff\nprice: 900\n---\n",
+                    ),
+                    (
+                        "ships/odd.md",
+                        "---\nname: Odd\nbase: priced\nmods: [plate, zeppelin-kit]\n---\n",
+                    ),
+                ],
+                "odd",
+            );
+            assert_eq!(price, Some(907));
+        }
+
+        #[test]
+        fn a_chain_with_no_price_has_none() {
+            assert_eq!(price_of(&[], "armed-skiff"), None);
+            assert_eq!(price_of(&[], "skiff"), None);
         }
 
         #[test]

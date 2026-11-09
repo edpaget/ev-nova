@@ -142,6 +142,35 @@ mod tests {
     }
 
     #[test]
+    fn the_ship_schema_describes_its_price_and_the_stellars_that_sell_it() {
+        let ship = value("ship.schema.json");
+        let price = &ship["properties"]["price"];
+        let types = price["type"].to_string();
+        assert!(types.contains("integer"), "{price}");
+        assert!(
+            price["description"]
+                .as_str()
+                .is_some_and(|d| d.contains("shipyard")),
+            "{price}"
+        );
+        let sold_at = &ship["properties"]["sold_at"];
+        assert_eq!(sold_at["type"], "array", "{sold_at}");
+        let pattern = sold_at["items"]["pattern"].as_str().or_else(|| {
+            let name = sold_at["items"]["$ref"].as_str()?.rsplit('/').next()?;
+            ship["definitions"][name]["pattern"].as_str()
+        });
+        assert_eq!(pattern, Some("^[a-z0-9]+(-[a-z0-9]+)*$"), "{ship}");
+        let description = sold_at["description"].as_str().unwrap_or_default();
+        assert!(
+            description.contains("stellars/") && description.contains("shipyard"),
+            "{sold_at}"
+        );
+        let required = ship["required"].as_array().expect("required");
+        assert!(!required.contains(&"price".into()), "{required:?}");
+        assert!(!required.contains(&"sold_at".into()), "{required:?}");
+    }
+
+    #[test]
     fn the_outfit_schema_lists_the_stellars_that_sell_it() {
         let outfit = value("outfit.schema.json");
         let sold_at = &outfit["properties"]["sold_at"];
