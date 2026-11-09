@@ -2,13 +2,21 @@
 //! stellar landed on. Its description comes through
 //! [`DescriptionSource`](crate::ui::DescriptionSource), as `dësc` = `spöb`
 //! ID.
+//!
+//! The record carries the stellar's stand-in too
+//! ([`PortRecord::stand_in`]), which only the new game's data has: the
+//! landscape draws it when there is no landscape `PICT`. A new readout of
+//! the stellar is a field of [`PortRecord`], not a method of the port.
 
 use std::rc::Rc;
 
 pub use nova_sim::StellarId;
 
-/// What the spaceport shows of a stellar, raw from its `spöb`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+use crate::outline::StellarStandIn;
+
+/// What the spaceport shows of a stellar, raw from its `spöb`, and its
+/// stand-in.
+#[derive(Clone, Debug, PartialEq)]
 pub struct PortRecord {
     /// Its name.
     pub name: String,
@@ -23,6 +31,10 @@ pub struct PortRecord {
     pub cust_snd_id: i16,
     /// Its `Flags2`.
     pub flags2: u16,
+    /// What it draws in place of a sprite, which the landscape draws when
+    /// the data has no landscape `PICT`: only the new game's stellars have
+    /// one, so a stock record's is `None`.
+    pub stand_in: Option<StellarStandIn>,
 }
 
 /// The stellars and pictures the spaceport reads.
@@ -74,6 +86,7 @@ mod tests {
                 graphic_type: 2,
                 cust_snd_id: -1,
                 flags2: 0,
+                stand_in: None,
             })
         }
 

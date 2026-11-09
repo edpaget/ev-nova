@@ -63,6 +63,7 @@ impl SpaceportCatalog for GameData {
             graphic_type: stellar.graphic_type,
             cust_snd_id: stellar.cust_snd_id,
             flags2: stellar.flags2.bits(),
+            stand_in: None,
         })
     }
 
@@ -154,6 +155,7 @@ mod tests {
                 graphic_type: 3,
                 cust_snd_id: 10_032,
                 flags2: 0x0011,
+                stand_in: None,
             })
         );
         assert_eq!(
@@ -165,6 +167,7 @@ mod tests {
                 graphic_type: 255,
                 cust_snd_id: -1,
                 flags2: 0,
+                stand_in: None,
             })
         );
     }

@@ -5,7 +5,8 @@
 //! record and landscape through the [`SpaceportCatalog`] port, and its
 //! description (`dësc` = `spöb` ID) and the button style through
 //! [`DescriptionSource`]. It draws the background, then the landscape
-//! stretched into its item, then the stellar's name centred in the name
+//! stretched into its item, else the stellar's stand-in fitted to it
+//! ([`landscape`](super::landscape)), then the stellar's name centred in the name
 //! bar, then the dialog: the description scrolling in its box and the
 //! seven buttons of [`buttons`](super::buttons), as `_DrawPlanetButtons`
 //! draws them. A service the stellar's flags don't offer is drawn
@@ -198,6 +199,7 @@ use super::bar::{BarScreen, BarTemplates, Hiring};
 use super::buttons;
 use super::catalog::{SpaceportCatalog, StellarId};
 use super::hire::HireScreen;
+use super::landscape::Landscape;
 use super::layout::{
     BACKGROUND, LANDSCAPE_ITEM, LEAVE_ITEM, NAME_FONT, NAME_ITEM, NAME_SIZE, RECHARGE_ITEM,
     TEXT_ITEM, item_service, landscape_id, port_command_item,
@@ -220,7 +222,6 @@ use crate::flight::view::SharedChance;
 use crate::flight::{MapOpener, PortScreen};
 use crate::font::Font;
 use crate::geometry::Point;
-use crate::image::ImageKey;
 use crate::input::Input;
 use crate::keymap::{Command, CommandReader, PlayCommand, SharedBindings, UiCommand, contexts};
 use crate::movie::Movies;
@@ -248,8 +249,8 @@ pub const PROBLEM_SIZE: f32 = 20.0;
 struct Port {
     dialog: Dialog,
     name: String,
-    /// The landscape `PICT`, or the missing one's ID.
-    landscape: Result<i16, i16>,
+    /// What the landscape item shows.
+    landscape: Landscape,
     offered: Vec<Service>,
     /// Whether the stellar sells fuel, so Recharge can be enabled.
     sells_fuel: bool,
@@ -643,11 +644,11 @@ impl SpaceportView {
             Ok(Port {
                 dialog,
                 name: record.name,
-                landscape: if catalog.picture_exists(landscape) {
-                    Ok(landscape)
-                } else {
-                    Err(landscape)
-                },
+                landscape: Landscape::of(
+                    landscape,
+                    catalog.picture_exists(landscape),
+                    record.stand_in,
+                ),
                 offered,
                 sells_fuel,
                 description_problem,
@@ -2206,7 +2207,7 @@ impl SpaceportView {
     /// The landscape `PICT` that is missing, if it is.
     #[must_use]
     pub fn missing_landscape(&self) -> Option<i16> {
-        self.port.as_ref().ok()?.landscape.err()
+        self.port.as_ref().ok()?.landscape.missing()
     }
 
     /// Why the description box is empty, if it is for want of a `dësc`.
@@ -2691,8 +2692,8 @@ impl SpaceportView {
         };
         let dialog = &port.dialog;
         list.picture(BACKGROUND, dialog.bounds().min);
-        if let (Ok(id), Some(area)) = (port.landscape, dialog.item_bounds(LANDSCAPE_ITEM)) {
-            list.stretched_picture(ImageKey::picture(id), area.min, area.width(), area.height());
+        if let Some(area) = dialog.item_bounds(LANDSCAPE_ITEM) {
+            port.landscape.draw(list, area);
         }
         if let Some(bar) = dialog.item_bounds(NAME_ITEM) {
             let metrics = &port.metrics.0;
@@ -2721,6 +2722,7 @@ pub(in crate::spaceport) mod tests {
     mod covered_aids;
     mod flushing_layers;
     mod held_keys;
+    mod landscape_stand_in;
     mod mission_screen_keys;
     mod overlay_pointer;
     pub(crate) mod pad_told;
@@ -2736,6 +2738,7 @@ pub(in crate::spaceport) mod tests {
     use super::*;
     use crate::draw::{DrawCommand, fill_command};
     use crate::geometry::Bounds;
+    use crate::image::ImageKey;
     use crate::input::{Key, MouseButton};
     use crate::sound::{Sound, UiSound};
     use crate::spaceport::catalog::PortRecord;
@@ -2765,6 +2768,7 @@ pub(in crate::spaceport) mod tests {
                 graphic_type: 3,
                 cust_snd_id: -1,
                 flags2: 0,
+                stand_in: None,
             }),
             pictures: vec![10_003],
             description: Ok("Blue and green.\rHome.".to_owned()),
