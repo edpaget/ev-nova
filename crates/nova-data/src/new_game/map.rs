@@ -247,9 +247,10 @@ pub(super) fn number<'a, T: 'a>(
 }
 
 /// Whether `galaxy` holds nothing at `dir/id`, so a reference to it is
-/// reported: it neither loaded into `loaded` nor failed to load.
+/// reported: it neither loaded into `loaded` nor failed to load, and
+/// `dir` itself didn't fail to list.
 pub(super) fn absent<T>(galaxy: &Galaxy, loaded: &BTreeMap<Id, T>, dir: &str, id: &Id) -> bool {
-    !loaded.contains_key(id) && !galaxy.unreadable.contains(&format!("{dir}/{id}.md"))
+    !loaded.contains_key(id) && !galaxy.is_unreadable(dir, id)
 }
 
 /// The `gövt` of `faction`, its colour as both colours, and, when it

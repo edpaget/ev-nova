@@ -555,6 +555,22 @@ fn copy(from: &Path, to: &Path) {
 }
 
 #[test]
+fn a_non_utf8_system_file_is_reported_and_the_good_systems_still_map() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let root = dir.path().join("data");
+    copy(&fixture(), &root);
+    fs::write(root.join("systems").join("garbled.md"), b"---\xff\xfe\n").expect("writes");
+    let game = new_game::open(&root).expect("lists");
+    assert_eq!(game.data.ids(System::TYPE), [128, 129, 130]);
+    // The format's relative path, written with `/` on every OS.
+    assert!(
+        game.problems.iter().any(|p| p.file.contains("garbled.md")),
+        "{:?}",
+        game.problems
+    );
+}
+
+#[test]
 fn media_holding_lfs_pointers_are_reported_and_the_data_still_loads() {
     let dir = tempfile::tempdir().expect("a temporary directory");
     let root = dir.path().join("data");

@@ -384,8 +384,8 @@ impl Names<'_> {
         if self.ids.gates.contains_key(point) {
             return;
         }
-        let system_file = format!("systems/{}.md", point.system());
-        if self.galaxy.jump_point(point).is_none() && !self.galaxy.unreadable.contains(&system_file)
+        if self.galaxy.jump_point(point).is_none()
+            && !self.galaxy.is_unreadable("systems", &point.system())
         {
             self.broken.push(format!(
                 "{field} names `{point}`, which is no jump point; it is left out"
@@ -780,6 +780,22 @@ mod tests {
             "objective.take_point.point names `beta/nowhere`, which is no jump point; \
              it is left out",
         );
+    }
+
+    #[test]
+    fn with_systems_unlisted_a_point_into_it_is_not_reported() {
+        use crate::new_game::tests::with_systems_unlisted;
+        use crate::new_game::{dialogs, map as map_ids};
+
+        let source = with_toll("on_offer: {points: [{point: alpha/to-beta, stability: dead}]}\n");
+        let galaxy = with_systems_unlisted(&source);
+        let ids = map_ids(&galaxy).ids;
+        let mut problems = Vec::new();
+        let compiled = dialogs::compiled(&galaxy, &source, &mut problems);
+        let storylines = map(&galaxy, &ids, &compiled, &mut problems);
+        let lines: Vec<_> = problems.iter().map(ToString::to_string).collect();
+        assert_eq!(lines, Vec::<String>::new());
+        assert!(!storylines.missions.contains_key("toll"), "it is left out");
     }
 
     #[test]

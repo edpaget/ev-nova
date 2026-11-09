@@ -669,6 +669,26 @@ fn a_stellar_in_a_system_that_failed_to_load_is_left_out_unreported() {
     assert_eq!(game.data.ids(System::TYPE), [128], "beta");
 }
 
+/// The fixture galaxy loaded with `systems/` marked as a folder that
+/// failed to list, as the format's loader leaves it.
+pub(super) fn with_systems_unlisted(source: &MemSource) -> nova_galaxy_format::load::Galaxy {
+    let (mut galaxy, _) = nova_galaxy_format::load::load(source);
+    galaxy.systems.clear();
+    galaxy.unreadable.insert("systems/".to_owned());
+    galaxy
+}
+
+#[test]
+fn with_systems_unlisted_no_reference_into_it_is_reported() {
+    let mapped = map(&with_systems_unlisted(&galaxy()));
+    let lines: Vec<_> = mapped.problems.iter().map(ToString::to_string).collect();
+    assert_eq!(
+        lines,
+        Vec::<String>::new(),
+        "the stellars' and start's systems"
+    );
+}
+
 #[test]
 fn a_map_position_outside_i16_is_a_problem_and_moved_to_the_nearest() {
     let source = galaxy().with(
