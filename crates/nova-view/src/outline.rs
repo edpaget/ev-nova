@@ -8,7 +8,11 @@
 //! ([`ShipSprites::ship_outline`](crate::flight::catalog::ShipSprites::ship_outline)),
 //! and the system scene a stellar's
 //! ([`StellarContents::stand_in`](crate::system::catalog::StellarContents::stand_in)),
-//! at the landing reach ([`draw_stellar`]).
+//! at the landing reach ([`draw_stellar`]). The spaceport's landscape
+//! draws a stellar's through [`draw_stellar`] too, fitted to the landscape
+//! item, when the data has no landscape `PICT`
+//! (the spaceport's private `landscape` module, its
+//! [`PortRecord::stand_in`](crate::spaceport::PortRecord::stand_in)).
 //! Everything is drawn as [`DrawCommand::Triangle`]s, in the list's layer.
 //!
 //! An outline's corners are in its own space: x to starboard, y to the

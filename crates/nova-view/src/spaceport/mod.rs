@@ -9,6 +9,8 @@
 //! - [`layout`]: the decisions: which item shows what, which button each
 //!   service gets and what it says, and which picture is the landscape.
 //! - [`view`]: the [`SpaceportView`] screen.
+//! - [`landscape`]: what the landscape item shows: the landscape `PICT`,
+//!   else the stellar's stand-in, else nothing.
 //! - [`ambient`]: the stellar's ambient sound, and when it plays while
 //!   the spaceport is frontmost.
 //! - [`service`]: the [`ServiceScreen`], a placeholder for each service

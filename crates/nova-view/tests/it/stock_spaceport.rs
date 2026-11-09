@@ -18,12 +18,14 @@ use nova_sim::{Chance, Pilot, Service, Session};
 use nova_view::geometry::{Bounds, Point};
 use nova_view::image::ImageKey;
 use nova_view::sound::{Sound, SoundId, UiSound};
-use nova_view::spaceport::layout::{BACKGROUND, LEAVE_ITEM, SPACEPORT_DIALOG};
+use nova_view::spaceport::layout::{
+    BACKGROUND, LANDSCAPE_ITEM, LEAVE_ITEM, SPACEPORT_DIALOG, landscape_id,
+};
 use nova_view::spaceport::trade::{
     BACKGROUND as TRADE_BACKGROUND, BUY_ITEM, DONE_ITEM, SELL_ITEM, TRADE_DIALOG,
 };
 use nova_view::spaceport::{
-    ListColors, ListLooks, ShipMovieFiles, SpaceportView, StellarId, TradeScreen,
+    ListColors, ListLooks, ShipMovieFiles, SpaceportCatalog, SpaceportView, StellarId, TradeScreen,
 };
 use nova_view::text::fixture::MonoMetrics;
 use nova_view::ui::DescriptionSource;
@@ -96,6 +98,28 @@ fn port_kanes_spaceport_shows_its_landscape_description_and_services() {
         assert!(
             list.iter()
                 .any(|c| matches!(c, DrawCommand::Text { text, .. } if text == "Port Kane"))
+        );
+        // Its landscape `PICT` stretched over the landscape item, and no
+        // stand-in: a stock store has none.
+        let record = data.stellar_port(StellarId(137)).expect("Port Kane");
+        assert_eq!(record.stand_in, None);
+        let area = dialog.item_bounds(LANDSCAPE_ITEM).expect("the landscape");
+        let landscape = ImageKey::picture(landscape_id(record.cust_pic_id, record.graphic_type));
+        assert!(
+            list.iter().any(|c| matches!(
+                c,
+                DrawCommand::StretchedPicture { image, top_left, .. }
+                    if *image == landscape && *top_left == area.min
+            )),
+            "{landscape:?} at {:?}",
+            area.min
+        );
+        assert!(
+            !list.iter().any(|c| matches!(
+                c,
+                DrawCommand::Triangle { corners, .. } if corners.iter().all(|&p| area.contains(p))
+            )),
+            "no stand-in in the landscape"
         );
 
         view.tick(Duration::from_millis(50));
