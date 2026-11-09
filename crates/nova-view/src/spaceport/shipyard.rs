@@ -13,8 +13,9 @@
 //!
 //! The grid shows each ship listed ([`Shipyard`]) in a cell, as the
 //! Outfitter's does ([`grid`](super::grid)): its picture (the same one as
-//! the detail pane's, [`ship_picture`], shrunk to 32 x 32, or a black
-//! square without one) near the cell's top, and its `ShortName`'s lines
+//! the detail pane's, [`ship_picture`], shrunk to 32 x 32, or its
+//! stand-in fitted to that square, or a black square without either)
+//! near the cell's top, and its `ShortName`'s lines
 //! centred at the bottom. "(current)" marks the cell of the class the
 //! player flies, in its top-left corner: the port's own addition, as the
 //! original's shipyard cell has no such mark (`_ShipyardDialogUpdate`
@@ -43,8 +44,12 @@
 //!
 //! The selected ship's picture is [`ship_picture`]'s: `PICT` 5000 plus its
 //! ID less 128, or else that of the lowest-numbered ship sharing its
-//! `shän` base image, as the Bible says target pictures are shared, or
-//! "No Picture" and "Available" centred on the picture item in white.
+//! `shän` base image, as the Bible says target pictures are shared; or,
+//! with no `PICT`, its stand-in, the outline flight draws for it, which
+//! only the new game's data has, nose up and fitted to the item; or "No
+//! Picture" and "Available" centred on the picture item in white. The
+//! choice, its fit and its drawing are the `picture` module's, which the
+//! hire screen shares.
 //! When the ship's `MovieFile` names a movie and QuickTime Movies is on,
 //! the movie loops in the picture item instead, stretched to it, as
 //! `_StartLoopingMovie` plays it and `_ShipyardDialogUpdate` copies its
@@ -160,6 +165,11 @@
 //!
 //! Done, Return and Escape close the shipyard. Without its dialog, the
 //! screen says why, and Return or Escape still closes it.
+//!
+//! Beyond the spaceport's port, the shipyard and the hire screen read each
+//! ship class's looks once as they open ([`ShipLooks`]): its base image,
+//! its movie and its stand-in, a [`ShipLook`] a class. A new readout of a
+//! ship is a field of [`ShipLook`], not a method of the port.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -194,6 +204,7 @@ use crate::keymap::{
     contexts,
 };
 use crate::movie::Movies;
+use crate::outline::Outline;
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
@@ -674,51 +685,70 @@ fn panel_texts(specs: &ShipSpecs, with_weapons: bool) -> Vec<PanelText> {
     texts
 }
 
-/// What the shipyard reads beyond the spaceport's port: each `shïp`'s
-/// `shän` base image, raw.
-pub trait ShipBaseImages {
-    /// Each readable `shän`'s ship (`shän` ID = `shïp` ID) with its
-    /// `BaseImageID`; an unreadable one is left out.
-    fn ship_base_images(&self) -> Vec<(ShipId, i16)>;
+/// What the shipyard and the hire screen read of one ship class beyond
+/// the spaceport's port: a row of [`ShipLooks`]. A new readout of a ship
+/// is a field of this record, not a method of the port.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShipLook {
+    /// The class (`shïp` ID = `shän` ID).
+    pub ship: ShipId,
+    /// Its `shän`'s `BaseImageID`, raw, which [`ship_picture`] shares
+    /// pictures by; none when its `shän` is unreadable.
+    pub base_image: Option<i16>,
+    /// Its `MovieFile`, a bare file name, as `_LoadObjectData` copies it
+    /// into `_shipMovieFilenames` (@0x7b0ce-0x7b136), which loops in the
+    /// picture item ([`ship_movie`](super::ship_movie)); none when its
+    /// `shïp` is unreadable or the name is empty (its Pascal length byte,
+    /// @0x60858-0x60866).
+    pub movie_file: Option<String>,
+    /// Its stand-in, the outline flight draws for it, which only the new
+    /// game's data has: the picture drawn with no `PICT` (the `picture`
+    /// module).
+    pub stand_in: Option<Outline>,
 }
 
-/// What the shipyard and the hire screen read to loop a ship's movie in
-/// the picture item: each ship's `MovieFile`, as `_LoadObjectData` copies
-/// it into `_shipMovieFilenames` (@0x7b0ce-0x7b136).
-pub trait ShipMovieFiles {
-    /// Each readable `shïp` whose `MovieFile` isn't empty, with that bare
-    /// file name; an empty one names no movie (its Pascal length byte,
-    /// @0x60858-0x60866), and an unreadable one is left out. Read once,
-    /// as a screen opens.
-    fn ship_movie_files(&self) -> Vec<(ShipId, String)>;
+/// What the shipyard and the hire screen read about every ship class, as
+/// each opens: one [`ShipLook`] a class that has a readable `shïp` or
+/// `shän`, read once.
+pub trait ShipLooks {
+    /// Each class's looks.
+    fn ship_looks(&self) -> Vec<ShipLook>;
+}
+
+/// Each class in `looks` with its `shän` base image, as [`ship_picture`]
+/// takes them.
+#[must_use]
+pub fn base_images(looks: &[ShipLook]) -> Vec<(ShipId, i16)> {
+    looks
+        .iter()
+        .filter_map(|look| Some((look.ship, look.base_image?)))
+        .collect()
+}
+
+/// Each class in `looks` naming a movie, with its file, as
+/// [`ShipMovie::new`] takes them.
+#[must_use]
+pub fn movie_files(looks: &[ShipLook]) -> Vec<(ShipId, String)> {
+    looks
+        .iter()
+        .filter_map(|look| Some((look.ship, look.movie_file.clone()?)))
+        .collect()
 }
 
 /// What the shipyard reads about a ship: its description, through
 /// [`DescriptionSource`], the graphic it names, through
 /// [`DescriptionGraphics`], whether a picture exists, through
-/// [`SpaceportCatalog::picture_exists`], the ships' base images,
-/// through [`ShipBaseImages`], their movies, through [`ShipMovieFiles`],
-/// and the grid's colours, through [`GridLooks`]. Anything that is all
-/// six is one.
+/// [`SpaceportCatalog::picture_exists`], each class's looks (its base
+/// image, its movie and its stand-in), through [`ShipLooks`], and the
+/// grid's colours, through [`GridLooks`]. Anything that is all five is
+/// one.
 pub trait ShipyardCatalog:
-    SpaceportCatalog
-    + DescriptionSource
-    + DescriptionGraphics
-    + ShipBaseImages
-    + ShipMovieFiles
-    + GridLooks
+    SpaceportCatalog + DescriptionSource + DescriptionGraphics + ShipLooks + GridLooks
 {
 }
 
-impl<
-    T: SpaceportCatalog
-        + DescriptionSource
-        + DescriptionGraphics
-        + ShipBaseImages
-        + ShipMovieFiles
-        + GridLooks
-        + ?Sized,
-> ShipyardCatalog for T
+impl<T: SpaceportCatalog + DescriptionSource + DescriptionGraphics + ShipLooks + GridLooks + ?Sized>
+    ShipyardCatalog for T
 {
 }
 
@@ -1004,11 +1034,11 @@ pub struct ShipyardScreen {
     catalog: CatalogHandle,
     /// The grid's frame colours, read from the catalog once.
     colors: GridColors,
-    /// Each ship's base image, read once.
-    bases: Vec<(ShipId, i16)>,
+    /// Each class's looks, read once.
+    looks: Vec<ShipLook>,
     /// Each listed ship's picture, by row, read once a list (none without
     /// the dialog).
-    pictures: Vec<Option<i16>>,
+    pictures: Vec<ShipPicture>,
     style: ButtonStyle,
     /// Whether its dialogs' buttons take the keyboard focus.
     focus_ring: FocusRing,
@@ -1094,18 +1124,19 @@ impl ShipyardScreen {
                 text_input: text_input.ok(),
             }
         });
-        let (bases, movies) = if laid.is_ok() {
-            (catalog.ship_base_images(), catalog.ship_movie_files())
+        let looks = if laid.is_ok() {
+            catalog.ship_looks()
         } else {
-            (Vec::new(), Vec::new())
+            Vec::new()
         };
+        let movies = movie_files(&looks);
         let grid = ShipyardGrid::open(&shipyard.rules, shipyard.rows.len());
         let mut screen = Self {
             laid,
             shipyard,
             colors: catalog.grid_colors(),
             catalog: CatalogHandle(catalog),
-            bases,
+            looks,
             pictures: Vec::new(),
             style,
             focus_ring: FocusRing::default(),
@@ -1496,7 +1527,7 @@ impl ShipyardScreen {
             .shipyard
             .rows
             .iter()
-            .map(|row| ship_picture(row.id, &self.bases, |id| catalog.picture_exists(id)))
+            .map(|row| ShipPicture::read(row.id, &self.looks, |id| catalog.picture_exists(id)))
             .collect();
     }
 
@@ -1519,7 +1550,7 @@ impl ShipyardScreen {
             .selected_row()
             .is_some_and(|row| self.shipyard.can(row.id).is_ok());
         let selected = self.selected().map(|index| {
-            let picture = self.pictures.get(index).copied().flatten();
+            let picture = self.pictures.get(index).and_then(ShipPicture::picture);
             (self.shipyard.rows[index].id, picture)
         });
         let catalog = Rc::clone(&self.catalog.0);
@@ -1677,7 +1708,7 @@ impl ShipyardScreen {
             self.colors,
             |list, index, cell| {
                 let row = &self.shipyard.rows[index];
-                grid::draw_cell_picture(list, cell, self.pictures[index]);
+                self.pictures[index].draw_cell(list, cell);
                 if row.id == self.shipyard.current {
                     grid::draw_corner_text(list, metrics, cell, CURRENT_MARK, false);
                 }
@@ -1694,10 +1725,11 @@ impl ShipyardScreen {
             return;
         };
         if let Some((_, shown)) = &laid.shown {
-            if let Some(area) = laid.dialog.item_bounds(PICTURE_ITEM)
-                && !self.movie.draw(area, list)
-            {
-                shown.draw_picture(list, area, &*laid.metrics.0);
+            if let (Some(area), Some(picture)) = (
+                laid.dialog.item_bounds(PICTURE_ITEM),
+                self.selected().and_then(|index| self.pictures.get(index)),
+            ) {
+                picture.draw_item(&self.movie, list, area, &*laid.metrics.0);
             }
             shown.draw_description(list);
         }
@@ -1909,6 +1941,38 @@ impl Screen for ShipyardScreen {
 }
 
 pub(crate) mod pad;
+pub(super) mod picture;
+
+/// The looks a fake gives: a row for each class `bases`, `movies` or
+/// `stand_ins` names, by ID, each with what they give it.
+#[cfg(test)]
+pub(crate) fn fake_looks(
+    bases: &[(ShipId, i16)],
+    movies: &[(ShipId, String)],
+    stand_ins: &[(ShipId, Outline)],
+) -> Vec<ShipLook> {
+    let ships: std::collections::BTreeSet<ShipId> = (bases.iter().map(|(ship, _)| *ship))
+        .chain(movies.iter().map(|(ship, _)| *ship))
+        .chain(stand_ins.iter().map(|(ship, _)| *ship))
+        .collect();
+    ships
+        .into_iter()
+        .map(|ship| ShipLook {
+            ship,
+            base_image: (bases.iter())
+                .find(|(id, _)| *id == ship)
+                .map(|(_, base)| *base),
+            movie_file: (movies.iter())
+                .find(|(id, _)| *id == ship)
+                .map(|(_, file)| file.clone()),
+            stand_in: (stand_ins.iter())
+                .find(|(id, _)| *id == ship)
+                .map(|(_, outline)| outline.clone()),
+        })
+        .collect()
+}
+
+use picture::ShipPicture;
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
@@ -1930,6 +1994,7 @@ mod tests {
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
 
     mod movie;
+    mod stand_in;
     mod unplaced_pad;
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds {
@@ -2030,6 +2095,8 @@ mod tests {
         graphics: Vec<(i16, i16)>,
         /// Each ship naming a movie, and its file.
         movies: Vec<(ShipId, String)>,
+        /// Each ship with a stand-in, and its outline.
+        stand_ins: Vec<(ShipId, Outline)>,
         asked: RefCell<Vec<String>>,
     }
 
@@ -2061,16 +2128,10 @@ mod tests {
         }
     }
 
-    impl ShipBaseImages for FakeArt {
-        fn ship_base_images(&self) -> Vec<(ShipId, i16)> {
-            self.asked.borrow_mut().push("bases".to_owned());
-            self.bases.clone()
-        }
-    }
-
-    impl ShipMovieFiles for FakeArt {
-        fn ship_movie_files(&self) -> Vec<(ShipId, String)> {
-            self.movies.clone()
+    impl ShipLooks for FakeArt {
+        fn ship_looks(&self) -> Vec<ShipLook> {
+            self.asked.borrow_mut().push("looks".to_owned());
+            fake_looks(&self.bases, &self.movies, &self.stand_ins)
         }
     }
 
@@ -2105,6 +2166,7 @@ mod tests {
             ],
             graphics,
             movies: Vec::new(),
+            stand_ins: Vec::new(),
             asked: RefCell::default(),
         })
     }
@@ -2750,7 +2812,7 @@ mod tests {
         assert_eq!(
             *art.asked.borrow(),
             [
-                "bases",
+                "looks",
                 "PICT 5000",
                 "PICT 5001",
                 "PICT 5002",
@@ -2766,7 +2828,7 @@ mod tests {
                 "PICT 5003",
                 "PICT 5000",
             ],
-            "the bases once, the pictures once a list, and each description once \
+            "the looks once, the pictures once a list, and each description once \
              while it stays selected"
         );
     }
@@ -2865,6 +2927,7 @@ mod tests {
             bases: vec![(ShipId(128), 1000), (ShipId(132), 1004)],
             graphics: Vec::new(),
             movies: Vec::new(),
+            stand_ins: Vec::new(),
             asked: RefCell::default(),
         });
         let mut screen = screen_with(shipyard(), &art);
@@ -3120,7 +3183,7 @@ mod tests {
         click_item(&mut screen, INFO_ITEM);
         assert_eq!(screen.take_request(), None);
         assert!(screen.info_panel().is_none());
-        assert_eq!(*art.asked.borrow(), ["bases"], "nothing else to read");
+        assert_eq!(*art.asked.borrow(), ["looks"], "nothing else to read");
     }
 
     #[test]
@@ -3195,7 +3258,7 @@ mod tests {
         assert_eq!(
             *art.asked.borrow(),
             [
-                "bases",
+                "looks",
                 "PICT 5000",
                 "PICT 5001",
                 "PICT 5002",

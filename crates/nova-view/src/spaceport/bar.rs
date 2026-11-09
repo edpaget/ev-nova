@@ -1189,7 +1189,7 @@ mod tests {
     use crate::geometry::{Bounds, Point};
     use crate::input::MouseButton;
     use crate::spaceport::catalog::{PortRecord, SpaceportCatalog};
-    use crate::spaceport::shipyard::{ShipBaseImages, ShipMovieFiles};
+    use crate::spaceport::shipyard::{ShipLook, ShipLooks, fake_looks};
     use crate::text::fixture::MonoMetrics;
     use crate::ui::ScrollText;
     use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
@@ -1280,16 +1280,10 @@ mod tests {
         }
     }
 
-    impl ShipBaseImages for FakeArt {
-        fn ship_base_images(&self) -> Vec<(ShipId, i16)> {
-            Vec::new()
-        }
-    }
-
     /// Ship 128 names "Ship.mov", which plays only once movies are given.
-    impl ShipMovieFiles for FakeArt {
-        fn ship_movie_files(&self) -> Vec<(ShipId, String)> {
-            vec![(ShipId(128), "Ship.mov".to_owned())]
+    impl ShipLooks for FakeArt {
+        fn ship_looks(&self) -> Vec<ShipLook> {
+            fake_looks(&[], &[(ShipId(128), "Ship.mov".to_owned())], &[])
         }
     }
 

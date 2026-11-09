@@ -4429,7 +4429,9 @@ pub(in crate::spaceport) mod tests {
 
     // The Shipyard.
 
-    use crate::spaceport::shipyard::{ShipBaseImages, ShipyardCatalog, ShipyardScreen};
+    use crate::spaceport::shipyard::{
+        ShipLook, ShipLooks, ShipyardCatalog, ShipyardScreen, fake_looks,
+    };
     use nova_sim::{Rulebook, ShipFacts, ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard};
 
     use crate::spaceport::shipyard::ShipOrder;
@@ -4440,17 +4442,11 @@ pub(in crate::spaceport) mod tests {
         }
     }
 
-    impl ShipBaseImages for FakePort {
-        fn ship_base_images(&self) -> Vec<(ShipId, i16)> {
-            Vec::new()
-        }
-    }
-
     /// Ship 129, the one [`yard`] sells, names "Ship.mov", which plays
     /// only once movies are given.
-    impl crate::spaceport::shipyard::ShipMovieFiles for FakePort {
-        fn ship_movie_files(&self) -> Vec<(ShipId, String)> {
-            vec![(ShipId(129), "Ship.mov".to_owned())]
+    impl ShipLooks for FakePort {
+        fn ship_looks(&self) -> Vec<ShipLook> {
+            fake_looks(&[], &[(ShipId(129), "Ship.mov".to_owned())], &[])
         }
     }
 

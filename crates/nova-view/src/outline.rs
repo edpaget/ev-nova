@@ -12,7 +12,11 @@
 //! draws a stellar's through [`draw_stellar`] too, fitted to the landscape
 //! item, when the data has no landscape `PICT`
 //! (the spaceport's private `landscape` module, its
-//! [`PortRecord::stand_in`](crate::spaceport::PortRecord::stand_in)).
+//! [`PortRecord::stand_in`](crate::spaceport::PortRecord::stand_in)), and
+//! the shipyard and the hire screen a ship's through [`draw`], fitted to
+//! the picture item and a grid cell's icon, when the data has no `PICT`
+//! for it (the shipyard's private `picture` module, its
+//! [`ShipLook::stand_in`](crate::spaceport::ShipLook::stand_in)).
 //! Everything is drawn as [`DrawCommand::Triangle`]s, in the list's layer.
 //!
 //! An outline's corners are in its own space: x to starboard, y to the

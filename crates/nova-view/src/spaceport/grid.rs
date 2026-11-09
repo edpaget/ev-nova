@@ -194,6 +194,29 @@ pub fn draw_cell_picture(list: &mut DrawList, cell: Bounds, picture: Option<i16>
     }
 }
 
+/// `PICT` `picture` stretched into `area`, or, with none, "No Picture"
+/// and "Available" centred across it in white, [`NO_PICTURE_OFFSET`]
+/// above and below the floor of its vertical middle (`_OutfitDialogUpdate`
+/// @0x579e0-0x57aa3, `_ShipyardDialogUpdate` @0x59164-0x59227).
+pub fn draw_picture(
+    list: &mut DrawList,
+    area: Bounds,
+    picture: Option<i16>,
+    metrics: &dyn TextMetrics,
+) {
+    if let Some(id) = picture {
+        list.stretched_picture(ImageKey::picture(id), area.min, area.width(), area.height());
+    } else {
+        let middle = f32::midpoint(area.min.y, area.max.y).floor();
+        for (words, baseline) in [
+            (NO_PICTURE, middle - NO_PICTURE_OFFSET),
+            (PICTURE_AVAILABLE, middle + NO_PICTURE_OFFSET),
+        ] {
+            draw_centred_text(list, metrics, area, baseline, words);
+        }
+    }
+}
+
 /// The top of a line of the screens' text whose baseline is `baseline`.
 pub(crate) fn baseline_top(baseline: f32) -> f32 {
     baseline - TEXT_SIZE
@@ -659,17 +682,7 @@ impl Shown {
     /// The picture stretched into `area`, or, with none, "No Picture" and
     /// "Available" centred across it ([`Shown::draw`]'s first half).
     pub fn draw_picture(&self, list: &mut DrawList, area: Bounds, metrics: &dyn TextMetrics) {
-        if let Some(id) = self.picture {
-            list.stretched_picture(ImageKey::picture(id), area.min, area.width(), area.height());
-        } else {
-            let middle = f32::midpoint(area.min.y, area.max.y).floor();
-            for (words, baseline) in [
-                (NO_PICTURE, middle - NO_PICTURE_OFFSET),
-                (PICTURE_AVAILABLE, middle + NO_PICTURE_OFFSET),
-            ] {
-                draw_centred_text(list, metrics, area, baseline, words);
-            }
-        }
+        draw_picture(list, area, self.picture, metrics);
     }
 
     /// The description's box filled black and the description in white

@@ -25,7 +25,7 @@ use nova_view::spaceport::trade::{
     BACKGROUND as TRADE_BACKGROUND, BUY_ITEM, DONE_ITEM, SELL_ITEM, TRADE_DIALOG,
 };
 use nova_view::spaceport::{
-    ListColors, ListLooks, ShipMovieFiles, SpaceportCatalog, SpaceportView, StellarId, TradeScreen,
+    ListColors, ListLooks, ShipLooks, SpaceportCatalog, SpaceportView, StellarId, TradeScreen,
 };
 use nova_view::text::fixture::MonoMetrics;
 use nova_view::ui::DescriptionSource;
@@ -315,7 +315,10 @@ fn the_stock_list_colours_are_colr_128s() {
 fn no_stock_ship_names_a_shipyard_movie() {
     for (dir, _) in builds() {
         let data = GameData::open(&dir, None).expect("the stock data opens");
-        assert_eq!(data.ship_movie_files(), []);
+        assert_eq!(
+            nova_view::spaceport::shipyard::movie_files(&data.ship_looks()),
+            []
+        );
     }
 }
 
@@ -351,7 +354,7 @@ fn vikings_shipyard_lists_its_ships_in_the_shipyard_dialog() {
     use nova_view::spaceport::shipyard::{
         BACKGROUND as SHIPYARD_BACKGROUND, BUY_ITEM as BUY_SHIP_ITEM, DONE_ITEM as SHIPYARD_DONE,
         INFO_ITEM, InfoTemplates, SHIP_INFO_DIALOG, SHIP_PICTURE_INFO_DIALOG, SHIPYARD_DIALOG,
-        ShipBaseImages, ShipyardScreen, ship_picture,
+        ShipyardScreen, base_images, ship_picture,
     };
     for (dir, ui) in builds() {
         let data = Rc::new(GameData::open(&dir, None).expect("the stock data opens"));
@@ -443,7 +446,7 @@ fn vikings_shipyard_lists_its_ships_in_the_shipyard_dialog() {
         )));
         // The second-hand Shuttle (361) has no picture of its own, and
         // shows the Shuttle's, whose base image it shares.
-        let bases = data.ship_base_images();
+        let bases = base_images(&data.ship_looks());
         assert!(!data.picture_exists(5233));
         assert_eq!(
             ship_picture(nova_sim::ShipId(361), &bases, |id| data.picture_exists(id)),

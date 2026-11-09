@@ -1,22 +1,25 @@
 //! The spaceport's ports over the game data: a thin mapping from
 //! `GameData`'s `spöb` records and stellar stand-ins (the new game's
-//! only, through [`outline_data`]), `PICT`s, `shän` base images, `shïp`
-//! movie files and `cölr` 128's list and grid colours.
+//! only, through [`outline_data`]), `PICT`s, each ship class's looks
+//! (its `shän` base image, its `shïp` movie file and its stand-in) and
+//! `cölr` 128's list and grid colours.
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use nova_data::graphics::PICT;
 use nova_data::records::colors::Colors;
 use nova_data::records::ship::Ship;
-use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::stellar::Stellar;
 use nova_data::{GameData, StandInOf};
 use nova_sim::ShipId;
 
 use super::catalog::{PortRecord, SpaceportCatalog, StellarId};
 use super::grid::{GridColors, GridLooks};
-use super::shipyard::{ShipBaseImages, ShipMovieFiles};
+use super::shipyard::{ShipLook, ShipLooks};
 use super::trade::{ListColors, ListLooks};
 use crate::color::Color;
 use crate::outline_data;
+use crate::target_picture::game_base_images;
 
 /// The `cölr` the list and grid colours come from.
 const COLORS_ID: i16 = 128;
@@ -76,32 +79,35 @@ impl SpaceportCatalog for GameData {
     }
 }
 
-/// Reads every `shïp` afresh; the shipyard and the hire screen ask once,
-/// as each opens.
-impl ShipMovieFiles for GameData {
-    fn ship_movie_files(&self) -> Vec<(ShipId, String)> {
-        self.records::<Ship>()
+/// Reads every `shïp` and `shän` afresh; the shipyard and the hire screen
+/// ask once, as each opens.
+impl ShipLooks for GameData {
+    fn ship_looks(&self) -> Vec<ShipLook> {
+        let bases: BTreeMap<ShipId, i16> = game_base_images(self).into_iter().collect();
+        let movies: BTreeMap<ShipId, Option<String>> = self
+            .records::<Ship>()
             .filter_map(|(id, ship)| {
                 let file = ship.ok()?.record.movie_file.as_str().to_owned();
-                (!file.is_empty()).then_some((ShipId(id), file))
+                Some((ShipId(id), (!file.is_empty()).then_some(file)))
             })
-            .collect()
-    }
-}
-
-/// Reads every `shän` afresh; the shipyard asks once, when it opens.
-impl ShipBaseImages for GameData {
-    fn ship_base_images(&self) -> Vec<(ShipId, i16)> {
-        self.records::<ShipAnim>()
-            .filter_map(|(id, anim)| Some((ShipId(id), anim.ok()?.record.base_image_id)))
+            .collect();
+        let ships: BTreeSet<ShipId> = bases.keys().chain(movies.keys()).copied().collect();
+        ships
+            .into_iter()
+            .map(|ship| ShipLook {
+                ship,
+                base_image: bases.get(&ship).copied(),
+                movie_file: movies.get(&ship).cloned().flatten(),
+                stand_in: self
+                    .stand_in(StandInOf::Ship(nova_data::ShipId(ship.0)))
+                    .and_then(outline_data::ship_outline),
+            })
             .collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use nova_data::Record;
     use nova_data::StandIn;
     use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
@@ -109,8 +115,11 @@ mod tests {
 
     use nova_rsrc::fixture::ForkBuilder;
 
+    use nova_data::records::ship_anim::ShipAnim;
+
     use super::*;
     use crate::outline::StellarStandIn;
+    use crate::spaceport::shipyard::{base_images, movie_files};
 
     /// A `spöb` of graphic type `graphic_type`, with these `Flags`,
     /// `CustPicID`, `CustSndID` and `Flags2`.
@@ -327,7 +336,7 @@ mod tests {
             .bytes;
         let data = one_file(fork).load();
         assert_eq!(
-            data.ship_base_images(),
+            base_images(&data.ship_looks()),
             [
                 (ShipId(128), 1000),
                 (ShipId(129), 1001),
@@ -335,7 +344,7 @@ mod tests {
             ],
             "an undecodable one is left out"
         );
-        assert_eq!(self::data().ship_base_images(), []);
+        assert_eq!(self::data().ship_looks(), []);
     }
 
     /// A `shïp` whose `MovieFile` (offset 0x6AE) is `movie`.
@@ -358,7 +367,7 @@ mod tests {
             .bytes;
         let data = one_file(fork).load();
         assert_eq!(
-            data.ship_movie_files(),
+            movie_files(&data.ship_looks()),
             [
                 (ShipId(128), "Ship.mov".to_owned()),
                 (ShipId(200), "Late.mov".to_owned())
@@ -366,6 +375,56 @@ mod tests {
             "an empty name names no movie (@0x60858-0x60866), and an \
              undecodable ship is left out"
         );
-        assert_eq!(self::data().ship_movie_files(), []);
+    }
+
+    #[test]
+    fn each_class_with_a_ship_or_a_shan_is_one_row_with_its_stand_in_outline() {
+        let fork = ForkBuilder::new()
+            .resource(Ship::TYPE, 128, None, &ship_naming("Ship.mov"))
+            .resource(ShipAnim::TYPE, 128, None, &ship_anim(1000))
+            .resource(Ship::TYPE, 129, None, &ship_naming(""))
+            .resource(ShipAnim::TYPE, 130, None, &ship_anim(1001))
+            .build()
+            .bytes;
+        let outline = nova_data::Outline {
+            triangles: vec![nova_data::OutlineTriangle {
+                corners: [[0.0, 2.0], [1.0, -1.0], [-1.0, -1.0]],
+                color: [10, 20, 30],
+            }],
+        };
+        let data = one_file(fork).load().with_stand_ins(BTreeMap::from([
+            (
+                StandInOf::Ship(nova_data::ShipId(129)),
+                StandIn::Outline(outline.clone()),
+            ),
+            (
+                StandInOf::Ship(nova_data::ShipId(130)),
+                StandIn::Disc { color: [1, 2, 3] },
+            ),
+        ]));
+        assert_eq!(
+            data.ship_looks(),
+            [
+                ShipLook {
+                    ship: ShipId(128),
+                    base_image: Some(1000),
+                    movie_file: Some("Ship.mov".to_owned()),
+                    stand_in: None,
+                },
+                ShipLook {
+                    ship: ShipId(129),
+                    base_image: None,
+                    movie_file: None,
+                    stand_in: Some(outline_data::outline(&outline)),
+                },
+                ShipLook {
+                    ship: ShipId(130),
+                    base_image: Some(1001),
+                    movie_file: None,
+                    stand_in: None,
+                },
+            ],
+            "a disc is no ship's stand-in"
+        );
     }
 }

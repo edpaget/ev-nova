@@ -10,7 +10,10 @@
 //! lines and centred under it ([`grid::draw_cell_name`], @0x58d11-0x58f33),
 //! since `_ShipyardDialogUpdate`'s cell loop (@0x58b30-0x58f91) never reads
 //! `_shipBuyMode`; the
-//! selected ship's picture ([`ship_picture`]); its description, the
+//! selected ship's picture ([`ship_picture`](super::shipyard::ship_picture)), or, with no `PICT`, its
+//! stand-in, in its icon slot and its picture item alike, through the
+//! shipyard's own picture path (the shipyard's `picture` module), so the
+//! new game's hulls show here as they do in the shipyard; its description, the
 //! pilot's, `dësc` 14000 plus its ID less 128 (the Bible: "Ship pilot
 //! descriptions, shown in the hire-escort dialog"); and the Info panel
 //! ("Shipyard Info", [`spec_lines`](super::shipyard::spec_lines)), whose
@@ -66,10 +69,11 @@ use super::credits::{self, credits_text, draw_amount_rows};
 use super::grid::{self, GridColors, Shown};
 use super::layout::DONE_LABEL;
 use super::ship_movie::ShipMovie;
+use super::shipyard::picture::ShipPicture;
 use super::shipyard::{
     BACKGROUND, BUY_ITEM, DESCRIPTION_ITEM, DONE_ITEM, GRID_ITEM, INFO_BOX_ITEM, INFO_ITEM,
     INFO_LABEL, InfoTemplates, PICTURE_ITEM, Panel, SCROLL_DOWN_ITEM, SCROLL_UP_ITEM,
-    ShipyardCatalog, open_panel, ship_picture,
+    ShipyardCatalog, movie_files, open_panel,
 };
 use super::shipyard_grid::{PressOutcome, ShipyardGrid};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
@@ -157,8 +161,8 @@ pub struct HireScreen {
     catalog: CatalogHandle,
     /// The grid's frame colours, read from the catalog once.
     colors: GridColors,
-    /// Each listed ship's cell picture, read once when there is a dialog.
-    pictures: Vec<Option<i16>>,
+    /// Each listed ship's picture, read once when there is a dialog.
+    pictures: Vec<ShipPicture>,
     style: ButtonStyle,
     /// Whether its dialogs' buttons take the keyboard focus.
     focus_ring: FocusRing,
@@ -230,13 +234,13 @@ impl HireScreen {
             }
         });
         let (pictures, movies) = if laid.is_ok() {
-            let bases = catalog.ship_base_images();
+            let looks = catalog.ship_looks();
             let pictures = list
                 .rows
                 .iter()
-                .map(|row| ship_picture(row.id, &bases, |id| catalog.picture_exists(id)))
+                .map(|row| ShipPicture::read(row.id, &looks, |id| catalog.picture_exists(id)))
                 .collect();
-            (pictures, catalog.ship_movie_files())
+            (pictures, movie_files(&looks))
         } else {
             (Vec::new(), Vec::new())
         };
@@ -414,7 +418,7 @@ impl HireScreen {
         let hires = self.selected_row().is_some_and(|row| row.hire.is_ok());
         let picture = self
             .selected()
-            .and_then(|index| self.pictures.get(index).copied().flatten());
+            .and_then(|index| self.pictures.get(index).and_then(ShipPicture::picture));
         let ship = self.selected_row().map(|row| row.id);
         let catalog = Rc::clone(&self.catalog.0);
         let Ok(laid) = &mut self.laid else {
@@ -555,7 +559,7 @@ impl HireScreen {
             self.colors,
             |list, index, cell| {
                 let row = &self.list.rows[index];
-                grid::draw_cell_picture(list, cell, self.pictures[index]);
+                self.pictures[index].draw_cell(list, cell);
                 grid::draw_cell_name(list, metrics, cell, &row.short_name);
             },
         );
@@ -569,10 +573,11 @@ impl HireScreen {
             return;
         };
         if let Some((_, shown)) = &laid.shown {
-            if let Some(area) = laid.dialog.item_bounds(PICTURE_ITEM)
-                && !self.movie.draw(area, list)
-            {
-                shown.draw_picture(list, area, &*laid.metrics.0);
+            if let (Some(area), Some(picture)) = (
+                laid.dialog.item_bounds(PICTURE_ITEM),
+                self.selected().and_then(|index| self.pictures.get(index)),
+            ) {
+                picture.draw_item(&self.movie, list, area, &*laid.metrics.0);
             }
             shown.draw_description(list);
         }
@@ -721,11 +726,12 @@ mod tests {
     use crate::font::Font;
     use crate::image::ImageKey;
     use crate::input::{Key, MouseButton};
+    use crate::outline::Outline;
     use crate::spaceport::catalog::{PortRecord, SpaceportCatalog, StellarId};
     use crate::spaceport::grid::TEXT_COLOR;
     use crate::spaceport::shipyard::{
-        INFO_BACKGROUND, PANEL_GRAPHIC_ITEM, PICTURE_INFO_BACKGROUND, ShipBaseImages,
-        ShipMovieFiles,
+        INFO_BACKGROUND, PANEL_GRAPHIC_ITEM, PICTURE_INFO_BACKGROUND, ShipLook, ShipLooks,
+        base_images, fake_looks, ship_picture,
     };
     use crate::text::fixture::MonoMetrics;
     use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
@@ -795,6 +801,8 @@ mod tests {
         graphics: Vec<(i16, i16)>,
         /// Each ship naming a movie, and its file.
         movies: Vec<(ShipId, String)>,
+        /// Each ship with a stand-in, and its outline.
+        stand_ins: Vec<(ShipId, Outline)>,
         asked: RefCell<Vec<String>>,
     }
 
@@ -825,15 +833,10 @@ mod tests {
         }
     }
 
-    impl ShipBaseImages for FakeArt {
-        fn ship_base_images(&self) -> Vec<(ShipId, i16)> {
-            vec![(ShipId(128), 128), (ShipId(141), 128)]
-        }
-    }
-
-    impl ShipMovieFiles for FakeArt {
-        fn ship_movie_files(&self) -> Vec<(ShipId, String)> {
-            self.movies.clone()
+    impl ShipLooks for FakeArt {
+        fn ship_looks(&self) -> Vec<ShipLook> {
+            let bases = [(ShipId(128), 128), (ShipId(141), 128)];
+            fake_looks(&bases, &self.movies, &self.stand_ins)
         }
     }
 
@@ -861,6 +864,7 @@ mod tests {
         Rc::new(FakeArt {
             graphics,
             movies: Vec::new(),
+            stand_ins: Vec::new(),
             asked: RefCell::default(),
         })
     }
@@ -1544,8 +1548,9 @@ mod tests {
             let row = &screen.list.rows[index];
             let cell = screen.cell_bounds(index).expect("a cell");
             let mut expected = DrawList::new();
-            let picture =
-                ship_picture(row.id, &art.ship_base_images(), |id| art.picture_exists(id));
+            let picture = ship_picture(row.id, &base_images(&art.ship_looks()), |id| {
+                art.picture_exists(id)
+            });
             grid::draw_cell_picture(&mut expected, cell, picture);
             grid::draw_cell_name(&mut expected, &MonoMetrics, cell, &row.short_name);
             let expected: Vec<DrawCommand> = expected.iter().cloned().collect();
@@ -1569,7 +1574,7 @@ mod tests {
         let mut hires = list();
         hires.rows.push(row(141, 900, 1, Ok(())));
         let mut screen = screen_of(&art, hires);
-        let bases = art.ship_base_images();
+        let bases = base_images(&art.ship_looks());
         assert!(!art.picture_exists(5013), "141's own picture is missing");
         assert_eq!(
             ship_picture(ShipId(141), &bases, |id| art.picture_exists(id)),
@@ -1594,6 +1599,57 @@ mod tests {
                     if image.id == 5000 && *top_left == picture
             )),
             "the picture item shows the base's PICT 5000"
+        );
+    }
+
+    #[test]
+    fn a_ship_with_no_picture_shows_its_stand_in_in_the_grid_and_the_picture_item() {
+        use crate::outline::OutlineTriangle;
+        use crate::spaceport::grid::NO_PICTURE;
+        use crate::spaceport::shipyard::picture::ShipPicture;
+
+        let hull = Outline {
+            triangles: vec![OutlineTriangle {
+                corners: [
+                    Point::new(0.0, 4.0),
+                    Point::new(1.5, -4.0),
+                    Point::new(-1.5, -4.0),
+                ],
+                color: Color::rgba(255, 0, 0, 255),
+            }],
+        };
+        let art = Rc::try_unwrap(art()).ok().expect("unshared");
+        let art = Rc::new(FakeArt {
+            stand_ins: vec![(ShipId(140), hull.clone())],
+            ..art
+        });
+        let mut screen = screen_of(&art, list());
+        let stand_in = ShipPicture::StandIn(hull);
+        let cell = screen.cell_bounds(1).expect("a cell");
+        let mut in_cell = DrawList::new();
+        stand_in.draw_cell(&mut in_cell, cell);
+        let in_cell: Vec<DrawCommand> = in_cell.iter().cloned().collect();
+        assert!(!in_cell.is_empty());
+        assert!(
+            contains(&drawn(&screen), &in_cell),
+            "the grid cell's outline"
+        );
+
+        screen.input(&key(Key::ArrowRight, false));
+        assert_eq!(screen.selected(), Some(1));
+        let picture = item(&screen, PICTURE_ITEM);
+        let mut in_item = DrawList::new();
+        stand_in.draw(&mut in_item, picture, &MonoMetrics);
+        let in_item: Vec<DrawCommand> = in_item.iter().cloned().collect();
+        assert!(
+            contains(&drawn(&screen), &in_item),
+            "the picture item's outline"
+        );
+        assert!(
+            !texts(&screen)
+                .iter()
+                .any(|(words, at, _)| words == NO_PICTURE && picture.contains(*at)),
+            "no \"No Picture\""
         );
     }
 

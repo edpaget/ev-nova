@@ -8,7 +8,7 @@
 //!   (offset 0x6AE) into its 256-byte entry of `_shipMovieFilenames`
 //!   (@0x7b0ce-0x7b136); an empty one names no movie (the Pascal length
 //!   byte, @0x60858-0x60866, @0x60c77-0x60c85). They are read once, as a
-//!   screen opens ([`ShipMovieFiles`](super::shipyard::ShipMovieFiles)).
+//!   screen opens ([`ShipLook::movie_file`](super::shipyard::ShipLook::movie_file)).
 //! - **Starting.** A key or a press that moves the selection to another
 //!   ship stops the loop playing (@0x6082e-0x6083f, @0x60c4d-0x60c5e),
 //!   then, for a ship whose entry isn't empty, starts its file in item 8

@@ -32,6 +32,15 @@ pub(crate) fn outline(outline: &nova_data::Outline) -> Outline {
     }
 }
 
+/// A ship's stand-in from the data, in the view's terms: its outline,
+/// or none for a disc or a ring, which only a stellar draws.
+pub(crate) fn ship_outline(stand_in: &StandIn) -> Option<Outline> {
+    match stand_in {
+        StandIn::Outline(data) => Some(outline(data)),
+        StandIn::Disc { .. } | StandIn::Ring { .. } => None,
+    }
+}
+
 /// A stellar's stand-in from the data, in the view's terms.
 pub(crate) fn stellar_stand_in(stand_in: &StandIn) -> StellarStandIn {
     match stand_in {

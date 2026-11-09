@@ -17,7 +17,7 @@ use nova_data::records::weapon::Weapon;
 use nova_data::sound::decode_snd;
 use nova_data::{
     GameData, LayerError, LayerSprite, SheetKind, SheetScan, ShipImage, ShipLayerInfos,
-    ShipSpriteInfo, SpriteError, StandIn, StandInOf, shot_spin_id,
+    ShipSpriteInfo, SpriteError, StandInOf, shot_spin_id,
 };
 use nova_rsrc::ResType;
 use nova_sim::TICKS_PER_SECOND;
@@ -56,10 +56,8 @@ impl ShipSprites for GameData {
     /// The ship type's stand-in when it is an outline (only the new game
     /// has stand-ins), in the view's points and colours.
     fn ship_outline(&self, id: ShipId) -> Option<Outline> {
-        match self.stand_in(StandInOf::Ship(id))? {
-            StandIn::Outline(outline) => Some(outline_data::outline(outline)),
-            StandIn::Disc { .. } | StandIn::Ring { .. } => None,
-        }
+        self.stand_in(StandInOf::Ship(id))
+            .and_then(outline_data::ship_outline)
     }
 }
 
@@ -444,7 +442,7 @@ impl EscortMenuLooks for GameData {
 #[allow(clippy::float_cmp)]
 mod tests {
 
-    use nova_data::Record;
+    use nova_data::{Record, StandIn};
 
     use crate::outline::OutlineTriangle;
     use nova_data::graphics::fixture::{Cicn, Ctab, DirectBits, PictBuilder, RledBuilder};

@@ -15,9 +15,8 @@
 
 use nova_data::GameData;
 use nova_data::records::ship::Ship;
+use nova_data::records::ship_anim::ShipAnim;
 use nova_sim::catalog::ShipId;
-
-use crate::spaceport::ShipBaseImages;
 
 /// The first target picture, `PICT` 3000 for `shïp` 128
 /// (`_LoadSprites`).
@@ -115,9 +114,18 @@ pub fn game_target_picture(data: &GameData, ship: ShipId) -> Option<ShipPicture>
 /// [`target_picture`] takes.
 #[must_use]
 pub fn game_ship_bases(data: &GameData) -> Vec<(ShipId, i16)> {
-    let mut bases = data.ship_base_images();
+    let mut bases = game_base_images(data);
     bases.retain(|(id, _)| matches!(data.get::<Ship>(id.0), Some(Ok(_))));
     bases
+}
+
+/// Each readable `shän`'s ship in `data` (`shän` ID = `shïp` ID) with its
+/// `BaseImageID`, raw: an unreadable one is left out.
+#[must_use]
+pub fn game_base_images(data: &GameData) -> Vec<(ShipId, i16)> {
+    data.records::<ShipAnim>()
+        .filter_map(|(id, anim)| Some((ShipId(id), anim.ok()?.record.base_image_id)))
+        .collect()
 }
 
 /// Ship type `ship`'s target picture in `data` ([`target_picture`]), from
