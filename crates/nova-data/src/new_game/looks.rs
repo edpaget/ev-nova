@@ -605,6 +605,33 @@ mod tests {
     }
 
     #[test]
+    fn an_outpost_whose_model_reads_is_its_silhouette() {
+        let source = yard_on_a_model().with(
+            "stellars/alpha-yard.md",
+            "---\nname: Alpha Yard\nkind: outpost\nsystem: alpha\nposition: [0, 0]\nowner: league\n\
+             visual: {asset: yard}\n---\n",
+        );
+        let game = loaded(&source);
+        let outline = outline(stellar(&game, "alpha-yard"));
+        assert_eq!(outline.triangles.len(), 4);
+        assert_eq!(outline.reach(), 2.0_f64.hypot(1.0));
+    }
+
+    #[test]
+    fn a_moon_whose_visual_is_a_model_is_still_a_disc() {
+        let source = yard_on_a_model().with(
+            "stellars/alpha-yard.md",
+            "---\nname: Alpha Yard\nkind: moon\nsystem: alpha\nposition: [0, 0]\n\
+             visual: {asset: yard}\n---\n",
+        );
+        let game = loaded(&source);
+        assert_eq!(
+            stellar(&game, "alpha-yard"),
+            Some(StandIn::Disc { color: BARE })
+        );
+    }
+
+    #[test]
     fn a_planet_whose_visual_is_a_model_is_still_a_disc() {
         let source = yard_on_a_model().with(
             "stellars/alpha-yard.md",
