@@ -20,7 +20,8 @@
 //! [`PlanetCommView::third`]): item 2 is Greetings, or Offer Bribe while
 //! the stellar refuses landing; item 3 is Demand Tribute, or Release while
 //! it is dominated, and none for a stellar always dominated (`Flags2`
-//! 0x0020). A press names the item ([`PlanetCommItem`]), as the
+//! [`DOMINATED`](nova_sim_state::domination::DOMINATED)). A press names
+//! the item ([`PlanetCommItem`]), as the
 //! original's filter and track do, so a click where a hidden item 3
 //! stands presses it.
 //!
@@ -96,8 +97,6 @@ pub const MORE_SLAPS: u32 = 5;
 /// A government's `Flags` bit whose planets take bribes (gövt +0x21 &
 /// 0x40, @0x96cbc).
 pub const PLANETS_TAKE_BRIBES: u16 = 0x4000;
-/// A `spöb` `Flags2` bit: always dominated, which hides item 3.
-pub const ALWAYS_DOMINATED: u16 = 0x0020;
 /// The `STR#` of the stellars' replies.
 pub const STELLAR_STRINGS: i16 = 3002;
 /// The `STR#` of the stellar type labels, #`Type` + 1 (@0x96b26).
@@ -463,7 +462,8 @@ pub struct Opening {
 pub struct Standing {
     /// Whether it is dominated (+0x46), by the player or always.
     pub dominated: bool,
-    /// Whether it is always dominated (`Flags2` [`ALWAYS_DOMINATED`]).
+    /// Whether it is always dominated (`Flags2`
+    /// [`DOMINATED`](nova_sim_state::domination::DOMINATED)).
     pub always_dominated: bool,
     /// Whether it is a station (`Flags` 0x10).
     pub station: bool,
