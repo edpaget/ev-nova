@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use crate::asset::{Asset, Budget};
 use crate::fleet::{Livery, ModKit, Outfit, Ship};
 use crate::frontmatter;
-use crate::id::{Id, PointRef};
+use crate::id::{Id, MediaPath, PointRef};
 use crate::model::{
     Character, Faction, JumpPoint, Kind, Mission, News, Region, Start, Stellar, Storyline, System,
 };
@@ -77,16 +77,18 @@ impl Galaxy {
     /// `licence_file`), each once, sorted.
     #[must_use]
     pub fn media_paths(&self) -> Vec<&str> {
-        let paths: BTreeSet<&str> = self
-            .assets
+        self.media().into_iter().map(MediaPath::as_str).collect()
+    }
+
+    /// Every media file an asset names, each once, sorted.
+    pub(crate) fn media(&self) -> BTreeSet<&MediaPath> {
+        self.assets
             .values()
             .flat_map(|asset| {
                 let a = &asset.data;
                 a.files.iter().chain(&a.sources).chain(&a.licence_file)
             })
-            .map(super::id::MediaPath::as_str)
-            .collect();
-        paths.into_iter().collect()
+            .collect()
     }
 
     /// Whether the file `dir/id.md` failed to load, or the folder `dir`

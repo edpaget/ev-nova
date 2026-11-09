@@ -4,6 +4,7 @@
 //! The engine and the `galaxy` tool both need to tell a pointer from the
 //! file, so it lives here, beside the manifest ([`crate::asset`]).
 
+use crate::id::MediaPath;
 use crate::load::Galaxy;
 use crate::source::Source;
 
@@ -18,7 +19,7 @@ pub fn is_lfs_pointer(bytes: &[u8]) -> bool {
 }
 
 /// The export media paths `galaxy`'s asset manifest names
-/// ([`Galaxy::media_paths`] under `media/export/`) whose bytes in
+/// ([`Galaxy::media_paths`] that are [`MediaPath::is_export`]) whose bytes in
 /// `source` are LFS pointers, sorted.
 ///
 /// A file that is absent, or can't be read, isn't a pointer: the `galaxy`
@@ -27,9 +28,10 @@ pub fn is_lfs_pointer(bytes: &[u8]) -> bool {
 #[must_use]
 pub fn lfs_pointers<'a>(galaxy: &'a Galaxy, source: &impl Source) -> Vec<&'a str> {
     galaxy
-        .media_paths()
+        .media()
         .into_iter()
-        .filter(|path| path.starts_with(EXPORT))
+        .filter(|path| path.is_export())
+        .map(MediaPath::as_str)
         .filter(|path| {
             source
                 .bytes(path)
@@ -39,12 +41,6 @@ pub fn lfs_pointers<'a>(galaxy: &'a Galaxy, source: &impl Source) -> Vec<&'a str
         })
         .collect()
 }
-
-/// Where the media the engine loads sit, as [`MediaPath::is_export`]
-/// reads it.
-///
-/// [`MediaPath::is_export`]: crate::id::MediaPath::is_export
-const EXPORT: &str = "media/export/";
 
 #[cfg(test)]
 mod tests {
@@ -129,6 +125,24 @@ mod tests {
             "---\nkind: model\nplaceholder: true\nsources: [media/source/spire.blend]\n---\n",
         );
         assert_eq!(pointers(&source), Vec::<String>::new());
+    }
+
+    #[test]
+    fn lfs_pointers_uses_the_manifest_s_export_rule() {
+        let source = with_media(&[
+            ("media/export/pack/hull.glb", POINTER),
+            ("media/source/spire.blend", POINTER),
+        ])
+        .with(
+            "assets/spire.md",
+            "---\nkind: model\nplaceholder: true\nsources: [media/source/spire.blend]\n---\n",
+        );
+        let listed = pointers(&source);
+        assert_eq!(listed, ["media/export/pack/hull.glb"]);
+        for path in listed {
+            let media = MediaPath::try_from(path.clone()).expect("a media path");
+            assert!(media.is_export(), "{path}");
+        }
     }
 
     #[test]
