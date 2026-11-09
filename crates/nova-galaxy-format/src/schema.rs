@@ -142,6 +142,25 @@ mod tests {
     }
 
     #[test]
+    fn the_outfit_schema_lists_the_stellars_that_sell_it() {
+        let outfit = value("outfit.schema.json");
+        let sold_at = &outfit["properties"]["sold_at"];
+        assert_eq!(sold_at["type"], "array", "{sold_at}");
+        let pattern = sold_at["items"]["pattern"].as_str().or_else(|| {
+            let name = sold_at["items"]["$ref"].as_str()?.rsplit('/').next()?;
+            outfit["definitions"][name]["pattern"].as_str()
+        });
+        assert_eq!(pattern, Some("^[a-z0-9]+(-[a-z0-9]+)*$"), "{outfit}");
+        let description = sold_at["description"].as_str().unwrap_or_default();
+        assert!(
+            description.contains("stellars/") && description.contains("outfitter"),
+            "{sold_at}"
+        );
+        let required = outfit["required"].as_array().expect("required");
+        assert!(!required.contains(&"sold_at".into()), "{required:?}");
+    }
+
+    #[test]
     fn the_stellar_schema_maps_each_good_it_prices_to_a_level() {
         let stellar = value("stellar.schema.json");
         let prices = &stellar["properties"]["prices"];

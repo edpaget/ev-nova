@@ -277,6 +277,12 @@ pub struct Outfit {
     /// shows.
     #[serde(default)]
     pub model: Option<Id>,
+    /// The stellars whose outfitter sells it (`stellars/<id>.md`, each
+    /// with the `outfitter` service). Left out or empty, no outfitter
+    /// sells it: it comes only with a mod kit, a hull's hardpoint or a
+    /// mission.
+    #[serde(default)]
+    pub sold_at: Vec<Id>,
 }
 
 /// A livery (`liveries/<id>.md`): paint and marks, so one model can serve
@@ -605,6 +611,27 @@ mod tests {
         .unwrap();
         assert_eq!(outfit.mount, Mount::Turret);
         assert_eq!(outfit.model.unwrap().as_str(), "turret-mount");
+        assert!(outfit.sold_at.is_empty(), "sold nowhere when left out");
+    }
+
+    #[test]
+    fn an_outfit_lists_the_stellars_that_sell_it() {
+        let outfit: Outfit = read(
+            "name: Mass driver\nmount: turret\ndamage: 12\nrange: 600\nreload: 0.5\n\
+             price: 2500\nsold_at: [marrow-yard, luyten-exchange]\n",
+        )
+        .unwrap();
+        let yards: Vec<&str> = outfit.sold_at.iter().map(Id::as_str).collect();
+        assert_eq!(yards, ["marrow-yard", "luyten-exchange"]);
+    }
+
+    #[test]
+    fn an_outfit_sold_at_a_malformed_id_is_an_error() {
+        let read = read::<Outfit>(
+            "name: Mass driver\nmount: turret\ndamage: 12\nrange: 600\nreload: 0.5\n\
+             price: 2500\nsold_at: [Marrow Yard]\n",
+        );
+        assert!(read.is_err(), "{read:?}");
     }
 
     #[test]
