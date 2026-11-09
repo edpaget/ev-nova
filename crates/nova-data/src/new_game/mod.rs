@@ -82,9 +82,10 @@
 //!   link, which refuses its entry.
 //! - A stellar's price for a good that isn't in `goods/` is left out. So
 //!   is a special good's `medium` price, and its price at a ninth stellar
-//!   at one level, by `spöb` ID. A good priced above 32767 is priced at
-//!   32767. A stellar with `prices` and no `trade` service trades nothing
-//!   ([`goods`]).
+//!   at one level, by `spöb` ID. A good priced above 32767, the most its
+//!   record holds, is priced at 32767; that bounds the base price, not
+//!   the marked-up price a port charges. A stellar with `prices` and no
+//!   `trade` service trades nothing ([`goods`]).
 //! - A start whose ship isn't there, or whose system isn't there, is left
 //!   out.
 //! - A ship whose `base` chain loops or names a ship that isn't there is

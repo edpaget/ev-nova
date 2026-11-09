@@ -437,8 +437,10 @@ fn a_price_above_the_most_a_record_holds_is_lowered_and_reported() {
     assert_eq!(
         problems(&game),
         [
-            "goods/gold.md: its price 40000 is above 32767; it is priced at 32767",
-            "goods/gems.md: its price 32768 is above 32767; it is priced at 32767",
+            "goods/gold.md: its price 40000 is above 32767, the most a good's record holds; \
+             it is priced at 32767",
+            "goods/gems.md: its price 32768 is above 32767, the most a good's record holds; \
+             it is priced at 32767",
         ]
     );
     assert_eq!(strings(&game, PRICES).expect("written")[0], "32767");

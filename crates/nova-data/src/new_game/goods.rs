@@ -46,7 +46,12 @@
 //!   ninth on, by `spöb` ID, get no price, each reported.
 //! - A good priced above [`MAX_PRICE`]: it is priced at [`MAX_PRICE`], as
 //!   the `jünk`'s `BasePrice` and the engine's read of `STR#` 4004 hold no
-//!   more.
+//!   more. This bounds the base price a record holds, not the price a
+//!   port charges: a `high` port marks the base up (by as much as 1.5 at
+//!   a dominated one), past what 16 bits hold. The original keeps that
+//!   marked-up price in 16 bits, so there a base from 21846 up can trade
+//!   at a negative price; the sim's exchange (`nova_sim_state::market`)
+//!   holds it wide, so it doesn't here.
 //! - A stellar with `prices` but no `trade` service: nothing is traded
 //!   there.
 
@@ -77,8 +82,9 @@ pub const LABELS: i16 = 4003;
 /// The `STR#` of their base prices, as text.
 pub const PRICES: i16 = 4004;
 
-/// The highest price a good can have: a `jünk`'s `BasePrice` is 16 bits,
-/// and the engine reads `STR#` 4004 into 16 bits.
+/// The highest base price a good's record holds: a `jünk`'s `BasePrice`
+/// is 16 bits, and the engine reads `STR#` 4004 into 16 bits. A port's
+/// marked-up price can be higher (see the module docs' "Problems").
 pub const MAX_PRICE: u32 = 0x7FFF;
 
 /// The most stellars a `jünk` lists on each side, `SoldAt1-8` and
@@ -274,7 +280,10 @@ fn price(doc: &Doc<Good>, problems: &mut Vec<Problem>) -> i16 {
     if price > MAX_PRICE {
         problems.push(Problem::new(
             &doc.path,
-            format!("its price {price} is above {MAX_PRICE}; it is priced at {MAX_PRICE}"),
+            format!(
+                "its price {price} is above {MAX_PRICE}, the most a good's record holds; \
+                 it is priced at {MAX_PRICE}"
+            ),
         ));
     }
     i16::try_from(price.min(MAX_PRICE)).expect("at most i16::MAX")
