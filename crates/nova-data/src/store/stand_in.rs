@@ -90,6 +90,16 @@ impl GameData {
         self
     }
 
+    /// The store with `stand_in` as `of`'s, replacing only `of`'s and
+    /// keeping the others: the one-record form of
+    /// [`with_stand_ins`](Self::with_stand_ins), for a test that changes
+    /// one look of a loaded store.
+    #[must_use]
+    pub fn with_stand_in(mut self, of: StandInOf, stand_in: StandIn) -> Self {
+        self.stand_ins.insert(of, stand_in);
+        self
+    }
+
     /// What `of` draws in place of a sprite, if the store has a stand-in
     /// for it: only the new game's do (see the module docs).
     #[must_use]
@@ -169,6 +179,26 @@ mod tests {
             data.stand_in(StandInOf::Stellar(StellarId(129))),
             Some(&disc(2))
         );
+    }
+
+    #[test]
+    fn one_stand_in_is_added_or_replaced_and_the_others_kept() {
+        let data = GameData::default()
+            .with_stand_ins(BTreeMap::from([
+                (StandInOf::Stellar(StellarId(128)), disc(1)),
+                (StandInOf::Stellar(StellarId(129)), disc(2)),
+            ]))
+            .with_stand_in(StandInOf::Stellar(StellarId(128)), outline())
+            .with_stand_in(StandInOf::Ship(ShipId(128)), disc(3));
+        assert_eq!(
+            data.stand_in(StandInOf::Stellar(StellarId(128))),
+            Some(&outline())
+        );
+        assert_eq!(
+            data.stand_in(StandInOf::Stellar(StellarId(129))),
+            Some(&disc(2))
+        );
+        assert_eq!(data.stand_in(StandInOf::Ship(ShipId(128))), Some(&disc(3)));
     }
 
     #[test]
