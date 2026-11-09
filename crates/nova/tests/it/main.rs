@@ -62,6 +62,7 @@ mod recharge;
 mod sample_kits;
 mod sample_missions;
 mod sample_routes;
+mod sample_status_bar;
 mod sample_travel;
 mod ship_browser;
 mod shipyard;
