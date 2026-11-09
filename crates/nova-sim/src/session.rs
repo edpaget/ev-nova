@@ -562,6 +562,7 @@ mod jump_collapse;
 mod jump_exploration;
 mod jump_hops;
 mod jump_moves;
+mod jump_rekey;
 mod kept_berths;
 mod kept_rescues;
 mod killed_explosions;
@@ -3011,7 +3012,8 @@ impl Session {
     /// turns to the map bearing of that system as [`pre_jump`] says, and
     /// the jump itself begins on the tick it is ready, or here and now if
     /// it is ready already. Once accepted the jump is committed: J again
-    /// during the stage gives the same system and changes nothing, without
+    /// during the stage or once the jump has begun gives the same system
+    /// and changes nothing (see the `jump_rekey` module), without
     /// asking the rules again, so a ship that brakes into its no-jump zone
     /// still jumps. Once it has stopped braking the warp's clock runs (see
     /// `Session::move_player`), and the warp-up sounds here when the ship needs
@@ -3040,11 +3042,11 @@ impl Session {
         if self.ship.condition != Condition::Intact {
             return Err(JumpRefusal::Disabled);
         }
-        if let Some(Jump::PreJump { to, .. }) = self.mode.jump() {
+        // A jump under way carries on whatever holds the ship (@0x6b21d).
+        if let Some(Jump::PreJump { to, .. } | Jump::Hyperspace { to, .. }) = self.mode.jump() {
             return Ok(to);
         }
-        // A jump under way carries on whatever holds the ship (@0x6b21d).
-        let held = self.mode.jump().is_none() && self.held_by_other();
+        let held = self.held_by_other();
         let next = hold_jump(self.check_next_jump(), held).inspect_err(|refusal| {
             if self.jump_refusal_told(*refusal) {
                 self.out.sounds.push(SimSound::Refused);
@@ -3052,7 +3054,7 @@ impl Session {
         })?;
         let bearing = self.chart.jump_aim(&self.pilot, next);
         // A new jump, for the fighters' warning (the `wait_for_me` module).
-        self.ship.warp.jump_accepted |= self.mode.jump().is_none();
+        self.ship.warp.jump_accepted = true;
         self.stage_jump(next, bearing, None);
         Ok(next)
     }
