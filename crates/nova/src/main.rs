@@ -191,7 +191,6 @@ use nova::platform::{
     Dialogs, Runner, event_loop, loop_channel, menu_key_equivalents, system_key_names,
     system_keyboard_access,
 };
-use nova::rulebook::{eight_bit_reading, thirty_two_bit_reading};
 use nova::ruleset::Ruleset;
 use nova::saves::FilePilots;
 use nova::startup::{
@@ -283,23 +282,6 @@ fn stock_look_wired(
         report.warn(warning);
     }
     wired.unzip()
-}
-
-/// The game's images: `data`'s, 8-bit and 32-bit sheets read as
-/// `rulebook` says, the `interface` file's pictures, and the new game's
-/// borrowed stock ship look, from the `stock` art alone.
-fn game_images(
-    data: &Rc<GameData>,
-    rulebook: &Rulebook,
-    interface: Option<Rc<InterfaceData>>,
-    stock: Option<Rc<StockArt>>,
-) -> GameImages<Rc<GameData>> {
-    let images = GameImages::new(Rc::clone(data), eight_bit_reading(rulebook))
-        .with_thirty_two_bit(thirty_two_bit_reading(rulebook));
-    let images = interface
-        .into_iter()
-        .fold(images, GameImages::with_interface);
-    stock.into_iter().fold(images, GameImages::with_stock_art)
 }
 
 /// Nanoseconds since 1970, wrapped: a different seed each run.
@@ -479,7 +461,7 @@ fn main() -> ExitCode {
     let audio = open_audio(&data, &dir, &rulebook, &mut report);
     let report = Rc::new(RefCell::new(report));
     // The simulation's diagnostics are the running game's, not startup's.
-    let images = game_images(&data, &rulebook, interface, stock_art);
+    let images = nova::stock_look::images(&data, &rulebook, interface, stock_art);
     let runner = with_gamepads(Runner::new(images, screen, fonts), &report)
         .with_diagnostics(Box::new(std::io::stderr()))
         .with_report(Rc::clone(&report));

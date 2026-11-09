@@ -16,18 +16,23 @@
 //! (`outline`, the flight and scene tests); how a triangle reaches the
 //! GPU, nova-render's. What a hull borrows is nova-data's
 //! (`stock_look`), and how a borrowed sheet is read and drawn,
-//! nova-view's (`StockShipLooks`, the flight's tests).
+//! nova-view's (`StockShipLooks`, the flight's tests). The borrowed frames
+//! the flight draws decode through the game's images as `main` builds
+//! them (`stock_look::images`); how one is decoded and scaled is
+//! nova-render's (`GameImages::with_stock_art`).
 
 use std::rc::Rc;
 
 use nova::app::WindowEvent;
 use nova::app::screen::AppScreen;
-use nova::stock_look::{StockLook, wire};
+use nova::stock_look::{StockLook, images, wire};
 use nova_audio::SettingsStore;
 use nova_audio::recording::MemorySettings;
-use nova_data::new_game;
 use nova_data::stock_look::fixture::stock_store;
 use nova_data::stock_look::{ROLE_DEFAULTS, Role};
+use nova_data::{GameData, StockArt, new_game};
+use nova_render::ImageSource;
+use nova_sim::Rulebook;
 use nova_sim::fixture::MemoryPilots;
 use nova_view::{Color, DrawCommand, DrawLayer, DrawList, ImageKind, Point, Screen};
 
@@ -116,6 +121,16 @@ fn freighter() -> i16 {
 /// wires it, over a synthetic stock store holding the freighter, when
 /// `look`.
 fn fly(pilots: &MemoryPilots, settings: &MemorySettings, look: bool) -> Harness {
+    fly_wired(pilots, settings, look).0
+}
+
+/// The app [`fly`] flies, with the game data and the stock art `main`
+/// builds the game's images from.
+fn fly_wired(
+    pilots: &MemoryPilots,
+    settings: &MemorySettings,
+    look: bool,
+) -> (Harness, Rc<GameData>, Option<Rc<StockArt>>) {
     let data = Rc::new(
         new_game::open(&new_game::fixture::folder())
             .expect("the fixture lists")
@@ -127,14 +142,15 @@ fn fly(pilots: &MemoryPilots, settings: &MemorySettings, look: bool) -> Harness 
     };
     let stock = look.then(|| stock_store(&[(freighter(), 40)]));
     let (wired, _) = wire(&data, &on, stock);
-    let looks = wired.map(|(_, looks)| Rc::new(looks));
+    let (art, looks) = wired.map(|(art, looks)| (art, Rc::new(looks))).unzip();
     let (keeper, warning) =
         nova::settings::SettingsKeeper::open(Box::new(settings.clone()) as Box<dyn SettingsStore>);
     assert_eq!(warning, None);
-    fly_new_pilot_wired(&data, pilots, keeper, |screen: AppScreen| match looks {
+    let game = fly_new_pilot_wired(&data, pilots, keeper, |screen: AppScreen| match looks {
         Some(looks) => screen.with_ship_looks(looks),
         None => screen,
-    })
+    });
+    (game, data, art)
 }
 
 /// The borrowed stock frames `list` draws.
@@ -171,6 +187,28 @@ fn with_the_stock_look_on_the_hauler_draws_its_borrowed_stock_sprites() {
     assert!(
         !livery.iter().any(|corners| boxes(corners, player)),
         "no livery round {player:?}: {livery:?}"
+    );
+}
+
+#[test]
+fn the_borrowed_frames_the_flight_draws_decode_through_the_game_s_images() {
+    let (game, data, art) = fly_wired(
+        &MemoryPilots::new(),
+        &MemorySettings::holding(LOOK_ON),
+        true,
+    );
+    let view = game.app.screen().flight_view().expect("flying");
+    let mut list = DrawList::new();
+    view.draw(&mut list);
+    let key = *stock_sprites(&list)
+        .iter()
+        .find(|key| key.id == freighter())
+        .expect("the freighter's frames");
+    let images = images(&data, &Rulebook::default(), None, art);
+    let frames = images.frames(key.kind, key.id);
+    assert!(
+        frames.as_ref().is_ok_and(|frames| !frames.is_empty()),
+        "{key:?} decodes: {frames:?}"
     );
 }
 

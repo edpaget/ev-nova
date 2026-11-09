@@ -29,6 +29,10 @@
 //! the setting holds IDs alone, and nothing the look reads is written
 //! anywhere ([`nova_data::StockArt`]).
 //!
+//! [`wire`] gives the art and the flight's looks; [`images`] builds the
+//! game's images `main` hands the renderer, the art among them, so a
+//! borrowed frame the flight draws decodes.
+//!
 //! [`Rulebook`]: nova_sim::Rulebook
 
 use std::collections::BTreeMap;
@@ -36,9 +40,13 @@ use std::rc::Rc;
 
 use nova_audio::SettingsStore;
 use nova_data::stock_look::resolve;
-use nova_data::{GameData, StockArt};
+use nova_data::{GameData, InterfaceData, StockArt};
+use nova_render::GameImages;
+use nova_sim::Rulebook;
 use nova_view::flight::StockShipLooks;
 use serde_json::{Map, Value};
+
+use crate::rulebook::{eight_bit_reading, thirty_two_bit_reading};
 
 /// The settings file's field holding the stock ship look.
 pub const STOCK_SHIP_LOOK: &str = "stock_ship_look";
@@ -161,6 +169,25 @@ pub fn wire(
         .collect();
     let looks = StockShipLooks::new(Rc::clone(&art), resolved.borrows);
     (Some((art, looks)), warnings)
+}
+
+/// The game's images, as `main` hands them to the renderer: `data`'s,
+/// 8-bit and 32-bit sheets read as `rulebook` says, the `interface`
+/// file's pictures, and the borrowed stock ship look from the `stock` art
+/// [`wire`] gave alone.
+#[must_use]
+pub fn images(
+    data: &Rc<GameData>,
+    rulebook: &Rulebook,
+    interface: Option<Rc<InterfaceData>>,
+    stock: Option<Rc<StockArt>>,
+) -> GameImages<Rc<GameData>> {
+    let images = GameImages::new(Rc::clone(data), eight_bit_reading(rulebook))
+        .with_thirty_two_bit(thirty_two_bit_reading(rulebook));
+    let images = interface
+        .into_iter()
+        .fold(images, GameImages::with_interface);
+    stock.into_iter().fold(images, GameImages::with_stock_art)
 }
 
 #[cfg(test)]

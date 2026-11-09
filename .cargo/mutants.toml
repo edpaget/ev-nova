@@ -232,8 +232,11 @@ exclude_re = [
     "nova/src/main.rs:.*replace run -> ",
     # `stock_look_wired` (nova's `main.rs`) only forwards `stock_look::wire`
     # and reports its warnings: `main`'s wiring (excluded below). What it
-    # wires is `wire`'s, tested in `stock_look.rs`, and the screen and
-    # images it feeds are flown in `tests/it/new_game_looks.rs`.
+    # wires is `wire`'s, tested in `stock_look.rs`. The screen it feeds is
+    # flown in `tests/it/new_game_looks.rs`, and the renderer's images it
+    # feeds are built by `stock_look::images`, which that file's
+    # `the_borrowed_frames_the_flight_draws_decode_through_the_game_s_images`
+    # decodes a flown borrowed frame through.
     "nova/src/main.rs:.*replace stock_look_wired -> ",
     # nova-movie's FFmpeg set-up: FFmpeg 9 registers nothing at `init`,
     # and the log level only silences FFmpeg's own messages on stderr,
