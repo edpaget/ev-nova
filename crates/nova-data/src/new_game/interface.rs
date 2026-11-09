@@ -12,7 +12,10 @@
 //!
 //! Which item of a dialog shows what is the view's rule, not this
 //! crate's: the defaults give each dialog the items its screen reads, and
-//! the app's wiring tests pin that each screen lays itself out over them.
+//! the app's wiring tests pin that each screen lays itself out over them,
+//! draws each button's label on its item and closes through its own Done
+//! or Leave. These tests pin the placeholders' own facts, among them
+//! where each row of buttons sits.
 
 use std::collections::BTreeMap;
 
@@ -597,6 +600,41 @@ mod tests {
                     let alternatives = ALTERNATIVES.contains(&(id, *n, *m));
                     assert!(apart || alternatives, "{id}: items {n} and {m} overlap");
                 }
+            }
+        }
+    }
+
+    /// Each dialog's row of buttons along its bottom, by item, left to
+    /// right, as its builder's docs give them. The screens draw each
+    /// label on its own item, so swapping two of these items moves the
+    /// buttons and nothing else; this pins where they sit.
+    const BOTTOM_ROWS: [(i16, &[usize]); 6] = [
+        // Buy, Sell, Done.
+        (1001, &[13, 14, 1]),
+        // Buy, Sell, Done.
+        (1002, &[7, 4, 1]),
+        // Info, Buy Ship, Done.
+        (1004, &[10, 1, 7]),
+        // Accept, Leave.
+        (1006, &[1, 7]),
+        // Abort, Done.
+        (1012, &[5, 1]),
+        // Holovid, Leave.
+        (1013, &[3, 1]),
+    ];
+
+    #[test]
+    fn each_dialog_s_bottom_buttons_run_left_to_right_as_its_docs_say() {
+        let dialogs = default_dialogs();
+        for (id, row) in BOTTOM_ROWS {
+            let dialog = dialogs.get(id).expect("a placeholder");
+            let bounds: Vec<Rect> = row
+                .iter()
+                .map(|&item| dialog.items[item - 1].bounds)
+                .collect();
+            for pair in bounds.windows(2) {
+                assert_eq!(pair[0].top, pair[1].top, "{id}: one row");
+                assert!(pair[0].right <= pair[1].left, "{id}: {row:?} in order");
             }
         }
     }

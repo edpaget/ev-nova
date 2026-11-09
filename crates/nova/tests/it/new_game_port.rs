@@ -51,6 +51,7 @@ use nova_sim::{
 use nova_view::geometry::Point;
 use nova_view::input::{Input, Key};
 use nova_view::menu::MenuChoice;
+use nova_view::spaceport::bar::LEAVE_ITEM as BAR_LEAVE_ITEM;
 use nova_view::spaceport::layout::{LEAVE_ITEM, RECHARGE_ITEM, service_item};
 use nova_view::spaceport::missions::{
     COMPUTER_DIALOG, INFO_DIALOG, MissionComputerScreen, MissionInfoScreen,
@@ -65,6 +66,9 @@ use nova_view::spaceport::shipyard::{
     BUY_ITEM as SHIPYARD_BUY_ITEM, DONE_ITEM as SHIPYARD_DONE_ITEM,
     INFO_ITEM as SHIPYARD_INFO_ITEM, InfoTemplates, SHIP_INFO_DIALOG, SHIPYARD_DIALOG,
     ShipyardScreen,
+};
+use nova_view::spaceport::trade::{
+    BUY_ITEM as TRADE_BUY_ITEM, DONE_ITEM as TRADE_DONE_ITEM, SELL_ITEM as TRADE_SELL_ITEM,
 };
 use nova_view::spaceport::{ShipyardCatalog, SpaceportView};
 use nova_view::text::TextMetrics;
@@ -215,7 +219,8 @@ fn hearth_dock_s_spaceport_is_laid_out_with_its_description_and_a_button_for_eac
     {
         assert!(dialog.item_shown(item), "item {item}");
     }
-    let drawn = texts(&game.frame());
+    let frame = game.frame();
+    let drawn = texts(&frame);
     for label in [
         "Hearth Dock",
         "Bar",
@@ -230,6 +235,19 @@ fn hearth_dock_s_spaceport_is_laid_out_with_its_description_and_a_button_for_eac
     }
     let description = drawn.join(" ");
     assert!(description.contains("The Guild's great dock."), "{drawn:?}");
+    assert_labelled(
+        &frame,
+        spaceport(&game).dialog(),
+        &[
+            (service_item(Service::Bar), "Bar"),
+            (service_item(Service::TradeCenter), "Trade Center"),
+            (service_item(Service::Outfitter), "Outfitter"),
+            (service_item(Service::Shipyard), "Shipyard"),
+            (service_item(Service::MissionBbs), "Mission BBS"),
+            (RECHARGE_ITEM, "Recharge"),
+            (LEAVE_ITEM, "Leave"),
+        ],
+    );
 
     click_port_item(&mut game, LEAVE_ITEM);
     assert_eq!(game.showing(), Showing::Flight, "Leave takes off");
@@ -257,25 +275,43 @@ fn open_over(game: &Harness) -> &'static str {
     }
 }
 
+/// Each opens over its placeholder, its buttons labelled on their items,
+/// and closes back to the spaceport through its own Leave or Done.
 #[test]
-fn the_bar_and_the_trade_center_open_from_their_buttons_and_close_back_to_the_spaceport() {
-    for (service, open) in [(Service::Bar, "bar"), (Service::TradeCenter, "trade")] {
-        let mut game = at_hearth_dock();
-        click_port_item(&mut game, service_item(service));
-        game.frame();
-        assert_eq!(open_over(&game), open, "{service:?}");
-        let port = spaceport(&game);
-        let problem = match service {
-            Service::Bar => port.open_bar().expect("open").problem(),
-            _ => port.open_trade().expect("open").problem(),
-        };
-        assert_eq!(problem, None, "{service:?} laid out");
+fn the_bar_and_the_trade_center_open_from_their_buttons_and_close_back_through_their_own() {
+    let mut game = at_hearth_dock();
+    click_port_item(&mut game, service_item(Service::Bar));
+    let frame = game.frame();
+    assert_eq!(open_over(&game), "bar");
+    let bar = spaceport(&game).open_bar().expect("open");
+    assert_eq!(bar.problem(), None, "laid out");
+    assert_labelled(&frame, bar.dialog(), &[(BAR_LEAVE_ITEM, "Leave")]);
+    let leave = centre_of(bar.dialog(), BAR_LEAVE_ITEM);
+    game.click(leave);
+    game.frame();
+    assert_eq!(open_over(&game), "nothing", "the bar closed");
+    assert_eq!(game.showing(), Showing::Spaceport);
 
-        game.press(KeyCode::Escape);
-        game.frame();
-        assert_eq!(open_over(&game), "nothing", "{service:?} closed");
-        assert_eq!(game.showing(), Showing::Spaceport);
-    }
+    let mut game = at_hearth_dock();
+    click_port_item(&mut game, service_item(Service::TradeCenter));
+    let frame = game.frame();
+    assert_eq!(open_over(&game), "trade");
+    let trade = spaceport(&game).open_trade().expect("open");
+    assert_eq!(trade.problem(), None, "laid out");
+    assert_labelled(
+        &frame,
+        trade.dialog(),
+        &[
+            (TRADE_DONE_ITEM, "Done"),
+            (TRADE_BUY_ITEM, "Buy"),
+            (TRADE_SELL_ITEM, "Sell"),
+        ],
+    );
+    let done = centre_of(trade.dialog(), TRADE_DONE_ITEM);
+    game.click(done);
+    game.frame();
+    assert_eq!(open_over(&game), "nothing", "the trade center closed");
+    assert_eq!(game.showing(), Showing::Spaceport);
 }
 
 /// The centre of `dialog`'s item `item`.
