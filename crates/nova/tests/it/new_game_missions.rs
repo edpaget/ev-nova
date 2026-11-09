@@ -8,7 +8,8 @@
 //! Dock, ten tons of hull plate to Verge Camp, completed there, lending a
 //! Dock pass on the way), the side
 //! road closing on day 3 (an event, with its news), the wardens' toll at
-//! Verge Camp (every condition group) and the road's `take_point` offer.
+//! Verge Camp (every condition group) and the road's `take_point` offer,
+//! met by beating the wardens at the road's gate.
 //! The headless tests drive the session through its commands, putting a
 //! pilot's state in through the save; one walks the app. The rules are
 //! pinned in `nova_sim_story::storylines` and the session's forwarding in
@@ -22,7 +23,7 @@ use nova_sim::storylines::state::MissionState;
 use nova_sim::{OutfitId, Pilot, StellarId, SystemId};
 
 use crate::new_game_play::{self, Play, texts};
-use crate::new_game_travel::{fixture, nova_of};
+use crate::new_game_travel::{fixture, gates, nova_of};
 
 /// The fixture's start pilot, changed by `edit`, flying in `system`.
 fn fixture_play(system: &str, edit: impl FnOnce(&mut Pilot)) -> Play {
@@ -242,8 +243,103 @@ fn the_toll_is_offered_after_the_side_road_closes_and_the_dock_job() {
     assert_eq!(
         play.state("clear-the-road"),
         active,
-        "a take_point stays active"
+        "a take_point stays active while its guards hold the road"
     );
+}
+
+/// The fixture pilot at Verge Camp with the toll refused and the road
+/// accepted, as the toll test reaches it.
+fn on_the_road() -> Play {
+    let mut play = fixture_play("verge", |pilot| {
+        pilot
+            .story
+            .missions
+            .insert("dock-job".to_owned(), MissionState::Done);
+        pilot.story.day = 3;
+    });
+    play.land("verge-camp");
+    play.open();
+    play.choose(1);
+    play.close();
+    play.open();
+    play.choose(0);
+    play.close();
+    assert_eq!(
+        play.state("clear-the-road"),
+        Some(MissionState::Active {
+            cargo: 0,
+            met: false
+        })
+    );
+    play
+}
+
+/// The road is the wardens' until their guards at its gate are beaten:
+/// accepted at Verge Camp, in the point's own system, the road's blockade
+/// brings warden pickets to `verge/hearth-road`'s gate at the take-off,
+/// and destroying every one meets and completes the road (it has no
+/// completion), giving the point to the guild. The blockade is never
+/// offered itself.
+#[test]
+fn the_road_is_taken_by_beating_the_wardens_at_its_gate() {
+    let mut play = on_the_road();
+    let blockade = nova_sim::MissionId(nova_of(&play.game.ids.blockades, "clear-the-road"));
+    for venue in [
+        nova_sim::mission::Venue::Computer,
+        nova_sim::mission::Venue::Outside,
+    ] {
+        assert!(
+            play.session
+                .mission_offers(venue)
+                .iter()
+                .all(|offer| offer.mission != blockade),
+            "{venue:?}: the blockade isn't offered at Verge Camp"
+        );
+    }
+    play.take_off();
+    let road = play.gate("verge/hearth-road");
+    let at = gates(&play.game)
+        .into_iter()
+        .find(|gate| gate.stellar == road)
+        .expect("the road's gate")
+        .at;
+    let wardens = nova_sim::GovtId(nova_of(&play.game.ids.factions, "warden"));
+    let guards: Vec<_> = play
+        .session
+        .npcs()
+        .iter()
+        .filter(|npc| npc.mission.is_some())
+        .map(|npc| (npc.id, npc.govt, npc.state.position))
+        .collect();
+    assert!(!guards.is_empty(), "the wardens hold their road");
+    for &(_, govt, position) in &guards {
+        assert_eq!(govt, Some(wardens));
+        assert_eq!(position, at, "at the road's gate");
+    }
+    let (last, rest) = guards.split_last().expect("guards");
+    for &(id, _, _) in rest {
+        nova_sim::fixture::destroy(&mut play.session, id);
+        play.settle();
+    }
+    assert_eq!(
+        play.state("clear-the-road"),
+        Some(MissionState::Active {
+            cargo: 0,
+            met: false
+        }),
+        "one guard is left"
+    );
+    nova_sim::fixture::destroy(&mut play.session, last.0);
+    play.settle();
+    assert_eq!(play.state("clear-the-road"), Some(MissionState::Done));
+    assert_eq!(
+        play.session.pilot().story.points["verge/hearth-road"]
+            .owner
+            .as_deref(),
+        Some("guild")
+    );
+    let guild = nova_sim::GovtId(nova_of(&play.game.ids.factions, "guild"));
+    assert_eq!(play.session.galaxy().gate_govt(road), Some(guild));
 }
 
 /// Paid, the toll has no objective, so accepting it completes it: Done,

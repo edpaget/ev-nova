@@ -10,7 +10,7 @@
 //! each defaulting to the original's reading.
 //!
 //! The stock game pins nothing. The new game pins the other reading of
-//! eleven keys, as a jump point's gate is the only way in or out of a
+//! twelve keys, as a jump point's gate is the only way in or out of a
 //! system:
 //!
 //! - the three its traffic needs: [`RuleKey::DestinationReach`] (its
@@ -32,12 +32,18 @@
 //!   [`RuleKey::NoGateRefusal`] (J with a system selected that no jump
 //!   point here serves says "No jump point leads there.", where the
 //!   original's J is silent, so the player learns why J did nothing);
-//! - the two its mission ships need: [`RuleKey::MissionShipLinks`] (a
+//! - the three its mission ships need: [`RuleKey::MissionShipLinks`] (a
 //!   mission's ships sent to "a system adjacent" are drawn over the
-//!   gate lanes, not the Con slots) and [`RuleKey::AuxShipLinks`] (a
+//!   gate lanes, not the Con slots), [`RuleKey::AuxShipLinks`] (a
 //!   mission's auxiliary ships sent next to a system come into the
-//!   systems its gate lanes reach). The new game's own missions spawn no
-//!   such ships yet: the two are pinned for any that will.
+//!   systems its gate lanes reach) and [`RuleKey::GateExitCounts`] (a
+//!   mission ship that leaves through a hypergate counts as one that
+//!   left, as every departure is through a gate: by the original's
+//!   reading a `take_point`'s guard driven off through the point's own
+//!   gate would come back at the next setup, so its blockade could only
+//!   be broken by destroying every guard). The new game's blockades
+//!   (`nova_data::new_game`'s `blockades`) are its first mission ships;
+//!   the first two are pinned for any that go further afield.
 //!
 //! It leaves [`RuleKey::MapPlotting`] at the original's Shift-click, a
 //! hop at a time, so a course is plotted a lane at a time and J flies it.
@@ -78,7 +84,7 @@ const STOCK: Profile = Profile {
 };
 
 /// The new game's profile: its traffic's three gate readings, its map
-/// and courses' four, J's two and its mission ships' two (see
+/// and courses' four, J's two and its mission ships' three (see
 /// the module docs), and pilots of its own.
 const NEW_GAME: Profile = Profile {
     readings: &[
@@ -93,6 +99,7 @@ const NEW_GAME: Profile = Profile {
         (RuleKey::NoGateRefusal, RuleSource::Bible),
         (RuleKey::MissionShipLinks, RuleSource::Bible),
         (RuleKey::AuxShipLinks, RuleSource::Bible),
+        (RuleKey::GateExitCounts, RuleSource::Bible),
     ],
     pilots: "New Game Pilots",
 };
@@ -159,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    fn the_new_game_pins_the_other_reading_of_its_eleven_gate_lane_map_autopilot_and_mission_ship_keys()
+    fn the_new_game_pins_the_other_reading_of_its_twelve_gate_lane_map_autopilot_and_mission_ship_keys()
      {
         assert_eq!(
             Ruleset::NewGame.profile().readings,
@@ -175,6 +182,7 @@ mod tests {
                 (RuleKey::NoGateRefusal, RuleSource::Bible),
                 (RuleKey::MissionShipLinks, RuleSource::Bible),
                 (RuleKey::AuxShipLinks, RuleSource::Bible),
+                (RuleKey::GateExitCounts, RuleSource::Bible),
             ]
         );
     }

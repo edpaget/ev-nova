@@ -6,8 +6,8 @@
 //! The storyline "Holding the point": the supply run (offered at Luyten
 //! Exchange, twelve tons to Marrow Yard), the first failure (an event on
 //! day 60 that breaks the Luyten road, with its news), the crossroads
-//! offer at Marrow Yard and take the point, met by going through the far
-//! gate. The gate crossings go through the session's own commands (the
+//! offer at Marrow Yard and take the point, met by beating the band's
+//! guards at the far gate. The gate crossings go through the session's own commands (the
 //! land press over the gate, then the hypergate entry). The rules are
 //! pinned in `nova_sim_story::storylines` and the session's forwarding in
 //! `nova_sim`; this pins that the sample's data, the real Ink runtime and
@@ -19,7 +19,7 @@ use nova_sim::storylines::state::MissionState;
 use nova_sim::{GovtId, LandingRefusal, Pilot, StellarId, SystemId};
 
 use crate::new_game_play::{Play, texts};
-use crate::new_game_travel::nova_of;
+use crate::new_game_travel::{gates, nova_of};
 
 /// The sample's start pilot, changed by `edit`, flying in `system`.
 fn sample(system: &str, edit: impl FnOnce(&mut Pilot)) -> Play {
@@ -211,25 +211,68 @@ fn crossroads(play: &mut Play) {
     play.close();
 }
 
-/// Take the point: met by leaving through the far gate, not by coming
-/// back through it, and completed at Marrow Yard, the far gate the
-/// commons'.
+/// The special ships in `play`'s system, the band's guards, as (id,
+/// government, position).
+fn guards(play: &Play) -> Vec<(nova_sim::NpcId, Option<GovtId>, nova_sim::Vec2)> {
+    play.session
+        .npcs()
+        .iter()
+        .filter(|npc| npc.mission.is_some())
+        .map(|npc| (npc.id, npc.govt, npc.state.position))
+        .collect()
+}
+
+/// Where the gate `gate` sits.
+fn gate_at(play: &Play, gate: StellarId) -> nova_sim::Vec2 {
+    gates(&play.game)
+        .into_iter()
+        .find(|at| at.stellar == gate)
+        .expect("a gate")
+        .at
+}
+
+/// Take the point: the band's gunships hold the far gate from the
+/// take-off at Marrow Yard. Going through the gate and back meets
+/// nothing, and brings them back at the gate. Destroying every one meets
+/// it, and it completes at Marrow Yard, the far gate the commons'.
 fn take_the_point(play: &mut Play) {
     let far_gate = play.gate("marrow/far-gate");
+    play.take_off();
+    let band = govt(play, "harrow-band");
+    let held = guards(play);
+    assert!(!held.is_empty(), "the band holds the far gate");
+    for &(_, govt, position) in &held {
+        assert_eq!(govt, Some(band));
+        assert_eq!(position, gate_at(play, far_gate), "at the far gate");
+    }
     assert_eq!(
         play.go_through("marrow/far-gate"),
         play.system("brightwater")
     );
     assert_eq!(
         play.state("take-the-point"),
-        MET,
-        "through the point's gate"
+        ACTIVE,
+        "going through the point's gate meets nothing"
     );
     assert_eq!(
         play.go_through("brightwater/marrow-gate"),
         play.system("marrow")
     );
-    assert_eq!(play.state("take-the-point"), MET, "arriving meets nothing");
+    assert_eq!(
+        play.state("take-the-point"),
+        ACTIVE,
+        "arriving meets nothing"
+    );
+    assert_eq!(
+        guards(play).len(),
+        held.len(),
+        "the guards are at the gate again"
+    );
+    for (id, _, _) in guards(play) {
+        nova_sim::fixture::destroy(&mut play.session, id);
+        play.settle();
+    }
+    assert_eq!(play.state("take-the-point"), MET, "the blockade is broken");
     play.land("marrow-yard");
     assert_eq!(
         play.open(),
