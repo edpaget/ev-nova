@@ -8,6 +8,7 @@ use schemars::generate::SchemaSettings;
 
 use crate::asset::{Asset, Budget};
 use crate::fleet::{Livery, ModKit, Outfit, Ship};
+use crate::goods::Good;
 use crate::model::{
     Character, Faction, Kind, Mission, News, Region, Start, Stellar, Storyline, System,
 };
@@ -20,6 +21,7 @@ pub fn schemas() -> Vec<(String, String)> {
         one::<Faction>(),
         one::<System>(),
         one::<Stellar>(),
+        one::<Good>(),
         one::<Storyline>(),
         one::<Mission>(),
         one::<News>(),
@@ -47,6 +49,19 @@ fn one<T: JsonSchema + Kind>() -> (String, String) {
 mod tests {
     use super::*;
 
+    /// The schema named `name`.
+    fn schema(name: &str) -> (String, String) {
+        schemas()
+            .into_iter()
+            .find(|(file, _)| file == name)
+            .expect("a schema of that name")
+    }
+
+    /// The schema named `name`, parsed.
+    fn value(name: &str) -> serde_json::Value {
+        serde_json::from_str(&schema(name).1).expect("JSON")
+    }
+
     #[test]
     fn there_is_one_schema_per_kind() {
         let names: Vec<_> = schemas().into_iter().map(|(name, _)| name).collect();
@@ -57,6 +72,7 @@ mod tests {
                 "faction.schema.json",
                 "system.schema.json",
                 "stellar.schema.json",
+                "good.schema.json",
                 "storyline.schema.json",
                 "mission.schema.json",
                 "news.schema.json",
@@ -74,7 +90,7 @@ mod tests {
 
     #[test]
     fn a_schema_rejects_unknown_fields() {
-        let (_, system) = &schemas()[2];
+        let (_, system) = &schema("system.schema.json");
         let value: serde_json::Value = serde_json::from_str(system).unwrap();
         assert_eq!(value["additionalProperties"], false);
         assert_eq!(value["title"], "System");
@@ -83,7 +99,7 @@ mod tests {
 
     #[test]
     fn the_mission_schema_lists_the_outfit_effects() {
-        let (_, mission) = &schemas()[5];
+        let (_, mission) = &schema("mission.schema.json");
         let value: serde_json::Value = serde_json::from_str(mission).unwrap();
         let effects = &value["definitions"]["Effects"]["properties"];
         for field in ["grant_outfits", "remove_outfits"] {
@@ -98,7 +114,7 @@ mod tests {
 
     #[test]
     fn the_stellar_schema_lists_its_conversation() {
-        let (_, stellar) = &schemas()[3];
+        let (_, stellar) = &schema("stellar.schema.json");
         let value: serde_json::Value = serde_json::from_str(stellar).unwrap();
         let dialog = &value["properties"]["dialog"];
         assert!(dialog.is_object(), "{stellar}");
@@ -108,5 +124,49 @@ mod tests {
                 .is_some_and(|d| d.contains("conversation")),
             "{dialog}"
         );
+    }
+
+    #[test]
+    fn the_good_schema_describes_its_name_and_price() {
+        let good = value("good.schema.json");
+        assert_eq!(good["title"], "Good");
+        assert_eq!(good["additionalProperties"], false);
+        assert!(
+            good["properties"]["price"]["description"]
+                .as_str()
+                .is_some_and(|d| d.contains("credits a ton")),
+            "{good}"
+        );
+        assert!(good["properties"]["name"].is_object(), "{good}");
+        assert_eq!(good["required"], serde_json::json!(["name", "price"]));
+    }
+
+    #[test]
+    fn the_stellar_schema_maps_each_good_it_prices_to_a_level() {
+        let stellar = value("stellar.schema.json");
+        let prices = &stellar["properties"]["prices"];
+        assert_eq!(prices["type"], "object", "{prices}");
+        assert!(
+            prices["description"]
+                .as_str()
+                .is_some_and(|d| d.contains("goods/")),
+            "{prices}"
+        );
+        let keyed = prices["patternProperties"]
+            .as_object()
+            .expect("keyed by good");
+        let (pattern, level) = keyed.iter().next().expect("one pattern");
+        assert_eq!(pattern, "^[a-z0-9]+(-[a-z0-9]+)*$", "a good's id");
+        let level = level["$ref"].as_str().expect("a level for each good");
+        let name = level.rsplit('/').next().expect("a definition");
+        let levels: Vec<&str> = stellar["definitions"][name]["oneOf"]
+            .as_array()
+            .expect("the levels")
+            .iter()
+            .filter_map(|level| level["const"].as_str())
+            .collect();
+        assert_eq!(levels, ["low", "medium", "high"], "{stellar}");
+        let required = stellar["required"].as_array().expect("required");
+        assert!(!required.contains(&"prices".into()), "{required:?}");
     }
 }

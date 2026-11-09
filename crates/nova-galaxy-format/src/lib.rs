@@ -3,7 +3,7 @@
 //!
 //! This crate holds what the engine and the checking tool both need: the
 //! ids and value types ([`id`]), one type per kind of content file
-//! ([`model`], [`fleet`], [`asset`]), front-matter parsing
+//! ([`model`], [`fleet`], [`goods`], [`asset`]), front-matter parsing
 //! ([`frontmatter`]), the loader ([`load`]) and the [`source::Source`]
 //! port it reads through, the JSON Schemas generated from the types
 //! ([`schema`]), the rules for derived data, such as how a ship
@@ -42,6 +42,7 @@ pub mod asset;
 pub mod fixture;
 pub mod fleet;
 pub mod frontmatter;
+pub mod goods;
 pub mod id;
 pub mod load;
 pub mod media;

@@ -5,9 +5,12 @@
 //! `data/schema/` are generated from them (`galaxy schema`), and a test
 //! fails if the committed schemas fall behind.
 
+use std::collections::BTreeMap;
+
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use crate::goods::PriceLevel;
 use crate::id::{Color, DialogRef, Flag, Fraction, Harshness, Id, PointRef};
 
 /// An `[x, y]` position. On the galaxy map and inside a system, x grows
@@ -194,6 +197,11 @@ pub struct Stellar {
     /// knot on landing. Omit if the stellar has nothing to say.
     #[serde(default)]
     pub dialog: Option<DialogRef>,
+    /// What its exchange trades: each good it buys and sells
+    /// (`goods/<id>.md`), and how dear it is here, `low`, `medium` or
+    /// `high`. It needs the `trade` service. Omit if it trades nothing.
+    #[serde(default)]
+    pub prices: BTreeMap<Id, PriceLevel>,
 }
 
 /// How a stellar looks: one or the other.
@@ -715,7 +723,7 @@ kinds! {
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::frontmatter::parse;
 
@@ -835,7 +843,7 @@ mod tests {
 
     /// `as_str` gives each of `all` the name data writes it as, and `all`
     /// is every value the schema names.
-    fn assert_data_names<T>(all: &[T], as_str: fn(T) -> &'static str)
+    pub(crate) fn assert_data_names<T>(all: &[T], as_str: fn(T) -> &'static str)
     where
         T: JsonSchema + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug + Copy,
     {

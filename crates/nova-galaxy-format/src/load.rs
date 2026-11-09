@@ -15,6 +15,7 @@ use serde::de::DeserializeOwned;
 use crate::asset::{Asset, Budget};
 use crate::fleet::{Livery, ModKit, Outfit, Ship};
 use crate::frontmatter;
+use crate::goods::Good;
 use crate::id::{Id, MediaPath, PointRef};
 use crate::model::{
     Character, Faction, JumpPoint, Kind, Mission, News, Region, Start, Stellar, Storyline, System,
@@ -43,6 +44,8 @@ pub struct Galaxy {
     pub systems: BTreeMap<Id, Doc<System>>,
     /// `stellars/`.
     pub stellars: BTreeMap<Id, Doc<Stellar>>,
+    /// `goods/`.
+    pub goods: BTreeMap<Id, Doc<Good>>,
     /// `storylines/`.
     pub storylines: BTreeMap<Id, Doc<Storyline>>,
     /// `missions/`.
@@ -144,6 +147,7 @@ pub fn load(source: &impl Source) -> (Galaxy, Vec<Problem>) {
         factions: kind::<Faction>(source, p, u),
         systems: kind::<System>(source, p, u),
         stellars: kind::<Stellar>(source, p, u),
+        goods: kind::<Good>(source, p, u),
         storylines: kind::<Storyline>(source, p, u),
         missions: kind::<Mission>(source, p, u),
         news: kind::<News>(source, p, u),
