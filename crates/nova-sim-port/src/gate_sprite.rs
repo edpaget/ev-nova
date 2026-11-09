@@ -87,15 +87,9 @@
 use crate::catalog::{LandingSite, SiteAnimation};
 use crate::chance::Chance;
 use crate::clearance::DockRequest;
+use crate::landing::{ALTERNATE, ANIMATE_ONLY_WHEN_DESTROYED, RANDOM};
 use crate::traffic::npc::Npc;
 use nova_sim_base::SpeedMult;
-
-/// `Flags2` 0x0001: show the open frame between every other frame.
-pub const ALTERNATE: u16 = 0x0001;
-/// `Flags2` 0x0002: pick the loop's frames at random.
-pub const RANDOM: u16 = 0x0002;
-/// `Flags2` 0x0080: animate only while destroyed.
-pub const ONLY_WHEN_DESTROYED: u16 = 0x0080;
 
 /// One `_HandleStellarSprites` the flight ran outside a play frame, under a
 /// `_PrepareAllSprites` or at game entry: the session steps every stellar
@@ -155,7 +149,7 @@ pub struct GateAnimation {
     /// Its `CustPicID`, raw: the open frame, when it is one.
     pub open_pic: i16,
     /// Its `Flags2`, raw: [`ALTERNATE`], [`RANDOM`] and
-    /// [`ONLY_WHEN_DESTROYED`] are read.
+    /// [`ANIMATE_ONLY_WHEN_DESTROYED`] are read.
     pub flags2: u16,
     /// The frame count of the sheet it counts.
     pub frames: u16,
@@ -203,10 +197,10 @@ impl GateAnimation {
     }
 
     /// Whether it animates, `destroyed` or not: when its frame count is
-    /// above 1 and its destroyed state is the one [`ONLY_WHEN_DESTROYED`]
+    /// above 1 and its destroyed state is the one [`ANIMATE_ONLY_WHEN_DESTROYED`]
     /// names (@0x2e784-0x2e80a).
     fn animates(&self, destroyed: bool) -> bool {
-        self.frames > 1 && (self.flags2 & ONLY_WHEN_DESTROYED != 0) == destroyed
+        self.frames > 1 && (self.flags2 & ANIMATE_ONLY_WHEN_DESTROYED != 0) == destroyed
     }
 
     fn has(&self, bit: u16) -> bool {
@@ -514,7 +508,7 @@ mod tests {
     #[test]
     fn a_sites_gate_animation_counts_its_dead_sheet_while_destroyed_with_one() {
         let site = LandingSite {
-            flags2: crate::gate::HYPERGATE | RANDOM | ONLY_WHEN_DESTROYED,
+            flags2: crate::gate::HYPERGATE | RANDOM | ANIMATE_ONLY_WHEN_DESTROYED,
             dead_graphic: Some(6),
             animation: SiteAnimation {
                 delay: 3,
@@ -530,7 +524,7 @@ mod tests {
             delay: 3,
             frame0_bias: 2,
             open_pic: 9,
-            flags2: crate::gate::HYPERGATE | RANDOM | ONLY_WHEN_DESTROYED,
+            flags2: crate::gate::HYPERGATE | RANDOM | ANIMATE_ONLY_WHEN_DESTROYED,
             frames: 42,
         };
         assert_eq!(GateAnimation::of(&site), anim);
@@ -768,7 +762,7 @@ mod tests {
         assert_eq!(sprite.shown(&anim, true), 0);
         // One that animates only while destroyed animates then alone.
         let ruin = GateAnimation {
-            flags2: ONLY_WHEN_DESTROYED,
+            flags2: ANIMATE_ONLY_WHEN_DESTROYED,
             ..gate(6, 1)
         };
         let mut sprite = GateSprite::new();

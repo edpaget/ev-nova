@@ -277,6 +277,19 @@ pub const HYPERGATE: u16 = spob_flags2::HYPERGATE;
 /// The `spöb` `Flags2` bit of a wormhole, as the `spöb` record defines it
 /// ([`nova_data::records::stellar::flags2::WORMHOLE`]).
 pub const WORMHOLE: u16 = spob_flags2::WORMHOLE;
+/// The `spöb` `Flags2` bit that shows the open frame between every other
+/// frame, as the `spöb` record defines it
+/// ([`nova_data::records::stellar::flags2::ALTERNATE`]).
+pub const ALTERNATE: u16 = spob_flags2::ALTERNATE;
+/// The `spöb` `Flags2` bit that picks the loop's frames at random, as the
+/// `spöb` record defines it ([`nova_data::records::stellar::flags2::RANDOM`]).
+pub const RANDOM: u16 = spob_flags2::RANDOM;
+/// The `spöb` `Flags2` bit that animates a stellar only while destroyed,
+/// as the `spöb` record defines it
+/// ([`nova_data::records::stellar::flags2::ANIMATE_ONLY_WHEN_DESTROYED`]).
+/// Not [`StellarFlags::ONLY_WHEN_DESTROYED`], the `Flags` bit that lets a
+/// stellar be landed on only once destroyed.
+pub const ANIMATE_ONLY_WHEN_DESTROYED: u16 = spob_flags2::ANIMATE_ONLY_WHEN_DESTROYED;
 
 /// What a stellar a ship can enter leads through.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
