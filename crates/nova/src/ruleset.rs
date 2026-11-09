@@ -10,7 +10,7 @@
 //! each defaulting to the original's reading.
 //!
 //! The stock game pins nothing. The new game pins the other reading of
-//! ten keys, as a jump point's gate is the only way in or out of a
+//! eleven keys, as a jump point's gate is the only way in or out of a
 //! system:
 //!
 //! - the three its traffic needs: [`RuleKey::DestinationReach`] (its
@@ -25,10 +25,13 @@
 //!   [`RuleKey::MapLaneStyle`] (each lane drawn in its stability's look,
 //!   one-way lanes arrowed) and [`RuleKey::GateCourse`] (a gate taken
 //!   along the course keeps the rest of it);
-//! - J's: [`RuleKey::GateAutopilot`] (J with a system selected that a
-//!   jump point here serves engages the gate autopilot, which flies the
+//! - J's two: [`RuleKey::GateAutopilot`] (J with a system selected that
+//!   a jump point here serves engages the gate autopilot, which flies the
 //!   course gate by gate with the player's own controls; J never starts a
-//!   hyperspace jump, as the new game has none);
+//!   hyperspace jump, as the new game has none) and
+//!   [`RuleKey::NoGateRefusal`] (J with a system selected that no jump
+//!   point here serves says "No jump point leads there.", where the
+//!   original's J is silent, so the player learns why J did nothing);
 //! - the two its mission ships need: [`RuleKey::MissionShipLinks`] (a
 //!   mission's ships sent to "a system adjacent" are drawn over the
 //!   gate lanes, not the Con slots) and [`RuleKey::AuxShipLinks`] (a
@@ -75,7 +78,7 @@ const STOCK: Profile = Profile {
 };
 
 /// The new game's profile: its traffic's three gate readings, its map
-/// and courses' four, J's gate autopilot and its mission ships' two (see
+/// and courses' four, J's two and its mission ships' two (see
 /// the module docs), and pilots of its own.
 const NEW_GAME: Profile = Profile {
     readings: &[
@@ -87,6 +90,7 @@ const NEW_GAME: Profile = Profile {
         (RuleKey::MapLaneStyle, RuleSource::Bible),
         (RuleKey::GateCourse, RuleSource::Bible),
         (RuleKey::GateAutopilot, RuleSource::Bible),
+        (RuleKey::NoGateRefusal, RuleSource::Bible),
         (RuleKey::MissionShipLinks, RuleSource::Bible),
         (RuleKey::AuxShipLinks, RuleSource::Bible),
     ],
@@ -155,7 +159,7 @@ mod tests {
     }
 
     #[test]
-    fn the_new_game_pins_the_other_reading_of_its_ten_gate_lane_map_autopilot_and_mission_ship_keys()
+    fn the_new_game_pins_the_other_reading_of_its_eleven_gate_lane_map_autopilot_and_mission_ship_keys()
      {
         assert_eq!(
             Ruleset::NewGame.profile().readings,
@@ -168,6 +172,7 @@ mod tests {
                 (RuleKey::MapLaneStyle, RuleSource::Bible),
                 (RuleKey::GateCourse, RuleSource::Bible),
                 (RuleKey::GateAutopilot, RuleSource::Bible),
+                (RuleKey::NoGateRefusal, RuleSource::Bible),
                 (RuleKey::MissionShipLinks, RuleSource::Bible),
                 (RuleKey::AuxShipLinks, RuleSource::Bible),
             ]
