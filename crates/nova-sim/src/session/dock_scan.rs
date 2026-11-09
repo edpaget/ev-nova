@@ -172,11 +172,15 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::{GovtId, GovtRecord, OutfitRecord, Penalties, StellarId};
+    use crate::catalog::{
+        GovtId, GovtRecord, JunkId, JunkRecord, OutfitRecord, Penalties, StellarId,
+    };
     use crate::clearance::{CLEARED, DockRequest};
     use crate::combat::hull::Condition;
+    use crate::control::Test;
     use crate::flight_frame::{Answer, FlightCommand};
     use crate::landing::{LandOutcome, LandingRefusal, StellarFlags};
+    use crate::market::Good;
     use crate::session::LandPress;
     use crate::session::apply::ApplyCollaborators;
     use crate::sound::SimSound;
@@ -191,6 +195,8 @@ mod tests {
     const GUN_MOUNT: OutfitId = OutfitId(131);
     /// A lawless outfit that is no kit: the law's `ScanMask`, no attention.
     const LOOSE: OutfitId = OutfitId(132);
+    /// A lawless `jünk`: the law's `ScanMask`.
+    const OPALS: JunkId = JunkId(146);
     const MASK: u16 = 0x0001;
     const FINE: i16 = 500;
     const PENALTY: i16 = 10;
@@ -416,6 +422,55 @@ mod tests {
         );
         assert_eq!(session.pilot().cash(), 2000);
         assert_eq!(session.take_messages(), []);
+    }
+
+    #[test]
+    fn illegal_junk_held_by_a_ship_drawing_attention_is_found_fined_and_denied() {
+        let mut catalog = policed();
+        catalog.junk = vec![JunkRecord {
+            id: OPALS,
+            name: "Opals".to_owned(),
+            abbrev: String::new(),
+            base_price: 100,
+            sold_at: Vec::new(),
+            bought_at: Vec::new(),
+            buy_on: Test::default(),
+            sell_on: Test::default(),
+            flags: 0,
+            scan_mask: MASK,
+            lc_name: "opals".to_owned(),
+        }];
+        let mut session = carrying(&catalog, &[PLATING]);
+        session.pilot.cargo.insert(Good::Junk(OPALS), 2);
+        assert_eq!(press(&mut session), denied(0));
+        assert_eq!(session.pilot().cash(), 2000 - i64::from(FINE));
+        assert_eq!(
+            session.take_messages(),
+            [SimMessage::DockScanned {
+                stellar: PLANET,
+                found: DockFind::Junk(OPALS),
+                fine: i64::from(FINE),
+            }]
+        );
+    }
+
+    #[test]
+    fn two_of_a_lawless_kit_are_found_as_more_than_one() {
+        let catalog = policed();
+        let mut session = carrying(&catalog, &[GUN_MOUNT]);
+        session.pilot.outfits.insert(GUN_MOUNT, 2);
+        assert_eq!(press(&mut session), denied(0));
+        assert_eq!(
+            session.take_messages(),
+            [SimMessage::DockScanned {
+                stellar: PLANET,
+                found: DockFind::Outfit {
+                    id: GUN_MOUNT,
+                    one: false,
+                },
+                fine: i64::from(FINE),
+            }]
+        );
     }
 
     #[test]
