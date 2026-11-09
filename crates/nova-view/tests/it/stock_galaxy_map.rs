@@ -547,3 +547,17 @@ fn pict_8509_the_maps_background_is_the_dialogs_own_size() {
     let size = (image.width() as f32, image.height() as f32);
     assert_eq!(size, DIALOG_SIZE, "601 x 513: the stretch changes nothing");
 }
+
+#[test]
+fn the_stock_rules_leave_the_stock_viewer_as_it_was() {
+    let Some(data) = open() else {
+        return;
+    };
+    let before = GalaxyMap::new(&data);
+    let after = GalaxyMap::new(&data).with_rules(&nova_sim::Rulebook::default());
+    assert_eq!(after.picture(), before.picture());
+    assert_eq!(
+        drawn(&after).iter().collect::<Vec<_>>(),
+        drawn(&before).iter().collect::<Vec<_>>()
+    );
+}

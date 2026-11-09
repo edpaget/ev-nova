@@ -310,9 +310,15 @@ impl AppScreen {
     /// router hands each flight (its behaviour, law, boarding, hail
     /// options, hire terms and persons) stay as they are, so a rule one
     /// of them decides changes only through [`AppScreen::with_rulebook`].
+    /// The galaxy viewer draws its links by them too
+    /// ([`Navigator::with_rules`]).
     #[must_use]
     pub fn with_rules(self, rules: Rulebook) -> Self {
-        Self { rules, ..self }
+        Self {
+            galaxy: self.galaxy.with_rules(&rules),
+            rules,
+            ..self
+        }
     }
 
     /// The router with each flight drawing the port's own `overlays`, the
