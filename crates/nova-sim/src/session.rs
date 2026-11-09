@@ -601,6 +601,7 @@ mod murk;
 mod nav;
 mod nebulae;
 mod news;
+mod no_gate_refusal;
 #[cfg(test)]
 mod npc_destinations;
 mod npc_escape;

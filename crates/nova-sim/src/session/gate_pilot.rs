@@ -323,7 +323,7 @@ impl Chart {
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::session) mod tests {
     use super::*;
     use crate::flight::{Face, Turn};
     use crate::flight_frame::{Answer, FlightCommand};
@@ -335,7 +335,7 @@ mod tests {
     /// A new pilot over [`laned_stable`], in drift over gate 300, the links the
     /// gate lanes, by `autopilot` for [`RuleKey::GateAutopilot`] and the
     /// other reading of [`RuleKey::GateCourse`].
-    fn laned_by(autopilot: RuleSource) -> Session {
+    pub(in crate::session) fn laned_by(autopilot: RuleSource) -> Session {
         let rules = Rulebook::default()
             .with_override(RuleKey::GateLanes, RuleSource::Bible)
             .with_override(RuleKey::GateCourse, RuleSource::Bible)
