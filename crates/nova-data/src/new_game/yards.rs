@@ -27,6 +27,14 @@
 //!   (`super::outfits`). Each yard's slots are its first eight numbers,
 //!   ascending, `-1` for an unused slot ([`Sales::slots`]); its `spöb`
 //!   takes them as `SpecialTech` (`super::map`).
+//! - **The hulls** ([`sales`]): after the outfits, so their numbers don't
+//!   move, each mapped ship, in id order, with a `sold_at` and at least
+//!   one yard with the `shipyard` service, gets its set's number
+//!   ([`Sales::ships`]) from the same allocator, so an outfit and a hull
+//!   sold at the same yards share one. The original tests a `shïp`'s
+//!   `TechLevel` against the same `SpecialTech` words
+//!   (`_SetupPortAvailableShipTypes` @0xbc4b-0xbc72). Its `shïp` takes it
+//!   as `TechLevel`, with `BuyRandom` 100 (`super::fleet`).
 //!
 //! # Problems
 //!
@@ -34,15 +42,20 @@
 //!   item is sold from, is reported against the item's file, and the
 //!   item isn't sold there. A stellar that failed to load, or was left out
 //!   for its system or its ID, is reported already and skipped.
+//! - A ship with a `sold_at` but no `price`, nor any in its `base` chain,
+//!   is reported and not sold: a price of 0 would have the shipyard pay
+//!   the whole trade-in.
 //! - A yard in more than eight sets is reported against its own file: it
-//!   keeps its eight lowest numbers, and the items of the rest aren't sold
-//!   there (they still are at their other yards).
+//!   keeps its eight lowest numbers, and the items of the rest, outfits
+//!   and then hulls, aren't sold there (they still are at their other
+//!   yards).
 //! - Past [`SOLD_TECH_LAST`] an item is reported and not sold. The data
 //!   can't reach it: an outfit and a hull each need a set, and there are
 //!   far fewer `oütf` and `shïp` IDs than numbers.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use nova_galaxy_format::fleet::resolve;
 use nova_galaxy_format::id::Id;
 use nova_galaxy_format::load::{Galaxy, Problem};
 use nova_galaxy_format::model::Service;
@@ -142,19 +155,42 @@ pub fn yards(
     yards
 }
 
-/// What the outfitters sell: each sold outfit's tech number, and each
-/// yard's `SpecialTech` slots.
+/// What the outfitters and shipyards sell: each sold outfit's and ship's
+/// tech number, and each yard's `SpecialTech` slots.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Sales {
     /// Each outfit sold at a yard, and its `TechLevel`.
     pub outfits: BTreeMap<Id, i16>,
+    /// Each ship sold at a yard, and its `TechLevel`.
+    pub ships: BTreeMap<Id, i16>,
     /// Each yard selling anything, by `spöb` ID, and its `SpecialTech`
     /// slots.
     pub slots: BTreeMap<i16, [i16; SPECIAL_TECH_SLOTS]>,
 }
 
-/// The sales of `galaxy`'s outfits numbered in `ids` (see the module
-/// docs).
+/// Numbers `at` in `tech` for the item `id` into `sold`; an item with no
+/// yard is skipped, and one with no number left reported against `file`.
+fn sell(
+    tech: &mut YardTech,
+    sold: &mut BTreeMap<Id, i16>,
+    id: &Id,
+    file: &str,
+    at: &BTreeSet<i16>,
+    problems: &mut Vec<Problem>,
+) {
+    if at.is_empty() {
+        return;
+    }
+    match tech.number(at) {
+        Some(number) => {
+            sold.insert(id.clone(), number);
+        }
+        None => problems.push(Problem::new(file, "no tech number is left; it isn't sold")),
+    }
+}
+
+/// The sales of `galaxy`'s outfits and then ships numbered in `ids` (see
+/// the module docs).
 pub fn sales(galaxy: &Galaxy, ids: &IdTable, problems: &mut Vec<Problem>) -> Sales {
     let mut tech = YardTech::default();
     let mut sales = Sales::default();
@@ -168,18 +204,33 @@ pub fn sales(galaxy: &Galaxy, ids: &IdTable, problems: &mut Vec<Problem>) -> Sal
             Service::Outfitter,
             problems,
         );
-        if at.is_empty() {
+        sell(&mut tech, &mut sales.outfits, id, &doc.path, &at, problems);
+    }
+    for id in ids.ships.keys() {
+        let doc = &galaxy.ships[id];
+        if doc.data.sold_at.is_empty() {
             continue;
         }
-        match tech.number(&at) {
-            Some(number) => {
-                sales.outfits.insert(id.clone(), number);
-            }
-            None => problems.push(Problem::new(
+        if resolve(galaxy, id)
+            .ok()
+            .and_then(|ship| ship.price)
+            .is_none()
+        {
+            problems.push(Problem::new(
                 &doc.path,
-                "no tech number is left; it isn't sold",
-            )),
+                "it has a `sold_at` but no `price`, nor does its base chain; it isn't sold",
+            ));
+            continue;
         }
+        let at = yards(
+            galaxy,
+            ids,
+            &doc.path,
+            &doc.data.sold_at,
+            Service::Shipyard,
+            problems,
+        );
+        sell(&mut tech, &mut sales.ships, id, &doc.path, &at, problems);
     }
     let stellars: BTreeMap<i16, &Id> = ids.stellars.iter().map(|(id, &nova)| (nova, id)).collect();
     for (yard, numbers) in tech.slots() {
@@ -190,6 +241,7 @@ pub fn sales(galaxy: &Galaxy, ids: &IdTable, problems: &mut Vec<Problem>) -> Sal
         let over = numbers.get(SPECIAL_TECH_SLOTS..).unwrap_or_default();
         if !over.is_empty() {
             let left: Vec<String> = (sales.outfits.iter())
+                .chain(&sales.ships)
                 .filter(|(_, number)| over.contains(number))
                 .map(|(id, _)| format!("`{id}`"))
                 .collect();
@@ -218,6 +270,7 @@ mod tests {
     use super::super::{NewGame, load};
     use super::*;
     use crate::records::outfit::Outfit;
+    use crate::records::ship::Ship;
     use crate::records::stellar::Stellar;
 
     fn set(yards: &[i16]) -> BTreeSet<i16> {
@@ -291,13 +344,32 @@ mod tests {
         )
     }
 
-    /// The fixture galaxy with both its stellars outfitters and four more
-    /// in `beta`, `b1` to `b4`.
+    /// A variant of the skiff costing `price` (none for no field), sold at
+    /// `sold_at`, a YAML list's insides (none for no field).
+    fn ship_text(price: Option<u32>, sold_at: Option<&str>) -> String {
+        let price = price.map_or(String::new(), |price| format!("price: {price}\n"));
+        let sold_at = sold_at.map_or(String::new(), |at| format!("sold_at: [{at}]\n"));
+        format!("---\nname: H\nbase: skiff\n{price}{sold_at}---\n")
+    }
+
+    /// The `shïp` of the ship `ship`.
+    fn ship(game: &NewGame, ship: &str) -> Ship {
+        let nova = game.ids.ships[&id(ship)];
+        game.data
+            .get::<Ship>(nova)
+            .expect("present")
+            .expect("decoded")
+            .record
+            .clone()
+    }
+
+    /// The fixture galaxy with both its stellars outfitters, `alpha-yard`
+    /// a shipyard too, and four more outfitters in `beta`, `b1` to `b4`.
     fn yards_galaxy() -> MemSource {
         let source = galaxy()
             .with(
                 "stellars/alpha-yard.md",
-                &stellar_text("Alpha Yard", "alpha", "outfitter"),
+                &stellar_text("Alpha Yard", "alpha", "outfitter, shipyard"),
             )
             .with(
                 "stellars/alpha-prime.md",
@@ -518,5 +590,107 @@ mod tests {
         for &gate in game.ids.gates.values() {
             assert_eq!(slots_of(&game, gate), holding(&[]), "{gate}");
         }
+    }
+
+    #[test]
+    fn a_hull_sold_at_a_yard_takes_the_number_of_its_set_and_shares_an_outfit_s() {
+        let game = loaded(
+            &yards_galaxy()
+                .with("outfits/blaster.md", &outfit_text(Some("alpha-yard")))
+                .with("ships/hauler.md", &ship_text(Some(900), Some("alpha-yard"))),
+        );
+        assert_eq!(problems(&game), Vec::<String>::new());
+        assert_eq!(outfit(&game, "blaster").tech_level, 3);
+        let hauler = ship(&game, "hauler");
+        assert_eq!((hauler.tech_level, hauler.buy_random), (3, 100));
+        assert_eq!(slots(&game, "alpha-yard"), holding(&[3]));
+    }
+
+    #[test]
+    fn outfits_are_numbered_before_hulls() {
+        let game = loaded(
+            &yards_galaxy()
+                .with("ships/a-hull.md", &ship_text(Some(900), Some("alpha-yard")))
+                .with("outfits/blaster.md", &outfit_text(Some("alpha-yard, b1"))),
+        );
+        assert_eq!(problems(&game), Vec::<String>::new());
+        assert_eq!(outfit(&game, "blaster").tech_level, 3, "phase 6's number");
+        assert_eq!(ship(&game, "a-hull").tech_level, 4);
+        assert_eq!(slots(&game, "alpha-yard"), holding(&[3, 4]));
+        assert_eq!(slots(&game, "b1"), holding(&[3]));
+    }
+
+    #[test]
+    fn a_hull_s_stellar_without_a_shipyard_is_reported_and_not_sold_there() {
+        let game = loaded(&yards_galaxy().with(
+            "ships/hauler.md",
+            &ship_text(Some(900), Some("b1, alpha-yard")),
+        ));
+        assert_eq!(
+            problems(&game),
+            ["ships/hauler.md: the stellar `b1` has no `shipyard` service; it isn't sold there"]
+        );
+        assert_eq!(ship(&game, "hauler").tech_level, 3, "at the yard alone");
+        assert_eq!(slots(&game, "alpha-yard"), holding(&[3]));
+        assert_eq!(slots(&game, "b1"), holding(&[]));
+    }
+
+    #[test]
+    fn a_hull_sold_with_no_price_is_reported_and_not_sold() {
+        let game =
+            loaded(&yards_galaxy().with("ships/hauler.md", &ship_text(None, Some("alpha-yard"))));
+        assert_eq!(
+            problems(&game),
+            [
+                "ships/hauler.md: it has a `sold_at` but no `price`, nor does its base chain; \
+                 it isn't sold"
+            ]
+        );
+        let hauler = ship(&game, "hauler");
+        assert_eq!(
+            (hauler.tech_level, hauler.buy_random),
+            (OUTFIT_TECH_NEVER, 0)
+        );
+        assert_eq!(slots(&game, "alpha-yard"), holding(&[]));
+    }
+
+    #[test]
+    fn a_yard_in_nine_sets_reports_the_hulls_of_the_ninth_too() {
+        let sets = [
+            "alpha-yard",
+            "alpha-yard, b1",
+            "alpha-yard, b2",
+            "alpha-yard, b3",
+            "alpha-yard, b4",
+            "alpha-yard, b1, b2",
+            "alpha-yard, b1, b3",
+            "alpha-yard, b1, b4",
+            "alpha-yard, b2, b3",
+        ];
+        let shipyards = (1..=4).fold(yards_galaxy(), |source, n| {
+            source.with(
+                &format!("stellars/b{n}.md"),
+                &stellar_text("B", "beta", "outfitter, shipyard"),
+            )
+        });
+        let source = sets
+            .iter()
+            .enumerate()
+            .fold(shipyards, |source, (n, at)| {
+                source.with(&format!("outfits/o{}.md", n + 1), &outfit_text(Some(at)))
+            })
+            .with(
+                "ships/hauler.md",
+                &ship_text(Some(900), Some("alpha-yard, b2, b3")),
+            );
+        let game = loaded(&source);
+        assert_eq!(
+            problems(&game),
+            [
+                "stellars/alpha-yard.md: it sells from more than eight sets of yards, more \
+                 than its eight `SpecialTech` slots; it doesn't sell `o9`, `hauler`"
+            ]
+        );
+        assert_eq!(ship(&game, "hauler").tech_level, 11);
     }
 }

@@ -18,8 +18,8 @@ use super::kits::{
     LAW_SCAN_FINE, LAW_SMUGGLE_PENALTY, LAWLESS_KIT_SCAN, YARD_TECH_LAWLESS, YARD_TECH_LEGAL,
 };
 use super::records::{
-    ANY_RECORD, default_interface, neutral_character, neutral_dude, neutral_govt, neutral_ship,
-    neutral_ship_anim, neutral_stellar,
+    ANY_RECORD, OUTFIT_TECH_NEVER, default_interface, neutral_character, neutral_dude,
+    neutral_govt, neutral_ship, neutral_ship_anim, neutral_stellar,
 };
 use super::*;
 use crate::decode::Record;
@@ -984,9 +984,86 @@ fn a_hull_sets_nothing_else() {
         fuel: 300,
         crew: 1,
         contribute: crate::Flags64(1),
+        tech_level: OUTFIT_TECH_NEVER,
         ..neutral_ship()
     };
     assert_eq!(skiff(&skiff_with_stats()), expected);
+}
+
+/// The fixture galaxy with `alpha-prime` a shipyard and the skiff priced
+/// at `price`, sold at `sold_at` (a YAML list's insides, none for no
+/// field).
+fn skiff_for_sale(price: &str, sold_at: Option<&str>) -> MemSource {
+    let sold_at = sold_at.map_or(String::new(), |at| format!("sold_at: [{at}]\n"));
+    alpha_prime_offering("shipyard").with(
+        "ships/skiff.md",
+        &format!(
+            "---\nname: Skiff\nstyle: civilian\nrole: shuttle\nmodel: hull\n\
+             size: {{length: 8, beam: 4, collision_radius: 4}}\nprice: {price}\n{sold_at}---\n"
+        ),
+    )
+}
+
+#[test]
+fn a_hull_sold_at_a_yard_costs_its_price_at_its_set_s_tech_always_offered() {
+    let game = loaded(&skiff_for_sale("40000", Some("alpha-prime")));
+    assert_eq!(problems(&game), Vec::<String>::new());
+    let ship = ship_of(&game, "skiff");
+    assert_eq!(
+        (
+            ship.cost,
+            ship.tech_level,
+            ship.buy_random,
+            ship.hire_random
+        ),
+        (40000, 3, 100, 0)
+    );
+}
+
+#[test]
+fn a_hull_sold_nowhere_is_never_offered_but_keeps_its_price_for_the_trade_in() {
+    let game = loaded(&skiff_for_sale("40000", None));
+    assert_eq!(problems(&game), Vec::<String>::new());
+    let ship = ship_of(&game, "skiff");
+    assert_eq!(
+        (
+            ship.cost,
+            ship.tech_level,
+            ship.buy_random,
+            ship.hire_random
+        ),
+        (40000, OUTFIT_TECH_NEVER, 0, 0)
+    );
+}
+
+#[test]
+fn a_ship_with_no_price_costs_nothing() {
+    assert_eq!(skiff(&skiff_with_stats()).cost, 0);
+}
+
+#[test]
+fn a_variant_costs_its_resolved_price() {
+    // The gun mount costs 100 (the format's fixture).
+    let game = loaded(&skiff_for_sale("40000", None));
+    assert_eq!(ship_of(&game, "armed-skiff").cost, 40100);
+}
+
+#[test]
+fn a_price_beyond_i32_is_held_at_the_most() {
+    let game = loaded(&skiff_for_sale("4000000000", None));
+    assert_eq!(problems(&game), Vec::<String>::new());
+    assert_eq!(ship_of(&game, "skiff").cost, i32::MAX);
+    assert_eq!(ship_of(&game, "armed-skiff").cost, i32::MAX);
+}
+
+#[test]
+fn a_stellar_s_special_tech_holds_the_hulls_sold_there() {
+    let game = loaded(&skiff_for_sale("40000", Some("alpha-prime")));
+    let prime = stellar(&game, game.ids.stellars[&id("alpha-prime")]);
+    assert_eq!(prime.special_tech1_3, [3, -1, -1]);
+    assert_eq!(prime.special_tech4_8, [-1; 5]);
+    let yard = stellar(&game, game.ids.stellars[&id("alpha-yard")]);
+    assert_eq!(yard.special_tech1_3, [-1; 3], "sells nothing");
 }
 
 /// The fixture galaxy with a variant of the skiff, `technical`, that sets

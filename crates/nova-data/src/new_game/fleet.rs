@@ -23,9 +23,15 @@
 //!   the `Require` bit of every kit `fits` set holding its `role`
 //!   ([`FitBits`]), and the mount bit of each of its chain's hardpoints
 //!   ([`FitBits::mounts`]): its kits' hardpoints come with the kits' own
-//!   `Contribute`, since a pilot owns its hull's kits. A chain that loops,
-//!   or names a base that isn't there,
-//!   leaves the ship out.
+//!   `Contribute`, since a pilot owns its hull's kits. Its `Cost` is the
+//!   chain's `price` ([`Resolved::price`]: a variant without one costs its
+//!   base's plus the kits it adds), held within `i32`, 0 with none; a hull
+//!   sold nowhere keeps it, for the shipyard's trade-in. Sold at the yards
+//!   of its `sold_at`, it takes their tech number ([`super::yards`]) and
+//!   `BuyRandom` 100; sold nowhere, `TechLevel` 0x7fff, which no yard
+//!   reaches and which keeps the low-tech discount off its trade-in, and
+//!   `BuyRandom` 0. `HireRandom` stays 0: no ship is for hire. A chain
+//!   that loops, or names a base that isn't there, leaves the ship out.
 //! - **Size and firing positions** ([`ship_anim`]). A ship's `shän` sets
 //!   `BaseXSize` (the beam) and `BaseYSize` (the length), in pixels at
 //!   [`PX_PER_METRE`]: the simulation collides and hovers at that size.
@@ -63,9 +69,11 @@ use nova_galaxy_format::load::{Doc, Galaxy, Problem};
 use nova_galaxy_format::model::Start;
 
 use super::ids::{CHARACTER_IDS, CIVILIAN_DUDE, IdTable, SHIP_IDS, after_pins};
-use super::kits::FitBits;
+use super::kits::{ALWAYS, FitBits};
 use super::map::{absent, number};
-use super::records::{neutral_character, neutral_dude, neutral_ship, neutral_ship_anim};
+use super::records::{
+    OUTFIT_TECH_NEVER, neutral_character, neutral_dude, neutral_ship, neutral_ship_anim,
+};
 use crate::decode::Entry;
 use crate::records::character::Character;
 use crate::records::dude::Dude;
@@ -206,7 +214,8 @@ fn resolved<'a>(galaxy: &'a Galaxy, id: &Id) -> Option<Resolved<'a>> {
 
 /// The `shïp` of the ship `id`, numbered `nova` (see the module docs), its
 /// kits' `oütf`s and its weapons' `wëap`s from `ids`, its `Contribute` its
-/// role's kit sets in `fit` and its chain hardpoints' mounts.
+/// role's kit sets in `fit` and its chain hardpoints' mounts, sold at the
+/// yards holding the tech number `sold` when it is sold.
 #[must_use]
 pub fn ship(
     galaxy: &Galaxy,
@@ -214,6 +223,7 @@ pub fn ship(
     fit: &FitBits,
     id: &Id,
     nova: i16,
+    sold: Option<i16>,
     problems: &mut Vec<Problem>,
 ) -> Entry<AnyRecord> {
     let doc = &galaxy.ships[id];
@@ -252,6 +262,11 @@ pub fn ship(
             fit.contributed(resolved.role)
                 | FitBits::mounts(chain.iter().map(|placed| placed.hardpoint)),
         ),
+        cost: resolved
+            .price
+            .map_or(0, |price| i32::try_from(price).unwrap_or(i32::MAX)),
+        tech_level: sold.unwrap_or(OUTFIT_TECH_NEVER),
+        buy_random: if sold.is_some() { ALWAYS } else { 0 },
         ..neutral_ship()
     };
     let items = default_items(galaxy, ids, doc, &resolved, problems);

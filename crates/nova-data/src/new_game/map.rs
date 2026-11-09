@@ -221,7 +221,8 @@ fn fittings(
 ) -> Fittings {
     let mut fittings = Fittings::default();
     for (id, &nova) in &ids.ships {
-        records.push(fleet::ship(galaxy, ids, fit, id, nova, problems));
+        let sold = sales.ships.get(id).copied();
+        records.push(fleet::ship(galaxy, ids, fit, id, nova, sold, problems));
         records.extend(fleet::ship_anim(galaxy, id, nova, problems));
         let spots = fleet::chain_spots(galaxy, id);
         if !spots.is_empty() {
