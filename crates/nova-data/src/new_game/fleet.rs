@@ -34,7 +34,9 @@
 //!   player's points are rebuilt by too); a kind with none keeps the
 //!   centre. It names no sprite: the view draws the ship's stand-in,
 //!   its model from above or its size box at the same scale
-//!   ([`super::looks`]). The store's fittings keep each ship's chain
+//!   ([`super::looks`]), or, with the opt-in stock look on, stock sprites
+//!   from the player's own data scaled to that size
+//!   ([`crate::stock_look`]). The store's fittings keep each ship's chain
 //!   hardpoints too, for the player's exit points to be rebuilt from its
 //!   class and the kits it carries (`crate::store::Fittings`).
 //! - **Traffic** ([`civilian_traffic`]). One `düde`,

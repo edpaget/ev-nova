@@ -36,6 +36,12 @@
 //! sense. The original's own `SmokeTrails` key is inverted, an "off"
 //! switch its `Keys.nib` box negates; both default to trails drawn.
 //!
+//! The file also holds keys this module keeps but doesn't own, saved back
+//! as they were: the rules' `rules`, `rule_overrides` and `rule_values`
+//! (`crate::rulebook`), the developer's `developer` (`crate::developer`)
+//! and the new game's `stock_ship_look` (`crate::stock_look`), each read
+//! once at startup and never written by the game.
+//!
 //! `nova_files` is the `Nova Files` directory the player picked when the
 //! game found none (`crate::startup`), a string, absent (or `null`) when
 //! none is remembered. A path whose name is not UTF-8 is never saved.
@@ -290,8 +296,8 @@ impl GameSettings {
 
 /// The settings as saved: JSON, every field optional (a missing one takes
 /// its default). Other fields, such as the rules' `rules`,
-/// `rule_overrides` and `rule_values`, are kept and saved back as they
-/// were.
+/// `rule_overrides` and `rule_values` and the new game's
+/// `stock_ship_look`, are kept and saved back as they were.
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
 #[allow(clippy::struct_excessive_bools)] // One field per key of the file.

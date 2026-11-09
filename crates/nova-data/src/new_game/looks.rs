@@ -2,6 +2,9 @@
 //! ([`stand_ins`]): the bible has models, not Nova's sprites, so each is
 //! drawn as a [`StandIn`] the store keeps
 //! ([`GameData::with_stand_ins`](crate::store::GameData::with_stand_ins)).
+//! A player who owns EV Nova may draw the hulls in stock sprites instead,
+//! the opt-in stock look ([`crate::stock_look`]), picked by each ship's
+//! lineage ([`ship_lines`]); a hull it can't borrow for keeps its stand-in.
 //!
 //! - **A ship**, a hull or a variant, with a `size` (its own or its
 //!   nearest base's, as its `model` and `livery` are) is its model seen

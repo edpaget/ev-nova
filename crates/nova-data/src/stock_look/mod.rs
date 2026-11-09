@@ -47,7 +47,7 @@ mod tests;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use nova_galaxy_format::fleet::Role;
+pub use nova_galaxy_format::fleet::Role;
 
 use crate::records::ship_anim::ShipAnim;
 use crate::store::{GameData, ShipLine, StockArt};

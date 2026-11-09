@@ -260,7 +260,25 @@ pub fn fly_new_pilot(folder: &Path, store: &MemoryPilots) -> (Harness, Rc<GameDa
             .unwrap_or_else(|error| panic!("{} lists: {error:?}", folder.display()))
             .data,
     );
-    let mut game = Harness::built_on(Rc::clone(&data), store, AudioSettings::default(), true);
+    let game = Harness::built_on(Rc::clone(&data), store, AudioSettings::default(), true);
+    (fly_from_the_menu(game), data)
+}
+
+/// [`fly_new_pilot`] over `data`, the router wired further by `wire` as
+/// `main` wires it (the stock ship look), and the player's settings kept
+/// by `keeper`.
+pub fn fly_new_pilot_wired(
+    data: &Rc<GameData>,
+    store: &MemoryPilots,
+    keeper: nova::settings::GameKeeper,
+    wire: impl FnOnce(nova::app::screen::AppScreen) -> nova::app::screen::AppScreen,
+) -> Harness {
+    let game = Harness::built_wired(Rc::clone(data), store, wire).with_settings(keeper);
+    fly_from_the_menu(game)
+}
+
+/// `game`, on the main menu, flown into flight as [`fly_new_pilot`] says.
+fn fly_from_the_menu(mut game: Harness) -> Harness {
     draw(&mut game);
     let new_pilot = game.menu_button(MenuChoice::NewPilot);
     game.click(new_pilot);
@@ -281,7 +299,7 @@ pub fn fly_new_pilot(folder: &Path, store: &MemoryPilots) -> (Harness, Rc<GameDa
     }
     assert_eq!(game.showing(), Showing::Flight, "flight never shows");
     draw(&mut game);
-    (game, data)
+    game
 }
 
 /// The app flying the sample's start, `first-flight` in Luyten Crossing,

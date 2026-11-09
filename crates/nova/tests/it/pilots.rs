@@ -462,6 +462,33 @@ impl Harness {
         Self::assembled(data, store, settings, launch, true)
     }
 
+    /// [`Harness::built_on`], opening the last pilot at launch, its router
+    /// wired further by `wire` as `main` wires it (the stock ship look).
+    pub(crate) fn built_wired(
+        data: Rc<GameData>,
+        store: &MemoryPilots,
+        wire: impl FnOnce(AppScreen) -> AppScreen,
+    ) -> Self {
+        Self::assembled_with(
+            data,
+            interface(),
+            store,
+            AudioSettings::default(),
+            true,
+            true,
+            wire,
+        )
+    }
+
+    /// The harness with the player's settings kept by `keeper`, as `main`
+    /// gives the runner them.
+    pub(crate) fn with_settings(self, keeper: nova::settings::GameKeeper) -> Self {
+        Self {
+            app: self.app.with_settings(keeper),
+            ..self
+        }
+    }
+
     /// The app on the main menu, keeping pilots in `store`, its start-up
     /// appear still under way: before any frame.
     pub(crate) fn starting_up(store: &MemoryPilots) -> Self {

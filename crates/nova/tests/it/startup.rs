@@ -25,6 +25,8 @@ use nova_audio::recording::MemorySettings;
 #[derive(Default)]
 struct Disk {
     holding: Vec<PathBuf>,
+    /// Directories that can't be listed, and why.
+    unreadable: Vec<(PathBuf, String)>,
     asked: RefCell<Vec<PathBuf>>,
     new_game: Option<NewGameOpened<PathBuf>>,
     new_game_asked: RefCell<Vec<PathBuf>>,
@@ -35,6 +37,9 @@ impl DataSource for Disk {
 
     fn open(&self, dir: &Path) -> Opened<PathBuf> {
         self.asked.borrow_mut().push(dir.to_path_buf());
+        if let Some((_, why)) = self.unreadable.iter().find(|(held, _)| held == dir) {
+            return Opened::Unreadable(why.clone());
+        }
         if self.holding.iter().any(|held| held == dir) {
             Opened::Loaded(dir.to_path_buf())
         } else {
@@ -703,4 +708,130 @@ fn a_nova_files_argument_with_game_data_says_game_data_rejected_it() {
         "the folder isn't opened"
     );
     assert_eq!(machine.panel.prompts, Vec::<String>::new());
+}
+
+/// The stock `Nova Files` `NOVA_DATA` names in the stock look's launches.
+fn stock_dir() -> PathBuf {
+    Path::new("/Games").join("EV Nova").join("Nova Files")
+}
+
+/// The settings with the stock ship look on.
+fn looking() -> MemorySettings {
+    MemorySettings::holding(r#"{"stock_ship_look": {"on": true, "ships": {"hauler": 136}}}"#)
+}
+
+/// A new game's launch over `store`, `NOVA_DATA` naming [`stock_dir`],
+/// which holds the stock data.
+fn new_game_with_stock(store: &MemorySettings) -> Machine {
+    let mut machine = new_game(store, NewGameOpened::Loaded(loaded(new_game_dir())));
+    machine.nova_data = Some(stock_dir().into_os_string());
+    machine.disk.holding.push(stock_dir());
+    machine
+}
+
+#[test]
+fn with_the_look_off_the_new_game_never_opens_nova_data() {
+    let mut machine = new_game_with_stock(&MemorySettings::new());
+    let started = machine.launch().expect("starts");
+    assert_eq!(*machine.disk.asked.borrow(), Vec::<PathBuf>::new());
+    assert_eq!(started.stock_art, None);
+    assert!(!started.stock_look.on);
+}
+
+#[test]
+fn with_the_look_on_the_new_game_opens_nova_data_through_the_port() {
+    let mut machine = new_game_with_stock(&looking());
+    let started = machine.launch().expect("starts");
+    assert_eq!(*machine.disk.asked.borrow(), [stock_dir()]);
+    assert_eq!(
+        started.stock_art,
+        Some(stock_dir()),
+        "what the port returned"
+    );
+    assert!(started.stock_look.on);
+    assert_eq!(started.stock_look.ships.get("hauler"), Some(&136));
+    assert_eq!(machine.log.0.borrow().len(), 1, "the header alone");
+}
+
+#[test]
+fn with_the_look_on_and_no_nova_data_the_new_game_warns_once_and_starts() {
+    let mut machine = new_game(&looking(), NewGameOpened::Loaded(loaded(new_game_dir())));
+    let started = machine.launch().expect("starts");
+    assert_eq!(started.stock_art, None);
+    assert_eq!(
+        machine.log.0.borrow()[1..],
+        [
+            "nova: the stock ship look is on, but NOVA_DATA doesn't name your Nova Files; the \
+          new game's hulls draw their stand-ins"
+        ]
+    );
+    assert_eq!(*machine.disk.asked.borrow(), Vec::<PathBuf>::new());
+}
+
+#[test]
+fn with_the_look_on_and_nova_data_unreadable_or_empty_the_new_game_warns_once_and_starts() {
+    let mut unreadable = new_game_with_stock(&looking());
+    unreadable.disk.holding.clear();
+    unreadable
+        .disk
+        .unreadable
+        .push((stock_dir(), "No such file or directory".to_owned()));
+    let started = unreadable.launch().expect("starts");
+    assert_eq!(started.stock_art, None);
+    assert_eq!(
+        unreadable.log.0.borrow()[1..],
+        [format!(
+            "nova: the stock ship look is on, but NOVA_DATA's {} can't be listed (No such file \
+             or directory); the new game's hulls draw their stand-ins",
+            stock_dir().display()
+        )]
+    );
+    let mut empty = new_game_with_stock(&looking());
+    empty.disk.holding.clear();
+    let started = empty.launch().expect("starts");
+    assert_eq!(started.stock_art, None);
+    assert_eq!(
+        empty.log.0.borrow()[1..],
+        [format!(
+            "nova: the stock ship look is on, but NOVA_DATA's {} loads no data file; the new \
+             game's hulls draw their stand-ins",
+            stock_dir().display()
+        )]
+    );
+}
+
+#[test]
+fn a_look_setting_that_cannot_be_used_warns_under_the_new_game() {
+    let store = MemorySettings::holding(r#"{"stock_ship_look": {"on": 1}}"#);
+    let mut machine = new_game_with_stock(&store);
+    let started = machine.launch().expect("starts");
+    assert_eq!(started.stock_art, None);
+    assert_eq!(
+        machine.log.0.borrow()[1..],
+        [
+            "nova: the saved \"stock_ship_look\".\"on\" in memory is not true or false; leaving \
+          the stock ship look off"
+        ]
+    );
+}
+
+#[test]
+fn the_stock_game_ignores_the_look_silently_and_opens_nova_data_once() {
+    for store in [
+        looking(),
+        MemorySettings::holding(r#"{"stock_ship_look": {"on": 1}}"#),
+    ] {
+        let mut machine = Machine::new(&store, &[&stock_dir()], &[]);
+        machine.nova_data = Some(stock_dir().into_os_string());
+        let started = machine.launch().expect("starts");
+        assert_eq!(started.ruleset, Ruleset::Stock);
+        assert_eq!(
+            *machine.disk.asked.borrow(),
+            [stock_dir()],
+            "the lookup alone"
+        );
+        assert_eq!(started.stock_art, None);
+        assert!(!started.stock_look.on);
+        assert_eq!(machine.log.0.borrow().len(), 1, "the header alone");
+    }
 }

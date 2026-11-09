@@ -1156,7 +1156,8 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     sheet: Result<ShipSheet, String>,
     /// What the player's ship draws in place of `sheet` when it cannot be
     /// shown: its type's outline, read with the sheet, only when the sheet
-    /// failed ([`outline_for`]); `None` draws the crossed box.
+    /// failed ([`outline_for`]) and no look answered for it
+    /// ([`FlightView::with_ship_looks`]); `None` draws the crossed box.
     outline: Option<Outline>,
     /// The class `sheet` and `status_bar` were read for; `None` when the
     /// session failed.

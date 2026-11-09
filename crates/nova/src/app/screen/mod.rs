@@ -693,6 +693,9 @@ pub struct AppScreen {
     rules: Rulebook,
     /// The port's own overlays each flight draws.
     flight_overlays: FlightOverlays,
+    /// The stock ship look each flight consults for a hull with no sheet
+    /// ([`AppScreen::with_ship_looks`]): none unless `main` gives it.
+    ship_looks: Option<Rc<nova_view::flight::StockShipLooks>>,
     /// The fee and wage of a hire in each flight.
     hire_terms: Rc<dyn HireTerms>,
     /// How persons appear in each flight.

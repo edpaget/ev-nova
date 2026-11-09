@@ -54,7 +54,10 @@
 //! The bible has models, not sprites, so nothing names a sprite: each hull,
 //! stellar and gate draws as its stand-in, kept on the store
 //! ([`GameData::stand_in`]) and read from the media through the same
-//! [`Source`]. Nor is there a star sheet: the stars draw as stand-in dots
+//! [`Source`]. Each ship's lineage, its chain of bible ids and its role, is
+//! kept too ([`GameData::ship_line`]), for the opt-in stock look, which
+//! draws a hull in stock sprites from the player's own data instead
+//! ([`crate::stock_look`]). Nor is there a star sheet: the stars draw as stand-in dots
 //! ([`GameData::star_dots`]).
 //!
 //! # Problems
