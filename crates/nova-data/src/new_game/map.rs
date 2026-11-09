@@ -14,15 +14,17 @@ use nova_galaxy_format::model::{Faction, Position, Stellar as BibleStellar};
 
 use super::fleet::{self, TRAFFIC_SHIPS};
 use super::gates;
-use super::ids::{CIVILIAN_DUDE, GOVT_IDS, IdTable, STELLAR_IDS, SYSTEM_IDS, allocate};
+use super::ids::{
+    CIVILIAN_DUDE, DEFAULT_INTERFACE, GOVT_IDS, IdTable, STELLAR_IDS, SYSTEM_IDS, allocate,
+};
 use super::kits::{
     self, FitBits, LAW_SCAN_FINE, LAW_SMUGGLE_PENALTY, LAWLESS_KIT_SCAN, YARD_TECH_LAWLESS,
     YARD_TECH_LEGAL,
 };
 use super::outfits;
 use super::records::{
-    ANY_RECORD, clamp_i16, neutral_govt, neutral_stellar, neutral_system, rgb, stellar_flags,
-    text_desc,
+    ANY_RECORD, clamp_i16, default_interface, neutral_govt, neutral_stellar, neutral_system, rgb,
+    stellar_flags, text_desc,
 };
 use crate::decode::Entry;
 use crate::records::govt::Govt;
@@ -49,7 +51,9 @@ pub struct Mapped {
 
 /// Maps `galaxy`'s factions, systems, stellars, jump points, ships,
 /// starts, outfits and mod kits to `gövt`, `sÿst`, `spöb`, `dësc`, `shïp`,
-/// `shän`, `düde`, `chär`, `oütf` and `wëap` records, and their fittings.
+/// `shän`, `düde`, `chär`, `oütf` and `wëap` records, and their fittings,
+/// plus the placeholder `ïntf` status bar, which a flight frame always
+/// needs, so even an empty galaxy maps it.
 #[must_use]
 pub fn map(galaxy: &Galaxy) -> Mapped {
     let mut problems = Vec::new();
@@ -134,6 +138,11 @@ pub fn map(galaxy: &Galaxy) -> Mapped {
     for (id, &nova) in &ids.starts {
         records.push(fleet::character(&ids, nova, &galaxy.starts[id]));
     }
+    records.push(Entry {
+        id: DEFAULT_INTERFACE,
+        name: Some("Default status bar".to_owned()),
+        record: AnyRecord::Interface(Box::new(default_interface())),
+    });
     Mapped {
         records,
         ids,

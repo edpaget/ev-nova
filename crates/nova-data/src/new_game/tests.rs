@@ -12,13 +12,13 @@ use nova_galaxy_format::fixture;
 use nova_galaxy_format::source::MemSource;
 
 use super::fleet::{PX_PER_METRE, START_DATE, TRAFFIC_SHIPS, maneuver};
-use super::ids::CIVILIAN_DUDE;
+use super::ids::{CIVILIAN_DUDE, DEFAULT_INTERFACE};
 use super::kits::{
     LAW_SCAN_FINE, LAW_SMUGGLE_PENALTY, LAWLESS_KIT_SCAN, YARD_TECH_LAWLESS, YARD_TECH_LEGAL,
 };
 use super::records::{
-    ANY_RECORD, neutral_character, neutral_dude, neutral_govt, neutral_ship, neutral_ship_anim,
-    neutral_stellar,
+    ANY_RECORD, default_interface, neutral_character, neutral_dude, neutral_govt, neutral_ship,
+    neutral_ship_anim, neutral_stellar,
 };
 use super::*;
 use crate::decode::Record;
@@ -26,6 +26,7 @@ use crate::records::character::Character;
 use crate::records::desc::Desc;
 use crate::records::dude::Dude;
 use crate::records::govt::Govt;
+use crate::records::interface::Interface;
 use crate::records::ship::Ship;
 use crate::records::ship_anim::ShipAnim;
 use crate::records::stellar::{Stellar, flags, flags2};
@@ -1633,4 +1634,17 @@ fn a_kit_s_missing_hardpoint_outfit_is_reported_against_the_kit_alone_whatever_i
             "mods/armed-skiff.md: its hardpoint `bed`'s outfit `lost` is not in outfits/; it isn't given with the kit"
         ]
     );
+}
+
+#[test]
+fn the_new_game_maps_the_placeholder_status_bar() {
+    let (name, intf) = named::<Interface>(&loaded(&galaxy()), DEFAULT_INTERFACE);
+    assert_eq!(name, "Default status bar");
+    assert_eq!(intf, default_interface());
+}
+
+#[test]
+fn an_empty_galaxy_maps_the_placeholder_status_bar_too() {
+    let game = loaded(&MemSource::default());
+    assert_eq!(game.data.ids(Interface::TYPE), [DEFAULT_INTERFACE]);
 }

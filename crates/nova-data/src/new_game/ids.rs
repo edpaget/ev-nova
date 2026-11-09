@@ -56,6 +56,12 @@ pub const CHARACTER_IDS: RangeInclusive<i16> = 128..=255;
 /// [`super::fleet`]).
 pub const CIVILIAN_DUDE: i16 = 128;
 
+/// The one `ïntf`, the placeholder status bar
+/// ([`super::records::default_interface`]): the one a ship of no
+/// government, or of a `gövt` whose `Interface` is below 128, shows
+/// (nova-view's `hud::DEFAULT_INTERFACE`).
+pub const DEFAULT_INTERFACE: i16 = 128;
+
 /// The Nova ID of each record that has one, by its bible id, per kind.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct IdTable {

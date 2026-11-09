@@ -8,6 +8,7 @@ use crate::records::character::Character;
 use crate::records::desc::Desc;
 use crate::records::dude::Dude;
 use crate::records::govt::Govt;
+use crate::records::interface::Interface;
 use crate::records::outfit::Outfit;
 use crate::records::ship::Ship;
 use crate::records::ship_anim::ShipAnim;
@@ -15,6 +16,7 @@ use crate::records::stellar::{Stellar, flags};
 use crate::records::system::System;
 use crate::records::weapon::Weapon;
 use crate::wire::flags::{Flags16, Flags32, Flags64};
+use crate::wire::geometry::Rect;
 use crate::wire::raw::RawArray;
 use crate::wire::string::MacString;
 
@@ -471,10 +473,173 @@ pub fn clamp_i16(value: i32) -> (i16, bool) {
     }
 }
 
+/// The placeholder status bar's radar: 170 px square, as stock `ïntf` 128's
+/// is, at the bar's top. It stands until the bible authors an interface.
+pub const PLACEHOLDER_RADAR: Rect = area(4, 12, 174, 182);
+/// The placeholder shield gauge, under the radar. A placeholder until the
+/// bible authors an interface.
+pub const PLACEHOLDER_SHIELD: Rect = area(182, 12, 190, 182);
+/// The placeholder armour gauge, under the shield gauge. A placeholder
+/// until the bible authors an interface.
+pub const PLACEHOLDER_ARMOR: Rect = area(194, 12, 202, 182);
+/// The placeholder fuel gauge, under the armour gauge. A placeholder until
+/// the bible authors an interface.
+pub const PLACEHOLDER_FUEL: Rect = area(206, 12, 214, 182);
+/// The placeholder navigation readout. A placeholder until the bible
+/// authors an interface.
+pub const PLACEHOLDER_NAV: Rect = area(220, 12, 260, 182);
+/// The placeholder weapon readout. A placeholder until the bible authors an
+/// interface.
+pub const PLACEHOLDER_WEAPON: Rect = area(264, 12, 304, 182);
+/// The placeholder target readout. A placeholder until the bible authors an
+/// interface.
+pub const PLACEHOLDER_TARGET: Rect = area(308, 12, 408, 182);
+/// The placeholder cargo readout, the bar's lowest area, ending inside a
+/// 480-tall view. A placeholder until the bible authors an interface.
+pub const PLACEHOLDER_CARGO: Rect = area(412, 12, 452, 182);
+/// The placeholder bright text colour, white. A placeholder until the bible
+/// authors an interface.
+pub const PLACEHOLDER_BRIGHT_TEXT: u32 = 0x00FF_FFFF;
+/// The placeholder dim text colour, grey. A placeholder until the bible
+/// authors an interface.
+pub const PLACEHOLDER_DIM_TEXT: u32 = 0x0080_8080;
+/// The placeholder bright radar colour (the player), light green. A
+/// placeholder until the bible authors an interface.
+pub const PLACEHOLDER_BRIGHT_RADAR: u32 = 0x0080_FF80;
+/// The placeholder dim radar colour (everything else), dark green. A
+/// placeholder until the bible authors an interface.
+pub const PLACEHOLDER_DIM_RADAR: u32 = 0x0000_8000;
+/// The placeholder shield gauge colour, blue. A placeholder until the bible
+/// authors an interface.
+pub const PLACEHOLDER_SHIELD_COLOR: u32 = 0x0040_80FF;
+/// The placeholder armour gauge colour, red. A placeholder until the bible
+/// authors an interface.
+pub const PLACEHOLDER_ARMOR_COLOR: u32 = 0x00FF_4040;
+/// The placeholder full fuel colour, yellow. A placeholder until the bible
+/// authors an interface.
+pub const PLACEHOLDER_FUEL_FULL: u32 = 0x00FF_D000;
+/// The placeholder partial fuel colour, dark yellow. A placeholder until
+/// the bible authors an interface.
+pub const PLACEHOLDER_FUEL_PARTIAL: u32 = 0x0080_6800;
+/// The placeholder status font. A placeholder until the bible authors an
+/// interface.
+pub const PLACEHOLDER_FONT: &str = "Geneva";
+/// The placeholder status and subtitle font size. A placeholder until the
+/// bible authors an interface.
+pub const PLACEHOLDER_FONT_SIZE: i16 = 9;
+
+const fn area(top: i16, left: i16, bottom: i16, right: i16) -> Rect {
+    Rect {
+        top,
+        left,
+        bottom,
+        right,
+    }
+}
+
+/// The new game's status bar, every value a placeholder until the bible
+/// authors an interface: a radar at the top, then the shield, armour and
+/// fuel gauges and the nav, weapon, target and cargo readouts stacked
+/// below it, with no background picture (`StatusBkgnd` 0).
+#[must_use]
+pub fn default_interface() -> Interface {
+    Interface {
+        bright_text: PLACEHOLDER_BRIGHT_TEXT,
+        dim_text: PLACEHOLDER_DIM_TEXT,
+        radar_area: PLACEHOLDER_RADAR,
+        bright_radar: PLACEHOLDER_BRIGHT_RADAR,
+        dim_radar: PLACEHOLDER_DIM_RADAR,
+        shield_area: PLACEHOLDER_SHIELD,
+        shield_color: PLACEHOLDER_SHIELD_COLOR,
+        armor_area: PLACEHOLDER_ARMOR,
+        armor_color: PLACEHOLDER_ARMOR_COLOR,
+        fuel_area: PLACEHOLDER_FUEL,
+        fuel_full: PLACEHOLDER_FUEL_FULL,
+        fuel_partial: PLACEHOLDER_FUEL_PARTIAL,
+        nav_area: PLACEHOLDER_NAV,
+        weap_area: PLACEHOLDER_WEAPON,
+        targ_area: PLACEHOLDER_TARGET,
+        cargo_area: PLACEHOLDER_CARGO,
+        status_font: MacString::from(PLACEHOLDER_FONT),
+        stat_font_size: PLACEHOLDER_FONT_SIZE,
+        subtitle_size: PLACEHOLDER_FONT_SIZE,
+        status_bkgnd: 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::decode::{Record, decode_bytes};
+
+    /// The bar's width: nova-view's `STATUS_BAR_WIDTH`, whose own test pins
+    /// the 194.
+    const BAR_WIDTH: i16 = 194;
+    /// The smallest view height the game draws.
+    const VIEW_HEIGHT: i16 = 480;
+
+    fn intf_areas(intf: &Interface) -> [Rect; 8] {
+        [
+            intf.radar_area,
+            intf.shield_area,
+            intf.armor_area,
+            intf.fuel_area,
+            intf.nav_area,
+            intf.weap_area,
+            intf.targ_area,
+            intf.cargo_area,
+        ]
+    }
+
+    #[test]
+    fn every_default_area_is_non_empty_and_inside_the_bar() {
+        for r in intf_areas(&default_interface()) {
+            assert!(r.top >= 0 && r.left >= 0, "{r:?}");
+            assert!(r.top < r.bottom && r.left < r.right, "{r:?}");
+            assert!(r.right <= BAR_WIDTH && r.bottom <= VIEW_HEIGHT, "{r:?}");
+        }
+    }
+
+    #[test]
+    fn the_default_radar_is_topmost_and_no_areas_overlap() {
+        let areas = intf_areas(&default_interface());
+        let radar = areas[0];
+        assert!(areas[1..].iter().all(|r| r.top >= radar.bottom));
+        for (i, a) in areas.iter().enumerate() {
+            for b in &areas[i + 1..] {
+                let apart = a.bottom <= b.top
+                    || b.bottom <= a.top
+                    || a.right <= b.left
+                    || b.right <= a.left;
+                assert!(apart, "{a:?} overlaps {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_default_marks_have_distinct_colours() {
+        let intf = default_interface();
+        let colours = [
+            intf.bright_radar,
+            intf.dim_radar,
+            intf.shield_color,
+            intf.armor_color,
+            intf.fuel_full,
+            intf.fuel_partial,
+        ];
+        for (i, a) in colours.iter().enumerate() {
+            assert!(!colours[i + 1..].contains(a), "{a:#08x} repeats");
+        }
+        assert_ne!(intf.bright_text, intf.dim_text);
+    }
+
+    #[test]
+    fn the_default_bar_has_no_picture_and_positive_font_sizes() {
+        let intf = default_interface();
+        assert!(intf.status_bkgnd < 128);
+        assert!(intf.stat_font_size > 0 && intf.subtitle_size > 0);
+        assert_eq!(&*intf.status_font, "Geneva");
+    }
 
     fn color(text: &str) -> Color {
         Color::try_from(text.to_owned()).expect("a colour")
