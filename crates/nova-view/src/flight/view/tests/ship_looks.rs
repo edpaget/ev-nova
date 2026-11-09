@@ -186,6 +186,50 @@ fn looks_given_after_the_opening_read_the_player_s_and_the_read_traffic_s_sheets
     assert!(!view.npc_outlines.contains_key(&ShipId(130)));
 }
 
+/// The player, alone, becomes a ship of `class` mid-flight, and the view
+/// catches up.
+fn becomes(view: &mut Faked, class: i16) {
+    use super::stellar_looks::{caught_up, changed, raising};
+    use nova_sim::SessionEvent;
+    changed(view, |frame| frame.ships[0].class = ShipId(class));
+    raising(view, &[SessionEvent::ShipChanged]);
+    caught_up(view);
+}
+
+#[test]
+fn a_player_who_changes_to_a_sheetless_class_the_looks_answer_draws_its_look() {
+    let looks = looks_for(&[130]);
+    let mut view = world(
+        sheetless(),
+        in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]),
+    )
+    .with_ship_looks(looks.clone());
+    assert_eq!(view.outline, Some(dart()), "ship 128 has no look");
+    becomes(&mut view, 130);
+    assert_eq!(view.sheet, Ok(borrowed()));
+    assert_eq!(view.outline, None);
+    assert_eq!(*looks.asked.borrow(), [ShipId(128), ShipId(130)]);
+}
+
+#[test]
+fn a_player_who_changes_from_a_borrowed_look_drops_it() {
+    let mut view = world(
+        sheetless(),
+        in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]),
+    )
+    .with_ship_looks(looks_for(&[128]));
+    assert_eq!(view.sheet, Ok(borrowed()), "ship 128's look");
+    becomes(&mut view, 130);
+    assert_eq!(view.sheet, Err("no shän 130".to_owned()), "no look for 130");
+    assert_eq!(view.outline, Some(dart()), "the stand-in");
+    becomes(&mut view, 128);
+    assert_eq!(view.sheet, Ok(borrowed()), "back to ship 128's look");
+    becomes(&mut view, 129);
+    assert!(view.sheet.is_ok());
+    assert_ne!(view.sheet, Ok(borrowed()), "ship 129's catalog sheet");
+    assert_eq!(view.outline, None);
+}
+
 #[test]
 fn without_looks_or_with_looks_that_answer_nothing_the_flight_draws_as_before() {
     for catalog in [sheetless, catalog] {
