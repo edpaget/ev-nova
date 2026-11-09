@@ -14,11 +14,13 @@ use nova_data::records::character::Character;
 use nova_data::records::desc::Desc;
 use nova_data::records::dude::Dude;
 use nova_data::records::govt::Govt;
+use nova_data::records::junk::Junk;
 use nova_data::records::mission::Mission;
 use nova_data::records::outfit::Outfit;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::stellar::{Stellar, flags2};
+use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
 use nova_data::store::GameData;
 use nova_data::{
@@ -31,7 +33,9 @@ use nova_galaxy_media::BARE;
 /// factions `guild` and `warden`; the systems `drift` (jump points alone),
 /// `hearth` (the guild's) and `verge` (ungoverned); three stellars:
 /// `hearth-dock`, a guild station with every service; `hearth-moon`, with
-/// none; and `verge-camp`, a warden outpost with a bar and no fuel; jump
+/// none; and `verge-camp`, a warden outpost with a bar, an exchange and
+/// no fuel; seven goods, six standard and `vintage-wine` a `jünk`, which
+/// the two exchanges price; jump
 /// points two of which lead from `hearth` to `verge`, a dead pair between
 /// `verge` and `drift`, and `drift`'s one-way back door to `verge`; the
 /// civilian hull `hauler`, the crown hull `cutter` and the wardens'
@@ -185,6 +189,12 @@ fn the_fixture_folder_holds_a_record_for_each_thing_it_maps() {
         [128, 129],
         "the dock pass, then the cargo racks kit"
     );
+    assert_eq!(
+        data.ids(StrList::TYPE),
+        [4000, 4001, 4003, 4004],
+        "the standard goods' lists"
+    );
+    assert_eq!(data.ids(Junk::TYPE), [128], "the vintage wine");
     let [file] = data.files() else {
         panic!("one file: {:?}", data.files());
     };
@@ -239,7 +249,7 @@ fn the_stellars_are_placed_owned_and_flagged_by_their_services() {
     assert_eq!(dock.govt, Some(GovtId(128)));
     // Landing, the commodity exchange, the outfitter, the shipyard, the
     // station and the bar.
-    assert_eq!(dock.flags.bits(), 0x5F);
+    assert_eq!(dock.flags.bits() & 0xFF, 0x5F);
     let (name, moon) = named::<Stellar>(&data, 129);
     assert_eq!(name, "Hearth's Moon");
     assert_eq!(moon.govt, None);
@@ -248,11 +258,86 @@ fn the_stellars_are_placed_owned_and_flagged_by_their_services() {
     assert_eq!(name, "Verge Camp");
     assert_eq!(camp.govt, Some(GovtId(129)));
     assert_eq!(
-        camp.flags.bits(),
-        0x71,
-        "landing, a station, a bar, no fuel"
+        camp.flags.bits() & 0xFF,
+        0x73,
+        "landing, the commodity exchange, a station, a bar, no fuel"
     );
     assert_eq!(camp.hyper_link, [None; 8]);
+}
+
+#[test]
+fn the_trade_stellars_price_the_six_standard_goods_in_their_nibbles() {
+    use nova_data::records::stellar::flags::{HIGH_PRICE, LOW_PRICE, MEDIUM_PRICE, price_bits};
+    let game = new_game::open(&fixture()).expect("lists");
+    let slot = |good: &str| u8::try_from(game.ids.commodities[&id(good)]).expect("a slot");
+    let price = |good: &str, level: u32| price_bits(slot(good), level);
+    let nibbles = |stellar: &str| {
+        let (_, record) = named::<Stellar>(&game.data, game.ids.stellars[&id(stellar)]);
+        record.flags.bits() & !0xFF
+    };
+    assert_eq!(
+        nibbles("hearth-dock"),
+        price("alloys", MEDIUM_PRICE)
+            | price("fuel-cells", LOW_PRICE)
+            | price("grain", LOW_PRICE)
+            | price("machinery", HIGH_PRICE)
+            | price("medicine", MEDIUM_PRICE)
+            | price("textiles", HIGH_PRICE)
+    );
+    assert_eq!(
+        nibbles("verge-camp"),
+        price("grain", HIGH_PRICE) | price("medicine", HIGH_PRICE)
+    );
+    assert_eq!(nibbles("hearth-moon"), 0, "it trades nothing");
+}
+
+#[test]
+fn the_standard_goods_are_named_and_priced_in_their_slots() {
+    let game = new_game::open(&fixture()).expect("lists");
+    assert_eq!(
+        pairs(&game.ids.commodities),
+        [
+            ("alloys".to_owned(), 0),
+            ("fuel-cells".to_owned(), 1),
+            ("grain".to_owned(), 2),
+            ("machinery".to_owned(), 3),
+            ("medicine".to_owned(), 4),
+            ("textiles".to_owned(), 5)
+        ]
+    );
+    let strings = |list: i16| -> Vec<String> {
+        let (_, record) = named::<StrList>(&game.data, list);
+        record.strings.iter().map(ToString::to_string).collect()
+    };
+    assert_eq!(
+        strings(4000),
+        [
+            "Alloys",
+            "Fuel cells",
+            "Grain",
+            "Machinery",
+            "Medicine",
+            "Textiles"
+        ]
+    );
+    assert_eq!(strings(4004), ["400", "150", "100", "600", "800", "250"]);
+}
+
+#[test]
+fn vintage_wine_is_a_junk_sold_at_verge_camp_and_bought_at_hearth_dock() {
+    let game = new_game::open(&fixture()).expect("lists");
+    assert_eq!(pairs(&game.ids.junk), [("vintage-wine".to_owned(), 128)]);
+    let (name, wine) = named::<Junk>(&game.data, 128);
+    assert_eq!(name, "Vintage wine");
+    assert_eq!(wine.base_price, 1200);
+    let at = |stellar: &str| Some(StellarId(game.ids.stellars[&id(stellar)]));
+    let side = |first| {
+        let mut side = [None; 8];
+        side[0] = first;
+        side
+    };
+    assert_eq!(wine.sold_at, side(at("verge-camp")));
+    assert_eq!(wine.bought_at, side(at("hearth-dock")));
 }
 
 #[test]

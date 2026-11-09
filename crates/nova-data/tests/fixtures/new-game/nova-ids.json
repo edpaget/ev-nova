@@ -2,7 +2,14 @@
   "blockades": {
     "clear-the-road": 128
   },
-  "commodities": {},
+  "commodities": {
+    "alloys": 0,
+    "fuel-cells": 1,
+    "grain": 2,
+    "machinery": 3,
+    "medicine": 4,
+    "textiles": 5
+  },
   "factions": {
     "guild": 128,
     "warden": 129
@@ -18,7 +25,9 @@
     "verge/hearth-road": 138,
     "verge/side-road": 139
   },
-  "junk": {},
+  "junk": {
+    "vintage-wine": 128
+  },
   "kits": {
     "cargo-racks": 129
   },

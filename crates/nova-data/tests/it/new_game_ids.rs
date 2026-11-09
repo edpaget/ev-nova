@@ -1,8 +1,11 @@
-//! Acceptance: adding a system, a stellar, a jump point, a hull or a start
-//! to a pinned folder moves no existing record's Nova ID. Each case adds
-//! to a temporary copy of the sample fixture (`new_game::fixture::sample_folder`,
-//! with its `nova-ids.json`) a record whose id sorts first in its kind,
-//! where it would have renumbered every record after it without the table.
+//! Acceptance: adding a system, a stellar, a jump point, a hull, a start
+//! or a good to a pinned folder moves no existing record's Nova ID. Each
+//! case adds to a temporary copy of a pinned fixture, with its
+//! `nova-ids.json`, a record whose id sorts first in its kind, where it
+//! would have renumbered every record after it without the table: the
+//! sample fixture (`new_game::fixture::sample_folder`), or, for a good,
+//! the new-game fixture (`new_game::fixture::folder`), whose seven goods
+//! fill the six standard slots and one `jünk`.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -32,6 +35,7 @@ enum Addition {
     JumpPoint,
     Hull,
     Start,
+    Good,
 }
 
 const EVERY: [Addition; 5] = [
@@ -81,6 +85,7 @@ fn add(root: &Path, addition: Addition) {
             "aaa-start.md",
             "---\nname: Early start\nsystem: luyten-crossing\nship: light-freighter\ncash: 500\n---\n",
         ),
+        Addition::Good => write("goods", "aaa-ale.md", "---\nname: Ale\nprice: 20\n---\n"),
     }
 }
 
@@ -101,6 +106,8 @@ fn flat(table: &IdTable) -> BTreeMap<String, i16> {
         of("outfits", &table.outfits),
         of("weapons", &table.weapons),
         of("kits", &table.kits),
+        of("commodities", &table.commodities),
+        of("junk", &table.junk),
     ]
     .into_iter()
     .flatten()
@@ -115,16 +122,22 @@ fn added_key(addition: Addition) -> &'static str {
         Addition::JumpPoint => "gates/brightwater/aaa-spur",
         Addition::Hull => "ships/aaa-hauler",
         Addition::Start => "starts/aaa-start",
+        Addition::Good => "junk/aaa-ale",
     }
 }
 
 /// Opens a copy of the sample with `additions` made, and checks every
 /// original record kept its ID and each addition got one.
 fn check(additions: &[Addition]) {
-    let original = new_game::open(&new_game::fixture::sample_folder()).expect("lists");
+    check_in(&new_game::fixture::sample_folder(), additions);
+}
+
+/// [`check`], over a copy of `folder`.
+fn check_in(folder: &Path, additions: &[Addition]) {
+    let original = new_game::open(folder).expect("lists");
     let temp = tempfile::tempdir().expect("a temporary directory");
-    let root = temp.path().join("sample");
-    copy(&new_game::fixture::sample_folder(), &root);
+    let root = temp.path().join("copy");
+    copy(folder, &root);
     for &addition in additions {
         add(&root, addition);
     }
@@ -190,6 +203,14 @@ fn adding_a_hull_moves_no_id() {
 #[test]
 fn adding_a_start_moves_no_id() {
     check(&[Addition::Start]);
+}
+
+/// The six slots are pinned, so the good takes the `jünk` after the
+/// pinned one, where unpinned it would have taken slot 0 and moved every
+/// standard good up.
+#[test]
+fn adding_a_good_moves_no_id() {
+    check_in(&new_game::fixture::folder(), &[Addition::Good]);
 }
 
 #[test]

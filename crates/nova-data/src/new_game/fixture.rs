@@ -15,8 +15,14 @@
 //! outfit `dock-pass`, a Dock pass; the legal mod kit `cargo-racks`,
 //! fitting freighters, so Hearth Dock's outfitter lists it for the
 //! hauler; the start `dock-hand`, in the hauler
-//! in `hearth`; and the storyline `dock-work`, with its four missions and
-//! two news items:
+//! in `hearth`; seven goods, the six standard ones `alloys` (400 a ton),
+//! `fuel-cells` (150), `grain` (100), `machinery` (600), `medicine` (800)
+//! and `textiles` (250), in slots 0 to 5, and the special good
+//! `vintage-wine` (1200), `jünk` 128; two trade stellars that price
+//! them, `hearth-dock` (alloys and medicine medium, fuel cells and grain
+//! low, machinery, textiles and vintage wine high) and `verge-camp`
+//! (grain and medicine high, vintage wine low); and the storyline
+//! `dock-work`, with its four missions and two news items:
 //!
 //! - `dock-job`: offered at `hearth-dock` (`job_offer`), ten tons of hull
 //!   plate to `verge-camp`, completed there (`job_done`), each effect
