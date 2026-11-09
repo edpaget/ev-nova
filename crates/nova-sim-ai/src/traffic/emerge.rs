@@ -29,7 +29,8 @@
 //!   [`RuleKey::ArrivalsThroughGates`](crate::RuleKey::ArrivalsThroughGates).
 //!   By the other reading, the new game's, where a gate is the only way
 //!   in, an arrival with a usable gate ([`destination::usable_gates`])
-//!   always comes out of one, drawn uniformly over them, and with none it
+//!   always comes out of one, drawn uniformly over them
+//!   ([`destination::draw_usable_gate`]), and with none it
 //!   jumps in from the edge, drawing nothing.
 //! - **Emerging** (`_AIMakeShipEmergeFromHyperGate` @0x89518). The ship is
 //!   placed at the gate's centre, at rest (the callers, @0x42ae4-0x42b0a,
@@ -177,7 +178,7 @@ pub fn emerge_stellar<'s>(
     chance: &mut (impl Chance + ?Sized),
 ) -> Option<&'s LandingSite> {
     if rules.through_gates == RuleSource::Bible {
-        return through_a_gate(govt, sites, govts, rules.reach, chance);
+        return destination::draw_usable_gate(govt, sites, govts, rules.reach, None, chance);
     }
     let candidates = destination::candidates_within(govt, sites, govts, Admit::All, rules.reach);
     if !candidates
@@ -191,27 +192,6 @@ pub fn emerge_stellar<'s>(
         .get(usize::try_from(draw).unwrap_or(usize::MAX))
         .copied()
         .filter(|site| GateKind::of(site.flags2).is_some())
-}
-
-/// The other reading of
-/// [`RuleKey::ArrivalsThroughGates`](crate::RuleKey::ArrivalsThroughGates):
-/// one of the gates among `sites` a ship of `govt` may use within `reach`,
-/// drawn uniformly on `chance`; `None`, drawing nothing, with none.
-fn through_a_gate<'s>(
-    govt: Option<GovtId>,
-    sites: &'s [LandingSite],
-    govts: &Governments,
-    reach: RuleSource,
-    chance: &mut (impl Chance + ?Sized),
-) -> Option<&'s LandingSite> {
-    let gates = destination::usable_gates(govt, sites, govts, reach);
-    if gates.is_empty() {
-        return None;
-    }
-    let draw = chance.below(u32::try_from(gates.len()).unwrap_or(u32::MAX));
-    gates
-        .get(usize::try_from(draw).unwrap_or(usize::MAX))
-        .copied()
 }
 
 /// How fast a ship leaving a gate moves on tick `tick` (from 0) of its
