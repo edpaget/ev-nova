@@ -10,60 +10,15 @@
 //! (`outline`, the flight and scene tests); how a triangle reaches the
 //! GPU, nova-render's.
 
-use std::rc::Rc;
-
-use nova::app::{Control, Showing};
-use nova_audio::AudioSettings;
 use nova_data::new_game;
-use nova_render::ImageError;
 use nova_sim::fixture::MemoryPilots;
-use nova_view::menu::MenuChoice;
 use nova_view::{Color, DrawCommand, DrawLayer, DrawList, Point, Screen};
-use winit::keyboard::KeyCode;
 
-use crate::pilots::Harness;
+use crate::common::fly_new_pilot;
 
 /// The guild's colour, `#c08040`: the hauler's livery's primary, and the
 /// dock's owner's.
 const GUILD: Color = Color::rgba(0xc0, 0x80, 0x40, 255);
-
-/// Draws a frame, whose only failures are pictures the data doesn't hold.
-fn draw(game: &mut Harness) {
-    assert_eq!(game.redraw(), Control::Continue);
-    for (key, error) in game.app.take_failures() {
-        assert!(matches!(error, ImageError::Missing), "{key:?}: {error:?}");
-    }
-}
-
-/// The app flying the fixture's start: New Pilot, named and confirmed,
-/// then entered.
-fn flying_the_fixture(store: &MemoryPilots) -> Harness {
-    let data = new_game::open(&new_game::fixture::folder())
-        .expect("the fixture lists")
-        .data;
-    let mut game = Harness::built_on(Rc::new(data), store, AudioSettings::default(), true);
-    draw(&mut game);
-    let new_pilot = game.menu_button(MenuChoice::NewPilot);
-    game.click(new_pilot);
-    draw(&mut game);
-    game.type_name("Ada");
-    game.press(KeyCode::Enter);
-    // The ship's christening, confirmed with its default.
-    game.press(KeyCode::Enter);
-    assert_eq!(game.showing(), Showing::MainMenu);
-    draw(&mut game);
-    let enter = crate::common::enter_ship_at(game.app.screen());
-    game.click(enter);
-    for _ in 0..200 {
-        if game.showing() == Showing::Flight {
-            break;
-        }
-        draw(&mut game);
-    }
-    assert_eq!(game.showing(), Showing::Flight, "flight never shows");
-    draw(&mut game);
-    game
-}
 
 /// The world's triangles in `color` that flight draws, as their corners.
 fn world_triangles(list: &DrawList, color: Color) -> Vec<[Point; 3]> {
@@ -90,7 +45,7 @@ fn boxes(corners: &[Point; 3], at: Point) -> bool {
 #[test]
 fn the_new_game_s_ships_and_stellars_draw_as_their_stand_ins() {
     let store = MemoryPilots::new();
-    let game = flying_the_fixture(&store);
+    let (game, _) = fly_new_pilot(&new_game::fixture::folder(), &store);
     let view = game.app.screen().flight_view().expect("flying");
     let mut list = DrawList::new();
     view.draw(&mut list);

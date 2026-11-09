@@ -6,23 +6,15 @@
 
 use std::rc::Rc;
 
-use nova::app::{Control, Showing};
+use nova::app::Showing;
 use nova_audio::AudioSettings;
 use nova_data::GameData;
-use nova_render::ImageError;
 use nova_sim::fixture::MemoryPilots;
 use nova_view::menu::MenuChoice;
 use winit::keyboard::KeyCode;
 
+use crate::common::draw;
 use crate::pilots::Harness;
-
-/// Draws a frame, whose only failures are pictures the data doesn't hold.
-fn draw(game: &mut Harness) {
-    assert_eq!(game.redraw(), Control::Continue);
-    for (key, error) in game.app.take_failures() {
-        assert!(matches!(error, ImageError::Missing), "{key:?}: {error:?}");
-    }
-}
 
 #[test]
 fn the_app_draws_and_survives_new_pilot_over_empty_data() {

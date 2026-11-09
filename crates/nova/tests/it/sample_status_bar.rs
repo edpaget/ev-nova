@@ -12,57 +12,19 @@
 //! (`new_game::records::default_interface`); how a layout draws,
 //! nova-view's (`flight::hud`, `flight::radar`).
 
-use std::rc::Rc;
-
-use nova::app::{Control, Showing};
-use nova_audio::AudioSettings;
-use nova_data::new_game;
-use nova_data::new_game::fixture::sample_folder;
-use nova_render::ImageError;
 use nova_sim::fixture::MemoryPilots;
 use nova_view::flight::catalog::StatusBarLayout;
 use nova_view::flight::hud::bar_origin;
 use nova_view::geometry::Bounds;
-use nova_view::menu::MenuChoice;
 use nova_view::{Color, DrawCommand, DrawList, Point, Screen};
-use winit::keyboard::KeyCode;
 
+use crate::common::{draw, fly_the_sample};
 use crate::pilots::Harness;
-
-/// Draws a frame, whose only failures are pictures the data doesn't hold.
-fn draw(game: &mut Harness) {
-    assert_eq!(game.redraw(), Control::Continue);
-    for (key, error) in game.app.take_failures() {
-        assert!(matches!(error, ImageError::Missing), "{key:?}: {error:?}");
-    }
-}
 
 /// The app flying the sample's start, `first-flight` in Luyten Crossing,
 /// with traffic in the system.
 fn flying_the_sample(store: &MemoryPilots) -> Harness {
-    let data = new_game::open(&sample_folder())
-        .expect("the sample lists")
-        .data;
-    let mut game = Harness::built_on(Rc::new(data), store, AudioSettings::default(), true);
-    draw(&mut game);
-    let new_pilot = game.menu_button(MenuChoice::NewPilot);
-    game.click(new_pilot);
-    draw(&mut game);
-    game.type_name("Ada");
-    game.press(KeyCode::Enter);
-    game.press(KeyCode::Enter);
-    assert_eq!(game.showing(), Showing::MainMenu);
-    draw(&mut game);
-    let enter = crate::common::enter_ship_at(game.app.screen());
-    game.click(enter);
-    for _ in 0..200 {
-        if game.showing() == Showing::Flight {
-            break;
-        }
-        draw(&mut game);
-    }
-    assert_eq!(game.showing(), Showing::Flight, "flight never shows");
-    draw(&mut game);
+    let (mut game, _) = fly_the_sample(store);
     for _ in 0..3000 {
         if !dim_ship_dots(&game).is_empty() {
             return game;

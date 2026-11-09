@@ -13,61 +13,16 @@
 //! and `flight::stars`, over fakes: the new game maps no murk yet, so the
 //! sample is never murky and its dots draw at full level here.
 
-use std::rc::Rc;
-
-use nova::app::{Control, Showing, WindowEvent};
-use nova_audio::AudioSettings;
-use nova_data::new_game::fixture::sample_folder;
-use nova_data::{GameData, new_game};
-use nova_render::ImageError;
+use nova::app::{Control, WindowEvent};
+use nova_data::GameData;
 use nova_sim::Vec2;
 use nova_sim::fixture::MemoryPilots;
 use nova_view::flight::catalog::{CombatLooks, StarDot};
 use nova_view::geometry::Bounds;
-use nova_view::menu::MenuChoice;
 use nova_view::{Color, DrawCommand, DrawLayer, DrawList, Key, Screen};
-use winit::keyboard::KeyCode;
 
+use crate::common::{draw, fly_the_sample};
 use crate::pilots::Harness;
-
-/// Draws a frame, whose only failures are pictures the data doesn't hold.
-fn draw(game: &mut Harness) {
-    assert_eq!(game.redraw(), Control::Continue);
-    for (key, error) in game.app.take_failures() {
-        assert!(matches!(error, ImageError::Missing), "{key:?}: {error:?}");
-    }
-}
-
-/// The app flying the sample's start, `first-flight` in Luyten Crossing,
-/// and the data it flies over.
-fn flying_the_sample(store: &MemoryPilots) -> (Harness, Rc<GameData>) {
-    let data = Rc::new(
-        new_game::open(&sample_folder())
-            .expect("the sample lists")
-            .data,
-    );
-    let mut game = Harness::built_on(Rc::clone(&data), store, AudioSettings::default(), true);
-    draw(&mut game);
-    let new_pilot = game.menu_button(MenuChoice::NewPilot);
-    game.click(new_pilot);
-    draw(&mut game);
-    game.type_name("Ada");
-    game.press(KeyCode::Enter);
-    game.press(KeyCode::Enter);
-    assert_eq!(game.showing(), Showing::MainMenu);
-    draw(&mut game);
-    let enter = crate::common::enter_ship_at(game.app.screen());
-    game.click(enter);
-    for _ in 0..200 {
-        if game.showing() == Showing::Flight {
-            break;
-        }
-        draw(&mut game);
-    }
-    assert_eq!(game.showing(), Showing::Flight, "flight never shows");
-    draw(&mut game);
-    (game, data)
-}
 
 /// The data's stand-in dots, as the view reads them.
 fn data_dots(data: &GameData) -> Vec<StarDot> {
@@ -129,7 +84,7 @@ fn ship_velocity(game: &Harness) -> Vec2 {
 #[allow(clippy::float_cmp)]
 fn the_sample_draws_its_stars_as_the_data_s_dots_at_full_level() {
     let store = MemoryPilots::new();
-    let (game, data) = flying_the_sample(&store);
+    let (game, data) = fly_the_sample(&store);
     let dots = data_dots(&data);
     let drawn = world_dots(&game);
     assert!(!drawn.is_empty(), "the stars draw");
@@ -150,7 +105,7 @@ fn the_sample_draws_its_stars_as_the_data_s_dots_at_full_level() {
 #[test]
 fn the_sample_s_dots_scroll_against_the_ship_s_travel() {
     let store = MemoryPilots::new();
-    let (mut game, _) = flying_the_sample(&store);
+    let (mut game, _) = fly_the_sample(&store);
     // Up to speed, then coasting, so the drawn frame's lag behind the
     // session is the same at both ends of the measure. Up is pressed
     // again each frame until it takes: a press sent as flight first shows
