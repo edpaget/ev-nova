@@ -17,7 +17,9 @@
     "verge/hearth-road": 138,
     "verge/side-road": 139
   },
-  "kits": {},
+  "kits": {
+    "cargo-racks": 129
+  },
   "outfits": {
     "dock-pass": 128
   },

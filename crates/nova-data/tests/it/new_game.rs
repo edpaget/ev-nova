@@ -180,7 +180,11 @@ fn the_fixture_folder_holds_a_record_for_each_thing_it_maps() {
     );
     assert_eq!(data.ids(Mission::TYPE), [128], "clear-the-road's blockade");
     assert_eq!(data.ids(Character::TYPE), [128], "the start");
-    assert_eq!(data.ids(Outfit::TYPE), [128], "the dock pass");
+    assert_eq!(
+        data.ids(Outfit::TYPE),
+        [128, 129],
+        "the dock pass, then the cargo racks kit"
+    );
     let [file] = data.files() else {
         panic!("one file: {:?}", data.files());
     };

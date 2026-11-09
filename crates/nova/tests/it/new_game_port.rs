@@ -14,8 +14,12 @@
 //!   for each of its services and for Leave. The format has no mission
 //!   service, but the Mission BBS is any inhabited stellar's, as the
 //!   original's is (`nova_sim::landing::services`), so it has one too.
-//! - **Services.** Bar, Trade Center, Outfitter, Shipyard and Mission BBS
-//!   each open from their button and close back to the spaceport.
+//! - **Services.** Bar, Trade Center, Outfitter and Shipyard each open
+//!   from their button, their buttons labelled on their items, and close
+//!   back to the spaceport through their own Leave or Done. The outfitter
+//!   lists the fixture's kit; no hull is for sale in the fixture yet, so
+//!   the shipyard opens over a variant of it with the cutter for sale.
+//!   The Mission BBS, with no mission offered, says so and closes back.
 //! - **Recharge.** A pilot short of fuel clicks Recharge: the tank fills,
 //!   at `nova_sim::FUEL_PRICE_PER_UNIT` a unit.
 //! - **Missions.** In port, I opens the missions log on the dock job.
@@ -29,17 +33,20 @@ use std::rc::Rc;
 use nova::app::{Control, Showing, WindowEvent};
 use nova::rulebook::ruleset_rulebook;
 use nova::ruleset::Ruleset;
+use nova::startup::{DataSource, DiskData, NewGameOpened};
 use nova_data::new_game::fixture::folder;
-use nova_data::{GameData, InterfaceData, ShipId};
-use nova_render::FontFaces;
+use nova_data::new_game::kits::YARD_TECH_LEGAL;
+use nova_data::records::ship::Ship;
+use nova_data::{AnyRecord, Entry, GameData, InterfaceData, ShipId};
 use nova_render::wgpu::GlyphonMetrics;
+use nova_render::{Batch, FontFaces, Frame};
 use nova_sim::fixture::MemoryPilots;
 use nova_sim::mission::OfferLabels;
 use nova_sim::storylines::state::MissionState;
 use nova_sim::{
     ComputerRefusal, FUEL_PRICE_PER_UNIT, Gauge, InfoRow, MissionComputer, MissionId, MissionInfo,
-    News, OfferPrompt, Outfitter, Pilot, PilotStore, RuleSource, Rulebook, Service, ShipFacts,
-    ShipFields, ShipRow, ShipSpecs, Shipyard,
+    News, OfferPrompt, Pilot, PilotStore, RuleSource, Rulebook, Service, ShipFacts, ShipFields,
+    ShipRow, ShipSpecs, Shipyard,
 };
 use nova_view::geometry::Point;
 use nova_view::input::{Input, Key};
@@ -50,19 +57,21 @@ use nova_view::spaceport::missions::{
 };
 use nova_view::spaceport::news::{NEWS_DIALOG, NewsScreen};
 use nova_view::spaceport::offer::{OFFER_DIALOG, OfferDialog};
-use nova_view::spaceport::outfitter::{NO_ITEMS, OUTFIT_DIALOG, OutfitterScreen};
+use nova_view::spaceport::outfitter::{
+    BUY_ITEM as OUTFIT_BUY_ITEM, DONE_ITEM as OUTFIT_DONE_ITEM, SELL_ITEM as OUTFIT_SELL_ITEM,
+};
 use nova_view::spaceport::race::{RACE_DIALOG, RaceScreen};
 use nova_view::spaceport::shipyard::{
-    INFO_ITEM as SHIPYARD_INFO_ITEM, InfoTemplates, NO_SHIPS, SHIP_INFO_DIALOG, SHIPYARD_DIALOG,
+    BUY_ITEM as SHIPYARD_BUY_ITEM, DONE_ITEM as SHIPYARD_DONE_ITEM,
+    INFO_ITEM as SHIPYARD_INFO_ITEM, InfoTemplates, SHIP_INFO_DIALOG, SHIPYARD_DIALOG,
     ShipyardScreen,
 };
-use nova_view::spaceport::{OutfitterCatalog, ShipyardCatalog, SpaceportView};
+use nova_view::spaceport::{ShipyardCatalog, SpaceportView};
 use nova_view::text::TextMetrics;
 use nova_view::ui::DialogResources;
 use nova_view::ui::button::ButtonStyle;
 use nova_view::ui::comm::{HAGGLE_DIALOG, HaggleDialog};
-use nova_view::ui::desc::DESC_DIALOG;
-use nova_view::ui::dialog::DialogTemplate;
+use nova_view::ui::dialog::{Dialog, DialogTemplate};
 use nova_view::ui::note::{NOTE_DIALOG, NoteDialog, OK_ITEM as NOTE_OK_ITEM};
 use nova_view::ui::quantity::QUANTITY_DIALOG;
 use nova_view::ui::text_input::TEXT_INPUT_DIALOG;
@@ -72,13 +81,19 @@ use winit::keyboard::KeyCode;
 
 use crate::common::EntryHarness;
 use crate::new_game_conversation::{land_at, new_pilot_flying, opened_from, resumed_in};
+use crate::new_game_travel::{fixture, nova_of};
 use crate::pilots::{Harness, saved, texts};
 
 /// The app over the fixture, with no interface file, wired as `main`
 /// wires the new game, keeping pilots in `store`, on the main menu.
 fn app(store: &MemoryPilots) -> Harness {
+    app_over(opened_from(&folder()), store)
+}
+
+/// [`app`] over `data`.
+fn app_over(data: Rc<GameData>, store: &MemoryPilots) -> Harness {
     let rules = ruleset_rulebook(None, Ruleset::NewGame.profile().readings).0;
-    Harness::wired_without_interface(opened_from(&folder()), store, |screen| {
+    Harness::wired_without_interface(data, store, |screen| {
         screen
             .with_rulebook(&rules)
             .with_dialog_loader(nova::dialogs::loader(1))
@@ -88,14 +103,47 @@ fn app(store: &MemoryPilots) -> Harness {
 /// Ada, a new pilot saved at once and changed by `edit`, resumed in a new
 /// app, flying where she was saved.
 fn resumed_after(edit: impl FnOnce(&mut Pilot)) -> (Harness, MemoryPilots) {
+    resumed_over(&opened_from(&folder()), edit)
+}
+
+/// [`resumed_after`] over `data`.
+fn resumed_over(data: &Rc<GameData>, edit: impl FnOnce(&mut Pilot)) -> (Harness, MemoryPilots) {
     let store = MemoryPilots::new();
-    drop(new_pilot_flying(app(&store)));
+    drop(new_pilot_flying(app_over(Rc::clone(data), &store)));
     let mut pilot = saved(&store, "Ada");
     edit(&mut pilot);
     store
         .write("Ada", &nova_sim::save::encode(&pilot))
         .expect("writes");
-    (resumed_in(app(&store)), store)
+    (resumed_in(app_over(Rc::clone(data), &store)), store)
+}
+
+/// The fixture, opened as `main` opens it, with the cutter for sale at
+/// every legal yard: a price, the legal yards' tech level and always on
+/// offer. No hull is for sale in the fixture's own data until hulls gain
+/// their prices and yards.
+fn selling_the_cutter() -> Rc<GameData> {
+    let NewGameOpened::Loaded(loaded) = DiskData.open_new_game(&folder()) else {
+        panic!("the fixture opens");
+    };
+    let id = nova_of(&fixture().ids.ships, "cutter");
+    let entry = loaded
+        .data
+        .get::<Ship>(id)
+        .expect("present")
+        .expect("decoded");
+    let name = entry.name.map(str::to_owned);
+    let cutter = Ship {
+        cost: 5_000,
+        tech_level: YARD_TECH_LEGAL,
+        buy_random: 100,
+        ..entry.record.clone()
+    };
+    Rc::new(loaded.data.with_decoded(Entry {
+        id,
+        name,
+        record: AnyRecord::Ship(Box::new(cutter)),
+    }))
 }
 
 /// Carrying the dock job, so Hearth Dock offers it no more.
@@ -230,31 +278,113 @@ fn the_bar_and_the_trade_center_open_from_their_buttons_and_close_back_to_the_sp
     }
 }
 
-/// Over the fixture no yard sells an outfit or a ship and no mission is
-/// offered on the computer, so each of these buttons says so in a text
-/// over the spaceport, laid out by the placeholder text dialog, rather
-/// than opening; the text closes back to the spaceport. The outfitter's,
-/// the shipyard's and the computer's own placeholders are built in
+/// The centre of `dialog`'s item `item`.
+fn centre_of(dialog: Option<&Dialog>, item: usize) -> Point {
+    dialog
+        .expect("laid out")
+        .item_bounds(item)
+        .expect("an item")
+        .center()
+}
+
+/// Asserts that `frame` draws each label of `labels` on its item of
+/// `dialog`: the label's run starts inside the item's bounds.
+fn assert_labelled(frame: &Frame, dialog: Option<&Dialog>, labels: &[(usize, &str)]) {
+    let dialog = dialog.expect("laid out");
+    let runs: Vec<_> = frame
+        .batches
+        .iter()
+        .flat_map(|batch| match batch {
+            Batch::Text(runs) => runs.clone(),
+            _ => Vec::new(),
+        })
+        .collect();
+    for &(item, label) in labels {
+        let bounds = dialog.item_bounds(item).expect("an item");
+        let on_it = runs.iter().any(|run| {
+            let (x, y) = run.origin_px;
+            run.text == label && bounds.contains(Point::new(x, y))
+        });
+        assert!(on_it, "{label:?} on item {item} at {bounds:?}");
+    }
+}
+
+/// Over the fixture Hearth Dock's outfitter lists its one kit, which fits
+/// the hauler (`mods/cargo-racks.md`), so the button opens the outfitter
+/// over its placeholder, its buttons labelled on their items, and Done
+/// closes it back to the spaceport.
+#[test]
+fn the_outfitter_opens_from_its_button_and_its_done_closes_it_back() {
+    let mut game = at_hearth_dock();
+    click_port_item(&mut game, service_item(Service::Outfitter));
+    let frame = game.frame();
+    assert_eq!(open_over(&game), "outfitter");
+    let outfitter = spaceport(&game).open_outfitter().expect("open");
+    assert_eq!(outfitter.problem(), None, "laid out");
+    assert_labelled(
+        &frame,
+        outfitter.dialog(),
+        &[
+            (OUTFIT_DONE_ITEM, "Done"),
+            (OUTFIT_BUY_ITEM, "Buy"),
+            (OUTFIT_SELL_ITEM, "Sell"),
+        ],
+    );
+
+    let done = centre_of(outfitter.dialog(), OUTFIT_DONE_ITEM);
+    game.click(done);
+    game.frame();
+    assert_eq!(open_over(&game), "nothing", "closed");
+    assert_eq!(game.showing(), Showing::Spaceport);
+}
+
+/// Over the fixture with the cutter for sale, the button opens the
+/// shipyard over its placeholder, its buttons labelled on their items,
+/// and Done closes it back to the spaceport.
+#[test]
+fn the_shipyard_opens_from_its_button_and_its_done_closes_it_back() {
+    let (mut game, _store) = resumed_over(&selling_the_cutter(), on_the_dock_job);
+    land_at(&mut game, "hearth-dock");
+    click_port_item(&mut game, service_item(Service::Shipyard));
+    let frame = game.frame();
+    assert_eq!(open_over(&game), "shipyard");
+    let shipyard = spaceport(&game).open_shipyard().expect("open");
+    assert_eq!(shipyard.problem(), None, "laid out");
+    assert_labelled(
+        &frame,
+        shipyard.dialog(),
+        &[
+            (SHIPYARD_DONE_ITEM, "Done"),
+            (SHIPYARD_BUY_ITEM, "Buy Ship"),
+            (SHIPYARD_INFO_ITEM, "Info"),
+        ],
+    );
+
+    let done = centre_of(shipyard.dialog(), SHIPYARD_DONE_ITEM);
+    game.click(done);
+    game.frame();
+    assert_eq!(open_over(&game), "nothing", "closed");
+    assert_eq!(game.showing(), Showing::Spaceport);
+}
+
+/// Over the fixture no mission is offered on the computer, so the Mission
+/// BBS says so in a text over the spaceport, laid out by the placeholder
+/// text dialog, rather than opening; the text closes back to the
+/// spaceport. The computer's own placeholder is built in
 /// [`every_placeholder_the_walk_does_not_reach_lays_its_screen_out`].
 #[test]
-fn the_outfitter_shipyard_and_mission_bbs_say_there_is_nothing_here_and_close_back() {
+fn the_mission_bbs_says_there_is_nothing_here_and_closes_back() {
     let none_here = ComputerRefusal::NoneAvailable.message();
-    for (service, said) in [
-        (Service::Outfitter, NO_ITEMS),
-        (Service::Shipyard, NO_SHIPS),
-        (Service::MissionBbs, none_here.as_str()),
-    ] {
-        let mut game = at_hearth_dock();
-        click_port_item(&mut game, service_item(service));
-        let drawn = texts(&game.frame());
-        assert_eq!(open_over(&game), "text", "{service:?}");
-        assert!(drawn.contains(&said.to_owned()), "{service:?}: {drawn:?}");
+    let mut game = at_hearth_dock();
+    click_port_item(&mut game, service_item(Service::MissionBbs));
+    let drawn = texts(&game.frame());
+    assert_eq!(open_over(&game), "text");
+    assert!(drawn.contains(&none_here), "{drawn:?}");
 
-        game.press(KeyCode::Enter);
-        game.frame();
-        assert_eq!(open_over(&game), "nothing", "{service:?} closed");
-        assert_eq!(game.showing(), Showing::Spaceport);
-    }
+    game.press(KeyCode::Enter);
+    game.frame();
+    assert_eq!(open_over(&game), "nothing", "closed");
+    assert_eq!(game.showing(), Showing::Spaceport);
 }
 
 #[test]
@@ -419,7 +549,8 @@ fn click_on(screen: &mut impl Screen, at: Point) {
 
 /// Each placeholder screen the walks above don't lay out, built from the
 /// placeholders `main` gives the new game, as the router builds it: laid
-/// out, not on its "Cannot show" line. The quantity dialog (1003) and the
+/// out, not on its "Cannot show" line, and the shipyard's ship info, which
+/// its Info opens. The quantity dialog (1003) and the
 /// text input (3001) are the view's own layouts; the haggle dialog (1008)
 /// stands for the built-in flight dialogs.
 #[test]
@@ -473,16 +604,7 @@ fn every_placeholder_the_walk_does_not_reach_lays_its_screen_out() {
     let note = NoteDialog::new(&template(NOTE_DIALOG), "A note.", style, metrics());
     assert!(note.dialog().item_shown(NOTE_OK_ITEM), "the note");
 
-    let outfitter = OutfitterScreen::new(
-        layout(OUTFIT_DIALOG),
-        placeholders().dialog_template(QUANTITY_DIALOG),
-        placeholders().dialog_template(DESC_DIALOG),
-        Outfitter::default(),
-        Rc::clone(&data) as Rc<dyn OutfitterCatalog>,
-        style,
-    );
-    assert_eq!(outfitter.problem(), None, "the outfitter");
-
+    // The shipyard is walked above; built here for its ship info (1005).
     let mut shipyard = ShipyardScreen::new(
         layout(SHIPYARD_DIALOG),
         InfoTemplates {

@@ -69,6 +69,25 @@ impl GameData {
             ship_lines: BTreeMap::new(),
         }
     }
+
+    /// The store with `entry` in place of the record of its type and ID,
+    /// or added beside them in ID order: a test's variant of a store
+    /// [`GameData::from_decoded`] built, such as the new game's fixture
+    /// with one hull put up for sale. The record is read from the store's
+    /// one file, as the others are; everything else is kept.
+    #[cfg(any(test, feature = "fixture"))]
+    #[must_use]
+    pub fn with_decoded(mut self, entry: Entry<AnyRecord>) -> Self {
+        let index = self.index.entry(entry.record.res_type()).or_default();
+        match index.ids.binary_search(&entry.id) {
+            Ok(at) => index.slots[at] = slot(entry),
+            Err(at) => {
+                index.ids.insert(at, entry.id);
+                index.slots.insert(at, slot(entry));
+            }
+        }
+        self
+    }
 }
 
 /// The slot of `entry`, defined by the store's one file and decoded
@@ -218,6 +237,44 @@ mod tests {
             .map(|(_, entry)| entry.expect("decoded").name)
             .collect();
         assert_eq!(names, [Some("A"), Some("B"), Some("C")]);
+    }
+
+    #[test]
+    fn a_record_put_in_replaces_its_type_and_id_and_keeps_the_rest() {
+        let data = sample().with_decoded(entry(129, "Beta Yard", stellar_record(9)));
+        let beta = data.get::<Stellar>(129).expect("present").expect("decoded");
+        assert_eq!((beta.name, beta.record.x_pos), (Some("Beta Yard"), 9));
+        assert_eq!(beta.source.path, dir());
+        assert_eq!(data.ids(Stellar::TYPE), [129]);
+        let alpha = data.get::<System>(128).expect("kept").expect("decoded");
+        assert_eq!(alpha.record.x_pos, 5);
+    }
+
+    #[test]
+    fn a_record_put_in_with_a_new_id_or_type_is_added_in_order() {
+        let data = sample()
+            .with_decoded(entry(128, "Zero", stellar_record(1)))
+            .with_decoded(entry(130, "Two", stellar_record(2)));
+        assert_eq!(data.ids(Stellar::TYPE), [128, 129, 130]);
+        let xs: Vec<_> = data
+            .records::<Stellar>()
+            .map(|(id, entry)| (id, entry.expect("decoded").record.x_pos))
+            .collect();
+        assert_eq!(xs, [(128, 1), (129, 7), (130, 2)]);
+
+        let data = GameData::from_decoded(dir(), Vec::new()).with_decoded(entry(
+            128,
+            "Alpha",
+            AnyRecord::System(Box::new(system(4))),
+        ));
+        assert_eq!(data.ids(System::TYPE), [128]);
+        let alpha = data.get::<System>(128).expect("present").expect("decoded");
+        assert_eq!(alpha.record.x_pos, 4);
+        assert_eq!(alpha.source.path, dir());
+    }
+
+    fn stellar_record(x_pos: i16) -> AnyRecord {
+        AnyRecord::Stellar(Box::new(stellar(x_pos)))
     }
 
     #[test]

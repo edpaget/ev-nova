@@ -12,7 +12,9 @@
 //! one-way back door to `verge`); the civilian hull `hauler`, in guild
 //! paint, the crown hull `cutter`, bare, and the wardens' crown hull
 //! `warden-picket`, in `warden-colours`, all on a placeholder model; the
-//! outfit `dock-pass`, a Dock pass; the start `dock-hand`, in the hauler
+//! outfit `dock-pass`, a Dock pass; the legal mod kit `cargo-racks`,
+//! fitting freighters, so Hearth Dock's outfitter lists it for the
+//! hauler; the start `dock-hand`, in the hauler
 //! in `hearth`; and the storyline `dock-work`, with its four missions and
 //! two news items:
 //!
