@@ -35,13 +35,14 @@
 //! [`DOMINATED`] or by Demand Tribute
 //! ([`domination::dominated`](crate::domination::dominated)). By 1.25 low is 80 % and high 125 %, and the community's
 //! table of stock prices (Food 60/75/93, Medical 600/750/937, and so on)
-//! matches these exactly. The price is then held in 16 bits, as the
-//! engine stores it (@0x5dcc5), so a high price above 32767 wraps
-//! negative ([`band_price`]). A standard commodity's price of 4 or
-//! less, after the wrap, a base price of 0 or below included, is
-//! [`MIN_COMMODITY_PRICE`], 5, as in the engine (`_DoTradeDialog`
-//! @0x5dcc8-0x5dcce). A `jünk` price wraps the same way
-//! (@0x5dddb, @0x5de2f) and has no floor, as
+//! matches these exactly. The engine then holds the price in 16 bits
+//! (@0x5dcc5), so there a high price above 32767 wraps negative; here it
+//! is held wide and never wraps ([`band_price`]), as integer widths are
+//! not replicated, and no stock price comes near 32767. A standard
+//! commodity's price of 4 or less, a base price of 0 or below included,
+//! is [`MIN_COMMODITY_PRICE`], 5, as in the engine (`_DoTradeDialog`
+//! @0x5dcc8-0x5dcce). A `jünk` price is held wide the same way (the
+//! engine's 16-bit stores @0x5dddb, @0x5de2f) and has no floor, as
 //! [`RuleKey::JunkPrice`](crate::RuleKey::JunkPrice) says by the engine
 //! (below); by the other reading it is never below 0.
 //!
@@ -188,10 +189,9 @@
 //! stellar that does not otherwise trade it. By the Bible, the event's `PriceDelta` is added
 //! to the stellar's own (level) price, several add up, and an event on a
 //! commodity not traded there moves nothing. Either way the price is
-//! held in 16 bits (@0x5dd19-0x5dd40 adds the delta with `addw`; the Bible
-//! is silent on a price's width), and then a price of 4 or less is 5.
-//! Wrapping the sum once is wrapping each addition, so the order of
-//! several events does not matter. What the exchange says of the events
+//! held wide, never wrapped as the engine's 16-bit `addw` wraps it
+//! (@0x5dd19-0x5dd40; the Bible is silent on a price's width), and then a
+//! price of 4 or less is 5. The order of several events does not matter. What the exchange says of the events
 //! active at its stellar is told by the story layer
 //! (`nova_sim::exchange_events`), which [`Market::events`] holds; an
 //! event of a negative commodity moves no price (the engine's reading of
@@ -334,7 +334,7 @@ impl Markup {
 }
 
 /// The lowest price of a standard commodity: a price of 4 or less, a
-/// level's or an event's, once held in 16 bits, is raised to this
+/// level's or an event's, is raised to this
 /// (`_DoTradeDialog` @0x5dcc8-0x5dcce, @0x5dd39-0x5dd40). A `jünk` price
 /// has no such floor.
 pub const MIN_COMMODITY_PRICE: i64 = 5;
@@ -474,28 +474,23 @@ pub fn price_level(flags: u32, commodity: u8) -> Option<PriceLevel> {
 
 /// A good's price at `level`, from its `base` price, by `markup`: low is
 /// `base / factor` and high `base × factor`, in doubles, truncated toward
-/// zero as `cvttsd2si` truncates (`_DoTradeDialog` @0x5dc87-0x5dcc5),
-/// then held in 16 bits ([`word`]) as the engine stores it, a commodity's
-/// @0x5dcc5 and a `jünk`'s @0x5dddb (high) and @0x5de2f (low). Only a high
-/// price can leave 16 bits: from a base of 26215 by 1.25, 29790 by 1.1
-/// and 21846 by 1.5 it wraps negative, and from a base of -26216 by 1.25
-/// positive.
+/// zero as `cvttsd2si` truncates (`_DoTradeDialog` @0x5dc87-0x5dcc5).
+///
+/// The price is held wide and never wraps. The engine stores it in 16
+/// bits (`_commodityPrice` 0x3b5078, a `movw` keeping the low half of
+/// `cvttsd2si`'s 32: a commodity's @0x5dcc5 and a `jünk`'s @0x5dddb (high)
+/// and @0x5de2f (low)), so a high price past 32767 wraps negative there:
+/// from a base of 26215 by 1.25, 29790 by 1.1 and 21846 by 1.5. Integer
+/// widths are not replicated. Every stock price is well within 16 bits,
+/// so the wider hold changes none of them.
 #[must_use]
 pub fn band_price(base: i64, level: PriceLevel, markup: Markup) -> i64 {
     let base_f = base as f64;
-    word(match level {
+    match level {
         PriceLevel::Low => (base_f / markup.factor()) as i64,
         PriceLevel::Medium => base,
         PriceLevel::High => (base_f * markup.factor()) as i64,
-    })
-}
-
-/// `price` held in 16 bits, as the engine's `_commodityPrice` (0x3b5078)
-/// holds it: its low 16 bits, signed. `cvttsd2si` gives 32 bits and a
-/// `movw` store keeps the low half; every price here is well within 32
-/// bits, so keeping the low 16 of the `i64` is the same.
-const fn word(price: i64) -> i64 {
-    price as i16 as i64
+    }
 }
 
 /// The cargo space, in tons, of a ship with `holds` and these `outfits`;
@@ -1190,10 +1185,11 @@ fn cash_never_below_none(trade: &RowTrade) -> i64 {
 /// [`RuleKey::TradeQuotient`](crate::RuleKey::TradeQuotient) says, or
 /// `None` at a price of nothing, which the engine never lists (phase 23).
 /// By the engine's division, trunc(f32(cash) / f32(price)), the cash is
-/// held in the engine's 32 bits and the price in its 16, each held at the
-/// least or most it can hold rather than wrapped past it; above 2^24 cash
-/// it can round up to a ton more than the cash covers. By the other
-/// division, exact integer division.
+/// held in the engine's 32 bits, at the least or most it can hold rather
+/// than wrapped past it; above 2^24 cash it can round up to a ton more
+/// than the cash covers. The price is taken whole, not in the engine's 16
+/// bits, as [`band_price`] holds it wide. By the other division, exact
+/// integer division.
 fn quotient<'a>() -> Value<RowTrade<'a>, Option<i64>> {
     Value::disputed(
         "quotient",
@@ -1212,8 +1208,7 @@ fn engine_quotient(trade: &RowTrade) -> Option<i64> {
     }
     let cash = cash_divided().of(trade);
     let cash = i32::try_from(cash).unwrap_or(if cash < 0 { i32::MIN } else { i32::MAX });
-    let price = i16::try_from(price).unwrap_or(if price < 0 { i16::MIN } else { i16::MAX });
-    Some((cash as f32 / f32::from(price)) as i64)
+    Some((cash as f32 / price as f32) as i64)
 }
 
 /// The exact quotient, in integers.
@@ -1610,12 +1605,12 @@ impl Context for CommodityQuote<'_> {
     }
 }
 
-/// The price of a commodity at its level: its [`band_price`], held in 16
-/// bits; none where it is not traded at a level.
+/// The price of a commodity at its level: its [`band_price`], held wide;
+/// none where it is not traded at a level.
 fn level_price<'a>() -> Value<CommodityQuote<'a>, Option<i64>> {
     Value::plain(
         "level price",
-        "`_DoTradeDialog` @0x5dc0c-0x5dc48, @0x5dc87-0x5dcc5, held in 16 bits @0x5dcc5",
+        "`_DoTradeDialog` @0x5dc0c-0x5dc48, @0x5dc87-0x5dcc5, the 16-bit store @0x5dcc5 held wide",
         level_band,
     )
 }
@@ -1632,11 +1627,12 @@ fn level_band(quote: &CommodityQuote) -> Option<i64> {
 /// engine its `BasePrice` plus the highest ID's `PriceDelta`, whatever
 /// its level, so an event lists a commodity not traded here; by the
 /// other reading its [`level_price`] plus every `PriceDelta`. Either way
-/// held in 16 bits; with no event, the level price.
+/// held wide, never wrapped as the engine's 16-bit `addw` wraps it; with
+/// no event, the level price.
 fn event_price<'a>() -> Value<CommodityQuote<'a>, Option<i64>> {
     Value::disputed(
         "event price",
-        "`_DoTradeDialog` @0x5dcf8-0x5dd58, held in 16 bits by `addw` @0x5dd19-0x5dd40",
+        "`_DoTradeDialog` @0x5dcf8-0x5dd58, the 16-bit `addw` @0x5dd19-0x5dd40 held wide",
         RuleKey::EventPrice,
         last_event_price,
         summed_event_price,
@@ -1644,20 +1640,19 @@ fn event_price<'a>() -> Value<CommodityQuote<'a>, Option<i64>> {
 }
 
 /// The engine's event price: the base plus the last (highest ID) delta,
-/// held in 16 bits, or else the level price.
+/// or else the level price.
 fn last_event_price(quote: &CommodityQuote) -> Option<i64> {
-    quote.deltas.last().map_or_else(
-        || level_price().of(quote),
-        |delta| Some(word(quote.base + delta)),
-    )
+    quote
+        .deltas
+        .last()
+        .map_or_else(|| level_price().of(quote), |delta| Some(quote.base + delta))
 }
 
-/// The other reading's event price: the level price plus every delta,
-/// held in 16 bits. Wrapping the sum once is wrapping each addition, so
-/// the deltas' order does not matter.
+/// The other reading's event price: the level price plus every delta, in
+/// any order.
 fn summed_event_price(quote: &CommodityQuote) -> Option<i64> {
     let delta: i64 = quote.deltas.iter().sum();
-    level_price().of(quote).map(|price| word(price + delta))
+    level_price().of(quote).map(|price| price + delta)
 }
 
 /// A commodity's price on the exchange: its [`event_price`], but never
@@ -1779,13 +1774,13 @@ impl Context for JunkQuote<'_> {
 
 /// A `jünk` row's price, as
 /// [`RuleKey::JunkPrice`](crate::RuleKey::JunkPrice) says, or `None` when
-/// the row is not listed. Its band price at its side's level, held in 16
-/// bits: by the engine signed, with no floor, and a row priced 0 not
+/// the row is not listed. Its band price at its side's level, held wide:
+/// by the engine signed, with no floor, and a row priced 0 not
 /// listed; by the other reading never below 0, and a row priced 0 listed.
 fn junk_price<'a>() -> Value<JunkQuote<'a>, Option<i64>> {
     Value::disputed(
         "jünk price",
-        "rows 6/7 `_DoTradeDialog` @0x5dd83-0x5de2f, held in 16 bits @0x5dddb/@0x5de2f; \
+        "rows 6/7 `_DoTradeDialog` @0x5dd83-0x5de2f, the 16-bit stores @0x5dddb/@0x5de2f held wide; \
          unlisted at 0 `_TradeDialogUpdate` @0x4d2a2-0x4d2ac, `_TradeFilter` @0x4e262; \
          signed `_TradeDialogUpdate` @0x4d545-0x4d54b",
         RuleKey::JunkPrice,
@@ -4502,17 +4497,57 @@ mod tests {
     }
 
     #[test]
-    fn a_high_price_is_held_in_16_bits() {
+    fn a_high_price_past_32767_is_never_wrapped() {
         use PriceLevel::High;
-        assert_eq!(band_price(30000, High, Markup::Standard), -28036, "37500");
-        assert_eq!(band_price(-30000, High, Markup::Standard), 28036, "-37500");
-        for (markup, last, first, wrapped) in [
-            (Markup::Standard, 26214, 26215, -32768),
-            (Markup::Outlaw, 29789, 29790, -32767),
-            (Markup::Dominated, 21845, 21846, -32767),
+        assert_eq!(band_price(25000, High, Markup::Dominated), 37500);
+        assert_eq!(band_price(30000, High, Markup::Standard), 37500);
+        assert_eq!(band_price(-30000, High, Markup::Standard), -37500);
+        assert_eq!(band_price(32767, High, Markup::Dominated), 49150);
+        // The last base whose high price the engine's 16 bits held, priced
+        // as before, and the first past it, now at its true price.
+        for (markup, last, first, past) in [
+            (Markup::Standard, 26214, 26215, 32768),
+            (Markup::Outlaw, 29789, 29790, 32769),
+            (Markup::Dominated, 21845, 21846, 32769),
         ] {
             assert_eq!(band_price(last, High, markup), 32767, "{markup:?}");
-            assert_eq!(band_price(first, High, markup), wrapped, "{markup:?}");
+            assert_eq!(band_price(first, High, markup), past, "{markup:?}");
+        }
+    }
+
+    #[test]
+    fn a_junk_priced_past_32767_at_a_dominated_port_trades_at_its_true_price() {
+        let rare = JunkRecord {
+            id: JunkId(200),
+            name: "Rare".to_owned(),
+            base_price: 25000,
+            bought_at: vec![EARTH],
+            ..unlisted()
+        };
+        let goods = Goods::new(&CommodityStrings::default(), vec![rare], Vec::new());
+        for quotient in RuleSource::ALL {
+            let mut holding = pilot(100_000);
+            holding.cargo = BTreeMap::from([(ODD, 3)]);
+            let found = market(&Exchange {
+                capacity: 10,
+                markup: Markup::Dominated,
+                rules: Rulebook::default().with_override(RuleKey::TradeQuotient, quotient),
+                ..exchange(&goods, EARTH, TRADE, &holding)
+            })
+            .expect("trades");
+            assert_eq!(price(&found, ODD), 37500, "{quotient:?}");
+            assert_eq!(
+                found.tons(order(0, ODD, Direction::Buy, Lot::Max)),
+                Ok(2),
+                "100000 at 37500, {quotient:?}"
+            );
+            settle(
+                &mut holding,
+                order(0, ODD, Direction::Sell, Lot::Max),
+                3,
+                37500,
+            );
+            assert_eq!(holding.cash, 212_500, "a sale pays, {quotient:?}");
         }
     }
 
@@ -4571,27 +4606,29 @@ mod tests {
     }
 
     #[test]
-    fn by_the_engine_a_price_past_32767_wraps_before_the_floor() {
+    fn by_the_engine_a_price_past_32767_is_not_wrapped_before_the_floor() {
         let food_high = TRADE | (4 << 28);
         let engine = RuleSource::Engine;
         let high = food_with_events("30000", food_high, &[], engine);
-        assert_eq!(price(&high, FOOD), 5, "37500 is -28036");
+        assert_eq!(price(&high, FOOD), 37500);
         let event = food_with_events("32000", food_high, &[(140, 1000)], engine);
-        assert_eq!(price(&event, FOOD), 5, "33000 is -32536");
-        let positive = food_with_events("-30000", food_high, &[(140, -10000)], engine);
-        assert_eq!(price(&positive, FOOD), 25536, "-40000 is 25536");
+        assert_eq!(price(&event, FOOD), 33000);
+        let negative = food_with_events("-30000", food_high, &[(140, -10000)], engine);
+        assert_eq!(price(&negative, FOOD), 5, "-40000 is floored");
     }
 
     #[test]
-    fn by_the_bible_the_level_price_plus_the_deltas_wraps_before_the_floor() {
+    fn by_the_bible_the_level_price_plus_the_deltas_is_not_wrapped_before_the_floor() {
         let food_medium = TRADE | (2 << 28);
         let bible = RuleSource::Bible;
         let one = food_with_events("32000", food_medium, &[(140, 1000)], bible);
-        assert_eq!(price(&one, FOOD), 5, "33000 is -32536");
+        assert_eq!(price(&one, FOOD), 33000);
         let forward = food_with_events("32000", food_medium, &[(140, 20000), (141, 15000)], bible);
         let backward = food_with_events("32000", food_medium, &[(140, 15000), (141, 20000)], bible);
-        assert_eq!(price(&forward, FOOD), 1464, "67000 is 1464");
-        assert_eq!(price(&backward, FOOD), 1464, "in either ID order");
+        assert_eq!(price(&forward, FOOD), 67000);
+        assert_eq!(price(&backward, FOOD), 67000, "in either ID order");
+        let negative = food_with_events("-30000", food_medium, &[(140, -10000)], bible);
+        assert_eq!(price(&negative, FOOD), 5, "-40000 is floored");
     }
 
     const ODD: Good = Good::Junk(JunkId(200));
@@ -4696,10 +4733,10 @@ mod tests {
     }
 
     #[test]
-    fn a_junk_price_wraps_and_by_the_engine_is_listed_signed() {
+    fn a_junk_price_is_not_wrapped_and_by_the_engine_is_listed_signed() {
         for (base, ways, engine, bible) in [
-            (30000, ONLY_BOUGHT, -28036, 0),
-            (-30000, ONLY_BOUGHT, 28036, 28036),
+            (30000, ONLY_BOUGHT, 37500, 37500),
+            (-30000, ONLY_BOUGHT, -37500, 0),
             (-100, ONLY_BOUGHT, -125, 0),
             (-100, ONLY_SOLD, -80, 0),
             (-1, ONLY_BOUGHT, -1, 0),
@@ -4953,15 +4990,15 @@ mod tests {
     }
 
     #[test]
-    fn level_price_is_the_band_price_held_in_16_bits() {
+    fn level_price_is_the_band_price_held_wide() {
         for source in RuleSource::ALL {
             let at = |base, level| quoted(rules(source), base, level, &[], |q| level_price().of(q));
             assert_eq!(at(75, Some(PriceLevel::High)), Some(93), "{source:?}");
             assert_eq!(at(26_215, Some(PriceLevel::Medium)), Some(26_215));
             assert_eq!(
                 at(26_215, Some(PriceLevel::High)),
-                Some(-32_768),
-                "32768 wraps"
+                Some(32_768),
+                "not wrapped"
             );
             assert_eq!(at(75, None), None, "not traded at a level");
             let moved = quoted(rules(source), 75, Some(PriceLevel::Low), &[-15], |q| {
@@ -4982,10 +5019,10 @@ mod tests {
         assert_eq!(at(Some(PriceLevel::High), &[-15]), Some(60));
         assert_eq!(at(Some(PriceLevel::Low), &[-15, 15]), Some(90), "the last");
         assert_eq!(at(Some(PriceLevel::High), &[15, -15]), Some(60));
-        let wrapped = quoted(rules(RuleSource::Engine), 32_000, None, &[1000], |q| {
+        let past = quoted(rules(RuleSource::Engine), 32_000, None, &[1000], |q| {
             event_price().of(q)
         });
-        assert_eq!(wrapped, Some(-32_536), "33000 held in 16 bits");
+        assert_eq!(past, Some(33_000), "not wrapped");
     }
 
     #[test]
@@ -4999,14 +5036,14 @@ mod tests {
         assert_eq!(at(Some(PriceLevel::High), &[-15]), Some(78));
         assert_eq!(at(Some(PriceLevel::High), &[-15, 15]), Some(93));
         assert_eq!(at(Some(PriceLevel::Low), &[-15, -5]), Some(40));
-        let wrapped = quoted(
+        let past = quoted(
             rules(RuleSource::Bible),
             32_000,
             Some(PriceLevel::Medium),
             &[20_000, 15_000],
             |q| event_price().of(q),
         );
-        assert_eq!(wrapped, Some(1464), "67000 held in 16 bits");
+        assert_eq!(past, Some(67_000), "not wrapped");
     }
 
     #[test]
@@ -5030,7 +5067,11 @@ mod tests {
             assert_eq!(at(5, medium, &[]), Some(5), "{source:?}");
             assert_eq!(at(6, medium, &[]), Some(6), "{source:?}");
             assert_eq!(at(-50, medium, &[]), Some(5), "{source:?}");
-            assert_eq!(at(26_215, Some(PriceLevel::High), &[]), Some(5), "wrapped");
+            assert_eq!(
+                at(26_215, Some(PriceLevel::High), &[]),
+                Some(32_768),
+                "not wrapped"
+            );
             assert_eq!(at(75, None, &[]), None, "{source:?}");
         }
         let untraded = |source| quoted(rules(source), 6, None, &[-4], |q| commodity_price().of(q));
@@ -5075,7 +5116,12 @@ mod tests {
         assert_eq!(at(400, JunkSide::SoldAt), Some(320), "low");
         assert_eq!(at(-100, JunkSide::BoughtAt), Some(-125));
         assert_eq!(at(-100, JunkSide::SoldAt), Some(-80));
-        assert_eq!(at(30_000, JunkSide::BoughtAt), Some(-28_036), "wrapped");
+        assert_eq!(at(30_000, JunkSide::BoughtAt), Some(37_500), "not wrapped");
+        assert_eq!(
+            at(-30_000, JunkSide::BoughtAt),
+            Some(-37_500),
+            "not wrapped"
+        );
         assert_eq!(at(0, JunkSide::BoughtAt), None);
         assert_eq!(at(1, JunkSide::SoldAt), None, "1 / 1.25 is 0");
         assert_eq!(at(1, JunkSide::BoughtAt), Some(1));
@@ -5091,8 +5137,8 @@ mod tests {
         assert_eq!(at(400, JunkSide::BoughtAt), Some(500), "high");
         assert_eq!(at(400, JunkSide::SoldAt), Some(320), "low");
         assert_eq!(at(-100, JunkSide::BoughtAt), Some(0));
-        assert_eq!(at(-30_000, JunkSide::BoughtAt), Some(28_036), "wrapped");
-        assert_eq!(at(30_000, JunkSide::BoughtAt), Some(0), "wrapped");
+        assert_eq!(at(-30_000, JunkSide::BoughtAt), Some(0), "not wrapped");
+        assert_eq!(at(30_000, JunkSide::BoughtAt), Some(37_500), "not wrapped");
         assert_eq!(at(0, JunkSide::BoughtAt), Some(0));
         assert_eq!(at(1, JunkSide::SoldAt), Some(0));
     }
@@ -5157,10 +5203,10 @@ mod tests {
         assert_eq!(
             cited,
             [
-                "`_DoTradeDialog` @0x5dc0c-0x5dc48, @0x5dc87-0x5dcc5, held in 16 bits @0x5dcc5",
-                "`_DoTradeDialog` @0x5dcf8-0x5dd58, held in 16 bits by `addw` @0x5dd19-0x5dd40",
+                "`_DoTradeDialog` @0x5dc0c-0x5dc48, @0x5dc87-0x5dcc5, the 16-bit store @0x5dcc5 held wide",
+                "`_DoTradeDialog` @0x5dcf8-0x5dd58, the 16-bit `addw` @0x5dd19-0x5dd40 held wide",
                 "floor of 5: `_DoTradeDialog` @0x5dcc8-0x5dcce, @0x5dd39-0x5dd40",
-                "rows 6/7 `_DoTradeDialog` @0x5dd83-0x5de2f, held in 16 bits @0x5dddb/@0x5de2f; \
+                "rows 6/7 `_DoTradeDialog` @0x5dd83-0x5de2f, the 16-bit stores @0x5dddb/@0x5de2f held wide; \
                  unlisted at 0 `_TradeDialogUpdate` @0x4d2a2-0x4d2ac, `_TradeFilter` @0x4e262; \
                  signed `_TradeDialogUpdate` @0x4d545-0x4d54b",
                 "`_CanBuyGoods` @0xccec, `_CanSellGoods` @0x4a94, `_DrawTradeButtons` \
@@ -5781,19 +5827,20 @@ mod tests {
         }
     }
 
-    /// The engine holds the cash in 32 bits and the price in 16 before it
-    /// divides; past those, this port holds each at the most it can hold
-    /// rather than wrapping it.
+    /// The engine holds the cash in 32 bits before it divides; past that,
+    /// this port holds it at the most it can hold rather than wrapping it.
+    /// The price, which the engine holds in 16 bits, is divided whole, as
+    /// [`band_price`] holds it wide.
     #[test]
-    fn by_the_engine_the_cash_and_price_divided_are_held_at_their_widths() {
+    fn by_the_engine_the_cash_divided_is_held_at_32_bits_and_the_price_whole() {
         let at = |cash, price| Market {
             rows: vec![row(FOOD, "Food", price)],
             ..stall(cash, 0, 40_000)
         };
         let most = |cash, price| at(cash, price).row_max(0, Direction::Buy);
         assert_eq!(most((1 << 32) + 100_000, 10), Some(32_000), "not 10,000");
-        assert_eq!(most(32_767_000, 40_000), Some(1000), "at 32767, not 819");
-        assert_eq!(most(32_767_000, -40_000), Some(-999), "at -32768");
+        assert_eq!(most(32_767_000, 40_000), Some(819), "not 1000 at 32767");
+        assert_eq!(most(32_767_000, -40_000), Some(-819), "not -999 at -32768");
         let other = quotient_by(RuleSource::Bible, at(32_767_000, 40_000));
         assert_eq!(other.row_max(0, Direction::Buy), Some(819));
     }
