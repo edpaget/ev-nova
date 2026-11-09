@@ -454,6 +454,9 @@ pub struct Names {
     pub junk: BTreeMap<JunkId, String>,
     /// Each stellar's `spöb` name, by ID.
     pub stellars: BTreeMap<StellarId, String>,
+    /// Each system's `sÿst` name, by ID: what the new game's news names
+    /// its source by.
+    pub systems: BTreeMap<SystemId, String>,
 }
 
 /// A ship class's names, as its `shïp` record gives them.
@@ -525,6 +528,12 @@ impl Names {
     #[must_use]
     pub fn stellar(&self, stellar: StellarId) -> Option<&str> {
         self.stellars.get(&stellar).map(String::as_str)
+    }
+
+    /// System `system`'s `sÿst` name.
+    #[must_use]
+    pub fn system(&self, system: SystemId) -> Option<&str> {
+        self.systems.get(&system).map(String::as_str)
     }
 }
 

@@ -8,8 +8,8 @@ use crate::market::{COMMODITIES, Good};
 use super::super::Statics;
 
 impl Statics {
-    /// The names of every ship class, outfit, good traded, `jünk` and
-    /// stellar the session read, each as the session's own lookup gives it
+    /// The names of every ship class, outfit, good traded, `jünk`,
+    /// stellar and system the session read, each as the session's own lookup gives it
     /// (`Session::ship_name`, `Statics::outfit_names`, `Statics::good_name`,
     /// `Goods::commodity_lc_name`, `Statics::junk_lc_name`,
     /// `TagNames::stellar_name`): the first
@@ -53,6 +53,7 @@ impl Statics {
                 .or_insert_with(|| record.lc_name.clone());
         }
         names.stellars.clone_from(&self.place_names.stellars);
+        names.systems.clone_from(&self.place_names.systems);
         names
     }
 }
@@ -171,6 +172,24 @@ mod tests {
             );
         }
         assert_eq!(names.stellar(StellarId(129)), Some("Luna"));
+    }
+
+    #[test]
+    fn the_opening_names_every_system_the_catalog_names() {
+        let mut catalog = named();
+        catalog
+            .place_names
+            .systems
+            .insert(crate::catalog::SystemId(130), "Hearth".to_owned());
+        catalog
+            .place_names
+            .systems
+            .insert(crate::catalog::SystemId(131), "Drift".to_owned());
+        let session = Session::start(&catalog).expect("starts");
+        let names = session.opening().names;
+        assert_eq!(names.systems, catalog.place_names.systems);
+        assert_eq!(names.system(crate::catalog::SystemId(130)), Some("Hearth"));
+        assert_eq!(names.system(crate::catalog::SystemId(999)), None);
     }
 
     #[test]
