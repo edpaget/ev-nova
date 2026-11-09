@@ -117,6 +117,11 @@ jobs:
   build:
     needs: check
     uses: ./.github/workflows/build.yml
+    # build.yml's Windows leg signs in to Azure with OIDC on main; a called
+    # workflow can only narrow what its caller grants.
+    permissions:
+      contents: read
+      id-token: write
     with:
       build-id: ${{ needs.check.outputs.build }}
       channel: beta

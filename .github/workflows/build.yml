@@ -16,7 +16,9 @@ name: Build
 #
 # A called workflow sees the caller's github context, so `github.ref` below
 # is the caller's ref: only a run on main (the nightly's push, or a
-# promotion dispatched on main) enters macos-signing.
+# promotion dispatched on main) enters macos-signing or windows-signing.
+# Both callers grant the `build` job `id-token: write`, which a called
+# workflow can only narrow.
 on:
   workflow_call:
     inputs:
@@ -68,15 +70,26 @@ jobs:
     runs-on: ${{ matrix.os }}
     # Only the Linux leg names one; empty, a leg runs on the runner itself.
     container: ${{ matrix.container }}
-    # The signing secrets live in the macos-signing environment, whose
-    # deployment-branch policy allows only main (infra/github/signing.tf).
-    # Only main's macOS leg enters it, picked by target rather than runner
-    # image so a runner bump can't silently drop signing. Every other leg, and every other
-    # branch, names no environment and so still runs: a job that names an
-    # environment its branch can't deploy to never starts. The expression must
-    # never name anything but macos-signing, because naming an environment
-    # that doesn't exist creates it, with no protection rules.
-    environment: ${{ github.ref == 'refs/heads/main' && matrix.name == 'aarch64-apple-darwin' && 'macos-signing' || '' }}
+    # For azure/login's OIDC token on the Windows leg. It can't be granted
+    # per matrix leg, and needn't be: Azure trusts only tokens whose subject
+    # is the windows-signing environment (infra/windows-signing), which only
+    # main's Windows leg enters.
+    permissions:
+      contents: read
+      id-token: write
+    # The macOS signing secrets live in the macos-signing environment
+    # (infra/github/signing.tf), and the Windows signing variables in the
+    # windows-signing environment (infra/windows-signing/github.tf). Each
+    # one's deployment-branch policy allows only main. Only main's macOS leg
+    # enters macos-signing, and only main's Windows leg windows-signing,
+    # each picked by target rather than runner image so a runner bump can't
+    # silently drop signing. Every other leg, and every other branch, names
+    # no environment and so still runs: a job that names an environment its
+    # branch can't deploy to never starts. The expression must only ever
+    # produce macos-signing, windows-signing or '', each a literal, because
+    # naming an environment that doesn't exist creates it, with no
+    # protection rules.
+    environment: ${{ github.ref == 'refs/heads/main' && matrix.name == 'aarch64-apple-darwin' && 'macos-signing' || github.ref == 'refs/heads/main' && matrix.name == 'x86_64-pc-windows-msvc' && 'windows-signing' || '' }}
     env:
       # As in ci.yml's `ci`: install only the Rust toolchain.
       MISE_AUTO_INSTALL: "false"
@@ -181,11 +194,40 @@ jobs:
             cargo test --locked -p nova-bundle --test it macos_dmg -- --nocapture
           NOVA_SPARKLE_FRAMEWORKS="$PWD/target/bundle/staging/Nova.app/Contents/Frameworks" \
             cargo test --locked -p nova-appkit --test it updater
-      # The signing seam (rdm phase
-      # windows-signing/phase-2-sign-windows-builds-in-ci):
-      # sign target/x86_64-pc-windows-msvc/release's nova.exe and
-      # nova-dump.exe here, between the Build above and the packing below,
-      # which takes the executables as they are and never rebuilds them.
+      # Signs in to Azure with the job's OIDC token, as the windows-signing
+      # environment's service principal, which holds only the Artifact
+      # Signing profile's signer role and no subscription role (hence
+      # allow-no-subscriptions). The vars are empty outside that
+      # environment, so a branch, pull request or fork skips it. Azure CLI
+      # can't refresh the GitHub token it keeps as the client assertion,
+      # which lasts minutes (Azure/login#372), so each signing step gets its
+      # own login right before it. Its post step logs out.
+      - name: Log in to Azure (Windows)
+        if: runner.os == 'Windows' && vars.AZURE_CLIENT_ID != ''
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          allow-no-subscriptions: true
+      # Signs and verifies nova.exe and nova-dump.exe in place with
+      # Artifact Signing (crates/nova-bundle/src/authenticode): signtool and
+      # its dlib at pinned versions, SHA-256, Microsoft's timestamp server,
+      # and `signtool verify /pa /tw`, which fails an untimestamped file.
+      # The packing below and the zip take them as they are. Outside
+      # windows-signing the three variables are empty, and it logs
+      # "unsigned" and signs nothing.
+      - name: Sign the executables (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          ARTIFACT_SIGNING_ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          ARTIFACT_SIGNING_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          ARTIFACT_SIGNING_PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+        run: >-
+          mise run sign-windows --
+          target/x86_64-pc-windows-msvc/release/nova.exe
+          target/x86_64-pc-windows-msvc/release/nova-dump.exe
       # WiX v5, pinned: v6 and later need an Open Source Maintenance Fee
       # EULA flag.
       - name: Install WiX (Windows)
@@ -194,30 +236,50 @@ jobs:
         run: |
           dotnet tool install --global wix --version 5.0.2
           "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-      # ev-nova-x86_64-pc-windows-msvc.msi, the per-user installer, beside
-      # the zip in dist/; it stages under target/. A second pack of the same
-      # executables (the same version, a new ProductCode) is the "older"
-      # build the installer test upgrades from. Each pack downloads
-      # WinSparkle 0.9.4 into target/installer/downloads, checks the
-      # archive's and then the DLL's SHA-256 with certutil, and lists
-      # WinSparkle.dll and its two licences beside nova.exe
+      # A second pack of the same executables (the same version, a new
+      # ProductCode): the "older" build the installer test upgrades from,
+      # into target/installer/previous. Never signed (no signing
+      # variables): it is only the test's. It packs first, so the dist pack
+      # below is the last to stage WinSparkle.dll, the file the installer
+      # test compares the installed DLL with. Each pack downloads WinSparkle
+      # 0.9.4 into target/installer/downloads, checks the archive's and then
+      # the DLL's SHA-256 with certutil, and lists WinSparkle.dll and its
+      # two licences beside nova.exe
       # (crates/nova-bundle/src/installer/winsparkle.rs). It logs which
       # update feed the build names, from the same NOVA_CHANNEL and key the
-      # Build's nova.exe compiled in.
-      - name: Package (Windows installer)
+      # Build's nova.exe compiled in, and that it is unsigned.
+      - name: Package the previous installer (Windows)
         if: runner.os == 'Windows'
         shell: bash
-        run: |
-          set -euo pipefail
-          mise run pack-installer -- --exes target/x86_64-pc-windows-msvc/release dist
-          mise run pack-installer -- --exes target/x86_64-pc-windows-msvc/release target/installer/previous
-      # The same phase signs dist/'s .msi here, before it is tested and
-      # uploaded, and the staged target\installer\downloads\WinSparkle.dll
-      # between its pin check and wix build (inside the packing above).
+        run: mise run pack-installer -- --exes target/x86_64-pc-windows-msvc/release target/installer/previous
+      # A fresh login for the dist pack's signing (see the first one).
+      - name: Log in to Azure again (Windows)
+        if: runner.os == 'Windows' && vars.AZURE_CLIENT_ID != ''
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          allow-no-subscriptions: true
+      # ev-nova-x86_64-pc-windows-msvc.msi, the per-user installer, beside
+      # the zip in dist/; it stages under target/. In windows-signing it
+      # signs and verifies the staged WinSparkle.dll between its pin check
+      # and wix build, and the .msi after wix build, as the executables
+      # above (crates/nova-bundle/src/installer/plan.rs); elsewhere it logs
+      # "unsigned".
+      - name: Package the Windows installer
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          ARTIFACT_SIGNING_ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          ARTIFACT_SIGNING_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          ARTIFACT_SIGNING_PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+        run: mise run pack-installer -- --exes target/x86_64-pc-windows-msvc/release dist
       # Installs, upgrades and uninstalls the .msi for real
       # (crates/nova-bundle/tests/it/windows_installer.rs), checking the
-      # installed WinSparkle.dll is the staged one; then loads that DLL for
-      # real (crates/nova-win32/tests/it/winsparkle.rs). Without NOVA_MSI or
+      # installed WinSparkle.dll is the one the last pack (dist's, signed on
+      # main) staged; then loads that DLL for real
+      # (crates/nova-win32/tests/it/winsparkle.rs). Without NOVA_MSI or
       # NOVA_WINSPARKLE_DLL each test skips.
       - name: Test the Windows installer
         if: runner.os == 'Windows'
@@ -237,7 +299,8 @@ jobs:
       # archive's names come from nova-bundle (crates/nova-bundle/src/archive.rs),
       # the same constants the download page links; cargo is run directly,
       # not through mise, so stdout carries the name alone. The Windows zip
-      # carries no WinSparkle.dll, so the portable copy doesn't update.
+      # carries no WinSparkle.dll, so the portable copy doesn't update; its
+      # executables are the ones signed above.
       - name: Package
         if: runner.os != 'macOS'
         shell: bash

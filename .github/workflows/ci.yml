@@ -186,6 +186,11 @@ jobs:
     needs: [ci, build-id]
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     uses: ./.github/workflows/build.yml
+    # build.yml's Windows leg signs in to Azure with OIDC on main; a called
+    # workflow can only narrow what its caller grants.
+    permissions:
+      contents: read
+      id-token: write
     with:
       build-id: ${{ needs.build-id.outputs.id }}
       channel: ${{ inputs.channel || 'nightly' }}
