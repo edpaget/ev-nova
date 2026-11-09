@@ -836,3 +836,77 @@ fn the_wordings_picks_draw_on_the_views_chance() {
     );
     assert_eq!(script.borrow().asked, [3, 2], "Rand(3), then Rand(2)");
 }
+
+// The dock scan's find in the press that lands or is denied
+// (rdm:phase/play-the-sample/phase-15-story-news-missions-ui, step 1).
+
+/// A view naming the Gun mount (outfit 131), flying in Sol.
+fn scanning() -> Faked {
+    let mut fake = naming_with(|names| {
+        names.outfits.insert(
+            OutfitId(131),
+            OutfitNames {
+                name: "Gun mount".to_owned(),
+                lc_name: String::new(),
+                lc_plural: String::new(),
+            },
+        );
+    });
+    fake.set_frame(FlightFrame {
+        player_ship_name: Some("Kestrel".to_owned()),
+        ..in_sol()
+    });
+    scripted_over(catalog(), fake, &Rulebook::default())
+}
+
+/// The scan's find of the Gun mount, fined 500 credits, raised in the
+/// press that `answer` answers, and L pressed.
+fn scanned_then(view: &mut Faked, answer: Answer) {
+    view.sim
+        .queue_event(FlightEvent::Message(SimMessage::DockScanned {
+            stellar: StellarId(128),
+            found: DockFind::Outfit {
+                id: OutfitId(131),
+                one: true,
+            },
+            fine: 500,
+        }));
+    view.sim.queue_answer(answer);
+    view.land();
+}
+
+/// Today the denial's words replace the find on the line, as any
+/// refusal replaces the press's request line.
+#[test]
+fn a_dock_scan_s_find_is_read_when_traffic_control_then_denies() {
+    let mut view = scanning();
+    scanned_then(
+        &mut view,
+        Answer::LandRefused {
+            refusal: nova_sim::LandingRefusal::Denied {
+                stellar: StellarId(128),
+                station: false,
+                min_status: 1,
+            },
+            gate: None,
+            requested: true,
+        },
+    );
+    assert_eq!(view.message(), Some(LANDING_DENIED));
+    super::faked_travel::faked_tick(&mut view);
+    assert_eq!(view.message(), Some(LANDING_DENIED));
+}
+
+/// Today a landing in the press that scanned blanks the line, the find
+/// with it.
+#[test]
+fn a_dock_scan_s_find_is_kept_when_the_press_lands() {
+    let mut view = scanning();
+    scanned_then(
+        &mut view,
+        Answer::LandPress(nova_sim::LandPress::Outcome(
+            nova_sim::landing::LandOutcome::Landed(StellarId(128)),
+        )),
+    );
+    assert_eq!(view.message(), None);
+}
