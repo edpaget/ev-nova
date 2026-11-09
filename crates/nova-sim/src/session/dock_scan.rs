@@ -34,8 +34,10 @@
 //! **The exits.** The player's refit lays its class's own hardpoints and
 //! those of the kits it carries over its class's exit points
 //! ([`Statics::fitted_hull`], `nova_sim::combat::spots`), so a kit bought
-//! or granted adds its mount at once, and a load restores it. Stock data
-//! has no fittings, so its exits are its `shän`s'.
+//! or granted adds its mount at once, and a load restores it. A ship
+//! bought flies from its class's and its default kits' hardpoints: the
+//! old ship's kits are traded in with it. Stock data has no fittings, so
+//! its exits are its `shän`s'.
 //!
 //! The original has neither: both are the new game's.
 
@@ -604,5 +606,81 @@ mod tests {
         );
         let sold = BTreeMap::from([(GUN_MOUNT, 0)]);
         assert_eq!(session.statics.spots(ShipId(128), &sold), [nose]);
+    }
+
+    #[test]
+    fn a_ship_bought_flies_from_its_class_s_spots_and_its_default_kits_not_the_old_ones() {
+        use super::super::tests::{NEW, outfitted, shipbuying};
+
+        /// The kit ship 129 comes with.
+        const RACKS: OutfitId = OutfitId(150);
+        /// The kit the pilot carries before buying.
+        const BED: OutfitId = OutfitId(151);
+        let nose = Spot {
+            kind: SpotKind::Gun,
+            at: (0, 8),
+        };
+        let rack = Spot {
+            kind: SpotKind::Turret,
+            at: (3, -1),
+        };
+        let bed = Spot {
+            kind: SpotKind::Turret,
+            at: (0, -2),
+        };
+        let racked = || {
+            let mut catalog = shipbuying();
+            catalog
+                .outfits
+                .extend([outfit(RACKS.0, &[]), outfit(BED.0, &[])]);
+            catalog.defaults = vec![(NEW, vec![(RACKS, 1)])];
+            catalog.ship_records[1].defaults = vec![(RACKS, 1)];
+            catalog
+        };
+        let plain = racked();
+        let mut fitted = racked();
+        fitted.fittings = Fittings {
+            hulls: BTreeMap::from([(NEW, vec![nose])]),
+            kits: BTreeMap::from([
+                (
+                    RACKS,
+                    Kit {
+                        attention: 0,
+                        spots: vec![rack],
+                    },
+                ),
+                (
+                    BED,
+                    Kit {
+                        attention: 0,
+                        spots: vec![bed],
+                    },
+                ),
+            ]),
+        };
+        let bought = |catalog: &FakePilotCatalog| {
+            let mut session = outfitted(catalog);
+            session.pilot.outfits.insert(BED, 1);
+            session.pilot.cash = 100_000;
+            session
+                .buy_ship(NEW, "Racked", &mut crate::chance::NeverFires)
+                .expect("bought");
+            session
+        };
+        let class = bought(&plain).ship.fit.hull;
+        let session = bought(&fitted);
+        assert_eq!(session.pilot.ship, NEW);
+        assert_eq!(session.pilot.outfits.get(&BED), None, "traded in");
+        assert_eq!(session.pilot.outfits.get(&RACKS), Some(&1));
+        assert_eq!(
+            session.statics.spots(NEW, &session.pilot.outfits),
+            [nose, rack]
+        );
+        let raw = session.statics.arsenal.class_exits(NEW);
+        assert_eq!(
+            session.ship.fit.hull,
+            class.with_spots(raw.as_ref(), &[nose, rack]),
+            "its class's nose, then its rack; the old bed is gone"
+        );
     }
 }
