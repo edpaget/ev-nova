@@ -13,6 +13,11 @@
 //! notices a ship that carries it, has no `oütf` field either, so it is
 //! kept here too (`nova_sim::dock_scan`).
 //!
+//! How a ship's spots become its four exit points of each kind is one
+//! rule, [`Spot::exit_points`], which both the loader's `shän` for an NPC
+//! and the session's rebuilt points for the player read, so a class flies
+//! from the same points whoever flies it.
+//!
 //! The stock game's store holds none.
 
 use std::collections::BTreeMap;
@@ -56,6 +61,33 @@ pub struct Spot {
     /// facing up: +x to its right and +y ahead, as the `shän`'s exit
     /// points are.
     pub at: (i16, i16),
+}
+
+impl Spot {
+    /// How many exit points of each kind a `shän` holds.
+    pub const EXIT_POINTS: usize = 4;
+
+    /// The four exit points of `kind` that `spots` give: the places of
+    /// that kind's spots, in order, cycled (one fills all four, two go a,
+    /// b, a, b, three a, b, c, a) and the first four kept; with them,
+    /// whether more than four were given. `None` with no spot of `kind`.
+    #[must_use]
+    pub fn exit_points(
+        spots: &[Spot],
+        kind: SpotKind,
+    ) -> Option<([(i16, i16); Self::EXIT_POINTS], bool)> {
+        let places: Vec<(i16, i16)> = spots
+            .iter()
+            .filter(|spot| spot.kind == kind)
+            .map(|spot| spot.at)
+            .collect();
+        if places.is_empty() {
+            return None;
+        }
+        let cycle = places.len().min(Self::EXIT_POINTS);
+        let points = std::array::from_fn(|n| places[n % cycle]);
+        Some((points, places.len() > Self::EXIT_POINTS))
+    }
 }
 
 /// Which `ExitType` a hardpoint fires its shots from.
@@ -103,6 +135,74 @@ mod tests {
                 },
             )]),
         }
+    }
+
+    fn spot(kind: SpotKind, at: (i16, i16)) -> Spot {
+        Spot { kind, at }
+    }
+
+    fn guns(n: i16) -> Vec<Spot> {
+        (0..n).map(|x| spot(SpotKind::Gun, (x, 0))).collect()
+    }
+
+    #[test]
+    fn a_shan_holds_four_exit_points_of_each_kind() {
+        assert_eq!(Spot::EXIT_POINTS, 4);
+    }
+
+    #[test]
+    fn no_spot_of_a_kind_gives_no_exit_points() {
+        assert_eq!(Spot::exit_points(&[], SpotKind::Gun), None);
+        let turret = [spot(SpotKind::Turret, (0, -2))];
+        assert_eq!(Spot::exit_points(&turret, SpotKind::Gun), None);
+        assert_eq!(Spot::exit_points(&turret, SpotKind::Guided), None);
+    }
+
+    #[test]
+    fn one_spot_fills_all_four_points() {
+        let turret = [spot(SpotKind::Turret, (0, -2))];
+        assert_eq!(
+            Spot::exit_points(&turret, SpotKind::Turret),
+            Some(([(0, -2); 4], false))
+        );
+    }
+
+    #[test]
+    fn two_spots_of_a_kind_cycle_a_b_a_b_past_the_other_kinds() {
+        let spots = [
+            spot(SpotKind::Gun, (-3, 5)),
+            spot(SpotKind::Guided, (0, -9)),
+            spot(SpotKind::Gun, (3, 5)),
+        ];
+        assert_eq!(
+            Spot::exit_points(&spots, SpotKind::Gun),
+            Some(([(-3, 5), (3, 5), (-3, 5), (3, 5)], false))
+        );
+        assert_eq!(
+            Spot::exit_points(&spots, SpotKind::Guided),
+            Some(([(0, -9); 4], false))
+        );
+    }
+
+    #[test]
+    fn three_spots_cycle_from_the_first_again() {
+        assert_eq!(
+            Spot::exit_points(&guns(3), SpotKind::Gun),
+            Some(([(0, 0), (1, 0), (2, 0), (0, 0)], false))
+        );
+    }
+
+    #[test]
+    fn four_fill_the_four_and_more_keep_the_first_four_and_say_so() {
+        let four = [(0, 0), (1, 0), (2, 0), (3, 0)];
+        assert_eq!(
+            Spot::exit_points(&guns(4), SpotKind::Gun),
+            Some((four, false))
+        );
+        assert_eq!(
+            Spot::exit_points(&guns(5), SpotKind::Gun),
+            Some((four, true))
+        );
     }
 
     #[test]

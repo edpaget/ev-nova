@@ -6,11 +6,11 @@
 //! `shän`'s pixels (+x right, +y ahead, the ship facing up). The new
 //! game's store keeps each class's own spots and each kit's
 //! (`nova_sim_catalog::fittings`). [`fitted_exits`] lays a ship's spots
-//! over its class's raw exit points: each kind with spots takes its four
-//! points from them, cycling in order (one fills all four, two go a, b,
-//! a, b, the first four kept), at z 0; a kind with none keeps the class's
-//! points. With no spots at all the class's points stand as they are, so
-//! the stock game, which has no fittings, is untouched.
+//! over its class's raw exit points: each kind with spots takes the four
+//! points [`Spot::exit_points`] makes of them, the one rule the new
+//! game's `shän`s are made by too, at z 0; a kind with none keeps the
+//! class's points. With no spots at all the class's points stand as they
+//! are, so the stock game, which has no fittings, is untouched.
 //!
 //! The session flies the player with its class's spots and those of the
 //! kits it carries ([`HullSpec::with_spots`]), so a kit bought at a yard
@@ -24,9 +24,6 @@ use nova_sim_catalog::fittings::{Spot, SpotKind};
 
 use super::exits::ExitPoints;
 use super::hull::HullSpec;
-
-/// The exit points of each kind.
-const EXITS: usize = 4;
 
 /// The `shän` set a spot of `kind` fills: gun 0, turret 1, guided 2.
 fn set(kind: SpotKind) -> usize {
@@ -48,19 +45,10 @@ pub fn fitted_exits(raw: Option<&ShipExits>, spots: &[Spot]) -> Option<ShipExits
     }
     let mut exits = raw.copied().unwrap_or_default();
     for kind in [SpotKind::Gun, SpotKind::Turret, SpotKind::Guided] {
-        let places: Vec<(i16, i16)> = spots
-            .iter()
-            .filter(|spot| spot.kind == kind)
-            .map(|spot| spot.at)
-            .take(EXITS)
-            .collect();
-        if places.is_empty() {
-            continue;
-        }
-        let set = set(kind);
-        for n in 0..EXITS {
-            exits.points[set][n] = places[n % places.len()];
-            exits.z[set][n] = 0;
+        if let Some((points, _)) = Spot::exit_points(spots, kind) {
+            let set = set(kind);
+            exits.points[set] = points;
+            exits.z[set] = [0; Spot::EXIT_POINTS];
         }
     }
     Some(exits)
@@ -129,41 +117,24 @@ mod tests {
     }
 
     #[test]
-    fn two_spots_of_a_kind_cycle_a_b_a_b() {
-        let fitted = fitted_exits(
-            Some(&raw()),
-            &[
-                spot(SpotKind::Gun, (-3, 5)),
-                spot(SpotKind::Guided, (0, -9)),
-                spot(SpotKind::Gun, (3, 5)),
-            ],
-        )
-        .unwrap();
-        assert_eq!(fitted.points[0], [(-3, 5), (3, 5), (-3, 5), (3, 5)]);
-        assert_eq!(fitted.points[2], [(0, -9); 4]);
-    }
-
-    #[test]
-    fn three_spots_cycle_from_the_first_again_and_past_four_keep_the_first_four() {
-        let three: Vec<Spot> = (0..3).map(|n| spot(SpotKind::Gun, (n, 0))).collect();
-        let fitted = fitted_exits(Some(&raw()), &three).unwrap();
-        assert_eq!(fitted.points[0], [(0, 0), (1, 0), (2, 0), (0, 0)]);
-        let five: Vec<Spot> = (0..5).map(|n| spot(SpotKind::Gun, (n, 0))).collect();
-        let fitted = fitted_exits(Some(&raw()), &five).unwrap();
-        assert_eq!(fitted.points[0], [(0, 0), (1, 0), (2, 0), (3, 0)]);
-    }
-
-    #[test]
-    fn the_class_s_spots_then_the_kits_go_in_order() {
-        let fitted = fitted_exits(
-            Some(&raw()),
-            &[
-                spot(SpotKind::Turret, (0, 8)),
-                spot(SpotKind::Turret, (0, -2)),
-            ],
-        )
-        .unwrap();
-        assert_eq!(fitted.points[1], [(0, 8), (0, -2), (0, 8), (0, -2)]);
+    fn each_kind_takes_the_points_its_spots_make_in_its_own_set() {
+        let spots = [
+            spot(SpotKind::Gun, (-3, 5)),
+            spot(SpotKind::Guided, (0, -9)),
+            spot(SpotKind::Gun, (3, 5)),
+            spot(SpotKind::Turret, (0, 8)),
+        ];
+        let fitted = fitted_exits(Some(&raw()), &spots).unwrap();
+        for (set, kind) in [SpotKind::Gun, SpotKind::Turret, SpotKind::Guided]
+            .into_iter()
+            .enumerate()
+        {
+            let (points, _) = Spot::exit_points(&spots, kind).unwrap();
+            assert_eq!(fitted.points[set], points, "{kind:?}");
+            assert_eq!(fitted.z[set], [0; 4], "{kind:?}");
+        }
+        assert_eq!(fitted.points[3], raw().points[3], "the beam points");
+        assert_eq!(fitted.z[3], [7; 4]);
     }
 
     #[test]

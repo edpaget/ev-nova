@@ -1033,26 +1033,33 @@ fn a_kit_s_hardpoint_outfit_is_a_stock_weapon_of_the_ship_it_is_fitted_to() {
 }
 
 #[test]
-fn two_spots_of_a_kind_cycle_through_its_four_points() {
+fn each_hardpoint_fires_from_its_kind_s_points_in_whole_pixels() {
     let game = loaded(&galaxy().with(
         "ships/skiff.md",
         "---\nname: Skiff\nstyle: civilian\nrole: shuttle\nmodel: hull\n\
          size: {length: 8, beam: 4, collision_radius: 4}\n\
-         hardpoints:\n  - id: a\n    mount: fixed\n    position: [-2, 3]\n\
-         \x20 - id: b\n    mount: fixed\n    position: [2.4, 3.6]\n\
+         hardpoints:\n  - id: a\n    mount: fixed\n    position: [2.4, 3.6]\n\
          \x20 - id: c\n    mount: launcher\n    position: [0, -3]\n\
-         \x20 - id: d\n    mount: bay\n    position: [0, 0]\n---\n",
+         \x20 - id: d\n    mount: bay\n    position: [5, 5]\n---\n",
     ));
     let (_, anim): (_, ShipAnim) = named(&game, game.ids.ships[&id("skiff")]);
-    assert_eq!(anim.gun_pos_x, [-2, 2, -2, 2]);
-    assert_eq!(anim.gun_pos_y, [3, 4, 3, 4], "whole pixels");
+    assert_eq!(
+        (anim.gun_pos_x, anim.gun_pos_y),
+        ([2; 4], [4; 4]),
+        "whole pixels"
+    );
     assert_eq!((anim.guided_pos_x, anim.guided_pos_y), ([0; 4], [-3; 4]));
+    assert_eq!(
+        (anim.turret_pos_x, anim.turret_pos_y),
+        ([0; 4], [0; 4]),
+        "a bay fires from none, and a kind with none keeps the centre"
+    );
     let skiff = ship_of(&game, "skiff");
-    assert_eq!((skiff.max_gun, skiff.max_tur), (3, 0), "a bay is no slot");
+    assert_eq!((skiff.max_gun, skiff.max_tur), (2, 0), "a bay is no slot");
 }
 
 #[test]
-fn more_than_four_spots_of_a_kind_keep_the_first_four_and_are_a_problem() {
+fn more_than_four_spots_of_a_kind_are_a_problem() {
     let hardpoints = (0..5)
         .map(|n| format!("  - id: t{n}\n    mount: turret\n    position: [{n}, 0]\n"))
         .collect::<Vec<_>>()
@@ -1064,8 +1071,6 @@ fn more_than_four_spots_of_a_kind_keep_the_first_four_and_are_a_problem() {
              size: {{length: 8, beam: 4, collision_radius: 4}}\nhardpoints:\n{hardpoints}---\n"
         ),
     ));
-    let (_, anim): (_, ShipAnim) = named(&game, game.ids.ships[&id("skiff")]);
-    assert_eq!(anim.turret_pos_x, [0, 1, 2, 3]);
     let lines = problems(&game);
     assert!(
         lines.contains(

@@ -30,8 +30,9 @@
 //!   a `fixed` one a gun point, a `turret` one a turret point, a
 //!   `launcher` one a guided point, a `bay` none, at its `position` in
 //!   whole pixels ([`spot`]). Each kind's four points cycle through that
-//!   kind's hardpoints in order ([`exit_points`]); a kind with none keeps
-//!   the centre. It names no sprite: the view draws the ship's stand-in,
+//!   kind's hardpoints in order ([`Spot::exit_points`], the one rule the
+//!   player's points are rebuilt by too); a kind with none keeps the
+//!   centre. It names no sprite: the view draws the ship's stand-in,
 //!   its model from above or its size box at the same scale
 //!   ([`super::looks`]). The store's fittings keep each ship's chain
 //!   hardpoints too, for the player's exit points to be rebuilt from its
@@ -112,8 +113,9 @@ pub const START_DATE: (i16, i16, i16) = (1, 1, 1200);
 /// How many default items and stock weapons a `shïp` holds.
 const SHIP_SLOTS: usize = 8;
 
-/// How many exit points of each kind a `shän` holds.
-const EXITS: usize = 4;
+/// How many default items or stock weapons each of a `shïp`'s two arrays
+/// holds.
+const ARRAY_SLOTS: usize = 4;
 
 /// The ships of `galaxy` that are hulls: no `base` and no `mods`.
 pub fn hulls(galaxy: &Galaxy) -> impl Iterator<Item = (&Id, &Doc<BibleShip>)> {
@@ -240,23 +242,23 @@ pub fn ship(
     let items = default_items(galaxy, ids, doc, &resolved, problems);
     for (slot, &(item, n)) in items.iter().enumerate() {
         let item = Some(OutfitId(item));
-        if slot < EXITS {
+        if slot < ARRAY_SLOTS {
             ship.default_items1_4[slot] = item;
             ship.item_count1_4[slot] = n;
         } else {
-            ship.default_items5_8[slot - EXITS] = item;
-            ship.item_count5_8[slot - EXITS] = n;
+            ship.default_items5_8[slot - ARRAY_SLOTS] = item;
+            ship.item_count5_8[slot - ARRAY_SLOTS] = n;
         }
     }
     let weapons = stock_weapons(galaxy, ids, doc, &resolved, chain.len(), problems);
     for (slot, &(weapon, n)) in weapons.iter().enumerate() {
         let weapon = Some(WeaponId(weapon));
-        if slot < EXITS {
+        if slot < ARRAY_SLOTS {
             ship.weap_type1_4[slot] = weapon;
             ship.weap_count1_4[slot] = n;
         } else {
-            ship.weap_type5_8[slot - EXITS] = weapon;
-            ship.weap_count5_8[slot - EXITS] = n;
+            ship.weap_type5_8[slot - ARRAY_SLOTS] = weapon;
+            ship.weap_count5_8[slot - ARRAY_SLOTS] = n;
         }
     }
     Entry {
@@ -396,25 +398,6 @@ pub fn chain_spots(galaxy: &Galaxy, id: &Id) -> Vec<Spot> {
         .collect()
 }
 
-/// The four exit points of `kind` that `spots` give: their places cycled
-/// in order (one fills all four, two go a, b, a, b), the first four kept;
-/// all at the centre with none. Whether more than four were given.
-#[must_use]
-pub fn exit_points(spots: &[Spot], kind: SpotKind) -> ([(i16, i16); EXITS], bool) {
-    let places: Vec<(i16, i16)> = spots
-        .iter()
-        .filter(|spot| spot.kind == kind)
-        .map(|spot| spot.at)
-        .collect();
-    let mut points = [(0, 0); EXITS];
-    if !places.is_empty() {
-        for (n, point) in points.iter_mut().enumerate() {
-            *point = places[n % places.len().min(EXITS)];
-        }
-    }
-    (points, places.len() > EXITS)
-}
-
 /// The `shän` of the ship `id`, numbered `nova`, its size and its exit
 /// points; none for a ship with no `size`, which the simulation collides
 /// as its default disc. A kind with more than four hardpoints is reported
@@ -459,7 +442,9 @@ pub fn ship_anim(
             &mut anim.guided_pos_y,
         ),
     ] {
-        let (points, more) = exit_points(&spots, kind);
+        let Some((points, more)) = Spot::exit_points(&spots, kind) else {
+            continue;
+        };
         if more {
             problems.push(Problem::new(
                 &doc.path,
