@@ -362,6 +362,21 @@ mod tests {
     }
 
     #[test]
+    fn beating_the_holder_makes_a_save_due_though_no_slot_ends() {
+        // No settle has run, so no slot holds the blockade for its end to
+        // make the save due.
+        let catalog = blockading();
+        let mut session = docked_with(&catalog, ACTIVE);
+        session.out.save_due = false;
+        session.blockade_broken(BLOCKADE, &mut NeverFires);
+        assert_eq!(
+            session.pilot.story.mission("road"),
+            Some(MissionState::Done)
+        );
+        assert!(session.out.save_due);
+    }
+
+    #[test]
     fn another_mission_s_goals_met_moment_touches_no_storyline() {
         let catalog = blockading();
         let mut session = among_the_guards(&catalog);

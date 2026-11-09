@@ -250,13 +250,11 @@ pub fn blockade(
         ship_syst,
         ship_dude,
         ship_goal: CHASE_OFF,
-        ship_behav: ATTACK_PLAYER,
         ship_start,
         flags: Flags16(HIDDEN),
-        avail_random: 0,
-        travel_stel: -1,
-        return_stel: -1,
-        time_limit: 0,
+        // The neutral mission's are the blockade's own: `ShipBehav`
+        // [`ATTACK_PLAYER`] (0), `AvailRandom` 0, `TravelStel` and
+        // `ReturnStel` -1 and no `TimeLimit`.
         ..neutral_mission()
     };
     Some(Entry {
