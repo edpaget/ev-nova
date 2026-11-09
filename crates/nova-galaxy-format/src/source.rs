@@ -1,5 +1,16 @@
 //! The port the loader reads content through, with an in-memory fake for
 //! tests and a filesystem adapter for the CLI.
+//!
+//! The loader reads each kind's folder with [`Source::listing`], which
+//! lists a file that can't be read with its error ([`Listed`]), so one bad
+//! file drops only itself. [`Source::files`] keeps failing the whole
+//! folder on its first such file, for callers that want that. `listing`
+//! has a default built from `files`, so an adapter that doesn't override
+//! it still compiles, but fails the folder as `files` does.
+//!
+//! Every adapter is checked against `TREE` with `check_contract`, and one
+//! that lists per file against `TREE` plus `UNREADABLE` with
+//! `check_unreadable_contract` (all behind the `fixture` feature).
 
 use std::collections::BTreeMap;
 use std::io;
