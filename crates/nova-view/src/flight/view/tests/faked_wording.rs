@@ -252,6 +252,16 @@ fn a_collapsed_jump_says_the_hyperspace_field_collapsed() {
 }
 
 #[test]
+fn j_with_no_gate_serving_the_selection_says_no_jump_point_leads_there() {
+    assert_eq!(
+        text(&SimMessage::NoGateLeadsThere, &FakeFlight::new()).as_deref(),
+        Some("No jump point leads there.")
+    );
+    assert_eq!(NO_GATE_LEADS_THERE, "No jump point leads there.");
+    assert_eq!(lead_of(&SimMessage::NoGateLeadsThere), None);
+}
+
+#[test]
 fn the_players_repair_droids_say_propulsion_systems_repaired() {
     assert_eq!(
         text(&SimMessage::PropulsionRepaired, &FakeFlight::new()).as_deref(),

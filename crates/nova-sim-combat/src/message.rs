@@ -275,6 +275,14 @@ pub enum SimMessage {
     /// One of the player's self-destruct lines (`_HandlePlayer` block Z;
     /// see [`self_destruct`](crate::self_destruct)).
     SelfDestruct(SelfDestructLine),
+    /// J was refused because no gate the player's system shows serves the
+    /// system selected in nav mode 3: "No jump point leads there." Raised
+    /// only by the other reading of
+    /// [`RuleKey::NoGateRefusal`](crate::RuleKey::NoGateRefusal), under the
+    /// other reading of
+    /// [`RuleKey::GateAutopilot`](crate::RuleKey::GateAutopilot); the
+    /// original's J says nothing there (`_HandlePlayer` @0x6b964-0x6b9a3).
+    NoGateLeadsThere,
 }
 
 /// The player's self-destruct lines, `STR#` 2002 #385-#390 and #395.
@@ -378,13 +386,17 @@ impl SimMessage {
     ///   [`NiceDay`](SelfDestructLine::NiceDay) (`_HandlePlayer` @0x6feb9,
     ///   @0x70164, @0x70251), 70 for [`In`](SelfDestructLine::In)
     ///   (@0x7009e).
+    /// - [`NoGateLeadsThere`](Self::NoGateLeadsThere): 360, as J's other
+    ///   no-destination line (`_HandlePlayer` @0x6ba00); the original has
+    ///   no such line.
     #[must_use]
     pub fn ticks(&self) -> u16 {
         match self {
             Self::ExitedHypergate(_)
             | Self::FleetArrivalQuote(_)
             | Self::Sabotaged { .. }
-            | Self::BombSetUp => 360,
+            | Self::BombSetUp
+            | Self::NoGateLeadsThere => 360,
             Self::MissionScanned
             | Self::Smuggling { .. }
             | Self::IllegalJunk { .. }
@@ -605,6 +617,7 @@ mod tests {
                 },
                 400,
             ),
+            (SimMessage::NoGateLeadsThere, 360),
         ];
         for (message, ticks) in cases {
             assert_eq!(message.ticks(), ticks, "{message:?}");

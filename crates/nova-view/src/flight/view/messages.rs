@@ -230,6 +230,11 @@ pub const BOMB_SET_UP: &str = "Someone set up us the bomb!";
 /// `STR#` 2002 #35: a disabled player's pre-jump collapsed
 /// (`_HandlePlayer` `_GetIndString` @0x68a04).
 pub const JUMP_COLLAPSED: &str = "Ship disabled - hyperspace field collapsed.";
+/// J refused because no gate the player's system shows serves the system
+/// selected in nav mode 3, by the other reading of
+/// [`RuleKey::NoGateRefusal`](nova_sim::RuleKey::NoGateRefusal): the
+/// original's J says nothing there, so it has no `STR#` for it.
+pub const NO_GATE_LEADS_THERE: &str = "No jump point leads there.";
 /// `STR#` 2002 #385: what each of the self-destruct's lines but the last
 /// begins with (`_HandlePlayer` @0x6fe3f, @0x6ff8a, @0x700ea).
 pub const SELF_DESTRUCT_LEAD: &str = "Self-destruct";
@@ -534,6 +539,7 @@ pub(super) fn sim_message_text(
         | SimMessage::WaitForMe(text)
         | SimMessage::ReinforcementsApproaching(text) => return Some(text.clone()),
         SimMessage::JumpCollapsed => JUMP_COLLAPSED,
+        SimMessage::NoGateLeadsThere => NO_GATE_LEADS_THERE,
         SimMessage::SelfDestruct(line) => return Some(self_destruct_text(*line)),
         SimMessage::EscapingIn { ship } => return Some(escaping_in_text(*ship, words.names)),
         SimMessage::Sabotaged { outfit: None } => BOMB_EXPLODED_ONBOARD,
@@ -914,6 +920,7 @@ pub(super) fn arrival_lead(message: &SimMessage, chance: &mut dyn Chance) -> Opt
         | SimMessage::WaitForMe(_)
         | SimMessage::ReinforcementsApproaching(_)
         | SimMessage::JumpCollapsed
+        | SimMessage::NoGateLeadsThere
         | SimMessage::SelfDestruct(_)
         | SimMessage::EscapingIn { .. }
         | SimMessage::Sabotaged { .. }
