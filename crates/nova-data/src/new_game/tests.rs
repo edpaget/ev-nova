@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use nova_galaxy_format::fixture;
 use nova_galaxy_format::source::MemSource;
 
-use super::fleet::{PX_PER_METRE, START_DATE, TRAFFIC_SHIPS};
+use super::fleet::{PX_PER_METRE, START_DATE, TRAFFIC_SHIPS, maneuver};
 use super::ids::CIVILIAN_DUDE;
 use super::kits::{
     LAW_SCAN_FINE, LAW_SMUGGLE_PENALTY, LAWLESS_KIT_SCAN, YARD_TECH_LAWLESS, YARD_TECH_LEGAL,
@@ -876,8 +876,18 @@ fn a_hull_s_acceleration_is_its_speed() {
 }
 
 #[test]
-fn a_hull_s_turn_rate_is_a_quarter_of_its_handling() {
-    assert_eq!(skiff(&skiff_with_stats()).maneuver, 15);
+fn a_hull_s_turn_rate_is_its_handling_on_the_turn_scale() {
+    assert_eq!(skiff(&skiff_with_stats()).maneuver, 60);
+}
+
+#[test]
+fn the_turn_scale_reads_handling_as_maneuver_so_every_bible_hull_turns_above_the_floor() {
+    // `Maneuver` 10 is the player's 1° a tick floor: the bible's hulls,
+    // handling 15 to 85, all turn above it, and a kit's -10 shows.
+    assert_eq!(
+        (maneuver(15), maneuver(35), maneuver(85), maneuver(-10)),
+        (15, 35, 85, -10)
+    );
 }
 
 #[test]
@@ -906,7 +916,7 @@ fn a_hull_sets_nothing_else() {
     let expected = Ship {
         speed: 300,
         accel: 300,
-        maneuver: 15,
+        maneuver: 60,
         shield: 30,
         armor: 50,
         holds: 10,
@@ -950,7 +960,7 @@ fn a_variant_has_its_base_s_stats_with_its_own_over_them() {
     let heavy = ship_of(&game, "heavy");
     assert_eq!(
         (heavy.speed, heavy.armor, heavy.shield, heavy.maneuver),
-        (350, 90, 30, 15),
+        (350, 90, 30, 60),
         "two steps down"
     );
 }

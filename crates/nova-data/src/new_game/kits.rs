@@ -57,7 +57,7 @@ use nova_galaxy_format::fleet::{ModKit, Mount, Role, Yard};
 use nova_galaxy_format::id::Id;
 use nova_galaxy_format::load::{Doc, Galaxy, Problem};
 
-use super::fleet::{HANDLING_PER_TURN, spot};
+use super::fleet::{maneuver, saturated as word, spot};
 use super::ids::OUTFIT_IDS;
 use super::map::absent;
 use super::records::neutral_outfit;
@@ -212,25 +212,12 @@ pub fn number_kits(
     kits
 }
 
-/// `handling` on the hull's turn scale as a turn-change `ModVal`: × 10
-/// over 4, rounded to the nearest, halves away from 0, held within `i16`.
+/// `handling` on the hull's turn scale ([`maneuver`]) as a turn-change
+/// `ModVal`, [`TURN_MOD_PER_MANEUVER`] a unit of `Maneuver`, held within
+/// `i16`.
 #[must_use]
 pub fn turn_change(handling: i32) -> i16 {
-    let value = (f64::from(handling) * f64::from(TURN_MOD_PER_MANEUVER)
-        / f64::from(HANDLING_PER_TURN))
-    .round();
-    // Held within `i16` first, so the cast can't truncate.
-    #[allow(clippy::cast_possible_truncation)]
-    let value = value.clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16;
-    value
-}
-
-/// `value` held within `i16`.
-fn word(value: i64) -> i16 {
-    // Held within `i16` first, so the cast can't truncate.
-    #[allow(clippy::cast_possible_truncation)]
-    let value = value.clamp(i16::MIN.into(), i16::MAX.into()) as i16;
-    value
+    word(maneuver(handling.into()) * i64::from(TURN_MOD_PER_MANEUVER))
 }
 
 /// The `ModType`/`ModVal` pairs `kit` needs, in slot order, each with the
@@ -455,14 +442,14 @@ mod tests {
     #[test]
     fn armour_plating_takes_four_slots_in_order() {
         let plating = kit_of(&loaded(&sample_kits()), "armour-plating");
-        assert_eq!(slots(&plating), [(6, 300), (8, -40), (9, -25), (2, -10)]);
+        assert_eq!(slots(&plating), [(6, 300), (8, -40), (9, -100), (2, -10)]);
     }
 
     #[test]
     fn the_gun_mount_adds_a_turret_slot_and_gives_its_gun() {
         let game = loaded(&sample_kits());
         let mount = kit_of(&game, "gun-mount");
-        assert_eq!(slots(&mount), [(9, -25), (2, -6), (46, 1), (-1, 0)]);
+        assert_eq!(slots(&mount), [(9, -100), (2, -6), (46, 1), (-1, 0)]);
         let driver = game.ids.outfits[&id("mass-driver")];
         assert_eq!(driver, 129);
         assert_eq!(mount.on_purchase.as_str(), "G129");
@@ -514,11 +501,11 @@ mod tests {
     }
 
     #[test]
-    fn handling_is_on_the_hull_s_turn_scale_halves_away_from_zero() {
-        assert_eq!(turn_change(-10), -25);
-        assert_eq!(turn_change(1), 3);
-        assert_eq!(turn_change(-1), -3);
-        assert_eq!(turn_change(4), 10);
+    fn handling_is_on_the_hull_s_turn_scale() {
+        assert_eq!(turn_change(-10), -100, "a tenth of a degree a tick each");
+        assert_eq!(turn_change(1), 10);
+        assert_eq!(turn_change(-1), -10);
+        assert_eq!(turn_change(35), 350);
         assert_eq!(turn_change(i32::MAX), i16::MAX);
         assert_eq!(turn_change(i32::MIN), i16::MIN);
     }
@@ -536,7 +523,7 @@ mod tests {
         );
         assert_eq!(
             slots(&kit_of(&game, "gun-mount")),
-            [(6, 1), (4, 2), (8, 3), (9, 10)]
+            [(6, 1), (4, 2), (8, 3), (9, 40)]
         );
     }
 

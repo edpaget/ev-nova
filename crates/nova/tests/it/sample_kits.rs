@@ -138,11 +138,10 @@ fn a_kit_fitted_at_a_yard_costs_what_it_says_and_draws_the_law() {
     assert_eq!(play.session.pilot().cash(), 14_000);
     assert_eq!(plated.capacity, 70);
     assert!(plated.handling.max_speed < before.handling.max_speed);
-    // The light freighter's placeholder turn (handling 35, a quarter of it
-    // as `Maneuver`) is under the 1° a tick floor with the kit or without,
-    // so its handling cost doesn't show in the turn rate yet: the
-    // `new-game-turn-scale` task.
-    assert!(plated.handling.turn_rate <= before.handling.turn_rate);
+    // The light freighter (handling 35) turns above the 1° a tick floor,
+    // so the plating's handling -10 shows.
+    assert!(before.handling.turn_rate > 1.0, "{:?}", before.handling);
+    assert!(plated.handling.turn_rate < before.handling.turn_rate);
     assert!(plated.armor > before.armor);
 
     // A lawless yard lists both.

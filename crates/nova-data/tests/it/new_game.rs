@@ -294,7 +294,7 @@ fn each_hull_is_a_ship_with_its_size_and_the_civilian_one_is_traffic() {
         (hauler.speed, hauler.shield, hauler.armor, hauler.holds),
         (300, 100, 200, 50)
     );
-    assert_eq!((hauler.accel, hauler.maneuver, hauler.fuel), (300, 10, 300));
+    assert_eq!((hauler.accel, hauler.maneuver, hauler.fuel), (300, 40, 300));
     let (_, anim) = named::<ShipAnim>(&game.data, 129);
     assert_eq!((anim.base_x_size, anim.base_y_size), (12, 30));
     let (name, dude) = named::<Dude>(&game.data, 128);

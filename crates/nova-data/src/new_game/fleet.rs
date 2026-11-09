@@ -12,8 +12,8 @@
 //!   kits'; its kits its base's, then its own. The bible's `speed` is
 //!   Nova's (speed/100 pixels a tick), `shields`, `hull` and `cargo` are
 //!   its `Shield`, `Armor` and `Holds`. Its acceleration is its speed and
-//!   its turn rate a quarter of its `handling` ([`HANDLING_PER_TURN`]),
-//!   both placeholders, and every ship holds [`HULL_FUEL`] and a crew of
+//!   its `Maneuver` its `handling` ([`maneuver`], the turn scale), both
+//!   placeholders, and every ship holds [`HULL_FUEL`] and a crew of
 //!   one. Its kits are its `DefaultItems`, one of each, so its stats come
 //!   from them as a fitted kit's do (`super::kits`). Its chain's `fixed`
 //!   and `launcher` hardpoints are its `MaxGun` and its `turret` ones its
@@ -77,9 +77,26 @@ pub const PX_PER_METRE: f64 = 1.0;
 /// engine's reading needs for an NPC to jump out where a ruleset lets it.
 pub const HULL_FUEL: i16 = 300;
 
-/// How much `handling` makes a degree of turn rate: a hull's `Maneuver`
-/// is its `handling` / 4 (a placeholder).
-pub const HANDLING_PER_TURN: u32 = 4;
+/// The new game's turn scale: the `Maneuver`, in tenths of a degree a
+/// tick, that `handling` makes. A hull's `Maneuver` and a kit's turn
+/// change ([`super::kits::turn_change`]) both read their `handling`
+/// through it, so the two can't drift apart.
+///
+/// The scale reads `handling` as `Maneuver` itself. It is a placeholder
+/// reading for the new game, not the original's: the bible gives
+/// `handling` no unit, and the original's ships carry a `Maneuver` of
+/// their own. It is chosen so a kit's handling cost can be felt. The
+/// player turns at least 1° a tick (`nova_sim_base::handling::MIN_TURN_RATE`,
+/// `Maneuver` 10), and the bible's hulls, `handling` 15 to 85, turn 1.5°
+/// to 8.5° a tick on this scale, all above that floor. So a kit's
+/// `handling` -10 takes a whole degree off: the sample's light freighter
+/// (35) turns 3.5° a tick, and 2.5° with armour plating fitted. An
+/// earlier quarter scale put every hull under 40 at the floor, kit or
+/// none.
+#[must_use]
+pub const fn maneuver(handling: i64) -> i64 {
+    handling
+}
 
 /// How many ships each system's traffic holds on average (`AvgShips`, a
 /// placeholder).
@@ -142,7 +159,15 @@ pub fn number_ships(galaxy: &Galaxy, problems: &mut Vec<Problem>) -> BTreeMap<Id
 
 /// `stat` as a record's word: none is 0, and one past `i16` the most.
 fn word(stat: Option<u32>) -> i16 {
-    stat.map_or(0, |stat| i16::try_from(stat).unwrap_or(i16::MAX))
+    stat.map_or(0, |stat| saturated(stat.into()))
+}
+
+/// `value` held within `i16`.
+pub(super) fn saturated(value: i64) -> i16 {
+    // Held within `i16` first, so the cast can't truncate.
+    #[allow(clippy::cast_possible_truncation)]
+    let value = value.clamp(i16::MIN.into(), i16::MAX.into()) as i16;
+    value
 }
 
 /// A count as a record's word.
@@ -199,7 +224,9 @@ pub fn ship(
     let mut ship = Ship {
         speed,
         accel: speed,
-        maneuver: word(stats.handling.map(|handling| handling / HANDLING_PER_TURN)),
+        maneuver: stats
+            .handling
+            .map_or(0, |handling| saturated(maneuver(handling.into()))),
         shield: word(stats.shields),
         armor: word(stats.hull),
         holds: word(stats.cargo),
