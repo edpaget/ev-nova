@@ -3925,9 +3925,9 @@ impl Session {
     /// ends the entry and turns the nav system off, as the original's
     /// `_PlayerEnterHypergate` does as it ends (@0x63fa2-0x63faa); a
     /// refusal otherwise changes nothing. See [`Session::enter_wormhole`]
-    /// for the arrival. An exit from a jump point's gate passes that point,
-    /// meeting its `take_point` missions, and settles the storylines
-    /// before it returns ([`Session::left_through_gate`]).
+    /// for the arrival. An exit from a jump point's gate meets no
+    /// `take_point` mission: beating the holder's guards does (see the
+    /// `blockades` module).
     ///
     /// The exit restarts the course at the system entered
     /// (@0x63e1d-0x63e3c). By [`RuleKey::GateCourse`]'s other reading an
@@ -3953,11 +3953,6 @@ impl Session {
             system
         });
         self.chart.set_nav(NavMode::Off);
-        if entered.is_ok() {
-            // A jump point's gate passes its point (see the `storylines`
-            // module).
-            self.left_through_gate(here, &mut &mut *chance);
-        }
         if entered.is_ok() && self.setup.rules.source_for(RuleKey::GateCourse) == RuleSource::Bible
         {
             // By the other reading an exit along the course kept its next

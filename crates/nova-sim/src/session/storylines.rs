@@ -54,16 +54,15 @@
 //!   and no frame, dialog page or save comes between. The state change
 //!   that applied the block (an offer, a decision, a success, an event)
 //!   has made a save due already.
-//! - **Gates.** A hypergate entry that comes out
-//!   ([`Session::enter_hypergate`]) from a jump point's gate passes that
-//!   point ([`Session::left_through_gate`], [`Play::passed_point`]): its
-//!   active `take_point` missions are met, those with no completion
-//!   succeed at once, and a change makes a save due. The storylines then
-//!   settle before the entry returns, the points synced and the outfits
-//!   made, so an owner or stability a success changes is stamped on the
-//!   sites before the first frame in the new system. Arriving through a
-//!   point's gate, or an entry refused or cancelled, passes nothing. The
-//!   gate autopilot's entries are the same entry, so they pass it too.
+//! - **Blockades.** A `take_point` mission is met by beating the
+//!   holder's guards at its point, not by passing its gate: a hypergate
+//!   entry from or to the point's gate meets nothing. The guards are the
+//!   mission's blockade, a hidden stock `mïsn` the storylines start while
+//!   the mission is active and unmet and end once it isn't
+//!   (at the end of [`Session::settle_storylines`] and as a pilot starts
+//!   flying). The blockade's goals-met moment meets the mission
+//!   ([`Play::beat_holder`]) and settles the storylines before the
+//!   moment's settling returns. See the `blockades` module.
 //! - **News.** [`Session::heard_news`] lists what a system has heard over
 //!   the galaxy's lanes ([`news::heard`]).
 
@@ -308,31 +307,6 @@ impl Session {
                 apply(&op, session, chance);
             }
         });
-    }
-
-    /// Settles leaving through the hypergate `gate`, an entry made from it
-    /// that came out: when it is a jump point's gate, its `take_point`
-    /// missions are met ([`Play::passed_point`]), a change making a save
-    /// due, and the storylines settle ([`Session::settle_storylines`]), so
-    /// a success's point changes are stamped before the first frame (see
-    /// the module docs).
-    pub(super) fn left_through_gate(&mut self, gate: StellarId, chance: &mut dyn Chance) {
-        let storylines = &self.statics.storylines;
-        let Some(point) = storylines
-            .points
-            .iter()
-            .find_map(|(point, at)| (at.gate == gate).then_some(point))
-        else {
-            return;
-        };
-        self.out.save_due |= Play {
-            storylines,
-            flags: &mut self.pilot.flags,
-            story: &mut self.pilot.story,
-            outfits: &mut self.out.story_outfits,
-        }
-        .passed_point(point);
-        self.settle_storylines(chance);
     }
 
     /// The news `system` has heard by today, over each item's reach,
@@ -1370,10 +1344,10 @@ mod tests {
         );
     }
 
-    /// Gates: leaving through a point's gate meets its `take_point`.
+    /// Gates: leaving through a point's gate meets no `take_point`.
     mod gates {
         use super::*;
-        use crate::gate::{GateKind, GateRefusal};
+        use crate::gate::GateKind;
         use crate::navigation::NavMode;
         use crate::session::LandPress;
         use crate::testkit::{HEARTH, laned_stable};
@@ -1415,14 +1389,6 @@ mod tests {
             catalog
         }
 
-        /// A completion at the dock.
-        fn completion() -> MissionCompletion {
-            MissionCompletion {
-                at: Some(StellarId(DOCK)),
-                dialog: nova_sim_catalog::fixture::storylines::place(FILE, "done"),
-            }
-        }
-
         /// A new pilot over `catalog`, in drift over gate 300, the road
         /// accepted, at the gate's entry, no save due.
         fn at_the_entry(catalog: &FakePilotCatalog) -> Session {
@@ -1461,69 +1427,22 @@ mod tests {
                 .expect("shown")
         }
 
-        const MET: Option<MissionState> = Some(MissionState::Active {
-            cargo: 0,
-            met: true,
-        });
-
         const NOT_MET: Option<MissionState> = Some(MissionState::Active {
             cargo: 0,
             met: false,
         });
 
         #[test]
-        fn leaving_through_the_point_s_gate_meets_it_and_makes_a_save_due() {
-            let catalog = roads("drift/hearth-road", Some(completion()));
-            let mut session = at_the_entry(&catalog);
-            assert_eq!(
-                session.enter_hypergate(Some(HEARTH), &catalog, &mut NeverFires),
-                Ok(HEARTH)
-            );
-            assert_eq!(state(&session, "road"), MET, "its completion is to play");
-            assert!(session.out.save_due);
-        }
-
-        #[test]
-        fn leaving_through_another_gate_meets_nothing() {
-            // `hearth/drift-road` is the partner's point: the ship comes
-            // out of its gate, and arriving meets nothing.
-            let catalog = roads("hearth/drift-road", Some(completion()));
-            let mut session = at_the_entry(&catalog);
-            assert_eq!(
-                session.enter_hypergate(Some(HEARTH), &catalog, &mut NeverFires),
-                Ok(HEARTH)
-            );
-            assert_eq!(state(&session, "road"), NOT_MET);
-            assert!(!session.out.save_due);
-        }
-
-        #[test]
-        fn an_entry_that_comes_out_nowhere_meets_nothing() {
-            let catalog = roads("drift/hearth-road", Some(completion()));
-            let mut session = at_the_entry(&catalog);
-            assert_eq!(
-                session.enter_hypergate(None, &catalog, &mut NeverFires),
-                Err(GateRefusal::Cancelled)
-            );
-            assert_eq!(state(&session, "road"), NOT_MET);
-            assert!(!session.out.save_due);
-        }
-
-        #[test]
-        fn an_owner_change_the_exit_makes_is_stamped_as_it_returns() {
+        fn leaving_through_the_point_s_gate_meets_nothing() {
             let catalog = roads("drift/hearth-road", None);
             let mut session = at_the_entry(&catalog);
             assert_eq!(
                 session.enter_hypergate(Some(HEARTH), &catalog, &mut NeverFires),
                 Ok(HEARTH)
             );
-            assert_eq!(state(&session, "road"), Some(MissionState::Done));
-            assert_eq!(site(&session, FROM_DRIFT).govt, Some(GUILD), "restamped");
-            assert!(
-                session
-                    .take_events()
-                    .contains(&crate::session::events::SessionEvent::GalaxyChanged)
-            );
+            assert_eq!(state(&session, "road"), NOT_MET, "the holder isn't beaten");
+            assert!(!session.out.save_due);
+            assert_eq!(site(&session, FROM_DRIFT).govt, None, "the owner stays");
         }
     }
 }
