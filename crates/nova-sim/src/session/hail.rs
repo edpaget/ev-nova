@@ -1170,19 +1170,42 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_ship_breaking_up_as_it_glides_in_gives_no_response() {
-        // `_IsDisabled` (@0x62610-0x62644) has no dying test: its armour
-        // line holds of a ship breaking up.
+    fn a_ship_gliding_in_gives_no_response_exactly_when_it_is_disabled() {
+        // `_HandlePlayerCommunication` reads `_IsDisabled` of a target not
+        // yet arrived (@0x62610-0x62644): whichever ships `Npc::is_disabled`
+        // holds of give "No response.", the rest are entering hyperspace.
         let catalog = hailable();
         let mut session = targeting(&catalog);
         npc(&mut session).mode = Mode::JumpingIn { tick: 0 };
-        npc(&mut session).condition = Condition::Dying {
-            ticks_left: 3,
-            starting: false,
-        };
-        let (hailed, asked) = hail_with(&mut session, &catalog, &opening(0));
-        assert_eq!(hailed, Err(HailRefusal::NoResponse));
-        assert!(asked.is_empty(), "{asked:?}");
+        let gliding = npc(&mut session).clone();
+        let targets = [
+            gliding.clone(),
+            Npc {
+                condition: Condition::Disabled,
+                ..gliding.clone()
+            },
+            Npc {
+                condition: Condition::Dying {
+                    ticks_left: 3,
+                    starting: false,
+                },
+                ..gliding.clone()
+            },
+            crate::traffic::fixture::breaking_up_guard(gliding),
+        ];
+        assert!(targets.iter().any(Npc::is_disabled), "one disabled");
+        assert!(!targets.iter().all(Npc::is_disabled), "one not");
+        for target in targets {
+            let want = if target.is_disabled() {
+                HailRefusal::NoResponse
+            } else {
+                HailRefusal::InHyperspace
+            };
+            *npc(&mut session) = target.clone();
+            let (hailed, asked) = hail_with(&mut session, &catalog, &opening(0));
+            assert_eq!(hailed, Err(want), "{target:?}");
+            assert!(asked.is_empty(), "{asked:?}");
+        }
     }
 
     #[test]
