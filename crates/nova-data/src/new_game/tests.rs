@@ -6,6 +6,7 @@
 //! `skiff` and its variant `armed-skiff`; and the start `first-flight` in
 //! the skiff in `alpha`) broken one file at a time.
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use nova_galaxy_format::fixture;
@@ -553,6 +554,45 @@ fn a_full_system_leaves_out_its_stellars_past_the_slots_before_a_gate() {
         beta.nav_def[14],
         Some(StellarId(game.ids.stellars[&id("b14")]))
     );
+}
+
+#[test]
+fn more_than_16_jump_points_keep_the_first_16_gates_and_no_stellar() {
+    let points = (0..16).fold(String::new(), |mut points, n| {
+        let _ = write!(
+            points,
+            "\x20 - id: p{n:02}\n    position: [{n}, 500]\n    to: alpha/to-beta\n    \
+             stability: stable\n    one_way: true\n"
+        );
+        points
+    });
+    let source = beta_holding(1).with(
+        "systems/beta.md",
+        &format!(
+            "---\nname: Beta\nregion: rim\nmap: [200, 50]\njump_points:\n\
+             \x20 - id: to-alpha\n    position: [-100, 0]\n    to: alpha/to-beta\n    \
+             stability: stable\n{points}---\n"
+        ),
+    );
+    let game = loaded(&source);
+    assert_eq!(
+        problems(&game),
+        [
+            "systems/beta.md: it has 1 stellar and 17 jump points, more than a system's 16 nav \
+             slots; `b00`, `beta/to-alpha` have no place in it"
+        ]
+    );
+    let beta = system(&game, game.ids.systems[&id("beta")]);
+    let gates: Vec<Option<StellarId>> = (0..16)
+        .map(|n| Some(StellarId(game.ids.gates[&point(&format!("beta/p{n:02}"))])))
+        .collect();
+    assert_eq!(
+        beta.nav_def.to_vec(),
+        gates,
+        "the first 16 gates, in ID order"
+    );
+    let b00 = StellarId(game.ids.stellars[&id("b00")]);
+    assert!(!beta.nav_def.contains(&Some(b00)), "no stellar kept");
 }
 
 #[test]
