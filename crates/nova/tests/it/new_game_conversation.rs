@@ -69,10 +69,13 @@ const AGAIN: [&str; 5] = [
 
 /// The fixture folder as the app opens it, with no problems.
 fn opened() -> Rc<GameData> {
-    let NewGameOpened::Loaded(loaded) =
-        DiskData.open_new_game(&nova_data::new_game::fixture::folder())
-    else {
-        panic!("the fixture opens");
+    opened_from(&nova_data::new_game::fixture::folder())
+}
+
+/// The new game's `folder` as the app opens it, with no problems.
+fn opened_from(folder: &std::path::Path) -> Rc<GameData> {
+    let NewGameOpened::Loaded(loaded) = DiskData.open_new_game(folder) else {
+        panic!("{} opens", folder.display());
     };
     assert_eq!(loaded.problems, Vec::<String>::new());
     Rc::new(loaded.data)
@@ -100,8 +103,14 @@ pub(crate) fn position_of(id: &str) -> Vec2 {
 /// The app over the fixture, wired as `main` wires it, keeping pilots in
 /// `store`, on the main menu.
 pub(crate) fn app(store: &MemoryPilots) -> Harness {
+    app_over(&nova_data::new_game::fixture::folder(), store)
+}
+
+/// The app over the new game's `folder`, wired as `main` wires it,
+/// keeping pilots in `store`, on the main menu.
+pub(crate) fn app_over(folder: &std::path::Path, store: &MemoryPilots) -> Harness {
     let rules = ruleset_rulebook(None, Ruleset::NewGame.profile().readings).0;
-    Harness::wired(opened(), store, |screen| {
+    Harness::wired(opened_from(folder), store, |screen| {
         screen
             .with_rulebook(&rules)
             .with_dialog_loader(nova::dialogs::loader(1))
@@ -116,7 +125,12 @@ pub(crate) fn flying() -> Harness {
 
 /// [`flying`], keeping the pilot, Ada, in `store`.
 pub(crate) fn flying_in(store: &MemoryPilots) -> Harness {
-    let mut game = app(store);
+    new_pilot_flying(app(store))
+}
+
+/// `game`, on the main menu, with a new pilot, Ada, flying in its start
+/// system.
+pub(crate) fn new_pilot_flying(mut game: Harness) -> Harness {
     let new_pilot = game.menu_button(MenuChoice::NewPilot);
     game.click(new_pilot);
     game.type_name("Ada");
@@ -131,7 +145,12 @@ pub(crate) fn flying_in(store: &MemoryPilots) -> Harness {
 /// A new app over `store`, with the pilot Ada opened through Open Pilot
 /// and flying where she was saved.
 pub(crate) fn resumed(store: &MemoryPilots) -> Harness {
-    let mut game = app(store);
+    resumed_in(app(store))
+}
+
+/// `game`, on the main menu, with the pilot Ada opened through Open
+/// Pilot and flying where she was saved.
+pub(crate) fn resumed_in(mut game: Harness) -> Harness {
     let open_pilot = game.menu_button(MenuChoice::OpenPilot);
     game.click(open_pilot);
     assert_eq!(game.showing(), Showing::OpenPilot);
