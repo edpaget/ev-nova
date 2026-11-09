@@ -12,8 +12,13 @@
 //! first: `_ShipIsCloaked` @0x66a8e, `_IsDisabled` @0x66aee), read once
 //! for the scan and the refusal both (`PlayerShip::landing_bar`), at a
 //! stellar that is no hypergate or wormhole, governed by
-//! a government that keeps the law, with no request already granted, for
-//! a ship whose kits draw any attention. A find is applied as an
+//! a government that keeps the law, for a ship whose kits draw any
+//! attention. A request already granted for the stellar never reaches the
+//! scan, since the press lands or fails on it before traffic control is
+//! asked. One granted at another stellar spares no scan: the find is
+//! applied, though the clearance that follows still grants on it, as the
+//! original's does whichever stellar the request is for
+//! (`Standing::granted`, @0x67934-0x6793d). A find is applied as an
 //! interceptor's is ([`Session::apply_find`]: convicted of smuggling
 //! against the stellar's government, ranks lost, fined,
 //! [`SimSound::Smuggling`](crate::sound::SimSound::Smuggling), the latch
@@ -38,7 +43,6 @@ use std::collections::BTreeMap;
 
 use super::{Session, Statics};
 use crate::catalog::{LandingSite, OutfitId, ShipId};
-use crate::clearance::CLEARED;
 use crate::combat::hull::HullSpec;
 use crate::landing::{DockAsk, DockPress, LandingRefusal};
 use crate::legal::LegalCode;
@@ -105,15 +109,16 @@ impl Session {
     /// Traffic control's scan of the player as it asks `site` for
     /// clearance, convicting by `law` (see the module docs): nothing at a
     /// hypergate or wormhole, a stellar of no government or one that keeps
-    /// no law, with a request already granted, or for a ship drawing no
-    /// attention; else the contraband scan, a find applied and said.
+    /// no law, or for a ship drawing no attention; else the contraband
+    /// scan, a find applied and said.
+    ///
+    /// It needs no check for a request already granted: traffic control
+    /// is asked only when the player holds no request for `site`
+    /// ([`dock_request`](crate::landing::dock_request) ends a press at a
+    /// stellar with its own request before it asks), and a request held
+    /// for another stellar spares no scan.
     pub(super) fn dock_scan(&mut self, site: &LandingSite, law: &dyn LegalCode) {
-        if self.gate_kind(site.id).is_some()
-            || self
-                .port
-                .dock
-                .is_some_and(|request| request.permission >= CLEARED)
-        {
+        if self.gate_kind(site.id).is_some() {
             return;
         }
         let Some(govt_id) = site.govt else {
@@ -168,7 +173,7 @@ impl Session {
 mod tests {
     use super::*;
     use crate::catalog::{GovtId, GovtRecord, OutfitRecord, Penalties, StellarId};
-    use crate::clearance::DockRequest;
+    use crate::clearance::{CLEARED, DockRequest};
     use crate::combat::hull::Condition;
     use crate::flight_frame::{Answer, FlightCommand};
     use crate::landing::{LandOutcome, LandingRefusal, StellarFlags};
@@ -379,15 +384,38 @@ mod tests {
     }
 
     #[test]
-    fn a_request_already_granted_is_not_scanned_again() {
+    fn a_request_granted_at_another_stellar_does_not_spare_the_scan() {
         let catalog = policed();
         let mut session = carrying(&catalog, &[GUN_MOUNT]);
         session.port.dock = Some(DockRequest {
             stellar: StellarId(129),
             permission: CLEARED,
         });
-        assert_eq!(press(&mut session), requested());
+        let record = session.pilot().legal_record(LAW);
+        assert_eq!(
+            press(&mut session),
+            requested(),
+            "the original's clearance grants on any stellar's cleared request"
+        );
+        assert_eq!(session.pilot().cash(), 2000 - i64::from(FINE));
+        assert_eq!(session.pilot().legal_record(LAW), record - PENALTY);
+        assert_eq!(session.take_messages(), [scanned(i64::from(FINE))]);
+    }
+
+    #[test]
+    fn a_request_granted_here_lands_without_a_second_scan() {
+        let catalog = policed();
+        let mut session = carrying(&catalog, &[GUN_MOUNT]);
+        session.port.dock = Some(DockRequest {
+            stellar: PLANET,
+            permission: CLEARED,
+        });
+        assert_eq!(
+            press(&mut session),
+            Answer::LandPress(LandPress::from(LandOutcome::Landed(PLANET)))
+        );
         assert_eq!(session.pilot().cash(), 2000);
+        assert_eq!(session.take_messages(), []);
     }
 
     #[test]
