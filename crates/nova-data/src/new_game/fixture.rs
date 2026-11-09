@@ -9,8 +9,9 @@
 //! the stellars `hearth-dock`, `hearth-moon` and `verge-camp`; jump
 //! points that cover every case a link can take (two from `hearth` to
 //! `verge`, a dead pair between `verge` and `drift`, and `drift`'s
-//! one-way back door to `verge`); the civilian hull `hauler` and the
-//! crown hull `cutter`, with a livery and a placeholder model; the
+//! one-way back door to `verge`); the civilian hull `hauler`, in guild
+//! paint, the crown hull `cutter`, bare, and the wardens' crown hull
+//! `warden-picket`, in `warden-colours`, all on a placeholder model; the
 //! outfit `dock-pass`, a Dock pass; the start `dock-hand`, in the hauler
 //! in `hearth`; and the storyline `dock-work`, with its four missions and
 //! two news items:
@@ -25,7 +26,8 @@
 //!   road is dead and the dock job done, under `all`, `any` and `none`
 //!   groups, with no objective;
 //! - `clear-the-road`: offered at `verge-camp` (`road_offer`) once the
-//!   toll is refused, a `take_point` objective on the wardens' road.
+//!   toll is refused, a `take_point` objective on the wardens' road,
+//!   whose blockade is three warden pickets at the road's gate.
 //!
 //! Their conversations are one file, `dialog/dock-job.ink`, with its
 //! compiled `dock-job.ink.json` beside it, which also holds `verge-camp`'s
@@ -70,7 +72,8 @@ pub fn folder() -> PathBuf {
 /// outfitter and fuel (the full sample's Marrow Yard has no outfitter:
 /// the cut adds one, so a lawless yard is in reach); the character
 /// `sector-organizer`, the missions' giver; the hull `light-freighter`, on
-/// a placeholder model; the sample's mod kits `armour-plating` (legal) and
+/// a placeholder model, and its variant `harrow-gunship`, in the band's
+/// `harrow-raider` livery with a gun mount; the sample's mod kits `armour-plating` (legal) and
 /// `gun-mount` (lawless, with a turret bed carrying a `mass-driver`), and
 /// the outfit `mass-driver` (its model left out); the start
 /// `first-flight`, in it, at `luyten-crossing` (the sample starts at
@@ -89,7 +92,8 @@ pub fn folder() -> PathBuf {
 ///   to `harrow-band`, with no objective;
 /// - `take-the-point`: offered at `marrow-yard`
 ///   (`take_the_point_briefing`) once the crossroads is done, a
-///   `take_point` objective on the far gate, completed at `marrow-yard`
+///   `take_point` objective on the far gate, whose blockade is three
+///   Harrow gunships at the gate, completed at `marrow-yard`
 ///   (`take_the_point_done`), giving the far gate to `marrow-commons`.
 ///
 /// Their conversations are one file, `dialog/holding-the-point.ink`, with

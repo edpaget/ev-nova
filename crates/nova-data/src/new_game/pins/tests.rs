@@ -408,7 +408,8 @@ fn parse_reads_every_kind() {
     let table = parse(
         br#"{"factions": {"f": 128}, "systems": {"s": 129}, "stellars": {"p": 130},
              "gates": {"s/g": 131}, "ships": {"h": 132}, "starts": {"c": 133},
-             "outfits": {"o": 134}, "kits": {"k": 135}, "weapons": {"o": 136}}"#,
+             "outfits": {"o": 134}, "kits": {"k": 135}, "weapons": {"o": 136},
+             "blockades": {"m": 137}}"#,
     )
     .expect("parses");
     assert_eq!(table.problems, Vec::<String>::new());
@@ -425,6 +426,7 @@ fn parse_reads_every_kind() {
             outfits: one("o", 134),
             kits: one("k", 135),
             weapons: one("o", 136),
+            blockades: one("m", 137),
         }
     );
 }

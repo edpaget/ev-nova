@@ -1,4 +1,7 @@
 {
+  "blockades": {
+    "clear-the-road": 128
+  },
   "factions": {
     "guild": 128,
     "warden": 129
@@ -20,7 +23,8 @@
   },
   "ships": {
     "cutter": 128,
-    "hauler": 129
+    "hauler": 129,
+    "warden-picket": 130
   },
   "starts": {
     "dock-hand": 128

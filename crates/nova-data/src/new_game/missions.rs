@@ -5,7 +5,8 @@
 //! factions, `system/point` refs), and takes Nova IDs only where the
 //! engine places something or acts on it: the stellar an offer, a
 //! completion or a delivery is at, and the `oütf` of each outfit an
-//! effect grants or removes. Its `offer` and `complete` dialogs become
+//! effect grants or removes, and the `mïsn` of a `take_point`'s blockade
+//! ([`super::blockades`]). Its `offer` and `complete` dialogs become
 //! [`DialogPlace`](crate::store::DialogPlace)s, resolved against the
 //! compiled texts ([`Compiled`]). A news item keeps its headline and body,
 //! and its `from` system's `sÿst`. Every jump point that has a gate is
@@ -38,7 +39,7 @@ use crate::store::{
     MissionCompletion, MissionObjective, MissionOffer, NewsItem, PointAt, PointState, Requires,
     StoryEffects, StoryMission, Storylines,
 };
-use crate::wire::id::{GovtId, OutfitId, StellarId, SystemId};
+use crate::wire::id::{GovtId, MissionId, OutfitId, StellarId, SystemId};
 
 /// Maps `galaxy`'s missions, news and jump points, with `ids`' Nova IDs and
 /// `compiled`'s stories, reporting what is left out to `problems`.
@@ -81,7 +82,7 @@ pub fn map(
             broken: Vec::new(),
             left_out: false,
         };
-        let mission = names.mission(&doc.data);
+        let mission = names.mission(id, &doc.data);
         problems.extend(
             names
                 .broken
@@ -201,10 +202,10 @@ struct Names<'a> {
 }
 
 impl Names<'_> {
-    /// `mission` mapped. Its names that don't resolve set
-    /// [`left_out`](Self::left_out), and what it then holds doesn't
+    /// `mission`, the mission `id`, mapped. Its names that don't resolve
+    /// set [`left_out`](Self::left_out), and what it then holds doesn't
     /// matter.
-    fn mission(&mut self, mission: &Mission) -> StoryMission {
+    fn mission(&mut self, id: &Id, mission: &Mission) -> StoryMission {
         let offer = mission.offer.as_ref().and_then(|offer| {
             let at = self.stellar("offer.at", &offer.at);
             let dialog = self.dialog("offer", &offer.dialog);
@@ -239,6 +240,7 @@ impl Names<'_> {
                     Some(MissionObjective::TakePoint {
                         point: point.to_string(),
                         held_by: held_by.to_string(),
+                        blockade: self.ids.blockades.get(id).copied().map(MissionId),
                     })
                 }
             });
@@ -445,6 +447,10 @@ mod tests {
         game.problems.iter().map(ToString::to_string).collect()
     }
 
+    fn id(text: &str) -> Id {
+        Id::try_from(text.to_owned()).expect("an id")
+    }
+
     fn stellar(game: &NewGame, id: &str) -> StellarId {
         StellarId(game.ids.stellars[&Id::try_from(id.to_owned()).expect("an id")])
     }
@@ -639,6 +645,7 @@ mod tests {
             Some(MissionObjective::TakePoint {
                 point: "beta/to-alpha".to_owned(),
                 held_by: "league".to_owned(),
+                blockade: Some(MissionId(game.ids.blockades[&id("toll")])),
             })
         );
         let game = loaded(&with_toll("complete: {dialog: dialog/errands.ink#done}\n"));

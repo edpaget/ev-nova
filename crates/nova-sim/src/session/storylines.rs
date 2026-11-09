@@ -1394,6 +1394,7 @@ mod tests {
                     objective: Some(nova_sim_catalog::storylines::MissionObjective::TakePoint {
                         point: point.to_owned(),
                         held_by: "warden".to_owned(),
+                        blockade: None,
                     }),
                     complete,
                     on_success: StoryEffects {

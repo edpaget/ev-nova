@@ -675,6 +675,7 @@ mod tests {
             objective: Some(MissionObjective::TakePoint {
                 point: "hearth/side".to_owned(),
                 held_by: "warden".to_owned(),
+                blockade: None,
             }),
             ..job()
         };
@@ -715,6 +716,7 @@ mod tests {
                 objective: Some(MissionObjective::TakePoint {
                     point: "hearth/side".to_owned(),
                     held_by: "warden".to_owned(),
+                    blockade: None,
                 }),
                 complete: None,
                 ..job()
@@ -739,6 +741,7 @@ mod tests {
         MissionObjective::TakePoint {
             point: point.to_owned(),
             held_by: "warden".to_owned(),
+            blockade: None,
         }
     }
 

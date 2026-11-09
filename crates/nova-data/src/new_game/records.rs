@@ -9,6 +9,7 @@ use crate::records::desc::Desc;
 use crate::records::dude::Dude;
 use crate::records::govt::Govt;
 use crate::records::interface::Interface;
+use crate::records::mission::Mission;
 use crate::records::outfit::Outfit;
 use crate::records::ship::Ship;
 use crate::records::ship_anim::ShipAnim;
@@ -272,6 +273,74 @@ pub fn neutral_dude() -> Dude {
         ship_type: [None; 16],
         probability: [0; 16],
         unknown_0x48: RawArray::default(),
+    }
+}
+
+/// A `mïsn` that asks nothing and is never offered: no availability,
+/// pay, ships, texts, scripts, buttons, flags or time limit; no cargo
+/// (`CargoType` -1) and no destination or return (`TravelStel` and
+/// `ReturnStel` -1); every `dësc`, `STR#`, `düde` and `gövt` reference
+/// none.
+#[must_use]
+pub fn neutral_mission() -> Mission {
+    Mission {
+        avail_stel: 0,
+        unknown_0x02: 0,
+        avail_loc: 0,
+        avail_record: 0,
+        avail_rating: 0,
+        avail_random: 0,
+        travel_stel: -1,
+        return_stel: -1,
+        cargo_type: -1,
+        cargo_qty: 0,
+        pickup_mode: 0,
+        drop_off_mode: 0,
+        scan_mask: Flags16::default(),
+        unknown_0x1a: 0,
+        pay_val: 0,
+        ship_count: 0,
+        ship_syst: 0,
+        ship_dude: None,
+        ship_goal: 0,
+        ship_behav: 0,
+        ship_name_id: None,
+        ship_start: 0,
+        comp_govt: None,
+        comp_reward: 0,
+        ship_subtitle: None,
+        brief_text: None,
+        quick_brief: None,
+        load_carg_text: None,
+        dump_cargo_text: None,
+        comp_text: None,
+        fail_text: None,
+        time_limit: 0,
+        can_abort: 0,
+        ship_done_text: None,
+        unknown_0x46: 0,
+        aux_ship_count: 0,
+        aux_ship_dude: None,
+        aux_ship_syst: 0,
+        unknown_0x4e: 0,
+        flags: Flags16::default(),
+        flags2: Flags16::default(),
+        unknown_0x54: RawArray::default(),
+        refuse_text: None,
+        avail_ship_type: 0,
+        avail_bits: MacString::default(),
+        on_accept: MacString::default(),
+        on_refuse: MacString::default(),
+        on_success: MacString::default(),
+        on_failure: MacString::default(),
+        on_abort: MacString::default(),
+        require: Flags64::default(),
+        date_post_inc: 0,
+        on_ship_done: MacString::default(),
+        accept_button: MacString::default(),
+        refuse_button: MacString::default(),
+        disp_weight: 0,
+        unknown_0x7a2: RawArray::default(),
     }
 }
 
@@ -861,6 +930,29 @@ mod tests {
             dude.ship_type = [None; 16];
         });
         assert_eq!(neutral_dude(), expected);
+    }
+
+    #[test]
+    fn the_neutral_mission_is_zero_but_its_unused_references_cargo_and_places() {
+        let expected = zeroed::<Mission>(|mission| {
+            mission.travel_stel = -1;
+            mission.return_stel = -1;
+            mission.cargo_type = -1;
+            mission.ship_dude = None;
+            mission.ship_name_id = None;
+            mission.comp_govt = None;
+            mission.ship_subtitle = None;
+            mission.brief_text = None;
+            mission.quick_brief = None;
+            mission.load_carg_text = None;
+            mission.dump_cargo_text = None;
+            mission.comp_text = None;
+            mission.fail_text = None;
+            mission.ship_done_text = None;
+            mission.aux_ship_dude = None;
+            mission.refuse_text = None;
+        });
+        assert_eq!(neutral_mission(), expected);
     }
 
     #[test]

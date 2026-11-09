@@ -1,4 +1,7 @@
 {
+  "blockades": {
+    "take-the-point": 128
+  },
   "factions": {
     "association": 128,
     "commonwealth": 129,
@@ -21,6 +24,7 @@
     "mass-driver": 128
   },
   "ships": {
+    "harrow-gunship": 129,
     "light-freighter": 128
   },
   "starts": {

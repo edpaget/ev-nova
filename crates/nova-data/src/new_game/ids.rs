@@ -3,13 +3,16 @@
 //! Each kind has its range: [`GOVT_IDS`] for factions, [`SYSTEM_IDS`] and
 //! [`STELLAR_IDS`] for systems and stellars, [`SHIP_IDS`] for ships,
 //! [`OUTFIT_IDS`] for outfits, [`WEAPON_IDS`] for the outfits that are
-//! weapons and [`CHARACTER_IDS`] for starts. The one traffic `düde` is
-//! [`CIVILIAN_DUDE`] and the one `ïntf` [`DEFAULT_INTERFACE`]; neither
-//! depends on the data.
+//! weapons, [`CHARACTER_IDS`] for starts and [`MISSION_IDS`] for the
+//! `take_point` missions' blockades ([`super::blockades`]). The one traffic
+//! `düde` is [`CIVILIAN_DUDE`] and the one `ïntf` [`DEFAULT_INTERFACE`];
+//! neither depends on the data. The holders' guard `düde`s number after
+//! [`CIVILIAN_DUDE`], unpinned: nothing saves a `düde` ID.
 //!
 //! # Pinning
 //!
-//! A saved pilot holds its system, stellar, ship and escorts by Nova ID,
+//! A saved pilot holds its system, stellar, ship, escorts and missions
+//! (a blockade's `mïsn` among them) by Nova ID,
 //! so the IDs must not move as the data grows. The data folder's ID
 //! table, `nova-ids.json` ([`super::pins`]), pins them:
 //!
@@ -62,6 +65,10 @@ pub const WEAPON_IDS: RangeInclusive<i16> = 128..=383;
 /// The `chär` IDs the new game's starts take: 128 to 255.
 pub const CHARACTER_IDS: RangeInclusive<i16> = 128..=255;
 
+/// The `mïsn` IDs Nova gives data: 128 to 1127, the range the `S`, `A`
+/// and `F` set operators act on.
+pub const MISSION_IDS: RangeInclusive<i16> = 128..=1127;
+
 /// The one traffic `düde`, "Civilian traffic" (see
 /// [`super::fleet`]).
 pub const CIVILIAN_DUDE: i16 = 128;
@@ -94,6 +101,9 @@ pub struct IdTable {
     pub weapons: BTreeMap<Id, i16>,
     /// Each mod kit's `oütf`.
     pub kits: BTreeMap<Id, i16>,
+    /// Each `take_point` mission's blockade `mïsn`, by the mission's id
+    /// ([`super::blockades`]).
+    pub blockades: BTreeMap<Id, i16>,
 }
 
 /// Numbers `ids`, in the order given, from the start of `range`: the
@@ -241,6 +251,7 @@ mod tests {
         assert_eq!(SHIP_IDS, 128..=895);
         assert_eq!(OUTFIT_IDS, 128..=639);
         assert_eq!(WEAPON_IDS, 128..=383);
+        assert_eq!(MISSION_IDS, 128..=1127);
     }
 
     #[test]

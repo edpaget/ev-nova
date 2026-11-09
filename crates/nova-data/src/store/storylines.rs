@@ -31,7 +31,7 @@ pub use nova_galaxy_format::model::Outcome;
 pub use nova_galaxy_format::model::Stability as GateStability;
 
 use super::{DialogPlace, GameData};
-use crate::wire::id::{GovtId, OutfitId, StellarId, SystemId};
+use crate::wire::id::{GovtId, MissionId, OutfitId, StellarId, SystemId};
 
 /// The new game's missions, news and jump points, each by its id.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -109,6 +109,11 @@ pub enum MissionObjective {
         point: String,
         /// The faction holding it.
         held_by: String,
+        /// Its blockade: the hidden `mïsn` whose special ships are the
+        /// holder's guards at the point, which the objective is met by
+        /// beating (`crate::new_game`'s `blockades`); none past the last
+        /// `mïsn` ID.
+        blockade: Option<MissionId>,
     },
 }
 

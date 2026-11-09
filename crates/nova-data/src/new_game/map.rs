@@ -2,7 +2,8 @@
 //! per kind over the neutral records of [`super::records`]: factions,
 //! systems and stellars here, the jump points' gates in [`super::gates`],
 //! ships, traffic and starts in [`super::fleet`], outfits and weapons in
-//! [`super::outfits`] and mod kits in [`super::kits`]. The module docs of
+//! [`super::outfits`], mod kits in [`super::kits`] and the `take_point`
+//! missions' guards and blockades in [`super::blockades`]. The module docs of
 //! [`super`] list what maps to what, and each problem.
 
 use std::collections::BTreeMap;
@@ -13,7 +14,6 @@ use nova_galaxy_format::load::{Doc, Galaxy, Problem};
 use nova_galaxy_format::model::{Faction, Position, Stellar as BibleStellar};
 
 use super::fleet::{self, TRAFFIC_SHIPS};
-use super::gates;
 use super::ids::{
     CIVILIAN_DUDE, DEFAULT_INTERFACE, GOVT_IDS, IdTable, OUTFIT_IDS, STELLAR_IDS, SYSTEM_IDS,
     after_pins, allocate_pinned,
@@ -27,6 +27,7 @@ use super::records::{
     ANY_RECORD, clamp_i16, default_interface, neutral_govt, neutral_stellar, neutral_system, rgb,
     stellar_flags, text_desc,
 };
+use super::{blockades, gates};
 use crate::decode::Entry;
 use crate::records::govt::Govt;
 use crate::records::stellar::Stellar;
@@ -51,8 +52,9 @@ pub struct Mapped {
 }
 
 /// Maps `galaxy`'s factions, systems, stellars, jump points, ships,
-/// starts, outfits and mod kits to `gövt`, `sÿst`, `spöb`, `dësc`, `shïp`,
-/// `shän`, `düde`, `chär`, `oütf` and `wëap` records, and their fittings,
+/// starts, outfits, mod kits and `take_point` blockades to `gövt`, `sÿst`,
+/// `spöb`, `dësc`, `shïp`, `shän`, `düde`, `chär`, `oütf`, `wëap` and
+/// `mïsn` records, and their fittings,
 /// plus the placeholder `ïntf` status bar, which a flight frame always
 /// needs, so even an empty galaxy maps it. Nothing is pinned: see
 /// [`map_pinned`].
@@ -110,6 +112,20 @@ pub fn map_pinned(galaxy: &Galaxy, pins: &IdTable) -> Mapped {
     }
     let fittings = fittings(galaxy, &ids, &fit, &mut records, &mut problems);
     records.extend(traffic);
+    let guards = blockades::number_guards(galaxy, &ids);
+    for (faction, &nova) in &guards {
+        records.push(blockades::guard(galaxy, &ids, faction, nova));
+    }
+    for (mission, &nova) in &ids.blockades {
+        records.extend(blockades::blockade(
+            galaxy,
+            &ids,
+            &guards,
+            mission,
+            nova,
+            &mut problems,
+        ));
+    }
     for (id, &nova) in &ids.starts {
         records.push(fleet::character(&ids, nova, &galaxy.starts[id]));
     }
@@ -166,6 +182,7 @@ fn number_all(galaxy: &Galaxy, pins: &IdTable, problems: &mut Vec<Problem>) -> (
     let weapons = outfits::number_weapons(galaxy, &pins.weapons, problems);
     let fit = FitBits::of(galaxy, problems);
     let kits = kits::number_kits(galaxy, &fit, &pins.kits, &mut free, problems);
+    let blockades = blockades::number_blockades(galaxy, &gates, &pins.blockades, problems);
     let mut ids = IdTable {
         factions,
         systems,
@@ -176,6 +193,7 @@ fn number_all(galaxy: &Galaxy, pins: &IdTable, problems: &mut Vec<Problem>) -> (
         outfits,
         weapons,
         kits,
+        blockades,
     };
     ids.starts = fleet::number_starts(galaxy, &ids, &pins.starts, problems);
     (ids, fit)

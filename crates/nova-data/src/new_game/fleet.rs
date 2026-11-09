@@ -44,8 +44,9 @@
 //!   every hull (no `base`, no `mods`) of `style: civilian`, at even odds,
 //!   flown as wimpy traders of no government. Every system names it in
 //!   `DudeTypes[0]` at 100%, with [`TRAFFIC_SHIPS`] ships on average.
-//!   Variants and factions' warships and fleets wait for the bible to
-//!   author traffic.
+//!   A faction holding a `take_point` gets its guards' `düde`
+//!   ([`super::blockades`]); variants in traffic and factions' traffic
+//!   fleets wait for the bible to author traffic.
 //! - **Starts** ([`character`]). Each start is a `chär` in its ship, in
 //!   its system, with its cash, on [`START_DATE`].
 

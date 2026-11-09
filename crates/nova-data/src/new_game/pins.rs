@@ -11,7 +11,7 @@
 //!
 //! One JSON object, holding one object per [`IdTable`] kind ([`KINDS`]),
 //! each mapping a bible id (`system/point` for `gates`, the outfit's id
-//! for `weapons`) to its ID. A kind left out pins nothing. The writer
+//! for `weapons`, the `take_point` mission's id for `blockades`) to its ID. A kind left out pins nothing. The writer
 //! writes every kind, pretty-printed with sorted keys and a trailing
 //! newline, so a diff shows just the added lines.
 //!
@@ -55,7 +55,8 @@ use nova_galaxy_format::load::Problem;
 use nova_galaxy_format::source::Source;
 
 use super::ids::{
-    CHARACTER_IDS, GOVT_IDS, IdTable, OUTFIT_IDS, SHIP_IDS, STELLAR_IDS, SYSTEM_IDS, WEAPON_IDS,
+    CHARACTER_IDS, GOVT_IDS, IdTable, MISSION_IDS, OUTFIT_IDS, SHIP_IDS, STELLAR_IDS, SYSTEM_IDS,
+    WEAPON_IDS,
 };
 
 /// The table's path in the data folder.
@@ -63,8 +64,17 @@ pub const FILE: &str = "nova-ids.json";
 
 /// The table's kinds, in allocation order: the stellars before the gates
 /// and the outfits before the kits, which share their ranges.
-pub const KINDS: [&str; 9] = [
-    "factions", "systems", "stellars", "gates", "ships", "starts", "outfits", "kits", "weapons",
+pub const KINDS: [&str; 10] = [
+    "factions",
+    "systems",
+    "stellars",
+    "gates",
+    "ships",
+    "starts",
+    "outfits",
+    "kits",
+    "weapons",
+    "blockades",
 ];
 
 /// Why a whole table is ignored, and why the writer won't replace it.
@@ -131,6 +141,7 @@ pub fn parse(bytes: &[u8]) -> Result<Table, TableError> {
         outfits: keyed(take(6)),
         kits: keyed(take(7)),
         weapons: keyed(take(8)),
+        blockades: keyed(take(9)),
     };
     Ok(Table { pins, problems })
 }
@@ -185,7 +196,7 @@ impl Held {
 }
 
 /// The range of each of [`KINDS`].
-const RANGES: [RangeInclusive<i16>; 9] = [
+const RANGES: [RangeInclusive<i16>; 10] = [
     GOVT_IDS,
     SYSTEM_IDS,
     STELLAR_IDS,
@@ -195,11 +206,12 @@ const RANGES: [RangeInclusive<i16>; 9] = [
     OUTFIT_IDS,
     OUTFIT_IDS,
     WEAPON_IDS,
+    MISSION_IDS,
 ];
 
 /// Which range each of [`KINDS`] numbers in, by the first kind of it: the
 /// gates share the stellars', and the kits the outfits'.
-const SHARED: [usize; 9] = [0, 1, 2, 2, 4, 5, 6, 6, 8];
+const SHARED: [usize; 10] = [0, 1, 2, 2, 4, 5, 6, 6, 8, 9];
 
 /// `kept`, whose keys are spelled right, as a kind's table.
 fn keyed<K: TryFrom<String> + Ord>(kept: Vec<(String, i16)>) -> BTreeMap<K, i16> {
@@ -227,6 +239,7 @@ fn entries(table: &IdTable) -> Vec<(&'static str, String, i16)> {
         .chain(of("outfits", &table.outfits))
         .chain(of("kits", &table.kits))
         .chain(of("weapons", &table.weapons))
+        .chain(of("blockades", &table.blockades))
         .collect()
 }
 
@@ -265,6 +278,7 @@ pub fn pin(previous: Option<&[u8]>, loaded: &IdTable) -> Result<Pinned, TableErr
     overlay(&mut table.outfits, &loaded.outfits);
     overlay(&mut table.kits, &loaded.kits);
     overlay(&mut table.weapons, &loaded.weapons);
+    overlay(&mut table.blockades, &loaded.blockades);
     let before = entries(&previous);
     let added = entries(loaded)
         .into_iter()
