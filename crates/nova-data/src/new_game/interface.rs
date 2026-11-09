@@ -80,7 +80,7 @@ impl FromIterator<(i16, DefaultDialog)> for DefaultDialogs {
 /// | 1005 | Default ship info | 250 x 285 |
 /// | 1006 | Default mission computer | 510 x 201 |
 /// | 1012 | Default missions log | 471 x 155 |
-/// | 1013 | Default bar | 263 x 185 |
+/// | 1013 | Default bar | 263 x 289 |
 /// | 1014 | Default news | 300 x 230 |
 /// | 1016 | Default mission offer | 441 x 317 |
 /// | 1017 | Default player info | 413 x 227 |
@@ -359,21 +359,29 @@ fn missions_log() -> (i16, DefaultDialog) {
     )
 }
 
-/// The bar: Leave (1), Gamble (2), Holovid (3), Hire Escort (5) and the
-/// text (7).
+/// The bar: Leave (1), Gamble (2), Holovid (3), Hire Escort (5), the
+/// text (7) at the top, and under it the four story slots (9-12), each
+/// 230 x 22 and 26 apart, above the Gamble and Hire Escort row and the
+/// Holovid and Leave row. Item 8, the picture variant's picture, stays
+/// parked.
 fn bar() -> (i16, DefaultDialog) {
     dialog(
         1013,
         "Default bar",
-        (263, 185),
+        (263, 289),
         vec![
-            area(156, 154, 99, 26),
-            area(156, 125, 99, 26),
-            area(6, 154, 146, 26),
+            area(156, 258, 99, 26),
+            area(156, 229, 99, 26),
+            area(6, 258, 146, 26),
             parked(),
-            area(6, 125, 146, 26),
+            area(6, 229, 146, 26),
             parked(),
             area(16, 10, 230, 106),
+            parked(),
+            user(16, 122, 230, 22),
+            user(16, 148, 230, 22),
+            user(16, 174, 230, 22),
+            user(16, 200, 230, 22),
         ],
     )
 }
@@ -637,6 +645,29 @@ mod tests {
                 assert!(pair[0].right <= pair[1].left, "{id}: {row:?} in order");
             }
         }
+    }
+
+    #[test]
+    fn the_bar_s_story_slots_stack_between_its_text_and_its_buttons() {
+        let dialogs = default_dialogs();
+        let bar = dialogs.get(1013).expect("the bar");
+        let (width, height) = size(&bar.dlog);
+        let at = |item: usize| bar.items[item - 1].bounds;
+        let slots = [9, 10, 11, 12];
+        for item in slots {
+            let slot = &bar.items[item - 1];
+            assert_eq!(slot.kind, ItemKind::User, "{item}");
+            assert!(slot.enabled, "{item}");
+            assert!(inside(slot.bounds, width, height), "{item}");
+        }
+        assert!(at(7).bottom <= at(9).top, "under the text");
+        for pair in slots.windows(2) {
+            assert!(at(pair[0]).bottom <= at(pair[1]).top, "{pair:?} in order");
+        }
+        for button in [1, 2, 3, 5] {
+            assert!(at(12).bottom <= at(button).top, "above {button}");
+        }
+        assert!(outside(at(8), width, height), "8 stays parked");
     }
 
     #[test]
