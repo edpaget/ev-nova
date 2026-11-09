@@ -17,7 +17,9 @@
 //!     [`Active`](MissionState::Active), a `deliver` objective's tons
 //!     loaded; without one it is done at once, and `on_success` applies
 //!     too. An accept of a `deliver` mission whose tons don't fit the
-//!     room left in the hold is refused: it is a defer, and nothing loads.
+//!     room left in the hold is refused: nothing loads and the offer
+//!     stands, as for a defer, but the decision says why
+//!     ([`Decision::NoRoom`]) so the session can tell the player.
 //!   - `decline` applies `on_decline`: the mission is
 //!     [`Declined`](MissionState::Declined), and never offered again.
 //!   - `defer`, or no outcome by the time the conversation closes,
@@ -100,6 +102,31 @@ pub struct Play<'a> {
     pub outfits: &'a mut Vec<OutfitChange>,
 }
 
+/// What [`Play::decide`] made of an offer's outcome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Decision {
+    /// The mission was accepted or declined.
+    Changed,
+    /// Nothing changed: a defer, or a mission not offered.
+    Unchanged,
+    /// An accept refused for want of room, which changed nothing: the
+    /// mission's load, and the room in the hold it was given.
+    NoRoom {
+        /// The tons the mission would load.
+        tons: u32,
+        /// The tons free in the hold, as given (it may be below 0).
+        room: i64,
+    },
+}
+
+impl Decision {
+    /// Whether the decision changed anything: only [`Decision::Changed`].
+    #[must_use]
+    pub fn changed(self) -> bool {
+        self == Self::Changed
+    }
+}
+
 impl Play<'_> {
     /// The next scene to show at `stellar` this visit, none of `shown`:
     /// a completion due there, an offer that holds there, or, when it has
@@ -173,20 +200,22 @@ impl Play<'_> {
     }
 
     /// Decides offered mission `id` by `outcome`, with `room` tons free in
-    /// the hold (see the module docs), then checks events. Whether
-    /// anything changed: nothing does for a defer, a refused accept, or a
-    /// mission not offered.
-    pub fn decide(&mut self, id: &str, outcome: Outcome, room: i64) -> bool {
+    /// the hold (see the module docs), then checks events. What it
+    /// decided ([`Decision`]): nothing changes for a defer, a mission not
+    /// offered, or an accept refused for room, which says the mission's
+    /// load and the `room` it was given ([`Decision::NoRoom`]).
+    pub fn decide(&mut self, id: &str, outcome: Outcome, room: i64) -> Decision {
         let Some(mission) = self.storylines.missions.get(id) else {
-            return false;
+            return Decision::Unchanged;
         };
         if self.story.mission(id) != Some(MissionState::Offered) {
-            return false;
+            return Decision::Unchanged;
         }
         match outcome {
             Outcome::Accept => {
-                if load(mission) > room {
-                    return false;
+                let tons = load(mission);
+                if i64::from(tons) > room {
+                    return Decision::NoRoom { tons, room };
                 }
                 self.apply(&mission.on_accept);
                 self.start(id, mission);
@@ -197,10 +226,10 @@ impl Play<'_> {
                     .missions
                     .insert(id.to_owned(), MissionState::Declined);
             }
-            Outcome::Defer => return false,
+            Outcome::Defer => return Decision::Unchanged,
         }
         self.fire_events();
-        true
+        Decision::Changed
     }
 
     /// Completes met mission `id`, as its completion conversation opens:
@@ -316,7 +345,7 @@ impl Play<'_> {
     /// loaded, with an objective; done, with `on_success`, without one.
     fn start(&mut self, id: &str, mission: &StoryMission) {
         if mission.objective.is_some() {
-            let cargo = u32::try_from(load(mission)).unwrap_or(u32::MAX);
+            let cargo = load(mission);
             self.story
                 .missions
                 .insert(id.to_owned(), MissionState::Active { cargo, met: false });
@@ -350,9 +379,9 @@ pub fn completion_at(mission: &StoryMission) -> Option<StellarId> {
 }
 
 /// The tons `mission`'s objective loads: a `deliver`'s, else none.
-fn load(mission: &StoryMission) -> i64 {
+fn load(mission: &StoryMission) -> u32 {
     match mission.objective {
-        Some(MissionObjective::Deliver { tons, .. }) => i64::from(tons),
+        Some(MissionObjective::Deliver { tons, .. }) => tons,
         _ => 0,
     }
 }
@@ -527,7 +556,10 @@ mod tests {
         ]);
         f.play().make_offer("job");
         assert_eq!(f.outfits, []);
-        assert!(f.play().decide("job", Outcome::Accept, 10));
+        assert_eq!(
+            f.play().decide("job", Outcome::Accept, 10),
+            Decision::Changed
+        );
         assert_eq!(
             f.outfits,
             [OutfitChange::Grant(pass), OutfitChange::Remove(pass)]
@@ -538,7 +570,10 @@ mod tests {
     fn an_unknown_mission_changes_nothing() {
         let mut f = Fixture::new(&[]);
         assert!(!f.play().make_offer("job"));
-        assert!(!f.play().decide("job", Outcome::Accept, 100));
+        assert_eq!(
+            f.play().decide("job", Outcome::Accept, 100),
+            Decision::Unchanged
+        );
         assert!(!f.play().complete("job"));
         assert_eq!(f.story, StoryState::default());
     }
@@ -547,7 +582,10 @@ mod tests {
     fn accepting_with_an_objective_applies_on_accept_and_loads_the_cargo() {
         let mut f = Fixture::new(&[("job", job())]);
         f.play().make_offer("job");
-        assert!(f.play().decide("job", Outcome::Accept, 10));
+        assert_eq!(
+            f.play().decide("job", Outcome::Accept, 10),
+            Decision::Changed
+        );
         assert_eq!(f.state("job"), Some(ACTIVE));
         assert!(f.flags.is_set("accepted"));
         assert!(!f.flags.is_set("succeeded"));
@@ -564,17 +602,23 @@ mod tests {
             },
         )]);
         f.play().make_offer("job");
-        assert!(f.play().decide("job", Outcome::Accept, 0));
+        assert_eq!(
+            f.play().decide("job", Outcome::Accept, 0),
+            Decision::Changed
+        );
         assert_eq!(f.state("job"), Some(MissionState::Done));
         assert!(f.flags.is_set("accepted"));
         assert!(f.flags.is_set("succeeded"));
     }
 
     #[test]
-    fn an_accept_without_room_is_a_defer_and_loads_nothing() {
+    fn an_accept_without_room_says_how_little_and_loads_nothing() {
         let mut f = Fixture::new(&[("job", job())]);
         f.play().make_offer("job");
-        assert!(!f.play().decide("job", Outcome::Accept, 9));
+        assert_eq!(
+            f.play().decide("job", Outcome::Accept, 9),
+            Decision::NoRoom { tons: 10, room: 9 }
+        );
         assert_eq!(f.state("job"), Some(MissionState::Offered));
         assert!(!f.flags.is_set("accepted"));
         assert_eq!(f.story.cargo_aboard(), 0);
@@ -585,11 +629,18 @@ mod tests {
     fn a_decline_applies_on_decline_and_is_never_offered_again() {
         let mut f = Fixture::new(&[("job", job())]);
         f.play().make_offer("job");
-        assert!(f.play().decide("job", Outcome::Decline, 100));
+        assert_eq!(
+            f.play().decide("job", Outcome::Decline, 100),
+            Decision::Changed
+        );
         assert_eq!(f.state("job"), Some(MissionState::Declined));
         assert!(f.flags.is_set("declined"));
         assert_eq!(f.next(DOCK, &[], false), None);
-        assert!(!f.play().decide("job", Outcome::Accept, 100), "decided");
+        assert_eq!(
+            f.play().decide("job", Outcome::Accept, 100),
+            Decision::Unchanged,
+            "decided"
+        );
     }
 
     #[test]
@@ -604,7 +655,10 @@ mod tests {
         f.flags.set("open");
         f.play().make_offer("job");
         let before = (f.flags.clone(), f.story.clone());
-        assert!(!f.play().decide("job", Outcome::Defer, 100));
+        assert_eq!(
+            f.play().decide("job", Outcome::Defer, 100),
+            Decision::Unchanged
+        );
         assert_eq!((f.flags.clone(), f.story.clone()), before);
         assert_eq!(f.next(DOCK, &[], false), Some(offer()));
         f.flags.clear("open");
@@ -614,7 +668,11 @@ mod tests {
     #[test]
     fn only_an_offered_mission_is_decided() {
         let mut f = Fixture::new(&[("job", job())]);
-        assert!(!f.play().decide("job", Outcome::Accept, 100), "not offered");
+        assert_eq!(
+            f.play().decide("job", Outcome::Accept, 100),
+            Decision::Unchanged,
+            "not offered"
+        );
         assert_eq!(f.state("job"), None);
     }
 
@@ -722,7 +780,10 @@ mod tests {
             },
         )]);
         f.play().make_offer("road");
-        assert!(f.play().decide("road", Outcome::Accept, 0));
+        assert_eq!(
+            f.play().decide("road", Outcome::Accept, 0),
+            Decision::Changed
+        );
         let active = Some(MissionState::Active {
             cargo: 0,
             met: false,
@@ -765,7 +826,7 @@ mod tests {
     /// `f` with mission `id` offered and accepted.
     fn accepted(f: &mut Fixture, id: &str) {
         f.play().make_offer(id);
-        assert!(f.play().decide(id, Outcome::Accept, 100));
+        assert_eq!(f.play().decide(id, Outcome::Accept, 100), Decision::Changed);
     }
 
     #[test]
@@ -986,7 +1047,10 @@ mod tests {
         let mut f = with_event(requiring(&["accepted"]));
         f.play().make_offer("job");
         assert_eq!(f.state("event"), None);
-        assert!(f.play().decide("job", Outcome::Accept, 10));
+        assert_eq!(
+            f.play().decide("job", Outcome::Accept, 10),
+            Decision::Changed
+        );
         assert_eq!(f.state("event"), Some(MissionState::Done));
     }
 
@@ -994,7 +1058,10 @@ mod tests {
     fn a_decline_s_effects_make_an_event_happen_at_once() {
         let mut f = with_event(requiring(&["declined"]));
         f.play().make_offer("job");
-        assert!(f.play().decide("job", Outcome::Decline, 10));
+        assert_eq!(
+            f.play().decide("job", Outcome::Decline, 10),
+            Decision::Changed
+        );
         assert_eq!(f.state("event"), Some(MissionState::Done));
     }
 

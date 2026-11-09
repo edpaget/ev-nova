@@ -279,7 +279,8 @@ pub(super) fn settle_outcome(
         story: &mut pilot.story,
         outfits: &mut out.story_outfits,
     }
-    .decide(id, outcome, room);
+    .decide(id, outcome, room)
+    .changed();
 }
 
 impl Session {
