@@ -158,7 +158,7 @@ impl EditDialog<Length> {
 /// The built-in "Text Input": 360 x 138, centred, with OK (1), the prompt
 /// (3), the field (5) and Cancel (6); the pictures (2 and 4) are parked
 /// outside it.
-fn fallback_template() -> DialogTemplate {
+pub(crate) fn fallback_template() -> DialogTemplate {
     let at = |x, y, w, h| Bounds::at(Point::new(x, y), w, h);
     let item = |bounds, enabled, kind| ItemTemplate {
         bounds,

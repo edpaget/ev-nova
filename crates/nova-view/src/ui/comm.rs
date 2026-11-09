@@ -582,7 +582,7 @@ fn layout(
 
 /// The built-in comm dialog: `DLOG` 1007's items, 423 x 215, centred;
 /// items 4-9, the escort dialog's, parked below it as stock parks them.
-fn comm_template() -> DialogTemplate {
+pub(crate) fn comm_template() -> DialogTemplate {
     let at = |x, y, w, h| Bounds::at(Point::new(x, y), w, h);
     let user = |bounds, enabled| ItemTemplate {
         bounds,
@@ -907,7 +907,7 @@ impl HaggleDialog {
 }
 
 /// The built-in haggle dialog: `DLOG` 1008's items, 262 x 107, centred.
-fn haggle_template() -> DialogTemplate {
+pub(crate) fn haggle_template() -> DialogTemplate {
     let at = |x, y, w, h| Bounds::at(Point::new(x, y), w, h);
     let user = |bounds, enabled| ItemTemplate {
         bounds,

@@ -1,9 +1,11 @@
 //! The widgets' ports over `nova_data`: dialog templates from the
-//! interface file ([`InterfaceData`]), and descriptions, their graphics,
-//! the button style and picture sizes from the game data ([`GameData`]).
-//! Thin mappings; the decisions are the core's.
+//! interface file ([`InterfaceData`]) or, for the new game without one,
+//! from its placeholder dialogs ([`DefaultDialogs`]), and descriptions,
+//! their graphics, the button style and picture sizes from the game data
+//! ([`GameData`]). Thin mappings; the decisions are the core's.
 
 use nova_data::graphics::{PICT, scan_pict};
+use nova_data::new_game::interface::DefaultDialogs;
 use nova_data::records::colors::Colors;
 use nova_data::records::desc::Desc;
 use nova_data::records::dialog::Dlog;
@@ -16,10 +18,52 @@ use super::catalog::{DescriptionGraphics, DescriptionSource, DialogResources, Pi
 use super::dialog::{DialogTemplate, ItemSpec, ItemTemplate, Placement};
 use crate::color::Color;
 use crate::font::Font;
+use crate::galaxy::find::{self, FIND_DIALOG};
 use crate::geometry::{Bounds, Point};
+use crate::ui::comm::{self, COMM_DIALOG, HAGGLE_DIALOG};
+use crate::ui::escort_dialog::{self, ESCORT_DIALOG};
+use crate::ui::new_pilot::{self, NEW_PILOT_DIALOG};
+use crate::ui::planet_comm::{self, PLANET_COMM_DIALOG};
+use crate::ui::plunder::{self, ASSIGNMENT_DIALOG, PLUNDER_DIALOG};
+use crate::ui::quantity::{self, QUANTITY_DIALOG};
+use crate::ui::text_input::{self, TEXT_INPUT_DIALOG};
 
 /// The `cölr` the button style comes from.
 const COLORS_ID: i16 = 128;
+
+/// The dialogs whose screens carry a built-in layout as plain data, each
+/// with it. The new game's defaults answer these with that layout rather
+/// than a copy, so the two can't drift.
+const BUILT_IN: [(i16, fn() -> DialogTemplate); 10] = [
+    (NEW_PILOT_DIALOG, new_pilot::fallback_template),
+    (TEXT_INPUT_DIALOG, text_input::fallback_template),
+    (QUANTITY_DIALOG, quantity::fallback_template),
+    (FIND_DIALOG, find::fallback),
+    (COMM_DIALOG, comm::comm_template),
+    (HAGGLE_DIALOG, comm::haggle_template),
+    (PLANET_COMM_DIALOG, planet_comm::planet_comm_template),
+    (PLUNDER_DIALOG, plunder::plunder_template),
+    (ASSIGNMENT_DIALOG, plunder::assignment_template),
+    (ESCORT_DIALOG, escort_dialog::escort_template),
+];
+
+/// The new game's dialogs, standing in for the interface file the bible
+/// doesn't author: each placeholder record mapped as the file's are, with
+/// no art, so a picture item is [`ItemSpec::MissingPicture`]; else the
+/// screen's own built-in layout ([`BUILT_IN`]); else an error naming the
+/// missing default. No screen can tell these from the file's.
+impl DialogResources for DefaultDialogs {
+    fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
+        if let Some(dialog) = self.get(id) {
+            return Ok(template(id, &dialog.dlog, dialog.items.clone(), |_| false));
+        }
+        BUILT_IN
+            .iter()
+            .find(|(each, _)| *each == id)
+            .map(|(_, layout)| layout())
+            .ok_or_else(|| format!("no default DLOG {id}"))
+    }
+}
 
 impl DialogResources for InterfaceData {
     fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
@@ -153,6 +197,8 @@ mod tests {
 
     use nova_rsrc::ResType;
     use nova_rsrc::fixture::ForkBuilder;
+
+    use nova_data::new_game::interface::DefaultDialog;
 
     use super::*;
     use crate::ui::dialog::ItemSpec;
@@ -359,6 +405,85 @@ mod tests {
         assert_eq!(template.placement, Placement::Fixed);
         assert_eq!(template.bounds, rect(30.0, 40.0, 200.0, 100.0));
         assert!(template.items.is_empty());
+    }
+
+    /// A set of defaults holding `id`'s `DLOG` and items as the interface
+    /// file `ui` decodes them.
+    fn defaults_from(ui: &InterfaceData, id: i16) -> DefaultDialogs {
+        let dlog = ui.dialog(id).expect("a DLOG").expect("decodes").0.record;
+        let items = ui
+            .items(dlog.items_id)
+            .expect("a DITL")
+            .expect("decodes")
+            .0
+            .record
+            .items;
+        [(id, DefaultDialog { dlog, items })].into_iter().collect()
+    }
+
+    #[test]
+    fn a_default_record_is_the_template_the_file_would_give() {
+        let ui = interface(&desc_dialog());
+        let defaults = defaults_from(&ui, 3003);
+        assert_eq!(defaults.dialog_template(3003), ui.dialog_template(3003));
+    }
+
+    #[test]
+    fn a_default_picture_is_missing_as_the_defaults_hold_no_art() {
+        let items = ditl(&[ditl_item([0, 0, 32, 32], 64, &130_i16.to_be_bytes())]);
+        let picture = nova_data::graphics::fixture::PictBuilder::new([0, 0, 32, 32])
+            .end()
+            .build();
+        let ui = interface(&[
+            (Dlog::TYPE, 128, dlog([0, 0, 100, 300], 128, &[])),
+            (nova_data::records::dialog_items::Ditl::TYPE, 128, items),
+            (PICT, 130, picture),
+        ]);
+        let template = defaults_from(&ui, 128)
+            .dialog_template(128)
+            .expect("converts");
+        assert_eq!(template.items[0].kind, ItemSpec::MissingPicture(130));
+    }
+
+    #[test]
+    fn each_built_in_dialog_is_answered_by_its_own_layout() {
+        let defaults = DefaultDialogs::default();
+        let expected = [
+            (NEW_PILOT_DIALOG, new_pilot::fallback_template()),
+            (TEXT_INPUT_DIALOG, text_input::fallback_template()),
+            (QUANTITY_DIALOG, quantity::fallback_template()),
+            (FIND_DIALOG, find::fallback()),
+            (COMM_DIALOG, comm::comm_template()),
+            (HAGGLE_DIALOG, comm::haggle_template()),
+            (PLANET_COMM_DIALOG, planet_comm::planet_comm_template()),
+            (PLUNDER_DIALOG, plunder::plunder_template()),
+            (ASSIGNMENT_DIALOG, plunder::assignment_template()),
+            (ESCORT_DIALOG, escort_dialog::escort_template()),
+        ];
+        for (id, template) in expected {
+            assert_eq!(defaults.dialog_template(id), Ok(template), "{id}");
+        }
+    }
+
+    #[test]
+    fn a_default_record_wins_over_a_built_in_layout() {
+        let ui = interface(&centred(3001, 200, 100));
+        let defaults = defaults_from(&ui, 3001);
+        assert_eq!(defaults.dialog_template(3001), ui.dialog_template(3001));
+    }
+
+    #[test]
+    fn a_dialog_with_no_default_is_an_error() {
+        let defaults = DefaultDialogs::default();
+        assert_eq!(
+            defaults.dialog_template(2000),
+            Err("no default DLOG 2000".to_owned())
+        );
+        let ui = interface(&desc_dialog());
+        assert_eq!(
+            defaults_from(&ui, 3003).dialog_template(1000),
+            Err("no default DLOG 1000".to_owned())
+        );
     }
 
     #[test]

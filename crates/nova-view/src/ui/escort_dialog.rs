@@ -406,7 +406,7 @@ fn layout(
 
 /// The built-in escort dialog: `DLOG` 1022's items, 424 x 259, centred;
 /// items 5 to 9 parked below it as stock parks them.
-fn escort_template() -> DialogTemplate {
+pub(crate) fn escort_template() -> DialogTemplate {
     let at = |x, y, w, h| Bounds::at(Point::new(x, y), w, h);
     let user = |bounds, enabled| ItemTemplate {
         bounds,

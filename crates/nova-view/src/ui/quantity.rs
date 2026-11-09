@@ -197,7 +197,7 @@ impl EditDialog<Count> {
 
 /// The built-in quantity dialog: 172 x 72, centred, with OK (1), the
 /// prompt (2), the field (3) and Cancel (4).
-fn fallback_template() -> DialogTemplate {
+pub(crate) fn fallback_template() -> DialogTemplate {
     let at = |x, y, w, h| Bounds::at(Point::new(x, y), w, h);
     let item = |bounds, enabled, kind| ItemTemplate {
         bounds,

@@ -401,7 +401,7 @@ impl PlunderDialog {
 }
 
 /// The built-in plunder dialog: `DLOG` 1011's items, 309 x 198, centred.
-fn plunder_template() -> DialogTemplate {
+pub(crate) fn plunder_template() -> DialogTemplate {
     let at = |x, y, w, h| Bounds::at(Point::new(x, y), w, h);
     let user = |bounds, enabled| ItemTemplate {
         bounds,
@@ -574,7 +574,7 @@ impl AssignmentDialog {
 
 /// The built-in assignment dialog: `DLOG` 1018's items, 257 x 114,
 /// centred.
-fn assignment_template() -> DialogTemplate {
+pub(crate) fn assignment_template() -> DialogTemplate {
     let at = |x, y, w, h| Bounds::at(Point::new(x, y), w, h);
     let user = |bounds| ItemTemplate {
         bounds,

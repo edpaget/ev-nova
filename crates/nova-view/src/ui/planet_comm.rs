@@ -425,7 +425,7 @@ fn layout(
 
 /// The built-in planet comm dialog: `DLOG` 1009's items, 540 x 295,
 /// placed as the loaded `DLOG` is ([`Placement::for_dlog`]).
-fn planet_comm_template() -> DialogTemplate {
+pub(crate) fn planet_comm_template() -> DialogTemplate {
     let at = |x, y, w, h| Bounds::at(Point::new(x, y), w, h);
     let user = |bounds, enabled| ItemTemplate {
         bounds,

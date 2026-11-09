@@ -465,7 +465,7 @@ impl NewPilotDialog {
 /// Cancel (2), the Full Name and Nickname labels (5, 6), their fields (8,
 /// 9), the gender control (11) and the title (12), each where stock has
 /// it; the other items are parked outside it.
-fn fallback_template() -> DialogTemplate {
+pub(crate) fn fallback_template() -> DialogTemplate {
     let at = |x, y, w, h| Bounds::at(Point::new(x, y), w, h);
     let parked = || ItemTemplate {
         bounds: at(0.0, 400.0, 10.0, 10.0),
