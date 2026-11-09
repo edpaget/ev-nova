@@ -150,7 +150,6 @@ use crate::ai::interceptor::{search_shut, searches_nothing};
 use crate::ai::warship::{Hunt, HuntTarget, Retreat, keeps, releases_blessed, retreats};
 use crate::ai::{Goal, Surroundings, fire, out_of_ammo};
 use crate::combat::ShipRef;
-use crate::combat::hull::Condition;
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::Npc;
 
@@ -194,8 +193,10 @@ pub fn interceptor_attack(
         return Hunt::of(Goal::Flee(ship));
     }
     let dry = retreat.out_of_ammo && out_of_ammo::retreats(npc);
-    if around.condition_of(ship) == Some(Condition::Disabled) && !fire::destroys(npc) {
-        // Goal 0, +0x70 -1; dry, goal 3 on -1, which the high level stops
+    if around.is_disabled(ship) && !fire::destroys(npc) {
+        // `_IsDisabled` (@0x8d319), no dying test, then
+        // `_AIHasDestroyingWeapons` (@0x8d328): goal 0, +0x70 -1
+        // (@0x8d334); dry, goal 3 on -1, which the high level stops
         // (@0x8dff6 → @0x8e228: +0x96 0).
         return Hunt {
             forgets_provocation: dry,
@@ -417,6 +418,7 @@ mod tests {
     };
     use crate::ai::interceptor::INTERCEPTOR_RETREAT;
     use crate::catalog::StellarId;
+    use crate::combat::hull::Condition;
     use crate::govt::{ALWAYS_ATTACKS_PLAYER, INTERCEPTORS_RETREAT};
     use crate::traffic::npc::{AiType, NpcId};
 
@@ -517,20 +519,46 @@ mod tests {
         );
     }
 
+    /// A pirate defence ship (NPC 2) breaking up: `_IsDisabled` never
+    /// calls it disabled (@0x2d6f), so only the high level's `_IsDying`
+    /// drop takes it.
+    fn breaking_up_guard() -> Npc {
+        crate::traffic::fixture::breaking_up_guard(ship(2, PIRATES, AiType::Warship, 0.0, 300.0))
+    }
+
+    #[test]
+    fn with_no_destroying_weapons_it_drops_a_quarry_breaking_up_but_not_a_defence_ship() {
+        // `_IsDisabled` of the target (@0x8d319), which has no dying test,
+        // then `_AIHasDestroyingWeapons` (@0x8d328): +0x70 -1 (@0x8d334).
+        let mut dying = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+        dying.condition = DYING;
+        let hunt = attacked(&police(n(2)), &dying, 0);
+        assert_eq!(
+            (hunt.goal, hunt.target, hunt.forgets_provocation),
+            (Some(Goal::Idle), HuntTarget::Cleared, false)
+        );
+        assert_eq!(
+            attacked(&police(n(2)), &breaking_up_guard(), 0),
+            Hunt::of(Goal::Attack(n(2))),
+            "a defence ship breaking up is not disabled (@0x2d6f)"
+        );
+    }
+
     #[test]
     fn dry_with_no_disabled_drop_it_flees_before_the_high_levels_drops() {
         let dry = short_of_ammo(police(n(2)), AmmoLeft::Dry, true);
-        let mut dying = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
-        dying.condition = DYING;
-        assert_eq!(attacked(&dry, &dying, 0), Hunt::of(Goal::Flee(n(2))));
+        assert_eq!(
+            attacked(&dry, &breaking_up_guard(), 0),
+            Hunt::of(Goal::Flee(n(2)))
+        );
     }
 
     #[test]
     fn the_think_leaves_goal_4_to_the_high_level_which_drops_or_flies_it() {
         // The think's tail has no ally, fleet or breaking-up drop: the
         // state-4 block's (@0x8e277-0x8e2db, @0x8e3ef → @0x8e714-0x8e726).
-        let mut dying = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
-        dying.condition = DYING;
+        // A defence ship breaking up, which its `_IsDisabled` let-go skips.
+        let dying = breaking_up_guard();
         let ally = ship(2, TRADERS, AiType::Warship, 0.0, 300.0);
         let pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
         for quarry in [&dying, &ally, &pirate] {

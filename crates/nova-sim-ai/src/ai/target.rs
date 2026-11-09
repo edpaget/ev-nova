@@ -662,15 +662,19 @@ pub fn dropped(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool {
 
 /// [`dropped`] with no `_IsDying` test, as an interceptor's think lets a
 /// target go: `_InterceptorAI` reads a target's slot (@0x8ccb0) and whether
-/// it is disabled with no destroying weapons (@0x8d319-0x8d32f), and calls
+/// it is disabled with no destroying weapons (`_IsDisabled` @0x8d319, then
+/// `_AIHasDestroyingWeapons` @0x8d328, +0x70 -1 @0x8d334), and calls
 /// `_IsDying` only on the player's slot, at its head, before any target is
-/// read (@0x8c906). So its goal 4 on a ship breaking up reaches the high
-/// level
-/// ([`attack_drop`](crate::ai::attack_drop)).
+/// read (@0x8c906). `_IsDisabled` ([`Surroundings::is_disabled`]) has no
+/// dying test, so a ship breaking up is let go by a ship with no
+/// destroying weapons; a stellar's defence ship breaking up is not
+/// disabled (@0x2d6f), so its goal 4 on one reaches the high level
+/// ([`attack_drop`](crate::ai::attack_drop)), as does any ship's with
+/// destroying weapons.
 #[must_use]
 pub fn let_go(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool {
     !around.active(target)
-        || (around.condition_of(target) == Some(Condition::Disabled) && !fire::destroys(npc))
+        || (around.is_disabled(target) && !fire::destroys(npc))
         || (target == ShipRef::Player && npc.spared)
 }
 
@@ -1963,12 +1967,17 @@ mod tests {
         fighter.leader = Some(NpcId(6));
         let mut follower = me();
         follower.leader = Some(NpcId(8));
+        let guard = crate::traffic::fixture::breaking_up_guard(ship(11, ENEMY, 100.0, 0.0));
         let mut npcs = vec![
-            follower, wreck, dying, ally, kin, escort, enemy, lead, fighter,
+            follower, wreck, dying, ally, kin, escort, enemy, lead, fighter, guard,
         ];
+        // The interceptor's let-go reads `_IsDisabled` (@0x8d319), which has
+        // no dying test: a ship breaking up is let go, a defence ship
+        // breaking up is not (@0x2d6f). The think's drop adds `_IsDying`.
         for (target, drop, lets_go) in [
             (n(2), true, true),
-            (n(3), true, false),
+            (n(3), true, true),
+            (n(11), true, false),
             (n(4), false, false),
             (n(5), false, false),
             (n(6), false, false),
@@ -1983,7 +1992,7 @@ mod tests {
             assert_eq!(
                 let_go(&npcs[0], target, &around),
                 lets_go,
-                "{target:?}, no dying test"
+                "{target:?}, by _IsDisabled"
             );
         }
         let mut spared = npcs.clone();

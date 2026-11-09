@@ -259,7 +259,9 @@ mod tests {
     fn a_fight_given_up_for_a_target_gone_forgets_its_provocation() {
         // A brave trader's and an interceptor's thinks keep goal 4 on a
         // ship breaking up, and the high level ends it (@0x8e3ef →
-        // @0x8e714), which `NovaAi` runs after each.
+        // @0x8e714), which `NovaAi` runs after each. The interceptor is
+        // armed to destroy, as its think's `_IsDisabled` let-go (@0x8d319)
+        // drops a ship breaking up first otherwise.
         let foe = ship(2, PIRATES, AiType::Warship, 100.0, 0.0);
         let dying = breaking_up(foe.clone());
         let brave = crate::ai::NovaAi::default();
@@ -269,7 +271,16 @@ mod tests {
             "a brave trader"
         );
         let police = Interceptor::default();
-        let police_one = attacking(AiType::Interceptor, POLICE);
+        let police_one = Npc {
+            armament: crate::combat::armament::Armament::new([(
+                crate::combat::weapon::WeaponSpec::new(&crate::catalog::WeaponRecord {
+                    mass_dmg: 1,
+                    ..nova_sim_catalog::fixture::weapon(128)
+                }),
+                1,
+            )]),
+            ..attacking(AiType::Interceptor, POLICE)
+        };
         assert!(
             decided(&brave, &police_one, std::slice::from_ref(&dying)).forgets_provocation,
             "an interceptor"

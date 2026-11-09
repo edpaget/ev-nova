@@ -14,10 +14,14 @@
 //!   player through `_AIMakeShipAttackPlayer`, the word's (@0x8cb8f) or
 //!   its pick's ([`Decision::turns_on_player`]), holds through the
 //!   inspection, hold or patrol it goes on to when the hunt gives it
-//!   nothing to fight. Unlike a warship's, its think doesn't let go of a
-//!   ship breaking up ([`let_go`]): goal 4 goes on to the high level, which
-//!   ends it ([`attack_drop`](crate::ai::attack_drop)), unless the wait
-//!   runs or it can't see the ship.
+//!   nothing to fight. Unlike a warship's, its think has no `_IsDying`
+//!   drop ([`let_go`]): it lets go of a ship breaking up only as disabled
+//!   (`_IsDisabled` @0x8d319, which has no dying test) when it has no
+//!   destroying weapons (@0x8d328), and never of a stellar's defence ship
+//!   breaking up, which is not disabled (@0x2d6f). Otherwise goal 4 goes
+//!   on to the high level, which ends it
+//!   ([`attack_drop`](crate::ai::attack_drop)), unless the wait runs or it
+//!   can't see the ship.
 //! - Idle or travelling ([`Goal::Land`], [`Goal::EnterGate`]), it searches
 //!   for no target while it holds one (+0x70,
 //!   [`held_attack`](crate::ai::held_attack)): provoked by an active one it
@@ -357,9 +361,11 @@ impl Behaviour for Interceptor {
     /// dropped ([`lost_sight::after_inspection`], @0x8d39a-0x8d3ee). The
     /// high level ends with its provocation a retreat with no target
     /// ([`out_of_ammo::stops`]), clearing its target; an attack on a ship
-    /// breaking up meets the high level's state-4 block, which `NovaAi`
-    /// runs: `_InterceptorAI` has no drop of its own ([`let_go`]), so goal
-    /// 4 reaches @0x8e714 ([`attack_drop`](crate::ai::attack_drop)).
+    /// breaking up that its think keeps (it holds destroying weapons, or
+    /// the ship is a defence ship, [`let_go`]) meets the high level's
+    /// state-4 block, which `NovaAi` runs: `_InterceptorAI` has no
+    /// `_IsDying` drop of its own, so goal 4 reaches @0x8e714
+    /// ([`attack_drop`](crate::ai::attack_drop)).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         if npc.goal == Goal::CountWait {
             // It returns for goal 0x16 at once (@0x8c8be).
@@ -655,6 +661,23 @@ mod tests {
         ship(1, POLICE, AiType::Interceptor, 0.0, 0.0)
     }
 
+    /// `npc` armed with a destroying weapon, so its think's let-go of a
+    /// disabled target (`_IsDisabled` @0x8d319, which has no dying test,
+    /// then `_AIHasDestroyingWeapons` @0x8d328) keeps a ship breaking up
+    /// for the high level's `_IsDying` drop (@0x8e3ef).
+    fn destroying(npc: Npc) -> Npc {
+        Npc {
+            armament: Armament::new([(
+                WeaponSpec::new(&WeaponRecord {
+                    mass_dmg: 1,
+                    ..weapon(128)
+                }),
+                1,
+            )]),
+            ..npc
+        }
+    }
+
     /// The interceptor's decision among `npcs` (it first), the player at
     /// `player` of record `record`, drawing `draws`; and the draws asked.
     fn decided_by(
@@ -934,9 +957,10 @@ mod tests {
         assert!(!at(&|other| other.condition = Condition::Destroyed));
     }
 
-    /// An interceptor provoked into attacking NPC 2, as `npc` changes it.
+    /// An interceptor with a destroying weapon provoked into attacking
+    /// NPC 2, as `npc` changes it.
     fn on_the_wreck(npc: impl Fn(&mut Npc)) -> Npc {
-        let mut cop = police();
+        let mut cop = destroying(police());
         cop.goal = Goal::Attack(n(2));
         cop.target = Some(n(2));
         cop.provoked = 5.0;
@@ -1002,14 +1026,7 @@ mod tests {
         // weapons has it for a candidate.
         let trader_cop = Npc {
             govt: Some(TRADERS),
-            armament: Armament::new([(
-                WeaponSpec::new(&WeaponRecord {
-                    mass_dmg: 1,
-                    ..weapon(128)
-                }),
-                1,
-            )]),
-            ..police()
+            ..destroying(police())
         };
         let decision = high_level(0, &[trader_cop, wreck()], None);
         assert_eq!(decision.goal, Goal::Idle);
@@ -1066,7 +1083,7 @@ mod tests {
             ticks_left: 3,
             starting: false,
         };
-        let decision = high_level(ALWAYS_ATTACKS_PLAYER, &[police()], Some(dying));
+        let decision = high_level(ALWAYS_ATTACKS_PLAYER, &[destroying(police())], Some(dying));
         assert_eq!(decision.goal, Goal::Idle, "@0x8e726");
         assert!(decision.turns_on_player, "the call came first (@0x8cb8f)");
         assert!(decision.clears_target, "@0x8e717");
@@ -1533,7 +1550,7 @@ mod tests {
      {
         // Goal 4 on a ship breaking up: goal 0, +0x70 -1, +0x96 0
         // (@0x8e3ef → @0x8e714-0x8e726), with no search that think.
-        let mut cop = police();
+        let mut cop = destroying(police());
         cop.goal = PLUNDER;
         cop.target = Some(n(2));
         cop.provoked = 3.0;
@@ -1725,8 +1742,10 @@ mod tests {
     }
 
     /// The decision of a provoked `cop` attacking NPC 2, `quarry`.
+    /// A provoked interceptor with a destroying weapon attacking NPC 2,
+    /// `quarry`: its decision and the draws asked.
     fn provoked_attacking(quarry: Npc) -> (Decision, Vec<u32>) {
-        let mut cop = police();
+        let mut cop = destroying(police());
         cop.goal = Goal::Attack(n(2));
         cop.target = Some(n(2));
         cop.provoked = 3.0;
@@ -1738,6 +1757,8 @@ mod tests {
         // The ally drop (@0x8e277-0x8e2e4) comes before the breaking-up
         // test (@0x8e3ef) and returns with goal 0, +0x70 and +0x96 kept
         // (@0x8e2d2 → @0x8fb47).
+        // Armed to destroy, as `_IsDisabled`'s let-go (@0x8d319) drops a
+        // quarry breaking up first otherwise.
         let mut ally = ship(2, TRADERS, AiType::Warship, 0.0, 300.0);
         ally.condition = DYING;
         let (decision, asked) = provoked_attacking(ally);
@@ -1781,10 +1802,14 @@ mod tests {
 
     #[test]
     fn an_unprovoked_interceptor_attacking_a_ship_breaking_up_idles_forgetting_its_provocation() {
-        // @0x8e3ef → @0x8e714-0x8e726.
+        // @0x8e3ef → @0x8e714-0x8e726, armed to destroy, as
+        // `_IsDisabled`'s let-go (@0x8d319) drops it first otherwise.
         let mut pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
         pirate.condition = DYING;
-        let (decision, asked) = attacking(Some(pirate));
+        let mut cop = destroying(police());
+        cop.goal = Goal::Attack(n(2));
+        cop.target = Some(n(2));
+        let (decision, asked) = attacking_with(Interceptor::default(), cop, Some(pirate));
         assert_eq!(
             (
                 decision.goal,

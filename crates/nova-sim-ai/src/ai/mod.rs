@@ -1042,7 +1042,8 @@ impl<'a> Surroundings<'a> {
 
     /// `_IsDisabled` (@0x2ce6-0x2e0d) of `ship`, as the high level reads
     /// its target: the stand-off band's halving (@0x8e4ca) and the
-    /// plunder's dock-or-fight (@0x8e866). The player reads
+    /// plunder's dock-or-fight (@0x8e866); and as `_InterceptorAI` lets a
+    /// target go (@0x8d319, [`target::let_go`]). The player reads
     /// [`Condition::disabled`]: disabled or breaking up. An NPC reads
     /// [`Npc::is_disabled`]: the same, but for a stellar's defence ship,
     /// which `_IsDisabled` never calls disabled by its armour and so not
