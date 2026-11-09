@@ -16,6 +16,12 @@
 //!   a later landing. An offer's first opening applies its `on_offer`, and
 //!   a completion's opening completes the mission, each before the
 //!   conversation enters its knot, so the scene reads the flags they set.
+//!   Under [`RuleKey::BarStory`](crate::RuleKey::BarStory)'s other
+//!   reading the bar also lists the offers that hold and the stellar's
+//!   own conversation, and
+//!   [`Converse::OpenListed`](crate::flight_frame::Converse::OpenListed)
+//!   opens one of them the same way ([`Port::open_listed_scene`]),
+//!   counting it shown this visit (see the `bar_story` module).
 //! - **Outcomes.** After an offer's conversation opens, and after each
 //!   choice, the first `outcome:` tag its page reached decides the offer
 //!   once ([`outcome_of`], [`Play::decide`]), against the room left in the
@@ -198,6 +204,52 @@ impl Port {
                 break (scene, at);
             }
         };
+        Some(self.open_scene(statics, setup, pilot, out, stellar, scene, &at, holds))
+    }
+
+    /// Opens `scene`, one the bar at `landed` lists, replacing any open
+    /// conversation, as [`Port::open_next_scene`] opens the one it picks:
+    /// the landing settled first, the scene counted shown this visit, so
+    /// the next [`Converse::Open`](crate::flight_frame::Converse::Open)
+    /// passes over it. Its first page, or `None` in flight, with no scene,
+    /// or with its story not held.
+    #[allow(clippy::too_many_arguments)] // the sub-states and values it reads, kept apart
+    pub(super) fn open_listed_scene(
+        &mut self,
+        statics: &Statics,
+        setup: &Setup,
+        pilot: &mut Pilot,
+        out: &mut Outbox,
+        landed: Option<StellarId>,
+        scene: Option<Scene>,
+        holds: u32,
+    ) -> Option<ConversationPage> {
+        let stellar = landed?;
+        let scene = scene?;
+        self.settle_landing(statics, pilot, out, stellar);
+        let at = scene_place(statics, &scene)?;
+        self.scenes_shown.insert(scene.clone());
+        Some(self.open_scene(statics, setup, pilot, out, stellar, scene, &at, holds))
+    }
+
+    /// Opens `scene` at `stellar`, from `at`, replacing any open
+    /// conversation: an offer's first opening applies its `on_offer` and
+    /// a completion completes its mission, each before the conversation
+    /// enters its knot, with `pilot`'s state of its file and its flags;
+    /// then an outcome its first page reached decides an offer against
+    /// the room left in `holds`. Its first page.
+    #[allow(clippy::too_many_arguments)] // the sub-states and values it reads, kept apart
+    fn open_scene(
+        &mut self,
+        statics: &Statics,
+        setup: &Setup,
+        pilot: &mut Pilot,
+        out: &mut Outbox,
+        stellar: StellarId,
+        scene: Scene,
+        at: &DialogAt<'_>,
+        holds: u32,
+    ) -> ConversationPage {
         let mut play = Play {
             storylines: &statics.storylines,
             flags: &mut pilot.flags,
@@ -223,7 +275,7 @@ impl Port {
         settle_outcome(&mut open, statics, pilot, out, holds);
         let page = open.conversation.page().clone();
         self.conversation = Some(open);
-        Some(page)
+        page
     }
 
     /// Forgets the scenes this visit has shown, as the ship takes off.

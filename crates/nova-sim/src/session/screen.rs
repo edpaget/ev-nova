@@ -64,15 +64,17 @@ impl Session {
     /// - To [`ScreenAsk::GateEntryDesc`], [`Session::gate_entry_desc`].
     /// - To [`ScreenAsk::HeardNews`], [`Session::heard_news`] of the
     ///   pilot's system.
+    /// - To [`ScreenAsk::BarStory`], [`Session::bar_story`].
     ///
     /// The map's redraw and panels, the hypergate cycle, the coming
     /// traffic, a ship's name prompt, a captured ship's, the hail, the
     /// pilot panel and the gate entry's `dësc` read
     /// `collab`'s catalog, and answer [`ScreenAnswer::Nothing`] without
     /// one; so does an ask with nothing to show (no outfitter, no bar, no
-    /// bar visit, no offer, no hail, no boarding). It takes `&mut self`
-    /// and the apply collaborators for the screens whose reads roll on the
-    /// chance or list the hail's options; the maps read only the catalog.
+    /// bar visit, no bar story, no offer, no hail, no boarding). It takes
+    /// `&mut self` and the apply collaborators for the screens whose reads
+    /// roll on the chance or list the hail's options; the maps read only
+    /// the catalog.
     #[allow(clippy::needless_pass_by_value)] // the asks come by value, as the port hands them on
     pub fn screen(&mut self, ask: ScreenAsk, collab: &mut ApplyCollaborators<'_>) -> ScreenAnswer {
         let catalog = collab.catalog;
@@ -158,6 +160,9 @@ impl Session {
                 ScreenAnswer::GateEntryDesc(self.gate_entry_desc(entry, catalog))
             }),
             ScreenAsk::HeardNews => self.heard_news_screen(),
+            ScreenAsk::BarStory => self
+                .bar_story()
+                .map_or(ScreenAnswer::Nothing, ScreenAnswer::BarStory),
         }
     }
 

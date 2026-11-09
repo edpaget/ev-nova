@@ -28,7 +28,7 @@ mod story_screens;
 pub use crate::key_fade::{FadeKey, KeyFades};
 pub use port_screens::{BarNews, PortShops};
 pub use screen::{FloatingMap, GateEntry, MapOpen, MapScreen, MarksFrom, ScreenAnswer, ScreenAsk};
-pub use story_screens::{RoomRefusal, StoryObjective, StoryRow};
+pub use story_screens::{BarScene, BarStory, RoomRefusal, StoryObjective, StoryRow};
 
 use crate::asteroid::Asteroid;
 use crate::bay::FighterNote;
@@ -1171,6 +1171,14 @@ pub enum Converse {
     /// Closes the open conversation: [`Answer::Done`], or refused with
     /// none open.
     Close,
+    /// Opens the scene at this index of the landed stellar's bar's
+    /// listing ([`BarStory::scenes`], as
+    /// [`ScreenAsk::BarStory`]
+    /// answers it now), from its knot, as [`Converse::Open`] opens the one
+    /// it picks, and counts it shown this visit. Refused under
+    /// [`RuleKey::BarStory`](crate::RuleKey::BarStory)'s engine reading,
+    /// in flight, at a stellar with no bar, and past the listing.
+    OpenListed(usize),
 }
 
 impl FlightCommand {
@@ -2585,6 +2593,7 @@ mod tests {
             C::Converse(crate::flight_frame::Converse::Open),
             C::Converse(crate::flight_frame::Converse::Choose(1)),
             C::Converse(crate::flight_frame::Converse::Close),
+            C::Converse(crate::flight_frame::Converse::OpenListed(0)),
         ];
         for command in port {
             assert_eq!(command.gate(), None, "{command:?}");

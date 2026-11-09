@@ -19,7 +19,9 @@
 //!
 //! The new game's own screens ask too: the news heard where the ship is
 //! ([`ScreenAsk::HeardNews`]), answered empty for a session whose data
-//! holds no storylines.
+//! holds no storylines, and the story the landed stellar's bar hosts
+//! ([`ScreenAsk::BarStory`]), answered only under
+//! [`RuleKey::BarStory`](crate::RuleKey::BarStory)'s other reading.
 //!
 //! An ask is a read: asked twice in a row, it answers the same, but for
 //! one that draws afresh at each ask ([`ScreenAsk::draws_afresh`]). The
@@ -28,6 +30,7 @@
 //! asked again they answer from the rolls kept.
 
 use super::port_screens::{BarNews, PortShops};
+use super::story_screens::BarStory;
 use crate::capture_naming::CaptureNaming;
 use crate::catalog::{ShipId, SystemId};
 use crate::galaxy_map::{GalaxyShown, MapDrawing, MapMarks};
@@ -187,6 +190,14 @@ pub enum ScreenAsk {
     /// ([`ScreenAnswer::HeardNews`]). Empty for a session whose data holds
     /// no storylines.
     HeardNews,
+    /// The story the landed stellar's bar hosts, asked as the bar opens
+    /// and after each conversation opened from it closes
+    /// ([`ScreenAnswer::BarStory`]). Answered nothing under
+    /// [`RuleKey::BarStory`](crate::RuleKey::BarStory)'s engine reading,
+    /// in flight, or at a stellar with no bar; under the other reading at a
+    /// bar, answered even when it lists nothing, so the view knows the bar
+    /// hosts the story.
+    BarStory,
 }
 
 /// A gate entry the view is about to send ([`ScreenAsk::GateEntryDesc`]).
@@ -360,6 +371,9 @@ pub enum ScreenAnswer {
     /// [`ScreenAsk::HeardNews`]'s: each item by release day, then id
     /// (`Session::heard_news`).
     HeardNews(Vec<HeardNews>),
+    /// [`ScreenAsk::BarStory`]'s: the scenes the bar lists and the news
+    /// heard in the system (`Session::bar_story`).
+    BarStory(BarStory),
 }
 
 impl ScreenAnswer {
@@ -397,6 +411,7 @@ impl ScreenAnswer {
             ScreenAsk::PilotPanel => matches!(self, Self::PilotPanel(_)),
             ScreenAsk::GateEntryDesc(_) => matches!(self, Self::GateEntryDesc(_)),
             ScreenAsk::HeardNews => matches!(self, Self::HeardNews(_)),
+            ScreenAsk::BarStory => matches!(self, Self::BarStory(_)),
         }
     }
 }
@@ -447,6 +462,7 @@ mod tests {
             ScreenAsk::PilotPanel,
             ScreenAsk::GateEntryDesc(GateEntry::Wormhole),
             ScreenAsk::HeardNews,
+            ScreenAsk::BarStory,
         ]
     }
 
@@ -556,6 +572,7 @@ mod tests {
             })),
             ScreenAnswer::GateEntryDesc(None),
             ScreenAnswer::HeardNews(Vec::new()),
+            ScreenAnswer::BarStory(BarStory::default()),
         ]
     }
 

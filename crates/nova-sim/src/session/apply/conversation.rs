@@ -26,6 +26,14 @@ impl Session {
     ///   decides: [`Answer::Conversation`] with
     ///   the next page, or [`Answer::Refused`] with none open, on an ended
     ///   page or past its choices.
+    /// - [`Converse::OpenListed`] opens the scene at its index of the
+    ///   landed stellar's bar's listing ([`Session::bar_story`]), as
+    ///   [`Converse::Open`] opens the one it picks, and counts it shown
+    ///   this visit: [`Answer::Conversation`] with its first page, or
+    ///   [`Answer::Refused`] under
+    ///   [`RuleKey::BarStory`](crate::RuleKey::BarStory)'s engine reading,
+    ///   in flight, at a stellar with no bar, or past the listing (see the
+    ///   `bar_story` module).
     /// - [`Converse::Close`] closes it: [`Answer::Done`], or
     ///   [`Answer::Refused`] with none open.
     ///
@@ -58,6 +66,18 @@ impl Session {
                 index,
                 holds,
             ),
+            Converse::OpenListed(index) => {
+                let scene = self.bar_scene(index);
+                self.port.open_listed_scene(
+                    &self.statics,
+                    &self.setup,
+                    &mut self.pilot,
+                    &mut self.out,
+                    landed,
+                    scene,
+                    holds,
+                )
+            }
             Converse::Close => return done_if(self.port.close_conversation()),
         };
         self.settle_storylines(chance);

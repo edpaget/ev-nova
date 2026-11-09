@@ -449,6 +449,7 @@ mod asteroid_seekers;
 mod asteroids;
 mod auto_refuel;
 mod aux_ships;
+mod bar_story;
 #[cfg(test)]
 mod berth_marks;
 mod blockades;
