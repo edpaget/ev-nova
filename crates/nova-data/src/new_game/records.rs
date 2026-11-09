@@ -487,16 +487,16 @@ pub const PLACEHOLDER_ARMOR: Rect = area(194, 12, 202, 182);
 pub const PLACEHOLDER_FUEL: Rect = area(206, 12, 214, 182);
 /// The placeholder navigation readout. A placeholder until the bible
 /// authors an interface.
-pub const PLACEHOLDER_NAV: Rect = area(220, 12, 260, 182);
+pub const PLACEHOLDER_NAV: Rect = area(218, 12, 250, 182);
 /// The placeholder weapon readout. A placeholder until the bible authors an
 /// interface.
-pub const PLACEHOLDER_WEAPON: Rect = area(264, 12, 304, 182);
-/// The placeholder target readout. A placeholder until the bible authors an
-/// interface.
-pub const PLACEHOLDER_TARGET: Rect = area(308, 12, 408, 182);
-/// The placeholder cargo readout, the bar's lowest area, ending inside a
-/// 480-tall view. A placeholder until the bible authors an interface.
-pub const PLACEHOLDER_CARGO: Rect = area(412, 12, 452, 182);
+pub const PLACEHOLDER_WEAPON: Rect = area(252, 12, 268, 182);
+/// The placeholder target readout, 112 px tall as stock `ïntf` 128's is.
+/// A placeholder until the bible authors an interface.
+pub const PLACEHOLDER_TARGET: Rect = area(270, 12, 382, 182);
+/// The placeholder cargo readout, the bar's lowest area: 86 px, tall enough
+/// for its credits value's baseline 82 px down, ending inside a 480-tall view. A placeholder until the bible authors an interface.
+pub const PLACEHOLDER_CARGO: Rect = area(384, 12, 470, 182);
 /// The placeholder bright text colour, white. A placeholder until the bible
 /// authors an interface.
 pub const PLACEHOLDER_BRIGHT_TEXT: u32 = 0x00FF_FFFF;
@@ -598,6 +598,60 @@ mod tests {
             assert!(r.top < r.bottom && r.left < r.right, "{r:?}");
             assert!(r.right <= BAR_WIDTH && r.bottom <= VIEW_HEIGHT, "{r:?}");
         }
+    }
+
+    /// The descent below a baseline of the bar's 9-point font.
+    const DESCENT: i16 = 3;
+    /// The nav readout's lowest baseline:
+    /// `nova_view::flight::hud::NAV_VALUE_BASELINE`.
+    const NAV_DEEPEST: i16 = 29;
+    /// The weapon readout's only baseline:
+    /// `nova_view::flight::target::WEAPON_BASELINE`.
+    const WEAPON_DEEPEST: i16 = 12;
+    /// The target readout's lowest top-anchored baseline:
+    /// `nova_view::flight::target::NO_TARGET_BASELINE`.
+    const TARGET_DEEPEST: i16 = 47;
+    /// The target's picture's height:
+    /// `nova_view::flight::target::PICTURE_HEIGHT`.
+    const TARGET_PICTURE: i16 = 64;
+    /// The target's subtitle baseline,
+    /// `nova_view::flight::target::SUBTITLE_BASELINE`, and its status line
+    /// above the bottom, `nova_view::flight::target::BOTTOM_BASELINE`.
+    const TARGET_SUBTITLE: i16 = 29;
+    const TARGET_BOTTOM: i16 = 6;
+    /// The cargo readout's lowest baseline:
+    /// `nova_view::flight::hud::CARGO_CREDITS_VALUE_BASELINE`.
+    const CARGO_DEEPEST: i16 = 82;
+
+    #[test]
+    fn every_default_readout_area_holds_its_readout() {
+        let intf = default_interface();
+        let h = |r: Rect| r.bottom - r.top;
+        assert!(
+            h(intf.nav_area) >= NAV_DEEPEST + DESCENT,
+            "{:?}",
+            intf.nav_area
+        );
+        assert!(
+            h(intf.weap_area) >= WEAPON_DEEPEST + DESCENT,
+            "{:?}",
+            intf.weap_area
+        );
+        let targ = h(intf.targ_area);
+        assert!(targ >= TARGET_DEEPEST + DESCENT, "{:?}", intf.targ_area);
+        assert!(targ >= TARGET_PICTURE, "{:?}", intf.targ_area);
+        assert!(
+            targ - TARGET_BOTTOM - DESCENT > TARGET_SUBTITLE + DESCENT,
+            "{:?}",
+            intf.targ_area
+        );
+        assert!(
+            h(intf.cargo_area) >= CARGO_DEEPEST + DESCENT,
+            "{:?}",
+            intf.cargo_area
+        );
+        let lowest = intf_areas(&intf).iter().map(|r| r.bottom).max();
+        assert!(lowest <= Some(VIEW_HEIGHT), "{lowest:?}");
     }
 
     #[test]
