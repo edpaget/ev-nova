@@ -361,6 +361,17 @@ mod tests {
         check_unreadable_contract(&DirSource::new(dir.path()));
     }
 
+    #[test]
+    fn the_directory_adapter_lists_no_folder_named_like_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "systems/marrow.md", b"m");
+        std::fs::create_dir(dir.path().join("systems").join("old.md")).unwrap();
+        let source = DirSource::new(dir.path());
+        let listed = source.listing("systems", "md").expect("lists systems/");
+        let paths: Vec<_> = listed.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["systems/marrow.md"]);
+    }
+
     /// A source keeping only the default `listing`, which fails the
     /// folder over one unreadable file.
     struct FilesOnly(MemSource);
