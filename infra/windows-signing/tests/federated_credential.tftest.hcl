@@ -72,7 +72,7 @@ run "federated_credential_trusts_only_the_windows_signing_environment" {
   command = plan
 
   assert {
-    condition     = azuread_application_federated_identity_credential.github_windows_signing.subject == "repo:edpaget/ev-nova:environment:windows-signing"
+    condition     = azuread_application_federated_identity_credential.github_windows_signing.subject == "repo:edpaget@108177/ev-nova@1403578017:environment:windows-signing"
     error_message = "The federated subject must name only the windows-signing environment, so no other job or branch can get a token."
   }
 

@@ -18,8 +18,9 @@ It manages:
 - an Entra application and service principal with one federated identity
   credential (issuer `https://token.actions.githubusercontent.com`, audience
   `api://AzureADTokenExchange`, subject
-  `repo:edpaget/ev-nova:environment:windows-signing`) and no client secret
-  (`entra.tf`);
+  `repo:edpaget@108177/ev-nova@1403578017:environment:windows-signing`,
+  GitHub's immutable form with the owner's and repository's IDs) and no
+  client secret (`entra.tf`);
 - the `windows-signing` environment, which only `main` may deploy to, and its
   six variables: `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`,
   `AZURE_SUBSCRIPTION_ID`, `ARTIFACT_SIGNING_ENDPOINT`,

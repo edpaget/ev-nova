@@ -18,5 +18,9 @@ resource "azuread_application_federated_identity_credential" "github_windows_sig
   description    = "GitHub Actions jobs in edpaget/ev-nova that deploy to the windows-signing environment."
   issuer         = "https://token.actions.githubusercontent.com"
   audiences      = ["api://AzureADTokenExchange"]
-  subject        = "repo:edpaget/ev-nova:environment:windows-signing"
+  # The repository uses GitHub's immutable OIDC subjects, which carry the
+  # owner's and the repository's numeric IDs (edpaget is 108177, ev-nova is
+  # 1403578017), so a repository that later takes the name can't match. Check
+  # with `gh api repos/edpaget/ev-nova/actions/oidc/customization/sub`.
+  subject = "repo:edpaget@108177/ev-nova@1403578017:environment:windows-signing"
 }
