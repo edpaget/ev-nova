@@ -777,6 +777,7 @@ mod sprites;
 mod stars;
 mod stellar_looks;
 mod stepping;
+mod story;
 mod target_latch;
 mod touch;
 mod travel;

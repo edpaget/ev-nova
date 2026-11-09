@@ -21,7 +21,7 @@
 //! so a fight's diagnostic and a report can interleave in the app's log.
 //! Nothing the player sees depends on it.
 
-use nova_sim::flight_frame::{CarriedDisplay, FlightEvent, LoadedDesc};
+use nova_sim::flight_frame::{CarriedDisplay, FlightEvent, LoadedDesc, RoomRefusal};
 use nova_sim::{
     CommNote, FighterNote, Granted, InterfaceLoad, MissionBoardLine, MissionShown, NavMode,
     PayNote, PersonQuote, SessionEvent, SimDiagnostic, SimMessage, SimSound, TextBar,
@@ -70,6 +70,8 @@ pub(super) struct Inbox {
     /// The kept escorts' displays carried since the last take, if the
     /// fleet was placed since, in order.
     carried: Option<Vec<CarriedDisplay>>,
+    /// The offers' accepts refused for room, in order.
+    room_refusals: Vec<RoomRefusal>,
 }
 
 impl Inbox {
@@ -102,6 +104,7 @@ impl Inbox {
                 FlightEvent::TakeoffNav(nav) => self.takeoff_nav = Some(nav),
                 FlightEvent::RescueDesc(desc) => self.rescue_desc = Some(desc),
                 FlightEvent::LeaveMessage(text) => self.leave_message = Some(text),
+                FlightEvent::RoomRefused(refusal) => self.room_refusals.push(refusal),
                 FlightEvent::DisplaysCarried(carried) => {
                     self.carried.get_or_insert_with(Vec::new).extend(carried);
                 }
@@ -226,6 +229,12 @@ impl Inbox {
     pub(super) fn take_carried(&mut self) -> Option<Vec<CarriedDisplay>> {
         self.carried.take()
     }
+
+    /// The offers' accepts refused for room, in order; taking them leaves
+    /// none.
+    pub(super) fn take_room_refusals(&mut self) -> Vec<RoomRefusal> {
+        std::mem::take(&mut self.room_refusals)
+    }
 }
 
 #[cfg(test)]
@@ -296,6 +305,25 @@ mod tests {
             ship_name: "Kestrel".to_owned(),
             done: Help::Repair,
         }
+    }
+
+    /// A job of 10 tons refused with `room` free.
+    fn refused(room: i64) -> RoomRefusal {
+        RoomRefusal {
+            mission: "job".to_owned(),
+            title: "Plate".to_owned(),
+            cargo: "Plate".to_owned(),
+            tons: 10,
+            room,
+        }
+    }
+
+    #[test]
+    fn the_room_refusals_are_taken_in_order_across_receives_once() {
+        let mut inbox = received(vec![FlightEvent::RoomRefused(refused(1))]);
+        inbox.receive(vec![FlightEvent::RoomRefused(refused(2))]);
+        assert_eq!(inbox.take_room_refusals(), [refused(1), refused(2)]);
+        assert_eq!(inbox.take_room_refusals(), []);
     }
 
     #[test]

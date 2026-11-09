@@ -21,7 +21,9 @@
 //!    ([`FlightEvent::Comm`], [`FlightEvent::FighterNote`],
 //!    [`FlightEvent::PayNote`], [`FlightEvent::Quote`]);
 //! 6. the mission texts and offer movies, each text with the bar it noted
-//!    ([`FlightEvent::MissionShown`]);
+//!    ([`FlightEvent::MissionShown`]), then the offers' accepts refused
+//!    for room ([`FlightEvent::RoomRefused`], see the `storylines`
+//!    module);
 //! 7. the interface loads ([`FlightEvent::InterfaceLoad`]), after
 //!    [`FlightEvent::InterfaceLoadsCleared`] when a run of docked scripts
 //!    began since the last drain;
@@ -85,6 +87,11 @@ impl Session {
             };
             FlightEvent::MissionShown { shown, bar }
         }));
+        into.extend(
+            std::mem::take(&mut self.out.room_refusals)
+                .into_iter()
+                .map(FlightEvent::RoomRefused),
+        );
         if std::mem::take(&mut self.out.interface_loads_cleared) {
             into.push(FlightEvent::InterfaceLoadsCleared);
         }
@@ -122,6 +129,7 @@ mod tests {
     use crate::catalog::{DescMovie, MissionId, OutfitId, StellarId, WeaponId};
     use crate::chance::NeverFires;
     use crate::combat::report::SimDiagnostic;
+    use crate::flight_frame::RoomRefusal;
     use crate::grant::Granted;
     use crate::hail::CommNote;
     use crate::hire::PayNote;
@@ -352,6 +360,25 @@ mod tests {
         assert_eq!(session.texts_queued(), 2, "never reset");
     }
 
+    /// A job of 10 tons refused with 5 free.
+    fn refusal() -> RoomRefusal {
+        RoomRefusal {
+            mission: "job".to_owned(),
+            title: "Plate".to_owned(),
+            cargo: "Plate".to_owned(),
+            tons: 10,
+            room: 5,
+        }
+    }
+
+    #[test]
+    fn a_room_refusal_is_drained_once() {
+        let mut session = started();
+        session.out.room_refusals.push(refusal());
+        assert_eq!(drained(&mut session), [FlightEvent::RoomRefused(refusal())]);
+        assert_eq!(drained(&mut session), []);
+    }
+
     #[test]
     fn a_docked_load_is_drained_and_an_order_after_a_drain_drains_its_clear() {
         let catalog = shipbuying();
@@ -453,6 +480,7 @@ mod tests {
         session.run.leave_with("Bye.");
         session.out.takeoff_nav = Some(NavMode::Off);
         session.out.begin_docked_run();
+        session.out.room_refusals.push(refusal());
         let bar = queue_text(&mut session, text(128));
         session.out.quotes.push(PersonQuote {
             npc: NpcId(4),
@@ -500,6 +528,7 @@ mod tests {
                     shown: MissionShown::Text(text(128)),
                     bar: Some(bar),
                 },
+                FlightEvent::RoomRefused(refusal()),
                 FlightEvent::InterfaceLoadsCleared,
                 FlightEvent::TakeoffNav(NavMode::Off),
                 FlightEvent::RescueDesc(rescued()),

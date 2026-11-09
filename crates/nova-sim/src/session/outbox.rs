@@ -10,7 +10,7 @@ use crate::bay::FighterNote;
 use crate::board::MissionBoardLine;
 use crate::combat::report::Reports;
 use crate::control::ScriptNote;
-use crate::flight_frame::{EscortMenuPass, RaisedLine};
+use crate::flight_frame::{EscortMenuPass, RaisedLine, RoomRefusal};
 #[cfg(test)]
 use crate::gate_sprite::StellarPass;
 use crate::grant::Granted;
@@ -88,6 +88,9 @@ pub(super) struct Outbox {
     /// queued: what its caller's redraw shows as it closes (see the
     /// `mission_screens` module's [`TextBar`]); never saved.
     pub(super) text_bars: Vec<TextBar>,
+    /// The offers' accepts refused for want of room since they were last
+    /// taken (see the `storylines` module); never saved.
+    pub(super) room_refusals: Vec<RoomRefusal>,
     /// The `C`, `E` and `H` run while docked since the last outfit order
     /// or ship purchase began, in order (see the `ship_change` module's
     /// [`InterfaceLoad`]); never saved.

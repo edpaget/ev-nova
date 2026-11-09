@@ -23,10 +23,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod port_screens;
 mod screen;
+mod story_screens;
 
 pub use crate::key_fade::{FadeKey, KeyFades};
 pub use port_screens::{BarNews, PortShops};
 pub use screen::{FloatingMap, GateEntry, MapOpen, MapScreen, MarksFrom, ScreenAnswer, ScreenAsk};
+pub use story_screens::RoomRefusal;
 
 use crate::asteroid::Asteroid;
 use crate::bay::FighterNote;
@@ -1621,6 +1623,9 @@ pub enum FlightEvent {
     /// NPC's display went with the system left, so the view lets go of
     /// whatever else it held through the change.
     DisplaysCarried(Vec<CarriedDisplay>),
+    /// An offer's accept refused for want of room in the hold, as its
+    /// conversation decided it ([`RoomRefusal`]).
+    RoomRefused(RoomRefusal),
 }
 
 /// A kept escort's display carried into its new NPC

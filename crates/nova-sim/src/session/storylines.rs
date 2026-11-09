@@ -23,7 +23,11 @@
 //!   dropped its deliveries off and the offer's `on_offer` has fired its
 //!   events, which may load cargo. A completion's or a stellar's own
 //!   conversation reads no outcome. Closing, or taking off, with none
-//!   reached leaves the offer offered. An offer's first opening, an
+//!   reached leaves the offer offered. An accept refused for room leaves
+//!   it offered too, decided for the visit, and raises its refusal
+//!   ([`RoomRefusal`], drained as
+//!   [`FlightEvent::RoomRefused`](crate::flight_frame::FlightEvent::RoomRefused))
+//!   so the view can tell the player. An offer's first opening, an
 //!   accept or a decline, and a completion each make a save due; a defer,
 //!   an offer opened again and a stellar's own conversation don't.
 //! - **Landing and days.** The `Storylines` consumer's subscriptions run
@@ -77,9 +81,12 @@ use crate::story::{
     Consumer, EventFilter, StoryEvent, StoryEventKind, Subscription, SubscriptionId,
 };
 use crate::storylines::effects::OutfitChange;
-use crate::storylines::lifecycle::{Play, Scene, outcome_of};
+use crate::storylines::lifecycle::{Decision, Play, Scene, outcome_of};
 use crate::storylines::news::{self, HeardNews};
 use nova_sim_catalog::dialogs::DialogAt;
+use nova_sim_catalog::storylines::MissionObjective;
+
+use crate::flight_frame::RoomRefusal;
 
 use super::conversation::OpenConversation;
 use super::free_cargo::free_cargo_in;
@@ -273,14 +280,30 @@ pub(super) fn settle_outcome(
     };
     open.decided = true;
     let room = free_cargo_in(holds, pilot);
-    out.save_due |= Play {
+    let decision = Play {
         storylines: &statics.storylines,
         flags: &mut pilot.flags,
         story: &mut pilot.story,
         outfits: &mut out.story_outfits,
     }
-    .decide(id, outcome, room)
-    .changed();
+    .decide(id, outcome, room);
+    out.save_due |= decision.changed();
+    if let Decision::NoRoom { tons, room } = decision {
+        let mission = statics.storylines.missions.get(id);
+        let cargo = match mission.and_then(|mission| mission.objective.as_ref()) {
+            Some(MissionObjective::Deliver { cargo, .. }) => cargo.clone(),
+            _ => String::new(),
+        };
+        out.room_refusals.push(RoomRefusal {
+            mission: id.clone(),
+            title: mission
+                .map(|mission| mission.title.clone())
+                .unwrap_or_default(),
+            cargo,
+            tons,
+            room: room.max(0),
+        });
+    }
 }
 
 impl Session {
@@ -646,15 +669,92 @@ mod tests {
         assert!(!session.out.save_due, "no mission");
     }
 
+    /// [`landed`] with the hold full but for `room` tons.
+    fn landed_with_room(catalog: &FakePilotCatalog, room: i64) -> Session {
+        let mut session = landed(catalog);
+        let filler = u32::try_from(free(&session) - room).expect("a hold's tons");
+        session
+            .pilot
+            .cargo
+            .insert(crate::market::Good::Commodity(0), filler);
+        session
+    }
+
+    /// The job, titled.
+    fn titled_job(tons: u32) -> StoryMission {
+        StoryMission {
+            title: "Plate for the dock".to_owned(),
+            ..job(tons)
+        }
+    }
+
     #[test]
-    fn an_accept_without_room_leaves_it_offered() {
-        let catalog = talking(&[("job", job(1_000_000))]);
-        let mut session = landed(&catalog);
-        let room = free(&session);
+    fn an_accept_without_room_raises_its_refusal_and_leaves_the_offer() {
+        let catalog = talking(&[("job", titled_job(10))]);
+        let mut session = landed_with_room(&catalog, 5);
+        converse(&mut session, Converse::Open);
+        session.out.save_due = false;
+        assert_eq!(
+            lines(&converse(&mut session, Converse::Choose(0))),
+            ["Bay two."],
+            "the accept's page"
+        );
+        assert_eq!(
+            session.out.room_refusals,
+            [RoomRefusal {
+                mission: "job".to_owned(),
+                title: "Plate for the dock".to_owned(),
+                cargo: "Plate".to_owned(),
+                tons: 10,
+                room: 5,
+            }]
+        );
+        assert_eq!(state(&session, "job"), Some(MissionState::Offered));
+        assert_eq!(free(&session), 5, "nothing loaded");
+        assert!(!session.out.save_due, "nothing changed");
+    }
+
+    #[test]
+    fn a_refusal_counts_an_overfull_hold_as_no_room() {
+        let catalog = talking(&[("job", titled_job(10))]);
+        let mut session = landed_with_room(&catalog, 0);
+        session
+            .pilot
+            .cargo
+            .entry(crate::market::Good::Commodity(1))
+            .or_insert(3);
         converse(&mut session, Converse::Open);
         converse(&mut session, Converse::Choose(0));
+        let rooms: Vec<i64> = session.out.room_refusals.iter().map(|r| r.room).collect();
+        assert_eq!(rooms, [0]);
+    }
+
+    #[test]
+    fn a_fitting_accept_raises_no_refusal() {
+        let catalog = talking(&[("job", titled_job(10))]);
+        let mut session = landed_with_room(&catalog, 10);
+        converse(&mut session, Converse::Open);
+        converse(&mut session, Converse::Choose(0));
+        assert_eq!(session.out.room_refusals, []);
+        assert_eq!(
+            state(&session, "job"),
+            Some(MissionState::Active {
+                cargo: 10,
+                met: false
+            })
+        );
+    }
+
+    #[test]
+    fn a_refused_offer_comes_back_at_the_next_landing() {
+        let catalog = talking(&[("job", titled_job(10))]);
+        let mut session = landed_with_room(&catalog, 5);
+        converse(&mut session, Converse::Open);
+        converse(&mut session, Converse::Choose(0));
+        converse(&mut session, Converse::Close);
+        visit_again(&mut session, &catalog);
+        assert_eq!(lines(&converse(&mut session, Converse::Open)), ["A job?"]);
         assert_eq!(state(&session, "job"), Some(MissionState::Offered));
-        assert_eq!(free(&session), room);
     }
 
     /// An event on day 3 that closes `a/b`, releasing `word`, and a toll

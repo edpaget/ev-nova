@@ -101,6 +101,7 @@ mod faked_open;
 mod faked_player;
 mod faked_screen;
 mod faked_shops;
+mod faked_story;
 mod faked_travel;
 mod faked_wording;
 mod faked_world;
