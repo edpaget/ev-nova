@@ -20,6 +20,7 @@ mod stock_fonts;
 mod stock_interface_images;
 mod stock_quickdraw_stretch;
 mod stock_render;
+mod stock_stock_art;
 mod stock_super_xbr;
 mod stock_super_xbr_cost;
 mod text_hinting;

@@ -19,6 +19,7 @@ mod stock_expr;
 mod stock_fonts;
 mod stock_graphics;
 mod stock_interface;
+mod stock_look;
 mod stock_sound;
 mod stock_store;
 mod store;
