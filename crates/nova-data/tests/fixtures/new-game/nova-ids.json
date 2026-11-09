@@ -1,0 +1,39 @@
+{
+  "factions": {
+    "guild": 128,
+    "warden": 129
+  },
+  "gates": {
+    "drift/back-door": 131,
+    "drift/hearth-road": 132,
+    "drift/verge-road": 133,
+    "hearth/drift-road": 134,
+    "hearth/side-road": 135,
+    "hearth/verge-road": 136,
+    "verge/drift-road": 137,
+    "verge/hearth-road": 138,
+    "verge/side-road": 139
+  },
+  "kits": {},
+  "outfits": {
+    "dock-pass": 128
+  },
+  "ships": {
+    "cutter": 128,
+    "hauler": 129
+  },
+  "starts": {
+    "dock-hand": 128
+  },
+  "stellars": {
+    "hearth-dock": 128,
+    "hearth-moon": 129,
+    "verge-camp": 130
+  },
+  "systems": {
+    "drift": 128,
+    "hearth": 129,
+    "verge": 130
+  },
+  "weapons": {}
+}

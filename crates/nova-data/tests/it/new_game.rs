@@ -72,6 +72,9 @@ fn the_fixture_folder_is_the_crates_own() {
     );
 }
 
+// This and `the_sample_folder_loads_without_problems` also show each
+// folder's `nova-ids.json` pins every record it maps: a table that left
+// one out would be a problem.
 #[test]
 fn the_fixture_folder_loads_without_problems_or_pointers() {
     let game = new_game::open(&fixture()).expect("lists");
@@ -429,6 +432,23 @@ fn the_sample_folder_is_the_crates_own() {
             .join("fixtures")
             .join("sample")
     );
+}
+
+#[test]
+fn each_fixture_holds_a_table_pinning_exactly_what_it_maps() {
+    for folder in [fixture(), new_game::fixture::sample_folder()] {
+        let bytes = fs::read(folder.join(new_game::pins::FILE)).expect("the folder's ID table");
+        let table = new_game::pins::parse(&bytes).expect("parses");
+        assert_eq!(table.problems, Vec::<String>::new(), "{}", folder.display());
+        let game = new_game::open(&folder).expect("lists");
+        assert_eq!(table.pins, game.ids, "{}", folder.display());
+        assert_eq!(
+            new_game::pins::text(&table.pins).into_bytes(),
+            bytes,
+            "{}: as the pin command writes it",
+            folder.display()
+        );
+    }
 }
 
 #[test]

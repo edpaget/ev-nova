@@ -35,6 +35,11 @@
 //! changes the completion's; the greeting reads `hauling_plate`. The
 //! `.ink`'s header, and [`dialogs`](super::dialogs)' docs, give the
 //! `inklecate` command that compiles it again.
+//!
+//! Each folder holds its ID table, `nova-ids.json`
+//! ([`pins`](super::pins)), pinning every record it maps at the ID it had
+//! before tables existed. After adding a record to either folder, run
+//! `nova-dump --pin-ids` over it and commit the table with the record.
 
 use std::path::PathBuf;
 
@@ -92,6 +97,8 @@ pub fn folder() -> PathBuf {
 /// the `inklecate` command that compiles it again. The crossroads offer
 /// reads the world flag `met_organizer` and the read count of
 /// `supply_run_done`'s labelled `monists` choice.
+///
+/// Its `nova-ids.json` pins every record it maps, as the module docs say.
 #[must_use]
 pub fn sample_folder() -> PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
