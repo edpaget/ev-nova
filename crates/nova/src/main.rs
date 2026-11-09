@@ -46,7 +46,9 @@
 //! Dialogs come from the interface file beside `Nova Files`
 //! (`Nova-DF.rsrc`, or the Windows `Nova.rez`). Without one, the game runs
 //! with a warning, and I and P do nothing; the new game, without one, uses
-//! its placeholder dialogs instead, with no warning ([`nova::interface`]).
+//! its placeholder dialogs instead, with no warning when neither file is
+//! there, and a warning naming the file and why when one is there but
+//! doesn't load ([`nova::interface`]).
 //!
 //! A `dësc`'s QuickTime movie plays, unless the QuickTime Movies
 //! preference is off, from the file its name names: looked for by bare
@@ -121,7 +123,8 @@
 //! pointers (with the `git lfs` commands that fetch them) and a folder
 //! with no systems; the game starts with what loaded (and the missing
 //! music warns as it does anywhere; a missing interface file doesn't, as
-//! the placeholder dialogs stand in for it). A folder that
+//! the placeholder dialogs stand in for it, but one there that doesn't
+//! load does). A folder that
 //! can't be listed ends the launch with exit status 2. Its pilots are
 //! saved in `New Game Pilots`, beside `Pilots`, so a stock pilot never
 //! opens over the new game's data. An empty `GAME_DATA` is unset.

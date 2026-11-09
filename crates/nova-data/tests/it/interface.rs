@@ -46,6 +46,12 @@ fn the_interface_file_is_found_beside_the_data_directory() {
     fs::create_dir(&data_dir).expect("creates");
     let err = open_interface(&data_dir).expect_err("nothing beside it yet");
     assert!(matches!(err.tried[1].1, LoadError::Io { .. }), "{err:?}");
+    assert_eq!(err.unloadable().count(), 0, "neither is there");
+
+    fs::write(dir.path().join("Nova.rez"), b"garbage").expect("writes");
+    let err = open_interface(&data_dir).expect_err("not a resource file");
+    let unloadable: Vec<String> = err.unloadable().map(ToString::to_string).collect();
+    assert_eq!(unloadable, [err.tried[1].1.to_string()], "the one there");
 
     fs::write(dir.path().join("Nova-DF.rsrc"), fork()).expect("writes");
     let ui = open_interface(&data_dir).expect("opens");

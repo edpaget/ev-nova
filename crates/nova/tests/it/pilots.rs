@@ -40,8 +40,8 @@ use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
-use nova_data::store::fixture::{one_file, one_file_at};
-use nova_data::{GameData, InterfaceData, Record, SoundId};
+use nova_data::store::fixture::{FakeTree, one_file, one_file_at};
+use nova_data::{GameData, InterfaceData, NoInterfaceFile, Record, SoundId};
 use nova_render::recording::RecordingGpu;
 use nova_render::wgpu::GlyphonMetrics;
 use nova_render::{Batch, FontFaces, Frame, ImageError};
@@ -532,15 +532,14 @@ impl Harness {
 
     /// [`Harness::wired`] over a new game with no interface file: its
     /// dialogs are what `nova::interface::wire` gives the new game when
-    /// the file doesn't open, as `main` builds the app, and wiring them
+    /// neither file is there, as `main` builds the app, and wiring them
     /// warns of nothing.
     pub(crate) fn wired_without_interface(
         data: Rc<GameData>,
         store: &MemoryPilots,
         wire: impl FnOnce(AppScreen) -> AppScreen,
     ) -> Self {
-        let no_file: Result<InterfaceData, _> = Err("no interface file");
-        let interface = nova::interface::wire(nova::ruleset::Ruleset::NewGame, no_file);
+        let interface = nova::interface::wire(nova::ruleset::Ruleset::NewGame, no_interface_file());
         assert_eq!(interface.warnings, Vec::<String>::new());
         assert!(interface.file.is_none(), "no file for the renderer");
         let mut harness = Self::assembled_with(
@@ -802,6 +801,11 @@ impl Harness {
             game.ship_session().dock_cleared()
         });
     }
+}
+
+/// Opening the interface file where neither file is there.
+pub(crate) fn no_interface_file() -> Result<InterfaceData, NoInterfaceFile> {
+    nova_data::load_interface(&FakeTree::new(), Path::new("Nova Files"))
 }
 
 pub(crate) fn texts(frame: &Frame) -> Vec<String> {

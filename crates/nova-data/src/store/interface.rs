@@ -51,6 +51,23 @@ pub struct NoInterfaceFile {
     pub tried: Box<[(PathBuf, LoadError); 2]>,
 }
 
+impl NoInterfaceFile {
+    /// Why each file tried that is there didn't load, in the order tried:
+    /// every failure but a missing file, each naming its path. Empty when
+    /// neither file is there.
+    pub fn unloadable(&self) -> impl Iterator<Item = &LoadError> {
+        self.tried
+            .iter()
+            .map(|(_, error)| error)
+            .filter(|error| !is_missing(error))
+    }
+}
+
+/// Whether `error` is the file not being there at all.
+fn is_missing(error: &LoadError) -> bool {
+    matches!(error, LoadError::Io { source, .. } if source.kind() == std::io::ErrorKind::NotFound)
+}
+
 /// Opens the interface file for the `Nova Files` directory `data_dir`
 /// through `forks`: the first of [`interface_path_candidates`] that loads.
 pub fn load_interface(
@@ -428,6 +445,30 @@ mod tests {
             message.contains(nova_rsrc::fixture::forks::UNREADABLE),
             "{message}"
         );
+    }
+
+    /// Why `forks` gives no interface file.
+    fn no_file(forks: &MemForks) -> NoInterfaceFile {
+        load_interface(forks, Path::new("/game/Nova Files")).expect_err("no file")
+    }
+
+    #[test]
+    fn with_neither_file_there_none_is_unloadable() {
+        let none = no_file(&MemForks::new());
+        assert_eq!(none.unloadable().count(), 0);
+    }
+
+    #[test]
+    fn a_file_there_that_doesnt_load_is_unloadable_with_why() {
+        let none = no_file(&MemForks::new().file(MAC, b"garbage".to_vec()));
+        let unloadable: Vec<String> = none.unloadable().map(ToString::to_string).collect();
+        assert_eq!(unloadable, [none.tried[0].1.to_string()]);
+        assert!(unloadable[0].contains(&none.tried[0].0.display().to_string()));
+
+        let none = no_file(&MemForks::new().unreadable(MAC).unreadable(WINDOWS));
+        let unloadable: Vec<String> = none.unloadable().map(ToString::to_string).collect();
+        let tried: Vec<String> = none.tried.iter().map(|(_, e)| e.to_string()).collect();
+        assert_eq!(unloadable, tried, "both, in the order tried");
     }
 
     #[test]

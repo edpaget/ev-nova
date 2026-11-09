@@ -1,8 +1,8 @@
 //! The new game's spaceport and screens over the checked-in fixture
 //! (`nova_data::new_game::fixture::folder`), with no interface file: the
 //! app built as `main` builds it, its dialogs what `nova::interface::wire`
-//! gives the new game when the file doesn't open (the placeholder
-//! dialogs), with the new game's rulebook and the Ink dialog loader.
+//! gives the new game when neither interface file is there (the
+//! placeholder dialogs), with the new game's rulebook and the Ink dialog loader.
 //!
 //! How each screen lays itself out over a template is pinned in
 //! nova-view, and each placeholder's own facts in nova-data; this pins
@@ -37,7 +37,7 @@ use nova::startup::{DataSource, DiskData, NewGameOpened};
 use nova_data::new_game::fixture::folder;
 use nova_data::new_game::kits::YARD_TECH_LEGAL;
 use nova_data::records::ship::Ship;
-use nova_data::{AnyRecord, Entry, GameData, InterfaceData, ShipId};
+use nova_data::{AnyRecord, Entry, GameData, ShipId};
 use nova_render::wgpu::GlyphonMetrics;
 use nova_render::{Batch, FontFaces, Frame};
 use nova_sim::fixture::MemoryPilots;
@@ -86,7 +86,7 @@ use winit::keyboard::KeyCode;
 use crate::common::EntryHarness;
 use crate::new_game_conversation::{land_at, new_pilot_flying, opened_from, resumed_in};
 use crate::new_game_travel::{fixture, nova_of};
-use crate::pilots::{Harness, saved, texts};
+use crate::pilots::{Harness, no_interface_file, saved, texts};
 
 /// The app over the fixture, with no interface file, wired as `main`
 /// wires the new game, keeping pilots in `store`, on the main menu.
@@ -513,8 +513,7 @@ fn the_main_menu_new_pilot_flight_and_the_map_with_find_warn_of_nothing() {
 
 /// The placeholders, as `main` gives the new game them.
 fn placeholders() -> Rc<dyn DialogResources> {
-    let no_file: Result<InterfaceData, _> = Err("no interface file");
-    nova::interface::wire(Ruleset::NewGame, no_file)
+    nova::interface::wire(Ruleset::NewGame, no_interface_file())
         .dialogs
         .expect("the placeholders")
 }
