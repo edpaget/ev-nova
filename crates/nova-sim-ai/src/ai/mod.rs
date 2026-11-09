@@ -838,6 +838,23 @@ pub static NO_DESTROYABLE: BTreeSet<StellarId> = BTreeSet::new();
 /// pursues, as every lead then takes the table bearing.
 pub static NO_WEAPONS: Arsenal = Arsenal::EMPTY;
 
+/// The player as it sees ships, as `_ShipVisibleToShip(ship, player)`
+/// reads it: from where `player` is (the centre with no player), with its
+/// cloak `scanner` on screen. The player escorts no NPC, so it is never a
+/// cloaked escort. [`Surroundings::seen_by_player`] (the friend-strength
+/// and threat reads) and
+/// [`World::gate_view`](crate::traffic::World::gate_view) (the
+/// attack-quote gate) both build it here, so the two can't disagree about
+/// what the player sees.
+#[must_use]
+pub fn player_observer(player: Option<&PlayerSide>, scanner: bool) -> crate::cloak::Observer {
+    crate::cloak::Observer {
+        at: player.map_or(crate::geometry::Vec2::ZERO, |player| player.state.position),
+        scanner,
+        cloaked_escort: false,
+    }
+}
+
 impl<'a> Surroundings<'a> {
     /// `npcs` among `sites`, every one listed, with no player, no governments, no record, no
     /// damage aimed, no asteroid in slot 0, no cargo boxes, the original's
@@ -884,18 +901,12 @@ impl<'a> Surroundings<'a> {
     }
 
     /// Whether the player sees `npc` (`_ShipVisibleToShip(npc, player)`):
-    /// [`cloak::visible`](crate::cloak::visible) from where the player is
-    /// (the centre with no player), with its
+    /// [`cloak::visible`](crate::cloak::visible) through the
+    /// [`player_observer`] with its
     /// [`cloak_scanner`](Surroundings::cloak_scanner).
     #[must_use]
     pub fn seen_by_player(&self, npc: &Npc) -> bool {
-        let observer = crate::cloak::Observer {
-            at: self
-                .player
-                .map_or(crate::geometry::Vec2::ZERO, |player| player.state.position),
-            scanner: self.cloak_scanner,
-            cloaked_escort: false,
-        };
+        let observer = player_observer(self.player.as_ref(), self.cloak_scanner);
         crate::cloak::visible(npc.cloak, npc.state.position, npc.emerging(), observer)
     }
 
@@ -1535,6 +1546,29 @@ mod tests {
     use crate::traffic::npc::{AiType, Mode};
     use nova_sim_base::fixture::{Draws, FAST};
     use nova_sim_catalog::fixture::planet;
+
+    #[test]
+    fn the_player_observer_stands_where_the_player_is_or_the_centre_and_is_never_a_cloaked_escort()
+    {
+        use crate::cloak::Observer;
+        use crate::geometry::Vec2;
+        assert_eq!(
+            player_observer(None, true),
+            Observer {
+                at: Vec2::ZERO,
+                scanner: true,
+                cloaked_escort: false,
+            }
+        );
+        assert_eq!(
+            player_observer(Some(&fixture::player(30.0, -40.0)), false),
+            Observer {
+                at: Vec2::new(30.0, -40.0),
+                scanner: false,
+                cloaked_escort: false,
+            }
+        );
+    }
 
     fn npc(id: u32, ai_type: AiType) -> Npc {
         Npc {
