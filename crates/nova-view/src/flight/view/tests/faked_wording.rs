@@ -875,8 +875,13 @@ fn scanned_then(view: &mut Faked, answer: Answer) {
     view.land();
 }
 
-/// Today the denial's words replace the find on the line, as any
-/// refusal replaces the press's request line.
+/// The find's words: the Gun mount, fined 500 credits.
+fn the_find() -> String {
+    dock_scanned_message("Gun mount", 500)
+}
+
+/// The scan's find keeps the line after the denial in the same press,
+/// for its own ticks; the denial's words are dropped for that press.
 #[test]
 fn a_dock_scan_s_find_is_read_when_traffic_control_then_denies() {
     let mut view = scanning();
@@ -892,13 +897,18 @@ fn a_dock_scan_s_find_is_read_when_traffic_control_then_denies() {
             requested: true,
         },
     );
-    assert_eq!(view.message(), Some(LANDING_DENIED));
+    assert_eq!(view.message(), Some(the_find().as_str()));
     super::faked_travel::faked_tick(&mut view);
-    assert_eq!(view.message(), Some(LANDING_DENIED));
+    assert_eq!(view.message(), Some(the_find().as_str()));
+    assert_eq!(
+        view.take_landing_notes(),
+        Vec::<String>::new(),
+        "not landed"
+    );
 }
 
-/// Today a landing in the press that scanned blanks the line, the find
-/// with it.
+/// A landing in the press that scanned blanks the line, as every landing
+/// does, but keeps the find's words for the router, once.
 #[test]
 fn a_dock_scan_s_find_is_kept_when_the_press_lands() {
     let mut view = scanning();
@@ -909,4 +919,24 @@ fn a_dock_scan_s_find_is_kept_when_the_press_lands() {
         )),
     );
     assert_eq!(view.message(), None);
+    assert_eq!(view.take_landing_notes(), [the_find()]);
+    assert_eq!(view.take_landing_notes(), Vec::<String>::new(), "taken");
+}
+
+/// A press that is neither denied nor landed says the find in its order,
+/// as before.
+#[test]
+fn a_dock_scan_s_find_in_a_requested_press_is_said_in_its_order() {
+    let mut view = scanning();
+    scanned_then(
+        &mut view,
+        Answer::LandPress(nova_sim::LandPress::Outcome(
+            nova_sim::landing::LandOutcome::Requested {
+                stellar: StellarId(128),
+                station: false,
+            },
+        )),
+    );
+    assert_eq!(view.message(), Some(the_find().as_str()));
+    assert_eq!(view.take_landing_notes(), Vec::<String>::new());
 }

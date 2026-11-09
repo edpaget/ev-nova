@@ -680,6 +680,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             jettison_tapped: None,
             faded_keys: super::faded_keys::FadedKeys::default(),
             pending_landing: None,
+            landing_notes: Vec::new(),
             movies: crate::movie::Movies::none(),
             movie: None,
             movie_replay: Vec::new(),
