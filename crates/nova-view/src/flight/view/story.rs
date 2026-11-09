@@ -7,7 +7,7 @@
 //!
 //! [`FlightEvent::RoomRefused`]: nova_sim::flight_frame::FlightEvent::RoomRefused
 
-use nova_sim::flight_frame::{RoomRefusal, ScreenAnswer, ScreenAsk};
+use nova_sim::flight_frame::{Names, RoomRefusal, ScreenAnswer, ScreenAsk};
 use nova_sim::storylines::news::HeardNews;
 
 use crate::flight::sim_port::FlightSim;
@@ -15,6 +15,13 @@ use crate::flight::sim_port::FlightSim;
 use super::FlightView;
 
 impl<C, S: FlightSim> FlightView<C, S> {
+    /// The names fixed for the flight's life, as its opening gave them:
+    /// what the router words the story log with.
+    #[must_use]
+    pub fn names(&self) -> &Names {
+        &self.names
+    }
+
     /// The news heard in the system the ship is in
     /// ([`ScreenAsk::HeardNews`]), by release day then id: none for a
     /// flight with nothing to answer.

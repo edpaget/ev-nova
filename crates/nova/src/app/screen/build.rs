@@ -75,6 +75,8 @@ impl AppScreen {
             about_text: ABOUT_TEXT,
             spaceport: None,
             conversation: None,
+            story_log: None,
+            news_read: false,
             sounds: Vec::new(),
             prefs: Prefs::default(),
             launch: LaunchPrefs::of(&Prefs::default()),

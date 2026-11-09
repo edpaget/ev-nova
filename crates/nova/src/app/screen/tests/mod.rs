@@ -137,6 +137,7 @@ mod rebinding;
 mod ship_movies;
 mod shop_text_movies;
 mod stellar_movies;
+mod story_log;
 mod surroundings;
 mod text_entry_covers;
 mod touch_controls;

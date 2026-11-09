@@ -144,8 +144,9 @@ impl AppScreen {
         self.spaceport = Some(spaceport);
         self.serve_descriptions();
         self.switch_to(Side::Spaceport);
-        // The stellar's conversation, asked once as the spaceport opens.
-        self.open_conversation();
+        // The landed find, then the visit's conversations, asked once as
+        // the spaceport opens, then its news (the `story_log` module).
+        self.open_landed_pages();
     }
 
     /// Puts the pilot away and shows `side`: saves it (when ending play
@@ -182,6 +183,7 @@ impl AppScreen {
         self.haggle = None;
         self.offer = None;
         self.missions = None;
+        self.story_log = None;
         self.player_info = None;
     }
 
@@ -672,6 +674,7 @@ impl AppScreen {
     fn drop_spaceport(&mut self) {
         self.leave_held = false;
         self.conversation = None;
+        self.story_log = None;
         if let Some(mut spaceport) = self.spaceport.take() {
             self.sounds.extend(spaceport.close_sounds());
         }
