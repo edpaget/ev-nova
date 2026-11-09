@@ -25,7 +25,13 @@
 //! writer of the table: loading the game reads it and never writes it.
 //! Run it whenever a record is added, and commit the table with the data.
 //! It refuses to replace a table the loader ignores (one that doesn't
-//! parse, or names an unknown kind), exiting 2, so no pin is lost.
+//! parse, or names an unknown kind), exiting 2, so no pin is lost. It
+//! also refuses, writing nothing, when the table holds entries the loader
+//! ignores (a duplicate ID, a malformed key, an ID out of range): writing
+//! would move their records to new IDs, so it names each one and why,
+//! and the author fixes the table by hand (or moves it aside) and runs
+//! again. Refusing, rather than writing with a warning, keeps the rule
+//! that no pin is ever dropped or reused.
 //!
 //! # Output
 //!
@@ -78,7 +84,8 @@
 //!   in it, an output directory that cannot be created or read or is not
 //!   empty, or a file that cannot be written; for `--pin-ids`, a folder
 //!   that cannot be listed, a table that cannot be read or written, or one
-//!   the loader ignores. The reason goes to standard error.
+//!   the loader ignores in whole or in part. The reason goes to standard
+//!   error.
 //!
 //! A data directory has no game data when not one file directly inside it
 //! is a resource-file candidate: typically the folder *containing*

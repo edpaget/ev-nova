@@ -32,10 +32,15 @@
 //! - A table that leaves out some mapped record: one problem, counting
 //!   them and naming the first, which says to run the pin command.
 //!
-//! An entry the reader ignores is dropped by the writer, which writes the
-//! load's ID for its record instead. Dropping one never frees an ID: a
-//! malformed key names no record, an ID out of range is no ID, and a
-//! duplicate's ID stays with the entry that kept it.
+//! An entry the reader ignores is dropped by the merge, which takes the
+//! load's ID for its record instead, and [`pin`] names each one in
+//! [`Pinned::dropped`]. Dropping one never frees an ID: a malformed key
+//! names no record, an ID out of range is no ID, and a duplicate's ID
+//! stays with the entry that kept it. But a record whose entry is dropped
+//! moves, so a pilot saved at its old ID would find something else there:
+//! `nova-dump --pin-ids` refuses to write such a merge, and the author
+//! fixes the table by hand, keeping the rule that no pin is ever dropped
+//! or reused.
 
 #[cfg(test)]
 mod tests;
@@ -92,6 +97,11 @@ pub struct Pinned {
     pub text: String,
     /// How many of the load's records the previous table didn't pin.
     pub added: usize,
+    /// One message per entry of the previous table the reader ignored,
+    /// which the merged table drops, giving its record the load's ID: the
+    /// [`Table::problems`] of the previous table. `nova-dump --pin-ids`
+    /// refuses to write while any is here.
+    pub dropped: Vec<String>,
 }
 
 /// Parses the table `bytes`.
@@ -241,7 +251,10 @@ pub fn text(table: &IdTable) -> String {
 /// [`TableError`] when `previous` is a table the loader ignores: writing
 /// over it would lose its pins.
 pub fn pin(previous: Option<&[u8]>, loaded: &IdTable) -> Result<Pinned, TableError> {
-    let previous = previous.map(parse).transpose()?.unwrap_or_default().pins;
+    let Table {
+        pins: previous,
+        problems: dropped,
+    } = previous.map(parse).transpose()?.unwrap_or_default();
     let mut table = previous.clone();
     overlay(&mut table.factions, &loaded.factions);
     overlay(&mut table.systems, &loaded.systems);
@@ -261,6 +274,7 @@ pub fn pin(previous: Option<&[u8]>, loaded: &IdTable) -> Result<Pinned, TableErr
         text: text(&table),
         table,
         added,
+        dropped,
     })
 }
 

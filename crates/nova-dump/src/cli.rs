@@ -17,7 +17,9 @@ every snd as WAV under OUT_DIR, which must be missing or empty.
 
 With --pin-ids, writes the new game's ID table, nova-ids.json, in the
 GAME_DATA folder instead: every record keeps the ID it has, and each one
-added since gets one. Run it whenever a record is added.
+added since gets one. Run it whenever a record is added. It writes
+nothing if the table holds entries the loader ignores (a duplicate ID, a
+bad key, an ID out of range), naming each: fix them by hand and run again.
 
   --plugins <DIR>  also load the plug-ins under DIR
   --pin-ids <GAME_DATA>

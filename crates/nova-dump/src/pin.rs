@@ -9,8 +9,15 @@
 //!
 //! Exit codes: 0 when the table was written or was already up to date; 2
 //! when the folder can't be listed, the table can't be read or written,
-//! or the table is one the loader ignores (it doesn't parse, or names an
-//! unknown kind), which it refuses to write over, so no pin is lost.
+//! the table is one the loader ignores (it doesn't parse, or names an
+//! unknown kind), or it holds entries the loader ignores (a duplicate ID,
+//! a malformed key, an ID out of range). It refuses to write over either
+//! kind of table, writing nothing: the first would lose every pin, and the
+//! second would move each ignored entry's record to a new ID, so a pilot
+//! saved at the old one would find something else. Refusing, rather than
+//! writing with a warning, keeps the table's rule that no pin is ever
+//! dropped or reused. It names each ignored entry and why; the author
+//! fixes the table by hand (or moves it aside) and runs again.
 
 use std::fmt::Display;
 use std::io::Write;
@@ -52,6 +59,9 @@ pub fn run(
             );
         }
     };
+    if !pinned.dropped.is_empty() {
+        return refuse_to_drop(stderr, &path, &pinned.dropped);
+    }
     if previous.as_deref() == Some(pinned.text.as_bytes()) {
         return report(stdout, stderr, format_args!("{path} is up to date"));
     }
@@ -67,6 +77,31 @@ pub fn run(
         stdout,
         stderr,
         format_args!("pinned {} new {records} in {path}", pinned.added),
+    )
+}
+
+/// Refuses to write a merge that drops the previous table's `dropped`
+/// entries, naming each on `stderr`: their records would move, and a pilot
+/// saved at an old ID would find something else there. Returns the fatal
+/// exit code.
+fn refuse_to_drop(stderr: &mut impl Write, path: &impl Display, dropped: &[String]) -> u8 {
+    let (entries, records) = if dropped.len() == 1 {
+        ("entry", "its record")
+    } else {
+        ("entries", "their records")
+    };
+    let _ = writeln!(
+        stderr,
+        "nova-dump: refusing to replace {path}: writing it would drop {} {entries} the loader \
+         ignores, moving {records} to a new ID:",
+        dropped.len()
+    );
+    for line in dropped {
+        let _ = writeln!(stderr, "nova-dump:   {line}");
+    }
+    fatal(
+        stderr,
+        "fix the table by hand, or move it aside, then run again",
     )
 }
 
@@ -198,6 +233,59 @@ mod tests {
             assert!(folder.writes().is_empty());
             assert_eq!(folder.held(&dir()), Some(bytes.to_vec()), "untouched");
         }
+    }
+
+    #[test]
+    fn a_table_with_entries_the_loader_ignores_is_never_written_over() {
+        // `beta` duplicates `alpha`'s ID, so the load numbered it afresh.
+        let bytes = br#"{"systems": {"alpha": 128, "beta": 128}}"#;
+        let loaded = table(r#"{"systems": {"alpha": 128, "beta": 129}}"#);
+        let folder = FakeFolder::default()
+            .with(&dir(), loaded)
+            .table_of(&dir(), bytes);
+        let ran = pin_with(&folder);
+        assert_eq!(ran.code, 2);
+        assert_eq!(ran.stdout, "");
+        assert_eq!(
+            ran.stderr,
+            format!(
+                "nova-dump: refusing to replace {}: writing it would drop 1 entry the loader \
+                 ignores, moving its record to a new ID:\n\
+                 nova-dump:   its systems entry `beta` is 128, which `systems/alpha` holds; \
+                 it is ignored\n\
+                 nova-dump: fix the table by hand, or move it aside, then run again\n",
+                table_path()
+            )
+        );
+        assert!(folder.writes().is_empty());
+        assert_eq!(folder.held(&dir()), Some(bytes.to_vec()), "untouched");
+    }
+
+    #[test]
+    fn every_dropped_entry_is_named() {
+        let bytes = br#"{"systems": {"alpha": 128, "beta": 128, "gamma": 5000}}"#;
+        let folder = FakeFolder::default()
+            .with(&dir(), ids())
+            .table_of(&dir(), bytes);
+        let ran = pin_with(&folder);
+        assert_eq!(ran.code, 2);
+        assert!(
+            ran.stderr
+                .contains("would drop 2 entries the loader ignores, moving their records"),
+            "{}",
+            ran.stderr
+        );
+        for line in [
+            "its systems entry `beta` is 128, which `systems/alpha` holds; it is ignored",
+            "its systems entry `gamma` is 5000, outside 128 to 2175; it is ignored",
+        ] {
+            assert!(
+                ran.stderr.contains(&format!("nova-dump:   {line}\n")),
+                "{line}: {}",
+                ran.stderr
+            );
+        }
+        assert!(folder.writes().is_empty());
     }
 
     #[test]

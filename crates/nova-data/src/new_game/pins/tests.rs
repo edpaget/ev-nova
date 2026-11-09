@@ -524,6 +524,44 @@ fn an_entry_the_load_rejected_takes_the_load_s_id() {
 }
 
 #[test]
+fn pinning_names_each_entry_it_drops_and_why() {
+    let previous = br#"{"systems": {"alpha": 128, "beta": 128, "gamma": 5000},
+        "stellars": {"Bad Key": 150}}"#;
+    let pinned = pin(Some(previous), &todays()).expect("pins");
+    assert_eq!(pinned.dropped.len(), 3, "{:?}", pinned.dropped);
+    for line in [
+        "its systems entry `beta` is 128, which `systems/alpha` holds; it is ignored",
+        "its systems entry `gamma` is 5000, outside 128 to 2175; it is ignored",
+    ] {
+        assert!(
+            pinned.dropped.contains(&line.to_owned()),
+            "{line}: {:?}",
+            pinned.dropped
+        );
+    }
+    assert!(
+        pinned
+            .dropped
+            .iter()
+            .any(|line| line.starts_with("its stellars entry ") && line.contains("Bad Key")),
+        "{:?}",
+        pinned.dropped
+    );
+}
+
+#[test]
+fn pinning_a_clean_table_drops_nothing() {
+    let loaded = todays();
+    assert_eq!(
+        pin(None, &loaded).expect("pins").dropped,
+        Vec::<String>::new()
+    );
+    let previous = text(&loaded);
+    let pinned = pin(Some(previous.as_bytes()), &loaded).expect("pins");
+    assert_eq!(pinned.dropped, Vec::<String>::new());
+}
+
+#[test]
 fn pinning_refuses_a_table_the_loader_ignores() {
     let loaded = todays();
     assert!(matches!(
