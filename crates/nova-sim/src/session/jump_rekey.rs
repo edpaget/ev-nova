@@ -1,5 +1,5 @@
 //! J pressed again once the jump has begun (`Jump::Hyperspace`): the jump
-//! is committed, so [`Session::begin_jump`] gives the system bound for and
+//! is committed, so [`Session::begin_jump`](super::Session::begin_jump) gives the system bound for and
 //! changes nothing, as it does during the pre-jump stage.
 
 #[cfg(test)]
