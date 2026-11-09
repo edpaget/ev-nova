@@ -139,11 +139,7 @@ pub fn map_walks(
             .collect(),
         MapReach::GovtClass(class) => map
             .systems()
-            .filter(|&id| {
-                map.govt(id)
-                    .and_then(|govt| govts.get(govt))
-                    .is_some_and(|record| record.classes.contains(&class))
-            })
+            .filter(|&id| govts.has_class(map.govt(id), class))
             .map(|id| (id, 0))
             .collect(),
         MapReach::Nothing => Vec::new(),
