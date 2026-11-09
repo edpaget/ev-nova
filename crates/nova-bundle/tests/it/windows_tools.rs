@@ -3,7 +3,7 @@
 //! digest as the check reads it, and `tar` (Windows' own bsdtar, which
 //! reads zip) unpacking the named members of a zip shaped as WinSparkle's
 //! release, stripped, and the x64 directories of zips shaped as the two
-//! signing tools' NuGet packages (a `.nupkg` is a zip, with no directory
+//! signing tools' `NuGet` packages (a `.nupkg` is a zip, with no directory
 //! entries). Each works in a temporary directory it owns.
 
 use std::fs;
@@ -131,7 +131,7 @@ fn names(dir: &Path) -> Vec<String> {
 }
 
 /// Writes each `(member, bytes)` under `tree` and zips them to `nupkg`,
-/// listing the files alone, as a `.nupkg` holds them: NuGet writes no
+/// listing the files alone, as a `.nupkg` holds them: `NuGet` writes no
 /// directory entries, so the fixture has none either, and its listing is
 /// checked for one before the unpack runs.
 fn zip(tree: &Path, nupkg: &Path, members: &[(&str, &[u8])]) {
