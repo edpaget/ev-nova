@@ -73,3 +73,15 @@ impl<C: ShipSprites, S: FlightSim> FlightView<C, S> {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn looks_say_in_debug_whether_any_were_given() {
+        assert_eq!(format!("{:?}", ShipLooks::default()), "ShipLooks(false)");
+        let given = ShipLooks(Some(Rc::new(crate::flight::fake_catalog::catalog())));
+        assert_eq!(format!("{given:?}"), "ShipLooks(true)");
+    }
+}

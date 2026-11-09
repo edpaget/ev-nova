@@ -258,6 +258,75 @@ mod tests {
     }
 
     #[test]
+    fn every_layer_of_a_borrowed_sheet_is_scaled_and_overlays_no_runs() {
+        use nova_data::Record;
+        use nova_data::graphics::RLED;
+        use nova_data::graphics::fixture::RledBuilder;
+        use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
+        use nova_data::records::ship::Ship;
+        use nova_data::records::ship_anim::ShipAnim;
+        // Stock ship 303: a 4 x 4 base and five 4 x 4 layers, every sheet
+        // two frames, each a pixel then a solid run on every line.
+        let runs = || {
+            let frame = |f: nova_data::graphics::fixture::RledFrame| {
+                (0..4).fold(f, |f, _| f.line().pixels(&[0x7C00]).run(3, 0x7FFF, 0x7FFF))
+            };
+            RledBuilder::new(4, 4).frame(frame).frame(frame).build()
+        };
+        let anim = ShipAnimBuilder::new()
+            .base_image_id(1400)
+            .base_set_count(1)
+            .frames_per(2)
+            .glow_image_id(1401)
+            .light_image_id(1402)
+            .weap_image_id(1403)
+            .alt_image_id(1404)
+            .alt_set_count(1)
+            .shield_image_id(1405)
+            .build();
+        let mut resources = vec![
+            (Ship::TYPE, 303, ShipBuilder::new().build()),
+            (ShipAnim::TYPE, 303, anim),
+        ];
+        resources.extend((1400..=1405).map(|id| (RLED, id, runs())));
+        let stock = nova_data::store::fixture::store_of(&resources);
+        let own = stock.ship_sheet(ShipId(303)).expect("a sheet");
+        let own_layers = [own.glow, own.lights, own.weapon, own.alt, own.shield];
+        assert!(
+            own_layers
+                .iter()
+                .all(|layer| layer.is_some_and(|l| l.solid))
+        );
+        let scale = Scale::of(3, 2);
+        let looks = StockShipLooks::new(
+            Rc::new(StockArt::new(stock)),
+            BTreeMap::from([(
+                ShipId(128),
+                Borrow {
+                    stock: ShipId(303),
+                    scale,
+                },
+            )]),
+        );
+        let found = looks.ship_sheet(ShipId(128)).expect("a borrowed sheet");
+        let side = scale.apply(4);
+        let layers = [
+            found.glow,
+            found.lights,
+            found.weapon,
+            found.alt,
+            found.shield,
+        ];
+        for (n, layer) in layers.into_iter().enumerate() {
+            let layer = layer.expect("each layer");
+            assert_eq!(layer.size(), (side, side), "layer {n}");
+            assert_eq!(layer.image_size, (side, side), "layer {n}");
+            assert!(!layer.solid, "layer {n}");
+        }
+        assert!(!found.solid);
+    }
+
+    #[test]
     fn a_hull_that_borrows_nothing_or_whose_stock_ship_is_missing_has_no_sheet() {
         let looks = looks();
         assert!(looks.ship_sheet(ShipId(131)).is_err(), "no borrow");

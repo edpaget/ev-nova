@@ -24,6 +24,13 @@ fn a_scale_is_the_hull_s_longer_side_over_the_art_s() {
         (2, 1),
         "in lowest terms"
     );
+    assert_eq!(
+        (
+            Scale::of(30, 40).numerator(),
+            Scale::of(30, 40).denominator()
+        ),
+        (3, 4)
+    );
 }
 
 #[test]

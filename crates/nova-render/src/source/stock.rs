@@ -148,6 +148,46 @@ mod tests {
     }
 
     #[test]
+    fn a_borrowed_rled_decodes_under_the_images_readings() {
+        use nova_data::graphics::fixture::RledBuilder;
+        use nova_data::graphics::{RLED, ThirtyTwoBitReading};
+        // Stock ship 320's base: a 32-bit rlëD, whose colours the reading
+        // decides.
+        let thirty_two = RledBuilder::new(2, 1)
+            .depth(32)
+            .count_lines()
+            .frame(|f| f.line().pixels32(&[0x0000_7C00, 0x0000_03E0]))
+            .build();
+        let anim = ShipAnimBuilder::new()
+            .frames_per(1)
+            .base_set_count(1)
+            .base_image_id(1500)
+            .build();
+        let resources = [
+            (Ship::TYPE, 320, ShipBuilder::new().build()),
+            (ShipAnim::TYPE, 320, anim),
+            (RLED, 1500, thirty_two),
+        ];
+        let stock = store_of(&resources);
+        let reading = |data| {
+            GameImages::new(data, EightBitReading::AsDrawn)
+                .with_thirty_two_bit(ThirtyTwoBitReading::TrueColour)
+        };
+        let own = reading(&stock).frames(ImageKind::Rled, 1500).unwrap();
+        let game = GameData::default();
+        let borrowed = reading(&game)
+            .with_stock_art(Rc::new(StockArt::new(store_of(&resources))))
+            .frames(stock_kind_one(), 320)
+            .unwrap();
+        assert_eq!(borrowed, own);
+        let as_drawn = GameImages::new(&game, EightBitReading::AsDrawn)
+            .with_stock_art(Rc::new(StockArt::new(store_of(&resources))))
+            .frames(stock_kind_one(), 320)
+            .unwrap();
+        assert_ne!(borrowed, as_drawn, "the reading shows");
+    }
+
+    #[test]
     fn a_borrowed_pict_pair_base_decodes_cut_and_scaled() {
         // Stock ship 310: two 2 x 1 frames cut from PICT 2000, masked by
         // 2100.

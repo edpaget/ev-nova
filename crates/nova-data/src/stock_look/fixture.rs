@@ -6,7 +6,8 @@
 //! [`ROTATIONS`] rotations naming base `rlëD` [`base_rled`]`(ship)` and
 //! glow `rlëD` [`glow_rled`]`(ship)`, a base sheet of `side` x `side`
 //! frames, and a glow sheet of frames two pixels wider and taller, as a
-//! stock glow sits about its hull.
+//! stock glow sits about its hull (an `rlëD`'s own frame size is what is
+//! read, so the `shän` names no glow size).
 
 use nova_rsrc::ResType;
 
@@ -62,8 +63,6 @@ pub fn ship_resources(ship: i16, side: u16) -> Vec<(ResType, i16, Vec<u8>)> {
         .base_y_size(px)
         .frames_per(i16::try_from(ROTATIONS).expect("a few"))
         .glow_image_id(glow_rled(ship))
-        .glow_x_size(px + 2)
-        .glow_y_size(px + 2)
         .build();
     vec![
         (Ship::TYPE, ship, ShipBuilder::new().build()),
@@ -87,4 +86,28 @@ pub fn stock_store(ships: &[(i16, u16)]) -> GameData {
 #[must_use]
 pub fn stock_art(ships: &[(i16, u16)]) -> StockArt {
     StockArt::new(stock_store(ships))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::wire::id::ShipId;
+
+    #[test]
+    fn each_ship_s_sheets_are_its_own_rleds_with_the_glow_two_pixels_wider() {
+        assert_eq!((base_rled(300), glow_rled(300)), (1300, 2300));
+        let art = stock_art(&[(300, 40), (301, 32)]);
+        for (ship, side) in [(300, 40), (301, 32)] {
+            let base = art.ship_sprite_info(ShipId(ship)).expect("a sheet");
+            assert_eq!(base.image_id, base_rled(ship));
+            assert_eq!(
+                (base.sheet.info.frame_width, base.sheet.info.frame_height),
+                (side, side)
+            );
+            let layers = art.ship_layer_infos(ShipId(ship)).expect("layers");
+            let glow = layers.glow.expect("a glow").expect("reads");
+            assert_eq!(glow.image_id, glow_rled(ship));
+            assert_eq!(glow.sheet.info.frame_width, side + 2);
+        }
+    }
 }

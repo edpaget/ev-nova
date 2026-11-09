@@ -230,6 +230,11 @@ exclude_re = [
     # display: `main`'s wiring (excluded below). What it gives back, the
     # open failure, is the runner's `failure_slot`, tested in `runner.rs`.
     "nova/src/main.rs:.*replace run -> ",
+    # `stock_look_wired` (nova's `main.rs`) only forwards `stock_look::wire`
+    # and reports its warnings: `main`'s wiring (excluded below). What it
+    # wires is `wire`'s, tested in `stock_look.rs`, and the screen and
+    # images it feeds are flown in `tests/it/new_game_looks.rs`.
+    "nova/src/main.rs:.*replace stock_look_wired -> ",
     # nova-movie's FFmpeg set-up: FFmpeg 9 registers nothing at `init`,
     # and the log level only silences FFmpeg's own messages on stderr,
     # which no test reads.
