@@ -113,6 +113,7 @@ mod entry;
 mod escort_defection;
 mod flight;
 mod flight_cursor_dialogs;
+mod flight_metrics;
 mod game;
 mod held_press_chords;
 mod info_dialog_gain;
