@@ -10,8 +10,9 @@
 //! each defaulting to the original's reading.
 //!
 //! The stock game pins nothing. The new game pins the other reading of
-//! thirteen keys: twelve as a jump point's gate is the only way in or out
-//! of a system, and one as its story lives in port:
+//! fourteen keys: twelve as a jump point's gate is the only way in or out
+//! of a system, one as its story lives in port, and one as its exchange
+//! lists every good a port prices:
 //!
 //! - the three its traffic needs: [`RuleKey::DestinationReach`] (its
 //!   jump points sit past the original's 999 bound),
@@ -49,7 +50,12 @@
 //!   any of which the player opens from it, and its News lists the news
 //!   heard in the system with each item's source and age, as the new game
 //!   has no bar `mïsn` and no news `STR#` lists; the scenes still open by
-//!   themselves at landing).
+//!   themselves at landing);
+//! - its exchange's one: [`RuleKey::JunkListing`] (each side of the
+//!   exchange lists every special good the port prices, where the
+//!   original lists only the highest-ID one, so two of the new game's
+//!   goods past the six standard slots, priced at one level at one port,
+//!   both trade there; `nova_data::new_game`'s `goods` maps them).
 //!
 //! It leaves [`RuleKey::MapPlotting`] at the original's Shift-click, a
 //! hop at a time, so a course is plotted a lane at a time and J flies it.
@@ -90,8 +96,8 @@ const STOCK: Profile = Profile {
 };
 
 /// The new game's profile: its traffic's three gate readings, its map
-/// and courses' four, J's two, its mission ships' three and its port's
-/// one (see the module docs), and pilots of its own.
+/// and courses' four, J's two, its mission ships' three, its port's one
+/// and its exchange's one (see the module docs), and pilots of its own.
 const NEW_GAME: Profile = Profile {
     readings: &[
         (RuleKey::DestinationReach, RuleSource::Bible),
@@ -107,6 +113,7 @@ const NEW_GAME: Profile = Profile {
         (RuleKey::AuxShipLinks, RuleSource::Bible),
         (RuleKey::GateExitCounts, RuleSource::Bible),
         (RuleKey::BarStory, RuleSource::Bible),
+        (RuleKey::JunkListing, RuleSource::Bible),
     ],
     pilots: "New Game Pilots",
 };
@@ -173,7 +180,7 @@ mod tests {
     }
 
     #[test]
-    fn the_new_game_pins_the_other_reading_of_its_thirteen_gate_lane_map_autopilot_mission_ship_and_bar_keys()
+    fn the_new_game_pins_the_other_reading_of_its_fourteen_gate_lane_map_autopilot_mission_ship_bar_and_exchange_keys()
      {
         assert_eq!(
             Ruleset::NewGame.profile().readings,
@@ -191,6 +198,7 @@ mod tests {
                 (RuleKey::AuxShipLinks, RuleSource::Bible),
                 (RuleKey::GateExitCounts, RuleSource::Bible),
                 (RuleKey::BarStory, RuleSource::Bible),
+                (RuleKey::JunkListing, RuleSource::Bible),
             ]
         );
     }
