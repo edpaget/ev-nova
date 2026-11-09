@@ -1,5 +1,11 @@
 //! Loads every content file into a [`Galaxy`], reporting each file that
 //! can't be read instead of stopping at the first.
+//!
+//! Each kind's folder is read with [`Source::listing`], so a file that
+//! can't be read drops only itself (`couldn't be read: …`, against its
+//! path). A folder that can't be listed drops its kind, with one problem
+//! against `dir/` (`listing failed: …`), and goes into
+//! [`Galaxy::unreadable`] as `dir/`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -60,7 +66,9 @@ pub struct Galaxy {
     /// `budgets/`: what art may cost.
     pub budgets: BTreeMap<Id, Doc<Budget>>,
     /// Files with a valid name that failed to load, e.g.
-    /// `systems/marrow.md`. References to them aren't reported again.
+    /// `systems/marrow.md`, and kind folders that failed to list, spelled
+    /// with a trailing `/`, e.g. `systems/`. References to them aren't
+    /// reported again: see [`Galaxy::is_unreadable`].
     pub unreadable: BTreeSet<String>,
 }
 
@@ -79,6 +87,14 @@ impl Galaxy {
             .map(super::id::MediaPath::as_str)
             .collect();
         paths.into_iter().collect()
+    }
+
+    /// Whether the file `dir/id.md` failed to load, or the folder `dir`
+    /// failed to list, so a reference to `id` isn't reported again.
+    #[must_use]
+    pub fn is_unreadable(&self, dir: &str, id: &Id) -> bool {
+        self.unreadable.contains(&format!("{dir}/"))
+            || self.unreadable.contains(&format!("{dir}/{id}.md"))
     }
 
     /// The jump point `r` names, as `systems/` has it, if its system
@@ -148,15 +164,17 @@ fn kind<T: DeserializeOwned + Kind>(
     unreadable: &mut BTreeSet<String>,
 ) -> BTreeMap<Id, Doc<T>> {
     let dir = T::DIR;
-    let files = match source.files(dir, "md") {
-        Ok(files) => files,
+    let listed = match source.listing(dir, "md") {
+        Ok(listed) => listed,
         Err(e) => {
-            problems.push(Problem::new(dir, e.to_string()));
+            let folder = format!("{dir}/");
+            unreadable.insert(folder.clone());
+            problems.push(Problem::new(folder, format!("listing failed: {e}")));
             return BTreeMap::new();
         }
     };
     let mut docs = BTreeMap::new();
-    for file in files {
+    for file in listed {
         let stem = file
             .path
             .rsplit('/')
@@ -165,10 +183,14 @@ fn kind<T: DeserializeOwned + Kind>(
             .trim_end_matches(".md");
         let loaded = Id::try_from(stem.to_string())
             .map_err(|e| format!("the file name {e}"))
-            .and_then(|id| frontmatter::parse::<T>(&file.text).map(|(t, body)| (id, t, body)));
+            .and_then(|id| match &file.text {
+                Ok(text) => {
+                    frontmatter::parse::<T>(text).map(|(t, body)| (id, t, body.to_string()))
+                }
+                Err(e) => Err(format!("couldn't be read: {e}")),
+            });
         match loaded {
             Ok((id, data, body)) => {
-                let body = body.to_string();
                 docs.insert(
                     id,
                     Doc {
@@ -191,8 +213,11 @@ fn kind<T: DeserializeOwned + Kind>(
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+
     use super::*;
     use crate::fixture;
+    use crate::source::{Listed, MemSource, SourceFile};
 
     #[test]
     fn loads_each_kind_by_file_name() {
@@ -310,6 +335,100 @@ mod tests {
             problems[0].message.contains("kebab-case"),
             "{}",
             problems[0]
+        );
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_read_drops_only_itself() {
+        let source = fixture::galaxy().with_bytes("systems/garbled.md", b"\xff");
+        let (galaxy, problems) = load(&source);
+        let ids: Vec<_> = galaxy.systems.keys().map(Id::as_str).collect();
+        assert_eq!(ids, ["alpha", "beta"]);
+        // The format's own relative path, always written with `/`, not an
+        // OS path: no Windows separator can reach it.
+        let garbled: Vec<_> = problems
+            .iter()
+            .filter(|p| p.file == "systems/garbled.md")
+            .collect();
+        assert_eq!(garbled.len(), 1, "{problems:?}");
+        assert!(
+            garbled[0].message.starts_with("couldn't be read: "),
+            "{}",
+            garbled[0]
+        );
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(galaxy.unreadable.contains("systems/garbled.md"));
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_read_and_is_not_an_id_is_not_marked_unreadable() {
+        let source = fixture::galaxy().with_bytes("systems/Garbled.md", b"\xff");
+        let (galaxy, problems) = load(&source);
+        assert_eq!(galaxy.systems.len(), 2);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert_eq!(problems[0].file, "systems/Garbled.md");
+        assert!(galaxy.unreadable.is_empty(), "{:?}", galaxy.unreadable);
+    }
+
+    /// The fixture galaxy, whose `systems/` can't be listed.
+    struct Unlisted(MemSource);
+    impl Source for Unlisted {
+        fn files(&self, dir: &str, ext: &str) -> io::Result<Vec<SourceFile>> {
+            self.0.files(dir, ext)
+        }
+        fn listing(&self, dir: &str, ext: &str) -> io::Result<Vec<Listed>> {
+            if dir == "systems" {
+                return Err(io::Error::other("the disk is unreadable"));
+            }
+            self.0.listing(dir, ext)
+        }
+        fn bytes(&self, path: &str) -> io::Result<Option<Vec<u8>>> {
+            self.0.bytes(path)
+        }
+    }
+
+    #[test]
+    fn a_folder_that_cannot_be_listed_marks_the_kind_unreadable() {
+        let (galaxy, problems) = load(&Unlisted(fixture::galaxy()));
+        assert!(galaxy.systems.is_empty());
+        assert_eq!(galaxy.stellars.len(), 2, "the other kinds load");
+        assert_eq!(
+            problems,
+            [Problem::new(
+                "systems/",
+                "listing failed: the disk is unreadable"
+            )]
+        );
+        assert!(galaxy.unreadable.contains("systems/"));
+        assert!(galaxy.is_unreadable("systems", &id("alpha")));
+    }
+
+    fn id(text: &str) -> Id {
+        Id::try_from(text.to_string()).unwrap()
+    }
+
+    #[test]
+    fn is_unreadable_matches_the_file_or_its_folder() {
+        let mut galaxy = Galaxy::default();
+        assert!(
+            !galaxy.is_unreadable("systems", &id("alpha")),
+            "nothing failed"
+        );
+        galaxy.unreadable.insert("systems/alpha.md".to_string());
+        assert!(galaxy.is_unreadable("systems", &id("alpha")), "its file");
+        assert!(
+            !galaxy.is_unreadable("systems", &id("beta")),
+            "another file"
+        );
+        assert!(
+            !galaxy.is_unreadable("stellars", &id("alpha")),
+            "another kind"
+        );
+        galaxy.unreadable.insert("stellars/".to_string());
+        assert!(galaxy.is_unreadable("stellars", &id("alpha")), "its folder");
+        assert!(
+            !galaxy.is_unreadable("missions", &id("alpha")),
+            "another folder"
         );
     }
 
