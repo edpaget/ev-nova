@@ -44,15 +44,15 @@ use crate::catalog::{
     AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, AuxShip, BOX_GRAPHICS, BoomId,
     CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes,
     DescMovie, DescText, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortClass, EscortRecord,
-    Explosion, FIRST_NEBULA, FleetId, FleetRecord, FrameSize, GateSite, GateStability, GovtId,
-    GovtRecord, HullRecord, JunkRecord, KINDS, LAST_NEBULA, LandingSite, ListedStellar, MaskSheet,
-    MissionId, MissionRecord, MissionShip, MissionTexts, NavDefSlots, NebulaId, NebulaRecord,
-    OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog,
-    PlaceNames, RankId, RankRecord, ShipDisplay, ShipExits, ShipId, ShipRecord, SiteAnimation,
-    SoundId, StarSystem, StartDate, StartError, StellarId, StellarLife, StellarMark,
-    StellarScripts, StockWeapon, StringPatch, SystemId, SystemReinforcements, SystemTraffic,
-    SystemVisibility, TextGraphics, TextMovies, TrafficCatalog, WeaponId, WeaponRecord,
-    explosion_sound, loaded_mod_val,
+    Explosion, FIRST_NEBULA, FleetId, FleetRecord, FrameSize, GateSite, GovtId, GovtRecord,
+    HullRecord, JunkRecord, KINDS, LAST_NEBULA, LandingSite, ListedStellar, MaskSheet, MissionId,
+    MissionRecord, MissionShip, MissionTexts, NavDefSlots, NebulaId, NebulaRecord, OutfitId,
+    OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames,
+    RankId, RankRecord, ShipDisplay, ShipExits, ShipId, ShipRecord, SiteAnimation, SoundId,
+    StarSystem, StartDate, StartError, StellarId, StellarLife, StellarMark, StellarScripts,
+    StockWeapon, StringPatch, SystemId, SystemReinforcements, SystemTraffic, SystemVisibility,
+    TextGraphics, TextMovies, TrafficCatalog, WeaponId, WeaponRecord, explosion_sound,
+    loaded_mod_val,
 };
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
@@ -108,18 +108,6 @@ fn sound_length(data: &GameData, id: i16) -> Option<SoundLength> {
 /// and 0x136, which the Bible leaves undocumented and the ResForge template
 /// labels the starting day and month (stock: 23 and 6, with `StartYear`
 /// 1177).
-/// The catalog's reading of the stability the store keeps for a gate:
-/// each of the store's stabilities as the one of the same name. The match
-/// is exhaustive on purpose: a stability the store grows must be read
-/// here, as the lanes' looks act on every one.
-fn gate_stability(stored: nova_data::GateStability) -> GateStability {
-    match stored {
-        nova_data::GateStability::Stable => GateStability::Stable,
-        nova_data::GateStability::Unstable => GateStability::Unstable,
-        nova_data::GateStability::Dead => GateStability::Dead,
-    }
-}
-
 impl PilotCatalog for GameData {
     fn stellar_dialogs(&self) -> crate::dialogs::StellarDialogs {
         crate::dialogs::stellar_dialogs(self)
@@ -127,6 +115,10 @@ impl PilotCatalog for GameData {
 
     fn storylines(&self) -> crate::storylines::Storylines {
         crate::storylines::storylines(self)
+    }
+
+    fn fittings(&self) -> crate::fittings::Fittings {
+        GameData::fittings(self).clone()
     }
 
     fn first_character(&self) -> Result<CharacterStart, StartError> {
@@ -304,6 +296,7 @@ impl PilotCatalog for GameData {
             flags2: stellar.flags2.bits(),
             destroyed: false,
             dominated_at_run_time: false,
+            gate_closed: false,
             graphic: stellar.graphic_type,
             dead_graphic: dead_frame_size.map(|_| stellar.dead_type),
             dead_frame_size,
@@ -426,9 +419,6 @@ impl PilotCatalog for GameData {
                     flags2: stellar.flags2.bits(),
                     links: stellar.hyper_link,
                     exit_angle: stellar.cust_snd_id,
-                    stability: self
-                        .gate_stability(nova_data::StellarId(id.0))
-                        .map_or(GateStability::Stable, gate_stability),
                 })
             })
             .collect()
@@ -2587,7 +2577,6 @@ mod tests {
                     // Its zeroed links, kept raw.
                     links: [Some(StellarId(0)); 8],
                     exit_angle: 0,
-                    stability: GateStability::Stable,
                 },
                 GateSite {
                     id: StellarId(129),
@@ -2595,50 +2584,11 @@ mod tests {
                     flags2: 0x2000,
                     links: links(&[128, 0, 999]),
                     exit_angle: 120,
-                    stability: GateStability::Stable,
                 },
             ],
             "unlisted 130, missing 999, and 133 listed only by an undecodable system left out"
         );
         assert_eq!(store(&[]).gate_sites(), []);
-    }
-
-    #[test]
-    fn a_gate_with_a_stored_stability_reads_its_own_and_one_without_reads_stable() {
-        let data = store(&[
-            (System::TYPE, 130, system_with(&[128, 129, 130])),
-            (Stellar::TYPE, 128, gate(0, 0, 0, &[129])),
-            (Stellar::TYPE, 129, gate(0, 0, 0, &[128])),
-            (Stellar::TYPE, 130, gate(0, 0, 0, &[128])),
-        ])
-        .with_gate_stabilities(std::collections::BTreeMap::from([
-            (
-                nova_data::StellarId(128),
-                nova_data::GateStability::Unstable,
-            ),
-            (nova_data::StellarId(130), nova_data::GateStability::Dead),
-        ]));
-        let stabilities: Vec<_> = data
-            .gate_sites()
-            .iter()
-            .map(|site| site.stability)
-            .collect();
-        assert_eq!(
-            stabilities,
-            [
-                GateStability::Unstable,
-                GateStability::Stable,
-                GateStability::Dead
-            ]
-        );
-    }
-
-    #[test]
-    fn each_stored_stability_reads_as_its_namesake() {
-        use nova_data::GateStability as Stored;
-        assert_eq!(gate_stability(Stored::Stable), GateStability::Stable);
-        assert_eq!(gate_stability(Stored::Unstable), GateStability::Unstable);
-        assert_eq!(gate_stability(Stored::Dead), GateStability::Dead);
     }
 
     #[test]
@@ -2914,6 +2864,7 @@ mod tests {
                     flags2: 0x1200,
                     destroyed: false,
                     dominated_at_run_time: false,
+                    gate_closed: false,
                     graphic: 0,
                     dead_graphic: Some(0),
                     dead_frame_size: Some((12, 30)),
@@ -2945,6 +2896,7 @@ mod tests {
                     flags2: 0,
                     destroyed: false,
                     dominated_at_run_time: false,
+                    gate_closed: false,
                     graphic: 7,
                     dead_graphic: Some(0),
                     dead_frame_size: Some((12, 30)),

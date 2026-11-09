@@ -4016,6 +4016,7 @@ pub mod day;
 pub mod dispatch;
 pub mod galaxy;
 mod galaxy_links;
+mod galaxy_points;
 pub mod rebuild;
 pub mod sprite_pool;
 pub mod wreck;

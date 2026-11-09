@@ -230,6 +230,14 @@ exclude_re = [
     # display: `main`'s wiring (excluded below). What it gives back, the
     # open failure, is the runner's `failure_slot`, tested in `runner.rs`.
     "nova/src/main.rs:.*replace run -> ",
+    # `stock_look_wired` (nova's `main.rs`) only forwards `stock_look::wire`
+    # and reports its warnings: `main`'s wiring (excluded below). What it
+    # wires is `wire`'s, tested in `stock_look.rs`. The screen it feeds is
+    # flown in `tests/it/new_game_looks.rs`, and the renderer's images it
+    # feeds are built by `stock_look::images`, which that file's
+    # `the_borrowed_frames_the_flight_draws_decode_through_the_game_s_images`
+    # decodes a flown borrowed frame through.
+    "nova/src/main.rs:.*replace stock_look_wired -> ",
     # nova-movie's FFmpeg set-up: FFmpeg 9 registers nothing at `init`,
     # and the log level only silences FFmpeg's own messages on stderr,
     # which no test reads.
@@ -747,6 +755,9 @@ exclude_re = [
     # And `PilotCatalog::storylines`' default body is
     # `Storylines::default()`: the mutant is the same body.
     "nova-sim-catalog/src/catalog\\.rs:[0-9]+:[0-9]+: replace PilotCatalog::storylines -> crate::storylines::Storylines with Default::default\\(\\)$",
+    # And `PilotCatalog::fittings`' default body is `Fittings::default()`:
+    # the mutant is the same body.
+    "nova-sim-catalog/src/catalog\\.rs:[0-9]+:[0-9]+: replace PilotCatalog::fittings -> crate::fittings::Fittings with Default::default\\(\\)$",
     # A stellar's frame 0 shows `AnimDelay` x `Frame0Bias` ticks only when
     # the bias is above 1; a bias of exactly 1 gives `AnimDelay` x 1, the
     # same threshold as `AnimDelay` (whatever its sign), so `>` and `>=`
@@ -868,4 +879,7 @@ exclude_re = [
     # FSR 1's EASU texture usage, `RENDER_ATTACHMENT | TEXTURE_BINDING`:
     # the two flags share no bit, so `^` makes the same usage.
     "nova-render/src/wgpu/fsr1\\.rs:[0-9]+:[0-9]+: replace \\| with \\^ in Fsr1::upsampled$",
+    # A role's fit bits: each `fits` set holds its own bit, so OR-ing the
+    # sets' bits together and XOR-ing them give the same mask.
+    "nova-data/src/new_game/kits\\.rs:[0-9]+:[0-9]+: replace \\| with \\^ in FitBits::contributed$",
 ]

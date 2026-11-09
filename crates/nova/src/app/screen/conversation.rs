@@ -12,8 +12,11 @@
 //! shows; the ended page's close goes back too
 //! ([`FlightView::close_conversation`]), and the router asks for the next
 //! conversation, showing it, or dropping the screen once the session has
-//! none left. The spaceport dropped (a take-off, the pilot put away) drops
-//! it with it. What each conversation plays is the session's.
+//! none left, when the visit's news opens, once (see the `story_log`
+//! module). An accept the flight refused for room is told on the
+//! page it was decided on. The spaceport dropped (a take-off, the pilot
+//! put away) drops it with it. What each conversation plays is the
+//! session's.
 
 use nova_view::flight::FlightView;
 use nova_view::spaceport::{ConversationChoice, ConversationScreen};
@@ -24,6 +27,8 @@ use super::{AppScreen, ENTERED};
 impl AppScreen {
     /// Opens the landed visit's next conversation, if it has one and the
     /// router has metrics to lay it out with, replacing any open one.
+    /// With none left, the visit's news opens, once (see the `story_log`
+    /// module); a first page's accept refused for room is told on it.
     pub(super) fn open_conversation(&mut self) {
         self.conversation = None;
         let Some(metrics) = self.metrics() else {
@@ -31,6 +36,11 @@ impl AppScreen {
         };
         let page = self.flight.as_mut().and_then(FlightView::open_conversation);
         self.conversation = page.map(|page| ConversationScreen::new(page, metrics));
+        if self.conversation.is_some() {
+            self.tell_room_refusals();
+        } else {
+            self.open_news_once();
+        }
     }
 
     /// Gives `input` to the open conversation, acting on its choice or
@@ -46,6 +56,7 @@ impl AppScreen {
                 if let Some(page) = flight.choose_in_conversation(index) {
                     screen.set_page(page);
                 }
+                self.tell_room_refusals();
             }
             Some(ConversationChoice::Close) => {
                 self.flight.as_mut().expect(ENTERED).close_conversation();

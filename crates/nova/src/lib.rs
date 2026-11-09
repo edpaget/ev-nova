@@ -71,5 +71,6 @@ pub mod ruleset;
 pub mod saves;
 pub mod settings;
 pub mod startup;
+pub mod stock_look;
 pub mod text_entry;
 pub mod winsparkle;

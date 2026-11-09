@@ -1,7 +1,9 @@
 //! The mapping from a loaded [`Galaxy`] to records, one small function
 //! per kind over the neutral records of [`super::records`]: factions,
 //! systems and stellars here, the jump points' gates in [`super::gates`],
-//! and hulls, traffic and starts in [`super::fleet`]. The module docs of
+//! ships, traffic and starts in [`super::fleet`], outfits and weapons in
+//! [`super::outfits`], mod kits in [`super::kits`] and the `take_point`
+//! missions' guards and blockades in [`super::blockades`]. The module docs of
 //! [`super`] list what maps to what, and each problem.
 
 use std::collections::BTreeMap;
@@ -12,19 +14,28 @@ use nova_galaxy_format::load::{Doc, Galaxy, Problem};
 use nova_galaxy_format::model::{Faction, Position, Stellar as BibleStellar};
 
 use super::fleet::{self, TRAFFIC_SHIPS};
-use super::gates;
-use super::ids::{CIVILIAN_DUDE, GOVT_IDS, IdTable, STELLAR_IDS, SYSTEM_IDS, allocate};
+use super::ids::{
+    CIVILIAN_DUDE, DEFAULT_INTERFACE, GOVT_IDS, IdTable, OUTFIT_IDS, STELLAR_IDS, SYSTEM_IDS,
+    after_pins, allocate_pinned,
+};
+use super::kits::{
+    self, FitBits, LAW_SCAN_FINE, LAW_SMUGGLE_PENALTY, LAWLESS_KIT_SCAN, YARD_TECH_LAWLESS,
+    YARD_TECH_LEGAL,
+};
 use super::outfits;
 use super::records::{
-    clamp_i16, neutral_govt, neutral_stellar, neutral_system, rgb, stellar_flags, text_desc,
+    ANY_RECORD, clamp_i16, default_interface, neutral_govt, neutral_stellar, neutral_system, rgb,
+    stellar_flags, text_desc,
 };
+use super::{blockades, gates};
 use crate::decode::Entry;
 use crate::records::govt::Govt;
 use crate::records::stellar::Stellar;
 use crate::records::system::System;
 use crate::registry::AnyRecord;
-use crate::wire::flags::Flags32;
-use crate::wire::id::GovtId;
+use crate::store::Fittings;
+use crate::wire::flags::{Flags16, Flags32};
+use crate::wire::id::{GovtId, OutfitId, ShipId};
 
 /// What [`map`] made of a galaxy.
 #[derive(Debug)]
@@ -35,44 +46,30 @@ pub struct Mapped {
     pub ids: IdTable,
     /// What couldn't be mapped as written, each against its file.
     pub problems: Vec<Problem>,
+    /// Each ship's chain hardpoints and each kit's attention and
+    /// hardpoints, for the store.
+    pub fittings: Fittings,
 }
 
-/// Maps `galaxy`'s factions, systems, stellars, jump points, hulls,
-/// starts and outfits to `gövt`, `sÿst`, `spöb`, `dësc`, `shïp`, `shän`,
-/// `düde`, `chär` and `oütf` records.
+/// Maps `galaxy`'s factions, systems, stellars, jump points, ships,
+/// starts, outfits, mod kits and `take_point` blockades to `gövt`, `sÿst`,
+/// `spöb`, `dësc`, `shïp`, `shän`, `düde`, `chär`, `oütf`, `wëap` and
+/// `mïsn` records, and their fittings,
+/// plus the placeholder `ïntf` status bar, which a flight frame always
+/// needs, so even an empty galaxy maps it. Nothing is pinned: see
+/// [`map_pinned`].
 #[must_use]
 pub fn map(galaxy: &Galaxy) -> Mapped {
+    map_pinned(galaxy, &IdTable::default())
+}
+
+/// [`map`], with each record `pins` names keeping its pinned ID, and each
+/// other numbered after the highest pin of its range
+/// ([`super::ids`]).
+#[must_use]
+pub fn map_pinned(galaxy: &Galaxy, pins: &IdTable) -> Mapped {
     let mut problems = Vec::new();
-    let factions = number(&galaxy.factions, GOVT_IDS, "gövt", &mut problems);
-    let systems = number(&galaxy.systems, SYSTEM_IDS, "sÿst", &mut problems);
-    let placed: BTreeMap<&Id, &Doc<BibleStellar>> = galaxy
-        .stellars
-        .iter()
-        .filter(|(_, doc)| {
-            let system = &doc.data.system;
-            let has_record = systems.contains_key(system);
-            if !has_record && absent(galaxy, &galaxy.systems, "systems", system) {
-                problems.push(Problem::new(
-                    &doc.path,
-                    format!("its system `{system}` is not in systems/; it is left out"),
-                ));
-            }
-            has_record
-        })
-        .collect();
-    let stellars = number(placed, STELLAR_IDS, "spöb", &mut problems);
-    let gates = gates::number(galaxy, &systems, &stellars, &mut problems);
-    let ships = fleet::number_hulls(galaxy, &mut problems);
-    let mut ids = IdTable {
-        factions,
-        systems,
-        stellars,
-        gates,
-        ships,
-        starts: BTreeMap::new(),
-        outfits: outfits::number_outfits(galaxy, &mut problems),
-    };
-    ids.starts = fleet::number_starts(galaxy, &ids, &mut problems);
+    let (ids, fit) = number_all(galaxy, pins, &mut problems);
     let traffic = fleet::civilian_traffic(galaxy, &ids.ships);
     let mut records = Vec::new();
     for (id, &nova) in &ids.factions {
@@ -113,36 +110,151 @@ pub fn map(galaxy: &Galaxy) -> Mapped {
             ));
         }
     }
-    for (id, &nova) in &ids.ships {
-        let doc = &galaxy.ships[id];
-        records.push(fleet::ship(nova, doc));
-        records.extend(fleet::ship_anim(nova, doc));
-    }
+    let fittings = fittings(galaxy, &ids, &fit, &mut records, &mut problems);
     records.extend(traffic);
+    let guards = blockades::number_guards(galaxy, &ids);
+    for (faction, &nova) in &guards {
+        records.push(blockades::guard(galaxy, &ids, faction, nova));
+    }
+    for (mission, &nova) in &ids.blockades {
+        records.extend(blockades::blockade(
+            galaxy,
+            &ids,
+            &guards,
+            mission,
+            nova,
+            &mut problems,
+        ));
+    }
     for (id, &nova) in &ids.starts {
         records.push(fleet::character(&ids, nova, &galaxy.starts[id]));
     }
-    for (id, &nova) in &ids.outfits {
-        records.push(outfits::outfit(nova, &galaxy.outfits[id]));
-    }
+    records.push(Entry {
+        id: DEFAULT_INTERFACE,
+        name: Some("Default status bar".to_owned()),
+        record: AnyRecord::Interface(Box::new(default_interface())),
+    });
     Mapped {
         records,
         ids,
         problems,
+        fittings,
     }
 }
 
-/// Numbers `docs` in id order from the start of `range`, reporting each
-/// past its end, as `what`, against its file.
+/// Every record's ID under `pins`, and the kits' fit bits, which number
+/// them.
+fn number_all(galaxy: &Galaxy, pins: &IdTable, problems: &mut Vec<Problem>) -> (IdTable, FitBits) {
+    let mut free = after_pins(GOVT_IDS, pins.factions.values());
+    let factions = number(
+        &galaxy.factions,
+        &pins.factions,
+        &mut free,
+        "gövt",
+        problems,
+    );
+    let mut free = after_pins(SYSTEM_IDS, pins.systems.values());
+    let systems = number(&galaxy.systems, &pins.systems, &mut free, "sÿst", problems);
+    let placed: BTreeMap<&Id, &Doc<BibleStellar>> = galaxy
+        .stellars
+        .iter()
+        .filter(|(_, doc)| {
+            let system = &doc.data.system;
+            let has_record = systems.contains_key(system);
+            if !has_record && absent(galaxy, &galaxy.systems, "systems", system) {
+                problems.push(Problem::new(
+                    &doc.path,
+                    format!("its system `{system}` is not in systems/; it is left out"),
+                ));
+            }
+            has_record
+        })
+        .collect();
+    let mut free = after_pins(
+        STELLAR_IDS,
+        pins.stellars.values().chain(pins.gates.values()),
+    );
+    let stellars = number(placed, &pins.stellars, &mut free, "spöb", problems);
+    let gates = gates::number(galaxy, &systems, &pins.gates, &mut free, problems);
+    let ships = fleet::number_ships(galaxy, &pins.ships, problems);
+    let mut free = after_pins(OUTFIT_IDS, pins.outfits.values().chain(pins.kits.values()));
+    let outfits = outfits::number_outfits(galaxy, &pins.outfits, &mut free, problems);
+    let weapons = outfits::number_weapons(galaxy, &pins.weapons, problems);
+    let fit = FitBits::of(galaxy, problems);
+    let kits = kits::number_kits(galaxy, &fit, &pins.kits, &mut free, problems);
+    let blockades = blockades::number_blockades(galaxy, &gates, &pins.blockades, problems);
+    let mut ids = IdTable {
+        factions,
+        systems,
+        stellars,
+        gates,
+        ships,
+        starts: BTreeMap::new(),
+        outfits,
+        weapons,
+        kits,
+        blockades,
+    };
+    ids.starts = fleet::number_starts(galaxy, &ids, &pins.starts, problems);
+    (ids, fit)
+}
+
+/// Pushes the `shïp`s and `shän`s of `ids`' ships, the `oütf`s and
+/// `wëap`s of its outfits and the `oütf`s of its kits onto `records`, and
+/// gives their fittings.
+fn fittings(
+    galaxy: &Galaxy,
+    ids: &IdTable,
+    fit: &FitBits,
+    records: &mut Vec<Entry<AnyRecord>>,
+    problems: &mut Vec<Problem>,
+) -> Fittings {
+    let mut fittings = Fittings::default();
+    for (id, &nova) in &ids.ships {
+        records.push(fleet::ship(galaxy, ids, fit, id, nova, problems));
+        records.extend(fleet::ship_anim(galaxy, id, nova, problems));
+        let spots = fleet::chain_spots(galaxy, id);
+        if !spots.is_empty() {
+            fittings.hulls.insert(ShipId(nova), spots);
+        }
+    }
+    for (id, &nova) in &ids.outfits {
+        let doc = &galaxy.outfits[id];
+        let weapon = ids.weapons.get(id).copied();
+        records.push(outfits::outfit(nova, doc, weapon));
+        records.extend(weapon.map(|weapon| outfits::weapon(weapon, doc)));
+    }
+    for (id, &nova) in &ids.kits {
+        let doc = &galaxy.mods[id];
+        let require = fit.required(id).unwrap_or_default();
+        records.push(kits::kit(
+            galaxy,
+            &ids.outfits,
+            nova,
+            doc,
+            require,
+            problems,
+        ));
+        fittings
+            .kits
+            .insert(OutfitId(nova), kits::kit_fittings(&doc.data));
+    }
+    fittings
+}
+
+/// Numbers `docs` in id order: each `pins` names keeps its pin, and each
+/// other takes the next of `free`. Each `free` has no ID left for is
+/// reported, as `what`, against its file.
 pub(super) fn number<'a, T: 'a>(
     docs: impl IntoIterator<Item = (&'a Id, &'a Doc<T>)>,
-    range: RangeInclusive<i16>,
+    pins: &BTreeMap<Id, i16>,
+    free: &mut RangeInclusive<i16>,
     what: &str,
     problems: &mut Vec<Problem>,
 ) -> BTreeMap<Id, i16> {
-    let last = *range.end();
+    let last = *free.end();
     let docs: BTreeMap<&Id, &Doc<T>> = docs.into_iter().collect();
-    let (table, past) = allocate(docs.keys().copied(), range);
+    let (table, past) = allocate_pinned(docs.keys().copied(), pins, free);
     for id in past {
         problems.push(Problem::new(
             &docs[id].path,
@@ -153,19 +265,27 @@ pub(super) fn number<'a, T: 'a>(
 }
 
 /// Whether `galaxy` holds nothing at `dir/id`, so a reference to it is
-/// reported: it neither loaded into `loaded` nor failed to load.
+/// reported: it neither loaded into `loaded` nor failed to load, and
+/// `dir` itself didn't fail to list.
 pub(super) fn absent<T>(galaxy: &Galaxy, loaded: &BTreeMap<Id, T>, dir: &str, id: &Id) -> bool {
-    !loaded.contains_key(id) && !galaxy.unreadable.contains(&format!("{dir}/{id}.md"))
+    !loaded.contains_key(id) && !galaxy.is_unreadable(dir, id)
 }
 
-/// The `gövt` of `faction`, its colour as both colours.
+/// The `gövt` of `faction`, its colour as both colours, and, when it
+/// keeps the law, [`LAW_SMUGGLE_PENALTY`], [`LAW_SCAN_FINE`] and a
+/// `ScanMask` of [`LAWLESS_KIT_SCAN`], so its scans find a lawless kit.
 fn faction(nova: i16, faction: &Doc<Faction>) -> Entry<AnyRecord> {
     let color = rgb(&faction.data.color);
-    let govt = Govt {
+    let mut govt = Govt {
         color,
         ship_color: color,
         ..neutral_govt()
     };
+    if !faction.data.lawless {
+        govt.smug_penalty = LAW_SMUGGLE_PENALTY;
+        govt.scan_fine = LAW_SCAN_FINE;
+        govt.scan_mask = Flags16(LAWLESS_KIT_SCAN);
+    }
     Entry {
         id: nova,
         name: Some(faction.data.name.clone()),
@@ -218,7 +338,10 @@ fn system(
     }
 }
 
-/// The `spöb` of the stellar `doc`.
+/// The `spöb` of the stellar `doc`: a law-keeping owner's lists legal
+/// kits ([`YARD_TECH_LEGAL`]) and clears by record (`MinStatus` 0); a
+/// lawless owner's, or one with none, lists every kit
+/// ([`YARD_TECH_LAWLESS`]) and clears any record ([`ANY_RECORD`]).
 fn stellar(
     galaxy: &Galaxy,
     ids: &IdTable,
@@ -228,11 +351,22 @@ fn stellar(
 ) -> Entry<AnyRecord> {
     let data = &doc.data;
     let (x_pos, y_pos) = position(data.position, "position", &doc.path, problems);
+    let govt = govt(galaxy, ids, data.owner.as_ref(), &doc.path, problems);
+    let lawful = (data.owner.as_ref())
+        .and_then(|owner| galaxy.factions.get(owner))
+        .is_some_and(|owner| !owner.data.lawless)
+        && govt.is_some();
     let stellar = Stellar {
         x_pos,
         y_pos,
         flags: Flags32(stellar_flags(data.kind, &data.services)),
-        govt: govt(galaxy, ids, data.owner.as_ref(), &doc.path, problems),
+        govt,
+        tech_level: if lawful {
+            YARD_TECH_LEGAL
+        } else {
+            YARD_TECH_LAWLESS
+        },
+        min_status: if lawful { 0 } else { ANY_RECORD },
         ..neutral_stellar()
     };
     Entry {

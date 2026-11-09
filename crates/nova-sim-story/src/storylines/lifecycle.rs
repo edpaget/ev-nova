@@ -17,7 +17,9 @@
 //!     [`Active`](MissionState::Active), a `deliver` objective's tons
 //!     loaded; without one it is done at once, and `on_success` applies
 //!     too. An accept of a `deliver` mission whose tons don't fit the
-//!     room left in the hold is refused: it is a defer, and nothing loads.
+//!     room left in the hold is refused: nothing loads and the offer
+//!     stands, as for a defer, but the decision says why
+//!     ([`Decision::NoRoom`]) so the session can tell the player.
 //!   - `decline` applies `on_decline`: the mission is
 //!     [`Declined`](MissionState::Declined), and never offered again.
 //!   - `defer`, or no outcome by the time the conversation closes,
@@ -33,8 +35,15 @@
 //! - **Objectives.** A `deliver` objective's cargo counts in the hold
 //!   ([`StoryState::cargo_aboard`]). Landing at its stellar drops the
 //!   cargo off and meets it ([`Play::landed`]). A `take_point` objective
-//!   is only state for now: it is never met (`play-the-sample` decides
-//!   what taking a point is).
+//!   is met when its blockade is broken ([`Play::beat_holder`]): every one
+//!   of the holder's ships at its point's gate destroyed or chased off
+//!   (out of the point's system), whoever did it. Arriving or leaving
+//!   through the gate meets nothing, nor does a landing. A disabled guard
+//!   counts once it is destroyed or gone. The format leaves taking a point
+//!   open and the original has no such objective, so this is the engine's
+//!   reading, with no rulebook key. The guards are a hidden stock mission
+//!   (`nova_data::new_game`'s `blockades`), which the session runs and
+//!   whose goals-met moment calls in here.
 //! - **Success.** A met mission with a completion conversation succeeds
 //!   as that conversation opens at its stellar, or at the objective's
 //!   when it names none ([`Play::complete`]), `on_success` applying
@@ -91,6 +100,31 @@ pub struct Play<'a> {
     /// they applied ([`effects::apply`]), for the caller to make: the
     /// ship isn't the story's to change.
     pub outfits: &'a mut Vec<OutfitChange>,
+}
+
+/// What [`Play::decide`] made of an offer's outcome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Decision {
+    /// The mission was accepted or declined.
+    Changed,
+    /// Nothing changed: a defer, or a mission not offered.
+    Unchanged,
+    /// An accept refused for want of room, which changed nothing: the
+    /// mission's load, and the room in the hold it was given.
+    NoRoom {
+        /// The tons the mission would load.
+        tons: u32,
+        /// The tons free in the hold, as given (it may be below 0).
+        room: i64,
+    },
+}
+
+impl Decision {
+    /// Whether the decision changed anything: only [`Decision::Changed`].
+    #[must_use]
+    pub fn changed(self) -> bool {
+        self == Self::Changed
+    }
 }
 
 impl Play<'_> {
@@ -166,20 +200,22 @@ impl Play<'_> {
     }
 
     /// Decides offered mission `id` by `outcome`, with `room` tons free in
-    /// the hold (see the module docs), then checks events. Whether
-    /// anything changed: nothing does for a defer, a refused accept, or a
-    /// mission not offered.
-    pub fn decide(&mut self, id: &str, outcome: Outcome, room: i64) -> bool {
+    /// the hold (see the module docs), then checks events. What it
+    /// decided ([`Decision`]): nothing changes for a defer, a mission not
+    /// offered, or an accept refused for room, which says the mission's
+    /// load and the `room` it was given ([`Decision::NoRoom`]).
+    pub fn decide(&mut self, id: &str, outcome: Outcome, room: i64) -> Decision {
         let Some(mission) = self.storylines.missions.get(id) else {
-            return false;
+            return Decision::Unchanged;
         };
         if self.story.mission(id) != Some(MissionState::Offered) {
-            return false;
+            return Decision::Unchanged;
         }
         match outcome {
             Outcome::Accept => {
-                if load(mission) > room {
-                    return false;
+                let tons = load(mission);
+                if i64::from(tons) > room {
+                    return Decision::NoRoom { tons, room };
                 }
                 self.apply(&mission.on_accept);
                 self.start(id, mission);
@@ -190,10 +226,10 @@ impl Play<'_> {
                     .missions
                     .insert(id.to_owned(), MissionState::Declined);
             }
-            Outcome::Defer => return false,
+            Outcome::Defer => return Decision::Unchanged,
         }
         self.fire_events();
-        true
+        Decision::Changed
     }
 
     /// Completes met mission `id`, as its completion conversation opens:
@@ -238,6 +274,37 @@ impl Play<'_> {
                 changed = true;
             }
         }
+        changed |= self.succeed_met();
+        self.fire_events() || changed
+    }
+
+    /// Beats the holder of mission `id`'s point: its blockade is broken
+    /// (see the module docs). An active, unmet `take_point` mission is
+    /// met, each met mission with no completion conversation succeeds,
+    /// then events are checked. Whether anything changed: nothing does
+    /// for any other mission.
+    pub fn beat_holder(&mut self, id: &str) -> bool {
+        let Some(mission) = self.storylines.missions.get(id) else {
+            return false;
+        };
+        let Some(MissionState::Active { met: false, cargo }) = self.story.mission(id) else {
+            return false;
+        };
+        if !matches!(mission.objective, Some(MissionObjective::TakePoint { .. })) {
+            return false;
+        }
+        self.story
+            .missions
+            .insert(id.to_owned(), MissionState::Active { cargo, met: true });
+        self.succeed_met();
+        self.fire_events();
+        true
+    }
+
+    /// Each met mission with no completion conversation succeeds. Whether
+    /// any did.
+    fn succeed_met(&mut self) -> bool {
+        let mut changed = false;
         for (id, mission) in &self.storylines.missions {
             if mission.complete.is_none()
                 && matches!(
@@ -249,7 +316,7 @@ impl Play<'_> {
                 changed = true;
             }
         }
-        self.fire_events() || changed
+        changed
     }
 
     /// Passes a day: the day of the game goes on by one, then events are
@@ -278,7 +345,7 @@ impl Play<'_> {
     /// loaded, with an objective; done, with `on_success`, without one.
     fn start(&mut self, id: &str, mission: &StoryMission) {
         if mission.objective.is_some() {
-            let cargo = u32::try_from(load(mission)).unwrap_or(u32::MAX);
+            let cargo = load(mission);
             self.story
                 .missions
                 .insert(id.to_owned(), MissionState::Active { cargo, met: false });
@@ -312,9 +379,9 @@ pub fn completion_at(mission: &StoryMission) -> Option<StellarId> {
 }
 
 /// The tons `mission`'s objective loads: a `deliver`'s, else none.
-fn load(mission: &StoryMission) -> i64 {
+fn load(mission: &StoryMission) -> u32 {
     match mission.objective {
-        Some(MissionObjective::Deliver { tons, .. }) => i64::from(tons),
+        Some(MissionObjective::Deliver { tons, .. }) => tons,
         _ => 0,
     }
 }
@@ -489,7 +556,10 @@ mod tests {
         ]);
         f.play().make_offer("job");
         assert_eq!(f.outfits, []);
-        assert!(f.play().decide("job", Outcome::Accept, 10));
+        assert_eq!(
+            f.play().decide("job", Outcome::Accept, 10),
+            Decision::Changed
+        );
         assert_eq!(
             f.outfits,
             [OutfitChange::Grant(pass), OutfitChange::Remove(pass)]
@@ -497,10 +567,20 @@ mod tests {
     }
 
     #[test]
+    fn only_a_changed_decision_counts_as_a_change() {
+        assert!(Decision::Changed.changed());
+        assert!(!Decision::Unchanged.changed());
+        assert!(!Decision::NoRoom { tons: 10, room: 9 }.changed());
+    }
+
+    #[test]
     fn an_unknown_mission_changes_nothing() {
         let mut f = Fixture::new(&[]);
         assert!(!f.play().make_offer("job"));
-        assert!(!f.play().decide("job", Outcome::Accept, 100));
+        assert_eq!(
+            f.play().decide("job", Outcome::Accept, 100),
+            Decision::Unchanged
+        );
         assert!(!f.play().complete("job"));
         assert_eq!(f.story, StoryState::default());
     }
@@ -509,7 +589,10 @@ mod tests {
     fn accepting_with_an_objective_applies_on_accept_and_loads_the_cargo() {
         let mut f = Fixture::new(&[("job", job())]);
         f.play().make_offer("job");
-        assert!(f.play().decide("job", Outcome::Accept, 10));
+        assert_eq!(
+            f.play().decide("job", Outcome::Accept, 10),
+            Decision::Changed
+        );
         assert_eq!(f.state("job"), Some(ACTIVE));
         assert!(f.flags.is_set("accepted"));
         assert!(!f.flags.is_set("succeeded"));
@@ -526,17 +609,23 @@ mod tests {
             },
         )]);
         f.play().make_offer("job");
-        assert!(f.play().decide("job", Outcome::Accept, 0));
+        assert_eq!(
+            f.play().decide("job", Outcome::Accept, 0),
+            Decision::Changed
+        );
         assert_eq!(f.state("job"), Some(MissionState::Done));
         assert!(f.flags.is_set("accepted"));
         assert!(f.flags.is_set("succeeded"));
     }
 
     #[test]
-    fn an_accept_without_room_is_a_defer_and_loads_nothing() {
+    fn an_accept_without_room_says_how_little_and_loads_nothing() {
         let mut f = Fixture::new(&[("job", job())]);
         f.play().make_offer("job");
-        assert!(!f.play().decide("job", Outcome::Accept, 9));
+        assert_eq!(
+            f.play().decide("job", Outcome::Accept, 9),
+            Decision::NoRoom { tons: 10, room: 9 }
+        );
         assert_eq!(f.state("job"), Some(MissionState::Offered));
         assert!(!f.flags.is_set("accepted"));
         assert_eq!(f.story.cargo_aboard(), 0);
@@ -547,11 +636,18 @@ mod tests {
     fn a_decline_applies_on_decline_and_is_never_offered_again() {
         let mut f = Fixture::new(&[("job", job())]);
         f.play().make_offer("job");
-        assert!(f.play().decide("job", Outcome::Decline, 100));
+        assert_eq!(
+            f.play().decide("job", Outcome::Decline, 100),
+            Decision::Changed
+        );
         assert_eq!(f.state("job"), Some(MissionState::Declined));
         assert!(f.flags.is_set("declined"));
         assert_eq!(f.next(DOCK, &[], false), None);
-        assert!(!f.play().decide("job", Outcome::Accept, 100), "decided");
+        assert_eq!(
+            f.play().decide("job", Outcome::Accept, 100),
+            Decision::Unchanged,
+            "decided"
+        );
     }
 
     #[test]
@@ -566,7 +662,10 @@ mod tests {
         f.flags.set("open");
         f.play().make_offer("job");
         let before = (f.flags.clone(), f.story.clone());
-        assert!(!f.play().decide("job", Outcome::Defer, 100));
+        assert_eq!(
+            f.play().decide("job", Outcome::Defer, 100),
+            Decision::Unchanged
+        );
         assert_eq!((f.flags.clone(), f.story.clone()), before);
         assert_eq!(f.next(DOCK, &[], false), Some(offer()));
         f.flags.clear("open");
@@ -576,7 +675,11 @@ mod tests {
     #[test]
     fn only_an_offered_mission_is_decided() {
         let mut f = Fixture::new(&[("job", job())]);
-        assert!(!f.play().decide("job", Outcome::Accept, 100), "not offered");
+        assert_eq!(
+            f.play().decide("job", Outcome::Accept, 100),
+            Decision::Unchanged,
+            "not offered"
+        );
         assert_eq!(f.state("job"), None);
     }
 
@@ -636,6 +739,7 @@ mod tests {
             objective: Some(MissionObjective::TakePoint {
                 point: "hearth/side".to_owned(),
                 held_by: "warden".to_owned(),
+                blockade: None,
             }),
             ..job()
         };
@@ -669,20 +773,24 @@ mod tests {
     }
 
     #[test]
-    fn a_take_point_mission_stays_active() {
+    fn a_take_point_mission_stays_active_through_landings_and_days() {
         let mut f = Fixture::new(&[(
             "road",
             StoryMission {
                 objective: Some(MissionObjective::TakePoint {
                     point: "hearth/side".to_owned(),
                     held_by: "warden".to_owned(),
+                    blockade: None,
                 }),
                 complete: None,
                 ..job()
             },
         )]);
         f.play().make_offer("road");
-        assert!(f.play().decide("road", Outcome::Accept, 0));
+        assert_eq!(
+            f.play().decide("road", Outcome::Accept, 0),
+            Decision::Changed
+        );
         let active = Some(MissionState::Active {
             cargo: 0,
             met: false,
@@ -693,6 +801,147 @@ mod tests {
         }
         f.play().day_passed();
         assert_eq!(f.state("road"), active);
+    }
+
+    /// A `take_point` objective on `point`.
+    fn taking(point: &str) -> MissionObjective {
+        MissionObjective::TakePoint {
+            point: point.to_owned(),
+            held_by: "warden".to_owned(),
+            blockade: None,
+        }
+    }
+
+    /// The road: offered at the dock, taking the side road's point, with
+    /// no completion, its success giving the point to the guild.
+    fn road() -> StoryMission {
+        StoryMission {
+            objective: Some(taking("hearth/side")),
+            complete: None,
+            on_success: StoryEffects {
+                points: vec![PointState {
+                    point: "hearth/side".to_owned(),
+                    owner: Some("guild".to_owned()),
+                    stability: None,
+                }],
+                ..setting(&["succeeded"])
+            },
+            ..job()
+        }
+    }
+
+    /// `f` with mission `id` offered and accepted.
+    fn accepted(f: &mut Fixture, id: &str) {
+        f.play().make_offer(id);
+        assert_eq!(f.play().decide(id, Outcome::Accept, 100), Decision::Changed);
+    }
+
+    #[test]
+    fn beating_the_holder_meets_its_take_point_and_one_without_a_completion_succeeds() {
+        let mut f = Fixture::new(&[("road", road())]);
+        accepted(&mut f, "road");
+        assert!(f.play().beat_holder("road"));
+        assert_eq!(f.state("road"), Some(MissionState::Done));
+        assert!(f.flags.is_set("succeeded"));
+        assert_eq!(
+            f.story.points["hearth/side"],
+            PointChange {
+                owner: Some("guild".to_owned()),
+                stability: None,
+            }
+        );
+        assert!(!f.play().beat_holder("road"), "done: no change");
+    }
+
+    #[test]
+    fn beating_the_holder_leaves_one_with_a_completion_met_for_its_scene() {
+        let mut f = Fixture::new(&[(
+            "road",
+            StoryMission {
+                complete: Some(MissionCompletion {
+                    at: Some(StellarId(CAMP)),
+                    dialog: place("done"),
+                }),
+                ..road()
+            },
+        )]);
+        accepted(&mut f, "road");
+        assert!(f.play().beat_holder("road"));
+        assert_eq!(
+            f.state("road"),
+            Some(MissionState::Active {
+                cargo: 0,
+                met: true
+            })
+        );
+        assert!(!f.flags.is_set("succeeded"), "its completion is to play");
+        assert_eq!(
+            f.next(CAMP, &[], false),
+            Some(Scene::Completion("road".to_owned()))
+        );
+        assert!(!f.play().beat_holder("road"), "met already");
+    }
+
+    #[test]
+    fn beating_the_holder_meets_that_mission_alone_and_only_an_active_take_point() {
+        let mut f = Fixture::new(&[
+            (
+                "elsewhere",
+                StoryMission {
+                    objective: Some(taking("hearth/main")),
+                    ..road()
+                },
+            ),
+            ("job", job()),
+            ("road", road()),
+            ("unseen", road()),
+        ]);
+        accepted(&mut f, "elsewhere");
+        accepted(&mut f, "job");
+        accepted(&mut f, "road");
+        assert!(f.play().beat_holder("road"));
+        assert_eq!(
+            f.state("elsewhere"),
+            Some(MissionState::Active {
+                cargo: 0,
+                met: false
+            }),
+            "another mission's point"
+        );
+        assert!(!f.play().beat_holder("job"), "a deliver");
+        assert_eq!(f.state("job"), Some(ACTIVE));
+        assert!(!f.play().beat_holder("unseen"), "not seen");
+        assert_eq!(f.state("unseen"), None);
+        f.play().make_offer("unseen");
+        assert!(!f.play().beat_holder("unseen"), "offered, not accepted");
+        assert_eq!(f.state("unseen"), Some(MissionState::Offered));
+        assert!(!f.play().beat_holder("nowhere"), "no such mission");
+    }
+
+    #[test]
+    fn beating_the_holder_makes_an_event_waiting_on_the_success_happen() {
+        let mut f = Fixture::new(&[
+            ("road", road()),
+            (
+                "event",
+                waiting_on(Requires {
+                    missions_done: vec!["road".to_owned()],
+                    ..Requires::default()
+                }),
+            ),
+        ]);
+        accepted(&mut f, "road");
+        assert_eq!(f.state("event"), None);
+        assert!(f.play().beat_holder("road"));
+        assert_eq!(f.state("event"), Some(MissionState::Done));
+        assert!(f.flags.is_set("fired"));
+    }
+
+    #[test]
+    fn beating_the_holder_with_nothing_to_meet_changes_nothing() {
+        let mut f = Fixture::new(&[]);
+        assert!(!f.play().beat_holder("road"));
+        assert_eq!(f.story, StoryState::default());
     }
 
     /// An event on day `day`, releasing `word` and closing the side road.
@@ -805,7 +1054,10 @@ mod tests {
         let mut f = with_event(requiring(&["accepted"]));
         f.play().make_offer("job");
         assert_eq!(f.state("event"), None);
-        assert!(f.play().decide("job", Outcome::Accept, 10));
+        assert_eq!(
+            f.play().decide("job", Outcome::Accept, 10),
+            Decision::Changed
+        );
         assert_eq!(f.state("event"), Some(MissionState::Done));
     }
 
@@ -813,7 +1065,10 @@ mod tests {
     fn a_decline_s_effects_make_an_event_happen_at_once() {
         let mut f = with_event(requiring(&["declined"]));
         f.play().make_offer("job");
-        assert!(f.play().decide("job", Outcome::Decline, 10));
+        assert_eq!(
+            f.play().decide("job", Outcome::Decline, 10),
+            Decision::Changed
+        );
         assert_eq!(f.state("event"), Some(MissionState::Done));
     }
 

@@ -27,7 +27,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Begins a jump ([`FlightCommand::Jump`]), or shows why not when the
     /// player is told ([`Answer::JumpRefused`]'s `told`,
     /// `nova_sim::Session::jump_refusal_told`); the refusal's beep is the
-    /// flight's, drained with its sounds. Starting it clears the message
+    /// flight's, drained with its sounds. A refusal the player is not told
+    /// shows at once any line the flight raised with it
+    /// ([`FlightView::say_messages`]), as the new game's
+    /// [`SimMessage::NoGateLeadsThere`](nova_sim::SimMessage::NoGateLeadsThere).
+    /// Starting it clears the message
     /// line only when it says [`TOO_CLOSE`], [`TRACTORED`], [`FAR_ENOUGH`]
     /// or [`NOTHING_OUT_HERE`] (`_HandlePlayer` @0x6b231-0x6b3d9, #36 at
     /// @0x6b2ac-0x6b30d). The original's second jump path clears them
@@ -54,6 +58,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
                     self.say_for(text, jump_refusal_ticks(&refusal));
                 }
             }
+            Answer::JumpRefused { told: false, .. } => self.say_messages(),
             _ => {}
         }
     }

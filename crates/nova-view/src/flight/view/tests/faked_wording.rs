@@ -11,8 +11,8 @@
 //! `sim_adapter/fake_catalog_checks.rs`'.
 
 use super::*;
-use nova_sim::SelfDestructLine;
 use nova_sim::flight_frame::{FlightEvent, OutfitNames, ShipNames};
+use nova_sim::{DockFind, SelfDestructLine};
 
 /// What `fake` words its messages with: its opening's names, and its
 /// frame's player's ship's name and date.
@@ -252,6 +252,16 @@ fn a_collapsed_jump_says_the_hyperspace_field_collapsed() {
 }
 
 #[test]
+fn j_with_no_gate_serving_the_selection_says_no_jump_point_leads_there() {
+    assert_eq!(
+        text(&SimMessage::NoGateLeadsThere, &FakeFlight::new()).as_deref(),
+        Some("No jump point leads there.")
+    );
+    assert_eq!(NO_GATE_LEADS_THERE, "No jump point leads there.");
+    assert_eq!(lead_of(&SimMessage::NoGateLeadsThere), None);
+}
+
+#[test]
 fn the_players_repair_droids_say_propulsion_systems_repaired() {
     assert_eq!(
         text(&SimMessage::PropulsionRepaired, &FakeFlight::new()).as_deref(),
@@ -434,6 +444,68 @@ fn a_contraband_notice_reads_its_names_from_the_flight() {
     );
     assert_eq!(lead_of(&junk(150)), None);
     assert_eq!(lead_of(&outfit(None)), None);
+}
+
+/// The new game's dock scan names what it found as the flight names it,
+/// an outfit with no lower-case name by its name, and adds the fine as
+/// the scans do.
+#[test]
+fn a_dock_scan_says_what_traffic_control_found_and_the_fine() {
+    let names = naming_with(|names| {
+        names.outfits.insert(
+            OutfitId(131),
+            OutfitNames {
+                name: "Gun mount".to_owned(),
+                lc_name: String::new(),
+                lc_plural: String::new(),
+            },
+        );
+        names
+            .outfits
+            .insert(OutfitId(275), outfit_lc("blaster", "blasters"));
+    });
+    let scanned = |found, fine| SimMessage::DockScanned {
+        stellar: StellarId(128),
+        found,
+        fine,
+    };
+    let kit = DockFind::Outfit {
+        id: OutfitId(131),
+        one: true,
+    };
+    assert_eq!(
+        text(&scanned(kit, 500), &names).as_deref(),
+        Some(
+            "Your ship is searched before landing: the Gun mount is found. You have been \
+             fined 500 credits."
+        )
+    );
+    assert_eq!(
+        text(&scanned(kit, 0), &names).as_deref(),
+        Some("Your ship is searched before landing: the Gun mount is found.")
+    );
+    let blasters = DockFind::Outfit {
+        id: OutfitId(275),
+        one: false,
+    };
+    assert_eq!(
+        text(&scanned(blasters, 1), &names),
+        Some(dock_scanned_message("blasters", 1))
+    );
+    let blaster = DockFind::Outfit {
+        id: OutfitId(275),
+        one: true,
+    };
+    assert_eq!(
+        text(&scanned(blaster, 0), &names),
+        Some(dock_scanned_message("blaster", 0))
+    );
+    let junk = DockFind::Junk(nova_sim::JunkId(150));
+    assert_eq!(
+        text(&scanned(junk, 0), &names),
+        Some(dock_scanned_message("bio-weapons", 0))
+    );
+    assert_eq!(lead_of(&scanned(kit, 0)), None);
 }
 
 /// The found mission's drawn ship name names the scanner when it has
@@ -763,4 +835,103 @@ fn the_wordings_picks_draw_on_the_views_chance() {
         )
     );
     assert_eq!(script.borrow().asked, [3, 2], "Rand(3), then Rand(2)");
+}
+
+// The dock scan's find in the press that lands or is denied
+// (rdm:phase/play-the-sample/phase-15-story-news-missions-ui, step 1).
+
+/// A view naming the Gun mount (outfit 131), flying in Sol.
+fn scanning() -> Faked {
+    let mut fake = naming_with(|names| {
+        names.outfits.insert(
+            OutfitId(131),
+            OutfitNames {
+                name: "Gun mount".to_owned(),
+                lc_name: String::new(),
+                lc_plural: String::new(),
+            },
+        );
+    });
+    fake.set_frame(FlightFrame {
+        player_ship_name: Some("Kestrel".to_owned()),
+        ..in_sol()
+    });
+    scripted_over(catalog(), fake, &Rulebook::default())
+}
+
+/// The scan's find of the Gun mount, fined 500 credits, raised in the
+/// press that `answer` answers, and L pressed.
+fn scanned_then(view: &mut Faked, answer: Answer) {
+    view.sim
+        .queue_event(FlightEvent::Message(SimMessage::DockScanned {
+            stellar: StellarId(128),
+            found: DockFind::Outfit {
+                id: OutfitId(131),
+                one: true,
+            },
+            fine: 500,
+        }));
+    view.sim.queue_answer(answer);
+    view.land();
+}
+
+/// The find's words: the Gun mount, fined 500 credits.
+fn the_find() -> String {
+    dock_scanned_message("Gun mount", 500)
+}
+
+/// The scan's find keeps the line after the denial in the same press,
+/// for its own ticks; the denial's words are dropped for that press.
+#[test]
+fn a_dock_scan_s_find_is_read_when_traffic_control_then_denies() {
+    let mut view = scanning();
+    scanned_then(
+        &mut view,
+        Answer::LandRefused {
+            refusal: nova_sim::LandingRefusal::Denied {
+                stellar: StellarId(128),
+                station: false,
+                min_status: 1,
+            },
+            gate: None,
+            requested: true,
+        },
+    );
+    assert_eq!(view.message(), Some(the_find().as_str()));
+    super::faked_travel::faked_tick(&mut view);
+    assert_eq!(view.message(), Some(the_find().as_str()));
+}
+
+/// A landing blanks the line, as every landing does, a find with it.
+/// The session never lands a press that scans (`session/dock_scan.rs`:
+/// a request granted elsewhere answers requested), so no find is lost
+/// this way.
+#[test]
+fn a_landing_blanks_the_line_whatever_the_press_said() {
+    let mut view = scanning();
+    scanned_then(
+        &mut view,
+        Answer::LandPress(nova_sim::LandPress::Outcome(
+            nova_sim::landing::LandOutcome::Landed(StellarId(128)),
+        )),
+    );
+    assert_eq!(view.message(), None);
+}
+
+/// A press that is granted, as one granted at another stellar is when
+/// traffic control has scanned it, says the find in its order, as
+/// before: it keeps the line.
+#[test]
+fn a_dock_scan_s_find_in_a_requested_press_is_said_in_its_order() {
+    let mut view = scanning();
+    scanned_then(
+        &mut view,
+        Answer::LandPress(nova_sim::LandPress::Outcome(
+            nova_sim::landing::LandOutcome::Requested {
+                stellar: StellarId(128),
+                station: false,
+            },
+        )),
+    );
+    assert_eq!(view.message(), Some(the_find().as_str()));
 }

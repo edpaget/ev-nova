@@ -5,6 +5,20 @@ use crate::catalog::{JunkId, OutfitId, ShipId, StellarId, SystemId};
 use crate::clearance::DockKind;
 use crate::tutorial::TutorialHint;
 
+/// What a dock scan found ([`SimMessage::DockScanned`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DockFind {
+    /// A `jünk`, named by its `LCName`.
+    Junk(JunkId),
+    /// An outfit, named by its `LCName` for one, else its `LCPlural`.
+    Outfit {
+        /// The outfit.
+        id: OutfitId,
+        /// Whether the player owns exactly one.
+        one: bool,
+    },
+}
+
 /// Something a `nova_sim::Session` did that the player is told of.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SimMessage {
@@ -114,6 +128,18 @@ pub enum SimMessage {
         outfit: OutfitId,
         /// Whether the player owns exactly one (@0x7f103-0x7f113).
         one: bool,
+        /// The credits fined: none for no fine.
+        fine: i64,
+    },
+    /// The new game's traffic control scanned the ship as it asked to land
+    /// and found contraband: the player is fined and convicted of
+    /// smuggling before the clearance (see `nova_sim::dock_scan`). The
+    /// original has no such scan, nor a `STR#` for it.
+    DockScanned {
+        /// The stellar whose traffic control scanned.
+        stellar: StellarId,
+        /// What it found.
+        found: DockFind,
         /// The credits fined: none for no fine.
         fine: i64,
     },
@@ -249,6 +275,14 @@ pub enum SimMessage {
     /// One of the player's self-destruct lines (`_HandlePlayer` block Z;
     /// see [`self_destruct`](crate::self_destruct)).
     SelfDestruct(SelfDestructLine),
+    /// J was refused because no gate the player's system shows serves the
+    /// system selected in nav mode 3: "No jump point leads there." Raised
+    /// only by the other reading of
+    /// [`RuleKey::NoGateRefusal`](crate::RuleKey::NoGateRefusal), under the
+    /// other reading of
+    /// [`RuleKey::GateAutopilot`](crate::RuleKey::GateAutopilot); the
+    /// original's J says nothing there (`_HandlePlayer` @0x6b964-0x6b9a3).
+    NoGateLeadsThere,
 }
 
 /// The player's self-destruct lines, `STR#` 2002 #385-#390 and #395.
@@ -307,7 +341,8 @@ impl SimMessage {
     ///   [`Smuggling`](Self::Smuggling),
     ///   [`IllegalJunk`](Self::IllegalJunk) and
     ///   [`IllegalOutfit`](Self::IllegalOutfit): 400 (`_ScanPlayer`
-    ///   @0x7e79d, @0x7ea96, @0x7eece, @0x7f38f).
+    ///   @0x7e79d, @0x7ea96, @0x7eece, @0x7f38f), and so the new game's
+    ///   [`DockScanned`](Self::DockScanned), as a scan's.
     /// - [`EscortRepaired`](Self::EscortRepaired) and
     ///   [`FighterRepaired`](Self::FighterRepaired): 250 (`_HandleShip`
     ///   @0x33ba1, `_HandlePlayerBoardAttempt` @0x65cff, @0x65af6,
@@ -351,17 +386,22 @@ impl SimMessage {
     ///   [`NiceDay`](SelfDestructLine::NiceDay) (`_HandlePlayer` @0x6feb9,
     ///   @0x70164, @0x70251), 70 for [`In`](SelfDestructLine::In)
     ///   (@0x7009e).
+    /// - [`NoGateLeadsThere`](Self::NoGateLeadsThere): 360, as J's other
+    ///   no-destination line (`_HandlePlayer` @0x6ba00); the original has
+    ///   no such line.
     #[must_use]
     pub fn ticks(&self) -> u16 {
         match self {
             Self::ExitedHypergate(_)
             | Self::FleetArrivalQuote(_)
             | Self::Sabotaged { .. }
-            | Self::BombSetUp => 360,
+            | Self::BombSetUp
+            | Self::NoGateLeadsThere => 360,
             Self::MissionScanned
             | Self::Smuggling { .. }
             | Self::IllegalJunk { .. }
             | Self::IllegalOutfit { .. }
+            | Self::DockScanned { .. }
             | Self::BombExploded { .. }
             | Self::ScanHail(_)
             | Self::CargoStolen { .. }
@@ -463,6 +503,24 @@ mod tests {
     }
 
     #[test]
+    fn a_dock_scan_lasts_as_long_as_a_scan() {
+        for found in [
+            DockFind::Outfit {
+                id: OutfitId(131),
+                one: true,
+            },
+            DockFind::Junk(JunkId(150)),
+        ] {
+            let scanned = SimMessage::DockScanned {
+                stellar: StellarId(128),
+                found,
+                fine: 500,
+            };
+            assert_eq!(scanned.ticks(), 400);
+        }
+    }
+
+    #[test]
     fn each_sim_message_lasts_its_callers_ticks() {
         let smuggling = SimMessage::Smuggling {
             scanner: ShipId(128),
@@ -559,6 +617,7 @@ mod tests {
                 },
                 400,
             ),
+            (SimMessage::NoGateLeadsThere, 360),
         ];
         for (message, ticks) in cases {
             assert_eq!(message.ticks(), ticks, "{message:?}");

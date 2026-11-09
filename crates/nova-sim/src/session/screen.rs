@@ -62,6 +62,8 @@ impl Session {
     /// - To [`ScreenAsk::Boarding`], [`Session::boarding`].
     /// - To [`ScreenAsk::PilotPanel`], [`Session::pilot_panel`].
     /// - To [`ScreenAsk::GateEntryDesc`], [`Session::gate_entry_desc`].
+    /// - To [`ScreenAsk::HeardNews`], [`Session::heard_news`] of the
+    ///   pilot's system.
     ///
     /// The map's redraw and panels, the hypergate cycle, the coming
     /// traffic, a ship's name prompt, a captured ship's, the hail, the
@@ -155,6 +157,7 @@ impl Session {
             ScreenAsk::GateEntryDesc(entry) => catalog.map_or(ScreenAnswer::Nothing, |catalog| {
                 ScreenAnswer::GateEntryDesc(self.gate_entry_desc(entry, catalog))
             }),
+            ScreenAsk::HeardNews => self.heard_news_screen(),
         }
     }
 

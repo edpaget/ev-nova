@@ -316,6 +316,9 @@ impl Screen for AppScreen {
                 .map(|screen| screen as &dyn Screen),
             self.missions.as_ref().map(|dialogs| dialogs as &dyn Screen),
             self.haggle.as_ref().map(|dialog| dialog as &dyn Screen),
+            self.story_log
+                .as_ref()
+                .map(|open| &open.screen as &dyn Screen),
         ];
         for overlay in under_map.into_iter().flatten() {
             overlay.draw(&mut dialogs);

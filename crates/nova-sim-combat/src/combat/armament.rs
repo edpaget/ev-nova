@@ -147,6 +147,7 @@
 
 mod ai_launch;
 mod burst_reload;
+mod fitted;
 mod idle_bays;
 #[cfg(test)]
 mod rating_stretch;

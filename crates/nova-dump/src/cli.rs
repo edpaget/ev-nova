@@ -9,12 +9,21 @@ use std::path::PathBuf;
 /// How to run `nova-dump`, shown by `--help` and after a usage error.
 pub const USAGE: &str = "\
 usage: nova-dump <DATA_DIR> <OUT_DIR> [--plugins <DIR>] [--verbose|-v]
+       nova-dump --pin-ids <GAME_DATA>
        nova-dump --help|-h
 
 Writes every record as JSON, every PICT, cicn, ppat and rl\u{eb}D as PNG and
 every snd as WAV under OUT_DIR, which must be missing or empty.
 
+With --pin-ids, writes the new game's ID table, nova-ids.json, in the
+GAME_DATA folder instead: every record keeps the ID it has, and each one
+added since gets one. Run it whenever a record is added. It writes
+nothing if the table holds entries the loader ignores (a duplicate ID, a
+bad key, an ID out of range), naming each: fix them by hand and run again.
+
   --plugins <DIR>  also load the plug-ins under DIR
+  --pin-ids <GAME_DATA>
+                   pin the new game's record IDs in GAME_DATA
   -v, --verbose    list ignored files, and show the field path and bytes
                    around each failure
   -h, --help       show this help
@@ -28,6 +37,8 @@ pub enum Command {
     Help,
     /// Dump the game data.
     Dump(Options),
+    /// Write the ID table of the new game's folder.
+    PinIds(PathBuf),
 }
 
 /// The options of a dump.
@@ -61,9 +72,13 @@ pub enum UsageError {
     /// An option that may be given once was given again.
     #[error("{0} given more than once")]
     Repeated(&'static str),
+    /// An option of the dump given with `--pin-ids`.
+    #[error("--pin-ids takes no {0}")]
+    Alongside(&'static str),
 }
 
 const PLUGINS: &str = "--plugins";
+const PIN_IDS: &str = "--pin-ids";
 
 /// Parses the arguments after the program name. `--help` anywhere among the
 /// options wins over everything else, errors included.
@@ -71,6 +86,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, UsageE
     let mut args = args.into_iter();
     let mut positionals = Vec::new();
     let mut plugins = None;
+    let mut pin_ids = None;
     let mut verbose = false;
     let mut error = None;
     let mut flags_done = false;
@@ -91,6 +107,13 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, UsageE
                 }
                 Some(dir) => plugins = Some(PathBuf::from(dir)),
             },
+            Some(PIN_IDS) => match args.next() {
+                None => keep_first(&mut error, UsageError::MissingValue(PIN_IDS)),
+                Some(_) if pin_ids.is_some() => {
+                    keep_first(&mut error, UsageError::Repeated(PIN_IDS));
+                }
+                Some(dir) => pin_ids = Some(PathBuf::from(dir)),
+            },
             _ => keep_first(&mut error, UsageError::UnknownFlag(arg)),
         }
     }
@@ -98,6 +121,18 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, UsageE
         return Err(error);
     }
     let mut positionals = positionals.into_iter();
+    if let Some(dir) = pin_ids {
+        if let Some(extra) = positionals.next() {
+            return Err(UsageError::Extra(extra));
+        }
+        if plugins.is_some() {
+            return Err(UsageError::Alongside(PLUGINS));
+        }
+        if verbose {
+            return Err(UsageError::Alongside("--verbose"));
+        }
+        return Ok(Command::PinIds(dir));
+    }
     let data = positionals
         .next()
         .ok_or(UsageError::MissingDirectory("data"))?;
@@ -257,8 +292,43 @@ mod tests {
     }
 
     #[test]
+    fn pin_ids_takes_the_game_data_folder() {
+        let expected = Ok(Command::PinIds(PathBuf::from("game")));
+        assert_eq!(parse_strs(&["--pin-ids", "game"]), expected);
+        assert_eq!(parse_strs(&["--pin-ids", "game", "-h"]), Ok(Command::Help));
+    }
+
+    #[test]
+    fn pin_ids_stands_alone() {
+        let cases: [(&[&str], UsageError); 5] = [
+            (&["--pin-ids"], UsageError::MissingValue("--pin-ids")),
+            (
+                &["--pin-ids", "a", "--pin-ids", "b"],
+                UsageError::Repeated("--pin-ids"),
+            ),
+            (&["--pin-ids", "a", "out"], UsageError::Extra("out".into())),
+            (
+                &["--pin-ids", "a", "--plugins", "p"],
+                UsageError::Alongside("--plugins"),
+            ),
+            (
+                &["-v", "--pin-ids", "a"],
+                UsageError::Alongside("--verbose"),
+            ),
+        ];
+        for (args, error) in cases {
+            assert_eq!(parse_strs(args), Err(error), "{args:?}");
+        }
+        assert_eq!(
+            UsageError::Alongside("--plugins").to_string(),
+            "--pin-ids takes no --plugins"
+        );
+    }
+
+    #[test]
     fn the_usage_text_names_every_option() {
         for option in [
+            "--pin-ids <GAME_DATA>",
             "<DATA_DIR>",
             "<OUT_DIR>",
             "--plugins",

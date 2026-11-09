@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::catalog::StellarId;
+use crate::catalog::{StellarId, SystemId};
 use nova_sim_catalog::storylines::{PointAt, PointStability};
 
 /// The new game's story, as a pilot has played it. A new pilot's is
@@ -22,6 +22,10 @@ pub struct StoryState {
     pub points: BTreeMap<String, PointChange>,
     /// Each news item released, by id, with the day it broke.
     pub news: BTreeMap<String, u32>,
+    /// Each released news item's reach, by id, frozen at its release
+    /// ([`news::freeze`](super::news::freeze)): how many lanes it crosses
+    /// to reach each system it reaches, by ID.
+    pub reach: BTreeMap<String, BTreeMap<SystemId, u32>>,
 }
 
 /// Where a mission is.

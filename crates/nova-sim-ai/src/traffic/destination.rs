@@ -81,6 +81,12 @@
 //! the original's systems, and the other reading, the new game's, drops it,
 //! so a gate or stellar anywhere the system lists may be picked
 //! ([`within_reach`], [`candidates_within`]). The new game's jump points sit past 999 on one axis.
+//! A hypergate stamped
+//! [`gate_closed`](crate::catalog::LandingSite::gate_closed), its jump
+//! points all closed in the new game, is never ok: no ship heads for it,
+//! leaves through it or comes out of it, under every branch. The original
+//! has no such gate.
+//!
 //! The gates among the candidates are [`usable_gates`], which the other
 //! readings of
 //! [`RuleKey::ArrivalsThroughGates`](crate::RuleKey::ArrivalsThroughGates)
@@ -89,6 +95,7 @@
 //! draw among.
 
 use crate::catalog::{GovtId, LandingSite, StellarId};
+use crate::chance::Chance;
 use crate::gate::GateKind;
 use crate::geometry::Vec2;
 use crate::govt::{AVOIDS_HYPERGATES, Governments, PREFERS_HYPERGATES, PREFERS_WORMHOLES};
@@ -157,7 +164,10 @@ pub fn candidates_within<'s>(
     let ok: Vec<&LandingSite> = sites
         .iter()
         .filter(|site| {
-            is_landable(site) && within_reach(site, reach) && !govts.npc_enemies(govt, site.govt)
+            is_landable(site)
+                && !site.gate_closed
+                && within_reach(site, reach)
+                && !govts.npc_enemies(govt, site.govt)
         })
         .collect();
     let inhabited = |site: &LandingSite| site.flags & StellarFlags::UNINHABITED == 0;
@@ -222,6 +232,35 @@ pub fn usable_gates<'s>(
         .into_iter()
         .filter(|site| GateKind::of(site.flags2).is_some())
         .collect()
+}
+
+/// One of the [`usable_gates`] among `sites` for a ship of `govt` within
+/// `reach`, drawn uniformly on `chance`, leaving out `exclude` when another
+/// gate is usable. `None`, drawing nothing, when no gate is usable. The
+/// one draw arrivals and departures through gates share.
+#[must_use]
+pub fn draw_usable_gate<'s>(
+    govt: Option<GovtId>,
+    sites: &'s [LandingSite],
+    govts: &Governments,
+    reach: RuleSource,
+    exclude: Option<StellarId>,
+    chance: &mut (impl Chance + ?Sized),
+) -> Option<&'s LandingSite> {
+    let usable = usable_gates(govt, sites, govts, reach);
+    let others: Vec<_> = usable
+        .iter()
+        .copied()
+        .filter(|site| Some(site.id) != exclude)
+        .collect();
+    let gates = if others.is_empty() { usable } else { others };
+    if gates.is_empty() {
+        return None;
+    }
+    let draw = chance.below(u32::try_from(gates.len()).unwrap_or(u32::MAX));
+    gates
+        .get(usize::try_from(draw).unwrap_or(usize::MAX))
+        .copied()
 }
 
 /// The stellar among `sites` nearest `at`, as `_SelectNearestAnyStellar`
@@ -454,6 +493,104 @@ mod tests {
         assert_eq!(ids(Some(GovtId(141)), &no_wormhole, Admit::All), [128, 129]);
         let no_hypergate = [planet(128, 0.0, 0.0), wormhole(130)];
         assert_eq!(ids(Some(GovtId(140)), &no_hypergate, Admit::All), [128]);
+    }
+
+    /// A hypergate whose jump points are all closed, as the overlay
+    /// stamps it.
+    fn closed(id: i16) -> LandingSite {
+        LandingSite {
+            gate_closed: true,
+            ..hypergate(id)
+        }
+    }
+
+    #[test]
+    fn a_closed_hypergate_is_never_a_candidate_and_an_open_one_still_is() {
+        let sites = [planet(128, 0.0, 0.0), hypergate(129), closed(131)];
+        let pick = |govt| ids(Some(GovtId(govt)), &sites, Admit::All);
+        assert_eq!(pick(140), [129], "hypergates preferred");
+        assert_eq!(pick(128), [128, 129], "the default branch");
+        assert_eq!(ids(None, &sites, Admit::All), [128, 129]);
+        let usable: Vec<i16> = usable_gates(None, &sites, &govts(), RuleSource::Bible)
+            .into_iter()
+            .map(|site| site.id.0)
+            .collect();
+        assert_eq!(usable, [129], "the usable gates");
+        let only_closed = [planet(128, 0.0, 0.0), closed(131)];
+        assert_eq!(
+            ids(Some(GovtId(140)), &only_closed, Admit::All),
+            [128],
+            "no ok hypergate: the rest"
+        );
+        assert!(usable_gates(None, &only_closed, &govts(), RuleSource::Bible).is_empty());
+    }
+
+    fn drawn(
+        sites: &[LandingSite],
+        reach: RuleSource,
+        exclude: Option<i16>,
+        draws: &[u32],
+    ) -> (Option<i16>, Vec<u32>) {
+        let mut chance = nova_sim_base::fixture::Draws::of(draws);
+        let pick = draw_usable_gate(
+            None,
+            sites,
+            &govts(),
+            reach,
+            exclude.map(StellarId),
+            &mut chance,
+        )
+        .map(|site| site.id.0);
+        (pick, chance.asked)
+    }
+
+    #[test]
+    fn drawing_a_usable_gate_is_uniform_over_the_usable_gates() {
+        let sites = [
+            hypergate(129),
+            planet(128, 0.0, 0.0),
+            hypergate(130),
+            hypergate(131),
+        ];
+        for (draw, gate) in [(0, 129), (1, 130), (2, 131)] {
+            assert_eq!(
+                drawn(&sites, RuleSource::Bible, None, &[draw]),
+                (Some(gate), vec![3])
+            );
+        }
+    }
+
+    #[test]
+    fn drawing_a_usable_gate_leaves_out_the_excluded_one_when_another_is_usable() {
+        let sites = [hypergate(129), hypergate(130), hypergate(131)];
+        assert_eq!(
+            drawn(&sites, RuleSource::Bible, Some(130), &[1]),
+            (Some(131), vec![2])
+        );
+    }
+
+    #[test]
+    fn drawing_a_usable_gate_keeps_the_excluded_one_when_it_is_the_only_one() {
+        let sites = [planet(128, 0.0, 0.0), hypergate(129)];
+        assert_eq!(
+            drawn(&sites, RuleSource::Bible, Some(129), &[0]),
+            (Some(129), vec![1])
+        );
+    }
+
+    #[test]
+    fn drawing_a_usable_gate_with_none_draws_nothing() {
+        let sites = [planet(128, 0.0, 0.0), closed(131)];
+        assert_eq!(drawn(&sites, RuleSource::Bible, None, &[0]), (None, vec![]));
+        let far = LandingSite {
+            position: Vec2::new(1500.0, 0.0),
+            ..hypergate(132)
+        };
+        let out_of_reach = [planet(128, 0.0, 0.0), far];
+        assert_eq!(
+            drawn(&out_of_reach, RuleSource::Engine, None, &[0]),
+            (None, vec![])
+        );
     }
 
     #[test]

@@ -355,6 +355,9 @@ impl AppScreen {
         if let Some(dialog) = &mut self.planet_comm {
             return Some(dialog);
         }
+        if let Some(open) = &mut self.story_log {
+            return Some(&mut open.screen);
+        }
         if let Some(dialogs) = &mut self.missions {
             return Some(dialogs);
         }
@@ -399,6 +402,10 @@ impl AppScreen {
             Overlay::Comm => self.comm.as_mut().map(|s| s as &mut dyn Screen),
             Overlay::EscortDialog => self.escort_dialog.as_mut().map(|s| s as &mut dyn Screen),
             Overlay::PlanetComm => self.planet_comm.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::StoryLog => self
+                .story_log
+                .as_mut()
+                .map(|open| &mut open.screen as &mut dyn Screen),
             Overlay::DialogMap => None,
             Overlay::Missions => self.missions.as_mut().map(|s| s as &mut dyn Screen),
             Overlay::Offer => self.offer.as_mut().map(|s| s as &mut dyn Screen),
@@ -516,8 +523,16 @@ impl AppScreen {
             .flight
             .as_mut()
             .and_then(FlightView::take_mission_info_request)
-            && self.flight_missions().is_some()
         {
+            // The new game's missions, in its own log, without dialogs
+            // (the `story_log` module).
+            if self.open_missions_log(&info, super::story_log::AfterLog::InfoOverFlight) {
+                self.hide_flight_cursor();
+                return;
+            }
+            if self.flight_missions().is_none() {
+                return;
+            }
             self.hide_flight_cursor();
             if let Some(missions) = &mut self.missions {
                 missions.open_info(info);

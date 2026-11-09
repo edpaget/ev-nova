@@ -16,7 +16,7 @@ pub(crate) use nova_sim_catalog::fixture::{
 };
 
 mod laned;
-pub(crate) use laned::{DRIFT, HEARTH, VERGE, laned};
+pub(crate) use laned::{DRIFT, HEARTH, VERGE, laned, laned_stable};
 
 use crate::ai::{Behaviour, Goal, Reaction, Surroundings};
 use crate::catalog::{

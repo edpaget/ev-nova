@@ -10,7 +10,7 @@
 
 use nova_sim::flight_frame::{Answer, FlightCommand, GateEntry, GatePilotShown};
 use nova_sim::landing::LandOutcome;
-use nova_sim::{CombatEvent, GateKind, GateRefusal, LandPress, SystemId};
+use nova_sim::{CombatEvent, GateKind, GateRefusal, LandPress, SimMessage, SystemId};
 
 use crate::Input;
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
@@ -22,7 +22,7 @@ use crate::system::catalog::SystemCatalog;
 use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 
 use super::{
-    FlightView, GATE_REFUSAL_TICKS, HYPERGATE_CANCELLED, gate_refusal_message,
+    FlightView, GATE_REFUSAL_TICKS, HYPERGATE_CANCELLED, Said, gate_refusal_message,
     landing_refusal_ticks, refusal_message, stellar_name,
 };
 
@@ -39,7 +39,11 @@ impl<
     /// Presses the land key ([`FlightCommand::Land`]): requests clearance,
     /// lands, enters a gate, or shows why not. What the press said (the
     /// request's line, or "No response."), shows first, so a
-    /// refusal in the same press replaces it. A landing hands the router
+    /// refusal in the same press replaces it, except the new game's dock
+    /// scan's find ([`SimMessage::DockScanned`]): it is said after the
+    /// refusal, keeping the line. A press that scans never lands: the
+    /// session answers it requested or refused (`session/dock_scan.rs`).
+    /// A landing hands the router
     /// the stellar ([`FlightView::take_landing`]) and lets go of what the
     /// view keeps of the fight; over a cleared hypergate the course map
     /// opens offering its links ([`FlightCommand::OpenHypergate`]), and
@@ -76,7 +80,7 @@ impl<
             Answer::LandRefused { requested, .. } => requested,
             _ => true,
         };
-        self.say_messages();
+        let scans = self.say_press_messages(&pressed);
         match pressed {
             Answer::LandPress(LandPress::Outcome(LandOutcome::Landed(stellar))) => {
                 self.blank_message();
@@ -126,10 +130,30 @@ impl<
                 if let Some(text) = refusal_message(&refusal, gate, &name) {
                     self.say_for(text, landing_refusal_ticks(&refusal));
                 }
+                for (text, ticks) in scans {
+                    self.say_for(text, ticks);
+                }
             }
             _ => {}
         }
         requested
+    }
+
+    /// Says the press's messages, in order, but for a refused press, whose
+    /// dock scan's find ([`SimMessage::DockScanned`]) is held back and
+    /// handed back worded: the refusal's line would replace it, and the
+    /// player must read what was found and fined. Stock never raises a
+    /// find.
+    fn say_press_messages(&mut self, pressed: &Answer) -> Said {
+        let messages = self.drain().take_messages();
+        let holds = matches!(pressed, Answer::LandRefused { .. });
+        let (scans, rest): (Vec<_>, Vec<_>) = messages
+            .into_iter()
+            .partition(|message| holds && matches!(message, SimMessage::DockScanned { .. }));
+        for (text, ticks) in self.word(rest) {
+            self.say_for(text, ticks);
+        }
+        self.word(scans)
     }
 
     /// The landing on `stellar` reaches the router

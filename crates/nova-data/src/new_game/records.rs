@@ -8,12 +8,16 @@ use crate::records::character::Character;
 use crate::records::desc::Desc;
 use crate::records::dude::Dude;
 use crate::records::govt::Govt;
+use crate::records::interface::Interface;
+use crate::records::mission::Mission;
 use crate::records::outfit::Outfit;
 use crate::records::ship::Ship;
 use crate::records::ship_anim::ShipAnim;
 use crate::records::stellar::{Stellar, flags};
 use crate::records::system::System;
+use crate::records::weapon::Weapon;
 use crate::wire::flags::{Flags16, Flags32, Flags64};
+use crate::wire::geometry::Rect;
 use crate::wire::raw::RawArray;
 use crate::wire::string::MacString;
 
@@ -272,6 +276,74 @@ pub fn neutral_dude() -> Dude {
     }
 }
 
+/// A `mïsn` that asks nothing and is never offered: no availability,
+/// pay, ships, texts, scripts, buttons, flags or time limit; no cargo
+/// (`CargoType` -1) and no destination or return (`TravelStel` and
+/// `ReturnStel` -1); every `dësc`, `STR#`, `düde` and `gövt` reference
+/// none.
+#[must_use]
+pub fn neutral_mission() -> Mission {
+    Mission {
+        avail_stel: 0,
+        unknown_0x02: 0,
+        avail_loc: 0,
+        avail_record: 0,
+        avail_rating: 0,
+        avail_random: 0,
+        travel_stel: -1,
+        return_stel: -1,
+        cargo_type: -1,
+        cargo_qty: 0,
+        pickup_mode: 0,
+        drop_off_mode: 0,
+        scan_mask: Flags16::default(),
+        unknown_0x1a: 0,
+        pay_val: 0,
+        ship_count: 0,
+        ship_syst: 0,
+        ship_dude: None,
+        ship_goal: 0,
+        ship_behav: 0,
+        ship_name_id: None,
+        ship_start: 0,
+        comp_govt: None,
+        comp_reward: 0,
+        ship_subtitle: None,
+        brief_text: None,
+        quick_brief: None,
+        load_carg_text: None,
+        dump_cargo_text: None,
+        comp_text: None,
+        fail_text: None,
+        time_limit: 0,
+        can_abort: 0,
+        ship_done_text: None,
+        unknown_0x46: 0,
+        aux_ship_count: 0,
+        aux_ship_dude: None,
+        aux_ship_syst: 0,
+        unknown_0x4e: 0,
+        flags: Flags16::default(),
+        flags2: Flags16::default(),
+        unknown_0x54: RawArray::default(),
+        refuse_text: None,
+        avail_ship_type: 0,
+        avail_bits: MacString::default(),
+        on_accept: MacString::default(),
+        on_refuse: MacString::default(),
+        on_success: MacString::default(),
+        on_failure: MacString::default(),
+        on_abort: MacString::default(),
+        require: Flags64::default(),
+        date_post_inc: 0,
+        on_ship_done: MacString::default(),
+        accept_button: MacString::default(),
+        refuse_button: MacString::default(),
+        disp_weight: 0,
+        unknown_0x7a2: RawArray::default(),
+    }
+}
+
 /// A `chär` that starts nowhere in nothing: no cash, ship, systems, legal
 /// records, kills, intro, script, flags, date or date affixes.
 #[must_use]
@@ -341,6 +413,78 @@ pub fn neutral_outfit() -> Outfit {
     }
 }
 
+/// A `wëap` that does nothing: no reload, life, damage, speed, flags,
+/// particles, beam, submunitions or ammunition limit; unguided
+/// (`Guidance` -1), using no ammunition (`AmmoType` -1), drawn with
+/// `Graphic` 0, whose `spïn` (3000) the new game's data never holds, so
+/// the view draws its shot as the placeholder box (a `Graphic` read above
+/// 255 unsigned, a negative one among them, spawns no shot at all:
+/// `nova_sim::combat::weapon`), silent (`Sound` -1), exploding into
+/// nothing (`ExplodType` -1) and leaving from the ship's centre
+/// (`ExitType` -1).
+#[must_use]
+pub fn neutral_weapon() -> Weapon {
+    Weapon {
+        reload: 0,
+        count: 0,
+        mass_dmg: 0,
+        energy_dmg: 0,
+        guidance: -1,
+        speed: 0,
+        ammo_type: -1,
+        graphic: 0,
+        inaccuracy: 0,
+        sound: -1,
+        impact: 0,
+        explod_type: -1,
+        prox_radius: 0,
+        blast_radius: 0,
+        flags: Flags16::default(),
+        seeker: Flags16::default(),
+        smoke_set: 0,
+        decay: 0,
+        particles: 0,
+        part_vel: 0,
+        part_life_min: 0,
+        part_life_max: 0,
+        part_color: 0,
+        beam_length: 0,
+        beam_width: 0,
+        falloff: 0,
+        beam_color: 0,
+        corona_color: 0,
+        sub_count: 0,
+        sub_type: None,
+        sub_theta: 0,
+        sub_limit: 0,
+        prox_safety: 0,
+        flags2: Flags16::default(),
+        ionization: 0,
+        hit_particles: 0,
+        hit_part_life: 0,
+        hit_part_vel: 0,
+        hit_part_color: 0,
+        recoil: 0,
+        exit_type: -1,
+        burst_count: 0,
+        burst_reload: 0,
+        jam_vuln: [0; 4],
+        flags3: Flags16::default(),
+        durability: 0,
+        guided_turn: 0,
+        max_ammo: 0,
+        li_density: 0,
+        li_amplitude: 0,
+        ionize_color: 0,
+        unknown_0x76: RawArray::default(),
+    }
+}
+
+/// The `spöb` `MinStatus` that clears a pilot of any legal record:
+/// -32767, which the clearance reads as "any record"
+/// (`nova_sim::landing::ANY_RECORD`).
+pub const ANY_RECORD: i16 = -32767;
+
 /// A `dësc` holding `text` alone: no picture, movie or flags.
 #[must_use]
 pub fn text_desc(text: &str) -> Desc {
@@ -398,10 +542,231 @@ pub fn clamp_i16(value: i32) -> (i16, bool) {
     }
 }
 
+/// The placeholder status bar's radar: 170 px square, as stock `ïntf` 128's
+/// is, at the bar's top. It stands until the bible authors an interface.
+pub const PLACEHOLDER_RADAR: Rect = area(4, 12, 174, 182);
+/// The placeholder shield gauge, under the radar. A placeholder until the
+/// bible authors an interface.
+pub const PLACEHOLDER_SHIELD: Rect = area(182, 12, 190, 182);
+/// The placeholder armour gauge, under the shield gauge. A placeholder
+/// until the bible authors an interface.
+pub const PLACEHOLDER_ARMOR: Rect = area(194, 12, 202, 182);
+/// The placeholder fuel gauge, under the armour gauge. A placeholder until
+/// the bible authors an interface.
+pub const PLACEHOLDER_FUEL: Rect = area(206, 12, 214, 182);
+/// The placeholder navigation readout. A placeholder until the bible
+/// authors an interface.
+pub const PLACEHOLDER_NAV: Rect = area(218, 12, 250, 182);
+/// The placeholder weapon readout. A placeholder until the bible authors an
+/// interface.
+pub const PLACEHOLDER_WEAPON: Rect = area(252, 12, 268, 182);
+/// The placeholder target readout, 112 px tall as stock `ïntf` 128's is.
+/// A placeholder until the bible authors an interface.
+pub const PLACEHOLDER_TARGET: Rect = area(270, 12, 382, 182);
+/// The placeholder cargo readout, the bar's lowest area: 86 px, tall enough
+/// for its credits value's baseline 82 px down, ending inside a 480-tall view. A placeholder until the bible authors an interface.
+pub const PLACEHOLDER_CARGO: Rect = area(384, 12, 470, 182);
+/// The placeholder bright text colour, white. A placeholder until the bible
+/// authors an interface.
+pub const PLACEHOLDER_BRIGHT_TEXT: u32 = 0x00FF_FFFF;
+/// The placeholder dim text colour, grey. A placeholder until the bible
+/// authors an interface.
+pub const PLACEHOLDER_DIM_TEXT: u32 = 0x0080_8080;
+/// The placeholder bright radar colour (the player), light green. A
+/// placeholder until the bible authors an interface.
+pub const PLACEHOLDER_BRIGHT_RADAR: u32 = 0x0080_FF80;
+/// The placeholder dim radar colour (everything else), dark green. A
+/// placeholder until the bible authors an interface.
+pub const PLACEHOLDER_DIM_RADAR: u32 = 0x0000_8000;
+/// The placeholder shield gauge colour, blue. A placeholder until the bible
+/// authors an interface.
+pub const PLACEHOLDER_SHIELD_COLOR: u32 = 0x0040_80FF;
+/// The placeholder armour gauge colour, red. A placeholder until the bible
+/// authors an interface.
+pub const PLACEHOLDER_ARMOR_COLOR: u32 = 0x00FF_4040;
+/// The placeholder full fuel colour, yellow. A placeholder until the bible
+/// authors an interface.
+pub const PLACEHOLDER_FUEL_FULL: u32 = 0x00FF_D000;
+/// The placeholder partial fuel colour, dark yellow. A placeholder until
+/// the bible authors an interface.
+pub const PLACEHOLDER_FUEL_PARTIAL: u32 = 0x0080_6800;
+/// The placeholder status font. A placeholder until the bible authors an
+/// interface.
+pub const PLACEHOLDER_FONT: &str = "Geneva";
+/// The placeholder status and subtitle font size. A placeholder until the
+/// bible authors an interface.
+pub const PLACEHOLDER_FONT_SIZE: i16 = 9;
+
+const fn area(top: i16, left: i16, bottom: i16, right: i16) -> Rect {
+    Rect {
+        top,
+        left,
+        bottom,
+        right,
+    }
+}
+
+/// The new game's status bar, every value a placeholder until the bible
+/// authors an interface: a radar at the top, then the shield, armour and
+/// fuel gauges and the nav, weapon, target and cargo readouts stacked
+/// below it, with no background picture (`StatusBkgnd` 0).
+#[must_use]
+pub fn default_interface() -> Interface {
+    Interface {
+        bright_text: PLACEHOLDER_BRIGHT_TEXT,
+        dim_text: PLACEHOLDER_DIM_TEXT,
+        radar_area: PLACEHOLDER_RADAR,
+        bright_radar: PLACEHOLDER_BRIGHT_RADAR,
+        dim_radar: PLACEHOLDER_DIM_RADAR,
+        shield_area: PLACEHOLDER_SHIELD,
+        shield_color: PLACEHOLDER_SHIELD_COLOR,
+        armor_area: PLACEHOLDER_ARMOR,
+        armor_color: PLACEHOLDER_ARMOR_COLOR,
+        fuel_area: PLACEHOLDER_FUEL,
+        fuel_full: PLACEHOLDER_FUEL_FULL,
+        fuel_partial: PLACEHOLDER_FUEL_PARTIAL,
+        nav_area: PLACEHOLDER_NAV,
+        weap_area: PLACEHOLDER_WEAPON,
+        targ_area: PLACEHOLDER_TARGET,
+        cargo_area: PLACEHOLDER_CARGO,
+        status_font: MacString::from(PLACEHOLDER_FONT),
+        stat_font_size: PLACEHOLDER_FONT_SIZE,
+        subtitle_size: PLACEHOLDER_FONT_SIZE,
+        status_bkgnd: 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::decode::{Record, decode_bytes};
+
+    /// The bar's width: nova-view's `STATUS_BAR_WIDTH`, whose own test pins
+    /// the 194.
+    const BAR_WIDTH: i16 = 194;
+    /// The smallest view height the game draws.
+    const VIEW_HEIGHT: i16 = 480;
+
+    fn intf_areas(intf: &Interface) -> [Rect; 8] {
+        [
+            intf.radar_area,
+            intf.shield_area,
+            intf.armor_area,
+            intf.fuel_area,
+            intf.nav_area,
+            intf.weap_area,
+            intf.targ_area,
+            intf.cargo_area,
+        ]
+    }
+
+    #[test]
+    fn every_default_area_is_non_empty_and_inside_the_bar() {
+        for r in intf_areas(&default_interface()) {
+            assert!(r.top >= 0 && r.left >= 0, "{r:?}");
+            assert!(r.top < r.bottom && r.left < r.right, "{r:?}");
+            assert!(r.right <= BAR_WIDTH && r.bottom <= VIEW_HEIGHT, "{r:?}");
+        }
+    }
+
+    /// The descent below a baseline of the bar's 9-point font.
+    const DESCENT: i16 = 3;
+    /// The nav readout's lowest baseline:
+    /// `nova_view::flight::hud::NAV_VALUE_BASELINE`.
+    const NAV_DEEPEST: i16 = 29;
+    /// The weapon readout's only baseline:
+    /// `nova_view::flight::target::WEAPON_BASELINE`.
+    const WEAPON_DEEPEST: i16 = 12;
+    /// The target readout's lowest top-anchored baseline:
+    /// `nova_view::flight::target::NO_TARGET_BASELINE`.
+    const TARGET_DEEPEST: i16 = 47;
+    /// The target's picture's height:
+    /// `nova_view::flight::target::PICTURE_HEIGHT`.
+    const TARGET_PICTURE: i16 = 64;
+    /// The target's subtitle baseline,
+    /// `nova_view::flight::target::SUBTITLE_BASELINE`, and its status line
+    /// above the bottom, `nova_view::flight::target::BOTTOM_BASELINE`.
+    const TARGET_SUBTITLE: i16 = 29;
+    const TARGET_BOTTOM: i16 = 6;
+    /// The cargo readout's lowest baseline:
+    /// `nova_view::flight::hud::CARGO_CREDITS_VALUE_BASELINE`.
+    const CARGO_DEEPEST: i16 = 82;
+
+    /// A cheap sanity check against hand-copied nova-view baselines, which
+    /// go stale if nova-view moves one. The authoritative check is the
+    /// wiring test over nova-view's real drawing,
+    /// `nova`'s `sample_status_bar::the_sample_draws_every_readout_inside_its_area`.
+    #[test]
+    fn every_default_readout_area_holds_its_readout() {
+        let intf = default_interface();
+        let h = |r: Rect| r.bottom - r.top;
+        assert!(
+            h(intf.nav_area) >= NAV_DEEPEST + DESCENT,
+            "{:?}",
+            intf.nav_area
+        );
+        assert!(
+            h(intf.weap_area) >= WEAPON_DEEPEST + DESCENT,
+            "{:?}",
+            intf.weap_area
+        );
+        let targ = h(intf.targ_area);
+        assert!(targ >= TARGET_DEEPEST + DESCENT, "{:?}", intf.targ_area);
+        assert!(targ >= TARGET_PICTURE, "{:?}", intf.targ_area);
+        assert!(
+            targ - TARGET_BOTTOM - DESCENT > TARGET_SUBTITLE + DESCENT,
+            "{:?}",
+            intf.targ_area
+        );
+        assert!(
+            h(intf.cargo_area) >= CARGO_DEEPEST + DESCENT,
+            "{:?}",
+            intf.cargo_area
+        );
+        let lowest = intf_areas(&intf).iter().map(|r| r.bottom).max();
+        assert!(lowest <= Some(VIEW_HEIGHT), "{lowest:?}");
+    }
+
+    #[test]
+    fn the_default_radar_is_topmost_and_no_areas_overlap() {
+        let areas = intf_areas(&default_interface());
+        let radar = areas[0];
+        assert!(areas[1..].iter().all(|r| r.top >= radar.bottom));
+        for (i, a) in areas.iter().enumerate() {
+            for b in &areas[i + 1..] {
+                let apart = a.bottom <= b.top
+                    || b.bottom <= a.top
+                    || a.right <= b.left
+                    || b.right <= a.left;
+                assert!(apart, "{a:?} overlaps {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_default_marks_have_distinct_colours() {
+        let intf = default_interface();
+        let colours = [
+            intf.bright_radar,
+            intf.dim_radar,
+            intf.shield_color,
+            intf.armor_color,
+            intf.fuel_full,
+            intf.fuel_partial,
+        ];
+        for (i, a) in colours.iter().enumerate() {
+            assert!(!colours[i + 1..].contains(a), "{a:#08x} repeats");
+        }
+        assert_ne!(intf.bright_text, intf.dim_text);
+    }
+
+    #[test]
+    fn the_default_bar_has_no_picture_and_positive_font_sizes() {
+        let intf = default_interface();
+        assert!(intf.status_bkgnd < 128);
+        assert!(intf.stat_font_size > 0 && intf.subtitle_size > 0);
+        assert_eq!(&*intf.status_font, "Geneva");
+    }
 
     fn color(text: &str) -> Color {
         Color::try_from(text.to_owned()).expect("a colour")
@@ -546,12 +911,48 @@ mod tests {
     }
 
     #[test]
+    fn the_neutral_weapon_is_zero_but_its_unused_and_none_fields() {
+        let expected = zeroed::<Weapon>(|weapon| {
+            weapon.guidance = -1;
+            weapon.ammo_type = -1;
+            weapon.sound = -1;
+            weapon.explod_type = -1;
+            weapon.exit_type = -1;
+            weapon.sub_type = None;
+        });
+        assert_eq!(neutral_weapon(), expected);
+    }
+
+    #[test]
     fn the_neutral_dude_is_zero_but_its_unused_references() {
         let expected = zeroed::<Dude>(|dude| {
             dude.govt = None;
             dude.ship_type = [None; 16];
         });
         assert_eq!(neutral_dude(), expected);
+    }
+
+    #[test]
+    fn the_neutral_mission_is_zero_but_its_unused_references_cargo_and_places() {
+        let expected = zeroed::<Mission>(|mission| {
+            mission.travel_stel = -1;
+            mission.return_stel = -1;
+            mission.cargo_type = -1;
+            mission.ship_dude = None;
+            mission.ship_name_id = None;
+            mission.comp_govt = None;
+            mission.ship_subtitle = None;
+            mission.brief_text = None;
+            mission.quick_brief = None;
+            mission.load_carg_text = None;
+            mission.dump_cargo_text = None;
+            mission.comp_text = None;
+            mission.fail_text = None;
+            mission.ship_done_text = None;
+            mission.aux_ship_dude = None;
+            mission.refuse_text = None;
+        });
+        assert_eq!(neutral_mission(), expected);
     }
 
     #[test]

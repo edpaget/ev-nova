@@ -95,6 +95,7 @@
 
 pub mod atlas;
 pub mod batch;
+mod box_filter;
 pub mod enlarge;
 pub mod fonts;
 pub mod glyph_raster;

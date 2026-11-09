@@ -1,0 +1,45 @@
+{
+  "blockades": {
+    "take-the-point": 128
+  },
+  "factions": {
+    "association": 128,
+    "commonwealth": 129,
+    "harrow-band": 130,
+    "marrow-commons": 131
+  },
+  "gates": {
+    "brightwater/luyten-road": 130,
+    "brightwater/marrow-gate": 131,
+    "luyten-crossing/association-road": 132,
+    "luyten-crossing/marrow-road": 133,
+    "marrow/far-gate": 134,
+    "marrow/luyten-road": 135
+  },
+  "kits": {
+    "armour-plating": 129,
+    "gun-mount": 130
+  },
+  "outfits": {
+    "mass-driver": 128
+  },
+  "ships": {
+    "harrow-gunship": 129,
+    "light-freighter": 128
+  },
+  "starts": {
+    "first-flight": 128
+  },
+  "stellars": {
+    "luyten-exchange": 128,
+    "marrow-yard": 129
+  },
+  "systems": {
+    "brightwater": 128,
+    "luyten-crossing": 129,
+    "marrow": 130
+  },
+  "weapons": {
+    "mass-driver": 128
+  }
+}

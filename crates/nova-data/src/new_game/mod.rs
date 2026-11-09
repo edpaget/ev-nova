@@ -10,27 +10,36 @@
 //! # What maps to what
 //!
 //! Each record's resource name is the bible's `name`, and its ID comes
-//! from [`ids`]: within a kind, in id order, from 128. A field the bible
-//! has no word for is neutral ([`records`]: zero, blank, none, no flags).
+//! from [`ids`]: the ID the folder's table pins it at, or, unpinned,
+//! within a kind in id order after the highest pin of its range (from 128
+//! with none). A field the bible has no word for is neutral ([`records`]:
+//! zero, blank, none, no flags).
 //!
 //! | Bible | Record | Fields |
 //! |---|---|---|
-//! | `factions/` | `gövt` | `color` and `ship_color` from `color`, as `00RRGGBB` |
+//! | `nova-ids.json` | every record's ID ([`pins`], [`ids`]) | the Nova ID each record keeps, by kind and bible id (a blockade's by its `take_point` mission's id); written only by `nova-dump --pin-ids` |
+//! | `factions/` | `gövt` | `color` and `ship_color` from `color`, as `00RRGGBB`; one that keeps the law (not `lawless`) `SmugPenalty` [`kits::LAW_SMUGGLE_PENALTY`], `ScanFine` [`kits::LAW_SCAN_FINE`] and `ScanMask` [`kits::LAWLESS_KIT_SCAN`], placeholders, so its scans find a lawless kit; a lawless one none |
 //! | `systems/` | `sÿst` | `x_pos`/`y_pos` from `map`; `govt` from `government`; `nav_def` its stellars, then its gates, each in ID order; the civilian traffic; no `con` links |
-//! | `stellars/` | `spöb` | `x_pos`/`y_pos` from `position`; `govt` from `owner`; `flags` from `services` and `kind` ([`records::stellar_flags`]); no `hyper_link`s |
+//! | `stellars/` | `spöb` | `x_pos`/`y_pos` from `position`; `govt` from `owner`; `flags` from `services` and `kind` ([`records::stellar_flags`]); no `hyper_link`s; a law-keeping owner's `TechLevel` [`kits::YARD_TECH_LEGAL`] and `MinStatus` 0, a lawless owner's or an unowned one's `TechLevel` [`kits::YARD_TECH_LAWLESS`] and `MinStatus` [`records::ANY_RECORD`] |
 //! | a stellar's body | `dësc` | the body, trimmed, at its `spöb`'s ID: the engine reads a stellar's landing text from the `dësc` with its `spöb`'s ID; an empty body has none |
-//! | a system's `jump_points` | hypergate `spöb` ([`gates`]) | numbered after the last stellar; `x_pos`/`y_pos` from `position`; `govt` from `owner`; `flags` `CAN_LAND`; `flags2` the hypergate bit; `hyper_link[0]` the partner point's gate; named for the partner's system; a random exit heading |
-//! | `ships/` hulls | `shïp` and `shän` ([`fleet`]) | `speed`, `shields`, `hull` and `cargo` as `Speed`, `Shield`, `Armor` and `Holds`; placeholder acceleration, turn rate, fuel and crew; the `shän` only `BaseXSize`/`BaseYSize` from `size` |
-//! | (placeholder) | `düde` 128 ([`fleet`]) | "Civilian traffic": every civilian hull at even odds, wimpy traders of no government |
-//! | `outfits/` | `oütf` ([`outfits`]) | its `name`, and `Cost` from `price`; massless, doing nothing, with no `Max` and never for sale (`TechLevel` 0x7fff); `mount`, `damage`, `range`, `reload` and `model` aren't read |
+//! | a system's `jump_points` | hypergate `spöb` ([`gates`]) | unpinned, numbered after the unpinned stellars; `x_pos`/`y_pos` from `position`; `govt` from `owner`; `flags` `CAN_LAND`; `flags2` the hypergate bit; `hyper_link[0]` the partner point's gate; named for the partner's system; a random exit heading; `MinStatus` [`records::ANY_RECORD`] |
+//! | `ships/`, hulls and variants | `shïp` and `shän` ([`fleet`]) | through the `base` chain: `speed`, `shields`, `hull` and `cargo` as `Speed`, `Shield`, `Armor` and `Holds`; placeholder acceleration, turn rate, fuel and crew; its kits as `DefaultItems`; its chain's hardpoints as `MaxGun` and `MaxTur`; its hardpoints' weapon outfits as stock weapons; the kit `fits` bits of its `role` as `Contribute`; the `shän` `BaseXSize`/`BaseYSize` from `size` and its hardpoints' and kits' as exit points |
+//! | (placeholder) | `düde` 128 ([`fleet`]) | "Civilian traffic": every civilian hull (no `base`, no `mods`) at even odds, wimpy traders of no government |
+//! | a `take_point`'s `held_by` | a guard `düde` ([`blockades`]) | "<faction> guards", numbered after 128 in faction id order, unpinned: the holder's ships (those whose livery names it) at even odds, of its `gövt`, flown as placeholder warships ([`blockades::GUARD_AI`]) |
+//! | a `take_point` objective | a hidden blockade `mïsn` ([`blockades`]) | its point's system as `ShipSyst`, its gate's nav slot as `ShipStart`, the holder's guards as `ShipDude`, [`blockades::BLOCKADE_SHIPS`] of them (a placeholder), chase off as `ShipGoal`, attacking the player; never offered, never completed by a landing; the store's objective names it |
+//! | (placeholder) | `ïntf` 128 ([`records::default_interface`]) | "Default status bar": a radar over the shield, armour and fuel gauges and the nav, weapon, target and cargo readouts, no background picture |
+//! | `outfits/` | `oütf` ([`outfits`]) | its `name`, and `Cost` from `price`; massless, with no `Max` and never for sale (`TechLevel` 0x7fff); a weapon (`damage` above 0, not a `bay`) a `ModType` 1 naming its `wëap`, `Flags` gun or turret; any other doing nothing; `model` isn't read |
+//! | a weapon outfit | `wëap` ([`outfits`]) | pinned by, and numbered in, outfit id order; `damage`, `range` and `reload` as damage, life and `Reload` at a placeholder speed; unguided, turreted for a turret; its mount's `ExitType`; drawn as the placeholder box, with no sound or explosion |
+//! | `mods/` | `oütf` ([`kits`]) | unpinned, numbered after the unpinned outfits; `Cost` from `price`; `Max` 1, `BuyRandom` 100, hidden unless it fits; its effects in the four `ModType` slots; its `fits` as a `Require` bit; `fitted_at` as `TechLevel` and, lawless, `ScanMask`; its hardpoints' outfits given by `OnPurchase` and taken back by `OnSell` |
+//! | a ship's chain hardpoints, a kit's hardpoints and `attention` | the store's fittings ([`GameData::fittings`], [`fleet`], [`kits`]) | each `shïp`'s own exit spots and each kit `oütf`'s, and each kit's attention, which `nova_sim::dock_scan` reads |
 //! | `starts/` | `chär` ([`fleet`]) | its hull, its system in `system[0]`, its cash, and a placeholder date |
 //! | a hull's `model`, `livery` and `size` | a ship stand-in ([`looks`]) | its model seen from above, painted by its livery, in pixels at [`fleet::PX_PER_METRE`]; else its size box in its livery's primary, or bare |
 //! | a stellar's `visual` | a stellar stand-in ([`looks`]) | a station's or outpost's model seen from above; else a disc in its look's first colour, its owner's, or bare grey |
 //! | a system's `jump_points` | a gate stand-in ([`looks`]) | a grey ring |
-//! | a jump point's `stability` | its gate's stability on the store ([`gates::stabilities`]) | the point's own; a jump between two points works as well as the worse of its ends, which the galaxy map's lanes read (`nova_sim::gate_lanes`) |
+//! | a jump point's `stability` and `owner` | its point on the storylines, with its gate ([`missions`], [`PointAt`](crate::PointAt)) | the point's own, which play overlays; a jump between two points works as well as the worse of its ends, and only a stable one is open, which the galaxy's lanes and gates read (`nova_sim_story::storylines::gate_points`) |
 //! | `dialog/<file>.ink.json` | its compiled text on the store ([`dialogs`], [`GameData::dialogs`]) | by the Ink file a ref names (`dialog/<file>.ink`); the `.ink` source isn't read |
 //! | a stellar's `dialog` | its `spöb`'s conversation on the store ([`dialogs`]) | the file and the knot (or `knot.stitch`) a landed pilot's conversation enters |
-//! | `missions/` | a mission on the store ([`missions`], [`GameData::storylines`]) | by its id: its title, `requires`, `offer`, `objective`, `complete` and the four effect blocks, its ids kept as text; a stellar it names as its `spöb`; an outfit an effect grants or removes as its `oütf`; its dialogs as places in the compiled texts |
+//! | `missions/` | a mission on the store ([`missions`], [`GameData::storylines`]) | by its id: its title, `requires`, `offer`, `objective`, `complete` and the four effect blocks, its ids kept as text; a stellar it names as its `spöb`; an outfit an effect grants or removes as its `oütf`; a `take_point`'s blockade as its `mïsn`; its dialogs as places in the compiled texts |
 //! | `news/` | a news item on the store ([`missions`]) | by its id: its headline, its body trimmed, and its `from` system's `sÿst` |
 //! | a jump point's `owner` and `stability` | its static state on the store ([`missions`]) | by `system/point`: its gate's `spöb`, its owner's id and its stability, which missions' effects overlay in play |
 //!
@@ -47,7 +56,11 @@
 //! The bible has models, not sprites, so nothing names a sprite: each hull,
 //! stellar and gate draws as its stand-in, kept on the store
 //! ([`GameData::stand_in`]) and read from the media through the same
-//! [`Source`].
+//! [`Source`]. Each ship's lineage, its chain of bible ids and its role, is
+//! kept too ([`GameData::ship_line`]), for the opt-in stock look, which
+//! draws a hull in stock sprites from the player's own data instead
+//! ([`crate::stock_look`]). Nor is there a star sheet: the stars draw as stand-in dots
+//! ([`GameData::star_dots`]).
 //!
 //! # Problems
 //!
@@ -63,9 +76,25 @@
 //!   records but no place in it, all named in one problem.
 //! - A jump point whose `to` names no jump point maps to a gate with no
 //!   link, which refuses its entry.
-//! - A start whose ship is no hull, or whose system isn't there, is left
+//! - A start whose ship isn't there, or whose system isn't there, is left
 //!   out.
+//! - A ship whose `base` chain loops or names a ship that isn't there is
+//!   left out, and a start in it with it. One with more than eight
+//!   default items or stock weapons keeps the first eight; one with more
+//!   than four hardpoints of a kind fires from the first four's places. A
+//!   mod kit or a hardpoint outfit it names itself that isn't there is
+//!   left out.
+//! - A kit needing more than four `ModType` slots keeps the first four;
+//!   one whose hardpoint names an outfit that isn't there doesn't give
+//!   it; one past the 64th distinct `fits` set is left out ([`kits`]).
+//! - A weapon past the last `wëap` ID does nothing ([`outfits`]).
 //! - A record past its kind's ID range is left out.
+//! - The ID table, `nova-ids.json` ([`pins`]): one that doesn't parse or
+//!   names an unknown kind is ignored whole, and every record is unpinned;
+//!   an entry with a malformed key, an ID outside its range, or an ID an
+//!   earlier entry of its range holds is ignored; and a table that leaves
+//!   out a mapped record says how many, names the first and says to run
+//!   `nova-dump --pin-ids`. A folder with no table is no problem.
 //! - A stellar's `dialog` whose compiled `dialog/<file>.ink.json` is
 //!   missing maps no conversation. One whose knot the story lacks does the
 //!   same once [`NewGame::check_dialogs`] has asked the dialog port
@@ -79,6 +108,9 @@
 //!   lacks. One whose `requires` names a mission left out is left out
 //!   too, with a problem naming it. A news item whose `from` isn't a
 //!   system is left out.
+//! - A `take_point` whose holder has no ships maps a blockade with no
+//!   ships, met at once; one whose gate has no nav slot places its guards
+//!   at random ([`blockades`]).
 //! - A hull's `livery` that isn't in `liveries/` draws bare; a hull's
 //!   `model` or a stellar's `visual` that isn't in `assets/` draws as its
 //!   box or its disc; an asset whose model file doesn't decode is reported
@@ -90,21 +122,25 @@
 //!
 //! # Not mapped yet
 //!
+//! - The status bar: the bible authors no interface, so `ïntf` 128 is a
+//!   placeholder with no art ([`records::default_interface`]).
 //! - `regions/` and `harshness`, and a system's `hazards`: Nova has no
 //!   region record, and hazards belong to a later hazards phase (nebulae,
 //!   murk, interference). They stay readable on the loaded `Galaxy`.
-//! - A jump point's `stability` in travel: the store keeps it
-//!   ([`GameData::gate_stability`]) and the map draws it, but unstable and
-//!   dead points are travelled as stable ones until `play-the-sample`
-//!   phase 1.
-//! - Ship variants (a `base` or `mods`) and `mods/`: `play-the-sample`
-//!   phase 3. `outfits/` map only as things a pilot can own
-//!   ([`outfits`]): no weapon or system reads them, and no hardpoint is
-//!   fitted, so the hulls are unarmed.
-//!   A livery's `decals` aren't drawn.
+//! - A kit's `hidden_cargo`: nothing in the new game is contraband cargo
+//!   yet. A kit's `attention` is read only as "any": how much more 2 is
+//!   noticed than 1 waits for the bible's law numbers.
+//! - A launcher's homing and ammunition, and `bay` hardpoints and outfits
+//!   as fighter bays: a launcher fires unguided, and a bay does nothing.
+//! - Loose outfits for sale: no yard sells one until the bible says which
+//!   yards sell which weapons.
+//! - Variants in traffic: the civilian traffic flies hulls alone.
+//! - A livery's `decals` aren't drawn, nor are mounted outfits' models.
 //! - Traffic: the bible authors none, so the civilian `düde` and each
 //!   system's traffic are placeholders ([`fleet`]), as are a hull's
-//!   acceleration, turn rate, fuel and crew and a start's date.
+//!   acceleration, turn rate, fuel and crew and a start's date. A
+//!   blockade's size and its guards' AI are placeholders too
+//!   ([`blockades`]).
 //! - `storylines/`, a mission's `storyline`, `act` and an offer's
 //!   `giver`, and `characters/`: nothing in the engine reads them yet.
 //! - `budgets/` and an asset's provenance: tooling. An asset's models are
@@ -116,19 +152,22 @@
 //! - Commodity prices: a trade centre's price levels (the upper `Flags`
 //!   bits) stay unset, so it trades nothing until the bible prices goods.
 //!
-//! IDs aren't pinned: adding a data file renumbers what follows it, and a
-//! pilot saved before can load into another place ([`ids`]).
+//! The IDs are pinned by the folder's table, so adding a record moves no
+//! other record and a pilot saved before keeps its place ([`ids`]).
 
+pub mod blockades;
 pub mod dialogs;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod fleet;
 pub mod gates;
 pub mod ids;
+pub mod kits;
 pub mod looks;
 mod map;
 pub mod missions;
 pub mod outfits;
+pub mod pins;
 pub mod records;
 #[cfg(test)]
 mod tests;
@@ -142,7 +181,7 @@ use nova_galaxy_format::source::{DirSource, Source};
 pub use nova_galaxy_format::load::Problem;
 
 pub use self::ids::IdTable;
-pub use self::map::{Mapped, map};
+pub use self::map::{Mapped, map, map_pinned};
 use crate::store::GameData;
 
 /// A new game's data, loaded and mapped.
@@ -187,10 +226,13 @@ pub fn open(dir: &Path) -> Result<NewGame, ListError> {
 }
 
 /// Loads the new game's data from `source`, read from the folder `dir`:
-/// the format's loader, the LFS check over its media, the mapping, then
-/// the stand-ins ([`looks`]), whose models are read from `source` too.
+/// the format's loader, the ID table ([`pins`]), the LFS check over its
+/// media, the mapping under the table's pins, then the stand-ins
+/// ([`looks`]), whose models are read from `source` too. It never writes
+/// the table.
 pub fn load(source: &impl Source, dir: &Path) -> NewGame {
     let (galaxy, mut problems) = nova_galaxy_format::load::load(source);
+    let pins = pins::read(source, &mut problems);
     let lfs_pointers = lfs_pointers(&galaxy, source)
         .into_iter()
         .map(str::to_owned)
@@ -199,19 +241,23 @@ pub fn load(source: &impl Source, dir: &Path) -> NewGame {
         records,
         ids,
         problems: mapping,
-    } = map(&galaxy);
+        fittings,
+    } = map_pinned(&galaxy, pins.as_ref().unwrap_or(&IdTable::default()));
     problems.extend(mapping);
+    problems.extend(pins.and_then(|pins| pins::unpinned(&pins, &ids, dir)));
     let stand_ins = looks::stand_ins(&galaxy, &ids, source, &mut problems);
-    let stabilities = gates::stabilities(&galaxy, &ids.gates);
+    let ship_lines = looks::ship_lines(&galaxy, &ids);
     let compiled = dialogs::compiled(&galaxy, source, &mut problems);
     let dialogs = dialogs::read(&galaxy, &ids, &compiled, &mut problems);
     let storylines = missions::map(&galaxy, &ids, &compiled, &mut problems);
     NewGame {
         data: GameData::from_decoded(dir.to_path_buf(), records)
             .with_stand_ins(stand_ins)
-            .with_gate_stabilities(stabilities)
+            .with_ship_lines(ship_lines)
+            .with_star_dots(looks::STAR_DOTS.to_vec())
             .with_dialogs(dialogs)
-            .with_storylines(storylines),
+            .with_storylines(storylines)
+            .with_fittings(fittings),
         ids,
         problems,
         lfs_pointers,

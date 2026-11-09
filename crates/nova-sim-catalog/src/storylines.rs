@@ -26,7 +26,7 @@ pub use nova_data::{
 /// (stable, then unstable, then dead).
 pub use nova_data::GateStability as PointStability;
 
-use nova_data::GameData;
+use nova_data::{GameData, GovtId};
 
 use crate::dialogs::DialogAt;
 
@@ -40,6 +40,9 @@ pub struct Storylines {
     pub news: BTreeMap<String, NewsItem>,
     /// Every jump point, by `system/point`, with its static state.
     pub points: BTreeMap<String, PointAt>,
+    /// Each faction's government, by its id: the gate's government a
+    /// point's owner stands for in travel.
+    pub factions: BTreeMap<String, GovtId>,
     /// Each compiled story a mission's conversation names, by its Ink
     /// file (`dialog/<file>.ink`).
     pub compiled: BTreeMap<String, Arc<str>>,
@@ -93,6 +96,7 @@ pub(crate) fn storylines(data: &GameData) -> Storylines {
         missions: stored.missions.clone(),
         news: stored.news.clone(),
         points: stored.points.clone(),
+        factions: stored.factions.clone(),
         compiled,
     }
 }
@@ -144,6 +148,7 @@ mod tests {
                     stability: PointStability::Dead,
                 },
             )]),
+            factions: BTreeMap::from([("guild".to_owned(), GovtId(128))]),
         }
     }
 
@@ -160,12 +165,13 @@ mod tests {
     }
 
     #[test]
-    fn game_data_serves_the_store_s_missions_news_and_points() {
+    fn game_data_serves_the_store_s_missions_news_points_and_factions() {
         let served = PilotCatalog::storylines(&data());
         let stored = stored();
         assert_eq!(served.missions, stored.missions);
         assert_eq!(served.news, stored.news);
         assert_eq!(served.points, stored.points);
+        assert_eq!(served.factions, stored.factions);
         assert!(!served.is_empty());
     }
 

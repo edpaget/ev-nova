@@ -19,7 +19,7 @@ pub mod locate;
 pub mod new_game;
 pub mod report;
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -39,6 +39,7 @@ use crate::developer::flight_overlays;
 use crate::rulebook::ruleset_rulebook;
 use crate::ruleset::{Ruleset, chosen};
 use crate::settings::{GameKeeper, GameSettings, game_settings};
+use crate::stock_look::{self, StockLook};
 
 /// What the startup sequence is given: the command line and environment
 /// it reads, and the ports it works through.
@@ -89,6 +90,13 @@ pub struct Started<E, D> {
     /// Its data: for the new game, what loaded from its folder
     /// ([`DataSource::open_new_game`]).
     pub data: D,
+    /// The stock ship look the settings set ([`crate::stock_look`]): off
+    /// for the stock game, which ignores it.
+    pub stock_look: StockLook,
+    /// The player's stock data, opened from `NOVA_DATA` through
+    /// [`DataSource::open`], for the new game's stock ship look: only when
+    /// the look is on under the new game and it loaded.
+    pub stock_art: Option<D>,
 }
 
 /// Starts the game, in order:
@@ -98,13 +106,19 @@ pub struct Started<E, D> {
 ///    platform's windowing sets the application up itself.
 /// 3. Chooses the ruleset from `GAME_DATA` ([`chosen`]) and reads the
 ///    settings: the rulebook (with the ruleset's readings), the flight
-///    overlays and the keeper, so the remembered `Nova Files` are known.
+///    overlays, the stock ship look ([`stock_look::setting`]) and the
+///    keeper, so the remembered `Nova Files` are known.
 /// 4. For the new game, takes no argument, opens its folder
 ///    ([`DataSource::open_new_game`]) and starts over what loaded,
 ///    reporting each problem, the media that are Git LFS pointers and a
 ///    galaxy with no systems as warnings ([`new_game::warnings`]): no
 ///    lookup, no open panel and no change to the remembered directory. A
-///    folder that can't be listed is fatal.
+///    folder that can't be listed is fatal. With the stock ship look on,
+///    it opens `NOVA_DATA` through [`DataSource::open`] as the look's
+///    stock art; without it, or with a folder that can't be listed or
+///    loads nothing, it warns once and starts with no stock art. The
+///    look's own setting warnings are reported here alone: the stock
+///    game ignores the look.
 /// 5. For the stock game, reads the command line ([`cli::data_dir`]) and
 ///    finds the data ([`locate()`]), reporting each warning, and saves the
 ///    change to the remembered directory ([`apply_remember`]).
@@ -147,6 +161,7 @@ where
         ruleset_rulebook(settings.as_deref_mut(), ruleset.profile().readings);
     let (overlays, more) = flight_overlays(settings.as_deref_mut());
     warnings.extend(more);
+    let (look, look_warnings) = stock_look::setting(settings.as_deref_mut());
     let (mut keeper, game, warning) = game_settings(settings);
     warnings.extend(warning);
     for warning in &warnings {
@@ -167,6 +182,13 @@ where
         for warning in new_game::warnings(&dir, &loaded) {
             report.warn(&warning);
         }
+        let stock_art = look_stock(
+            &look,
+            &look_warnings,
+            source,
+            nova_data.as_deref(),
+            &mut report,
+        );
         return Ok(Started {
             ruleset,
             report,
@@ -177,6 +199,8 @@ where
             settings: game,
             dir,
             data: loaded.data,
+            stock_look: look,
+            stock_art,
         });
     }
     let named = match cli::data_dir(&args, nova_data) {
@@ -207,7 +231,71 @@ where
             settings: game,
             dir: found.dir,
             data: found.data,
+            stock_look: StockLook::default(),
+            stock_art: None,
         }),
         Err(not) => Err(report.fail(&Fatal::from(not), alert)),
+    }
+}
+
+/// The new game's stock ship look's stock data: `look`'s setting
+/// `warnings` reported, then, with the look on, `NOVA_DATA` opened
+/// ([`open_stock`]), why there is none reported.
+fn look_stock<D: DataSource>(
+    look: &StockLook,
+    warnings: &[String],
+    source: &D,
+    nova_data: Option<&OsStr>,
+    report: &mut Report,
+) -> Option<D::Data> {
+    for warning in warnings {
+        report.warn(warning);
+    }
+    if !look.on {
+        return None;
+    }
+    let (stock, warning) = open_stock(source, nova_data);
+    if let Some(warning) = warning {
+        report.warn(&warning);
+    }
+    stock
+}
+
+/// The player's stock data for the new game's stock ship look, opened from
+/// `nova_data` (`NOVA_DATA`) through `source`, and why there is none, as
+/// one warning: `NOVA_DATA` unset, a folder that can't be listed, or one
+/// that loads nothing. Every hull then draws its stand-in.
+fn open_stock<D: DataSource>(
+    source: &D,
+    nova_data: Option<&OsStr>,
+) -> (Option<D::Data>, Option<String>) {
+    const STAND_INS: &str = "the new game's hulls draw their stand-ins";
+    let Some(dir) = nova_data.filter(|dir| !dir.is_empty()).map(PathBuf::from) else {
+        return (
+            None,
+            Some(format!(
+                "nova: the stock ship look is on, but NOVA_DATA doesn't name your Nova Files; \
+                 {STAND_INS}"
+            )),
+        );
+    };
+    match source.open(&dir) {
+        Opened::Loaded(data) => (Some(data), None),
+        Opened::Empty(_) => (
+            None,
+            Some(format!(
+                "nova: the stock ship look is on, but NOVA_DATA's {} loads no data file; \
+                 {STAND_INS}",
+                dir.display()
+            )),
+        ),
+        Opened::Unreadable(why) => (
+            None,
+            Some(format!(
+                "nova: the stock ship look is on, but NOVA_DATA's {} can't be listed ({why}); \
+                 {STAND_INS}",
+                dir.display()
+            )),
+        ),
     }
 }

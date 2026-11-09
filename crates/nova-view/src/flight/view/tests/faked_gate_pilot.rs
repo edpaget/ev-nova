@@ -6,6 +6,7 @@
 //! [`Answer::GatePilot`]. The flight decides whose press it is; the view
 //! never says.
 
+use super::faked_hud::hud_tick;
 use super::faked_landing::{arrived, at_gate, at_the_hypergate, came_out_in_alpha};
 use super::faked_movies::{filmed, filming, run_out};
 use super::faked_travel::{now_shows, sent_but_lines};
@@ -186,4 +187,104 @@ fn the_players_own_l_over_a_hypergate_still_opens_the_map() {
         piloted.map_open(),
         "the player's press, the autopilot shown"
     );
+}
+
+// The nav area while the autopilot flies.
+
+/// The gate the autopilot keeps selected in nav mode 2.
+const SERVING_GATE: StellarId = StellarId(128);
+
+/// [`sol`] with [`SERVING_GATE`] selected in nav mode 2 and `explored`
+/// explored, the autopilot off.
+fn at_the_gate(explored: Vec<SystemId>) -> FlightFrame {
+    FlightFrame {
+        nav_mode: NavMode::Stellar(Some(SERVING_GATE)),
+        explored,
+        ..sol()
+    }
+}
+
+/// What the nav area shows of Alpha Centauri in nav mode 3, and of the
+/// serving gate in nav mode 2, with `explored` explored and the autopilot
+/// off, by the builders the autopilot's readout shares.
+fn names_of(explored: Vec<SystemId>) -> (hud::NavDestination, Option<String>) {
+    let view = faked(at_the_gate(explored));
+    let NavDisplay::Hyperspace { destination, .. } =
+        view.nav_display(NavMode::Hyperspace(Some(ALPHA)))
+    else {
+        panic!("mode 3 names a system");
+    };
+    let NavDisplay::Stellar(gate) = view.nav_display(NavMode::Stellar(Some(SERVING_GATE))) else {
+        panic!("mode 2 names a stellar");
+    };
+    (destination, gate)
+}
+
+#[test]
+fn with_the_autopilot_engaged_the_nav_area_shows_it_and_its_system() {
+    for (explored, alpha) in [
+        (
+            vec![SystemId(130), ALPHA],
+            hud::NavDestination::Named("Alpha Centauri".to_owned()),
+        ),
+        (vec![SystemId(130)], hud::NavDestination::Unexplored),
+    ] {
+        let view = faked(piloting(at_the_gate(explored.clone()), false));
+        let (to, gate) = names_of(explored.clone());
+        assert_eq!(to, alpha, "{explored:?}");
+        assert!(gate.is_some(), "the gate is named");
+        assert_eq!(
+            view.nav_now(),
+            NavDisplay::GatePilot { to, gate },
+            "{explored:?}"
+        );
+    }
+}
+
+#[test]
+fn with_the_autopilot_engaged_and_no_gate_selected_the_value_is_no_destination() {
+    let frame = FlightFrame {
+        nav_mode: NavMode::Stellar(None),
+        ..piloting(at_the_gate(vec![ALPHA]), false)
+    };
+    let view = faked(frame);
+    let (to, _) = names_of(vec![ALPHA]);
+    assert_eq!(view.nav_now(), NavDisplay::GatePilot { to, gate: None });
+}
+
+#[test]
+fn with_the_autopilot_off_the_nav_area_draws_as_today() {
+    let view = faked(at_the_gate(vec![ALPHA]));
+    let (_, gate) = names_of(vec![ALPHA]);
+    assert_eq!(view.nav_now(), NavDisplay::Stellar(gate));
+    assert_eq!(
+        view.nav_now(),
+        view.nav_display(NavMode::Stellar(Some(SERVING_GATE)))
+    );
+}
+
+#[test]
+fn engaging_and_letting_go_redraw_the_nav_area_at_once_under_the_hud_cadence() {
+    let mut view = faked(at_the_gate(vec![ALPHA]));
+    assert!(view.hud_waits(), "the engine's cadence");
+    hud_tick(&mut view);
+    let off = view.nav_now();
+    now_shows(&mut view, piloting(at_the_gate(vec![ALPHA]), false));
+    assert!(matches!(
+        view.nav_shown(&view.frame_now()),
+        NavDisplay::GatePilot { .. }
+    ));
+    hud_tick(&mut view);
+    assert!(matches!(
+        view.nav_scene,
+        Some((_, NavDisplay::GatePilot { .. }))
+    ));
+    now_shows(&mut view, at_the_gate(vec![ALPHA]));
+    assert_eq!(
+        view.nav_shown(&view.frame_now()),
+        off,
+        "let go, the same mode"
+    );
+    hud_tick(&mut view);
+    assert_eq!(view.nav_scene.as_ref().map(|(_, shown)| shown), Some(&off));
 }

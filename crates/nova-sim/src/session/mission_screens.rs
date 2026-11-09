@@ -39,6 +39,7 @@ use super::missions::TextSource;
 use super::{Chart, MissionRun, Outbox, Session, Setup, Statics};
 use crate::catalog::{DescMovie, MissionId, MissionTexts};
 use crate::chance::{Chance, NeverFires};
+use crate::flight_frame::StoryRow;
 use crate::galaxy_map::MapMarks;
 use crate::mission::screens::{HIDDEN, NO_MISSIONS_HERE, SPACEPORT, UNREFUSABLE};
 use crate::mission::{
@@ -273,6 +274,11 @@ pub struct MissionInfo {
     /// order, hidden ones included, so row *i* picks the *i*th of these
     /// and a step can pick past the rows. `None` picks by `rows`.
     pub table: Option<Vec<InfoRow>>,
+    /// The new game's active storyline missions, by catalog id
+    /// (`Statics::story_rows`): the router shows them in its own missions
+    /// log rather than on `DLOG` 1012. Always empty in stock, whose data
+    /// holds no storylines.
+    pub story: Vec<StoryRow>,
 }
 
 impl MissionInfo {
@@ -284,7 +290,21 @@ impl MissionInfo {
             rows,
             today: today.into(),
             table: None,
+            story: Vec::new(),
         }
+    }
+
+    /// This screen listing the storyline missions `story` too
+    /// ([`MissionInfo::story`]).
+    #[must_use]
+    pub fn with_story(self, story: Vec<StoryRow>) -> Self {
+        Self { story, ..self }
+    }
+
+    /// Whether it lists nothing: no stock row and no storyline row.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty() && self.story.is_empty()
     }
 
     /// This screen with each row's place picking from `table` instead
@@ -344,8 +364,9 @@ impl Session {
     /// (0x6870d-0x6888c) runs no key handler. A disabled ship is taken
     /// (none of the tests reads `_IsDisabled`). Taken, it counts the
     /// active missions the screen shows (@0x7047d-0x704ba, those without
-    /// `Flags` 0x0400): with one, the screen opens
-    /// ([`Session::mission_info`]); with none, it beeps `_beepSnd[3]`
+    /// `Flags` 0x0400), and the new game's active storyline missions
+    /// beside them ([`MissionInfo::story`], none in stock): with one, the
+    /// screen opens ([`Session::mission_info`]); with none, it beeps `_beepSnd[3]`
     /// ([`SimSound::Refused`], `PlaySound` @0x70557) before "No active
     /// missions.", `STR#` 2002 #354
     /// ([`SimMessage::NoActiveMissions`](crate::SimMessage::NoActiveMissions),
@@ -371,7 +392,7 @@ impl Session {
             return MissionInfoPress::Refused;
         }
         let info = self.mission_info();
-        if info.rows.is_empty() {
+        if info.is_empty() {
             self.out.sounds.push(SimSound::Refused);
             self.space
                 .say(&mut self.out, crate::SimMessage::NoActiveMissions);
@@ -625,7 +646,8 @@ impl Session {
     /// munges them before any text is loaded (@0x9e108); each text reads
     /// its own, as if loaded ([`Session::peek_desc`]: a missing one the
     /// remembered), changing nothing: the screen loads the selected one
-    /// ([`Session::show_info_row`]).
+    /// ([`Session::show_info_row`]). The new game's active storyline
+    /// missions ride beside the rows ([`MissionInfo::story`]).
     #[must_use]
     pub fn mission_info(&self) -> MissionInfo {
         let rows = self
@@ -636,6 +658,7 @@ impl Session {
             .map(|(slot, active)| self.info_row(slot, active))
             .collect();
         MissionInfo::shown(rows, self.med_date_text())
+            .with_story(self.statics.story_rows(&self.pilot))
     }
 
     /// The mission info screen after an abort, by the
@@ -3383,6 +3406,47 @@ pub(super) mod tests {
             session.take_messages(),
             [crate::SimMessage::NoActiveMissions]
         );
+    }
+
+    #[test]
+    fn the_mission_info_key_opens_on_storyline_missions_alone() {
+        use crate::session::storylines::tests::{job, landed, talking};
+        let catalog = talking(&[("job", job(10))]);
+        let mut session = landed(&catalog);
+        session.pilot.story.missions.insert(
+            "job".to_owned(),
+            crate::storylines::state::MissionState::Active {
+                cargo: 10,
+                met: false,
+            },
+        );
+        let _ = session.take_sounds();
+        let MissionInfoPress::Opens(info) = session.press_mission_info() else {
+            panic!("opens");
+        };
+        assert_eq!(info.rows, []);
+        assert_eq!(info.story, session.statics.story_rows(&session.pilot));
+        assert_eq!(info.story.len(), 1);
+        assert_eq!(session.take_sounds(), [], "no beep");
+        assert_eq!(session.mission_info_after_abort().story, info.story);
+    }
+
+    #[test]
+    fn with_neither_it_says_no_active_missions() {
+        use crate::session::storylines::tests::{job, landed, talking};
+        let catalog = talking(&[("job", job(10))]);
+        let mut session = landed(&catalog);
+        session.pilot.story.missions.insert(
+            "job".to_owned(),
+            crate::storylines::state::MissionState::Offered,
+        );
+        let _ = session.take_sounds();
+        let _ = session.take_messages();
+        assert_eq!(
+            session.press_mission_info(),
+            MissionInfoPress::NoActiveMissions
+        );
+        assert_eq!(session.take_sounds(), [crate::SimSound::Refused]);
     }
 
     #[test]

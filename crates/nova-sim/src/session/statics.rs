@@ -154,6 +154,10 @@ pub(super) struct Statics {
     /// conversations' stories, read when the session starts (see the
     /// `storylines` module). None in the stock game.
     pub(super) storylines: nova_sim_catalog::storylines::Storylines,
+    /// The new game's fittings, read when the session starts: each ship
+    /// class's own hardpoints and each kit's attention and hardpoints (see
+    /// the `dock_scan` module). None in the stock game.
+    pub(super) fittings: nova_sim_catalog::fittings::Fittings,
 }
 
 impl Statics {

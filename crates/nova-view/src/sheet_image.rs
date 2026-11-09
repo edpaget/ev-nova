@@ -7,8 +7,10 @@
 //! phase 20). An `rlëD` is keyed by its own ID, as every sprite always was;
 //! a `PICT` pair has no `rlëD` ID, so it is keyed by its `spïn`
 //! ([`ImageKind::SpinSheet`]) or by its ship and image
-//! ([`ImageKind::ShipSheet`]).
+//! ([`ImageKind::ShipSheet`]). A new-game hull's borrowed stock look is keyed
+//! by its stock ship, image and scale ([`ImageKind::StockShip`]).
 
+use nova_data::stock_look::Scale;
 use nova_data::{SheetKind, ShipImage};
 
 use crate::image::ImageKey;
@@ -29,6 +31,17 @@ pub enum SheetImage {
         ship: i16,
         /// Which of its images.
         image: ShipImage,
+    },
+    /// The frames stock `shïp` `ship`'s `image` resolves to in the
+    /// player's own stock data, scaled by `scale`: a new-game hull's
+    /// borrowed look ([`ImageKind::StockShip`]).
+    Stock {
+        /// The stock ship's ID.
+        ship: i16,
+        /// Which of its images.
+        image: ShipImage,
+        /// How much each frame is scaled.
+        scale: Scale,
     },
 }
 
@@ -60,6 +73,7 @@ impl SheetImage {
             Self::Rled(id) => ImageKey::sprite(id, frame),
             Self::Spin(id) => ImageKey::spin_sheet(id, frame),
             Self::Ship { ship, image } => ImageKey::ship_sheet(ship, image, frame),
+            Self::Stock { ship, image, scale } => ImageKey::stock_ship(ship, image, scale, frame),
         }
     }
 
@@ -69,7 +83,7 @@ impl SheetImage {
     pub const fn rled(self) -> Option<i16> {
         match self {
             Self::Rled(id) => Some(id),
-            Self::Spin(_) | Self::Ship { .. } => None,
+            Self::Spin(_) | Self::Ship { .. } | Self::Stock { .. } => None,
         }
     }
 
@@ -81,7 +95,7 @@ impl SheetImage {
     pub const fn clipped_frame(self, frame: u16, cut: (u16, u16)) -> Option<ImageKey> {
         match self {
             Self::Rled(id) => Some(ImageKey::clipped_sprite(id, frame, cut)),
-            Self::Spin(_) | Self::Ship { .. } => None,
+            Self::Spin(_) | Self::Ship { .. } | Self::Stock { .. } => None,
         }
     }
 }
@@ -146,6 +160,22 @@ mod tests {
         );
         assert_eq!(pair.frame(2), ImageKey::ship_sheet(128, ShipImage::Glow, 2));
         assert_eq!(pair.clipped_frame(2, (1, 2)), None);
+    }
+
+    #[test]
+    fn a_stock_sheet_is_keyed_by_its_stock_ship_and_has_no_rled_or_clipped_frame() {
+        let half = Scale::of(1, 2);
+        let stock = SheetImage::Stock {
+            ship: 136,
+            image: ShipImage::Lights,
+            scale: half,
+        };
+        assert_eq!(
+            stock.frame(4),
+            ImageKey::stock_ship(136, ShipImage::Lights, half, 4)
+        );
+        assert_eq!(stock.rled(), None);
+        assert_eq!(stock.clipped_frame(4, (1, 2)), None);
     }
 
     #[test]

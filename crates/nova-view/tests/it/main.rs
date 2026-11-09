@@ -17,5 +17,6 @@ mod stock_main_screen;
 mod stock_map_borders;
 mod stock_resource_browser;
 mod stock_ship_browser;
+mod stock_ship_looks;
 mod stock_spaceport;
 mod stock_system_view;

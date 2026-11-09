@@ -1,12 +1,15 @@
-//! The std adapters: the game data and the output directory on disk.
+//! The std adapters: the game data, the output directory and the new
+//! game's folder on disk.
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+use nova_data::new_game::pins::FILE;
+use nova_data::new_game::{self, IdTable, ListError};
 use nova_data::store::{GameData, OpenError};
 
-use crate::ports::{DataSource, OutputRoot, Sink};
+use crate::ports::{DataSource, GameFolder, OutputRoot, Sink};
 
 /// Adapter: opens the game data from disk with [`GameData::open`].
 #[derive(Clone, Copy, Debug, Default)]
@@ -61,6 +64,29 @@ impl Sink for DirSink {
     }
 }
 
+/// Adapter: a new game's folder on disk, loaded with
+/// [`new_game::open`], its table at [`FILE`] in it.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct StdGameFolder;
+
+impl GameFolder for StdGameFolder {
+    fn load(&self, dir: &Path) -> Result<IdTable, ListError> {
+        new_game::open(dir).map(|game| game.ids)
+    }
+
+    fn table(&self, dir: &Path) -> io::Result<Option<Vec<u8>>> {
+        match fs::read(dir.join(FILE)) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn replace_table(&self, dir: &Path, bytes: &[u8]) -> io::Result<()> {
+        fs::write(dir.join(FILE), bytes)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use nova_data::Record;
@@ -68,7 +94,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::testutil::{fork, record};
+    use crate::testutil::{check_folder_contract, fork, record};
 
     #[test]
     fn the_data_source_opens_a_folder_of_flattened_forks() {
@@ -166,5 +192,49 @@ mod tests {
             std::fs::read(dir.path().join("taken.json")).expect("read"),
             b"old"
         );
+    }
+
+    #[test]
+    fn the_game_folder_meets_the_contract() {
+        let dir = TempDir::new().expect("temp dir");
+        check_folder_contract(&StdGameFolder, dir.path(), &dir.path().join("missing"));
+    }
+
+    #[test]
+    fn the_game_folder_s_table_is_nova_ids_json_at_its_root() {
+        let dir = TempDir::new().expect("temp dir");
+        std::fs::write(dir.path().join("nova-ids.json"), b"{}").expect("write");
+        assert_eq!(
+            StdGameFolder.table(dir.path()).expect("reads"),
+            Some(b"{}".to_vec())
+        );
+        StdGameFolder
+            .replace_table(dir.path(), b"[]")
+            .expect("writes");
+        assert_eq!(
+            std::fs::read(dir.path().join("nova-ids.json")).expect("read"),
+            b"[]"
+        );
+    }
+
+    #[test]
+    fn the_game_folder_loads_the_new_game_s_ids() {
+        let dir = TempDir::new().expect("temp dir");
+        std::fs::create_dir(dir.path().join("factions")).expect("mkdir");
+        std::fs::write(
+            dir.path().join("factions").join("guild.md"),
+            "---\nname: Guild\nkind: minor\ncolor: \"#aa8800\"\n---\n",
+        )
+        .expect("write");
+        let ids = StdGameFolder.load(dir.path()).expect("loads");
+        assert_eq!(ids.factions.values().copied().collect::<Vec<_>>(), [128]);
+    }
+
+    #[test]
+    fn a_table_that_is_a_folder_can_t_be_read() {
+        let dir = TempDir::new().expect("temp dir");
+        std::fs::create_dir(dir.path().join("nova-ids.json")).expect("mkdir");
+        assert!(StdGameFolder.table(dir.path()).is_err());
+        assert!(StdGameFolder.replace_table(dir.path(), b"{}").is_err());
     }
 }

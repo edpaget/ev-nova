@@ -181,7 +181,10 @@
 //! session's drawing ([`GalaxyMap::show_drawing`], `nova_sim`'s
 //! [`galaxy_map`](nova_sim::galaxy_map) decides what `_DrawMap` draws),
 //! and on the viewer every system and link in the data
-//! ([`MapPicture::viewer`]). [`GalaxyMap::draw_marks`] draws it in
+//! ([`MapPicture::viewer`]): the Con links by `RuleKey::GateLanes`'
+//! engine reading, a fresh pilot's gate lanes by its other, each in its
+//! look with the closed lanes by `RuleKey::MapLaneStyle`'s other too
+//! ([`GalaxyMap::with_rules`], [`viewer_rules`](super::viewer_rules)). [`GalaxyMap::draw_marks`] draws it in
 //! `_DrawMap`'s order (@0xe568-0xf5d0), and the floating map draws it
 //! through the same method. Then the course and hypergate maps, and the
 //! viewer, bracket the selection and name the systems again, as
@@ -213,7 +216,9 @@
 //!    instead of the grey: each way in its gate lane's stability's colour
 //!    and dash, in two halves where the ways differ, and an arrowhead on
 //!    a one-way link ([`lanes`](super::lanes)). The hypergate map's links
-//!    and the selected and mode-3 links keep their colours.
+//!    and the selected and mode-3 links keep their colours. Each closed
+//!    gate lane ([`MapPicture::closed_lanes`]), which is no link, is drawn
+//!    in its look after the links, off the hypergate map.
 //! 5. **Each system**: its point's rect inset by −[`SYSTEM_INSET_ZOOMED`]
 //!    at pen 2 when the zoom ≤ 0.5, otherwise −[`SYSTEM_INSET`] at pen 1
 //!    (@0xeeec-0xef68), an oval painted black (@0xef70-0xef85) and framed
@@ -474,6 +479,10 @@ pub struct MapPicture {
     /// `RuleKey::MapLaneStyle`'s other reading
     /// ([`MapDrawing::lanes`]); empty for the original's greys.
     pub lanes: Vec<LaneLook>,
+    /// The closed gate lanes, each drawn in its look after the links and
+    /// never on the hypergate map ([`MapDrawing::closed_lanes`]); empty
+    /// for the original's greys.
+    pub closed_lanes: Vec<LaneLook>,
 }
 
 /// The colour `_ColorCodeSystem` gives `code` (@0xd672-0xd941).
@@ -514,6 +523,7 @@ impl MapPicture {
             gate_arrows: drawing.gate_arrows.clone(),
             named: drawing.named.clone(),
             lanes: drawing.lanes.clone(),
+            closed_lanes: drawing.closed_lanes.clone(),
         }
     }
 
@@ -553,6 +563,7 @@ impl MapPicture {
             gate_arrows: Vec::new(),
             named: systems.iter().map(|system| system.entry.id).collect(),
             lanes: Vec::new(),
+            closed_lanes: Vec::new(),
         }
     }
 }
@@ -593,7 +604,7 @@ pub enum MapMode {
 /// The galaxy map.
 #[derive(Clone, Debug)]
 pub struct GalaxyMap {
-    mode: MapMode,
+    pub(super) mode: MapMode,
     pub(super) model: GalaxyModel,
     look: Look,
     selected: Option<SystemId>,
@@ -625,7 +636,7 @@ pub struct GalaxyMap {
     offered: Vec<SystemId>,
     /// What the map draws: the viewer's from the start, an in-flight
     /// map's once shown ([`GalaxyMap::show_drawing`]).
-    picture: Option<MapPicture>,
+    pub(super) picture: Option<MapPicture>,
     /// Its keys, as commands: the viewer's ([`contexts::GALAXY_VIEWER`])
     /// or an in-flight map's ([`contexts::COURSE_MAP`]). Shift-Tab is
     /// [`MapCommand::TabBack`], read with either Shift as `_MapFilter`
@@ -1773,7 +1784,8 @@ impl GalaxyMap {
     /// current system's, then every other, the mode-3 slot's in
     /// [`DIM_GREEN`] (@0xe7a8-0xebd2). By `RuleKey::MapLaneStyle`'s other
     /// reading each link with a look is drawn in it ([`lanes::strokes`]),
-    /// off the hypergate map, whose links keep their grey.
+    /// off the hypergate map, whose links keep their grey, and then each
+    /// closed lane in its look, off the hypergate map too.
     fn draw_links(
         &self,
         list: &mut DrawList,
@@ -1812,6 +1824,17 @@ impl GalaxyMap {
                 (Some(others + at), grey)
             };
             line(list, at, (link.from, link.to), color);
+        }
+        if picture.hypergate {
+            return;
+        }
+        for look in &picture.closed_lanes {
+            let (Some(from), Some(to)) = (pixel(look.from), pixel(look.to)) else {
+                continue;
+            };
+            for stroke in lanes::strokes(look, from, to, grey) {
+                pen_line(list, stroke.from, stroke.to, 1, stroke.color);
+            }
         }
     }
 
@@ -3939,6 +3962,7 @@ mod tests {
             gate_arrows: Vec::new(),
             named: vec![SystemId(128), SystemId(129)],
             lanes: Vec::new(),
+            closed_lanes: Vec::new(),
         }
     }
 
@@ -4154,6 +4178,45 @@ mod tests {
         assert_eq!(rects(&hypergate, REAL_DARK_GREY).len(), 2);
         assert_eq!(rects(&hypergate, lanes::DEAD), []);
         assert_eq!(rects(&hypergate, lanes::STABLE), []);
+    }
+
+    #[test]
+    fn a_closed_lane_is_drawn_in_its_look_with_no_grey_link_under_it() {
+        use nova_sim::catalog::GateStability::{Dead, Unstable};
+        use nova_sim::map_lanes::Back;
+        for (stability, color, pieces) in [(Unstable, lanes::UNSTABLE, 47), (Dead, lanes::DEAD, 86)]
+        {
+            let closed = MapDrawing {
+                course: Vec::new(),
+                current_links: Vec::new(),
+                links: Vec::new(),
+                mode3_link: None,
+                closed_lanes: vec![alpha_beta(Some(stability), Back::Way(Some(stability)))],
+                ..drawing()
+            };
+            let list = drawn(&showing(&closed));
+            let drawn: Vec<_> = rects(&list, color)
+                .into_iter()
+                .filter(|rect| rect.3 == 155.0)
+                .collect();
+            assert_eq!(drawn.len(), pieces, "{stability:?}");
+            assert_eq!(drawn[0].0, 212.0, "{stability:?} from Alpha");
+            assert_eq!(rects(&list, LESS_DARK_GREY), [], "{stability:?}: no grey");
+            let hypergate = drawn_on_hypergate(&closed);
+            assert_eq!(
+                rects(&hypergate, color),
+                [],
+                "{stability:?} on the hypergate map"
+            );
+        }
+    }
+
+    /// What [`showing`] `drawing` draws as the hypergate map's.
+    fn drawn_on_hypergate(drawing: &MapDrawing) -> DrawList {
+        drawn(&showing(&MapDrawing {
+            hypergate: true,
+            ..drawing.clone()
+        }))
     }
 
     #[test]

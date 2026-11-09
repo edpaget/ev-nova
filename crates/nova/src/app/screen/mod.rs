@@ -418,6 +418,7 @@ mod rescue_fades;
 mod routing;
 mod screen_impl;
 mod ship_name_dialog;
+mod story_log;
 mod touch_controls;
 
 /// Where the hint the router draws over the ships, the map and the main
@@ -622,6 +623,12 @@ pub struct AppScreen {
     /// The landed stellar's conversation, while it is open over the
     /// spaceport (see the `conversation` module).
     conversation: Option<nova_view::spaceport::ConversationScreen>,
+    /// The story log, while it is open over the spaceport or flight (see
+    /// the `story_log` module).
+    story_log: Option<story_log::OpenLog>,
+    /// Whether this visit's news has been offered (see the `story_log`
+    /// module); reset as the spaceport opens.
+    news_read: bool,
     /// The sounds of screens closed since the sounds were last taken.
     sounds: Vec<Sound>,
     /// The player's preferences, as last chosen.
@@ -693,6 +700,9 @@ pub struct AppScreen {
     rules: Rulebook,
     /// The port's own overlays each flight draws.
     flight_overlays: FlightOverlays,
+    /// The stock ship look each flight consults for a hull with no sheet
+    /// ([`AppScreen::with_ship_looks`]): none unless `main` gives it.
+    ship_looks: Option<Rc<nova_view::flight::StockShipLooks>>,
     /// The fee and wage of a hire in each flight.
     hire_terms: Rc<dyn HireTerms>,
     /// How persons appear in each flight.

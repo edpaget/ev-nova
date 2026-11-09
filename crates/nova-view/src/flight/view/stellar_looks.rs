@@ -159,8 +159,8 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S
     fn follow_ship(&mut self) {
         let ship = self.frame.player().class;
         if self.sheet_ship != Some(ship) {
-            self.sheet = self.catalog.ship_sheet(ship);
-            self.outline = super::outline_for(&self.catalog, ship, &self.sheet);
+            (self.sheet, self.outline) =
+                super::ship_looks::read_ship(&*self.catalog, &self.ship_looks, ship);
             self.sheet_ship = Some(ship);
         }
     }

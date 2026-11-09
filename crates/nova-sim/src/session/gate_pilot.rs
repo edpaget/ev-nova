@@ -192,11 +192,15 @@ impl Session {
     }
 
     /// The land key, telling the gate autopilot's press from the
-    /// player's (see the module docs): [`Session::land_requesting`]'s
-    /// press and whether it made a dock request.
-    pub(crate) fn press_land_key(&mut self) -> (Result<LandPress, LandingRefusal>, bool) {
+    /// player's (see the module docs): [`Session::land_requesting_by`]'s
+    /// press, traffic control scanning by `law` (the `dock_scan` module),
+    /// and whether it made a dock request.
+    pub(crate) fn press_land_key(
+        &mut self,
+        law: &dyn crate::legal::LegalCode,
+    ) -> (Result<LandPress, LandingRefusal>, bool) {
         let own = self.ship.gate_pilot.is_some_and(|pilot| pilot.asked_land);
-        let press = self.land_requesting();
+        let press = self.land_requesting_by(Some(law));
         let ended = !own || press.0.is_err_and(ends_on);
         if ended {
             self.ship.gate_pilot = None;
@@ -288,7 +292,11 @@ impl Chart {
     /// The gate the autopilot takes toward `hop` from a ship at `at`: of
     /// the gates serving the lane from the player's system to `hop`, the
     /// nearest the system shows, can be landed on and still holds, by
-    /// squared distance, then the lower ID (see the module docs).
+    /// squared distance, then the lower ID (see the module docs). The
+    /// holder term is defensive: in flight the shown sites and the lanes
+    /// already agree with the holder, and they differ only while the
+    /// owners are left unset, mid-jump or landed, where the autopilot
+    /// doesn't fly.
     fn serving_gate(
         &self,
         pilot: &Pilot,
@@ -315,24 +323,24 @@ impl Chart {
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::session) mod tests {
     use super::*;
     use crate::flight::{Face, Turn};
     use crate::flight_frame::{Answer, FlightCommand};
     use crate::hyperspace::{JumpReadiness, JumpRefusal};
     use crate::rulebook::Rulebook;
     use crate::sound::SimSound;
-    use crate::testkit::{DRIFT, HEARTH, VERGE, laned};
+    use crate::testkit::{DRIFT, HEARTH, VERGE, laned_stable};
 
-    /// A new pilot over [`laned`], in drift over gate 300, the links the
+    /// A new pilot over [`laned_stable`], in drift over gate 300, the links the
     /// gate lanes, by `autopilot` for [`RuleKey::GateAutopilot`] and the
     /// other reading of [`RuleKey::GateCourse`].
-    fn laned_by(autopilot: RuleSource) -> Session {
+    pub(in crate::session) fn laned_by(autopilot: RuleSource) -> Session {
         let rules = Rulebook::default()
             .with_override(RuleKey::GateLanes, RuleSource::Bible)
             .with_override(RuleKey::GateCourse, RuleSource::Bible)
             .with_override(RuleKey::GateAutopilot, autopilot);
-        Session::start_ruled(&laned(), &rules).expect("starts")
+        Session::start_ruled(&laned_stable(), &rules).expect("starts")
     }
 
     /// [`laned_by`] the gate autopilot's other reading.
@@ -428,7 +436,7 @@ mod tests {
     fn step(session: &mut Session, double: bool) {
         use crate::flight_frame::{StepInput, StepReport};
         use crate::session::StepCollaborators;
-        let catalog = laned();
+        let catalog = laned_stable();
         let behaviour = crate::ai::NovaAi::default();
         let mut chance = crate::chance::NeverFires;
         let mut collab = StepCollaborators {
@@ -655,6 +663,105 @@ mod tests {
         let mut stellar = autopiloted();
         stellar.chart.set_nav(NavMode::Stellar(Some(GATE_TO_VERGE)));
         assert!(!stellar.gate_pilot_would_engage());
+        let mut landed = selecting(autopiloted(), VERGE);
+        landed.mode = super::super::Mode::Landed(StellarId(300));
+        assert!(!landed.gate_pilot_would_engage(), "landed");
+    }
+
+    /// A hyperspace jump to verge under way.
+    fn jumping() -> super::super::Mode {
+        super::super::Mode::Jumping(crate::session::Jump::Hyperspace { to: VERGE, warp: 1 })
+    }
+
+    #[test]
+    fn j_with_a_jump_under_way_does_not_engage() {
+        let mut session = selecting(autopiloted(), VERGE);
+        session.mode = jumping();
+        assert!(!session.gate_pilot_would_engage());
+        assert!(!matches!(jump(&mut session), Answer::GatePilot(_)));
+        assert!(!session.gate_pilot_engaged());
+    }
+
+    #[test]
+    fn a_jump_under_way_disengages() {
+        let mut session = engaged();
+        session.mode = jumping();
+        assert_eq!(
+            session.pilot_controls(Controls::default()),
+            Controls::default()
+        );
+        assert!(!session.gate_pilot_engaged());
+    }
+
+    /// [`autopiloted`] with drift's gates unowned (drift made visible by
+    /// the hidden move, `Some(true)`), the rescues forgotten but for
+    /// `kept`'s, and the rebuild awaited: the owners left unset, as only
+    /// mid-jump or landed (the `owners_unset` module). The gates not kept
+    /// stay among the sites and the lane, but drift doesn't hold them.
+    fn owners_unset_but(kept: &[StellarId]) -> Session {
+        let mut session = autopiloted();
+        let mut overlay = session.chart.galaxy.overlay().clone();
+        overlay.set_visible(DRIFT, Some(true));
+        session.chart.galaxy.set_overlay(overlay);
+        session.chart.galaxy.forget_rescues();
+        let listed: Vec<_> = session
+            .statics
+            .listed_stellars
+            .iter()
+            .filter(|stellar| kept.contains(&stellar.id))
+            .cloned()
+            .collect();
+        session.chart.galaxy.keep_rescues(&listed, DRIFT);
+        session.chart.galaxy.await_rebuild();
+        let lane = session.chart.galaxy.lanes().gates(DRIFT, VERGE);
+        for gate in [GATE_TO_VERGE, StellarId(302)] {
+            assert!(lane.contains(&gate), "{gate:?} in the lane");
+            assert!(
+                session.chart.sites.iter().any(|site| site.id == gate),
+                "{gate:?} among the sites"
+            );
+            assert_eq!(
+                session
+                    .chart
+                    .held_here(&session.pilot, &session.statics, gate),
+                kept.contains(&gate),
+                "{gate:?} held"
+            );
+        }
+        session
+    }
+
+    /// The gate `serving_gate` picks toward verge from the player's ship.
+    /// Called directly: the owners are left unset only mid-jump or landed,
+    /// where `gate_pilot_flies` stops the session from asking, and in flight
+    /// the sites and lanes already agree with the holder, so the holder term
+    /// is pinned here, below the session.
+    fn served(session: &Session) -> Option<StellarId> {
+        session
+            .chart
+            .serving_gate(
+                &session.pilot,
+                &session.statics,
+                VERGE,
+                session.ship.player.position,
+            )
+            .map(|site| site.id)
+    }
+
+    /// The pick passes over the nearer 301, which drift doesn't hold (see
+    /// [`served`] for why this asks `serving_gate` directly).
+    #[test]
+    fn serving_gate_passes_over_a_gate_the_system_does_not_hold() {
+        let session = owners_unset_but(&[StellarId(302)]);
+        assert_eq!(served(&session), Some(StellarId(302)));
+    }
+
+    /// With neither gate held, none serves (see [`served`] for why this
+    /// asks `serving_gate` directly).
+    #[test]
+    fn serving_gate_with_neither_gate_held_gives_none() {
+        let session = owners_unset_but(&[]);
+        assert_eq!(served(&session), None);
     }
 
     // Over a stock-shaped galaxy with Con links, by `GateLanes`' engine
@@ -718,7 +825,7 @@ mod tests {
             .with_override(RuleKey::GateLanes, RuleSource::Bible)
             .with_override(RuleKey::GateCourse, course)
             .with_override(RuleKey::GateAutopilot, RuleSource::Bible);
-        let mut session = Session::start_ruled(&laned(), &rules).expect("starts");
+        let mut session = Session::start_ruled(&laned_stable(), &rules).expect("starts");
         session.pilot.course = hops.to_vec();
         session.pilot.course_start = Some(DRIFT);
         session.cue_course();
@@ -737,12 +844,12 @@ mod tests {
         crate::session::apply::tests::apply(session, FlightCommand::Land)
     }
 
-    /// Runs `command` on `session` with [`laned`] shared.
+    /// Runs `command` on `session` with [`laned_stable`] shared.
     fn apply_laned(session: &mut Session, command: FlightCommand) -> Answer {
         session.apply(
             command,
             &mut crate::session::apply::ApplyCollaborators {
-                catalog: Some(&laned()),
+                catalog: Some(&laned_stable()),
                 chance: &mut crate::chance::NeverFires,
                 law: &crate::legal::NovaLaw::default(),
                 boarding_rule: &crate::board::NovaBoarding::default(),

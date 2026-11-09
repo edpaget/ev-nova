@@ -150,6 +150,14 @@ pub struct LandingSite {
     /// (`nova_sim::story::OverlaidGalaxy::site`). Whether it is dominated
     /// reads this with its `Flags2` (`nova_sim::domination::dominated`).
     pub dominated_at_run_time: bool,
+    /// Whether it is a hypergate whose links are all closed, as its jump
+    /// points stand in play ([`GateStability::is_open`]): never in the
+    /// catalog, which gives `false`; the galaxy overlay stamps it
+    /// (`nova_sim::story::OverlaidGalaxy::site`). The land key refuses a
+    /// closed gate as a rank-barred one (`nova_sim::landing`), and no NPC
+    /// heads for one or comes out of it. A gate with no links at all, and
+    /// a wormhole, are never closed.
+    pub gate_closed: bool,
     /// Its `Type`, raw: the graphic type whose master the original's
     /// landing distance reads (see `nova_sim::landing`).
     pub graphic: i16,
@@ -251,24 +259,25 @@ pub struct GateSite {
     /// Its `CustSndID`, raw: the heading a ship comes out of it on, when
     /// it is 0 to 359.
     pub exit_angle: i16,
-    /// How well jumps through it work: a new-game jump point's own
-    /// stability, which the store keeps beside its gate; every stock
-    /// stellar is [`GateStability::Stable`], as the original has no such
-    /// word.
-    pub stability: GateStability,
 }
 
 /// How well jumps through a gate work, ordered from best to worst: the
-/// new game's jump points' `stability`. A jump between two gates works as
-/// well as the [`worse`](GateStability::worse) of its two ends. The
-/// original has no such word, so a stock gate is
-/// [`Stable`](GateStability::Stable).
+/// new game's jump points' `stability`, as play leaves it
+/// (`nova_sim_story::storylines::state::StoryState::point`). A jump
+/// between two gates works as well as the [`worse`](GateStability::worse)
+/// of its two ends, and a gate whose jump is not
+/// [open](GateStability::is_open) refuses entry. The original has no such
+/// word, so a stock gate is [`Stable`](GateStability::Stable).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum GateStability {
     /// Jumps through it always work: every stock gate.
     #[default]
     Stable,
-    /// Jumps through it sometimes fail.
+    /// Jumps through it sometimes fail, by the format. How often is
+    /// engine tuning, and the engine's is every time: an unstable jump is
+    /// closed ([`is_open`](GateStability::is_open)), so the planner and
+    /// the traffic can skip it as they skip a dead one, and no draw is
+    /// made. It differs from dead only on the map.
     Unstable,
     /// Jumps through it never happen.
     Dead,
@@ -279,6 +288,28 @@ impl GateStability {
     #[must_use]
     pub fn worse(self, other: Self) -> Self {
         self.max(other)
+    }
+
+    /// Whether a jump this stable can be taken: only a stable one (see
+    /// [`Unstable`](GateStability::Unstable)). The one rule every reader
+    /// of a gate's availability reads.
+    #[must_use]
+    pub fn is_open(self) -> bool {
+        self == Self::Stable
+    }
+}
+
+/// A jump point's stability, as the data and play keep it, read as a
+/// gate's: each its namesake. The match is exhaustive on purpose: a
+/// stability the data grows must be read here.
+impl From<crate::storylines::PointStability> for GateStability {
+    fn from(point: crate::storylines::PointStability) -> Self {
+        use crate::storylines::PointStability;
+        match point {
+            PointStability::Stable => Self::Stable,
+            PointStability::Unstable => Self::Unstable,
+            PointStability::Dead => Self::Dead,
+        }
     }
 }
 
@@ -2212,6 +2243,13 @@ pub trait PilotCatalog {
     fn storylines(&self) -> crate::storylines::Storylines {
         crate::storylines::Storylines::default()
     }
+    /// The new game's fittings: each ship class's own hardpoints and each
+    /// mod kit's attention and hardpoints (see the
+    /// [`fittings`](crate::fittings) module). None by default: the stock
+    /// game has none.
+    fn fittings(&self) -> crate::fittings::Fittings {
+        crate::fittings::Fittings::default()
+    }
     /// Every `spöb` that can be read, by ascending ID, with what its
     /// destruction and regeneration read.
     fn stellar_lives(&self) -> Vec<StellarLife>;
@@ -2541,6 +2579,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
     fn storylines(&self) -> crate::storylines::Storylines {
         (**self).storylines()
     }
+
+    fn fittings(&self) -> crate::fittings::Fittings {
+        (**self).fittings()
+    }
 }
 
 /// A shared catalog is a catalog, so the sim and the views can read the
@@ -2721,6 +2763,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
     fn storylines(&self) -> crate::storylines::Storylines {
         (**self).storylines()
     }
+
+    fn fittings(&self) -> crate::fittings::Fittings {
+        (**self).fittings()
+    }
 }
 
 /// `items`, each an outfit with a count, as how many of each: repeats add
@@ -2770,6 +2816,30 @@ mod tests {
         ] {
             assert_eq!(a.worse(b), worse, "{a:?} {b:?}");
         }
+    }
+
+    #[test]
+    fn only_a_stable_gate_is_open() {
+        assert!(GateStability::Stable.is_open());
+        assert!(!GateStability::Unstable.is_open());
+        assert!(!GateStability::Dead.is_open());
+    }
+
+    #[test]
+    fn each_point_stability_reads_as_its_namesake() {
+        use crate::storylines::PointStability;
+        assert_eq!(
+            GateStability::from(PointStability::Stable),
+            GateStability::Stable
+        );
+        assert_eq!(
+            GateStability::from(PointStability::Unstable),
+            GateStability::Unstable
+        );
+        assert_eq!(
+            GateStability::from(PointStability::Dead),
+            GateStability::Dead
+        );
     }
 
     #[test]
@@ -3052,6 +3122,7 @@ mod tests {
                 flags2: 0,
                 destroyed: false,
                 dominated_at_run_time: false,
+                gate_closed: false,
                 graphic: 4,
                 dead_graphic: Some(5),
                 dead_frame_size: Some((60, 60)),
@@ -3077,7 +3148,6 @@ mod tests {
                 flags2: 0x1200,
                 links,
                 exit_angle: 120,
-                stability: GateStability::Stable,
             }]
         }
 

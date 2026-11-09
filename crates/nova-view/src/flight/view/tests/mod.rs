@@ -101,6 +101,7 @@ mod faked_open;
 mod faked_player;
 mod faked_screen;
 mod faked_shops;
+mod faked_story;
 mod faked_travel;
 mod faked_wording;
 mod faked_world;
@@ -136,6 +137,7 @@ mod port_screen_map;
 mod rebinding;
 mod rescue;
 mod ship_drawing;
+mod ship_looks;
 mod ship_outlines;
 mod shots;
 mod stars;
@@ -583,6 +585,7 @@ fn sol_drawing() -> nova_sim::galaxy_map::MapDrawing {
         gate_arrows: Vec::new(),
         named: vec![sol],
         lanes: Vec::new(),
+        closed_lanes: Vec::new(),
     }
 }
 

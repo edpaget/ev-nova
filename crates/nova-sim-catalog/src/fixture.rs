@@ -155,6 +155,7 @@ pub fn planet(id: i16, x: f32, y: f32) -> LandingSite {
         flags2: 0,
         destroyed: false,
         dominated_at_run_time: false,
+        gate_closed: false,
         graphic: 0,
         dead_graphic: None,
         dead_frame_size: None,

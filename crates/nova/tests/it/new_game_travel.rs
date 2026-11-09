@@ -6,11 +6,14 @@
 //! a one-way back door and `drift`, a system of gates alone.
 //!
 //! - **New Pilot** starts in the fixture's start system, in its hull.
-//! - **The player** goes through every gate of every system and comes out
-//!   at its partner's gate, its escort after it.
-//! - **The traffic** comes out of and goes into every gate under the new
-//!   game's readings; under the stock rulebook the gates past 999 are
-//!   never used.
+//! - **The player** goes through every open gate of every system and
+//!   comes out at its partner's gate, its escort after it, and is denied
+//!   every closed one: a gate whose jump, the worse of its point's and its
+//!   partner's stability, isn't stable (the dead pair, the unstable back
+//!   door and the road into verge's unstable end).
+//! - **The traffic** comes out of and goes into every open gate and never
+//!   a closed one under the new game's readings; under the stock rulebook
+//!   the gates past 999 are never used.
 //!
 //! Which gate an exit takes and how the traffic picks its gates are
 //! nova-sim's and nova-sim-ai's rules, pinned there; this pins that the
@@ -30,8 +33,8 @@ use nova_sim::flight_frame::FlightEvent;
 use nova_sim::gate::GateKind;
 use nova_sim::traffic::destination::usable_gates as usable;
 use nova_sim::{
-    Controls, Escort, Governments, LandPress, NovaAi, Pilot, PilotCatalog, RuleKey, Rulebook,
-    Rules, Session, ShipId, SimMessage, SimSound, StellarId, SystemId, Vec2,
+    Controls, Escort, Governments, LandPress, LandingRefusal, NovaAi, Pilot, PilotCatalog, RuleKey,
+    Rulebook, Rules, Session, ShipId, SimMessage, SimSound, StellarId, SystemId, Vec2,
 };
 
 /// The new game's rulebook, with no settings.
@@ -55,6 +58,9 @@ pub(crate) struct Gate {
     pub at: Vec2,
     /// Its partner's gate, its system and where it sits.
     pub partner: (StellarId, SystemId, Vec2),
+    /// Whether its jump is open: the worse of its point's and its
+    /// partner's stability, as the data writes them, is stable.
+    pub open: bool,
 }
 
 /// `stellar`'s record in `data`.
@@ -78,6 +84,14 @@ pub(crate) fn gates(game: &NewGame) -> Vec<Gate> {
             .expect("a gate's partner is a gate")
     };
     let at = |stellar: &Stellar| Vec2::new(f32::from(stellar.x_pos), f32::from(stellar.y_pos));
+    let stability_of = |gate: StellarId| {
+        game.data
+            .storylines()
+            .points
+            .values()
+            .find(|point| point.gate.0 == gate.0)
+            .map_or(nova_data::GateStability::Stable, |point| point.stability)
+    };
     game.ids
         .gates
         .iter()
@@ -90,6 +104,8 @@ pub(crate) fn gates(game: &NewGame) -> Vec<Gate> {
                 stellar: StellarId(nova),
                 at: at(&spob),
                 partner: (partner, system_of(partner.0), at(&partner_gate)),
+                open: stability_of(StellarId(nova)).worse(stability_of(StellarId(partner.0)))
+                    == nova_data::GateStability::Stable,
             }
         })
         .collect()
@@ -155,12 +171,31 @@ fn flying(
 /// L again, picks the one system the hypergate map offers and enters it:
 /// the ship comes out at the partner's gate, in its system, with
 /// `SimSound::Arrived` and `SimMessage::ExitedHypergate`, and its escort
-/// comes out of the same gate.
+/// comes out of the same gate. A closed gate ([`Gate::open`]) is denied
+/// at the first L instead, as a rank-barred one, with traffic control's
+/// sound, and the ship stays.
 pub(crate) fn fly_through(data: &GameData, rules: &Rulebook, pilot: &Pilot, gate: &Gate) {
     let (partner, partner_system, partner_at) = gate.partner;
     let mut session = flying(data, rules, pilot, gate.system, Some(gate.stellar));
     assert_eq!(session.landed(), None, "{gate:?}: in flight");
     assert_eq!(session.player().position, gate.at, "{gate:?}");
+    if !gate.open {
+        assert!(
+            matches!(
+                session.land(),
+                Err(LandingRefusal::Denied { stellar, .. }) if stellar == gate.stellar
+            ),
+            "{gate:?}: denied"
+        );
+        let mut events = Vec::new();
+        session.drain_events(&mut events);
+        assert!(
+            events.contains(&FlightEvent::Sound(SimSound::TrafficControl)),
+            "{gate:?}: {events:?}"
+        );
+        assert_eq!(session.system(), gate.system, "{gate:?}: stays");
+        return;
+    }
     assert!(session.land().is_ok(), "{gate:?}: cleared");
     pass(&mut session, data, rules, &mut SplitMix::new(1));
     assert_eq!(
@@ -263,6 +298,16 @@ pub(crate) fn of_system(gates: &[Gate], system: SystemId) -> BTreeSet<StellarId>
         .collect()
 }
 
+/// The open gates of `gates` in `system` ([`Gate::open`]): those the
+/// traffic uses.
+pub(crate) fn open_of_system(gates: &[Gate], system: SystemId) -> BTreeSet<StellarId> {
+    gates
+        .iter()
+        .filter(|gate| gate.system == system && gate.open)
+        .map(|gate| gate.stellar)
+        .collect()
+}
+
 /// The systems `gates` lie in, each once.
 pub(crate) fn systems(gates: &[Gate]) -> BTreeSet<SystemId> {
     gates.iter().map(|gate| gate.system).collect()
@@ -333,12 +378,29 @@ fn the_fixture_covers_every_kind_of_link() {
 }
 
 #[test]
-fn the_player_goes_through_every_gate_and_comes_out_at_its_partner() {
+fn the_player_goes_through_every_open_gate_and_is_denied_every_closed_one() {
     let game = fixture();
     let rules = new_game_rules();
     let pilot = pilot_for(&game);
-    for gate in gates(&game) {
-        fly_through(&game.data, &rules, &pilot, &gate);
+    let gates = gates(&game);
+    let closed: Vec<StellarId> = gates
+        .iter()
+        .filter(|gate| !gate.open)
+        .map(|gate| gate.stellar)
+        .collect();
+    let named = |point: &str| StellarId(nova_of(&game.ids.gates, point));
+    let expected: BTreeSet<StellarId> = [
+        "drift/verge-road",
+        "drift/back-door",
+        "hearth/verge-road",
+        "verge/hearth-road",
+        "verge/drift-road",
+    ]
+    .map(named)
+    .into();
+    assert_eq!(closed.iter().copied().collect::<BTreeSet<_>>(), expected);
+    for gate in &gates {
+        fly_through(&game.data, &rules, &pilot, gate);
     }
 }
 
@@ -356,18 +418,19 @@ fn under_the_new_game_every_gate_is_one_the_traffic_comes_out_of_and_leaves_by()
     }
 }
 
-/// The run over every system took about 3 s, so it runs over two: `drift`,
-/// of gates alone, and `hearth`, the busiest. The rest are covered by
-/// [`under_the_new_game_every_gate_is_one_the_traffic_comes_out_of_and_leaves_by`].
+/// It runs over `drift`, of gates alone, `hearth`, the busiest, and
+/// `verge`: every fixture system with gates. Each has a closed gate, which
+/// no ship ever comes out of or goes into.
 #[test]
-fn under_the_new_game_the_traffic_comes_out_of_and_goes_into_every_gate() {
+fn under_the_new_game_the_traffic_uses_every_open_gate_and_no_closed_one() {
     let game = fixture();
     let rules = new_game_rules();
     let gates = gates(&game);
     let pilot = pilot_for(&game);
-    for name in ["drift", "hearth"] {
+    for name in ["drift", "hearth", "verge"] {
         let system = SystemId(nova_of(&game.ids.systems, name));
-        let wanted = of_system(&gates, system);
+        let wanted = open_of_system(&gates, system);
+        assert_ne!(wanted, of_system(&gates, system), "{name}: a closed gate");
         let seen = watch_traffic(
             &game.data,
             &rules,
@@ -377,8 +440,8 @@ fn under_the_new_game_the_traffic_comes_out_of_and_goes_into_every_gate() {
             TRAFFIC_TICKS,
             7,
         );
-        assert_eq!(seen.emerged, wanted, "{name}: out of every gate");
-        assert_eq!(seen.entered, wanted, "{name}: into every gate");
+        assert_eq!(seen.emerged, wanted, "{name}: out of every open gate");
+        assert_eq!(seen.entered, wanted, "{name}: into every open gate");
     }
 }
 

@@ -211,32 +211,35 @@ use crate::registry::{AnyDecoded, AnyRecord, Registered, decode_any};
 
 mod decoded;
 mod dialogs;
+mod fittings;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod fs;
-mod gate_stability;
 mod interface;
 pub mod order;
 mod pict_pair;
 mod ship_desc;
+mod ship_line;
 mod ship_pict;
 mod shot_spin;
 mod spin_sprite;
 mod sprite;
 mod stand_in;
 mod stellar_sprite;
+mod stock_art;
 mod storylines;
 #[cfg(test)]
 mod tests;
 mod walk;
 
 pub use self::dialogs::{DialogPlace, Dialogs};
-pub use self::gate_stability::GateStability;
+pub use self::fittings::{Fittings, Kit, Spot, SpotKind};
 pub use self::interface::{
     InterfaceData, NoInterfaceFile, interface_path_candidates, load_interface, open_interface,
 };
 pub use self::pict_pair::SheetKind;
 pub use self::ship_desc::ship_desc_id;
+pub use self::ship_line::ShipLine;
 pub use self::ship_pict::{ShipImage, ShipImageError, ShipImageFields};
 pub use self::shot_spin::shot_spin_id;
 pub use self::spin_sprite::{SpinSheet, SpinSpriteError};
@@ -244,13 +247,14 @@ pub use self::sprite::{
     LayerError, LayerSprite, SheetScan, ShipLayer, ShipLayerInfos, ShipLayers, ShipSprite,
     ShipSpriteFrame, ShipSpriteInfo, ShipSpriteWords, SpriteError,
 };
-pub use self::stand_in::{Outline, OutlineTriangle, StandIn, StandInOf};
+pub use self::stand_in::{Outline, OutlineTriangle, StandIn, StandInOf, StarDot};
 pub use self::stellar_sprite::{
     StellarSprite, StellarSpriteError, master_frame_count, stellar_spin_id,
 };
+pub use self::stock_art::StockArt;
 pub use self::storylines::{
-    MissionCompletion, MissionObjective, MissionOffer, NewsItem, Outcome, PointAt, PointState,
-    Requires, StoryEffects, StoryMission, Storylines,
+    GateStability, MissionCompletion, MissionObjective, MissionOffer, NewsItem, Outcome, PointAt,
+    PointState, Requires, StoryEffects, StoryMission, Storylines,
 };
 
 /// Why the store could not be opened at all.
@@ -392,15 +396,22 @@ pub struct GameData {
     /// What each ship or stellar with no sprite draws instead: the new
     /// game's ([`GameData::with_stand_ins`]); none in a stock store.
     stand_ins: BTreeMap<StandInOf, StandIn>,
-    /// Each jump point's own stability, by its gate's `spöb`: the new
-    /// game's ([`GameData::with_gate_stabilities`]); none in a stock store.
-    gate_stabilities: BTreeMap<crate::wire::id::StellarId, GateStability>,
+    /// The dots the starfield draws as where it has no star sheet: the
+    /// new game's ([`GameData::with_star_dots`]); none in a stock store.
+    star_dots: Vec<StarDot>,
     /// The compiled conversations and each stellar's: the new game's
     /// ([`GameData::with_dialogs`]); none in a stock store.
     dialogs: Dialogs,
     /// The missions, news and jump points: the new game's
     /// ([`GameData::with_storylines`]); none in a stock store.
     storylines: Storylines,
+    /// Each ship class's and mod kit's hardpoints and each kit's
+    /// attention: the new game's ([`GameData::with_fittings`]); none in a
+    /// stock store.
+    fittings: Fittings,
+    /// Each new-game ship's lineage, its chain of bible ids and its role
+    /// ([`GameData::with_ship_lines`]); none in a stock store.
+    ship_lines: BTreeMap<crate::wire::id::ShipId, ShipLine>,
 }
 
 /// A test expression parsed once and shared: its tree, or why it did not
@@ -452,9 +463,11 @@ impl GameData {
             tests: Mutex::default(),
             sets: Mutex::default(),
             stand_ins: BTreeMap::new(),
-            gate_stabilities: BTreeMap::new(),
+            star_dots: Vec::new(),
             dialogs: Dialogs::default(),
             storylines: Storylines::default(),
+            fittings: Fittings::default(),
+            ship_lines: BTreeMap::new(),
         })
     }
 

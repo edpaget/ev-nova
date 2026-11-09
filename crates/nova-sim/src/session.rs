@@ -451,6 +451,7 @@ mod auto_refuel;
 mod aux_ships;
 #[cfg(test)]
 mod berth_marks;
+mod blockades;
 mod board_attempt;
 mod board_repair;
 mod brackets;
@@ -488,6 +489,7 @@ mod disabled_mission_escorts;
 mod display_carry;
 mod display_gain;
 mod display_step;
+mod dock_scan;
 mod dock_tail;
 mod dominated_stellars;
 mod double_time;
@@ -540,6 +542,7 @@ mod gate_follow;
 #[cfg(test)]
 mod gate_partner;
 mod gate_pilot;
+mod gate_points;
 mod gate_sprites;
 #[cfg(test)]
 mod grant_explorations;
@@ -601,6 +604,7 @@ mod murk;
 mod nav;
 mod nebulae;
 mod news;
+mod no_gate_refusal;
 #[cfg(test)]
 mod npc_destinations;
 mod npc_escape;
@@ -706,6 +710,7 @@ mod stellars;
 mod step;
 mod stock_fold;
 mod story;
+mod story_screens;
 mod storylines;
 mod stray_words;
 mod swarm_formation;
@@ -827,7 +832,7 @@ use crate::hyperspace::{
 };
 #[cfg(doc)]
 use crate::hyperspace::{HyperSelectRule, HyperlinkRule, JumpZoneRule};
-use crate::landing::{LandOutcome, LandingRefusal, Standing, land_or_select};
+use crate::landing::{DockStage, LandOutcome, LandingRefusal, Standing, dock_request};
 use crate::legal::{self, Crime, LegalCode};
 use crate::market::{self, Direction, EscortHolds, Goods, Market, Markup, Order, TradeRefusal};
 use crate::message::SimMessage;
@@ -1307,6 +1312,13 @@ impl Session {
         // standing in for the load's first refresh (@0x751ca, @0x751cf).
         let mut galaxy = OverlaidGalaxy::new(catalog.star_map(), pilot.galaxy.clone())
             .with_gates(&catalog.gate_sites(), &listed);
+        // The jump points as the pilot left them, before any site is read
+        // (see the `gate_points` module).
+        let storylines = catalog.storylines();
+        galaxy.set_gate_points(crate::storylines::gate_points::gate_points(
+            &storylines,
+            &pilot.story,
+        ));
         galaxy.set_colocated(CoLocated::from(
             rules.source_for(RuleKey::ColocatedResolution),
         ));
@@ -1438,7 +1450,8 @@ impl Session {
                 .filter_map(|id| catalog.landing_site(id))
                 .collect(),
             stellar_dialogs: catalog.stellar_dialogs(),
-            storylines: catalog.storylines(),
+            storylines,
+            fittings: catalog.fittings(),
         };
         let mut session = Self {
             mode: Mode::Flying,
@@ -1468,10 +1481,21 @@ impl Session {
         // `_LoadPilotData` spawns the escorts and fighters into their
         // slots at once (@0x759af-0x75b91; see the `loaded_berths` module).
         session.space.hold_loaded_berths(&mut session.pilot);
+        // The jump points are the galaxy's already; a saved news item with
+        // no reach is frozen over the lanes now (see the `gate_points`
+        // module).
+        session
+            .chart
+            .sync_points(&session.statics, &mut session.pilot, &mut session.out);
         session.run.register_offer_roll();
         session.run.register_storylines(&session.statics);
         session.run.register_nebulae(&session.statics);
         session.run.register_slots(&session.pilot);
+        // A pilot whose save and data disagree has its blockades put
+        // right before its system is set up (see the `blockades` module).
+        // The load draws on no chance, so a blockade started here draws
+        // as `NeverFires` does.
+        session.sync_blockades(&mut crate::chance::NeverFires);
         session.set_player_system(system, here, Dock::AsItWas);
         // A load and the main screen are rebuild points (@0x751cf,
         // @0x75324, @0x1a354, @0x1a8ca, @0x1b003, @0x457ee): the view
@@ -2656,8 +2680,9 @@ impl Session {
     /// dying branch dropped it (see the `disabled_mission_escorts` module);
     /// one destroyed with neither between, its slot inactive, leaves the
     /// rest to re-form at the next pass's head
-    /// ([`Session::reform_on_swarm_change`]).
-    fn take_out_the_destroyed(&mut self, chance: &mut dyn Chance) {
+    /// ([`Session::reform_on_swarm_change`]). Crate-visible for
+    /// `fixture::destroy`.
+    pub(crate) fn take_out_the_destroyed(&mut self, chance: &mut dyn Chance) {
         let destroyed: Vec<NpcId> = self
             .space
             .traffic
@@ -3549,8 +3574,9 @@ impl Session {
 
     /// Presses the land key, unless a jump is under way, its pre-jump stage
     /// included: as the [`landing`](crate::landing) rules say
-    /// ([`land_or_select`]), with the stellar selected, the dock request
-    /// (see the `clearance` module) and traffic control's clearance
+    /// ([`land_or_select`](crate::landing::land_or_select)), with the
+    /// stellar selected, the dock request (see the `clearance` module) and
+    /// traffic control's clearance
     /// ([`landing::cleared`](crate::landing::cleared)) of the pilot's
     /// standing: its legal record, the `Require` its ranks meet, its
     /// missions' stellars, the blessing table (see the `ranks` module),
@@ -3634,6 +3660,12 @@ impl Session {
     /// the can-land flag makes no dock request in the original
     /// (`_FindNearestStellar` gives -1, @0x6a94c), so its
     /// [`LandingRefusal::NothingLandable`] is silent.
+    ///
+    /// This bare press carries no [`LegalCode`], so the new game's traffic
+    /// control scans nothing:
+    /// [`FlightCommand::Land`](crate::flight_frame::FlightCommand::Land)
+    /// presses with its collaborators' law, which runs the dock scan at
+    /// the request (see the `dock_scan` module).
     pub fn land(&mut self) -> Result<LandPress, LandingRefusal> {
         self.land_requesting().0
     }
@@ -3645,7 +3677,17 @@ impl Session {
     /// under way, a breaking-up or destroyed ship, @0x6a8cb-0x6a8df) or
     /// whose pick found nothing (@0x6a90f) makes none.
     pub(crate) fn land_requesting(&mut self) -> (Result<LandPress, LandingRefusal>, bool) {
-        let (press, requested) = self.land_press();
+        self.land_requesting_by(None)
+    }
+
+    /// [`Session::land_requesting`], traffic control scanning the ship
+    /// first and convicting by `law`, when given (see the `dock_scan`
+    /// module).
+    pub(crate) fn land_requesting_by(
+        &mut self,
+        law: Option<&dyn LegalCode>,
+    ) -> (Result<LandPress, LandingRefusal>, bool) {
+        let (press, requested) = self.land_press(law);
         if let Err(refusal) = &press
             && refusal.beeps()
         {
@@ -3654,19 +3696,21 @@ impl Session {
         (press, requested)
     }
 
-    fn land_press(&mut self) -> (Result<LandPress, LandingRefusal>, bool) {
+    fn land_press(
+        &mut self,
+        law: Option<&dyn LegalCode>,
+    ) -> (Result<LandPress, LandingRefusal>, bool) {
         if self.mode.jump().is_some() {
             return (Err(LandingRefusal::Jumping), false);
         }
-        let disabled = match self.ship.condition {
-            Condition::Intact => false,
-            Condition::Disabled => true,
+        match self.ship.condition {
+            Condition::Intact | Condition::Disabled => {}
             Condition::Dying { .. } | Condition::Destroyed => {
                 return (Err(LandingRefusal::Disabled), false);
             }
-        };
-        let blessing = self.blessing();
-        let reading = self.setup.rules.source_for(RuleKey::BlessingLanding);
+        }
+        // Read once, for the dock scan and the refusal both.
+        let barred = self.ship.landing_bar();
         let candidates = self.chart.pick_candidates(&self.pilot, &self.statics);
         // The stellar held, wherever its system lists it, and the dock
         // request's recheck of it (@0x6699a-0x669aa): its owner word the
@@ -3678,13 +3722,12 @@ impl Session {
             self.chart.sites.iter().any(|shown| shown.id == site.id)
                 && self.chart.held_here(&self.pilot, &self.statics, site.id)
         };
-        let press = land_or_select(
+        let stage = dock_request(
             target,
             self.port.dock,
             &self.ship.player,
             self.pilot.cash,
             &candidates,
-            |site| crate::landing::cleared(site, self.standing(site, &blessing), reading),
             held,
             |site| {
                 let held = self.chart.held_here(&self.pilot, &self.statics, site.id);
@@ -3693,22 +3736,25 @@ impl Session {
             self.setup.rules.source_for(RuleKey::LandingSpeed),
             self.setup.rules.source_for(RuleKey::GatePickRange),
         );
+        let press = match stage {
+            DockStage::Done(press) => press,
+            DockStage::Asks(ask) => self.answer_dock_ask(ask, law, barred),
+        };
         let requested = had_target || press.selected.is_some();
-        (self.land_picked(press, disabled), requested)
+        (self.land_picked(press, barred), requested)
     }
 
     /// The rest of the land key's press once its pick is made, `press`
-    /// what [`land_or_select`] gave and the ship `disabled` or not.
+    /// what [`dock_request`] and traffic control gave and `barred` what
+    /// refuses the ship itself, if anything (`PlayerShip::landing_bar`).
     fn land_picked(
         &mut self,
         press: crate::landing::DockPress,
-        disabled: bool,
+        barred: Option<LandingRefusal>,
     ) -> Result<LandPress, LandingRefusal> {
-        // The fee's refusal (@0x669b4) comes before the cloak's
-        // (`_ShipIsCloaked` @0x66a8e), which comes before the disabled one
-        // (@0x66aee), all after the landability (@0x66977-0x669ae).
-        let cloaked = self.ship.cloak.cloak.is_cloaked();
-        if cloaked || disabled {
+        // The fee's refusal (@0x669b4) comes before the ship's own, all
+        // after the landability (@0x66977-0x669ae).
+        if let Some(bar) = barred {
             self.chart.select_pressed(press.selected);
             return match press.outcome {
                 Err(refusal @ LandingRefusal::CannotPayFee { .. }) => {
@@ -3722,8 +3768,7 @@ impl Session {
                     | LandingRefusal::NoStellars
                     | LandingRefusal::NothingLandable),
                 ) => Err(refusal),
-                Ok(_) | Err(_) if cloaked => Err(LandingRefusal::Cloaked),
-                Ok(_) | Err(_) => Err(LandingRefusal::Disabled),
+                Ok(_) | Err(_) => Err(bar),
             };
         }
         let outcome = self.apply_press(press)?;
@@ -3768,7 +3813,10 @@ impl Session {
     /// and the first of `here`'s links that leads there
     /// ([`hypergate_exit`]). [`GateRefusal::NoLinks`] for a hypergate
     /// without links ([`has_links`]), [`GateRefusal::Cancelled`] for no
-    /// pick or a pick no link leads to (@0x6392c). The one rule both
+    /// pick or a pick no link leads to (@0x6392c). Only an open link
+    /// leads anywhere ([`OverlaidGalaxy::open_links`]), so a hypergate
+    /// with links but none open answers [`GateRefusal::Cancelled`] (see
+    /// the `gate_points` module). The one rule both
     /// [`Session::enter_hypergate`] and [`Session::gate_entry_desc`] read.
     pub(crate) fn hypergate_route(
         &self,
@@ -3780,6 +3828,8 @@ impl Session {
         if !has_links(&links) {
             return Err(GateRefusal::NoLinks);
         }
+        // Only an open link is taken (see the `gate_points` module).
+        let links = self.chart.galaxy.open_links(here, links);
         let system_of = |id| {
             self.chart
                 .galaxy
@@ -3803,8 +3853,9 @@ impl Session {
     /// Decides whether the hypergate whose entry is pending opens the
     /// hypergate map, read from `catalog`'s gate sites. A hypergate with
     /// links ([`has_links`], as `_StellarNumHyperLinks` counts them) offers
-    /// the systems its links lead to, each as the visible system standing
-    /// for it on the overlaid map ([`gate::hypergate_offers`]), for
+    /// the systems its open links lead to ([`OverlaidGalaxy::open_links`]),
+    /// each as the visible system standing for it on the overlaid map
+    /// ([`gate::hypergate_offers`]), for
     /// the player to choose among, and the entry awaits
     /// [`Session::enter_hypergate`]: even when none leads anywhere, the
     /// map opens with nothing to pick, and closing it cancels. One without
@@ -3828,7 +3879,7 @@ impl Session {
                     .system_of(id, self.statics.listers(id), self.pilot.system)
             };
             Ok(gate::hypergate_offers(
-                &links,
+                &self.chart.galaxy.open_links(here, links),
                 &sites,
                 system_of,
                 self.chart.galaxy.map(),
@@ -3866,7 +3917,9 @@ impl Session {
     /// ends the entry and turns the nav system off, as the original's
     /// `_PlayerEnterHypergate` does as it ends (@0x63fa2-0x63faa); a
     /// refusal otherwise changes nothing. See [`Session::enter_wormhole`]
-    /// for the arrival.
+    /// for the arrival. An exit from a jump point's gate meets no
+    /// `take_point` mission: beating the holder's guards does (see the
+    /// `blockades` module).
     ///
     /// The exit restarts the course at the system entered
     /// (@0x63e1d-0x63e3c). By [`RuleKey::GateCourse`]'s other reading an
@@ -6341,7 +6394,10 @@ impl PlayerShip {
         reserves: ReservePolicy,
     ) {
         let hold = reserves == ReservePolicy::Hold;
-        self.fit.hull = setup.hull(statics, pilot.ship);
+        // The new game's hardpoints, its class's and its kits' (see the
+        // `dock_scan` module); a stock class's exits stand.
+        let hull = setup.hull(statics, pilot.ship);
+        self.fit.hull = statics.fitted_hull(&hull, pilot.ship, &self.counted_outfits(pilot));
         self.mount(pilot, statics, setup);
         let stats = self.current_stats(pilot, statics);
         let reserves = &mut pilot.reserves;
@@ -28803,7 +28859,6 @@ pub(super) mod tests {
             flags2,
             links: slots,
             exit_angle,
-            stability: crate::catalog::GateStability::Stable,
         }
     }
 

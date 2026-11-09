@@ -236,6 +236,12 @@ pub struct MapDrawing {
     /// reading ([`map_lanes`](crate::map_lanes)); empty by the engine's,
     /// which draws every link grey.
     pub lanes: Vec<LaneLook>,
+    /// The closed gate lanes drawn beside the links, each in its look, by
+    /// [`RuleKey::MapLaneStyle`](crate::RuleKey::MapLaneStyle)'s other
+    /// reading: each pair once, none drawn as a link, none on the
+    /// hypergate map ([`map_lanes`](crate::map_lanes)). Empty by the
+    /// engine's.
+    pub closed_lanes: Vec<LaneLook>,
 }
 
 /// What the galaxy map's model shows of the galaxy as overlaid, as plain
@@ -458,6 +464,7 @@ pub fn draw_map(
             .map(|(from, to)| lane_look(galaxy, from, to))
             .collect(),
     };
+    let closed_lanes = closed_lanes(state, &current_links, &links);
     MapDrawing {
         hypergate: state.hypergate.is_some(),
         course,
@@ -472,7 +479,44 @@ pub fn draw_map(
             .unwrap_or_default(),
         named,
         lanes,
+        closed_lanes,
     }
+}
+
+/// The closed gate lanes `state`'s map draws beside the links drawn,
+/// `current_links` and `links`, each in its look, by
+/// [`RuleKey::MapLaneStyle`](crate::RuleKey::MapLaneStyle)'s other reading and off the hypergate map
+/// (see the [`map_lanes`](crate::map_lanes) module): from the current
+/// system, then each visible, explored and known system by ascending ID,
+/// each pair once and none drawn as a link either way.
+fn closed_lanes(
+    state: &MapState<'_>,
+    current_links: &[(SystemId, SystemId)],
+    links: &[MapLink],
+) -> Vec<LaneLook> {
+    if state.lane_style == RuleSource::Engine || state.hypergate.is_some() {
+        return Vec::new();
+    }
+    let galaxy = state.galaxy;
+    let mut paired: BTreeSet<(SystemId, SystemId)> = current_links
+        .iter()
+        .copied()
+        .chain(links.iter().map(|link| (link.from, link.to)))
+        .map(|(a, b)| (a.min(b), a.max(b)))
+        .collect();
+    let drawn_from =
+        std::iter::once(state.current).chain(galaxy.catalog_systems().filter(|&from| {
+            galaxy.visible(from) && state.explored.contains(&from) && state.known.contains(&from)
+        }));
+    let mut closed = Vec::new();
+    for from in drawn_from {
+        for to in galaxy.lanes().closed(from) {
+            if paired.insert((from.min(to), from.max(to))) {
+                closed.push(lane_look(galaxy, from, to));
+            }
+        }
+    }
+    closed
 }
 
 #[cfg(test)]

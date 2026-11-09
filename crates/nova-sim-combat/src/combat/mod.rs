@@ -19,6 +19,8 @@
 //!   its hits do to them.
 //! - [`exits`]: the weapon exit points a ship's shots and beams leave
 //!   from, turning with the frame it is drawn on.
+//! - [`spots`]: the new game's exit points, from the hardpoints a ship's
+//!   class and its mod kits place.
 //! - [`flags`]: what the simulation does with each documented weapon flag,
 //!   and which of a weapon's are not done yet.
 //! - [`hull`]: a ship type's [`HullSpec`](hull::HullSpec), its
@@ -449,6 +451,7 @@ pub mod shot_slots;
 pub mod sides;
 mod source_slot;
 pub mod spin_timer;
+pub mod spots;
 pub mod sprite_load;
 pub mod stellar;
 mod stellar_contact;

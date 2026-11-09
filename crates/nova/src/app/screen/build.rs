@@ -16,7 +16,7 @@ use nova_sim::{
 use nova_view::devtools::FlightDesk;
 use nova_view::flight::{
     Collaborators, FlightOverlays, FlightStart, FlightView, SessionFlight, SharedChance,
-    open_flight,
+    ShipSprites, open_flight,
 };
 use nova_view::galaxy::GalaxyMap;
 use nova_view::galaxy::find::FIND_DIALOG;
@@ -75,6 +75,8 @@ impl AppScreen {
             about_text: ABOUT_TEXT,
             spaceport: None,
             conversation: None,
+            story_log: None,
+            news_read: false,
             sounds: Vec::new(),
             prefs: Prefs::default(),
             launch: LaunchPrefs::of(&Prefs::default()),
@@ -103,6 +105,7 @@ impl AppScreen {
             hail_options: HailOptions::default(),
             rules: Rulebook::default(),
             flight_overlays: FlightOverlays::default(),
+            ship_looks: None,
             hire_terms: Rc::new(NovaHire::default()),
             control_bits: Rc::new(NovaBits),
             person_rules: Rc::new(NovaPersons::default()),
@@ -310,9 +313,15 @@ impl AppScreen {
     /// router hands each flight (its behaviour, law, boarding, hail
     /// options, hire terms and persons) stay as they are, so a rule one
     /// of them decides changes only through [`AppScreen::with_rulebook`].
+    /// The galaxy viewer draws its links by them too
+    /// ([`Navigator::with_rules`]).
     #[must_use]
     pub fn with_rules(self, rules: Rulebook) -> Self {
-        Self { rules, ..self }
+        Self {
+            galaxy: self.galaxy.with_rules(&rules),
+            rules,
+            ..self
+        }
     }
 
     /// The router with each flight drawing the port's own `overlays`, the
@@ -322,6 +331,19 @@ impl AppScreen {
     pub fn with_flight_overlays(self, flight_overlays: FlightOverlays) -> Self {
         Self {
             flight_overlays,
+            ..self
+        }
+    }
+
+    /// The router with each flight drawing the new game's hulls in the
+    /// stock ship look `looks` where they have no sheet of their own
+    /// ([`FlightView::with_ship_looks`], `crate::stock_look`): none until
+    /// it is given. Only the flight's view reads it; the simulation never
+    /// does.
+    #[must_use]
+    pub fn with_ship_looks(self, looks: Rc<nova_view::flight::StockShipLooks>) -> Self {
+        Self {
+            ship_looks: Some(looks),
             ..self
         }
     }
@@ -505,6 +527,10 @@ impl AppScreen {
         .with_map_borders(self.map_borders);
         let flight = match self.course_map_zoom {
             Some(zoom) => flight.with_course_map_zoom(zoom),
+            None => flight,
+        };
+        let flight = match &self.ship_looks {
+            Some(looks) => flight.with_ship_looks(Rc::clone(looks) as Rc<dyn ShipSprites>),
             None => flight,
         };
         match self.metrics() {

@@ -13,8 +13,8 @@ use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
 use nova_sim::mission::screens::NO_ACTIVE_MISSIONS;
 use nova_sim::text_tags::comma_number;
 use nova_sim::{
-    Assigned, BoardRefusal, Chance, CommNote, DockKind, GateKind, HailRefusal, Help, JumpRefusal,
-    LandingRefusal, SelfDestructLine, ShipId, SimMessage, StellarId, Taken,
+    Assigned, BoardRefusal, Chance, CommNote, DockFind, DockKind, GateKind, HailRefusal, Help,
+    JumpRefusal, LandingRefusal, SelfDestructLine, ShipId, SimMessage, StellarId, Taken,
 };
 use nova_sim::{MissionBoardLine, PayNote, RuleSource, TutorialHint};
 
@@ -230,6 +230,11 @@ pub const BOMB_SET_UP: &str = "Someone set up us the bomb!";
 /// `STR#` 2002 #35: a disabled player's pre-jump collapsed
 /// (`_HandlePlayer` `_GetIndString` @0x68a04).
 pub const JUMP_COLLAPSED: &str = "Ship disabled - hyperspace field collapsed.";
+/// J refused because no gate the player's system shows serves the system
+/// selected in nav mode 3, by the other reading of
+/// [`RuleKey::NoGateRefusal`](nova_sim::RuleKey::NoGateRefusal): the
+/// original's J says nothing there, so it has no `STR#` for it.
+pub const NO_GATE_LEADS_THERE: &str = "No jump point leads there.";
 /// `STR#` 2002 #385: what each of the self-destruct's lines but the last
 /// begins with (`_HandlePlayer` @0x6fe3f, @0x6ff8a, @0x700ea).
 pub const SELF_DESTRUCT_LEAD: &str = "Self-destruct";
@@ -350,6 +355,37 @@ pub fn illegal_outfit_message(
         format!("{scanner}:  {ship}, {POSSESSION_OF} {named} {HAS_BEEN_DETECTED}."),
         fine,
     )
+}
+
+/// What the message line says when the new game's traffic control finds
+/// `found` as it searches the ship before landing: "Your ship is searched
+/// before landing: the `found` is found.", and the fine as
+/// [`smuggling_message`] adds it. The original has no such scan, nor a
+/// `STR#` for it, so the words are the engine's own.
+#[must_use]
+pub fn dock_scanned_message(found: &str, fine: i64) -> String {
+    with_fine(
+        format!("Your ship is searched before landing: the {found} is found."),
+        fine,
+    )
+}
+
+/// What a dock scan's notice calls what it found: an outfit by its
+/// `LCName` for one or its `LCPlural` for more, else, for an outfit with
+/// none (the new game's), by its name; a `jünk` by its `LCName`.
+fn dock_find_name(found: DockFind, names: &Names) -> &str {
+    match found {
+        DockFind::Junk(junk) => names.junk_lc(junk).unwrap_or_default(),
+        DockFind::Outfit { id, one } => {
+            let (lc_name, lc_plural) = names.outfit_lc(id).unwrap_or_default();
+            let lc = if one { lc_name } else { lc_plural };
+            if lc.is_empty() {
+                names.outfit(id).unwrap_or_default()
+            } else {
+                lc
+            }
+        }
+    }
 }
 
 /// What the flight's messages are worded with: the names fixed for the
@@ -503,6 +539,7 @@ pub(super) fn sim_message_text(
         | SimMessage::WaitForMe(text)
         | SimMessage::ReinforcementsApproaching(text) => return Some(text.clone()),
         SimMessage::JumpCollapsed => JUMP_COLLAPSED,
+        SimMessage::NoGateLeadsThere => NO_GATE_LEADS_THERE,
         SimMessage::SelfDestruct(line) => return Some(self_destruct_text(*line)),
         SimMessage::EscapingIn { ship } => return Some(escaping_in_text(*ship, words.names)),
         SimMessage::Sabotaged { outfit: None } => BOMB_EXPLODED_ONBOARD,
@@ -555,6 +592,12 @@ pub(super) fn sim_message_text(
                 *one,
                 lc_name,
                 lc_plural,
+                *fine,
+            ));
+        }
+        SimMessage::DockScanned { found, fine, .. } => {
+            return Some(dock_scanned_message(
+                dock_find_name(*found, words.names),
                 *fine,
             ));
         }
@@ -877,6 +920,7 @@ pub(super) fn arrival_lead(message: &SimMessage, chance: &mut dyn Chance) -> Opt
         | SimMessage::WaitForMe(_)
         | SimMessage::ReinforcementsApproaching(_)
         | SimMessage::JumpCollapsed
+        | SimMessage::NoGateLeadsThere
         | SimMessage::SelfDestruct(_)
         | SimMessage::EscapingIn { .. }
         | SimMessage::Sabotaged { .. }
@@ -885,6 +929,7 @@ pub(super) fn arrival_lead(message: &SimMessage, chance: &mut dyn Chance) -> Opt
         | SimMessage::Smuggling { .. }
         | SimMessage::IllegalJunk { .. }
         | SimMessage::IllegalOutfit { .. }
+        | SimMessage::DockScanned { .. }
         | SimMessage::Buoy(_)
         | SimMessage::TookOff { .. }
         | SimMessage::DockRequested { .. }

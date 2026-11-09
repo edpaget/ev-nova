@@ -214,6 +214,10 @@ pub const NAV_NO_DESTINATION: &str = "No Destination";
 pub const NAV_HYPERSPACE: &str = "Hyperspace";
 /// `STR#` 2002 #346: the nav area's name for a system not yet explored.
 pub const NAV_UNEXPLORED: &str = "Unexplored System";
+/// The nav area's label lead while the gate autopilot flies, before the
+/// system it flies toward ([`gate_pilot_label`]). The original has no
+/// autopilot, so no `STR#` holds it.
+pub const NAV_AUTOPILOT: &str = "Autopilot:";
 /// The label's baseline below the nav area's top (@0x4a0de, @0x4a1f5).
 pub const NAV_LABEL_BASELINE: f32 = 12.0;
 /// "Nav System Off"'s baseline below the nav area's top (@0x4a07f).
@@ -275,6 +279,19 @@ pub fn credits_label(word: &str) -> String {
         .collect()
 }
 
+/// The gate autopilot's label line: [`NAV_AUTOPILOT`], a space and the
+/// system it flies toward as `to` names it ("Unexplored System" for one
+/// not explored, "No Destination" for none).
+#[must_use]
+pub fn gate_pilot_label(to: &NavDestination) -> String {
+    let system = match to {
+        NavDestination::Named(name) => name.as_str(),
+        NavDestination::Unexplored => NAV_UNEXPLORED,
+        NavDestination::None => NAV_NO_DESTINATION,
+    };
+    format!("{NAV_AUTOPILOT} {system}")
+}
+
 /// What the nav area shows: one variant for each of the original's nav
 /// modes (player +0x6a) the engine reaches. Modes 0 and 1 are never set
 /// on the player, and mode 4 (the hypergate map) is reset to −1
@@ -296,6 +313,18 @@ pub enum NavDisplay {
         destination: NavDestination,
         /// Whether the ship can jump there.
         readiness: JumpReadiness,
+    },
+    /// The new game's gate autopilot engaged, whatever the mode (see
+    /// `nova_sim::flight_frame::FlightFrame::gate_pilot`): the original has
+    /// none. The label line names the system it flies toward
+    /// ([`gate_pilot_label`]), bright as the autopilot is acting; the value
+    /// line names the gate it flies to, bright, or "No Destination", dim.
+    GatePilot {
+        /// The system the autopilot flies toward, named as nav mode 3
+        /// names its selection.
+        to: NavDestination,
+        /// The gate selected in nav mode 2, by name.
+        gate: Option<String>,
     },
 }
 
@@ -610,6 +639,7 @@ fn draw_nav(
         return;
     }
     let (dim, bright) = (layout.dim_text, layout.bright_text);
+    let label;
     let lines: [Option<(&str, f32, Color)>; 2] = match nav {
         NavDisplay::Off => [Some((NAV_OFF, NAV_OFF_BASELINE, dim)), None],
         NavDisplay::Stellar(name) => [
@@ -638,6 +668,18 @@ fn draw_nav(
             [
                 Some((NAV_HYPERSPACE, NAV_LABEL_BASELINE, label)),
                 Some((value.0, NAV_VALUE_BASELINE, value.1)),
+            ]
+        }
+        NavDisplay::GatePilot { to, gate } => {
+            label = gate_pilot_label(to);
+            [
+                Some((label.as_str(), NAV_LABEL_BASELINE, bright)),
+                Some(
+                    gate.as_deref()
+                        .map_or((NAV_NO_DESTINATION, NAV_VALUE_BASELINE, dim), |name| {
+                            (name, NAV_VALUE_BASELINE, bright)
+                        }),
+                ),
             ]
         }
     };
@@ -1926,6 +1968,66 @@ mod tests {
                 "{readiness:?}"
             );
         }
+    }
+
+    fn gate_pilot(to: NavDestination, gate: Option<&str>) -> NavDisplay {
+        NavDisplay::GatePilot {
+            to,
+            gate: gate.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn the_gate_autopilot_is_autopilot_and_its_system_bright_over_its_gates_bright_name() {
+        assert_eq!(NAV_AUTOPILOT, "Autopilot:");
+        assert_eq!(
+            nav_drawn(gate_pilot(
+                NavDestination::Named("Verge".to_owned()),
+                Some("Gate")
+            )),
+            [
+                nav_text("Autopilot: Verge", NAV_LABEL_BASELINE, TEXT),
+                nav_text("Gate", NAV_VALUE_BASELINE, TEXT)
+            ]
+        );
+    }
+
+    #[test]
+    fn the_gate_autopilot_toward_an_unexplored_system_names_it_unexplored() {
+        assert_eq!(
+            nav_drawn(gate_pilot(NavDestination::Unexplored, Some("Gate"))),
+            [
+                nav_text("Autopilot: Unexplored System", NAV_LABEL_BASELINE, TEXT),
+                nav_text("Gate", NAV_VALUE_BASELINE, TEXT)
+            ]
+        );
+    }
+
+    #[test]
+    fn the_gate_autopilot_with_no_gate_selected_is_over_no_destination_dim() {
+        assert_eq!(
+            nav_drawn(gate_pilot(NavDestination::Named("Verge".to_owned()), None)),
+            [
+                nav_text("Autopilot: Verge", NAV_LABEL_BASELINE, TEXT),
+                nav_text(NAV_NO_DESTINATION, NAV_VALUE_BASELINE, Color::DIM)
+            ]
+        );
+    }
+
+    #[test]
+    fn the_gate_autopilots_label_names_its_system_after_one_space() {
+        assert_eq!(
+            gate_pilot_label(&NavDestination::Named("Sol".to_owned())),
+            "Autopilot: Sol"
+        );
+        assert_eq!(
+            gate_pilot_label(&NavDestination::Unexplored),
+            "Autopilot: Unexplored System"
+        );
+        assert_eq!(
+            gate_pilot_label(&NavDestination::None),
+            "Autopilot: No Destination"
+        );
     }
 
     /// The stock bar with a 200-wide background, Geneva 12 (6 a character

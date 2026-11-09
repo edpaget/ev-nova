@@ -3,7 +3,8 @@
 //! original's randomizing sites, stepped and scrolled each pass, and
 //! drawn from the first pass's placement, dimmed by the system's murk.
 
-use crate::flight::stars::{Star, Starfield};
+use crate::flight::catalog::{StarDot, StarDots};
+use crate::flight::stars::{Star, Starfield, dimmed};
 use crate::system::camera::Anchor;
 
 use super::*;
@@ -62,11 +63,124 @@ fn the_flight_scatters_its_stars_when_it_is_first_caught_up_with() {
 }
 
 #[test]
-fn without_the_stars_sheet_none_is_scattered_or_drawn() {
+fn without_the_stars_sheet_or_dots_none_is_scattered_or_drawn() {
     let mut view = faked_counted(catalog(), Vec2::ZERO, 0);
     caught_up(&mut view);
     assert!(faked_stars(&view).iter().all(|star| !star.shown));
     assert!(!super::faked_world::world_list(&view).iter().any(is_star));
+}
+
+/// Three stand-in dots: single pixels in two greys and a 3 × 3.
+fn dots() -> StarDots {
+    let dot = |side, grey| StarDot {
+        side,
+        color: Color::rgba(grey, grey, grey, 255),
+    };
+    StarDots::new(vec![dot(1, 100), dot(1, 180), dot(3, 240)]).expect("dots")
+}
+
+/// [`catalog`] with no stars' sheet but [`dots`], as the new game's data.
+fn dotted() -> FakeCatalog {
+    FakeCatalog {
+        star_dots: Some(dots()),
+        ..catalog()
+    }
+}
+
+/// Each OR fill in `view`'s world: the dots the stars draw as.
+fn star_dots_drawn(view: &Faked) -> Vec<(Bounds, Color)> {
+    super::faked_world::world_list(view)
+        .iter()
+        .filter_map(|command| match command {
+            DrawCommand::OrFill { area, color } => Some((*area, *color)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn without_the_stars_sheet_the_dots_are_scattered_and_drawn() {
+    let mut view = faked_counted(dotted(), Vec2::ZERO, 0);
+    caught_up(&mut view);
+    assert!(faked_stars(&view).iter().all(|star| star.shown));
+    let drawn = star_dots_drawn(&view);
+    assert_eq!(drawn.len(), 20);
+    for (area, color) in drawn {
+        let dot = dots()
+            .as_slice()
+            .iter()
+            .find(|dot| dot.color == color)
+            .copied()
+            .unwrap_or_else(|| panic!("{color:?} is a dot's"));
+        assert_eq!(area.width(), f32::from(dot.side), "{area:?}");
+    }
+    assert!(!super::faked_world::world_list(&view).iter().any(is_star));
+}
+
+#[test]
+fn a_scroll_moves_the_dots_by_their_factor() {
+    let looks = Looks::read(&dotted(), []);
+    let ship = Vec2::new(50.0, 50.0);
+    let (mut field, mut chance) = scattered(ship, &looks);
+    let before = field.stars();
+    let pass = nova_sim::flight_frame::PassReport {
+        player_position: ship,
+        ..nova_sim::flight_frame::PassReport::default()
+    };
+    let from = Vec2::new(ship.x + 8.0, ship.y - 4.0);
+    super::super::stars::step(
+        &mut field,
+        &pass,
+        (RuleSource::Engine, &looks),
+        (VIEW_SIZE, Anchor::PlayAreaCentre),
+        Some(from),
+        &mut chance,
+    );
+    for (star, was) in field.stars().iter().zip(before) {
+        assert!(was.factor > 0.0, "{was:?}");
+        assert_eq!(star.x, was.x - was.factor * 8.0);
+        assert_eq!(star.y, was.y - was.factor * -4.0);
+    }
+}
+
+#[test]
+fn a_murky_systems_dots_are_dimmed_to_its_level() {
+    let mut view = faked_counted(dotted(), Vec2::ZERO, 8);
+    caught_up(&mut view);
+    let drawn = star_dots_drawn(&view);
+    assert_eq!(drawn.len(), 20);
+    let dimmed_dots: Vec<Color> = dots()
+        .as_slice()
+        .iter()
+        .map(|dot| dimmed(dot.color, 7))
+        .collect();
+    for (_, color) in drawn {
+        assert!(
+            dimmed_dots.contains(&color),
+            "{color:?}: trunc(8 × 0.9) of 32"
+        );
+    }
+}
+
+#[test]
+fn by_the_other_reading_dots_draw_the_procedural_stand_in_and_scatter_none() {
+    let rules = Rulebook::default().with_override(RuleKey::FlightStarfield, RuleSource::Bible);
+    let mut view = super::faked_world::world_by(
+        dotted(),
+        in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]),
+        &rules,
+    );
+    caught_up(&mut view);
+    assert!(faked_stars(&view).iter().all(|star| !star.shown));
+    let list = super::faked_world::world_list(&view);
+    let mut procedural = DrawList::new();
+    starfield::draw(&mut procedural, &view.camera());
+    assert!(!procedural.is_empty());
+    assert!(
+        list.iter().take(procedural.len()).eq(procedural.iter()),
+        "the procedural dots first"
+    );
+    assert!(star_dots_drawn(&view).is_empty());
 }
 
 #[test]

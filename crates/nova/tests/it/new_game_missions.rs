@@ -8,170 +8,32 @@
 //! Dock, ten tons of hull plate to Verge Camp, completed there, lending a
 //! Dock pass on the way), the side
 //! road closing on day 3 (an event, with its news), the wardens' toll at
-//! Verge Camp (every condition group) and the road's `take_point` offer.
+//! Verge Camp (every condition group) and the road's `take_point` offer,
+//! met by beating the wardens at the road's gate.
 //! The headless tests drive the session through its commands, putting a
 //! pilot's state in through the save; one walks the app. The rules are
 //! pinned in `nova_sim_story::storylines` and the session's forwarding in
 //! `nova_sim`; this pins that the data, the real Ink runtime and the
 //! session meet.
 
-use nova::chance::SplitMix;
-use nova::startup::{DataSource, DiskData, NewGameOpened};
-use nova_data::GameData;
 use nova_data::new_game::NewGame;
-use nova_sim::flight_frame::{Answer, Converse, FlightCommand};
+use nova_data::new_game::fixture::folder;
+use nova_sim::flight_frame::{Answer, Converse};
 use nova_sim::storylines::state::MissionState;
-use nova_sim::{
-    ApplyCollaborators, HailOptions, NovaBoarding, NovaLaw, OutfitId, Pilot, Session, StellarId,
-    SystemId,
-};
+use nova_sim::{OutfitId, Pilot, StellarId, SystemId};
 
-use crate::new_game_travel::{fixture, new_game_rules, nova_of, pilot_for};
+use crate::new_game_play::{self, Play, texts};
+use crate::new_game_travel::{fixture, gates, nova_of};
 
-/// The fixture as the app opens it, its knots checked, with no problems,
-/// and its ids.
-fn opened() -> (GameData, NewGame) {
-    let NewGameOpened::Loaded(loaded) =
-        DiskData.open_new_game(&nova_data::new_game::fixture::folder())
-    else {
-        panic!("the fixture opens");
-    };
-    assert_eq!(loaded.problems, Vec::<String>::new());
-    (loaded.data, fixture())
+/// The fixture's start pilot, changed by `edit`, flying in `system`.
+fn fixture_play(system: &str, edit: impl FnOnce(&mut Pilot)) -> Play {
+    Play::new(&folder(), system, edit)
 }
 
-/// A mission game: the data, its ids and a session flying a pilot.
-struct Play {
-    data: GameData,
-    game: NewGame,
-    session: Session,
-    chance: SplitMix,
-}
-
-impl Play {
-    /// The fixture's start pilot, changed by `edit` and put through a
-    /// save, flying in system `system`.
-    fn new(system: &str, edit: impl FnOnce(&mut Pilot)) -> Self {
-        let (data, game) = opened();
-        let mut pilot = pilot_for(&game);
-        pilot.system = SystemId(nova_of(&game.ids.systems, system));
-        pilot.stellar = None;
-        edit(&mut pilot);
-        let pilot = nova_sim::save::decode(&nova_sim::save::encode(&pilot)).expect("loads");
-        let session = Session::load(&data, pilot, &new_game_rules())
-            .expect("flies")
-            .with_dialog_loader(nova::dialogs::loader(1));
-        Self {
-            data,
-            game,
-            session,
-            chance: SplitMix::new(3),
-        }
-    }
-
-    fn stellar(&self, id: &str) -> StellarId {
-        StellarId(nova_of(&self.game.ids.stellars, id))
-    }
-
-    fn system(&self, id: &str) -> SystemId {
-        SystemId(nova_of(&self.game.ids.systems, id))
-    }
-
-    /// Lands at the stellar `id`, in the system the pilot is in, and
-    /// settles the landing's story.
-    fn land(&mut self, id: &str) {
-        let stellar = self.stellar(id);
-        let system = self.session.pilot().system;
-        self.session
-            .land_at(&self.data, system, stellar)
-            .expect("lands");
-        self.settle();
-        assert_eq!(self.session.landed(), Some(stellar));
-    }
-
-    /// Takes off, then lands at the stellar `id` again: a new visit.
-    fn visit_again(&mut self, id: &str) {
-        assert!(
-            self.session
-                .take_off(&self.data, &mut self.chance)
-                .is_some()
-        );
-        self.settle();
-        self.land(id);
-    }
-
-    /// Lets `days` days go by and settles them.
-    fn pass(&mut self, days: u32) {
-        self.session.let_days_pass(days, &mut self.chance);
-        self.settle();
-    }
-
-    fn settle(&mut self) {
-        let _ = self.session.settle_script(&self.data, &mut self.chance);
-    }
-
-    fn converse(&mut self, converse: Converse) -> Answer {
-        self.session.apply(
-            FlightCommand::Converse(converse),
-            &mut ApplyCollaborators {
-                catalog: Some(&self.data),
-                chance: &mut self.chance,
-                law: &NovaLaw::default(),
-                boarding_rule: &NovaBoarding::default(),
-                hail_options: &HailOptions::default(),
-            },
-        )
-    }
-
-    /// Opens the visit's next conversation: its lines and choices.
-    fn open(&mut self) -> Vec<String> {
-        page(&self.converse(Converse::Open))
-    }
-
-    /// Takes the choice at `index`: the next page's lines and choices.
-    fn choose(&mut self, index: usize) -> Vec<String> {
-        page(&self.converse(Converse::Choose(index)))
-    }
-
-    fn close(&mut self) {
-        assert_eq!(self.converse(Converse::Close), Answer::Done);
-    }
-
-    fn state(&self, id: &str) -> Option<MissionState> {
-        self.session.pilot().story.mission(id)
-    }
-
-    fn flag(&self, name: &str) -> bool {
-        self.session.pilot().flags.is_set(name)
-    }
-
-    /// How many Dock passes (`outfits/dock-pass.md`) the pilot owns.
-    fn passes(&self) -> u16 {
-        let pass = OutfitId(nova_of(&self.game.ids.outfits, "dock-pass"));
-        self.session.pilot().owned(pass)
-    }
-
-    /// What system `id` has heard, as (news id, age).
-    fn heard(&self, id: &str) -> Vec<(String, u32)> {
-        self.session
-            .heard_news(self.system(id))
-            .into_iter()
-            .map(|news| (news.id, news.age))
-            .collect()
-    }
-}
-
-/// The page `answer` shows: its lines, then its choices.
-fn page(answer: &Answer) -> Vec<String> {
-    let Answer::Conversation(page) = answer else {
-        panic!("not a page: {answer:?}");
-    };
-    assert_eq!(page.problem, None);
-    page.lines.iter().chain(&page.choices).cloned().collect()
-}
-
-fn texts(lines: &[&str]) -> Vec<String> {
-    lines.iter().map(|&line| line.to_owned()).collect()
+/// How many Dock passes (`outfits/dock-pass.md`) the pilot owns.
+fn passes(play: &Play) -> u16 {
+    let pass = OutfitId(nova_of(&play.game.ids.outfits, "dock-pass"));
+    play.session.pilot().owned(pass)
 }
 
 /// The dock job's offer, its first page.
@@ -188,7 +50,7 @@ const GREETING: [&str; 1] = ["Wind snaps at the tents."];
 
 #[test]
 fn the_dock_job_is_offered_taken_and_delivered() {
-    let mut play = Play::new("hearth", |_| {});
+    let mut play = fixture_play("hearth", |_| {});
     play.land("hearth-dock");
     assert_eq!(play.open(), texts(&OFFER));
     assert_eq!(play.state("dock-job"), Some(MissionState::Offered));
@@ -209,7 +71,7 @@ fn the_dock_job_is_offered_taken_and_delivered() {
         "the plate is aboard"
     );
     assert!(play.flag("hauling_plate"));
-    assert_eq!(play.passes(), 1, "the accept lends a Dock pass");
+    assert_eq!(passes(&play), 1, "the accept lends a Dock pass");
     play.close();
     assert_eq!(
         play.converse(Converse::Open),
@@ -219,15 +81,15 @@ fn the_dock_job_is_offered_taken_and_delivered() {
 
     // A saved pilot in the Verge with the job active and the pass.
     let taken = play.session.pilot().clone();
-    let mut play = Play::new("verge", |pilot| {
+    let mut play = fixture_play("verge", |pilot| {
         pilot.story = taken.story.clone();
         pilot.flags = taken.flags.clone();
         pilot.dialogs = taken.dialogs.clone();
         pilot.outfits = taken.outfits.clone();
     });
-    assert_eq!(play.passes(), 1, "the pass survives a save");
+    assert_eq!(passes(&play), 1, "the pass survives a save");
     play.land("verge-camp");
-    assert_eq!(play.passes(), 1, "kept until the completion");
+    assert_eq!(passes(&play), 1, "kept until the completion");
     assert_eq!(play.session.pilot().total_cargo(), 0, "dropped off");
     assert_eq!(
         play.open(),
@@ -236,7 +98,7 @@ fn the_dock_job_is_offered_taken_and_delivered() {
     assert_eq!(play.state("dock-job"), Some(MissionState::Done));
     assert!(play.flag("dock_regular"));
     assert!(!play.flag("hauling_plate"));
-    assert_eq!(play.passes(), 0, "the success takes the pass back");
+    assert_eq!(passes(&play), 0, "the success takes the pass back");
     play.close();
     assert_eq!(
         play.open(),
@@ -249,7 +111,7 @@ fn the_dock_job_is_offered_taken_and_delivered() {
 
 #[test]
 fn the_side_road_closes_on_day_3_and_its_news_spreads() {
-    let mut play = Play::new("hearth", |_| {});
+    let mut play = fixture_play("hearth", |_| {});
     play.pass(2);
     assert_eq!(play.state("side-road-closes"), None);
     assert!(play.session.pilot().story.points.is_empty());
@@ -270,8 +132,56 @@ fn the_side_road_closes_on_day_3_and_its_news_spreads() {
     assert_eq!(play.heard("drift"), []);
     play.pass(1);
     assert_eq!(play.heard("hearth"), news(1));
-    assert_eq!(play.heard("verge"), news(0));
     assert_eq!(play.heard("drift"), news(0));
+    // The other road into verge is unstable at verge's end, so closed: no
+    // ship, and no news, crosses to verge once the side road is dead.
+    assert_eq!(play.heard("verge"), []);
+    play.pass(5);
+    assert_eq!(play.heard("verge"), []);
+}
+
+/// The side road's gate in hearth, over which the pilot flies.
+fn over_the_side_road(pilot: &mut Pilot, game: &NewGame) {
+    pilot.stellar = Some(StellarId(nova_of(&game.ids.gates, "hearth/side-road")));
+}
+
+#[test]
+fn the_side_road_s_gate_clears_until_day_3_and_is_denied_after() {
+    let game = fixture();
+    let side_road = StellarId(nova_of(&game.ids.gates, "hearth/side-road"));
+    let mut play = fixture_play("hearth", |pilot| over_the_side_road(pilot, &game));
+    let (hearth, verge) = (play.system("hearth"), play.system("verge"));
+    play.pass(2);
+    assert!(play.session.land().is_ok(), "cleared on day 2");
+    assert_eq!(
+        play.session.galaxy().lanes().gates(hearth, verge),
+        [side_road]
+    );
+    play.pass(1);
+    assert!(
+        matches!(
+            play.session.land(),
+            Err(nova_sim::LandingRefusal::Denied { stellar, .. }) if stellar == side_road
+        ),
+        "denied on day 3, its request granted or not"
+    );
+    assert_eq!(play.session.galaxy().lanes().gates(hearth, verge), []);
+    let drawing = play
+        .session
+        .map_drawing(None, &[], nova_sim::galaxy_map::MapMarks::NONE);
+    assert!(
+        !drawing.current_links.contains(&(hearth, verge)),
+        "{:?}",
+        drawing.current_links
+    );
+    assert_eq!(
+        drawing
+            .closed_lanes
+            .iter()
+            .map(|look| (look.from, look.to))
+            .collect::<Vec<_>>(),
+        [(hearth, verge)]
+    );
 }
 
 /// The toll is offered once the side road is dead, the dock job done and
@@ -281,7 +191,7 @@ fn the_side_road_closes_on_day_3_and_its_news_spreads() {
 /// own greeting, which a visit shows last.
 #[test]
 fn the_toll_is_offered_after_the_side_road_closes_and_the_dock_job() {
-    let mut play = Play::new("verge", |pilot| {
+    let mut play = fixture_play("verge", |pilot| {
         pilot
             .story
             .missions
@@ -333,8 +243,103 @@ fn the_toll_is_offered_after_the_side_road_closes_and_the_dock_job() {
     assert_eq!(
         play.state("clear-the-road"),
         active,
-        "a take_point stays active"
+        "a take_point stays active while its guards hold the road"
     );
+}
+
+/// The fixture pilot at Verge Camp with the toll refused and the road
+/// accepted, as the toll test reaches it.
+fn on_the_road() -> Play {
+    let mut play = fixture_play("verge", |pilot| {
+        pilot
+            .story
+            .missions
+            .insert("dock-job".to_owned(), MissionState::Done);
+        pilot.story.day = 3;
+    });
+    play.land("verge-camp");
+    play.open();
+    play.choose(1);
+    play.close();
+    play.open();
+    play.choose(0);
+    play.close();
+    assert_eq!(
+        play.state("clear-the-road"),
+        Some(MissionState::Active {
+            cargo: 0,
+            met: false
+        })
+    );
+    play
+}
+
+/// The road is the wardens' until their guards at its gate are beaten:
+/// accepted at Verge Camp, in the point's own system, the road's blockade
+/// brings warden pickets to `verge/hearth-road`'s gate at the take-off,
+/// and destroying every one meets and completes the road (it has no
+/// completion), giving the point to the guild. The blockade is never
+/// offered itself.
+#[test]
+fn the_road_is_taken_by_beating_the_wardens_at_its_gate() {
+    let mut play = on_the_road();
+    let blockade = nova_sim::MissionId(nova_of(&play.game.ids.blockades, "clear-the-road"));
+    for venue in [
+        nova_sim::mission::Venue::Computer,
+        nova_sim::mission::Venue::Outside,
+    ] {
+        assert!(
+            play.session
+                .mission_offers(venue)
+                .iter()
+                .all(|offer| offer.mission != blockade),
+            "{venue:?}: the blockade isn't offered at Verge Camp"
+        );
+    }
+    play.take_off();
+    let road = play.gate("verge/hearth-road");
+    let at = gates(&play.game)
+        .into_iter()
+        .find(|gate| gate.stellar == road)
+        .expect("the road's gate")
+        .at;
+    let wardens = nova_sim::GovtId(nova_of(&play.game.ids.factions, "warden"));
+    let guards: Vec<_> = play
+        .session
+        .npcs()
+        .iter()
+        .filter(|npc| npc.mission.is_some())
+        .map(|npc| (npc.id, npc.govt, npc.state.position))
+        .collect();
+    assert!(!guards.is_empty(), "the wardens hold their road");
+    for &(_, govt, position) in &guards {
+        assert_eq!(govt, Some(wardens));
+        assert_eq!(position, at, "at the road's gate");
+    }
+    let (last, rest) = guards.split_last().expect("guards");
+    for &(id, _, _) in rest {
+        nova_sim::fixture::destroy(&mut play.session, id);
+        play.settle();
+    }
+    assert_eq!(
+        play.state("clear-the-road"),
+        Some(MissionState::Active {
+            cargo: 0,
+            met: false
+        }),
+        "one guard is left"
+    );
+    nova_sim::fixture::destroy(&mut play.session, last.0);
+    play.settle();
+    assert_eq!(play.state("clear-the-road"), Some(MissionState::Done));
+    assert_eq!(
+        play.session.pilot().story.points["verge/hearth-road"]
+            .owner
+            .as_deref(),
+        Some("guild")
+    );
+    let guild = nova_sim::GovtId(nova_of(&play.game.ids.factions, "guild"));
+    assert_eq!(play.session.galaxy().gate_govt(road), Some(guild));
 }
 
 /// Paid, the toll has no objective, so accepting it completes it: Done,
@@ -342,7 +347,7 @@ fn the_toll_is_offered_after_the_side_road_closes_and_the_dock_job() {
 /// `refused_the_toll`, so the visit goes straight to the camp's greeting.
 #[test]
 fn the_toll_is_paid_and_done_on_accept() {
-    let mut play = Play::new("verge", |pilot| {
+    let mut play = fixture_play("verge", |pilot| {
         pilot
             .story
             .missions
@@ -385,7 +390,7 @@ fn the_toll_is_paid_and_done_on_accept() {
 
 #[test]
 fn a_declined_dock_job_never_comes_back() {
-    let mut play = Play::new("hearth", |_| {});
+    let mut play = fixture_play("hearth", |_| {});
     play.land("hearth-dock");
     play.open();
     play.choose(1);
@@ -399,7 +404,7 @@ fn a_declined_dock_job_never_comes_back() {
 
 #[test]
 fn a_deferred_offer_comes_back_at_the_next_landing() {
-    let mut play = Play::new("hearth", |_| {});
+    let mut play = fixture_play("hearth", |_| {});
     play.land("hearth-dock");
     play.open();
     assert_eq!(play.choose(2), texts(&["\"It'll keep a day or two.\""]));
@@ -416,7 +421,7 @@ fn a_deferred_offer_comes_back_at_the_next_landing() {
 
 #[test]
 fn the_plate_news_skips_the_dead_lane_and_reaches_drift_through_hearth() {
-    let mut play = Play::new("hearth", |pilot| {
+    let mut play = fixture_play("hearth", |pilot| {
         pilot.story.day = 5;
         pilot.story.news.insert("plate-arrives".to_owned(), 5);
         // The side road's event is past, so only the plate is news.
@@ -479,7 +484,7 @@ fn the_app_shows_the_completion_first_at_the_landing_that_delivers() {
     // A new pilot is saved at once; she is put in the Verge with the dock
     // job taken.
     drop(flying_in(&store));
-    let (_, game) = opened();
+    let (_, game) = new_game_play::opened(&folder());
     let mut pilot = saved(&store, "Ada");
     pilot.system = SystemId(nova_of(&game.ids.systems, "verge"));
     pilot.stellar = None;

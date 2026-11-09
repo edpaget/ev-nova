@@ -9,16 +9,14 @@ use std::num::NonZeroU16;
 use nova_data::graphics::SpriteSheet;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
-use nova_data::{GameData, Record, StandIn, StandInOf, StellarSprite, StoreEntry, stellar_spin_id};
+use nova_data::{GameData, Record, StandInOf, StellarSprite, StoreEntry, stellar_spin_id};
 
 use super::catalog::{
     StellarAnimation, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemContents,
     SystemId,
 };
-use crate::color::Color;
-use crate::flight::data::view_outline;
 use crate::galaxy::data::display_name;
-use crate::outline::StellarStandIn;
+use crate::outline_data;
 use crate::sheet_image::SheetImage;
 
 /// Reads the system afresh on every call; a view asks once, when it opens.
@@ -104,17 +102,9 @@ fn contents(data: &GameData, id: StellarId, stellar: &StoreEntry<'_, Stellar>) -
             frame0_bias: record.frame0_bias,
             flags2: record.flags2.bits(),
         },
-        stand_in: data.stand_in(StandInOf::Stellar(id)).map(stand_in),
-    }
-}
-
-/// A stellar's stand-in from the data, in the view's terms.
-fn stand_in(stand_in: &StandIn) -> StellarStandIn {
-    let opaque = |[r, g, b]: [u8; 3]| Color::rgba(r, g, b, 255);
-    match stand_in {
-        StandIn::Outline(outline) => StellarStandIn::Outline(view_outline(outline)),
-        StandIn::Disc { color } => StellarStandIn::Disc(opaque(*color)),
-        StandIn::Ring { color } => StellarStandIn::Ring(opaque(*color)),
+        stand_in: data
+            .stand_in(StandInOf::Stellar(id))
+            .map(outline_data::stellar_stand_in),
     }
 }
 
@@ -147,6 +137,11 @@ fn sheet(image: SheetImage, sheet: &SpriteSheet, frames: usize) -> StellarSheet 
 mod tests {
 
     use std::num::NonZeroU16;
+
+    use nova_data::StandIn;
+
+    use crate::color::Color;
+    use crate::outline::StellarStandIn;
 
     use nova_data::graphics::RLED;
     use nova_data::graphics::fixture::RledBuilder;

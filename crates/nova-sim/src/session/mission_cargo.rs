@@ -11,7 +11,7 @@
 use super::mission_screens::MissionTextKind;
 use super::{Session, Space};
 use crate::ai::Goal;
-use crate::catalog::{GovtRecord, MissionId, MissionRecord, ShipId, StellarId};
+use crate::catalog::{GovtId, GovtRecord, MissionId, MissionRecord, ShipId, StellarId};
 use crate::chance::{Chance, NeverFires};
 use crate::combat::ShipRef;
 use crate::legal::{Crime, LegalCode};
@@ -277,24 +277,8 @@ impl Session {
         ) else {
             return;
         };
-        self.chart.convict_of(
-            &mut self.pilot,
-            &self.statics,
-            law,
-            Crime::Smuggle,
-            Some(govt_id),
-        );
-        self.run.lose_ranks_to(
-            &mut self.pilot,
-            &self.statics,
-            &self.setup,
-            Crime::Smuggle,
-            Some(govt_id),
-        );
         self.space.set_on_player(id);
-        let (Contraband::Junk { fine, .. } | Contraband::Outfit { fine, .. }) = found;
-        self.take_scan_fine(fine);
-        self.out.sounds.push(SimSound::Smuggling);
+        self.apply_find(govt_id, &found, law);
         self.space.say(
             &mut self.out,
             match found {
@@ -317,7 +301,36 @@ impl Session {
                 },
             },
         );
-        self.ship.latches.scan_latches.clear(&found);
+    }
+
+    /// Applies a scan's `found`, made for government `govt_id`, as
+    /// `_ScanPlayer` does once it has found contraband (@0x7ebcc-0x7eed3,
+    /// @0x7f01f-0x7f399), but for who scanned: the player is convicted of
+    /// [`Crime::Smuggle`] against it by `law` and loses the ranks that
+    /// reaches, is fined, the cash floored at none, hears
+    /// [`SimSound::Smuggling`], and the find's latch is cleared. The
+    /// interceptor's scan ([`Session::scanned_by`]) and the new game's
+    /// dock scan (the `dock_scan` module) both apply a find so, each
+    /// setting its own scanner and saying its own message.
+    pub(super) fn apply_find(&mut self, govt_id: GovtId, found: &Contraband, law: &dyn LegalCode) {
+        self.chart.convict_of(
+            &mut self.pilot,
+            &self.statics,
+            law,
+            Crime::Smuggle,
+            Some(govt_id),
+        );
+        self.run.lose_ranks_to(
+            &mut self.pilot,
+            &self.statics,
+            &self.setup,
+            Crime::Smuggle,
+            Some(govt_id),
+        );
+        let (Contraband::Junk { fine, .. } | Contraband::Outfit { fine, .. }) = *found;
+        self.take_scan_fine(fine);
+        self.out.sounds.push(SimSound::Smuggling);
+        self.ship.latches.scan_latches.clear(found);
     }
 
     /// The mission cargo's part of the scan by NPC `id`, of ship type

@@ -23,7 +23,11 @@
 //!   dropped its deliveries off and the offer's `on_offer` has fired its
 //!   events, which may load cargo. A completion's or a stellar's own
 //!   conversation reads no outcome. Closing, or taking off, with none
-//!   reached leaves the offer offered. An offer's first opening, an
+//!   reached leaves the offer offered. An accept refused for room leaves
+//!   it offered too, decided for the visit, and raises its refusal
+//!   ([`RoomRefusal`], drained as
+//!   [`FlightEvent::RoomRefused`](crate::flight_frame::FlightEvent::RoomRefused))
+//!   so the view can tell the player. An offer's first opening, an
 //!   accept or a decline, and a completion each make a save due; a defer,
 //!   an offer opened again and a stellar's own conversation don't.
 //! - **Landing and days.** The `Storylines` consumer's subscriptions run
@@ -54,6 +58,17 @@
 //!   and no frame, dialog page or save comes between. The state change
 //!   that applied the block (an offer, a decision, a success, an event)
 //!   has made a save due already.
+//! - **Blockades.** A `take_point` mission is met by beating the
+//!   holder's guards at its point, not by passing its gate: a hypergate
+//!   entry from or to the point's gate meets nothing. The guards are the
+//!   mission's blockade, a hidden stock `mïsn` the storylines start while
+//!   the mission is active and unmet and end once it isn't
+//!   ([`Session::sync_blockades`], at the end of
+//!   [`Session::settle_storylines`] and as a pilot is loaded). The
+//!   blockade's goals-met moment meets the mission
+//!   ([`Session::blockade_broken`], [`Play::beat_holder`]) and settles the
+//!   storylines before the moment's settling returns. See the
+//!   `blockades` module.
 //! - **News.** [`Session::heard_news`] lists what a system has heard over
 //!   the galaxy's lanes ([`news::heard`]).
 
@@ -66,9 +81,12 @@ use crate::story::{
     Consumer, EventFilter, StoryEvent, StoryEventKind, Subscription, SubscriptionId,
 };
 use crate::storylines::effects::OutfitChange;
-use crate::storylines::lifecycle::{Play, Scene, outcome_of};
+use crate::storylines::lifecycle::{Decision, Play, Scene, outcome_of};
 use crate::storylines::news::{self, HeardNews};
 use nova_sim_catalog::dialogs::DialogAt;
+use nova_sim_catalog::storylines::MissionObjective;
+
+use crate::flight_frame::RoomRefusal;
 
 use super::conversation::OpenConversation;
 use super::free_cargo::free_cargo_in;
@@ -262,13 +280,30 @@ pub(super) fn settle_outcome(
     };
     open.decided = true;
     let room = free_cargo_in(holds, pilot);
-    out.save_due |= Play {
+    let decision = Play {
         storylines: &statics.storylines,
         flags: &mut pilot.flags,
         story: &mut pilot.story,
         outfits: &mut out.story_outfits,
     }
     .decide(id, outcome, room);
+    out.save_due |= decision.changed();
+    if let Decision::NoRoom { tons, room } = decision {
+        let mission = statics.storylines.missions.get(id);
+        let cargo = match mission.and_then(|mission| mission.objective.as_ref()) {
+            Some(MissionObjective::Deliver { cargo, .. }) => cargo.clone(),
+            _ => String::new(),
+        };
+        out.room_refusals.push(RoomRefusal {
+            mission: id.clone(),
+            title: mission
+                .map(|mission| mission.title.clone())
+                .unwrap_or_default(),
+            cargo,
+            tons,
+            room: room.max(0),
+        });
+    }
 }
 
 impl Session {
@@ -300,23 +335,20 @@ impl Session {
         });
     }
 
-    /// The news `system` has heard by today, over the galaxy's lanes, by
-    /// the day each broke and then by id, each with how many days ago it
-    /// was heard (see the `storylines` module). None in the stock game.
+    /// The news `system` has heard by today, over each item's reach,
+    /// frozen over the galaxy's lanes at its release (see the
+    /// `gate_points` module), by the day each broke and then by id, each
+    /// with how many days ago it was heard (see the `storylines` module).
+    /// None in the stock game.
     #[must_use]
     pub fn heard_news(&self, system: SystemId) -> Vec<HeardNews> {
-        news::heard(
-            &self.statics.storylines,
-            &self.pilot.story,
-            self.chart.galaxy.lanes(),
-            system,
-        )
+        news::heard(&self.statics.storylines, &self.pilot.story, system)
     }
 }
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)] // shields compared as the refit leaves them
-mod tests {
+pub(super) mod tests {
     //! What the session forwards to the story layer and what reaches the
     //! pilot and the page; the rules themselves are pinned in
     //! `nova_sim_story::storylines`.
@@ -332,7 +364,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::catalog::{OutfitId, OutfitRecord};
+    use crate::catalog::{GovtId, OutfitId, OutfitRecord};
     use crate::chance::NeverFires;
     use crate::dialog::Value;
     use crate::dialog::fake::{FakeChoice, FakeDialog, FakeKnot, FakeLoader};
@@ -345,12 +377,12 @@ mod tests {
 
     const STORY: &str = "job story";
     const FILE: &str = "dialog/job.ink";
-    const DOCK: i16 = 128;
+    pub(in crate::session) const DOCK: i16 = 128;
 
     /// The job's story: an offer whose choices end in `accept`,
     /// `decline` and `defer` (or none), its completion, whose first line
     /// shows while `paid` is set, and the planet's own greeting.
-    fn loader() -> FakeLoader {
+    pub(in crate::session) fn loader() -> FakeLoader {
         let offer = FakeKnot::new("offer")
             .line("A job?", &[])
             .choice(FakeChoice::sticky("Take", &[]).line("Bay two.", &["outcome: accept"]))
@@ -398,7 +430,7 @@ mod tests {
 
     /// The job: offered at the dock, `tons` of plate back to the dock, its
     /// completion there setting `paid`.
-    fn job(tons: u32) -> StoryMission {
+    pub(in crate::session) fn job(tons: u32) -> StoryMission {
         StoryMission {
             objective: Some(deliver(tons, DOCK)),
             complete: Some(MissionCompletion {
@@ -413,7 +445,7 @@ mod tests {
 
     /// [`catalog`] with `missions`, the jump point `a/b` (stable), the
     /// news item `word` from system 130, and the dock greeting.
-    fn talking(missions: &[(&str, StoryMission)]) -> FakePilotCatalog {
+    pub(in crate::session) fn talking(missions: &[(&str, StoryMission)]) -> FakePilotCatalog {
         let mut storylines =
             nova_sim_catalog::fixture::storylines::storylines(missions, FILE, STORY);
         storylines.points = BTreeMap::from([(
@@ -445,20 +477,20 @@ mod tests {
     }
 
     /// A session of `catalog`'s, wired to [`loader`], in flight.
-    fn flying(catalog: &FakePilotCatalog) -> Session {
+    pub(in crate::session) fn flying(catalog: &FakePilotCatalog) -> Session {
         Session::start(catalog)
             .expect("starts")
             .with_dialog_loader(Rc::new(loader()))
     }
 
     /// Lands at the dock and settles the landing's story.
-    fn land(session: &mut Session, catalog: &FakePilotCatalog) {
+    pub(in crate::session) fn land(session: &mut Session, catalog: &FakePilotCatalog) {
         assert_eq!(land_now(session), Ok(StellarId(DOCK)));
         let _ = session.settle_script(catalog, &mut NeverFires);
     }
 
     /// Takes off from the dock and lands there again: a new visit.
-    fn visit_again(session: &mut Session, catalog: &FakePilotCatalog) {
+    pub(in crate::session) fn visit_again(session: &mut Session, catalog: &FakePilotCatalog) {
         assert_eq!(
             session.take_off(catalog, &mut NeverFires),
             Some(StellarId(DOCK))
@@ -467,18 +499,18 @@ mod tests {
         land(session, catalog);
     }
 
-    fn landed(catalog: &FakePilotCatalog) -> Session {
+    pub(in crate::session) fn landed(catalog: &FakePilotCatalog) -> Session {
         let mut session = flying(catalog);
         land(&mut session, catalog);
         session
     }
 
-    fn converse(session: &mut Session, converse: Converse) -> Answer {
+    pub(in crate::session) fn converse(session: &mut Session, converse: Converse) -> Answer {
         apply(session, FlightCommand::Converse(converse))
     }
 
     /// The lines of the page `answer` shows.
-    fn lines(answer: &Answer) -> Vec<String> {
+    pub(in crate::session) fn lines(answer: &Answer) -> Vec<String> {
         match answer {
             Answer::Conversation(page) => page.lines.clone(),
             other => panic!("not a page: {other:?}"),
@@ -637,20 +669,97 @@ mod tests {
         assert!(!session.out.save_due, "no mission");
     }
 
+    /// [`landed`] with the hold full but for `room` tons.
+    fn landed_with_room(catalog: &FakePilotCatalog, room: i64) -> Session {
+        let mut session = landed(catalog);
+        let filler = u32::try_from(free(&session) - room).expect("a hold's tons");
+        session
+            .pilot
+            .cargo
+            .insert(crate::market::Good::Commodity(0), filler);
+        session
+    }
+
+    /// The job, titled.
+    fn titled_job(tons: u32) -> StoryMission {
+        StoryMission {
+            title: "Plate for the dock".to_owned(),
+            ..job(tons)
+        }
+    }
+
     #[test]
-    fn an_accept_without_room_leaves_it_offered() {
-        let catalog = talking(&[("job", job(1_000_000))]);
-        let mut session = landed(&catalog);
-        let room = free(&session);
+    fn an_accept_without_room_raises_its_refusal_and_leaves_the_offer() {
+        let catalog = talking(&[("job", titled_job(10))]);
+        let mut session = landed_with_room(&catalog, 5);
+        converse(&mut session, Converse::Open);
+        session.out.save_due = false;
+        assert_eq!(
+            lines(&converse(&mut session, Converse::Choose(0))),
+            ["Bay two."],
+            "the accept's page"
+        );
+        assert_eq!(
+            session.out.room_refusals,
+            [RoomRefusal {
+                mission: "job".to_owned(),
+                title: "Plate for the dock".to_owned(),
+                cargo: "Plate".to_owned(),
+                tons: 10,
+                room: 5,
+            }]
+        );
+        assert_eq!(state(&session, "job"), Some(MissionState::Offered));
+        assert_eq!(free(&session), 5, "nothing loaded");
+        assert!(!session.out.save_due, "nothing changed");
+    }
+
+    #[test]
+    fn a_refusal_counts_an_overfull_hold_as_no_room() {
+        let catalog = talking(&[("job", titled_job(10))]);
+        let mut session = landed_with_room(&catalog, 0);
+        session
+            .pilot
+            .cargo
+            .entry(crate::market::Good::Commodity(1))
+            .or_insert(3);
         converse(&mut session, Converse::Open);
         converse(&mut session, Converse::Choose(0));
+        let rooms: Vec<i64> = session.out.room_refusals.iter().map(|r| r.room).collect();
+        assert_eq!(rooms, [0]);
+    }
+
+    #[test]
+    fn a_fitting_accept_raises_no_refusal() {
+        let catalog = talking(&[("job", titled_job(10))]);
+        let mut session = landed_with_room(&catalog, 10);
+        converse(&mut session, Converse::Open);
+        converse(&mut session, Converse::Choose(0));
+        assert_eq!(session.out.room_refusals, []);
+        assert_eq!(
+            state(&session, "job"),
+            Some(MissionState::Active {
+                cargo: 10,
+                met: false
+            })
+        );
+    }
+
+    #[test]
+    fn a_refused_offer_comes_back_at_the_next_landing() {
+        let catalog = talking(&[("job", titled_job(10))]);
+        let mut session = landed_with_room(&catalog, 5);
+        converse(&mut session, Converse::Open);
+        converse(&mut session, Converse::Choose(0));
+        converse(&mut session, Converse::Close);
+        visit_again(&mut session, &catalog);
+        assert_eq!(lines(&converse(&mut session, Converse::Open)), ["A job?"]);
         assert_eq!(state(&session, "job"), Some(MissionState::Offered));
-        assert_eq!(free(&session), room);
     }
 
     /// An event on day 3 that closes `a/b`, releasing `word`, and a toll
     /// offered at the dock once `a/b` is dead.
-    fn closing() -> [(&'static str, StoryMission); 2] {
+    pub(in crate::session) fn closing() -> [(&'static str, StoryMission); 2] {
         let close = StoryMission {
             requires: Requires {
                 not_before_day: Some(3),
@@ -1276,5 +1385,167 @@ mod tests {
         assert_eq!(lines(&converse(&mut session, Converse::Open)), ["Hello."]);
         assert!(session.ship.fuel_cap_cached, "nothing queued: no reset");
         assert!(!session.chart.galaxy_stale);
+    }
+
+    /// The guild's `gövt`.
+    const GUILD: GovtId = GovtId(129);
+
+    /// The job, its accept handing `a/b` to the guild.
+    fn handing_over() -> StoryMission {
+        let job = job(10);
+        StoryMission {
+            on_accept: StoryEffects {
+                points: vec![PointState {
+                    point: "a/b".to_owned(),
+                    owner: Some("guild".to_owned()),
+                    stability: None,
+                }],
+                ..job.on_accept.clone()
+            },
+            ..job
+        }
+    }
+
+    /// The site of planet 129, in the dock's system, as the chart holds
+    /// it.
+    fn far_planet(session: &Session) -> crate::catalog::LandingSite {
+        *session
+            .chart
+            .sites
+            .iter()
+            .find(|site| site.id == StellarId(129))
+            .expect("shown")
+    }
+
+    #[test]
+    fn a_choice_that_changes_a_point_restamps_its_gate_before_it_answers() {
+        let mut catalog = talking(&[("job", handing_over())]);
+        // `a/b`'s gate is planet 129, so the chart holds its site.
+        catalog
+            .storylines
+            .points
+            .get_mut("a/b")
+            .expect("talking's point")
+            .gate = StellarId(129);
+        catalog
+            .storylines
+            .factions
+            .insert("guild".to_owned(), GUILD);
+        let mut session = landed(&catalog);
+        converse(&mut session, Converse::Open);
+        assert_ne!(far_planet(&session).govt, Some(GUILD));
+        session.take_events();
+        assert_eq!(
+            lines(&converse(&mut session, Converse::Choose(0))),
+            ["Bay two."]
+        );
+        assert_eq!(far_planet(&session).govt, Some(GUILD), "restamped");
+        assert!(
+            session
+                .take_events()
+                .contains(&crate::session::events::SessionEvent::GalaxyChanged)
+        );
+    }
+
+    /// Gates: leaving through a point's gate meets no `take_point`.
+    mod gates {
+        use super::*;
+        use crate::gate::GateKind;
+        use crate::navigation::NavMode;
+        use crate::session::LandPress;
+        use crate::testkit::{HEARTH, laned_stable};
+
+        /// The gate in drift to hearth, which the pilot starts over.
+        const TO_HEARTH: StellarId = StellarId(300);
+        /// Its partner, in hearth.
+        const FROM_DRIFT: StellarId = StellarId(310);
+
+        /// [`laned_stable`] with the road, taking the point `point`, and
+        /// its `complete`; its success gives `hearth/drift-road` to the
+        /// guild.
+        fn roads(point: &str, complete: Option<MissionCompletion>) -> FakePilotCatalog {
+            let mut catalog = laned_stable();
+            catalog.storylines.missions.insert(
+                "road".to_owned(),
+                StoryMission {
+                    objective: Some(nova_sim_catalog::storylines::MissionObjective::TakePoint {
+                        point: point.to_owned(),
+                        held_by: "warden".to_owned(),
+                        blockade: None,
+                    }),
+                    complete,
+                    on_success: StoryEffects {
+                        points: vec![PointState {
+                            point: "hearth/drift-road".to_owned(),
+                            owner: Some("guild".to_owned()),
+                            stability: None,
+                        }],
+                        ..StoryEffects::default()
+                    },
+                    ..offered_at(DOCK, FILE, "offer")
+                },
+            );
+            catalog
+                .storylines
+                .factions
+                .insert("guild".to_owned(), GUILD);
+            catalog
+        }
+
+        /// A new pilot over `catalog`, in drift over gate 300, the road
+        /// accepted, at the gate's entry, no save due.
+        fn at_the_entry(catalog: &FakePilotCatalog) -> Session {
+            let rules = Rulebook::default()
+                .with_override(RuleKey::GateLanes, RuleSource::Bible)
+                .with_override(RuleKey::GateCourse, RuleSource::Bible);
+            let mut session = Session::start_ruled(catalog, &rules).expect("starts");
+            session.pilot.story.missions.insert(
+                "road".to_owned(),
+                MissionState::Active {
+                    cargo: 0,
+                    met: false,
+                },
+            );
+            session.chart.set_nav(NavMode::Stellar(Some(TO_HEARTH)));
+            let _ = session.land();
+            session.dock_approach();
+            assert_eq!(
+                session.land(),
+                Ok(LandPress::AtGate {
+                    stellar: TO_HEARTH,
+                    kind: GateKind::Hypergate,
+                })
+            );
+            session.out.save_due = false;
+            session.take_events();
+            session
+        }
+
+        fn site(session: &Session, id: StellarId) -> crate::catalog::LandingSite {
+            *session
+                .chart
+                .sites
+                .iter()
+                .find(|site| site.id == id)
+                .expect("shown")
+        }
+
+        const NOT_MET: Option<MissionState> = Some(MissionState::Active {
+            cargo: 0,
+            met: false,
+        });
+
+        #[test]
+        fn leaving_through_the_point_s_gate_meets_nothing() {
+            let catalog = roads("drift/hearth-road", None);
+            let mut session = at_the_entry(&catalog);
+            assert_eq!(
+                session.enter_hypergate(Some(HEARTH), &catalog, &mut NeverFires),
+                Ok(HEARTH)
+            );
+            assert_eq!(state(&session, "road"), NOT_MET, "the holder isn't beaten");
+            assert!(!session.out.save_due);
+            assert_eq!(site(&session, FROM_DRIFT).govt, None, "the owner stays");
+        }
     }
 }

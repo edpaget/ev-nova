@@ -9,11 +9,12 @@ use nova_view::{Input, MenuCommand, MouseButton, Point, Screen, ScreenAction, Sh
 
 use super::port_dialogs::{
     abort_and_refresh, close_mission_texts, close_port_dialogs, collect_race_winnings,
-    load_info_text, open_outfitter, open_port_dialogs, open_port_map, open_shipyard,
-    refresh_spaceport, refresh_status_bar, run_gamble,
+    load_info_text, open_outfitter, open_port_dialogs, open_port_map, open_port_mission_info,
+    open_shipyard, refresh_spaceport, refresh_status_bar, run_gamble,
 };
 use nova_view::menu::MenuChoice;
 
+use super::story_log::AfterLog;
 use super::{AppScreen, ENTERED, LANDED, MenuAction, Side, chord_command};
 
 impl AppScreen {
@@ -69,10 +70,9 @@ impl AppScreen {
         let accepted = spaceport.take_mission_accept();
         open_port_dialogs(spaceport, self.flight.as_mut().expect(ENTERED));
         run_gamble(spaceport, self.flight.as_mut().expect(ENTERED));
-        if spaceport.take_mission_info_request() {
-            let info = self.flight.as_mut().expect(ENTERED).mission_info();
-            spaceport.open_mission_info(info);
-        }
+        // The new game's missions open in its own log, once the
+        // spaceport is let go (the `story_log` module).
+        let story_info = open_port_mission_info(spaceport, self.flight.as_mut().expect(ENTERED));
         // An abort frees the slot, and the info goes back as the
         // `mission_info_rebuild` rule reads it, closing once nothing is
         // left; a refusal changes nothing.
@@ -163,6 +163,9 @@ impl AppScreen {
             // trade-in; and a ship the cargo space, the free mass and the
             // outfits: so all three go back.
             refresh_spaceport(spaceport, flight);
+        }
+        if let Some(info) = story_info {
+            self.open_missions_log(&info, AfterLog::Nothing);
         }
         self.serve_closings();
         self.serve_mission_screens();
@@ -446,7 +449,7 @@ impl AppScreen {
     /// ([`Screen::holds_back_keys`]). A mission dialog's map over flight is
     /// in front of the mission dialogs it opened from, and holds nothing:
     /// flight places it.
-    fn overlays_open(&self) -> [OverlayRow; 18] {
+    fn overlays_open(&self) -> [OverlayRow; 19] {
         let row = |open: bool, overlay, holds_back_keys| OverlayRow {
             open,
             overlay,
@@ -488,6 +491,7 @@ impl AppScreen {
                 Overlay::PlanetComm,
                 holds(self.planet_comm.as_ref()),
             ),
+            row(self.story_log.is_some(), Overlay::StoryLog, false),
             row(self.flight_dialog_map_open(), Overlay::DialogMap, false),
             row(
                 self.missions.is_some(),
@@ -656,6 +660,7 @@ impl AppScreen {
             Overlay::Comm => self.comm_input(moved),
             Overlay::EscortDialog => self.escort_dialog_input(moved),
             Overlay::PlanetComm => self.planet_comm_input(moved),
+            Overlay::StoryLog => self.story_log_input(moved),
             Overlay::DialogMap => self.flight_dialog_map_input(input),
             Overlay::Missions => self.missions_input(moved),
             Overlay::Offer => self.offer_input(moved),
@@ -838,6 +843,8 @@ pub(super) enum Overlay {
     Comm,
     EscortDialog,
     PlanetComm,
+    /// The new game's story log (the `story_log` module).
+    StoryLog,
     /// A mission dialog's map over flight.
     DialogMap,
     Missions,

@@ -137,29 +137,19 @@ pub fn leave_or_wait(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) 
 /// The gate `npc` leaves through by the other reading of
 /// [`RuleKey::DeparturesThroughGates`](crate::RuleKey::DeparturesThroughGates):
 /// one of the gates among those `around` lists it may use
-/// ([`destination::usable_gates`]), drawn uniformly on `chance`, leaving out
+/// ([`destination::draw_usable_gate`]), drawn uniformly on `chance`, leaving out
 /// the one it came out of ([`Npc::visited`]) when another is usable. `None`,
 /// drawing nothing, with none.
 fn gate_out(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Option<Goal> {
-    let usable = destination::usable_gates(
+    destination::draw_usable_gate(
         npc.govt,
         around.listed,
         around.govts,
         around.destination_reach,
-    );
-    let others: Vec<_> = usable
-        .iter()
-        .copied()
-        .filter(|site| Some(site.id) != npc.visited)
-        .collect();
-    let gates = if others.is_empty() { usable } else { others };
-    if gates.is_empty() {
-        return None;
-    }
-    let draw = chance.below(u32::try_from(gates.len()).unwrap_or(u32::MAX));
-    gates
-        .get(usize::try_from(draw).unwrap_or(usize::MAX))
-        .map(|site| Goal::EnterGate(site.id))
+        npc.visited,
+        chance,
+    )
+    .map(|site| Goal::EnterGate(site.id))
 }
 
 /// Whether a think of `thought` by `npc` is an idle block's leave

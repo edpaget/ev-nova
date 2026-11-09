@@ -328,3 +328,22 @@ pub(super) fn start_up_words(
         nova_sim::text_parse::conditional_text(raw, &nova_sim::control::StartUpPilot, rules);
     text_tags::expand_before_any_pilot(&resolved, data)
 }
+
+/// The mission info the spaceport's mission info key asked for, if it
+/// did: opened on the spaceport's own screen, or, when it lists the new
+/// game's storyline missions, handed back for the story log (the
+/// `story_log` module).
+pub(super) fn open_port_mission_info(
+    spaceport: &mut SpaceportView,
+    flight: &mut FlightView<Rc<GameData>>,
+) -> Option<nova_sim::MissionInfo> {
+    if !spaceport.take_mission_info_request() {
+        return None;
+    }
+    let info = flight.mission_info();
+    if info.story.is_empty() {
+        spaceport.open_mission_info(info);
+        return None;
+    }
+    Some(info)
+}

@@ -4,23 +4,27 @@
 //! A news item breaks on the day a mission's effects release it (kept in
 //! [`StoryState::news`]) in its `from` system, and travels on ships: it
 //! reaches a system [`NEWS_DAYS_PER_LANE`] days for each lane between them,
-//! over the shortest way. A dead lane carries nothing, and a one-way lane
-//! carries news only its own way. Nothing is stored per system: what a
-//! system has heard is worked out from the release days and the lanes
-//! whenever it is asked ([`heard`]).
+//! over the shortest way. A closed lane, unstable or dead, carries
+//! nothing, as no ship crosses it, and a one-way lane carries news only
+//! its own way.
 //!
-//! The lanes are the galaxy's as the data writes them
-//! ([`GateLanes`]); play's changes to a jump point don't reach them yet
-//! (`play-the-sample` phase 1). Once they do, a lane closing could make a
-//! system "unhear" an item; freezing each item's arrivals at its release
-//! would then be the fix.
+//! The lanes are the galaxy's ([`GateLanes`]), which follow play's
+//! changes to the jump points, so they change at run time. Each item's
+//! reach is frozen at its release, over the lanes then ([`freeze`], kept
+//! in [`StoryState::reach`]), so a system that has heard an item never
+//! "unhears" it when a lane closes, and an item released once a lane has
+//! closed never crosses it. The session freezes after it hands the galaxy
+//! an effect block's point changes, so an item released in the block that
+//! closes a road never crosses that road. What a system has heard is
+//! worked out from the release days and the reaches whenever it is asked
+//! ([`heard`]).
 
 use std::collections::{BTreeMap, VecDeque};
 
 use nova_sim_catalog::storylines::Storylines;
 
 use super::state::StoryState;
-use crate::catalog::{GateStability, SystemId};
+use crate::catalog::SystemId;
 use crate::gate_lanes::GateLanes;
 
 /// The days news takes to cross one gate lane: engine tuning, as the
@@ -43,8 +47,8 @@ pub struct HeardNews {
 }
 
 /// How many lanes news from `from` crosses to reach each system it
-/// reaches, `from` itself at 0: a breadth-first walk over `lanes`, never
-/// over a dead lane.
+/// reaches, `from` itself at 0: a breadth-first walk over `lanes`' open
+/// lanes ([`GateLanes::listed`]), as no ship crosses a closed one.
 #[must_use]
 pub fn arrivals(lanes: &GateLanes, from: SystemId) -> BTreeMap<SystemId, u32> {
     let mut reached = BTreeMap::from([(from, 0)]);
@@ -52,7 +56,7 @@ pub fn arrivals(lanes: &GateLanes, from: SystemId) -> BTreeMap<SystemId, u32> {
     while let Some(at) = queue.pop_front() {
         let crossed = reached[&at] + 1;
         for &to in lanes.listed(at) {
-            if lanes.stability(at, to) == Some(GateStability::Dead) || reached.contains_key(&to) {
+            if reached.contains_key(&to) {
                 continue;
             }
             reached.insert(to, crossed);
@@ -62,22 +66,33 @@ pub fn arrivals(lanes: &GateLanes, from: SystemId) -> BTreeMap<SystemId, u32> {
     reached
 }
 
-/// The news `system` has heard by `story`'s day, over `lanes`, by the day
-/// each broke and then by id.
+/// Freezes the reach of each news item `story` has released and keeps no
+/// reach for: its [`arrivals`] over `lanes` as they are now, kept in
+/// [`StoryState::reach`]. An item with a reach keeps it, and one the data
+/// lacks gets none.
+pub fn freeze(storylines: &Storylines, story: &mut StoryState, lanes: &GateLanes) {
+    for id in story.news.keys() {
+        if story.reach.contains_key(id) {
+            continue;
+        }
+        if let Some(item) = storylines.news.get(id) {
+            story.reach.insert(id.clone(), arrivals(lanes, item.from));
+        }
+    }
+}
+
+/// The news `system` has heard by `story`'s day, over each item's frozen
+/// reach ([`freeze`]), by the day each broke and then by id. An item with
+/// no reach is heard nowhere.
 #[must_use]
-pub fn heard(
-    storylines: &Storylines,
-    story: &StoryState,
-    lanes: &GateLanes,
-    system: SystemId,
-) -> Vec<HeardNews> {
+pub fn heard(storylines: &Storylines, story: &StoryState, system: SystemId) -> Vec<HeardNews> {
     let mut released: Vec<(&String, u32)> = story.news.iter().map(|(id, &day)| (id, day)).collect();
     released.sort_by_key(|&(id, day)| (day, id));
     released
         .into_iter()
         .filter_map(|(id, day)| {
             let item = storylines.news.get(id)?;
-            let lanes = *arrivals(lanes, item.from).get(&system)?;
+            let lanes = *story.reach.get(id)?.get(&system)?;
             let arrives = day.saturating_add(lanes.saturating_mul(NEWS_DAYS_PER_LANE));
             let age = story.day.checked_sub(arrives)?;
             Some(HeardNews {
@@ -96,20 +111,21 @@ mod tests {
     use nova_sim_catalog::storylines::NewsItem;
 
     use super::*;
+    use crate::catalog::GateStability;
 
     const HEARTH: i16 = 1;
     const VERGE: i16 = 2;
     const DRIFT: i16 = 3;
     const FAR: i16 = 4;
 
-    /// The new-game fixture's lanes: Hearth and Verge both ways, Hearth
-    /// and Drift both ways, Verge to Drift dead, Drift to Verge unstable
-    /// (its back door), and Far reached by nothing.
+    /// Lanes shaped like the new-game fixture's: Hearth and Verge both
+    /// ways, Hearth and Drift both ways, Verge to Drift dead, Drift to
+    /// Verge unstable (its back door), and Far reached by nothing.
     fn lanes() -> GateLanes {
         use GateStability::{Dead, Stable, Unstable};
         GateLanes::fixture(&[
             (HEARTH, VERGE, Stable),
-            (VERGE, HEARTH, Unstable),
+            (VERGE, HEARTH, Stable),
             (HEARTH, DRIFT, Stable),
             (DRIFT, HEARTH, Stable),
             (VERGE, DRIFT, Dead),
@@ -144,17 +160,24 @@ mod tests {
         }
     }
 
+    /// [`story`] with every item frozen over [`lanes`].
+    fn frozen(day: u32, released: &[(&str, u32)]) -> StoryState {
+        let mut story = story(day, released);
+        freeze(&storylines(), &mut story, &lanes());
+        story
+    }
+
     /// What `system` has heard on `day`, as (id, age).
     fn heard_in(system: i16, day: u32, released: &[(&str, u32)]) -> Vec<(String, u32)> {
-        heard(
-            &storylines(),
-            &story(day, released),
-            &lanes(),
-            SystemId(system),
-        )
-        .into_iter()
-        .map(|news| (news.id, news.age))
-        .collect()
+        heard_by(&frozen(day, released), system)
+    }
+
+    /// What `system` has heard of `story`, as (id, age).
+    fn heard_by(story: &StoryState, system: i16) -> Vec<(String, u32)> {
+        heard(&storylines(), story, SystemId(system))
+            .into_iter()
+            .map(|news| (news.id, news.age))
+            .collect()
     }
 
     fn ids(heard: &[(String, u32)]) -> Vec<&str> {
@@ -205,8 +228,26 @@ mod tests {
     }
 
     #[test]
-    fn a_one_way_lane_carries_one_way() {
+    fn an_unstable_lane_carries_nothing() {
+        assert_eq!(
+            arrivals(&lanes(), SystemId(DRIFT)),
+            BTreeMap::from([
+                (SystemId(DRIFT), 0),
+                (SystemId(HEARTH), 1),
+                (SystemId(VERGE), 2),
+            ]),
+            "round by hearth, not by the back door"
+        );
         let lanes = GateLanes::fixture(&[(DRIFT, VERGE, GateStability::Unstable)]);
+        assert_eq!(
+            arrivals(&lanes, SystemId(DRIFT)),
+            BTreeMap::from([(SystemId(DRIFT), 0)])
+        );
+    }
+
+    #[test]
+    fn a_one_way_lane_carries_one_way() {
+        let lanes = GateLanes::fixture(&[(DRIFT, VERGE, GateStability::Stable)]);
         assert_eq!(
             arrivals(&lanes, SystemId(DRIFT)),
             BTreeMap::from([(SystemId(DRIFT), 0), (SystemId(VERGE), 1)])
@@ -236,12 +277,7 @@ mod tests {
 
     #[test]
     fn heard_news_carries_its_item_and_its_age() {
-        let news = heard(
-            &storylines(),
-            &story(10, &[("plate", 5)]),
-            &lanes(),
-            SystemId(DRIFT),
-        );
+        let news = heard(&storylines(), &frozen(10, &[("plate", 5)]), SystemId(DRIFT));
         assert_eq!(
             news,
             [HeardNews {
@@ -252,6 +288,61 @@ mod tests {
                 age: 3,
             }]
         );
+    }
+
+    #[test]
+    fn freezing_keeps_each_released_items_reach_over_the_lanes_then() {
+        let story = frozen(3, &[("closed", 3), ("gone", 1)]);
+        assert_eq!(
+            story.reach,
+            BTreeMap::from([("closed".to_owned(), arrivals(&lanes(), SystemId(HEARTH)))]),
+            "an item the data lacks has no reach"
+        );
+    }
+
+    #[test]
+    fn an_item_frozen_before_a_lane_closes_is_still_heard_beyond_it() {
+        let mut story = frozen(3, &[("closed", 3)]);
+        // Hearth's lanes all close; the item, frozen, still reaches verge.
+        let closed = GateLanes::fixture(&[(VERGE, HEARTH, GateStability::Stable)]);
+        story.news.insert("plate".to_owned(), 3);
+        freeze(&storylines(), &mut story, &closed);
+        story.day = 4;
+        assert_eq!(
+            heard_by(&story, VERGE),
+            [("closed".to_owned(), 0), ("plate".to_owned(), 1)]
+        );
+        assert_eq!(
+            heard_by(&story, HEARTH),
+            [("closed".to_owned(), 1), ("plate".to_owned(), 0)],
+            "plate, released after, crosses verge's open lane"
+        );
+        assert_eq!(heard_by(&story, DRIFT), [("closed".to_owned(), 0)]);
+    }
+
+    #[test]
+    fn an_item_released_after_a_lane_closes_is_not_heard_beyond_it() {
+        let mut story = story(5, &[("closed", 4)]);
+        freeze(
+            &storylines(),
+            &mut story,
+            &GateLanes::fixture(&[(HEARTH, VERGE, GateStability::Dead)]),
+        );
+        assert_eq!(heard_by(&story, HEARTH), [("closed".to_owned(), 1)]);
+        assert_eq!(heard_by(&story, VERGE), []);
+    }
+
+    #[test]
+    fn freezing_leaves_a_kept_reach_alone() {
+        let mut story = frozen(3, &[("closed", 3)]);
+        let kept = story.reach.clone();
+        freeze(&storylines(), &mut story, &GateLanes::default());
+        assert_eq!(story.reach, kept);
+    }
+
+    #[test]
+    fn an_item_not_frozen_is_heard_nowhere() {
+        assert_eq!(heard_by(&story(9, &[("closed", 3)]), HEARTH), []);
     }
 
     #[test]

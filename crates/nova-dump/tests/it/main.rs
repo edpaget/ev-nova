@@ -7,6 +7,7 @@
 mod common;
 
 mod cli;
+mod pin_ids;
 mod stock_dump;
 #[cfg(windows)]
 mod windows_exe;

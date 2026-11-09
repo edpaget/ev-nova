@@ -74,7 +74,12 @@
 //!   the autopilot's while its ask stands (`FlightView::gate_pilot_frame`).
 //!   J's [`Answer::GatePilot`](nova_sim::flight_frame::Answer::GatePilot)
 //!   says the autopilot engaged, and `fixture::check_contract` checks the
-//!   frame after it shows the autopilot.
+//!   frame after it shows the autopilot. The nav area reads the same
+//!   field to show the autopilot and the system it flies toward
+//!   ([`NavDisplay::GatePilot`](crate::flight::hud::NavDisplay::GatePilot)),
+//!   and J's line when no gate serves the selection is a message
+//!   ([`SimMessage::NoGateLeadsThere`](nova_sim::SimMessage::NoGateLeadsThere)),
+//!   drained as any other.
 //! - **A fact the router reads between commands is a frame field**:
 //!   whether Recharge is enabled
 //!   ([`FlightFrame::recharge_enabled`](nova_sim::flight_frame::FlightFrame::recharge_enabled))
@@ -101,14 +106,17 @@
 //!   (`SessionFlight::opening`), not asked through the port.
 //! - **A name fixed for the flight's life comes in the opening's
 //!   [`Names`](nova_sim::flight_frame::Names)** (a ship's, an outfit's, a
-//!   good's, a `jünk`'s, a stellar's); **a name the flight decides is a
+//!   good's, a `jünk`'s, a stellar's, a system's: the new game's news
+//!   names its source by it); **a name the flight decides is a
 //!   frame field** (the player's ship's,
 //!   [`FlightFrame::player_ship_name`](nova_sim::flight_frame::FlightFrame::player_ship_name);
 //!   the date, [`FlightFrame::long_date`](nova_sim::flight_frame::FlightFrame::long_date);
 //!   whether a system is explored,
 //!   [`FlightFrame::explored`](nova_sim::flight_frame::FlightFrame::explored)),
 //!   **or rides the value that carries it** (a mission cargo's, on
-//!   [`MissionBoardLine::Retrieved`](nova_sim::MissionBoardLine::Retrieved)).
+//!   [`MissionBoardLine::Retrieved`](nova_sim::MissionBoardLine::Retrieved);
+//!   a storyline point's holder, on
+//!   [`StoryObjective::TakePoint`](nova_sim::flight_frame::StoryObjective::TakePoint)).
 //!   A text filled for the pilot is a screen's ask
 //!   ([`ScreenAsk::PlainText`]).
 //! - **A readout is a frame field, an action a command, a one-shot output
@@ -139,11 +147,18 @@
 //!   ([`ConversationScreen`](crate::spaceport::ConversationScreen)) takes
 //!   the page as plain data.
 //! - **A one-shot output** is a [`FlightEvent`] variant, drained in
-//!   `session/flight_events.rs`.
+//!   `session/flight_events.rs`: an accept the new game's storylines
+//!   refused for room is one ([`FlightEvent::RoomRefused`]), rather than
+//!   a reshaped [`Answer::Conversation`].
 //! - **A screen's question** is a [`ScreenAsk`] and [`ScreenAnswer`]
 //!   pair, answered in `session/screen.rs` or a module under
 //!   `session/screen/`, pinned there, and sampled in
-//!   `fixture::sample_screen_asks`.
+//!   `fixture::sample_screen_asks`: the news heard where the ship is
+//!   ([`ScreenAsk::HeardNews`], answered in `session/story_screens.rs`)
+//!   is one. **A screen's new readout of an answer it already has is a
+//!   field of that answer**: the new game's storyline missions ride the
+//!   mission info ([`MissionInfo::story`](nova_sim::MissionInfo::story)),
+//!   so the mission info key stays one ask and one press answer.
 //! - **The step's order** lives in `session/step.rs`, and what a step
 //!   reports for the view to draw from is a
 //!   [`StepRun`](nova_sim::flight_frame::StepRun) or

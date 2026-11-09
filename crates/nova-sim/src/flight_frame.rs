@@ -23,10 +23,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod port_screens;
 mod screen;
+mod story_screens;
 
 pub use crate::key_fade::{FadeKey, KeyFades};
 pub use port_screens::{BarNews, PortShops};
 pub use screen::{FloatingMap, GateEntry, MapOpen, MapScreen, MarksFrom, ScreenAnswer, ScreenAsk};
+pub use story_screens::{RoomRefusal, StoryObjective, StoryRow};
 
 use crate::asteroid::Asteroid;
 use crate::bay::FighterNote;
@@ -455,6 +457,9 @@ pub struct Names {
     pub junk: BTreeMap<JunkId, String>,
     /// Each stellar's `spöb` name, by ID.
     pub stellars: BTreeMap<StellarId, String>,
+    /// Each system's `sÿst` name, by ID: what the new game's news names
+    /// its source by.
+    pub systems: BTreeMap<SystemId, String>,
 }
 
 /// A ship class's names, as its `shïp` record gives them.
@@ -526,6 +531,12 @@ impl Names {
     #[must_use]
     pub fn stellar(&self, stellar: StellarId) -> Option<&str> {
         self.stellars.get(&stellar).map(String::as_str)
+    }
+
+    /// System `system`'s `sÿst` name.
+    #[must_use]
+    pub fn system(&self, system: SystemId) -> Option<&str> {
+        self.systems.get(&system).map(String::as_str)
     }
 }
 
@@ -1620,6 +1631,9 @@ pub enum FlightEvent {
     /// NPC's display went with the system left, so the view lets go of
     /// whatever else it held through the change.
     DisplaysCarried(Vec<CarriedDisplay>),
+    /// An offer's accept refused for want of room in the hold, as its
+    /// conversation decided it ([`RoomRefusal`]).
+    RoomRefused(RoomRefusal),
 }
 
 /// A kept escort's display carried into its new NPC

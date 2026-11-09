@@ -1,5 +1,5 @@
-//! Tests of every link reader over a galaxy of jump points alone
-//! ([`laned`]): the map's links, its clicks and Shift-clicks, the planner,
+//! Tests of every link reader over a galaxy of jump points alone, every
+//! gate open ([`laned_stable`]): the map's links, its clicks and Shift-clicks, the planner,
 //! the cue, Hyper Select, the map's Tab cycle, the floating map, the known
 //! pass, a new pilot's neighbours and J.
 //!
@@ -16,10 +16,14 @@
 //!
 //! By [`RuleKey::GateLanes`]' other reading each reads the gate lanes
 //! instead (see the `story` module's `galaxy_links`), and J never jumps:
-//! each test of that reading stands beside the engine's.
+//! each test of that reading stands beside the engine's. The planner,
+//! Hyper Select, the Tab cycle, the clicks and the cue also follow a lane
+//! closed in play, after the session was built ([`closed_to_hearth`]):
+//! they read the lanes as the storylines' settle leaves them, not as
+//! they were when the session started.
 //!
 //! Two mission pickers read the raw Con slots under either reading of
-//! [`RuleKey::GateLanes`], so over [`laned`] they find nothing by the
+//! [`RuleKey::GateLanes`], so over [`laned_stable`] they find nothing by the
 //! engine's reading of their own keys: a mission's `ShipSyst` -5 ships
 //! (`_SelectMissionSystem` @0x9ba70-0x9bac7) and its `AuxShipSyst`
 //! 5000-9998 auxiliary ships (`_ValidAuxShipSystem` @0x99363-0x993ac). By
@@ -41,18 +45,22 @@ use crate::mission::ships::ShipSystem;
 use crate::navigation::NavMode;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::sound::SimSound;
-use crate::testkit::{DRIFT, FakePilotCatalog, HEARTH, VERGE, land_now, laned, planet};
+use crate::storylines::state::PointChange;
+use crate::testkit::{
+    DRIFT, FakePilotCatalog, HEARTH, VERGE, land_now, laned, laned_stable, planet,
+};
+use nova_sim_catalog::storylines::PointStability;
 
-/// A new pilot over [`laned`], in drift, by the original's readings.
+/// A new pilot over [`laned_stable`], in drift, by the original's readings.
 fn started() -> Session {
-    Session::start(&laned()).expect("starts")
+    Session::start(&laned_stable()).expect("starts")
 }
 
-/// A new pilot over [`laned`], in drift, by [`RuleKey::GateLanes`]' other
+/// A new pilot over [`laned_stable`], in drift, by [`RuleKey::GateLanes`]' other
 /// reading: the links are the gate lanes.
 fn laned_session() -> Session {
     let rules = Rulebook::default().with_override(RuleKey::GateLanes, RuleSource::Bible);
-    Session::start_ruled(&laned(), &rules).expect("starts")
+    Session::start_ruled(&laned_stable(), &rules).expect("starts")
 }
 
 /// A press on the course map hitting `hit`, with Shift held or not.
@@ -223,10 +231,10 @@ fn by_the_lanes_the_known_pass_marks_the_lane_neighbours() {
     );
 }
 
-/// `session` begun as a new pilot over [`laned`], `_DoNewPilot`'s pass
+/// `session` begun as a new pilot over [`laned_stable`], `_DoNewPilot`'s pass
 /// over the start system's neighbours run.
 fn begun(mut session: Session) -> Session {
-    session.begin(&laned(), &mut NeverFires);
+    session.begin(&laned_stable(), &mut NeverFires);
     session
 }
 
@@ -290,6 +298,69 @@ fn by_the_lanes_j_toward_a_lane_neighbour_refuses_silently_with_no_pre_jump() {
     assert_eq!(session.nav_mode(), NavMode::Hyperspace(Some(VERGE)), "kept");
 }
 
+/// [`laned_session`] with the road drift↔hearth closed in play, after the
+/// session was built: `hearth/drift-road` dead and the storylines settled
+/// ([`Session::settle_storylines`]). Drift's one open lane is then to
+/// verge, and hearth lies round by verge. A reader that kept the lanes
+/// from before the settle would still reach hearth from drift.
+fn closed_to_hearth() -> Session {
+    let mut session = laned_session();
+    session.pilot.story.points.insert(
+        "hearth/drift-road".to_owned(),
+        PointChange {
+            owner: None,
+            stability: Some(PointStability::Dead),
+        },
+    );
+    session.settle_storylines(&mut NeverFires);
+    session
+}
+
+#[test]
+fn by_the_lanes_the_planner_routes_round_a_lane_closed_in_play() {
+    let mut session = closed_to_hearth();
+    assert_eq!(session.plot_course(HEARTH), Ok(&[VERGE, HEARTH][..]));
+}
+
+#[test]
+fn by_the_lanes_hyper_select_and_the_tab_cycle_skip_a_lane_closed_in_play() {
+    let mut session = closed_to_hearth();
+    let selected: Vec<_> = (0..3).map(|_| session.select_next_system()).collect();
+    assert_eq!(selected, [Some(VERGE); 3]);
+    let mut session = closed_to_hearth();
+    let cycled: Vec<_> = (0..3)
+        .map(|_| {
+            assert!(session.cycle_map_selection());
+            session.nav_mode()
+        })
+        .collect();
+    assert_eq!(cycled, [NavMode::Hyperspace(Some(VERGE)); 3]);
+}
+
+/// Hearth stays known after its lane closes, so the map takes a click on
+/// it, but as a known system the current one no longer links.
+#[test]
+fn by_the_lanes_a_click_or_shift_click_over_a_lane_closed_in_play_selects_nothing() {
+    let mut session = closed_to_hearth();
+    assert!(session.is_known(HEARTH), "known from the start");
+    session.chart.set_nav(NavMode::Hyperspace(Some(VERGE)));
+    let clicked = session.map_click(&press(&[HEARTH], false)).expect("known");
+    assert_eq!(clicked.selected, Some(HEARTH));
+    assert_eq!(session.nav_mode(), NavMode::Hyperspace(None), "let go");
+    let clicked = session.map_click(&press(&[HEARTH], true)).expect("known");
+    assert_eq!(clicked.selected, None, "nothing appended");
+    assert_eq!(session.course(), []);
+}
+
+#[test]
+fn by_the_lanes_the_cue_selects_no_hop_over_a_lane_closed_in_play() {
+    let mut session = closed_to_hearth();
+    session.pilot.course = vec![HEARTH, VERGE];
+    session.pilot.course_start = Some(DRIFT);
+    session.cue_course();
+    assert_eq!(session.nav_mode(), NavMode::Off);
+}
+
 #[test]
 fn the_map_drawing_reads_the_lane_style_key() {
     use crate::catalog::GateStability::{Dead, Unstable};
@@ -300,16 +371,23 @@ fn the_map_drawing_reads_the_lane_style_key() {
             .with_override(RuleKey::MapLaneStyle, style);
         let session = Session::start_ruled(&laned(), &rules).expect("starts");
         let drawing = session.map_drawing(None, &[], MapMarks::NONE);
-        let to_verge = drawing
-            .lanes
-            .iter()
-            .find(|look| (look.from, look.to) == (DRIFT, VERGE))
-            .map(|look| (look.out, look.back));
+        let to_verge = |looks: &[crate::map_lanes::LaneLook]| {
+            looks
+                .iter()
+                .find(|look| (look.from, look.to) == (DRIFT, VERGE))
+                .map(|look| (look.out, look.back))
+        };
+        assert_eq!(to_verge(&drawing.lanes), None, "closed: no link, {style:?}");
         let expected = match style {
             RuleSource::Engine => None,
             RuleSource::Bible => Some((Some(Unstable), Back::Way(Some(Dead)))),
         };
-        assert_eq!(to_verge, expected, "{style:?}");
+        assert_eq!(to_verge(&drawing.closed_lanes), expected, "{style:?}");
+        assert_eq!(
+            drawing.current_links,
+            [(DRIFT, HEARTH)],
+            "the open lane alone, {style:?}"
+        );
     }
 }
 
@@ -317,7 +395,7 @@ fn the_map_drawing_reads_the_lane_style_key() {
 /// gates.
 const PORT: (f32, f32) = (600.0, 600.0);
 
-/// [`laned`] with planet 128 in drift at [`PORT`] and mission 140, offered
+/// [`laned_stable`] with planet 128 in drift at [`PORT`] and mission 140, offered
 /// anywhere: its special ships as `ships` says and its auxiliary ships as
 /// `aux` says (see the `mission_ships` tests' `ships_catalog` and
 /// `with_aux`).
@@ -327,7 +405,7 @@ fn laned_mission(ships: MissionShip, aux: AuxShip) -> FakePilotCatalog {
         ship_records: shipping.ship_records,
         dudes: shipping.dudes,
         missions: shipping.missions,
-        ..laned()
+        ..laned_stable()
     };
     for (system, sites) in &mut catalog.sites {
         if *system == DRIFT {

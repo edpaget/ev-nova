@@ -1,6 +1,7 @@
 //! The new game's folder adapter (`new_game::open`) over real folders:
 //! the checked-in fixture (`tests/fixtures/new-game/`, published as
-//! `new_game::fixture::folder`), and temporary
+//! `new_game::fixture::folder`), the sample's cut
+//! (`tests/fixtures/sample/`, `new_game::fixture::sample_folder`), and temporary
 //! folders for a root that can't be listed and for media that are Git LFS
 //! pointers.
 
@@ -13,6 +14,7 @@ use nova_data::records::character::Character;
 use nova_data::records::desc::Desc;
 use nova_data::records::dude::Dude;
 use nova_data::records::govt::Govt;
+use nova_data::records::mission::Mission;
 use nova_data::records::outfit::Outfit;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
@@ -32,7 +34,8 @@ use nova_galaxy_media::BARE;
 /// none; and `verge-camp`, a warden outpost with a bar and no fuel; jump
 /// points two of which lead from `hearth` to `verge`, a dead pair between
 /// `verge` and `drift`, and `drift`'s one-way back door to `verge`; the
-/// civilian hull `hauler` and the crown hull `cutter`; the outfit
+/// civilian hull `hauler`, the crown hull `cutter` and the wardens'
+/// crown hull `warden-picket`, in their colours; the outfit
 /// `dock-pass`; the start `dock-hand`, in the hauler in `hearth`; the
 /// storyline `dock-work`,
 /// whose four missions and two news items run over the conversations of
@@ -53,6 +56,10 @@ fn id(text: &str) -> nova_galaxy_format::id::Id {
 }
 
 /// `table` as `(id, nova)` pairs.
+fn point(text: &str) -> nova_galaxy_format::id::PointRef {
+    nova_galaxy_format::id::PointRef::try_from(text.to_owned()).expect("a point")
+}
+
 fn pairs<K: ToString>(table: &BTreeMap<K, i16>) -> Vec<(String, i16)> {
     table
         .iter()
@@ -71,6 +78,9 @@ fn the_fixture_folder_is_the_crates_own() {
     );
 }
 
+// This and `the_sample_folder_loads_without_problems` also show each
+// folder's `nova-ids.json` pins every record it maps: a table that left
+// one out would be a problem.
 #[test]
 fn the_fixture_folder_loads_without_problems_or_pointers() {
     let game = new_game::open(&fixture()).expect("lists");
@@ -161,9 +171,14 @@ fn the_fixture_folder_holds_a_record_for_each_thing_it_maps() {
         "three stellars, then nine jump points' gates"
     );
     assert_eq!(data.ids(Desc::TYPE), [128, 130], "the stellars with a body");
-    assert_eq!(data.ids(Ship::TYPE), [128, 129], "the two hulls");
-    assert_eq!(data.ids(ShipAnim::TYPE), [128, 129]);
-    assert_eq!(data.ids(Dude::TYPE), [128], "the civilian traffic");
+    assert_eq!(data.ids(Ship::TYPE), [128, 129, 130], "the three hulls");
+    assert_eq!(data.ids(ShipAnim::TYPE), [128, 129, 130]);
+    assert_eq!(
+        data.ids(Dude::TYPE),
+        [128, 129],
+        "the civilian traffic, then the wardens' guards"
+    );
+    assert_eq!(data.ids(Mission::TYPE), [128], "clear-the-road's blockade");
     assert_eq!(data.ids(Character::TYPE), [128], "the start");
     assert_eq!(data.ids(Outfit::TYPE), [128], "the dock pass");
     let [file] = data.files() else {
@@ -285,7 +300,11 @@ fn each_hull_is_a_ship_with_its_size_and_the_civilian_one_is_traffic() {
     let game = new_game::open(&fixture()).expect("lists");
     assert_eq!(
         pairs(&game.ids.ships),
-        [("cutter".to_owned(), 128), ("hauler".to_owned(), 129)]
+        [
+            ("cutter".to_owned(), 128),
+            ("hauler".to_owned(), 129),
+            ("warden-picket".to_owned(), 130)
+        ]
     );
     let (name, hauler) = named::<Ship>(&game.data, 129);
     assert_eq!(name, "Hauler");
@@ -293,13 +312,60 @@ fn each_hull_is_a_ship_with_its_size_and_the_civilian_one_is_traffic() {
         (hauler.speed, hauler.shield, hauler.armor, hauler.holds),
         (300, 100, 200, 50)
     );
-    assert_eq!((hauler.accel, hauler.maneuver, hauler.fuel), (300, 10, 300));
+    assert_eq!((hauler.accel, hauler.maneuver, hauler.fuel), (300, 40, 300));
     let (_, anim) = named::<ShipAnim>(&game.data, 129);
     assert_eq!((anim.base_x_size, anim.base_y_size), (12, 30));
     let (name, dude) = named::<Dude>(&game.data, 128);
     assert_eq!(name, "Civilian traffic");
     assert_eq!(dude.ship_type[..2], [Some(ShipId(129)), None]);
     assert_eq!(dude.ai_type, 1);
+}
+
+#[test]
+fn the_wardens_hold_their_road_with_pickets_in_their_colours() {
+    let game = new_game::open(&fixture()).expect("lists");
+    let (name, guards) = named::<Dude>(&game.data, 129);
+    assert_eq!(name, "The Wardens guards");
+    assert_eq!(guards.govt, Some(GovtId(game.ids.factions[&id("warden")])));
+    assert_eq!(
+        guards.ship_type[..2],
+        [Some(ShipId(game.ids.ships[&id("warden-picket")])), None],
+        "the picket wears the wardens' colours; the cutter wears none"
+    );
+    let (name, blockade) = named::<Mission>(&game.data, game.ids.blockades[&id("clear-the-road")]);
+    assert_eq!(name, "Clear the hearth road blockade");
+    assert_eq!(blockade.ship_dude.map(|dude| dude.0), Some(129));
+    assert_eq!(blockade.ship_syst, game.ids.systems[&id("verge")]);
+    let (_, verge) = named::<System>(&game.data, game.ids.systems[&id("verge")]);
+    let road = StellarId(game.ids.gates[&point("verge/hearth-road")]);
+    let slot = verge
+        .nav_def
+        .iter()
+        .position(|s| *s == Some(road))
+        .expect("a slot");
+    assert_eq!(i32::from(blockade.ship_start), -(slot as i32) - 1);
+}
+
+#[test]
+fn the_harrow_band_blockades_the_far_gate_with_its_gunships() {
+    let game = new_game::open(&new_game::fixture::sample_folder()).expect("lists");
+    let (name, guards) = named::<Dude>(&game.data, 129);
+    assert_eq!(name, "The Harrow band guards");
+    assert_eq!(
+        guards.govt,
+        Some(GovtId(game.ids.factions[&id("harrow-band")]))
+    );
+    let gunship = game.ids.ships[&id("harrow-gunship")];
+    assert_eq!(guards.ship_type[..2], [Some(ShipId(gunship)), None]);
+    let (_, ship) = named::<Ship>(&game.data, gunship);
+    assert!(
+        ship.weap_type1_4[0].is_some(),
+        "armed: its gun mount's turret"
+    );
+    let (name, blockade) = named::<Mission>(&game.data, game.ids.blockades[&id("take-the-point")]);
+    assert_eq!(name, "Take the point blockade");
+    assert_eq!(blockade.ship_dude.map(|dude| dude.0), Some(129));
+    assert_eq!(blockade.ship_syst, game.ids.systems[&id("marrow")]);
 }
 
 /// The size box `beam` by `length` metres, at `PX_PER_METRE`, in `color`.
@@ -420,6 +486,102 @@ fn the_ids_map_back_to_the_bible_s() {
 }
 
 #[test]
+fn the_sample_folder_is_the_crates_own() {
+    assert_eq!(
+        new_game::fixture::sample_folder(),
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("sample")
+    );
+}
+
+#[test]
+fn each_fixture_holds_a_table_pinning_exactly_what_it_maps() {
+    for folder in [fixture(), new_game::fixture::sample_folder()] {
+        let bytes = fs::read(folder.join(new_game::pins::FILE)).expect("the folder's ID table");
+        let table = new_game::pins::parse(&bytes).expect("parses");
+        assert_eq!(table.problems, Vec::<String>::new(), "{}", folder.display());
+        let game = new_game::open(&folder).expect("lists");
+        assert_eq!(table.pins, game.ids, "{}", folder.display());
+        assert_eq!(
+            new_game::pins::text(&table.pins).into_bytes(),
+            bytes,
+            "{}: as the pin command writes it",
+            folder.display()
+        );
+    }
+}
+
+#[test]
+fn the_sample_folder_loads_without_problems() {
+    let game = new_game::open(&new_game::fixture::sample_folder()).expect("lists");
+    let problems: Vec<_> = game.problems.iter().map(ToString::to_string).collect();
+    assert_eq!(problems, Vec::<String>::new());
+    assert_eq!(game.lfs_pointers, Vec::<String>::new());
+}
+
+#[test]
+fn the_sample_s_stars_stand_in_as_dots_of_one_to_three_pixels_in_several_greys() {
+    let game = new_game::open(&new_game::fixture::sample_folder()).expect("lists");
+    let dots = game.data.star_dots();
+    assert!(!dots.is_empty());
+    assert!(
+        dots.iter().all(|dot| (1..=3).contains(&dot.side)),
+        "{dots:?}"
+    );
+    assert!(dots.iter().any(|dot| dot.grey != dots[0].grey), "{dots:?}");
+}
+
+#[test]
+fn the_sample_maps_four_missions_one_news_item_and_six_jump_points() {
+    let game = new_game::open(&new_game::fixture::sample_folder()).expect("lists");
+    let storylines = game.data.storylines();
+    let keys = |ids: Vec<&String>| ids.into_iter().cloned().collect::<Vec<_>>();
+    assert_eq!(
+        keys(storylines.missions.keys().collect()),
+        [
+            "supply-run",
+            "take-the-point",
+            "the-crossroads-offer",
+            "the-first-failure"
+        ]
+    );
+    assert_eq!(
+        keys(storylines.news.keys().collect()),
+        ["luyten-road-fails"]
+    );
+    assert_eq!(
+        keys(storylines.points.keys().collect()),
+        [
+            "brightwater/luyten-road",
+            "brightwater/marrow-gate",
+            "luyten-crossing/association-road",
+            "luyten-crossing/marrow-road",
+            "marrow/far-gate",
+            "marrow/luyten-road"
+        ]
+    );
+    let failure = &storylines.missions["the-first-failure"];
+    assert_eq!(failure.offer, None, "an event");
+    assert_eq!(failure.requires.not_before_day, Some(60));
+    assert_eq!(
+        storylines.missions["take-the-point"].objective,
+        Some(nova_data::MissionObjective::TakePoint {
+            point: "marrow/far-gate".to_owned(),
+            held_by: "harrow-band".to_owned(),
+            blockade: Some(nova_data::MissionId(
+                game.ids.blockades[&id("take-the-point")]
+            )),
+        })
+    );
+    assert_eq!(
+        storylines.news["luyten-road-fails"].from,
+        SystemId(game.ids.systems[&id("luyten-crossing")])
+    );
+}
+
+#[test]
 fn a_missing_root_cannot_be_listed() {
     let dir = tempfile::tempdir().expect("a temporary directory");
     let gone = dir.path().join("gone");
@@ -455,6 +617,22 @@ fn copy(from: &Path, to: &Path) {
             fs::copy(entry.path(), target).expect("copies");
         }
     }
+}
+
+#[test]
+fn a_non_utf8_system_file_is_reported_and_the_good_systems_still_map() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let root = dir.path().join("data");
+    copy(&fixture(), &root);
+    fs::write(root.join("systems").join("garbled.md"), b"---\xff\xfe\n").expect("writes");
+    let game = new_game::open(&root).expect("lists");
+    assert_eq!(game.data.ids(System::TYPE), [128, 129, 130]);
+    // The format's relative path, written with `/` on every OS.
+    assert!(
+        game.problems.iter().any(|p| p.file.contains("garbled.md")),
+        "{:?}",
+        game.problems
+    );
 }
 
 #[test]

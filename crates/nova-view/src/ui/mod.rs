@@ -116,6 +116,7 @@ pub mod row_list;
 pub mod scroll_arrows;
 pub mod scroll_text;
 pub mod slice;
+pub mod story_log;
 pub mod text_box;
 pub mod text_field;
 pub mod text_input;

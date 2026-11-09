@@ -5,7 +5,8 @@
 //! factions, `system/point` refs), and takes Nova IDs only where the
 //! engine places something or acts on it: the stellar an offer, a
 //! completion or a delivery is at, and the `oütf` of each outfit an
-//! effect grants or removes. Its `offer` and `complete` dialogs become
+//! effect grants or removes, and the `mïsn` of a `take_point`'s blockade
+//! ([`super::blockades`]). Its `offer` and `complete` dialogs become
 //! [`DialogPlace`](crate::store::DialogPlace)s, resolved against the
 //! compiled texts ([`Compiled`]). A news item keeps its headline and body,
 //! and its `from` system's `sÿst`. Every jump point that has a gate is
@@ -38,7 +39,7 @@ use crate::store::{
     MissionCompletion, MissionObjective, MissionOffer, NewsItem, PointAt, PointState, Requires,
     StoryEffects, StoryMission, Storylines,
 };
-use crate::wire::id::{OutfitId, StellarId, SystemId};
+use crate::wire::id::{GovtId, MissionId, OutfitId, StellarId, SystemId};
 
 /// Maps `galaxy`'s missions, news and jump points, with `ids`' Nova IDs and
 /// `compiled`'s stories, reporting what is left out to `problems`.
@@ -81,7 +82,7 @@ pub fn map(
             broken: Vec::new(),
             left_out: false,
         };
-        let mission = names.mission(&doc.data);
+        let mission = names.mission(id, &doc.data);
         problems.extend(
             names
                 .broken
@@ -93,10 +94,16 @@ pub fn map(
         }
     }
     drop_dependents(&mut missions, problems);
+    let factions = ids
+        .factions
+        .iter()
+        .map(|(id, &nova)| (id.to_string(), GovtId(nova)))
+        .collect();
     Storylines {
         missions,
         news,
         points,
+        factions,
     }
 }
 
@@ -195,10 +202,10 @@ struct Names<'a> {
 }
 
 impl Names<'_> {
-    /// `mission` mapped. Its names that don't resolve set
-    /// [`left_out`](Self::left_out), and what it then holds doesn't
+    /// `mission`, the mission `id`, mapped. Its names that don't resolve
+    /// set [`left_out`](Self::left_out), and what it then holds doesn't
     /// matter.
-    fn mission(&mut self, mission: &Mission) -> StoryMission {
+    fn mission(&mut self, id: &Id, mission: &Mission) -> StoryMission {
         let offer = mission.offer.as_ref().and_then(|offer| {
             let at = self.stellar("offer.at", &offer.at);
             let dialog = self.dialog("offer", &offer.dialog);
@@ -233,6 +240,7 @@ impl Names<'_> {
                     Some(MissionObjective::TakePoint {
                         point: point.to_string(),
                         held_by: held_by.to_string(),
+                        blockade: self.ids.blockades.get(id).copied().map(MissionId),
                     })
                 }
             });
@@ -378,8 +386,8 @@ impl Names<'_> {
         if self.ids.gates.contains_key(point) {
             return;
         }
-        let system_file = format!("systems/{}.md", point.system());
-        if self.galaxy.jump_point(point).is_none() && !self.galaxy.unreadable.contains(&system_file)
+        if self.galaxy.jump_point(point).is_none()
+            && !self.galaxy.is_unreadable("systems", &point.system())
         {
             self.broken.push(format!(
                 "{field} names `{point}`, which is no jump point; it is left out"
@@ -437,6 +445,10 @@ mod tests {
 
     fn problems(game: &NewGame) -> Vec<String> {
         game.problems.iter().map(ToString::to_string).collect()
+    }
+
+    fn id(text: &str) -> Id {
+        Id::try_from(text.to_owned()).expect("an id")
     }
 
     fn stellar(game: &NewGame, id: &str) -> StellarId {
@@ -633,6 +645,7 @@ mod tests {
             Some(MissionObjective::TakePoint {
                 point: "beta/to-alpha".to_owned(),
                 held_by: "league".to_owned(),
+                blockade: Some(MissionId(game.ids.blockades[&id("toll")])),
             })
         );
         let game = loaded(&with_toll("complete: {dialog: dialog/errands.ink#done}\n"));
@@ -745,8 +758,11 @@ mod tests {
         let game = loaded(&source);
         assert_eq!(
             problems(&game),
-            ["outfits/blaster.md: it is past the last oütf ID, 639; it is left out"],
-            "the outfit's problem alone"
+            [
+                "outfits/blaster.md: it is past the last oütf ID, 639; it is left out",
+                "mods/gun-mount.md: it is past the last oütf ID, 639; it is left out",
+            ],
+            "the outfit's problem, and the kit's after it, alone"
         );
         assert_eq!(toll(&game), None);
         assert!(game.data.storylines().missions.contains_key("parcel"));
@@ -771,6 +787,22 @@ mod tests {
             "objective.take_point.point names `beta/nowhere`, which is no jump point; \
              it is left out",
         );
+    }
+
+    #[test]
+    fn with_systems_unlisted_a_point_into_it_is_not_reported() {
+        use crate::new_game::tests::with_systems_unlisted;
+        use crate::new_game::{dialogs, map as map_ids};
+
+        let source = with_toll("on_offer: {points: [{point: alpha/to-beta, stability: dead}]}\n");
+        let galaxy = with_systems_unlisted(&source);
+        let ids = map_ids(&galaxy).ids;
+        let mut problems = Vec::new();
+        let compiled = dialogs::compiled(&galaxy, &source, &mut problems);
+        let storylines = map(&galaxy, &ids, &compiled, &mut problems);
+        let lines: Vec<_> = problems.iter().map(ToString::to_string).collect();
+        assert_eq!(lines, Vec::<String>::new());
+        assert!(!storylines.missions.contains_key("toll"), "it is left out");
     }
 
     #[test]

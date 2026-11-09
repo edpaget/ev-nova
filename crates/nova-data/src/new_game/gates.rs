@@ -8,25 +8,26 @@
 //! (@0x63a7f-0x63aa6), whether or not it links back, so one link to the
 //! partner's gate arrives at the partner, a one-way point included.
 //!
-//! A `spöb` has no word for a point's `stability`, so each gate's is kept
-//! on the store beside it ([`stabilities`],
-//! [`GameData::gate_stability`](crate::GameData::gate_stability)), where
-//! the galaxy map reads it. Travel doesn't read it yet: unstable and dead
-//! points are travelled as stable ones until `play-the-sample` phase 1.
+//! A `spöb` has no word for a point's `stability` or its owner as a
+//! faction: the storylines keep each point's, with its gate
+//! ([`PointAt`](crate::PointAt), mapped in `missions`), and play
+//! overlays them. Travel reads each gate's from there
+//! (`nova_sim_story::storylines::gate_points`). The gate's own `govt` is
+//! its point's static owner's.
 
 use std::collections::BTreeMap;
+use std::ops::RangeInclusive;
 
 use nova_galaxy_format::id::{Id, PointRef};
 use nova_galaxy_format::load::{Galaxy, Problem};
 use nova_galaxy_format::model::JumpPoint;
 
-use super::ids::{IdTable, STELLAR_IDS};
+use super::ids::{IdTable, allocate_pinned};
 use super::map::{absent, govt, position};
-use super::records::neutral_stellar;
+use super::records::{ANY_RECORD, neutral_stellar};
 use crate::decode::Entry;
 use crate::records::stellar::{Stellar, flags, flags2};
 use crate::registry::AnyRecord;
-use crate::store::GateStability;
 use crate::wire::flags::{Flags16, Flags32};
 use crate::wire::id::StellarId;
 
@@ -34,40 +35,35 @@ use crate::wire::id::StellarId;
 pub const NAV_SLOTS: usize = 16;
 
 /// Numbers the jump points of the systems in `systems`, in (system id,
-/// point id) order, from the ID after `stellars`' last (128 with none),
-/// within [`STELLAR_IDS`], reporting each past its end against its
-/// system's file.
+/// point id) order: each `pins` names keeps its pin, and each other takes
+/// the next of `free`, the [`STELLAR_IDS`](super::ids::STELLAR_IDS) after the stellars' (see
+/// [`super::ids`]). Each `free` has no ID left for is reported against
+/// its system's file.
 pub fn number(
     galaxy: &Galaxy,
     systems: &BTreeMap<Id, i16>,
-    stellars: &BTreeMap<Id, i16>,
+    pins: &BTreeMap<PointRef, i16>,
+    free: &mut RangeInclusive<i16>,
     problems: &mut Vec<Problem>,
 ) -> BTreeMap<PointRef, i16> {
-    let first = stellars
-        .values()
-        .max()
-        .map_or(*STELLAR_IDS.start(), |last| last.saturating_add(1));
-    let last = *STELLAR_IDS.end();
-    let mut next = first..=last;
-    let mut gates = BTreeMap::new();
+    let last = *free.end();
+    let mut points = Vec::new();
     for system in systems.keys() {
-        let doc = &galaxy.systems[system];
-        let mut points: Vec<&JumpPoint> = doc.data.jump_points.iter().collect();
-        points.sort_by(|a, b| a.id.cmp(&b.id));
-        for point in points {
-            match next.next() {
-                Some(nova) => {
-                    gates.insert(PointRef::new(system, &point.id), nova);
-                }
-                None => problems.push(Problem::new(
-                    &doc.path,
-                    format!(
-                        "its jump point `{}` is past the last spöb ID, {last}; it is left out",
-                        point.id
-                    ),
-                )),
-            }
-        }
+        let mut ids: Vec<&Id> = (galaxy.systems[system].data.jump_points.iter())
+            .map(|point| &point.id)
+            .collect();
+        ids.sort();
+        points.extend(ids.into_iter().map(|point| PointRef::new(system, point)));
+    }
+    let (gates, past) = allocate_pinned(&points, pins, free);
+    for at in past {
+        problems.push(Problem::new(
+            &galaxy.systems[&at.system()].path,
+            format!(
+                "its jump point `{}` is past the last spöb ID, {last}; it is left out",
+                at.point()
+            ),
+        ));
     }
     gates
 }
@@ -76,7 +72,9 @@ pub fn number(
 /// `file`, numbered `nova`: at the
 /// point's position, held by its owner, landable, its one link the
 /// partner's gate, named for the partner's system, heading ships out at
-/// random (`CustSndID` -1). A partner that is no jump point is reported
+/// random (`CustSndID` -1), clearing any record ([`ANY_RECORD`]): holding
+/// a point is the storylines' work, through its owner and stability, and
+/// a convicted player is never trapped in a system. A partner that is no jump point is reported
 /// against the system's file and leaves the gate with no link, but not
 /// one in a system that failed to load or was left out for its ID.
 #[must_use]
@@ -113,6 +111,7 @@ pub fn gate(
         flags2: Flags16(flags2::HYPERGATE),
         hyper_link,
         govt: govt(galaxy, ids, point.owner.as_ref(), file, problems),
+        min_status: ANY_RECORD,
         ..neutral_stellar()
     };
     let name = galaxy
@@ -139,19 +138,22 @@ pub fn nav_def(
     file: &str,
     problems: &mut Vec<Problem>,
 ) -> [Option<StellarId>; NAV_SLOTS] {
-    // In ID order: the tables iterate in id order, which numbered them.
-    let stellars: Vec<(i16, String)> = ids
+    // The tables iterate in bible id order, which pins can break, so sort
+    // each by ID.
+    let mut stellars: Vec<(i16, String)> = ids
         .stellars
         .iter()
         .filter(|(stellar, _)| galaxy.stellars[*stellar].data.system == *id)
         .map(|(stellar, &nova)| (nova, format!("`{stellar}`")))
         .collect();
-    let gates: Vec<(i16, String)> = ids
+    let mut gates: Vec<(i16, String)> = ids
         .gates
         .iter()
         .filter(|(point, _)| point.system() == *id)
         .map(|(point, &nova)| (nova, format!("`{point}`")))
         .collect();
+    stellars.sort_unstable();
+    gates.sort_unstable();
     let kept_gates = gates.len().min(NAV_SLOTS);
     let kept_stellars = stellars.len().min(NAV_SLOTS - kept_gates);
     let left_out: Vec<&str> = stellars[kept_stellars..]
@@ -181,28 +183,6 @@ pub fn nav_def(
         *slot = stellar;
     }
     nav_def
-}
-
-/// Each numbered gate's own point stability, by its `spöb`: what
-/// [`GameData::with_gate_stabilities`](crate::GameData::with_gate_stabilities)
-/// keeps. A point left out for its ID has no gate and no entry.
-#[must_use]
-pub fn stabilities(
-    galaxy: &Galaxy,
-    gates: &BTreeMap<PointRef, i16>,
-) -> BTreeMap<StellarId, GateStability> {
-    gates
-        .iter()
-        .filter_map(|(point, &nova)| {
-            let system = galaxy.systems.get(&point.system())?;
-            let found = system
-                .data
-                .jump_points
-                .iter()
-                .find(|jump| PointRef::new(&point.system(), &jump.id) == *point)?;
-            Some((StellarId(nova), found.stability))
-        })
-        .collect()
 }
 
 /// `count` `what`s, in words: "1 stellar", "2 stellars".

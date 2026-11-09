@@ -17,6 +17,10 @@
 //! ([`ScreenAsk::Shops`], [`PortShops`]) and the bar's news
 //! ([`ScreenAsk::News`], [`BarNews`]).
 //!
+//! The new game's own screens ask too: the news heard where the ship is
+//! ([`ScreenAsk::HeardNews`]), answered empty for a session whose data
+//! holds no storylines.
+//!
 //! An ask is a read: asked twice in a row, it answers the same, but for
 //! one that draws afresh at each ask ([`ScreenAsk::draws_afresh`]). The
 //! shops' and the bar's asks draw the day's rolls not drawn yet on the
@@ -34,6 +38,7 @@ use crate::map_panel::MapPanel;
 use crate::map_search::SearchOutcome;
 use crate::pilot_panel::PilotPanel;
 use crate::session::SavedNav;
+use crate::storylines::news::HeardNews;
 use crate::{HireList, MissionId, MissionInfo, Outfitter, PlunderView, ShipNaming, ShipRefusal};
 
 /// What a screen asks the session as it opens or as its input changes
@@ -177,6 +182,11 @@ pub enum ScreenAsk {
     /// ([`ScreenAnswer::GateEntryDesc`]). Answered nothing without a
     /// catalog, as the gate sites are the catalog's.
     GateEntryDesc(GateEntry),
+    /// The news heard in the system the ship is in, landed or flying,
+    /// asked as the new game's news log opens
+    /// ([`ScreenAnswer::HeardNews`]). Empty for a session whose data holds
+    /// no storylines.
+    HeardNews,
 }
 
 /// A gate entry the view is about to send ([`ScreenAsk::GateEntryDesc`]).
@@ -347,6 +357,9 @@ pub enum ScreenAnswer {
     /// [`ScreenAsk::GateEntryDesc`]'s: the `dësc` ID, or `None` when the
     /// entry would be refused and so plays no movie.
     GateEntryDesc(Option<i16>),
+    /// [`ScreenAsk::HeardNews`]'s: each item by release day, then id
+    /// (`Session::heard_news`).
+    HeardNews(Vec<HeardNews>),
 }
 
 impl ScreenAnswer {
@@ -383,6 +396,7 @@ impl ScreenAnswer {
             ScreenAsk::Boarding => matches!(self, Self::Boarding(_)),
             ScreenAsk::PilotPanel => matches!(self, Self::PilotPanel(_)),
             ScreenAsk::GateEntryDesc(_) => matches!(self, Self::GateEntryDesc(_)),
+            ScreenAsk::HeardNews => matches!(self, Self::HeardNews(_)),
         }
     }
 }
@@ -432,6 +446,7 @@ mod tests {
             ScreenAsk::Boarding,
             ScreenAsk::PilotPanel,
             ScreenAsk::GateEntryDesc(GateEntry::Wormhole),
+            ScreenAsk::HeardNews,
         ]
     }
 
@@ -448,6 +463,7 @@ mod tests {
             gate_arrows: Vec::new(),
             named: Vec::new(),
             lanes: Vec::new(),
+            closed_lanes: Vec::new(),
         }
     }
 
@@ -539,6 +555,7 @@ mod tests {
                 date: String::new(),
             })),
             ScreenAnswer::GateEntryDesc(None),
+            ScreenAnswer::HeardNews(Vec::new()),
         ]
     }
 

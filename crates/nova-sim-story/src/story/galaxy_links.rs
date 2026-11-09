@@ -38,8 +38,10 @@
 //! The lanes are built under both sources, as the map's lane looks read
 //! them by [`RuleKey::MapLaneStyle`](crate::RuleKey::MapLaneStyle) over
 //! either, and rebuilt with the map: at [`OverlaidGalaxy::set_overlay`],
-//! [`OverlaidGalaxy::set_colocated`], [`OverlaidGalaxy::with_gates`] and a
-//! change of [`OverlaidGalaxy::set_link_source`].
+//! [`OverlaidGalaxy::set_colocated`], [`OverlaidGalaxy::with_gates`], a
+//! change of [`OverlaidGalaxy::set_link_source`] and a change of the jump
+//! points' gates ([`OverlaidGalaxy::set_gate_points`]), whose
+//! stabilities close lanes (see the `galaxy_points` module).
 //!
 //! [`known_from`]: crate::exploration::known_from
 //! [`select_ship_system`]: crate::mission::ships::select_ship_system
@@ -143,7 +145,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::catalog::{GateStability, StellarId};
+    use crate::catalog::StellarId;
     use crate::exploration::known_from;
     use crate::gate::{HYPERGATE, WORMHOLE};
     use crate::geometry::Vec2;
@@ -170,7 +172,6 @@ mod tests {
             flags2,
             links,
             exit_angle: -1,
-            stability: GateStability::Stable,
         }
     }
 

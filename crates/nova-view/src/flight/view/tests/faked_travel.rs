@@ -398,6 +398,29 @@ fn j_says_a_refusal_the_player_is_told_in_its_words_for_its_ticks_and_beeps_as_d
 }
 
 #[test]
+fn a_no_gate_line_drained_after_j_is_said_for_its_ticks_with_no_beep() {
+    // That the flight raises it, by which readings, is nova-sim's
+    // (`session::no_gate_refusal`); that it lasts 360 ticks is
+    // nova-sim-combat's (`each_sim_message_lasts_its_callers_ticks`).
+    use nova_sim::{JumpRefusal, SimMessage};
+    let mut view = faked(in_sol());
+    view.sim.queue_answer(Answer::JumpRefused {
+        refusal: JumpRefusal::NoDestination,
+        told: false,
+    });
+    view.sim
+        .queue_event(FlightEvent::Message(SimMessage::NoGateLeadsThere));
+    view.jump_frame(true);
+    assert_eq!(view.jump_effect(), None);
+    assert_eq!(view.drained_sounds(), [], "no beep");
+    faked_lasts(
+        &mut view,
+        NO_GATE_LEADS_THERE,
+        SimMessage::NoGateLeadsThere.ticks(),
+    );
+}
+
+#[test]
 fn j_acts_only_on_an_intact_frame() {
     for condition in [
         Condition::Disabled,

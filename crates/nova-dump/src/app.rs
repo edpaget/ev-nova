@@ -1,4 +1,5 @@
-//! The whole program, over its ports: parse, open, export, report.
+//! The whole program, over its ports: parse, open, export, report; or,
+//! for `--pin-ids`, the pin command ([`crate::pin`]).
 //!
 //! Exit codes: 0 when the dump finished with no failures; 1 when it
 //! finished but some failures were listed (everything else was still
@@ -16,8 +17,8 @@ use nova_data::store::{GameData, Origin};
 
 use crate::cli::{self, Command, Options, USAGE};
 use crate::export::export;
-use crate::ports::{DataSource, OutputRoot};
-use crate::report;
+use crate::ports::{DataSource, GameFolder, OutputRoot};
+use crate::{pin, report};
 
 /// The exit code for a run that could not finish.
 const FATAL: u8 = 2;
@@ -29,6 +30,7 @@ pub fn run(
     args: impl IntoIterator<Item = OsString>,
     data: &impl DataSource,
     root: &impl OutputRoot,
+    folder: &impl GameFolder,
     stdout: &mut impl Write,
     stderr: &mut impl Write,
 ) -> u8 {
@@ -38,6 +40,7 @@ pub fn run(
             Err(error) => fatal(stderr, format_args!("writing the usage: {error}")),
         },
         Ok(Command::Dump(options)) => dump(&options, data, root, stdout, stderr),
+        Ok(Command::PinIds(dir)) => pin::run(&dir, folder, stdout, stderr),
         Err(error) => fatal(stderr, format_args!("{error}\n\n{}", USAGE.trim_end())),
     }
 }
@@ -154,7 +157,7 @@ mod tests {
     use super::*;
     use crate::cli::USAGE;
     use crate::ports::{DataSource, OutputRoot};
-    use crate::testutil::{MemFs, MemSink, fork, native, record};
+    use crate::testutil::{FakeFolder, MemFs, MemSink, fork, native, record};
 
     /// What the fake output directory holds before the run.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -271,6 +274,7 @@ mod tests {
             args.iter().map(OsString::from),
             data,
             root,
+            &FakeFolder::default(),
             &mut stdout,
             &mut stderr,
         );
@@ -307,6 +311,19 @@ mod tests {
     }
 
     const DUMP_WITH_PLUGINS: &[&str] = &["/data", "/out", "--plugins", "/plugins"];
+
+    #[test]
+    fn pin_ids_runs_the_pin_command_on_the_folder_alone() {
+        let root = FakeRoot::new(RootState::Empty);
+        let run = run_with(&["--pin-ids", "/game"], &NoData, &root);
+        assert_eq!(run.code, 2);
+        assert!(
+            run.stderr.starts_with("nova-dump: listing /game: "),
+            "{}",
+            run.stderr
+        );
+        assert!(root.calls().is_empty());
+    }
 
     #[test]
     fn help_prints_the_usage_and_touches_nothing() {
@@ -523,6 +540,7 @@ mod tests {
             ["/data", "/out"].map(OsString::from),
             &good_data(),
             &root,
+            &FakeFolder::default(),
             &mut FailingWriter,
             &mut stderr,
         );
@@ -541,6 +559,7 @@ mod tests {
             ["--help"].map(OsString::from),
             &NoData,
             &root,
+            &FakeFolder::default(),
             &mut FailingWriter,
             &mut stderr,
         );

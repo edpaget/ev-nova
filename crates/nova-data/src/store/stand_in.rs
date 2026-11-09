@@ -9,6 +9,13 @@
 //!
 //! The stock game's store holds none: every stock record answers `None`,
 //! so stock drawing is the same with or without stand-ins.
+//!
+//! The starfield stands in too. The new game has no star sheet (`spïn`
+//! 700), so its loader sets the dots each star may draw as instead
+//! ([`StarDot`], [`GameData::with_star_dots`]), and
+//! [`GameData::star_dots`] answers them. They aren't keyed by record:
+//! the sky has one set. A stock store has none, so a stock starfield
+//! draws its sheet or, when the sheet fails, nothing, as before.
 
 use std::collections::BTreeMap;
 
@@ -48,7 +55,34 @@ pub enum StandIn {
     },
 }
 
+/// One kind of star the starfield may draw where it has no star sheet: a
+/// solid square dot `side` pixels across (1 to 3), in the grey `grey`
+/// (each of red, green and blue), at full brightness before the system's
+/// murk dims it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StarDot {
+    /// Its side, in pixels.
+    pub side: u8,
+    /// Its grey, at full brightness.
+    pub grey: u8,
+}
+
 impl GameData {
+    /// The store with `dots` as the starfield's stand-in, replacing any it
+    /// had (see the module docs).
+    #[must_use]
+    pub fn with_star_dots(mut self, dots: Vec<StarDot>) -> Self {
+        self.star_dots = dots;
+        self
+    }
+
+    /// The dots the starfield draws as where it has no star sheet: the new
+    /// game's; empty in a stock store (see the module docs).
+    #[must_use]
+    pub fn star_dots(&self) -> &[StarDot] {
+        &self.star_dots
+    }
+
     /// The store with `stand_ins`, replacing any it had.
     #[must_use]
     pub fn with_stand_ins(mut self, stand_ins: BTreeMap<StandInOf, StandIn>) -> Self {
@@ -151,6 +185,27 @@ mod tests {
             data.stand_in(StandInOf::Stellar(StellarId(128))),
             Some(&disc(7))
         );
+    }
+
+    #[test]
+    fn a_stock_store_has_no_star_dots() {
+        let decoded = GameData::from_decoded(PathBuf::from("/game"), Vec::new());
+        let empty = GameData::default();
+        let loaded = store_of(&[]);
+        for data in [&decoded, &empty, &loaded] {
+            assert_eq!(data.star_dots(), &[]);
+        }
+    }
+
+    #[test]
+    fn star_dots_replace_those_set_before_and_answer_back() {
+        let first = StarDot { side: 1, grey: 90 };
+        let second = StarDot { side: 3, grey: 200 };
+        let third = StarDot { side: 2, grey: 140 };
+        let data = GameData::default()
+            .with_star_dots(vec![first])
+            .with_star_dots(vec![second, third]);
+        assert_eq!(data.star_dots(), &[second, third]);
     }
 
     #[test]

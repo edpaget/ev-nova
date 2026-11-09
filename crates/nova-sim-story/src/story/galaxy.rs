@@ -103,6 +103,7 @@ use crate::geometry::Vec2;
 use crate::hyperspace::{CoLocated, Places, StarMap};
 use crate::legal::CrimeMap;
 pub use crate::story::galaxy_links::LinkSource;
+use crate::storylines::gate_points::GatePoint;
 
 /// What the overlay changes of one system. The default changes nothing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -429,6 +430,9 @@ pub struct OverlaidGalaxy {
     /// Every stellar some system lists, with its listers, by ascending ID:
     /// where each gate is.
     pub(super) listed: Vec<ListedStellar>,
+    /// Each jump point's gate as play leaves its point, by its `spöb`
+    /// ([`OverlaidGalaxy::set_gate_points`]): none in the stock game.
+    pub(super) gate_points: BTreeMap<StellarId, GatePoint>,
     /// The lanes the hypergates make on the overlaid galaxy
     /// ([`OverlaidGalaxy::lanes`]).
     pub(super) lanes: GateLanes,
@@ -464,6 +468,7 @@ impl OverlaidGalaxy {
             link_source: LinkSource::default(),
             gates: Vec::new(),
             listed: Vec::new(),
+            gate_points: BTreeMap::new(),
             lanes: GateLanes::default(),
             map: StarMap::default(),
             rescued: BTreeMap::new(),
@@ -496,7 +501,8 @@ impl OverlaidGalaxy {
             let listers = listers_of(&self.listed, gate);
             owner_on(&places, overlay, listers).or_else(|| found_on(&places, listers))
         };
-        self.lanes = GateLanes::new(&self.gates, system_of, &places);
+        let stability_of = |gate: StellarId| self.gate_stability(gate);
+        self.lanes = GateLanes::new(&self.gates, system_of, stability_of, &places);
         self.map = match self.link_source {
             LinkSource::Con => StarMap::with_hidden(overlaid, &hidden, self.colocated),
             LinkSource::Gates => {
@@ -631,16 +637,24 @@ impl OverlaidGalaxy {
         crate::domination::dominated_by(self.overlay.stellar(stellar).dominated, flags2)
     }
 
-    /// `site` with the overlay's government for its stellar, if any,
-    /// destroyed exactly when the overlay holds it destroyed, and
-    /// dominated at run time exactly when the overlay holds it so.
+    /// `site` with the government of the faction holding its jump point,
+    /// else the overlay's for its stellar, if any; destroyed exactly when
+    /// the overlay holds it destroyed; dominated at run time exactly when
+    /// the overlay holds it so; and closed exactly when it is a hypergate
+    /// whose links are all closed ([`OverlaidGalaxy::gate_closed`]; see
+    /// the `galaxy_points` module).
     #[must_use]
     pub fn site(&self, site: LandingSite) -> LandingSite {
         let change = self.overlay.stellar(site.id);
+        let govt = match self.gate_govt(site.id) {
+            Some(owner) => Some(owner),
+            None => change.govt.unwrap_or(site.govt),
+        };
         LandingSite {
-            govt: change.govt.unwrap_or(site.govt),
+            govt,
             destroyed: self.destroyed(site.id),
             dominated_at_run_time: change.dominated,
+            gate_closed: self.gate_closed(site.id),
             ..site
         }
     }

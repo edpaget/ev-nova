@@ -1,5 +1,16 @@
 //! The port the loader reads content through, with an in-memory fake for
 //! tests and a filesystem adapter for the CLI.
+//!
+//! The loader reads each kind's folder with [`Source::listing`], which
+//! lists a file that can't be read with its error ([`Listed`]), so one bad
+//! file drops only itself. [`Source::files`] keeps failing the whole
+//! folder on its first such file, for callers that want that. `listing`
+//! has a default built from `files`, so an adapter that doesn't override
+//! it still compiles, but fails the folder as `files` does.
+//!
+//! Every adapter is checked against `TREE` with `check_contract`, and one
+//! that lists per file against `TREE` plus `UNREADABLE` with
+//! `check_unreadable_contract` (all behind the `fixture` feature).
 
 use std::collections::BTreeMap;
 use std::io;
@@ -15,11 +26,38 @@ pub struct SourceFile {
     pub text: String,
 }
 
+/// A file [`Source::listing`] found: its path, as [`SourceFile`] writes
+/// it, and its text or why it couldn't be read.
+#[derive(Debug)]
+pub struct Listed {
+    /// e.g. `systems/marrow.md`, always written with `/`.
+    pub path: String,
+    /// The file's contents, or the error reading them.
+    pub text: io::Result<String>,
+}
+
 /// Where content comes from.
 pub trait Source {
     /// The files directly inside the folder `dir` of the data folder whose
     /// names end in `.ext`, sorted by path. A missing folder has none.
     fn files(&self, dir: &str, ext: &str) -> io::Result<Vec<SourceFile>>;
+
+    /// Like [`files`](Self::files), but a file that can't be read is
+    /// listed with its error instead of failing the folder. `Err` only
+    /// when the folder itself can't be listed.
+    ///
+    /// The default is built from `files`, so a source that doesn't
+    /// override it fails the folder on its first unreadable file.
+    fn listing(&self, dir: &str, ext: &str) -> io::Result<Vec<Listed>> {
+        Ok(self
+            .files(dir, ext)?
+            .into_iter()
+            .map(|f| Listed {
+                path: f.path,
+                text: Ok(f.text),
+            })
+            .collect())
+    }
 
     /// The bytes of the file at `path` (relative to the data folder,
     /// written with `/`), or `None` if there is no such file. Media files
@@ -64,23 +102,25 @@ impl MemSource {
 
 impl Source for MemSource {
     fn files(&self, dir: &str, ext: &str) -> io::Result<Vec<SourceFile>> {
+        texts(self.listing(dir, ext)?)
+    }
+
+    fn listing(&self, dir: &str, ext: &str) -> io::Result<Vec<Listed>> {
         let prefix = format!("{dir}/");
         let suffix = format!(".{ext}");
-        self.files
+        Ok(self
+            .files
             .iter()
             .filter(|(path, _)| {
                 path.strip_prefix(&prefix)
                     .is_some_and(|name| !name.contains('/') && name.ends_with(&suffix))
             })
-            .map(|(path, bytes)| {
-                let text = String::from_utf8(bytes.clone())
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                Ok(SourceFile {
-                    path: path.clone(),
-                    text,
-                })
+            .map(|(path, bytes)| Listed {
+                path: path.clone(),
+                text: String::from_utf8(bytes.clone())
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e)),
             })
-            .collect()
+            .collect())
     }
 
     fn bytes(&self, path: &str) -> io::Result<Option<Vec<u8>>> {
@@ -109,25 +149,38 @@ impl DirSource {
 
 impl Source for DirSource {
     fn files(&self, dir: &str, ext: &str) -> io::Result<Vec<SourceFile>> {
+        texts(self.listing(dir, ext)?)
+    }
+
+    /// An entry that can't be read, or whose type can't be read, is listed
+    /// with its error once its name has the extension. Only a folder that
+    /// can't be listed, or an entry without a name, fails the folder.
+    fn listing(&self, dir: &str, ext: &str) -> io::Result<Vec<Listed>> {
         let entries = match std::fs::read_dir(self.root.join(dir)) {
             Ok(entries) => entries,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(e),
         };
-        let mut files = Vec::new();
+        let mut listed = Vec::new();
         for entry in entries {
             let entry = entry?;
             let path = entry.path();
-            if entry.file_type()?.is_file() && path.extension().is_some_and(|e| e == ext) {
-                let name = entry.file_name().to_string_lossy().into_owned();
-                files.push(SourceFile {
-                    path: format!("{dir}/{name}"),
-                    text: std::fs::read_to_string(&path)?,
-                });
+            if path.extension().is_none_or(|e| e != ext) {
+                continue;
             }
+            let text = match entry.file_type() {
+                Ok(kind) if !kind.is_file() => continue,
+                Ok(_) => std::fs::read_to_string(&path),
+                Err(e) => Err(e),
+            };
+            let name = entry.file_name().to_string_lossy().into_owned();
+            listed.push(Listed {
+                path: format!("{dir}/{name}"),
+                text,
+            });
         }
-        files.sort_by(|a, b| a.path.cmp(&b.path));
-        Ok(files)
+        listed.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(listed)
     }
 
     fn bytes(&self, path: &str) -> io::Result<Option<Vec<u8>>> {
@@ -139,6 +192,19 @@ impl Source for DirSource {
             Err(e) => Err(e),
         }
     }
+}
+
+/// `listed`'s files with their texts, or the first one's error.
+fn texts(listed: Vec<Listed>) -> io::Result<Vec<SourceFile>> {
+    listed
+        .into_iter()
+        .map(|f| {
+            Ok(SourceFile {
+                path: f.path,
+                text: f.text?,
+            })
+        })
+        .collect()
 }
 
 #[cfg(any(test, feature = "fixture"))]
@@ -188,6 +254,41 @@ pub fn check_contract(source: &impl Source) {
     );
 }
 
+/// A file every adapter must list with its error rather than fail its
+/// folder over: `(path, bytes)` pairs, written into a source alongside
+/// [`TREE`]. Its bytes aren't UTF-8.
+#[cfg(any(test, feature = "fixture"))]
+pub const UNREADABLE: &[(&str, &[u8])] = &[("systems/garbled.md", b"---\xff\xfe\n")];
+
+/// Checks that `source`, holding [`TREE`] and [`UNREADABLE`] (written into
+/// it by the caller), lists the unreadable file with its error and the
+/// rest with their texts, panicking if not. Test support for this crate's
+/// adapters and for adapters in other crates.
+#[cfg(any(test, feature = "fixture"))]
+pub fn check_unreadable_contract(source: &impl Source) {
+    let listed = source.listing("systems", "md").expect("lists systems/");
+    let paths: Vec<_> = listed.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        [
+            "systems/brightwater.md",
+            "systems/garbled.md",
+            "systems/marrow.md"
+        ]
+    );
+    assert_eq!(listed[0].text.as_deref().ok(), Some("b"));
+    assert_eq!(listed[2].text.as_deref().ok(), Some("m"));
+    assert_eq!(
+        listed[1].text.as_ref().map_err(io::Error::kind).err(),
+        Some(io::ErrorKind::InvalidData),
+        "the garbled file is listed with its error"
+    );
+    assert!(
+        source.files("systems", "md").is_err(),
+        "files still fails the folder"
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,6 +327,74 @@ mod tests {
     #[should_panic(expected = "assertion")]
     fn the_contract_fails_a_source_that_breaks_it() {
         check_contract(&MemSource::default());
+    }
+
+    /// Writes `bytes` at the relative `path` under `root`.
+    fn write(root: &Path, path: &str, bytes: &[u8]) {
+        let mut file = root.to_path_buf();
+        file.extend(path.split('/'));
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, bytes).unwrap();
+    }
+
+    #[test]
+    fn the_fake_meets_the_unreadable_contract() {
+        let mut fake = MemSource::default();
+        for (path, text) in TREE {
+            fake = fake.with(path, text);
+        }
+        for (path, bytes) in UNREADABLE {
+            fake = fake.with_bytes(path, bytes);
+        }
+        check_unreadable_contract(&fake);
+    }
+
+    #[test]
+    fn the_directory_adapter_meets_the_unreadable_contract() {
+        let dir = tempfile::tempdir().unwrap();
+        for (path, text) in TREE {
+            write(dir.path(), path, text.as_bytes());
+        }
+        for (path, bytes) in UNREADABLE {
+            write(dir.path(), path, bytes);
+        }
+        check_unreadable_contract(&DirSource::new(dir.path()));
+    }
+
+    #[test]
+    fn the_directory_adapter_lists_no_folder_named_like_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "systems/marrow.md", b"m");
+        std::fs::create_dir(dir.path().join("systems").join("old.md")).unwrap();
+        let source = DirSource::new(dir.path());
+        let listed = source.listing("systems", "md").expect("lists systems/");
+        let paths: Vec<_> = listed.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["systems/marrow.md"]);
+    }
+
+    /// A source keeping only the default `listing`, which fails the
+    /// folder over one unreadable file.
+    struct FilesOnly(MemSource);
+    impl Source for FilesOnly {
+        fn files(&self, dir: &str, ext: &str) -> io::Result<Vec<SourceFile>> {
+            self.0.files(dir, ext)
+        }
+        fn bytes(&self, path: &str) -> io::Result<Option<Vec<u8>>> {
+            self.0.bytes(path)
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "lists systems/")]
+    fn the_unreadable_contract_fails_a_source_that_breaks_it() {
+        let mut fake = MemSource::default();
+        for (path, text) in TREE {
+            fake = fake.with(path, text);
+        }
+        for (path, bytes) in UNREADABLE {
+            fake = fake.with_bytes(path, bytes);
+        }
+        check_unreadable_contract(&FilesOnly(fake));
     }
 
     #[test]

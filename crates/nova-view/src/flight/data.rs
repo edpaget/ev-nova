@@ -16,7 +16,8 @@ use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::weapon::Weapon;
 use nova_data::sound::decode_snd;
 use nova_data::{
-    GameData, LayerError, LayerSprite, SheetScan, ShipImage, StandIn, StandInOf, shot_spin_id,
+    GameData, LayerError, LayerSprite, SheetKind, SheetScan, ShipImage, ShipLayerInfos,
+    ShipSpriteInfo, SpriteError, StandIn, StandInOf, shot_spin_id,
 };
 use nova_rsrc::ResType;
 use nova_sim::TICKS_PER_SECOND;
@@ -25,14 +26,15 @@ use nova_sim::data::FIRST_ASTEROID_SPIN;
 
 use super::catalog::{
     BoomId, BoomLook, CombatLooks, EffectSheet, FIRST_SMOKE_ICON, GovtId, LayerSheet, SMOKE_FRAMES,
-    SMOKE_SETS, ShipId, ShipSheet, ShipSprites, SmokeSheet, SoundId, StarSheet, StatusBarLayout,
-    StatusBars, TargetCard, WeaponId, WeaponLook,
+    SMOKE_SETS, ShipId, ShipSheet, ShipSprites, SmokeSheet, SoundId, StarDot, StarDots, StarSheet,
+    StatusBarLayout, StatusBars, TargetCard, WeaponId, WeaponLook,
 };
 use super::escorts::{EscortMenuColors, EscortMenuLooks};
 use crate::color::Color;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
-use crate::outline::{Outline, OutlineTriangle};
+use crate::outline::Outline;
+use crate::outline_data::{self, opaque};
 use crate::sheet_image::SheetImage;
 
 /// Scans the sheet and its layers on every call, reading their sizes,
@@ -42,82 +44,79 @@ use crate::sheet_image::SheetImage;
 impl ShipSprites for GameData {
     fn ship_sheet(&self, id: ShipId) -> Result<ShipSheet, String> {
         let sprite = self.ship_sprite_info(id).map_err(|err| err.to_string())?;
-        let sheet = &sprite.sheet;
-        // The sheet's layout is the `shän`'s frames per rotation as columns.
-        let rotations = NonZeroU16::new(sheet.layout.columns())
-            .expect("a sheet layout has at least one column");
-        // A layer that cannot be resolved is drawn as no layer; the ship
-        // browser is where its error is shown.
-        let [glow, lights, weapon, alt, shield] =
-            self.ship_layer_infos(id).map_or([None; 5], |layers| {
-                [
-                    (ShipImage::Glow, layers.glow),
-                    (ShipImage::Lights, layers.lights),
-                    (ShipImage::Weapon, layers.weapon),
-                    (ShipImage::Alt, layers.alt),
-                    (ShipImage::Shield, layers.shield),
-                ]
-                .map(|(image, layer)| layer.and_then(|layer| layer_sheet(id, image, layer)))
-            });
         let anim = self.get::<ShipAnim>(id.0).and_then(Result::ok);
-        let field = |read: fn(&ShipAnim) -> i16| anim.map_or(0, |anim| read(anim.record));
-        Ok(ShipSheet {
-            image: SheetImage::of_ship(sprite.kind, id.0, ShipImage::Base, sprite.image_id),
-            rotations,
-            frame_width: sheet.info.frame_width,
-            frame_height: sheet.info.frame_height,
-            image_size: (sheet.info.image_width, sheet.info.image_height),
-            clip_quirks: sheet.info.clip_quirks,
-            glow,
-            lights,
-            weapon,
-            weap_decay: field(|anim| anim.weap_decay),
-            alt,
-            shield,
-            base_transp: field(|anim| anim.base_transp),
-            solid: sheet.info.has_runs,
-            eight_bit: sheet.info.depth == 8,
-        })
+        Ok(sheet_of(
+            &sprite,
+            self.ship_layer_infos(id),
+            anim.map(|anim| anim.record),
+            |kind, image, image_id| SheetImage::of_ship(kind, id.0, image, image_id),
+        ))
     }
 
     /// The ship type's stand-in when it is an outline (only the new game
     /// has stand-ins), in the view's points and colours.
     fn ship_outline(&self, id: ShipId) -> Option<Outline> {
         match self.stand_in(StandInOf::Ship(id))? {
-            StandIn::Outline(outline) => Some(view_outline(outline)),
+            StandIn::Outline(outline) => Some(outline_data::outline(outline)),
             StandIn::Disc { .. } | StandIn::Ring { .. } => None,
         }
     }
 }
 
-/// `outline`, as the data draws it (`f64` corners, RGB bytes), in the
-/// view's points and opaque colours.
-pub(crate) fn view_outline(outline: &nova_data::Outline) -> Outline {
-    // A pixel's place in an `f32`: what the view draws in.
-    #[allow(clippy::cast_possible_truncation)]
-    let point = |[x, y]: [f64; 2]| Point::new(x as f32, y as f32);
-    Outline {
-        triangles: outline
-            .triangles
-            .iter()
-            .map(|triangle| {
-                let [r, g, b] = triangle.color;
-                OutlineTriangle {
-                    corners: triangle.corners.map(point),
-                    color: Color::rgba(r, g, b, 255),
-                }
-            })
-            .collect(),
+/// The sheet a ship's scanned base `sprite`, its scanned `layers` and its
+/// `shän` `anim` make, each image keyed by `image_of` (its kind, which
+/// image, its image ID): the one reading of a `shän`'s sprites, which the
+/// game data's adapter and the borrowed stock look
+/// ([`StockShipLooks`](super::stock_looks::StockShipLooks)) share.
+pub(super) fn sheet_of(
+    sprite: &ShipSpriteInfo<'_>,
+    layers: Result<ShipLayerInfos<'_>, SpriteError>,
+    anim: Option<&ShipAnim>,
+    image_of: impl Fn(SheetKind, ShipImage, i16) -> SheetImage,
+) -> ShipSheet {
+    let sheet = &sprite.sheet;
+    // The sheet's layout is the `shän`'s frames per rotation as columns.
+    let rotations =
+        NonZeroU16::new(sheet.layout.columns()).expect("a sheet layout has at least one column");
+    // A layer that cannot be resolved is drawn as no layer; the ship
+    // browser is where its error is shown.
+    let [glow, lights, weapon, alt, shield] = layers.map_or([None; 5], |layers| {
+        [
+            (ShipImage::Glow, layers.glow),
+            (ShipImage::Lights, layers.lights),
+            (ShipImage::Weapon, layers.weapon),
+            (ShipImage::Alt, layers.alt),
+            (ShipImage::Shield, layers.shield),
+        ]
+        .map(|(image, layer)| layer.and_then(|layer| layer_sheet(image, layer, &image_of)))
+    });
+    let field = |read: fn(&ShipAnim) -> i16| anim.map_or(0, read);
+    ShipSheet {
+        image: image_of(sprite.kind, ShipImage::Base, sprite.image_id),
+        rotations,
+        frame_width: sheet.info.frame_width,
+        frame_height: sheet.info.frame_height,
+        image_size: (sheet.info.image_width, sheet.info.image_height),
+        clip_quirks: sheet.info.clip_quirks,
+        glow,
+        lights,
+        weapon,
+        weap_decay: field(|anim| anim.weap_decay),
+        alt,
+        shield,
+        base_transp: field(|anim| anim.base_transp),
+        solid: sheet.info.has_runs,
+        eight_bit: sheet.info.depth == 8,
     }
 }
 
-/// Ship `ship`'s resolved layer `image`'s image, frame count, frame size,
-/// image size, clip quirks, whether it holds solid runs and whether it is
-/// 8-bit; `None` for one that failed.
+/// A resolved layer `image`'s image (keyed by `image_of`), frame count,
+/// frame size, image size, clip quirks, whether it holds solid runs and
+/// whether it is 8-bit; `None` for one that failed.
 fn layer_sheet(
-    ship: ShipId,
     image: ShipImage,
     layer: Result<LayerSprite<'_, SheetScan>, LayerError>,
+    image_of: impl Fn(SheetKind, ShipImage, i16) -> SheetImage,
 ) -> Option<LayerSheet> {
     let layer = layer.ok()?;
     // The scan, like the decoder, rejects a sheet with no frames
@@ -125,7 +124,7 @@ fn layer_sheet(
     let frames =
         NonZeroU16::new(layer.sheet.info.frames).expect("a scanned rlëD has at least one frame");
     Some(LayerSheet {
-        image: SheetImage::of_ship(layer.kind, ship.0, image, layer.image_id),
+        image: image_of(layer.kind, image, layer.image_id),
         frames,
         frame_width: layer.sheet.info.frame_width,
         frame_height: layer.sheet.info.frame_height,
@@ -338,6 +337,20 @@ impl CombatLooks for GameData {
         })
     }
 
+    /// The store's stand-in dots ([`GameData::star_dots`]), each grey as
+    /// an opaque view colour; none in a stock store.
+    fn star_dots(&self) -> Option<StarDots> {
+        StarDots::new(
+            GameData::star_dots(self)
+                .iter()
+                .map(|dot| StarDot {
+                    side: dot.side,
+                    color: opaque([dot.grey; 3]),
+                })
+                .collect(),
+        )
+    }
+
     fn smoke_sheet(&self, set: u8) -> Option<SmokeSheet> {
         if set >= SMOKE_SETS {
             return None;
@@ -432,6 +445,8 @@ impl EscortMenuLooks for GameData {
 mod tests {
 
     use nova_data::Record;
+
+    use crate::outline::OutlineTriangle;
     use nova_data::graphics::fixture::{Cicn, Ctab, DirectBits, PictBuilder, RledBuilder};
     use nova_data::graphics::{PICT, RLED};
     use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
@@ -510,6 +525,34 @@ mod tests {
         assert_eq!(data.ship_outline(ShipId(130)), None, "a stellar's");
         assert_eq!(GameData::default().ship_outline(ShipId(128)), None, "stock");
         assert_eq!(store(&[]).ship_outline(ShipId(128)), None, "stock, loaded");
+    }
+
+    #[test]
+    fn a_stock_store_has_no_star_dots() {
+        assert_eq!(CombatLooks::star_dots(&GameData::default()), None, "stock");
+        assert_eq!(CombatLooks::star_dots(&store(&[])), None, "stock, loaded");
+    }
+
+    #[test]
+    fn a_store_s_star_dots_are_its_sides_in_view_greys() {
+        let data = GameData::default().with_star_dots(vec![
+            nova_data::StarDot { side: 1, grey: 90 },
+            nova_data::StarDot { side: 3, grey: 250 },
+        ]);
+        let dots = CombatLooks::star_dots(&data).expect("dots");
+        assert_eq!(
+            dots.as_slice(),
+            [
+                StarDot {
+                    side: 1,
+                    color: Color::rgba(90, 90, 90, 255),
+                },
+                StarDot {
+                    side: 3,
+                    color: Color::rgba(250, 250, 250, 255),
+                },
+            ]
+        );
     }
 
     /// A `shän` with base image `base`, `sets` sets of `frames_per`

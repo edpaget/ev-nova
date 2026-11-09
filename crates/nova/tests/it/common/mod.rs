@@ -3,7 +3,9 @@
 //! the main menu's Enter Ship is ([`enter_ship_at`]), and a click on it
 //! with the way into play stepped through ([`EntryHarness::enter_ship`]),
 //! and the frames drawn until the screen has settled ([`Frames::settle`],
-//! [`Frames::settle_until`]).
+//! [`Frames::settle_until`]). For a new game's folder: a frame drawn with
+//! only missing pictures to report ([`draw`]), and the app flown from New
+//! Pilot into flight ([`fly_new_pilot`], [`fly_the_sample`]).
 //!
 //! This module is the only place `NOVA_DATA` and `GAME_DATA` are read. The
 //! game data is copyrighted and never committed, so each stock test asks
@@ -12,7 +14,18 @@
 //! sample tests ask [`game_data`] for its `data` folder and skip the same
 //! way.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+
+use nova::app::{Control, Showing};
+use nova_audio::AudioSettings;
+use nova_data::{GameData, new_game};
+use nova_render::ImageError;
+use nova_sim::fixture::MemoryPilots;
+use nova_view::menu::MenuChoice;
+use winit::keyboard::KeyCode;
+
+use crate::pilots::Harness;
 
 /// The `Nova Files` directory named by `NOVA_DATA`, or `None` (after printing
 /// a skip message) when it is unset.
@@ -229,3 +242,68 @@ macro_rules! entry_harness {
     };
 }
 pub(crate) use entry_harness;
+
+/// Draws a frame, whose only failures are pictures the data doesn't hold.
+pub fn draw(game: &mut Harness) {
+    assert_eq!(game.redraw(), Control::Continue);
+    for (key, error) in game.app.take_failures() {
+        assert!(matches!(error, ImageError::Missing), "{key:?}: {error:?}");
+    }
+}
+
+/// The app flying the start of the new game in `folder`, and the data it
+/// flies over: New Pilot, named `Ada`, its ship's christening confirmed
+/// with its default, then Enter Ship, drawn until flight shows.
+pub fn fly_new_pilot(folder: &Path, store: &MemoryPilots) -> (Harness, Rc<GameData>) {
+    let data = Rc::new(
+        new_game::open(folder)
+            .unwrap_or_else(|error| panic!("{} lists: {error:?}", folder.display()))
+            .data,
+    );
+    let game = Harness::built_on(Rc::clone(&data), store, AudioSettings::default(), true);
+    (fly_from_the_menu(game), data)
+}
+
+/// [`fly_new_pilot`] over `data`, the router wired further by `wire` as
+/// `main` wires it (the stock ship look), and the player's settings kept
+/// by `keeper`.
+pub fn fly_new_pilot_wired(
+    data: &Rc<GameData>,
+    store: &MemoryPilots,
+    keeper: nova::settings::GameKeeper,
+    wire: impl FnOnce(nova::app::screen::AppScreen) -> nova::app::screen::AppScreen,
+) -> Harness {
+    let game = Harness::built_wired(Rc::clone(data), store, wire).with_settings(keeper);
+    fly_from_the_menu(game)
+}
+
+/// `game`, on the main menu, flown into flight as [`fly_new_pilot`] says.
+fn fly_from_the_menu(mut game: Harness) -> Harness {
+    draw(&mut game);
+    let new_pilot = game.menu_button(MenuChoice::NewPilot);
+    game.click(new_pilot);
+    draw(&mut game);
+    game.type_name("Ada");
+    game.press(KeyCode::Enter);
+    // The ship's christening, confirmed with its default.
+    game.press(KeyCode::Enter);
+    assert_eq!(game.showing(), Showing::MainMenu);
+    draw(&mut game);
+    let enter = enter_ship_at(game.app.screen());
+    game.click(enter);
+    for _ in 0..200 {
+        if game.showing() == Showing::Flight {
+            break;
+        }
+        draw(&mut game);
+    }
+    assert_eq!(game.showing(), Showing::Flight, "flight never shows");
+    draw(&mut game);
+    game
+}
+
+/// The app flying the sample's start, `first-flight` in Luyten Crossing,
+/// and the data it flies over ([`fly_new_pilot`] over the sample).
+pub fn fly_the_sample(store: &MemoryPilots) -> (Harness, Rc<GameData>) {
+    fly_new_pilot(&new_game::fixture::sample_folder(), store)
+}

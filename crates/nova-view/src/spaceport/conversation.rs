@@ -10,8 +10,11 @@
 //! ([`ConversationScreen::set_page`]).
 //!
 //! It draws a black panel centred in the screen: the page's lines wrapped
-//! in white, a problem in [`Color::ERROR`], then the choices numbered from
-//! 1 in [`CHOICE_COLOR`], or, once the story has ended, the close hint.
+//! in white, a problem in [`Color::ERROR`], the router's notice for the
+//! page after a gap, also in [`Color::ERROR`] (an accept refused for
+//! room, [`room_refusal_text`]), then the choices numbered from 1 in
+//! [`CHOICE_COLOR`], or, once the story has ended, the close hint. A new
+//! page drops the notice ([`ConversationScreen::set_page`]).
 //!
 //! - A digit key `1`-`9` (its press, not a repeat) or a click on a
 //!   choice's text takes that choice. More than nine choices are reached by
@@ -29,6 +32,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::ConversationPage;
+use nova_sim::flight_frame::RoomRefusal;
 
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect, frame_rect};
@@ -36,6 +40,7 @@ use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key, key_letter};
 use crate::screen::{Screen, ScreenAction};
+use crate::spaceport::credits::{TON, TONS};
 use crate::text::{TextMetrics, wrap};
 
 /// The panel, centred in the 1024 by 768 screen.
@@ -55,6 +60,27 @@ pub const GAP: f32 = 12.0;
 pub const CHOICE_COLOR: Color = Color::from_rgb24(0x00FF_CC66);
 /// The hint an ended page shows.
 pub const CLOSE_HINT: &str = "Return to close";
+
+/// What the conversation's page says when its accept was refused for want
+/// of room in the hold: "No room in the hold: this job needs 10 tons of
+/// Hull plate, and 5 tons are free. The offer stands for a later visit."
+/// The original's own refusal (`STR#` 2002 #356) says to try again, but
+/// the new game's offer is decided once a visit, so the words are the new
+/// game's own.
+#[must_use]
+pub fn room_refusal_text(refusal: &RoomRefusal) -> String {
+    let unit = |n: u64| if n == 1 { TON } else { TONS };
+    let room = u64::try_from(refusal.room).unwrap_or(0);
+    let verb = if room == 1 { "is" } else { "are" };
+    format!(
+        "No room in the hold: this job needs {} {} of {}, and {room} {} {verb} free. \
+         The offer stands for a later visit.",
+        refusal.tons,
+        unit(u64::from(refusal.tons)),
+        refusal.cargo,
+        unit(room),
+    )
+}
 
 /// What the player did with the page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,6 +110,7 @@ struct Layout {
 #[derive(Clone)]
 pub struct ConversationScreen {
     page: ConversationPage,
+    notice: Option<String>,
     metrics: Rc<dyn TextMetrics>,
     choice: Option<ConversationChoice>,
 }
@@ -92,6 +119,7 @@ impl std::fmt::Debug for ConversationScreen {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ConversationScreen")
             .field("page", &self.page)
+            .field("notice", &self.notice)
             .field("choice", &self.choice)
             .finish_non_exhaustive()
     }
@@ -103,6 +131,7 @@ impl ConversationScreen {
     pub fn new(page: ConversationPage, metrics: Rc<dyn TextMetrics>) -> Self {
         Self {
             page,
+            notice: None,
             metrics,
             choice: None,
         }
@@ -114,9 +143,24 @@ impl ConversationScreen {
         &self.page
     }
 
-    /// Shows `page` instead.
+    /// Shows `page` instead, with no notice: the router sets a notice
+    /// for each page it belongs to ([`ConversationScreen::set_notice`]).
     pub fn set_page(&mut self, page: ConversationPage) {
         self.page = page;
+        self.notice = None;
+    }
+
+    /// Shows `notice` on the page, or none: a line of the router's own
+    /// below the page's lines, such as an accept refused for room
+    /// ([`room_refusal_text`]).
+    pub fn set_notice(&mut self, notice: Option<String>) {
+        self.notice = notice;
+    }
+
+    /// The notice shown on the page, if any.
+    #[must_use]
+    pub fn notice(&self) -> Option<&str> {
+        self.notice.as_deref()
     }
 
     /// What the player did since this was last taken, if anything.
@@ -154,6 +198,10 @@ impl ConversationScreen {
         }
         if let Some(problem) = &self.page.problem {
             place(problem, Color::ERROR, gap);
+        }
+        if let Some(notice) = &self.notice {
+            gap += GAP;
+            place(notice, Color::ERROR, gap);
         }
         gap += GAP;
         let choices = self
@@ -522,6 +570,123 @@ mod tests {
             key(&mut screen, Key::Enter, false),
             Some(ConversationChoice::Close)
         );
+    }
+
+    #[test]
+    fn a_notice_is_drawn_in_the_error_colour_after_the_lines_and_before_the_hint() {
+        let mut screen = ended();
+        screen.set_notice(Some("No room.".to_owned()));
+        assert_eq!(screen.notice(), Some("No room."));
+        assert_eq!(
+            texts(&screen),
+            [
+                (
+                    "Bay two.".to_owned(),
+                    Point::new(LEFT, row(0.0)),
+                    Color::WHITE
+                ),
+                (
+                    "No room.".to_owned(),
+                    Point::new(LEFT, row(1.0) + GAP),
+                    Color::ERROR
+                ),
+                (
+                    CLOSE_HINT.to_owned(),
+                    Point::new(LEFT, row(2.0) + 2.0 * GAP),
+                    Color::DIM
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_notice_comes_before_the_choices_and_their_boxes_follow_it() {
+        let mut screen = offer();
+        screen.set_notice(Some("No room.".to_owned()));
+        let drawn = texts(&screen);
+        assert_eq!(drawn[1].0, "No room.");
+        assert_eq!(
+            drawn[2],
+            (
+                "1. Take it".to_owned(),
+                Point::new(LEFT, row(2.0) + 2.0 * GAP),
+                CHOICE_COLOR
+            )
+        );
+        assert_eq!(
+            click(
+                &mut screen,
+                Point::new(LEFT + 1.0, row(2.0) + 2.0 * GAP + 1.0)
+            ),
+            Some(ConversationChoice::Choose(0))
+        );
+    }
+
+    #[test]
+    fn a_new_page_keeps_no_notice() {
+        let mut screen = offer();
+        screen.set_notice(Some("No room.".to_owned()));
+        screen.set_page(page(&["Bay two."], &[], true));
+        assert_eq!(screen.notice(), None);
+        assert!(!texts(&screen).iter().any(|(text, ..)| text == "No room."));
+        screen.set_notice(Some("No room.".to_owned()));
+        screen.set_notice(None);
+        assert_eq!(texts(&screen).len(), 2, "cleared");
+    }
+
+    /// A refusal of `tons` of Hull plate with `room` free.
+    fn refusal(tons: u32, room: i64) -> RoomRefusal {
+        RoomRefusal {
+            mission: "dock-job".to_owned(),
+            title: "Hull plate for Verge Camp".to_owned(),
+            cargo: "Hull plate".to_owned(),
+            tons,
+            room,
+        }
+    }
+
+    #[test]
+    fn the_refusal_names_the_tons_the_room_and_the_cargo() {
+        assert_eq!(
+            room_refusal_text(&refusal(10, 5)),
+            "No room in the hold: this job needs 10 tons of Hull plate, and 5 tons are free. \
+             The offer stands for a later visit."
+        );
+        assert_eq!(
+            room_refusal_text(&refusal(1, 0)),
+            "No room in the hold: this job needs 1 ton of Hull plate, and 0 tons are free. \
+             The offer stands for a later visit."
+        );
+        assert_eq!(
+            room_refusal_text(&refusal(10, 1)),
+            "No room in the hold: this job needs 10 tons of Hull plate, and 1 ton is free. \
+             The offer stands for a later visit."
+        );
+    }
+
+    #[test]
+    fn the_fixture_s_accept_page_with_its_refusal_fits_the_panel() {
+        let step = MonoMetrics.line_height(FONT, SIZE);
+        for line in [
+            "\"Bay two, then.\"",
+            "\"Bay two. Mind the dead gate past Verge.\"",
+        ] {
+            let mut screen =
+                ConversationScreen::new(page(&[line], &[], true), Rc::new(MonoMetrics));
+            screen.set_notice(Some(room_refusal_text(&refusal(10, 5))));
+            let drawn = texts(&screen);
+            assert_eq!(
+                drawn.last().map(|(text, ..)| text.as_str()),
+                Some(CLOSE_HINT)
+            );
+            for (text, origin, _) in drawn {
+                assert!(
+                    origin.x + MonoMetrics.width(FONT, SIZE, &text) <= PANEL.max.x - INSET,
+                    "{text}"
+                );
+                assert!(origin.y + step <= PANEL.max.y - INSET, "{text}");
+            }
+        }
     }
 
     #[test]

@@ -18,10 +18,14 @@ impl Session {
     ///   [`Session::begin_jump`]: answered [`Answer::Jumped`] with the
     ///   system bound for, or [`Answer::JumpRefused`] with why and whether
     ///   the player is told ([`Session::jump_refusal_told`]), its beep
-    ///   raised when told.
+    ///   raised when told. A refusal for want of a destination with a
+    ///   mode-3 selection may also say why, by the other readings of the
+    ///   gate autopilot and the no-gate refusal
+    ///   ([`Session::say_no_gate_refusal`]); the answer is the same.
     /// - [`FlightCommand::Land`] runs [`Session::land`], telling the gate
     ///   autopilot's own press from the player's
-    ///   ([`Session::press_land_key`]): answered
+    ///   ([`Session::press_land_key`]), its traffic control scanning by
+    ///   `collab`'s law (the `dock_scan` module): answered
     ///   [`Answer::LandPress`], or [`Answer::LandRefused`] with why and
     ///   the gate the refusal's stellar is ([`Session::gate_kind`]).
     /// - [`FlightCommand::OpenHypergate`] runs [`Session::open_hypergate`]:
@@ -60,13 +64,16 @@ impl Session {
                 Some(to) => Answer::GatePilot(to),
                 None => match self.begin_jump() {
                     Ok(to) => Answer::Jumped(to),
-                    Err(refusal) => Answer::JumpRefused {
-                        told: self.jump_refusal_told(refusal),
-                        refusal,
-                    },
+                    Err(refusal) => {
+                        self.say_no_gate_refusal(refusal);
+                        Answer::JumpRefused {
+                            told: self.jump_refusal_told(refusal),
+                            refusal,
+                        }
+                    }
                 },
             },
-            FlightCommand::Land => match self.press_land_key() {
+            FlightCommand::Land => match self.press_land_key(collab.law) {
                 (Ok(press), _) => Answer::LandPress(press),
                 (Err(refusal), requested) => Answer::LandRefused {
                     gate: refusal

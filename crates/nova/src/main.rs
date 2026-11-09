@@ -83,6 +83,14 @@
 //! flight, and `"help_line": true` for the line of keys at its bottom.
 //! Both are off otherwise ([`nova::developer`]).
 //!
+//! The same file turns on the new game's stock ship look, which draws the
+//! new game's hulls in stock EV Nova sprites from the player's own
+//! `NOVA_DATA` in place of their stand-ins: `"stock_ship_look"`, an
+//! object, with `"on": true`, and `"ships"`, an object mapping a bible
+//! ship id to the stock `shïp` ID it borrows, such as
+//! `{"light-freighter": 136}`. Off otherwise; the stock game ignores it.
+//! Nothing it reads is written anywhere ([`nova::stock_look`]).
+//!
 //! When the game data loads, each data file that could not be loaded and
 //! each control-bit expression that does not parse is reported as a line
 //! on standard error, and the game runs without them.
@@ -103,7 +111,8 @@
 //! line on standard error and in the startup log, but with no alert.
 //!
 //! `GAME_DATA`, set and not empty, starts the new game instead of EV Nova
-//! ([`nova::ruleset`]): `NOVA_DATA` is ignored, an argument is a usage
+//! ([`nova::ruleset`]): `NOVA_DATA` is ignored (but for the stock ship
+//! look's art, when that is on), an argument is a usage
 //! error, and no `Nova Files` are looked for, asked for or remembered.
 //! The folder is read in the bible's format (`nova_data::new_game`): its
 //! factions, systems and stellars become the game's records. Each file
@@ -182,21 +191,21 @@ use nova::platform::{
     Dialogs, Runner, event_loop, loop_channel, menu_key_equivalents, system_key_names,
     system_keyboard_access,
 };
-use nova::rulebook::{eight_bit_reading, thirty_two_bit_reading};
 use nova::ruleset::Ruleset;
 use nova::saves::FilePilots;
 use nova::startup::{
     DiskData, Fatal, FileLog, Launch, Report, Started, StartupLog, Terminal, usual_places,
 };
+use nova::stock_look::StockLook;
 use nova_audio::{Audio, AudioCore, FileSettings, KiraAudio, SettingsStore};
 use nova_data::fonts::open_charcoal;
 use nova_data::music::open_music;
-use nova_data::{GameData, InterfaceData, open_interface};
+use nova_data::{GameData, InterfaceData, StockArt, open_interface};
 use nova_render::GameImages;
 use nova_render::wgpu::GlyphonMetrics;
 use nova_sim::{Chance, PilotKeeper, PilotStore, Rulebook};
 use nova_view::SharedBindings;
-use nova_view::flight::SharedChance;
+use nova_view::flight::{SharedChance, StockShipLooks};
 use nova_view::text::TextMetrics;
 use winit::event_loop::EventLoop;
 
@@ -256,6 +265,23 @@ fn open_interface_file(dir: &Path, report: &mut Report) -> Option<Rc<InterfaceDa
         .map_err(|error| report.warn(&format!("nova: running without dialogs: {error}")))
         .ok()
         .map(Rc::new)
+}
+
+/// The new game's stock ship look over the player's own stock data
+/// `stock`, as `look` sets it: the renderer's stock art and the flight's
+/// looks, which share it, each warning to `report`. Nothing it reads is
+/// written anywhere ([`nova::stock_look`]).
+fn stock_look_wired(
+    data: &GameData,
+    look: &StockLook,
+    stock: Option<GameData>,
+    report: &mut Report,
+) -> (Option<Rc<StockArt>>, Option<StockShipLooks>) {
+    let (wired, warnings) = nova::stock_look::wire(data, look, stock);
+    for warning in &warnings {
+        report.warn(warning);
+    }
+    wired.unzip()
 }
 
 /// Nanoseconds since 1970, wrapped: a different seed each run.
@@ -380,6 +406,8 @@ fn main() -> ExitCode {
         settings,
         dir,
         data,
+        stock_look,
+        stock_art,
     } = match started {
         Ok(started) => started,
         Err(code) => return ExitCode::from(code),
@@ -391,6 +419,7 @@ fn main() -> ExitCode {
     if let Some(warning) = warning {
         report.warn(&warning);
     }
+    let (stock_art, ship_looks) = stock_look_wired(&data, &stock_look, stock_art, &mut report);
     // The screens and the renderer read the same game data.
     let data = Rc::new(data);
     // Dialog and menu text is laid out by the faces the window draws it in.
@@ -419,6 +448,9 @@ fn main() -> ExitCode {
         .with_flight_overlays(overlays)
         // Every disputed rule as the settings' rulebook chooses.
         .with_rulebook(&rulebook);
+    if let Some(looks) = ship_looks {
+        screen = screen.with_ship_looks(Rc::new(looks));
+    }
     screen = with_platform(screen);
     let interface = open_interface_file(&dir, &mut report);
     if let Some(interface) = &interface {
@@ -429,13 +461,7 @@ fn main() -> ExitCode {
     let audio = open_audio(&data, &dir, &rulebook, &mut report);
     let report = Rc::new(RefCell::new(report));
     // The simulation's diagnostics are the running game's, not startup's.
-    // The game's images, 8-bit and 32-bit sheets read as the rulebook
-    // says, and the interface file's pictures.
-    let images = interface.into_iter().fold(
-        GameImages::new(Rc::clone(&data), eight_bit_reading(&rulebook))
-            .with_thirty_two_bit(thirty_two_bit_reading(&rulebook)),
-        GameImages::with_interface,
-    );
+    let images = nova::stock_look::images(&data, &rulebook, interface, stock_art);
     let runner = with_gamepads(Runner::new(images, screen, fonts), &report)
         .with_diagnostics(Box::new(std::io::stderr()))
         .with_report(Rc::clone(&report));

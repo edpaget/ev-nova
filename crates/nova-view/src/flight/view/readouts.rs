@@ -478,37 +478,69 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// interface load's): its system reads as explored or not as the
     /// frame's set stands now, as `_DrawStatusNav` reads the flag as it
     /// draws.
+    ///
+    /// While the frame it reads has the new game's gate autopilot engaged
+    /// ([`FlightFrame::gate_pilot`]), whatever `mode` is, the autopilot
+    /// ([`NavDisplay::GatePilot`]): the system it flies toward, named as
+    /// mode 3 names its selection, over the stellar selected in mode 2,
+    /// named as mode 2 names it (none in another mode).
     pub(super) fn nav_display(&self, mode: NavMode) -> NavDisplay {
+        if let Some(pilot) = &self.nav_frame().gate_pilot {
+            return NavDisplay::GatePilot {
+                to: self.nav_destination(Some(pilot.to)),
+                gate: match mode {
+                    NavMode::Stellar(target) => self.nav_stellar(target),
+                    NavMode::Off | NavMode::Hyperspace(_) => None,
+                },
+            };
+        }
         match mode {
             NavMode::Off => NavDisplay::Off,
-            NavMode::Stellar(target) => NavDisplay::Stellar(target.and_then(|target| {
-                stellar_name(
-                    self.scene.as_ref(),
-                    |id| self.names.stellar(id).map(str::to_owned),
-                    target,
-                )
-            })),
+            NavMode::Stellar(target) => NavDisplay::Stellar(self.nav_stellar(target)),
             NavMode::Hyperspace(next) => NavDisplay::Hyperspace {
-                destination: next.map_or(NavDestination::None, |next| {
-                    self.nav_frame()
-                        .has_explored(next)
-                        .then(|| self.map.model().system(next))
-                        .flatten()
-                        .map_or(NavDestination::Unexplored, |system| {
-                            NavDestination::Named(system.entry.name.clone())
-                        })
-                }),
+                destination: self.nav_destination(next),
                 readiness: self.nav_frame().jump_readiness,
             },
         }
     }
 
+    /// The name the nav area gives the stellar `target` selected in nav
+    /// mode 2 ([`FlightView::nav_display`]).
+    fn nav_stellar(&self, target: Option<nova_sim::StellarId>) -> Option<String> {
+        target.and_then(|target| {
+            stellar_name(
+                self.scene.as_ref(),
+                |id| self.names.stellar(id).map(str::to_owned),
+                target,
+            )
+        })
+    }
+
+    /// How the nav area names the system `next` selected in nav mode 3
+    /// ([`FlightView::nav_display`]).
+    fn nav_destination(&self, next: Option<nova_sim::SystemId>) -> NavDestination {
+        next.map_or(NavDestination::None, |next| {
+            self.nav_frame()
+                .has_explored(next)
+                .then(|| self.map.model().system(next))
+                .flatten()
+                .map_or(NavDestination::Unexplored, |system| {
+                    NavDestination::Named(system.entry.name.clone())
+                })
+        })
+    }
+
     /// Whether the nav area's snapshot was taken for the nav mode of the
-    /// frame it reads now (`FlightView::nav_frame`).
+    /// frame it reads now (`FlightView::nav_frame`), with the gate
+    /// autopilot engaged as it is now. Engaging or letting go redraws the
+    /// area at once, as a mode change does: letting go keeps mode 2 with
+    /// the gate still selected, so the mode alone would hold
+    /// "Autopilot:" on the bar until the next refresh.
     fn nav_mode_shown(&self) -> bool {
-        let mode = self.nav_frame().nav_mode;
-        self.nav_scene
-            .as_ref()
-            .is_some_and(|(shown, _)| *shown == mode)
+        let frame = self.nav_frame();
+        let (mode, piloted) = (frame.nav_mode, frame.gate_pilot.is_some());
+        self.nav_scene.as_ref().is_some_and(|(shown, display)| {
+            *shown == mode && matches!(display, NavDisplay::GatePilot { .. }) == piloted
+        })
     }
 }

@@ -34,9 +34,21 @@
 //!
 //! **Stability**, per direction ([`GateLanes::stability`]): each gate
 //! serving the lane works as well as the [`worse`](GateStability::worse)
-//! of its own and its link's gate's stability, and of parallel gates the
-//! best wins, as the traveller can take it. A lane is one-way
-//! ([`GateLanes::one_way`]) when no lane leads back.
+//! of its own and its link's gate's stability, each as the resolver
+//! [`GateLanes::new`] is given says (the galaxy gives the jump points'
+//! as play leaves them, `nova_sim::story::OverlaidGalaxy::gate_stability`),
+//! and of parallel gates the best wins, as the traveller can take it. A
+//! lane is one-way ([`GateLanes::one_way`]) when no lane leads back.
+//!
+//! **Open and closed.** A gate serving a lane is open when its
+//! stability [is open](GateStability::is_open), and a lane is open when
+//! one of its gates is. Every link reader reads open lanes alone:
+//! [`GateLanes::listed`], so the star map, and [`GateLanes::gates`],
+//! give only open lanes and gates. [`GateLanes::stability`] and
+//! [`GateLanes::one_way`] read every lane, and
+//! [`GateLanes::closed`] gives the closed ones, for the map's looks. The
+//! lanes change with the points' stabilities too: the galaxy builds them
+//! again when play changes one.
 //!
 //! With the `fixture` feature, `GateLanes::fixture` builds lanes as
 //! given, for the tests of the crates above (the story's news spreads
@@ -48,33 +60,51 @@ use crate::catalog::{GateSite, GateStability, StellarId, SystemId};
 use crate::gate::{GateKind, exits};
 use crate::hyperspace::Places;
 
-/// One lane: the gates serving it and how well it works.
+/// One lane: the gates serving it and how well each works.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Lane {
-    /// The gates serving it, by ID, each once.
-    gates: Vec<StellarId>,
+    /// The gates serving it, by ID, each once, with the
+    /// [`worse`](GateStability::worse) of its two ends.
+    gates: Vec<(StellarId, GateStability)>,
+    /// Those of [`gates`](Self::gates) that are
+    /// [open](GateStability::is_open), by ID.
+    open: Vec<StellarId>,
+}
+
+impl Lane {
     /// The best of its gates' stabilities.
-    stability: GateStability,
+    fn stability(&self) -> GateStability {
+        self.gates
+            .iter()
+            .map(|&(_, stability)| stability)
+            .min()
+            .unwrap_or_default()
+    }
 }
 
 /// The lanes a galaxy's hypergates make (see the module docs).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GateLanes {
-    /// Each lane, by (from, to).
+    /// Each lane, open or closed, by (from, to).
     lanes: BTreeMap<(SystemId, SystemId), Lane>,
-    /// The systems each system's lanes reach, by gate ID then slot order,
-    /// each once.
+    /// The systems each system's lanes reach, open or closed, by gate ID
+    /// then slot order, each once.
+    reached: BTreeMap<SystemId, Vec<SystemId>>,
+    /// Those of [`reached`](Self::reached) whose lane has an open gate,
+    /// in the same order: what [`GateLanes::listed`] gives.
     listed: BTreeMap<SystemId, Vec<SystemId>>,
 }
 
 impl GateLanes {
     /// The lanes the hypergates among `sites` make, each gate's system,
     /// and each link's gate's, given by `system_of` and resolved by place
-    /// on `places` (see the module docs).
+    /// on `places`, each gate's own stability by `stability_of` (see the
+    /// module docs).
     #[must_use]
     pub fn new(
         sites: &[GateSite],
         system_of: impl Fn(StellarId) -> Option<SystemId>,
+        stability_of: impl Fn(StellarId) -> GateStability,
         places: &Places,
     ) -> Self {
         let standing = |gate: StellarId| system_of(gate).and_then(|system| places.stand_in(system));
@@ -92,53 +122,98 @@ impl GateLanes {
                 let Some(to) = standing(exit.id).filter(|&to| to != from) else {
                     continue;
                 };
-                lanes.serve(from, to, gate.id, gate.stability.worse(exit.stability));
+                let stability = stability_of(gate.id).worse(stability_of(exit.id));
+                lanes.serve(from, to, gate.id, stability);
             }
         }
+        lanes.list_open();
         lanes
     }
 
-    /// Notes `gate` serving the lane (`from`, `to`) at `stability`.
+    /// Notes `gate` serving the lane (`from`, `to`) at `stability`: a
+    /// gate serving it twice keeps the better.
     fn serve(&mut self, from: SystemId, to: SystemId, gate: StellarId, stability: GateStability) {
-        let listed = self.listed.entry(from).or_default();
-        if !listed.contains(&to) {
-            listed.push(to);
+        let reached = self.reached.entry(from).or_default();
+        if !reached.contains(&to) {
+            reached.push(to);
         }
         let lane = self.lanes.entry((from, to)).or_insert(Lane {
             gates: Vec::new(),
-            stability,
+            open: Vec::new(),
         });
-        if !lane.gates.contains(&gate) {
-            lane.gates.push(gate);
+        match lane.gates.iter_mut().find(|(id, _)| *id == gate) {
+            Some((_, kept)) => *kept = (*kept).min(stability),
+            None => lane.gates.push((gate, stability)),
         }
-        lane.stability = lane.stability.min(stability);
     }
 
-    /// The systems `from`'s lanes reach, by gate ID then slot order, each
-    /// once: empty for a system with none.
+    /// Works out each lane's open gates, and each system's open lanes,
+    /// once every gate is served.
+    fn list_open(&mut self) {
+        for lane in self.lanes.values_mut() {
+            lane.gates.sort_by_key(|&(id, _)| id);
+            lane.open = lane
+                .gates
+                .iter()
+                .filter(|(_, stability)| stability.is_open())
+                .map(|&(id, _)| id)
+                .collect();
+        }
+        self.listed = self
+            .reached
+            .iter()
+            .map(|(&from, reached)| {
+                let open = reached
+                    .iter()
+                    .copied()
+                    .filter(|&to| !self.gates(from, to).is_empty())
+                    .collect();
+                (from, open)
+            })
+            .collect();
+    }
+
+    /// The systems `from`'s open lanes reach, by gate ID then slot order,
+    /// each once: empty for a system with none. A lane whose every gate
+    /// is closed is left out ([`GateLanes::closed`]).
     #[must_use]
     pub fn listed(&self, from: SystemId) -> &[SystemId] {
         self.listed.get(&from).map_or(&[], Vec::as_slice)
     }
 
-    /// The gates serving the lane from `from` to `to`, by ID: empty when
-    /// there is no such lane.
+    /// The open gates serving the lane from `from` to `to`, by ID: empty
+    /// when there is no such lane or every gate serving it is closed.
     #[must_use]
     pub fn gates(&self, from: SystemId, to: SystemId) -> &[StellarId] {
         self.lanes
             .get(&(from, to))
-            .map_or(&[], |lane| lane.gates.as_slice())
+            .map_or(&[], |lane| lane.open.as_slice())
     }
 
-    /// How well the lane from `from` to `to` works: the best of its gates'
-    /// (see the module docs), or `None` when there is no such lane.
+    /// The systems `from`'s closed lanes reach, by gate ID then slot
+    /// order, each once: each lane from `from` that exists but has no
+    /// open gate, as the map draws it.
+    #[must_use]
+    pub fn closed(&self, from: SystemId) -> Vec<SystemId> {
+        self.reached.get(&from).map_or_else(Vec::new, |reached| {
+            reached
+                .iter()
+                .copied()
+                .filter(|&to| self.gates(from, to).is_empty())
+                .collect()
+        })
+    }
+
+    /// How well the lane from `from` to `to` works, open or closed: the
+    /// best of its gates' (see the module docs), or `None` when there is
+    /// no such lane.
     #[must_use]
     pub fn stability(&self, from: SystemId, to: SystemId) -> Option<GateStability> {
-        self.lanes.get(&(from, to)).map(|lane| lane.stability)
+        self.lanes.get(&(from, to)).map(Lane::stability)
     }
 
     /// Whether the lane from `from` to `to` is one-way: it exists, and no
-    /// lane leads back.
+    /// lane leads back, open or closed.
     #[must_use]
     pub fn one_way(&self, from: SystemId, to: SystemId) -> bool {
         self.lanes.contains_key(&(from, to)) && !self.lanes.contains_key(&(to, from))
@@ -146,8 +221,9 @@ impl GateLanes {
 
     /// Lanes as given, for other crates' tests: each `(from, to,
     /// stability)` a lane, in order, served by one gate numbered by its
-    /// place in `lanes` (from 0). A lane given twice keeps the better
-    /// stability, as parallel gates do.
+    /// place in `lanes` (from 0). A lane given twice is served by two
+    /// gates, so it keeps the better stability, as parallel gates do. A
+    /// lane given only unstable or dead is closed.
     #[cfg(any(test, feature = "fixture"))]
     #[must_use]
     pub fn fixture(lanes: &[(i16, i16, GateStability)]) -> Self {
@@ -155,6 +231,7 @@ impl GateLanes {
         for (gate, &(from, to, stability)) in (0..).zip(lanes) {
             built.serve(SystemId(from), SystemId(to), StellarId(gate), stability);
         }
+        built.list_open();
         built
     }
 }
@@ -179,20 +256,41 @@ mod tests {
         list.iter().copied().map(StellarId).collect()
     }
 
+    /// A gate's site and its own stability, as the galaxy resolves it.
+    type Gate = (GateSite, GateStability);
+
     /// Hypergate `id` linking `links`, at `stability`.
-    fn gate(id: i16, links: &[i16], stability: GateStability) -> GateSite {
+    fn gate(id: i16, links: &[i16], stability: GateStability) -> Gate {
         let mut slots = [None; 8];
         for (slot, &link) in slots.iter_mut().zip(links) {
             *slot = Some(StellarId(link));
         }
-        GateSite {
+        let site = GateSite {
             id: StellarId(id),
             position: Vec2::ZERO,
             flags2: HYPERGATE,
             links: slots,
             exit_angle: -1,
-            stability,
-        }
+        };
+        (site, stability)
+    }
+
+    /// The lanes `gates` make, each gate's system by `system_of`, on
+    /// `places`, each at its own stability: [`GateLanes::new`] over their
+    /// sites, stable for a gate not among them.
+    fn built(
+        gates: &[Gate],
+        system_of: impl Fn(StellarId) -> Option<SystemId>,
+        places: &Places,
+    ) -> GateLanes {
+        let sites: Vec<GateSite> = gates.iter().map(|&(site, _)| site).collect();
+        let stability_of = |id: StellarId| {
+            gates
+                .iter()
+                .find(|(site, _)| site.id == id)
+                .map_or(Stable, |&(_, stability)| stability)
+        };
+        GateLanes::new(&sites, system_of, stability_of, places)
     }
 
     /// Systems 1-4, each at its own place, 5 at 1's.
@@ -218,8 +316,8 @@ mod tests {
         Some(SystemId(gate.0 / 100))
     }
 
-    fn lanes(sites: &[GateSite]) -> GateLanes {
-        GateLanes::new(sites, by_hundreds, &places(&[]))
+    fn lanes(gates: &[Gate]) -> GateLanes {
+        built(gates, by_hundreds, &places(&[]))
     }
 
     #[test]
@@ -242,9 +340,9 @@ mod tests {
     fn a_wormhole_makes_no_lane() {
         let wormhole = GateSite {
             flags2: WORMHOLE,
-            ..gate(101, &[201], Stable)
+            ..gate(101, &[201], Stable).0
         };
-        let lanes = lanes(&[wormhole, gate(201, &[], Stable)]);
+        let lanes = lanes(&[(wormhole, Stable), gate(201, &[], Stable)]);
         assert_eq!(lanes.listed(SystemId(1)), ids(&[]));
         assert_eq!(lanes.stability(SystemId(1), SystemId(2)), None);
     }
@@ -262,21 +360,21 @@ mod tests {
             gate(201, &[], Stable),
             gate(301, &[], Stable),
         ];
-        let lanes = GateLanes::new(&sites, by_hundreds, &places(&[2]));
+        let lanes = built(&sites, by_hundreds, &places(&[2]));
         assert_eq!(lanes.listed(SystemId(1)), ids(&[3]));
     }
 
     #[test]
     fn a_link_to_a_hidden_system_reaches_the_one_standing_at_its_place() {
         let sites = [gate(201, &[501], Stable), gate(501, &[], Stable)];
-        let lanes = GateLanes::new(&sites, by_hundreds, &places(&[5]));
+        let lanes = built(&sites, by_hundreds, &places(&[5]));
         assert_eq!(lanes.listed(SystemId(2)), ids(&[1]));
     }
 
     #[test]
     fn a_gate_with_no_system_makes_no_lane() {
         let sites = [gate(101, &[201], Stable), gate(201, &[], Stable)];
-        let lanes = GateLanes::new(&sites, |_| None, &places(&[]));
+        let lanes = built(&sites, |_| None, &places(&[]));
         assert_eq!(lanes.listed(SystemId(1)), ids(&[]));
     }
 
@@ -284,7 +382,7 @@ mod tests {
     fn a_link_to_the_gates_own_system_makes_no_lane() {
         let lanes = lanes(&[gate(101, &[102], Stable), gate(102, &[], Stable)]);
         assert_eq!(lanes.listed(SystemId(1)), ids(&[]));
-        let lanes = GateLanes::new(
+        let lanes = built(
             &[gate(101, &[501], Stable), gate(501, &[], Stable)],
             by_hundreds,
             &places(&[]),
@@ -364,22 +462,99 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_gate_whose_either_end_is_unstable_or_dead_is_closed_but_its_lane_kept() {
+        for (own, far) in [
+            (Stable, Unstable),
+            (Stable, Dead),
+            (Unstable, Stable),
+            (Dead, Stable),
+        ] {
+            let lanes = lanes(&[gate(101, &[201], own), gate(201, &[], far)]);
+            let (from, to) = (SystemId(1), SystemId(2));
+            assert_eq!(lanes.listed(from), ids(&[]), "{own:?} {far:?}");
+            assert_eq!(lanes.gates(from, to), stellars(&[]), "{own:?} {far:?}");
+            assert_eq!(
+                lanes.stability(from, to),
+                Some(own.worse(far)),
+                "{own:?} {far:?}"
+            );
+            assert_eq!(lanes.closed(from), ids(&[2]), "{own:?} {far:?}");
+            assert!(lanes.one_way(from, to), "{own:?} {far:?}");
+        }
+    }
+
+    #[test]
+    fn an_open_lane_is_listed_and_not_closed() {
+        let lanes = lanes(&[gate(101, &[201], Stable), gate(201, &[], Stable)]);
+        assert_eq!(lanes.listed(SystemId(1)), ids(&[2]));
+        assert_eq!(lanes.gates(SystemId(1), SystemId(2)), stellars(&[101]));
+        assert_eq!(lanes.closed(SystemId(1)), ids(&[]));
+        assert_eq!(lanes.closed(SystemId(9)), ids(&[]), "no lane at all");
+    }
+
+    #[test]
+    fn of_parallel_gates_only_the_open_ones_serve_and_the_best_is_the_lanes() {
+        let lanes = lanes(&[
+            gate(101, &[201], Dead),
+            gate(102, &[202], Stable),
+            gate(103, &[201], Unstable),
+            gate(104, &[301], Stable),
+            gate(201, &[], Stable),
+            gate(202, &[], Stable),
+            gate(301, &[], Stable),
+        ]);
+        let (from, to) = (SystemId(1), SystemId(2));
+        assert_eq!(lanes.listed(from), ids(&[2, 3]));
+        assert_eq!(lanes.gates(from, to), stellars(&[102]));
+        assert_eq!(lanes.stability(from, to), Some(Stable));
+        assert_eq!(lanes.closed(from), ids(&[]));
+    }
+
+    #[test]
+    fn closed_and_open_lanes_keep_the_order_of_their_gates() {
+        let lanes = lanes(&[
+            gate(101, &[401], Dead),
+            gate(102, &[201], Stable),
+            gate(103, &[301], Unstable),
+            gate(104, &[501], Stable),
+            gate(201, &[], Stable),
+            gate(301, &[], Stable),
+            gate(401, &[], Stable),
+        ]);
+        assert_eq!(lanes.listed(SystemId(1)), ids(&[2]));
+        assert_eq!(lanes.closed(SystemId(1)), ids(&[4, 3]));
+    }
+
+    /// The nova-data new-game fixture's gates, at `stability` of each
+    /// gate's own: drift 1, hearth 2, verge 3.
+    fn fixture_gates(stability: impl Fn(GateStability) -> GateStability) -> Vec<Gate> {
+        use GateStability::{Dead, Stable, Unstable};
+        let at = |id, links: &[i16], own| gate(id, links, stability(own));
+        vec![
+            // drift: hearth-road, verge-road, back-door.
+            at(101, &[201], Stable),
+            at(102, &[303], Dead),
+            at(103, &[302], Unstable),
+            // hearth: drift-road, verge-road, side-road.
+            at(201, &[101], Stable),
+            at(202, &[301], Stable),
+            at(203, &[302], Stable),
+            // verge: hearth-road, side-road, drift-road.
+            at(301, &[202], Unstable),
+            at(302, &[203], Stable),
+            at(303, &[102], Dead),
+        ]
+    }
+
+    /// The fixture's lanes with every gate stable: each lane open.
+    fn fixture_stable() -> GateLanes {
+        lanes(&fixture_gates(|_| Stable))
+    }
+
     /// The nova-data new-game fixture's gates: drift 1, hearth 2, verge 3.
     fn fixture_shaped() -> GateLanes {
-        lanes(&[
-            // drift: hearth-road, verge-road, back-door.
-            gate(101, &[201], Stable),
-            gate(102, &[303], Dead),
-            gate(103, &[302], Unstable),
-            // hearth: drift-road, verge-road, side-road.
-            gate(201, &[101], Stable),
-            gate(202, &[301], Stable),
-            gate(203, &[302], Stable),
-            // verge: hearth-road, side-road, drift-road.
-            gate(301, &[202], Unstable),
-            gate(302, &[203], Stable),
-            gate(303, &[102], Dead),
-        ])
+        lanes(&fixture_gates(|own| own))
     }
 
     #[test]
@@ -400,7 +575,25 @@ mod tests {
             "the side road"
         );
         assert_eq!(lanes.stability(verge, hearth), Some(Stable));
-        assert_eq!(lanes.gates(drift, verge), stellars(&[102, 103]));
+        assert_eq!(
+            lanes.gates(drift, verge),
+            stellars(&[]),
+            "both ways from drift to verge closed"
+        );
+        assert_eq!(lanes.closed(drift), ids(&[3]));
+        assert_eq!(lanes.closed(verge), ids(&[1]));
+        assert_eq!(
+            lanes.gates(hearth, verge),
+            stellars(&[203]),
+            "the side road alone"
+        );
+        assert_eq!(lanes.listed(hearth), ids(&[1, 3]));
+        assert_eq!(lanes.closed(hearth), ids(&[]));
+        assert_eq!(
+            fixture_stable().gates(drift, verge),
+            stellars(&[102, 103]),
+            "every gate open"
+        );
     }
 
     #[test]
@@ -425,17 +618,33 @@ mod tests {
 
     use crate::hyperspace::{HyperlinkRule, RouteError, StarMap};
 
-    /// [`systems`] with 1 listing 2 and 4 by Con, mapped by
-    /// [`fixture_shaped`]'s lanes.
-    fn laned_map() -> StarMap {
+    /// [`systems`] with 1 listing 2 and 4 by Con, mapped by `lanes`.
+    fn mapped(lanes: &GateLanes) -> StarMap {
         let mut systems = systems();
         systems[0].links = ids(&[2, 4, 4]);
-        StarMap::with_lanes(
-            systems,
-            &BTreeSet::new(),
-            CoLocated::Lowest,
-            &fixture_shaped(),
-        )
+        StarMap::with_lanes(systems, &BTreeSet::new(), CoLocated::Lowest, lanes)
+    }
+
+    /// [`systems`] with 1 listing 2 and 4 by Con, mapped by
+    /// [`fixture_stable`]'s lanes.
+    fn laned_map() -> StarMap {
+        mapped(&fixture_stable())
+    }
+
+    #[test]
+    fn a_closed_lane_is_no_link_on_the_map() {
+        let map = mapped(&fixture_shaped());
+        assert_eq!(map.listed_links(SystemId(1)), ids(&[2]));
+        assert_eq!(map.listed_links(SystemId(3)), ids(&[2]));
+        assert_eq!(
+            map.links(),
+            [(1, 2), (2, 3)].map(|(a, b)| (SystemId(a), SystemId(b)))
+        );
+        assert_eq!(
+            map.route(SystemId(1), SystemId(3), HyperlinkRule::Engine),
+            Ok(ids(&[2, 3])),
+            "round by hearth"
+        );
     }
 
     #[test]
@@ -518,7 +727,8 @@ mod tests {
             (1, 3, GateStability::Stable),
         ]);
         assert_eq!(lanes.listed(SystemId(1)), ids(&[2, 3]));
-        assert_eq!(lanes.listed(SystemId(2)), ids(&[1]));
+        assert_eq!(lanes.listed(SystemId(2)), ids(&[]), "dead: closed");
+        assert_eq!(lanes.closed(SystemId(2)), ids(&[1]));
         assert_eq!(lanes.listed(SystemId(3)), ids(&[]));
         assert_eq!(
             lanes.stability(SystemId(1), SystemId(2)),
@@ -535,7 +745,11 @@ mod tests {
         );
         assert_eq!(lanes.stability(SystemId(3), SystemId(1)), None);
         assert!(lanes.one_way(SystemId(1), SystemId(3)));
-        assert_eq!(lanes.gates(SystemId(1), SystemId(3)), stellars(&[2, 3]));
+        assert_eq!(
+            lanes.gates(SystemId(1), SystemId(3)),
+            stellars(&[3]),
+            "the stable one alone"
+        );
     }
 
     #[test]

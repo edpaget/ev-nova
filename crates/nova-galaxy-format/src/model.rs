@@ -38,6 +38,13 @@ pub struct Faction {
     pub kind: FactionKind,
     /// The faction's colour on the generated map.
     pub color: Color,
+    /// Whether the faction is lawless: its yards fit lawless mod kits as
+    /// well as legal ones, and its traffic control scans nobody. Pirates
+    /// and the Union workshops are lawless; the Association and the Crown
+    /// keep the law. Omit for a faction that keeps the law. Space nobody
+    /// governs is lawless too.
+    #[serde(default)]
+    pub lawless: bool,
 }
 
 /// Major power or minor faction.
@@ -730,6 +737,34 @@ mod tests {
         for (kind, text) in types {
             assert_eq!(kind.as_str(), text);
         }
+    }
+
+    #[test]
+    fn a_faction_keeps_the_law_unless_it_says_it_is_lawless() {
+        let keeps: Faction = read("name: Crown\nkind: major\ncolor: \"#aa0000\"\n").unwrap();
+        assert!(!keeps.lawless);
+        let lawless: Faction =
+            read("name: Band\nkind: minor\ncolor: \"#333333\"\nlawless: true\n").unwrap();
+        assert!(lawless.lawless);
+    }
+
+    #[test]
+    fn the_faction_schema_lists_lawless_as_optional() {
+        let schema = schemars::schema_for!(Faction);
+        let value = schema.as_value();
+        assert!(
+            value["properties"]["lawless"]["description"]
+                .as_str()
+                .is_some_and(|d| d.contains("lawless")),
+            "{value}"
+        );
+        let required: Vec<&str> = value["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|r| r.as_str())
+            .collect();
+        assert!(!required.contains(&"lawless"), "{required:?}");
     }
 
     #[test]

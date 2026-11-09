@@ -1081,6 +1081,7 @@ mod tests {
             cursor: None,
             pod: None,
             stars: None,
+            star_dots: None,
         }
     }
 

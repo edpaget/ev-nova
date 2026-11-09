@@ -164,20 +164,29 @@ pub struct FakePilotCatalog {
     pub stellar_dialogs: crate::dialogs::StellarDialogs,
     /// The missions, news and jump points: none, by default.
     pub storylines: crate::storylines::Storylines,
+    /// The ship classes' and kits' fittings: none, by default.
+    pub fittings: crate::fittings::Fittings,
 }
 
 impl FakePilotCatalog {
-    /// This catalog with gate `gate`'s stability `stability`: none
-    /// changes for a gate it doesn't hold.
+    /// This catalog with the jump point `point` (`system/point`) among its
+    /// storylines' points: gate `gate`, no owner, at `stability`,
+    /// replacing any point of that name. Its other storylines are kept.
     #[must_use]
-    pub fn with_gate_stability(
+    pub fn with_point(
         mut self,
+        point: &str,
         gate: i16,
-        stability: crate::catalog::GateStability,
+        stability: crate::storylines::PointStability,
     ) -> Self {
-        for site in self.gates.iter_mut().filter(|site| site.id.0 == gate) {
-            site.stability = stability;
-        }
+        self.storylines.points.insert(
+            point.to_owned(),
+            crate::storylines::PointAt {
+                gate: StellarId(gate),
+                owner: None,
+                stability,
+            },
+        );
         self
     }
 
@@ -283,6 +292,7 @@ pub fn catalog() -> FakePilotCatalog {
         rle_sheets_asked: RefCell::default(),
         stellar_dialogs: crate::dialogs::StellarDialogs::default(),
         storylines: crate::storylines::Storylines::default(),
+        fittings: crate::fittings::Fittings::default(),
     }
 }
 
@@ -564,6 +574,10 @@ impl PilotCatalog for FakePilotCatalog {
         self.storylines.clone()
     }
 
+    fn fittings(&self) -> crate::fittings::Fittings {
+        self.fittings.clone()
+    }
+
     /// Each existing system's [`FakePilotCatalog::nav_defs`] where given,
     /// else its [`FakePilotCatalog::sites`] numbered in order, read
     /// without counting as a read of the star map or the sites.
@@ -668,24 +682,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_gates_stability_is_set_on_that_gate_alone() {
-        use crate::catalog::GateStability;
-        let gate = |id| GateSite {
-            id: StellarId(id),
-            position: crate::geometry::Vec2::ZERO,
-            flags2: 0,
-            links: [None; 8],
-            exit_angle: -1,
-            stability: GateStability::Stable,
-        };
-        let fake = FakePilotCatalog {
-            gates: vec![gate(150), gate(151)],
-            ..catalog()
-        }
-        .with_gate_stability(151, GateStability::Dead)
-        .with_gate_stability(999, GateStability::Unstable);
-        let stabilities: Vec<_> = fake.gates.iter().map(|site| site.stability).collect();
-        assert_eq!(stabilities, [GateStability::Stable, GateStability::Dead]);
+    fn a_point_is_added_to_the_storylines_with_its_gate_and_stability() {
+        use crate::storylines::{PointAt, PointStability};
+        let fake = catalog()
+            .with_point("drift/road", 151, PointStability::Dead)
+            .with_point("hearth/road", 152, PointStability::Stable)
+            .with_point("drift/road", 153, PointStability::Unstable);
+        assert_eq!(
+            fake.storylines.points,
+            std::collections::BTreeMap::from([
+                (
+                    "drift/road".to_owned(),
+                    PointAt {
+                        gate: StellarId(153),
+                        owner: None,
+                        stability: PointStability::Unstable,
+                    }
+                ),
+                (
+                    "hearth/road".to_owned(),
+                    PointAt {
+                        gate: StellarId(152),
+                        owner: None,
+                        stability: PointStability::Stable,
+                    }
+                ),
+            ]),
+            "a point given again replaces the first"
+        );
+        assert!(fake.storylines.missions.is_empty());
     }
 
     #[test]
@@ -887,7 +912,6 @@ mod tests {
             flags2: 0,
             links: [None; 8],
             exit_angle: 90,
-            stability: crate::catalog::GateStability::Stable,
         };
         let commodities = CommodityStrings {
             names: vec!["Food".to_owned()],

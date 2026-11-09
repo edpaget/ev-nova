@@ -770,6 +770,7 @@ mod port_screen_map;
 mod readouts;
 mod rescue;
 mod screen;
+mod ship_looks;
 mod shops;
 mod shots;
 mod slot_block;
@@ -777,6 +778,7 @@ mod sprites;
 mod stars;
 mod stellar_looks;
 mod stepping;
+mod story;
 mod target_latch;
 mod touch;
 mod travel;
@@ -1156,7 +1158,8 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     sheet: Result<ShipSheet, String>,
     /// What the player's ship draws in place of `sheet` when it cannot be
     /// shown: its type's outline, read with the sheet, only when the sheet
-    /// failed ([`outline_for`]); `None` draws the crossed box.
+    /// failed ([`outline_for`]) and no look answered for it
+    /// ([`FlightView::with_ship_looks`]); `None` draws the crossed box.
     outline: Option<Outline>,
     /// The class `sheet` and `status_bar` were read for; `None` when the
     /// session failed.
@@ -1465,6 +1468,10 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// The outline of each NPC ship type whose sheet cannot be shown and
     /// that has one, read once with its sheet ([`outline_for`]).
     npc_outlines: BTreeMap<ShipId, Outline>,
+    /// The looks consulted for a ship type the catalog has no sheet for,
+    /// before its outline ([`FlightView::with_ship_looks`]): none unless
+    /// the edge gives them.
+    ship_looks: ship_looks::ShipLooks,
     /// Each NPC's place a step before the frame's, in the system's order
     /// as the step reported them ([`StepRun::before`](nova_sim::flight_frame::StepRun::before)).
     npc_previous: Vec<(NpcId, ShipPlace)>,
