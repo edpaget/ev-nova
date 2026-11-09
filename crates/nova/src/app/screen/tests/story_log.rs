@@ -13,6 +13,7 @@ use nova_data::{
 };
 use nova_sim::dialog::fake::{FakeChoice, FakeDialog, FakeKnot, FakeLoader};
 use nova_view::spaceport::conversation::CLOSE_HINT;
+use nova_view::spaceport::layout::service_item;
 use nova_view::ui::story_log::{MISSIONS_HEADING, NEWS_HEADING};
 
 use super::*;
@@ -176,6 +177,44 @@ fn the_news_takes_every_input_in_front_of_the_spaceport() {
     assert!(!shows(&screen, HEADLINE));
     tap(&mut screen, Key::Escape);
     assert_eq!(screen.showing(), Showing::Flight, "then took off");
+}
+
+/// The news log's beeps among the sounds `screen` reports, taken.
+fn news_beeps(screen: &mut AppScreen) -> Vec<UiSound> {
+    screen
+        .take_sounds()
+        .into_iter()
+        .filter_map(|sound| match sound {
+            Sound::Ui(beep @ (UiSound::NewsOpened | UiSound::NewsClosed)) => Some(beep),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn the_bars_holovid_beeps_as_it_opens_and_closes_and_the_landings_news_never() {
+    // The bar, laid out, hosts the story under `RuleKey::BarStory`'s
+    // other reading.
+    let rules = Rulebook::default().with_override(RuleKey::BarStory, RuleSource::Bible);
+    let mut screen = AppScreen::new(story_data(None))
+        .with_dialogs(Rc::new(PastTheHoldsDialogs), Rc::new(MonoMetrics))
+        .with_dialog_loader(Rc::new(loader()))
+        .with_rules(rules);
+    land(&mut screen);
+    assert!(shows(&screen, HEADLINE), "the landing's news");
+    assert_eq!(news_beeps(&mut screen), [], "pops up silently");
+    tap(&mut screen, Key::Enter);
+    assert!(!shows(&screen, HEADLINE));
+    assert_eq!(news_beeps(&mut screen), [], "and closes silently");
+    click_port_item(&mut screen, service_item(nova_sim::Service::Bar));
+    assert!(spaceport(&screen).open_bar().is_some(), "in the bar");
+    tap(&mut screen, Key::KeyN);
+    assert!(shows(&screen, HEADLINE), "{:?}", texts(&screen));
+    assert_eq!(news_beeps(&mut screen), [UiSound::NewsOpened]);
+    tap(&mut screen, Key::Enter);
+    assert!(!shows(&screen, HEADLINE), "closed");
+    assert!(spaceport(&screen).open_bar().is_some(), "back in the bar");
+    assert_eq!(news_beeps(&mut screen), [UiSound::NewsClosed]);
 }
 
 #[test]
