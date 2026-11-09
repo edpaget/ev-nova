@@ -520,32 +520,36 @@ mod tests {
     }
 
     #[test]
-    fn a_disabled_or_breaking_up_ship_is_disabled_even_attacking() {
-        for condition in [
-            Condition::Disabled,
-            Condition::Dying {
-                ticks_left: 3,
-                starting: false,
+    fn a_ship_is_coded_disabled_even_attacking_exactly_when_it_is_disabled() {
+        // `_ColorCodeShip` reads `_IsDisabled` (@0x4b17) before the
+        // threat: whichever ships `Npc::is_disabled` holds of are grey,
+        // and the rest fall through to the threat.
+        let attacker = attacking(hired());
+        let ships = [
+            attacker.clone(),
+            Npc {
+                condition: Condition::Disabled,
+                ..attacker.clone()
             },
-        ] {
-            let npc = Npc {
-                condition,
-                ..attacking(hired())
+            Npc {
+                condition: Condition::Dying {
+                    ticks_left: 3,
+                    starting: false,
+                },
+                ..attacker.clone()
+            },
+            crate::traffic::fixture::breaking_up_guard(attacker),
+        ];
+        assert!(ships.iter().any(Npc::is_disabled), "one disabled");
+        assert!(!ships.iter().all(Npc::is_disabled), "one not");
+        for npc in ships {
+            let want = if npc.is_disabled() {
+                ShipIff::Disabled
+            } else {
+                ShipIff::Threat
             };
-            assert_eq!(
-                ship_iff(&npc, None, &[]),
-                ShipIff::Disabled,
-                "{condition:?}"
-            );
+            assert_eq!(ship_iff(&npc, None, &[]), want, "{npc:?}");
         }
-    }
-
-    #[test]
-    fn a_defence_ship_breaking_up_is_not_coded_disabled() {
-        // `_IsDisabled`'s branch 3 (@0x2d6f): a stellar's defence ship is
-        // never disabled by its armour, so it falls through.
-        let guard = crate::traffic::fixture::breaking_up_guard(ship());
-        assert_eq!(ship_iff(&guard, None, &[]), ShipIff::Other);
     }
 
     #[test]
