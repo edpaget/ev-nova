@@ -418,17 +418,16 @@ fn under_the_new_game_every_gate_is_one_the_traffic_comes_out_of_and_leaves_by()
     }
 }
 
-/// The run over every system took about 3 s, so it runs over two: `drift`,
-/// of gates alone, and `hearth`, the busiest. The rest are covered by
-/// [`under_the_new_game_every_gate_is_one_the_traffic_comes_out_of_and_leaves_by`].
-/// Each has a closed gate, which no ship ever comes out of or goes into.
+/// It runs over `drift`, of gates alone, `hearth`, the busiest, and
+/// `verge`: every fixture system with gates. Each has a closed gate, which
+/// no ship ever comes out of or goes into.
 #[test]
 fn under_the_new_game_the_traffic_uses_every_open_gate_and_no_closed_one() {
     let game = fixture();
     let rules = new_game_rules();
     let gates = gates(&game);
     let pilot = pilot_for(&game);
-    for name in ["drift", "hearth"] {
+    for name in ["drift", "hearth", "verge"] {
         let system = SystemId(nova_of(&game.ids.systems, name));
         let wanted = open_of_system(&gates, system);
         assert_ne!(wanted, of_system(&gates, system), "{name}: a closed gate");
