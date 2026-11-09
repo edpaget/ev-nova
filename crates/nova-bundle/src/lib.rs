@@ -243,6 +243,7 @@
 
 pub mod appcast;
 pub mod archive;
+pub mod authenticode;
 pub mod build_id;
 pub mod bundle;
 pub mod channel;
