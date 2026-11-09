@@ -29,6 +29,11 @@ None of the six is a secret: CI gets a token only through the federated
 credential, which trusts only jobs that deploy to `windows-signing`, and the
 environment allows only `main`.
 
+`.github/workflows/build.yml`'s Windows leg on `main` consumes the
+environment: it logs in with `azure/login` and signs with
+`mise run sign-windows` and `mise run pack-installer`
+(`crates/nova-bundle/src/authenticode`).
+
 It is a separate root from `infra/github` so that planning the GitHub
 settings never needs `az login`. The `windows-signing` environment lives
 here, not there, because its values come from the Azure resources.

@@ -1,7 +1,9 @@
 //! `nova-bundle`: packs the nightly's and the beta's installers. Its `nova-bundle`
 //! binary builds `Nova.app`, the macOS bundle of the game, and packs it
 //! into a `.dmg`; its `nova-installer` binary packs the built Windows
-//! executables into a per-user MSI ([`installer`]); its `nova-linux`
+//! executables into a per-user MSI ([`installer`]); its
+//! `nova-sign-windows` binary signs Windows files with Artifact Signing
+//! ([`authenticode`]); its `nova-linux`
 //! binary writes the Linux desktop file, AppStream metainfo and icons
 //! ([`linux`]); its `nova-flatpak` binary packs the game into the Linux
 //! Flatpak ([`linux::flatpak`]); its `nova-build-id` binary prints the build ID
@@ -104,6 +106,25 @@
 //! relaunches the game when the feed passes
 //! [`installer::RELAUNCH_PROPERTY`]. `NOVA_CHANNEL` is read as for the
 //! macOS bundle, and the packer prints which feed the build names.
+//!
+//! # Windows signing
+//!
+//! ```text
+//! mise run sign-windows -- <FILE>...
+//! ```
+//!
+//! On Windows only, after `az login`. With `ARTIFACT_SIGNING_ENDPOINT`,
+//! `ARTIFACT_SIGNING_ACCOUNT` and `ARTIFACT_SIGNING_PROFILE` all set
+//! ([`authenticode::VARS`]), `nova-sign-windows` downloads `signtool` and
+//! the Artifact Signing dlib at pinned versions, checks their SHA-256s
+//! with `certutil` before unpacking them ([`authenticode::tools`]), signs
+//! each file in place with SHA-256 and Microsoft's timestamp server, and
+//! verifies each with `signtool verify /pa /tw`, which fails a file with no
+//! timestamp ([`authenticode::sign`]). `nova-installer` reads the same
+//! variables and signs the staged `WinSparkle.dll` and the `.msi` the same
+//! way. With none set both run unsigned and say so; a mix is an error
+//! naming the missing ones. CI's Windows leg sets them on `main` alone,
+//! from the `windows-signing` environment.
 
 //!
 //! # The Linux desktop files

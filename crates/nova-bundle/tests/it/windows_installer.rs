@@ -10,8 +10,8 @@
 //!
 //! Both packs carry WinSparkle: the test checks the installed
 //! `WinSparkle.dll` is the one the last pack staged in
-//! `target\installer\downloads` (the file `wix build` packed, which the
-//! signing phase will sign there), that both packs hold it in the same
+//! `target\installer\downloads` (the file `wix build` packed, which a
+//! signed pack signs there), that both packs hold it in the same
 //! component, which after the upgrade only the new product holds, and the
 //! relaunch custom action's rows. It doesn't run the relaunch: that would
 //! start the game on the runner.
@@ -386,7 +386,8 @@ fn expected_version() -> String {
 }
 
 /// The `WinSparkle.dll` the last pack staged and `wix build` packed: the
-/// pinned DLL, or, once the signing phase signs it there, that signed DLL.
+/// pinned DLL, or, when that pack signed (`nova_bundle::authenticode`),
+/// the signed DLL.
 fn staged_dll() -> PathBuf {
     InstallerLayout::new(&spec().target_dir, None, None)
         .expect("layout")

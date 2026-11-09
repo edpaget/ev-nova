@@ -12,8 +12,11 @@
 //!
 //! Packing never builds: [`plan::pack`] takes `nova.exe` and
 //! `nova-dump.exe` as they are from the directory it is given
-//! ([`layout::InstallerLayout::exes`]), so a signing step can run between
-//! the build and the pack, and another can sign the `.msi` after it.
+//! ([`layout::InstallerLayout::exes`]), so `nova-sign-windows` signs them
+//! between the build and the pack. With the Artifact Signing variables
+//! set ([`crate::authenticode`]), the pack itself signs and verifies the
+//! staged `WinSparkle.dll` between its pin check and `wix build`, and the
+//! `.msi` after it.
 //!
 //! It installs into `%LOCALAPPDATA%\Programs\Nova`, for the user alone
 //! and without administrator rights. Not `…\Programs\EV Nova`: that is

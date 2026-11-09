@@ -9,8 +9,8 @@
 //! their paths stripped, and checks the DLL against [`DLL_PIN`]: a DLL that
 //! isn't the pinned one stops the pack before `wix`. Both checks run
 //! `certutil`, which every Windows has. The DLL carries no Authenticode
-//! signature of its own; the signing phase signs the staged file after the
-//! pin check.
+//! signature of its own; a signed pack ([`crate::authenticode`]) signs the
+//! staged file in place after the pin check, before `wix build`.
 //!
 //! # Bumping the pin
 //!

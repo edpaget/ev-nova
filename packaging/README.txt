@@ -106,8 +106,9 @@ itself.
 Either way the game finds your EV Nova's `Nova Files` itself, or asks you
 for your EV Nova folder and remembers your pick.
 
-Neither is signed yet, so SmartScreen may warn about an unknown publisher
-when you open the installer or nova.exe. Choose "More info", then "Run
+The installer, nova.exe and nova-dump.exe are signed, with Edward Paget
+as the publisher. A new publisher's reputation builds over downloads, so
+for a while SmartScreen may still warn: choose "More info", then "Run
 anyway".
 
 Linux
