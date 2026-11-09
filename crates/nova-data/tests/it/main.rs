@@ -11,6 +11,7 @@ mod fonts;
 mod graphics;
 mod interface;
 mod new_game;
+mod new_game_ids;
 mod sample_galaxy;
 mod sound;
 mod stock;
