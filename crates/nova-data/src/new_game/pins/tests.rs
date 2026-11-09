@@ -571,3 +571,46 @@ fn the_civilian_traffic_lists_its_hulls_in_id_order_under_pins() {
     let held: Vec<_> = dude.ship_type.iter().flatten().map(|ship| ship.0).collect();
     assert_eq!(held, [128, 129], "the skiff, then the hauler");
 }
+
+#[test]
+fn the_civilian_traffic_keeps_the_16_lowest_ids_under_pins() {
+    let hull = |name: &str| {
+        format!(
+            "---\nname: {name}\nstyle: civilian\nrole: freighter\nmodel: hull\n\
+             size: {{length: 20, beam: 10, collision_radius: 10}}\n---\n"
+        )
+    };
+    // `zzz-last` sorts after every other hull but is pinned below them, so
+    // the first 16 by ID and the first 16 by bible id differ.
+    let mut source =
+        pinned(r#"{"ships": {"zzz-last": 128}}"#).with("ships/zzz-last.md", &hull("Last"));
+    for n in 1..=15 {
+        source = source.with(&format!("ships/h{n:02}.md"), &hull(&format!("H{n}")));
+    }
+    let game = loaded(&source);
+    let civilian: Vec<i16> = ["zzz-last", "skiff"]
+        .into_iter()
+        .map(str::to_owned)
+        .chain((1..=15).map(|n| format!("h{n:02}")))
+        .map(|ship| game.ids.ships[&id(&ship)])
+        .collect();
+    assert_eq!(civilian.len(), 17);
+    let mut lowest = civilian.clone();
+    lowest.sort_unstable();
+    lowest.truncate(16);
+    assert!(lowest.contains(&128), "the pinned hull is among them");
+    assert!(
+        !lowest.contains(&game.ids.ships[&id("skiff")]),
+        "the skiff, 16th in bible order, has the highest ID"
+    );
+    let dude = game
+        .data
+        .get::<crate::records::dude::Dude>(super::super::ids::CIVILIAN_DUDE)
+        .expect("present")
+        .expect("decoded")
+        .record
+        .clone();
+    let held: Vec<_> = dude.ship_type.iter().flatten().map(|ship| ship.0).collect();
+    assert_eq!(held, lowest, "the 16 lowest IDs, in ID order");
+    assert_eq!(dude.probability, [100 / 16; 16]);
+}

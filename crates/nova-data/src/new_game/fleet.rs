@@ -471,8 +471,9 @@ pub fn ship_anim(
     })
 }
 
-/// The civilian traffic `düde`: the first 16 civilian hulls of `ships` (no
-/// `base`, no `mods`), in ID order, at even odds; none without a civilian
+/// The civilian traffic `düde`: the civilian hulls of `ships` (no `base`,
+/// no `mods`) with the 16 lowest IDs, which pins can make differ from the
+/// first 16 by bible id, in ID order, at even odds; none without a civilian
 /// hull.
 #[must_use]
 pub fn civilian_traffic(galaxy: &Galaxy, ships: &BTreeMap<Id, i16>) -> Option<Entry<AnyRecord>> {
