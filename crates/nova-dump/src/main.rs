@@ -4,13 +4,14 @@ use std::io;
 use std::process::ExitCode;
 
 use nova_dump::app::run;
-use nova_dump::fs::{StdDataSource, StdOutputRoot};
+use nova_dump::fs::{StdDataSource, StdGameFolder, StdOutputRoot};
 
 fn main() -> ExitCode {
     ExitCode::from(run(
         std::env::args_os().skip(1),
         &StdDataSource,
         &StdOutputRoot,
+        &StdGameFolder,
         &mut io::stdout().lock(),
         &mut io::stderr().lock(),
     ))

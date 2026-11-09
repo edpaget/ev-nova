@@ -20,7 +20,7 @@ use nova_data::sound::decode_snd;
 use nova_data::store::GameData;
 use nova_data::{Record, ShipId, TYPES};
 use nova_dump::app::run;
-use nova_dump::fs::{StdDataSource, StdOutputRoot};
+use nova_dump::fs::{StdDataSource, StdGameFolder, StdOutputRoot};
 use nova_dump::names::{file_stem, type_component};
 use nova_rsrc::ResType;
 use tempfile::TempDir;
@@ -83,6 +83,7 @@ fn dump(dir: &Path, out: &Path) {
         args,
         &StdDataSource,
         &StdOutputRoot,
+        &StdGameFolder,
         &mut stdout,
         &mut stderr,
     );

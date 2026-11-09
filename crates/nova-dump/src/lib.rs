@@ -8,6 +8,7 @@
 //!
 //! ```text
 //! nova-dump <DATA_DIR> <OUT_DIR> [--plugins <DIR>] [--verbose|-v]
+//! nova-dump --pin-ids <GAME_DATA>
 //! nova-dump --help|-h
 //! ```
 //!
@@ -16,6 +17,15 @@
 //! created if it is missing and must otherwise be empty: the tool never
 //! deletes or replaces a file, so stale files from an earlier run cannot
 //! mix with a new one. `--` ends the options.
+//!
+//! `--pin-ids` is the other mode ([`pin`]): it writes the new game's ID
+//! table, `nova-ids.json`, in the `GAME_DATA` folder (the bible's
+//! format, not `Nova Files`), so every record keeps its Nova ID and each
+//! one added since gets one (`nova_data::new_game::pins`). It is the only
+//! writer of the table: loading the game reads it and never writes it.
+//! Run it whenever a record is added, and commit the table with the data.
+//! It refuses to replace a table the loader ignores (one that doesn't
+//! parse, or names an unknown kind), exiting 2, so no pin is lost.
 //!
 //! # Output
 //!
@@ -59,14 +69,16 @@
 //! # Exit codes
 //!
 //! - **0**: the dump finished with no failures (the last line of the
-//!   summary is `failures: 0`). `--help` also exits 0.
+//!   summary is `failures: 0`). `--help` also exits 0, as does
+//!   `--pin-ids` when the table was written or already up to date.
 //! - **1**: the dump finished, but failures are listed; everything else
 //!   was written.
 //! - **2**: nothing useful was done: a usage error, a data or plug-ins
 //!   directory that cannot be listed, a data directory with no game data
 //!   in it, an output directory that cannot be created or read or is not
-//!   empty, or a file that cannot be written. The reason goes to standard
-//!   error.
+//!   empty, or a file that cannot be written; for `--pin-ids`, a folder
+//!   that cannot be listed, a table that cannot be read or written, or one
+//!   the loader ignores. The reason goes to standard error.
 //!
 //! A data directory has no game data when not one file directly inside it
 //! is a resource-file candidate: typically the folder *containing*
@@ -78,9 +90,9 @@
 //!
 //! # Structure
 //!
-//! The core ([`app`], [`export`], [`report`] and the pure helpers) reaches
-//! the outside world only through the [`ports`]; [`fs`] holds the std
-//! adapters, which the binary wires in.
+//! The core ([`app`], [`export`], [`pin`], [`report`] and the pure
+//! helpers) reaches the outside world only through the [`ports`]; [`fs`]
+//! holds the std adapters, which the binary wires in.
 
 pub mod app;
 pub mod cli;
@@ -89,6 +101,7 @@ pub mod fs;
 pub mod hex;
 pub mod layouts;
 pub mod names;
+pub mod pin;
 pub mod png;
 pub mod ports;
 pub mod report;

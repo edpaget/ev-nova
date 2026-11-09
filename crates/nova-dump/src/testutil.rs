@@ -6,12 +6,13 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use nova_data::new_game::{IdTable, ListError};
 use nova_data::store::fixture::{DATA_DIR, FakeTree};
 use nova_data::store::{GameData, OpenError};
 use nova_rsrc::ResType;
 use nova_rsrc::fixture::ForkBuilder;
 
-use crate::ports::{DataSource, Sink};
+use crate::ports::{DataSource, GameFolder, Sink};
 
 /// `path`, written with `/` in a test, as the program displays it: rebuilt
 /// with [`Path::join`] one segment at a time, so it carries the platform's
@@ -161,4 +162,110 @@ mod tests {
         assert_eq!(native("/plugins/Bad Ship"), "/plugins/Bad Ship");
         assert_eq!(native("png/PICT/128.png"), "png/PICT/128.png");
     }
+}
+
+/// A new game's folder in memory: each folder it knows loads to its
+/// canned IDs, and its tables are kept by folder. Records each write.
+#[derive(Default)]
+pub struct FakeFolder {
+    loads: BTreeMap<PathBuf, IdTable>,
+    tables: RefCell<BTreeMap<PathBuf, Vec<u8>>>,
+    unreadable: bool,
+    unwritable: bool,
+    writes: RefCell<Vec<PathBuf>>,
+}
+
+impl FakeFolder {
+    /// A fake with the folder `dir`, loading to `ids`.
+    #[must_use]
+    pub fn with(mut self, dir: &Path, ids: IdTable) -> Self {
+        self.loads.insert(dir.to_path_buf(), ids);
+        self
+    }
+
+    /// `dir` holding the table `bytes`.
+    #[must_use]
+    pub fn table_of(self, dir: &Path, bytes: &[u8]) -> Self {
+        self.tables
+            .borrow_mut()
+            .insert(dir.to_path_buf(), bytes.to_vec());
+        self
+    }
+
+    /// A fake whose tables can't be read.
+    #[must_use]
+    pub fn unreadable(mut self) -> Self {
+        self.unreadable = true;
+        self
+    }
+
+    /// A fake whose tables can't be written.
+    #[must_use]
+    pub fn unwritable(mut self) -> Self {
+        self.unwritable = true;
+        self
+    }
+
+    /// The folders written to, in order.
+    pub fn writes(&self) -> Vec<PathBuf> {
+        self.writes.borrow().clone()
+    }
+
+    /// The table `dir` holds now.
+    pub fn held(&self, dir: &Path) -> Option<Vec<u8>> {
+        self.tables.borrow().get(dir).cloned()
+    }
+}
+
+impl GameFolder for FakeFolder {
+    fn load(&self, dir: &Path) -> Result<IdTable, ListError> {
+        self.loads.get(dir).cloned().ok_or_else(|| ListError {
+            path: dir.to_path_buf(),
+            source: io::Error::from(io::ErrorKind::NotFound),
+        })
+    }
+
+    fn table(&self, dir: &Path) -> io::Result<Option<Vec<u8>>> {
+        if self.unreadable {
+            return Err(io::Error::other("permission denied"));
+        }
+        Ok(self.tables.borrow().get(dir).cloned())
+    }
+
+    fn replace_table(&self, dir: &Path, bytes: &[u8]) -> io::Result<()> {
+        if self.unwritable {
+            return Err(io::Error::other("read-only volume"));
+        }
+        self.writes.borrow_mut().push(dir.to_path_buf());
+        self.tables
+            .borrow_mut()
+            .insert(dir.to_path_buf(), bytes.to_vec());
+        Ok(())
+    }
+}
+
+/// What every [`GameFolder`] does: `dir` is a new game's folder with no
+/// table, and `missing` a path with no folder.
+pub fn check_folder_contract(folder: &impl GameFolder, dir: &Path, missing: &Path) {
+    let error = folder
+        .load(missing)
+        .expect_err("a missing folder doesn't list");
+    assert_eq!(error.path, missing);
+    folder.load(dir).expect("the folder loads");
+    assert_eq!(folder.table(dir).expect("reads"), None, "no table yet");
+    folder.replace_table(dir, b"one").expect("writes");
+    assert_eq!(folder.table(dir).expect("reads"), Some(b"one".to_vec()));
+    folder.replace_table(dir, b"two").expect("replaces");
+    assert_eq!(
+        folder.table(dir).expect("reads"),
+        Some(b"two".to_vec()),
+        "replacing overwrites"
+    );
+}
+
+#[test]
+fn the_fake_folder_meets_the_contract() {
+    let dir = Path::new("/game");
+    let fake = FakeFolder::default().with(dir, IdTable::default());
+    check_folder_contract(&fake, dir, Path::new("/nowhere"));
 }
