@@ -63,6 +63,16 @@ impl<C: GalaxyCatalog + SystemCatalog> Navigator<C> {
     pub fn catalog(&self) -> &C {
         &self.catalog
     }
+
+    /// The navigator with its map's links drawn by `rules`
+    /// ([`GalaxyMap::with_rules`]).
+    #[must_use]
+    pub fn with_rules(self, rules: &nova_sim::Rulebook) -> Self {
+        Self {
+            map: self.map.with_rules(rules),
+            ..self
+        }
+    }
 }
 
 impl<C> Navigator<C> {
@@ -228,6 +238,10 @@ mod tests {
         fn galaxy(&self) -> Galaxy {
             Galaxy {
                 systems: vec![entry(128, "Alpha", 0), entry(129, "Beta", 600)],
+                gate_links: crate::galaxy::catalog::GateLinks {
+                    links: vec![(SystemId(128), SystemId(129))],
+                    ..Default::default()
+                },
                 ..Galaxy::default()
             }
         }
@@ -647,5 +661,21 @@ mod tests {
             [crate::Sound::Ui(crate::sound::UiSound::MapSystemFound)]
         );
         assert_eq!(navigator.take_sounds(), []);
+    }
+
+    #[test]
+    fn the_rules_reach_the_maps_links() {
+        use nova_sim::{RuleKey, RuleSource, Rulebook};
+        let laned = Rulebook::default().with_override(RuleKey::GateLanes, RuleSource::Bible);
+        let navigator = Navigator::new(FakeCatalog).with_rules(&laned);
+        let links: Vec<(SystemId, SystemId)> = navigator
+            .map()
+            .picture()
+            .expect("the viewer's")
+            .links
+            .iter()
+            .map(|link| (link.from, link.to))
+            .collect();
+        assert_eq!(links, [(SystemId(128), SystemId(129))]);
     }
 }

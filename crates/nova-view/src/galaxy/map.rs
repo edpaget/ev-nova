@@ -181,7 +181,10 @@
 //! session's drawing ([`GalaxyMap::show_drawing`], `nova_sim`'s
 //! [`galaxy_map`](nova_sim::galaxy_map) decides what `_DrawMap` draws),
 //! and on the viewer every system and link in the data
-//! ([`MapPicture::viewer`]). [`GalaxyMap::draw_marks`] draws it in
+//! ([`MapPicture::viewer`]): the Con links by `RuleKey::GateLanes`'
+//! engine reading, a fresh pilot's gate lanes by its other, each in its
+//! look with the closed lanes by `RuleKey::MapLaneStyle`'s other too
+//! ([`GalaxyMap::with_rules`], [`viewer_rules`](super::viewer_rules)). [`GalaxyMap::draw_marks`] draws it in
 //! `_DrawMap`'s order (@0xe568-0xf5d0), and the floating map draws it
 //! through the same method. Then the course and hypergate maps, and the
 //! viewer, bracket the selection and name the systems again, as
@@ -601,7 +604,7 @@ pub enum MapMode {
 /// The galaxy map.
 #[derive(Clone, Debug)]
 pub struct GalaxyMap {
-    mode: MapMode,
+    pub(super) mode: MapMode,
     pub(super) model: GalaxyModel,
     look: Look,
     selected: Option<SystemId>,
@@ -633,7 +636,7 @@ pub struct GalaxyMap {
     offered: Vec<SystemId>,
     /// What the map draws: the viewer's from the start, an in-flight
     /// map's once shown ([`GalaxyMap::show_drawing`]).
-    picture: Option<MapPicture>,
+    pub(super) picture: Option<MapPicture>,
     /// Its keys, as commands: the viewer's ([`contexts::GALAXY_VIEWER`])
     /// or an in-flight map's ([`contexts::COURSE_MAP`]). Shift-Tab is
     /// [`MapCommand::TabBack`], read with either Shift as `_MapFilter`

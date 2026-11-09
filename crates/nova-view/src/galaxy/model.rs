@@ -18,7 +18,10 @@
 //!   either system lists, drawn once and undirected, as the original's
 //!   `_DrawMap` (@0xe7a8) draws them, while the session's jumps follow its
 //!   `HyperlinkRule` (by the engine's, one way along each system's own
-//!   links); a link to a missing system is reported as a problem.
+//!   links); a link to a missing system is reported as a problem. The
+//!   viewer swaps them for a fresh pilot's gate lanes by
+//!   `RuleKey::GateLanes`' other reading
+//!   ([`GalaxyModel::apply_viewer_rules`]).
 //! - The nebulae are kept for drawing ([`GalaxyModel::nebulae`],
 //!   [`GalaxyModel::catalog_nebulae`]); how each is drawn, its rect and
 //!   its picture, is the [`nebulae`](super::nebulae) module's.
@@ -28,10 +31,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use nova_sim::Rulebook;
 use nova_sim::galaxy_map::GalaxyShown;
+use nova_sim::viewer_lanes::{ViewerLinks, viewer_links};
 use nova_sim::{Governments, StarMap, StarSystem, Vec2};
 
-use super::catalog::{Galaxy, GovtId, NebulaEntry, SystemEntry, SystemId};
+use super::catalog::{Galaxy, GateLinks, GovtId, NebulaEntry, SystemEntry, SystemId};
 use super::view::{Bounds, Transform};
 use crate::{Color, Point};
 
@@ -92,6 +97,12 @@ pub struct GalaxyModel {
     systems: Vec<MapSystem>,
     /// Every hyperlink once, as (lower ID, higher ID), sorted.
     links: Vec<(SystemId, SystemId)>,
+    /// The catalog's Con links, as `links` starts: what the viewer draws
+    /// by the gate lanes' engine reading.
+    con_links: Vec<(SystemId, SystemId)>,
+    /// A fresh pilot's gate lanes, what the viewer draws by their other
+    /// reading.
+    gate_links: GateLinks,
     /// Every government's map colour.
     govt_colors: BTreeMap<GovtId, u32>,
     /// Every government, as the simulation reads them.
@@ -115,6 +126,7 @@ impl GalaxyModel {
             govts,
             nebulae,
             mut problems,
+            gate_links,
         } = galaxy;
         systems.sort_by_key(|system| system.id);
         let known: BTreeSet<SystemId> = systems.iter().map(|system| system.id).collect();
@@ -161,7 +173,9 @@ impl GalaxyModel {
         Self {
             catalog: systems.clone(),
             systems,
+            con_links: links.clone(),
             links,
+            gate_links,
             govt_colors,
             govts,
             catalog_nebulae: nebulae.clone(),
@@ -240,6 +254,15 @@ impl GalaxyModel {
     #[must_use]
     pub fn links(&self) -> &[(SystemId, SystemId)] {
         &self.links
+    }
+
+    /// The links the viewer draws by `rules`, from the catalog's Con
+    /// links and gate lanes (`nova_sim::viewer_lanes::viewer_links`),
+    /// which become its [`links`](Self::links).
+    pub fn apply_viewer_rules(&mut self, rules: &Rulebook) -> ViewerLinks {
+        let drawn = viewer_links(&self.con_links, &self.gate_links, rules);
+        self.links.clone_from(&drawn.links);
+        drawn
     }
 
     /// Every government's map colour, a 24-bit `00RRGGBB` value: what the

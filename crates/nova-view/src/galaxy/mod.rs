@@ -33,6 +33,8 @@
 //!   opens it.
 //! - [`help`]: the viewer's help line and Enter label, naming the keys
 //!   the map reads.
+//! - [`viewer_rules`]: the viewer's links by the rules: the Con links,
+//!   or a fresh pilot's gate lanes in their looks.
 //! - [`lanes`]: the in-flight maps' gate lanes, each way of a link in its
 //!   stability's look, by `RuleKey::MapLaneStyle`'s other reading.
 
@@ -57,6 +59,7 @@ pub mod toggle;
 pub mod touch;
 pub mod update;
 pub mod view;
+pub mod viewer_rules;
 
 #[cfg(test)]
 mod testkit;
