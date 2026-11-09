@@ -111,17 +111,11 @@ impl BarScreen {
         }
     }
 
-    /// Activates `item` if it is a slot showing a scene: asks for that
-    /// scene. Anything else does nothing.
+    /// Activates `item` if it is a story slot: asks for its scene. Only a
+    /// slot showing a scene can be activated, as [`show_slots`] greys and
+    /// undraws the rest. Anything else does nothing.
     pub(super) fn activate_slot(&mut self, item: usize) {
-        let Some(index) = STORY_ITEMS.iter().position(|&slot| slot == item) else {
-            return;
-        };
-        if self
-            .story
-            .as_ref()
-            .is_some_and(|story| index < story.scenes.len())
-        {
+        if let Some(index) = STORY_ITEMS.iter().position(|&slot| slot == item) {
             self.asks.scene = Some(index);
         }
     }
