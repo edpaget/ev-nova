@@ -20,21 +20,21 @@
 //! | `nova-ids.json` | every record's ID ([`pins`], [`ids`]) | the Nova ID each record keeps, by kind and bible id (a blockade's by its `take_point` mission's id); written only by `nova-dump --pin-ids` |
 //! | `factions/` | `gövt` | `color` and `ship_color` from `color`, as `00RRGGBB`; one that keeps the law (not `lawless`) `SmugPenalty` [`kits::LAW_SMUGGLE_PENALTY`], `ScanFine` [`kits::LAW_SCAN_FINE`] and `ScanMask` [`kits::LAWLESS_KIT_SCAN`], placeholders, so its scans find a lawless kit; a lawless one none |
 //! | `systems/` | `sÿst` | `x_pos`/`y_pos` from `map`; `govt` from `government`; `nav_def` its stellars, then its gates, each in ID order; the civilian traffic; no `con` links |
-//! | `stellars/` | `spöb` | `x_pos`/`y_pos` from `position`; `govt` from `owner`; `flags` from `services` and `kind` ([`records::stellar_flags`]); no `hyper_link`s; a law-keeping owner's `TechLevel` [`kits::YARD_TECH_LEGAL`] and `MinStatus` 0, a lawless owner's or an unowned one's `TechLevel` [`kits::YARD_TECH_LAWLESS`] and `MinStatus` [`records::ANY_RECORD`] |
+//! | `stellars/` | `spöb` | `x_pos`/`y_pos` from `position`; `govt` from `owner`; `flags` from `services` and `kind` ([`records::stellar_flags`]); no `hyper_link`s; a law-keeping owner's `TechLevel` [`kits::YARD_TECH_LEGAL`] and `MinStatus` 0, a lawless owner's or an unowned one's `TechLevel` [`kits::YARD_TECH_LAWLESS`] and `MinStatus` [`records::ANY_RECORD`]; `SpecialTech` the tech numbers of the outfits sold there, ascending, `-1` for an unused slot ([`yards`]) |
 //! | `goods/`, the standard ones | `STR#` 4000, 4001, 4003 and 4004 ([`goods`]) | the first six goods by the ID table, each in its slot: the name, lower-cased, with a `:` (placeholders), and its `price` as text; six entries each, empty for an unused slot; none when no good takes a slot |
 //! | `goods/`, the rest | `jünk` ([`goods`]) | named for the good: `BasePrice` its `price`, `LCName` its name lower-cased, `Abbrev` its name, blank `BuyOn` and `SellOn`, no flags and no `ScanMask` |
 //! | a stellar's `prices` | `spöb` `Flags`' price nibbles, and each `jünk`'s `SoldAt`/`BoughtAt` ([`goods`]) | a standard good's level as its slot's low, medium or high bit ([`crate::records::stellar::flags::price_bits`]); a special good's `low` stellars as `SoldAt` and `high` ones as `BoughtAt`, in `spöb` ID order; only at a stellar with `trade` |
 //! | a stellar's body | `dësc` | the body, trimmed, at its `spöb`'s ID: the engine reads a stellar's landing text from the `dësc` with its `spöb`'s ID; an empty body has none |
 //! | a system's `jump_points` | hypergate `spöb` ([`gates`]) | unpinned, numbered after the unpinned stellars; `x_pos`/`y_pos` from `position`; `govt` from `owner`; `flags` `CAN_LAND`; `flags2` the hypergate bit; `hyper_link[0]` the partner point's gate; named for the partner's system; a random exit heading; `MinStatus` [`records::ANY_RECORD`] |
-//! | `ships/`, hulls and variants | `shïp` and `shän` ([`fleet`]) | through the `base` chain: `speed`, `shields`, `hull` and `cargo` as `Speed`, `Shield`, `Armor` and `Holds`; placeholder acceleration, turn rate, fuel and crew; its kits as `DefaultItems`; its chain's hardpoints as `MaxGun` and `MaxTur`; its hardpoints' weapon outfits as stock weapons; the kit `fits` bits of its `role` as `Contribute`; the `shän` `BaseXSize`/`BaseYSize` from `size` and its hardpoints' and kits' as exit points |
+//! | `ships/`, hulls and variants | `shïp` and `shän` ([`fleet`]) | through the `base` chain: `speed`, `shields`, `hull` and `cargo` as `Speed`, `Shield`, `Armor` and `Holds`; placeholder acceleration, turn rate, fuel and crew; its kits as `DefaultItems`; its chain's hardpoints as `MaxGun` and `MaxTur`; its hardpoints' weapon outfits as stock weapons; the kit `fits` bits of its `role` and its chain hardpoints' mount bits ([`kits::FitBits::mount_bit`]) as `Contribute`; the `shän` `BaseXSize`/`BaseYSize` from `size` and its hardpoints' and kits' as exit points |
 //! | (placeholder) | `düde` 128 ([`fleet`]) | "Civilian traffic": every civilian hull (no `base`, no `mods`) at even odds, wimpy traders of no government |
 //! | a `take_point`'s `held_by` | a guard `düde` ([`blockades`]) | "<faction> guards", numbered after 128 in faction id order, unpinned: the holder's ships (those whose livery names it) at even odds, of its `gövt`, flown as placeholder warships ([`blockades::GUARD_AI`]) |
 //! | a `take_point` objective | a hidden blockade `mïsn` ([`blockades`]) | its point's system as `ShipSyst`, its gate's nav slot as `ShipStart`, the holder's guards as `ShipDude`, [`blockades::BLOCKADE_SHIPS`] of them (a placeholder), chase off as `ShipGoal`, attacking the player; never offered, never completed by a landing; the store's objective names it |
 //! | (placeholder) | `ïntf` 128 ([`records::default_interface`]) | "Default status bar": a radar over the shield, armour and fuel gauges and the nav, weapon, target and cargo readouts, no background picture |
 //! | (placeholder) | the dialogs ([`interface::default_dialogs`]) | a `DLOG` and its items, titled "Default spaceport" and so on, for each dialog the view has no built-in layout for: the spaceport and every screen it opens, the text, note and question dialogs, the player info and the preferences; each fits the 640 x 480 view, with no art; the app reads them when the folder has no interface file (`nova::interface`) |
-//! | `outfits/` | `oütf` ([`outfits`]) | its `name`, and `Cost` from `price`; massless, with no `Max` and never for sale (`TechLevel` 0x7fff); a weapon (`damage` above 0, not a `bay`) a `ModType` 1 naming its `wëap`, `Flags` gun or turret; any other doing nothing; `model` isn't read |
+//! | `outfits/` | `oütf` ([`outfits`]) | its `name`, and `Cost` from `price`; massless, with no `Max`; its `mount`'s bit as `Require`, with `Flags` `HIDE_UNLESS_REQUIRED`, so it is listed only for a ship with a hardpoint of that mount; sold at the stellars its `sold_at` names, as a `TechLevel` from [`yards::SOLD_TECH_FIRST`] that only their `SpecialTech` slots hold and `BuyRandom` 100 ([`yards`]); with no `sold_at`, never for sale (`TechLevel` 0x7fff, `BuyRandom` 0); a weapon (`damage` above 0, not a `bay`) a `ModType` 1 naming its `wëap`, `Flags` gun or turret; any other doing nothing; `model` isn't read |
 //! | a weapon outfit | `wëap` ([`outfits`]) | pinned by, and numbered in, outfit id order; `damage`, `range` and `reload` as damage, life and `Reload` at a placeholder speed; unguided, turreted for a turret; its mount's `ExitType`; drawn as the placeholder box, with no sound or explosion |
-//! | `mods/` | `oütf` ([`kits`]) | unpinned, numbered after the unpinned outfits; `Cost` from `price`; `Max` 1, `BuyRandom` 100, hidden unless it fits; its effects in the four `ModType` slots; its `fits` as a `Require` bit; `fitted_at` as `TechLevel` and, lawless, `ScanMask`; its hardpoints' outfits given by `OnPurchase` and taken back by `OnSell` |
+//! | `mods/` | `oütf` ([`kits`]) | unpinned, numbered after the unpinned outfits; `Cost` from `price`; `Max` 1, `BuyRandom` 100, hidden unless it fits; its effects in the four `ModType` slots; its `fits` as a `Require` bit; its hardpoints' mount bits as `Contribute`; `fitted_at` as `TechLevel` and, lawless, `ScanMask`; its hardpoints' outfits given by `OnPurchase` and taken back by `OnSell` |
 //! | a ship's chain hardpoints, a kit's hardpoints and `attention` | the store's fittings ([`GameData::fittings`], [`fleet`], [`kits`]) | each `shïp`'s own exit spots and each kit `oütf`'s, and each kit's attention, which `nova_sim::dock_scan` reads |
 //! | `starts/` | `chär` ([`fleet`]) | its hull, its system in `system[0]`, its cash, and a placeholder date |
 //! | a hull's `model`, `livery` and `size` | a ship stand-in ([`looks`]) | its model seen from above, painted by its livery, in pixels at [`fleet::PX_PER_METRE`]; else its size box in its livery's primary, or bare |
@@ -96,7 +96,13 @@
 //!   left out.
 //! - A kit needing more than four `ModType` slots keeps the first four;
 //!   one whose hardpoint names an outfit that isn't there doesn't give
-//!   it; one past the 64th distinct `fits` set is left out ([`kits`]).
+//!   it; one past the 60th distinct `fits` set is left out ([`kits`]).
+//! - An outfit's `sold_at` stellar that isn't in `stellars/`, or has no
+//!   `outfitter` service, doesn't sell it. A stellar selling from more
+//!   than eight distinct sets of yards, more than its eight `SpecialTech`
+//!   slots, keeps the eight lowest numbers, and the outfits of the rest
+//!   aren't sold there; they still are at their other yards. An outfit
+//!   past the last tech number isn't sold ([`yards`]).
 //! - A weapon past the last `wëap` ID does nothing ([`outfits`]).
 //! - A record past its kind's ID range is left out.
 //! - The ID table, `nova-ids.json` ([`pins`]): one that doesn't parse or
@@ -144,8 +150,6 @@
 //!   noticed than 1 waits for the bible's law numbers.
 //! - A launcher's homing and ammunition, and `bay` hardpoints and outfits
 //!   as fighter bays: a launcher fires unguided, and a bay does nothing.
-//! - Loose outfits for sale: no yard sells one until the bible says which
-//!   yards sell which weapons.
 //! - Variants in traffic: the civilian traffic flies hulls alone.
 //! - A livery's `decals` aren't drawn, nor are mounted outfits' models.
 //! - Traffic: the bible authors none, so the civilian `düde` and each
@@ -189,6 +193,7 @@ pub mod pins;
 pub mod records;
 #[cfg(test)]
 mod tests;
+pub mod yards;
 
 use std::io;
 use std::path::{Path, PathBuf};

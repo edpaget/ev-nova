@@ -2,7 +2,8 @@
 //! per kind over the neutral records of [`super::records`]: factions,
 //! systems and stellars here, the jump points' gates in [`super::gates`],
 //! ships, traffic and starts in [`super::fleet`], outfits and weapons in
-//! [`super::outfits`], mod kits in [`super::kits`], the `take_point`
+//! [`super::outfits`], mod kits in [`super::kits`], which yards sell what
+//! in [`super::yards`], the `take_point`
 //! missions' guards and blockades in [`super::blockades`], and goods and
 //! a stellar's prices in [`super::goods`]. The module docs of
 //! [`super`] list what maps to what, and each problem.
@@ -28,6 +29,7 @@ use super::records::{
     ANY_RECORD, clamp_i16, default_interface, neutral_govt, neutral_stellar, neutral_system, rgb,
     stellar_flags, text_desc,
 };
+use super::yards::{self, SPECIAL_TECH_SLOTS, Sales};
 use super::{blockades, gates, goods};
 use crate::decode::Entry;
 use crate::records::govt::Govt;
@@ -71,6 +73,7 @@ pub fn map(galaxy: &Galaxy) -> Mapped {
 pub fn map_pinned(galaxy: &Galaxy, pins: &IdTable) -> Mapped {
     let mut problems = Vec::new();
     let (ids, fit) = number_all(galaxy, pins, &mut problems);
+    let sales = yards::sales(galaxy, &ids, &mut problems);
     let traffic = fleet::civilian_traffic(galaxy, &ids.ships);
     let mut records = Vec::new();
     for (id, &nova) in &ids.factions {
@@ -88,7 +91,7 @@ pub fn map_pinned(galaxy: &Galaxy, pins: &IdTable) -> Mapped {
     }
     for (id, &nova) in &ids.stellars {
         let doc = &galaxy.stellars[id];
-        records.push(stellar(galaxy, &ids, nova, doc, &mut problems));
+        records.push(stellar(galaxy, &ids, &sales, nova, doc, &mut problems));
         let body = doc.body.trim();
         if !body.is_empty() {
             records.push(Entry {
@@ -113,7 +116,7 @@ pub fn map_pinned(galaxy: &Galaxy, pins: &IdTable) -> Mapped {
             ));
         }
     }
-    let fittings = fittings(galaxy, &ids, &fit, &mut records, &mut problems);
+    let fittings = fittings(galaxy, &ids, &fit, &sales, &mut records, &mut problems);
     records.extend(traffic);
     let guards = blockades::number_guards(galaxy, &ids);
     for (faction, &nova) in &guards {
@@ -206,12 +209,13 @@ fn number_all(galaxy: &Galaxy, pins: &IdTable, problems: &mut Vec<Problem>) -> (
 }
 
 /// Pushes the `shïp`s and `shän`s of `ids`' ships, the `oütf`s and
-/// `wëap`s of its outfits and the `oütf`s of its kits onto `records`, and
-/// gives their fittings.
+/// `wëap`s of its outfits, sold as `sales` says, and the `oütf`s of its
+/// kits onto `records`, and gives their fittings.
 fn fittings(
     galaxy: &Galaxy,
     ids: &IdTable,
     fit: &FitBits,
+    sales: &Sales,
     records: &mut Vec<Entry<AnyRecord>>,
     problems: &mut Vec<Problem>,
 ) -> Fittings {
@@ -227,7 +231,8 @@ fn fittings(
     for (id, &nova) in &ids.outfits {
         let doc = &galaxy.outfits[id];
         let weapon = ids.weapons.get(id).copied();
-        records.push(outfits::outfit(nova, doc, weapon));
+        let sold = sales.outfits.get(id).copied();
+        records.push(outfits::outfit(nova, doc, weapon, sold));
         records.extend(weapon.map(|weapon| outfits::weapon(weapon, doc)));
     }
     for (id, &nova) in &ids.kits {
@@ -348,10 +353,13 @@ fn system(
 /// its standard goods' price levels ([`goods::price_flags`]): a law-keeping owner's lists legal
 /// kits ([`YARD_TECH_LEGAL`]) and clears by record (`MinStatus` 0); a
 /// lawless owner's, or one with none, lists every kit
-/// ([`YARD_TECH_LAWLESS`]) and clears any record ([`ANY_RECORD`]).
+/// ([`YARD_TECH_LAWLESS`]) and clears any record ([`ANY_RECORD`]). Its
+/// `SpecialTech` slots are the tech numbers of what `sales` sells there
+/// ([`yards`]), none for a yard selling nothing.
 fn stellar(
     galaxy: &Galaxy,
     ids: &IdTable,
+    sales: &Sales,
     nova: i16,
     doc: &Doc<BibleStellar>,
     problems: &mut Vec<Problem>,
@@ -363,9 +371,16 @@ fn stellar(
         .and_then(|owner| galaxy.factions.get(owner))
         .is_some_and(|owner| !owner.data.lawless)
         && govt.is_some();
+    let special = sales
+        .slots
+        .get(&nova)
+        .copied()
+        .unwrap_or([-1; SPECIAL_TECH_SLOTS]);
     let stellar = Stellar {
         x_pos,
         y_pos,
+        special_tech1_3: [special[0], special[1], special[2]],
+        special_tech4_8: [special[3], special[4], special[5], special[6], special[7]],
         flags: Flags32(
             stellar_flags(data.kind, &data.services)
                 | goods::price_flags(galaxy, ids, doc, problems),

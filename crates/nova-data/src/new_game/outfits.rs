@@ -14,6 +14,15 @@
 //! ([`super::kits`]). A mission's grant and a kit's `OnPurchase` read no
 //! `Require`, so they give it whatever the ship's mounts.
 //!
+//! **Where it is sold.** An outfit whose `sold_at` names a yard takes that
+//! yard set's tech number as `TechLevel` and `BuyRandom` 100, always
+//! offered, and each yard it names holds the number in a `SpecialTech`
+//! slot ([`super::yards`]), so it is listed there and at no other yard.
+//! One sold nowhere keeps the original's "never listed" `TechLevel`
+//! ([`OUTFIT_TECH_NEVER`](super::records::OUTFIT_TECH_NEVER)) and
+//! `BuyRandom` 0, so no outfitter lists it under either reading of the
+//! tech level rule.
+//!
 //! **Weapons** ([`is_weapon`]). An outfit with `damage` above 0 and a
 //! `fixed`, `turret` or `launcher` mount is a weapon: it is numbered
 //! again within [`WEAPON_IDS`] ([`number_weapons`]), in outfit id order
@@ -52,7 +61,7 @@ use nova_galaxy_format::id::Id;
 use nova_galaxy_format::load::{Doc, Galaxy, Problem};
 
 use super::ids::{WEAPON_IDS, after_pins};
-use super::kits::{FitBits, HIDE_UNLESS_REQUIRED};
+use super::kits::{ALWAYS, FitBits, HIDE_UNLESS_REQUIRED};
 use super::map::number;
 use super::records::{neutral_outfit, neutral_weapon};
 use crate::decode::Entry;
@@ -150,15 +159,25 @@ fn at_least_one(value: f64) -> i16 {
 }
 
 /// The `oütf` of the outfit `doc`, numbered `nova`, a weapon of the `wëap`
-/// `weapon` when it is one (see the module docs).
+/// `weapon` when it is one, sold at the yards holding the tech number
+/// `sold` when it is sold (see the module docs).
 #[must_use]
-pub fn outfit(nova: i16, doc: &Doc<BibleOutfit>, weapon: Option<i16>) -> Entry<AnyRecord> {
+pub fn outfit(
+    nova: i16,
+    doc: &Doc<BibleOutfit>,
+    weapon: Option<i16>,
+    sold: Option<i16>,
+) -> Entry<AnyRecord> {
     let mut outfit = Outfit {
         cost: i32::try_from(doc.data.price).unwrap_or(i32::MAX),
         flags: Flags16(HIDE_UNLESS_REQUIRED),
         require: Flags64(FitBits::mount_bit(doc.data.mount)),
         ..neutral_outfit()
     };
+    if let Some(sold) = sold {
+        outfit.tech_level = sold;
+        outfit.buy_random = ALWAYS;
+    }
     if let Some(weapon) = weapon {
         outfit.mod_type = MOD_WEAPON;
         outfit.mod_val = weapon;
