@@ -20,6 +20,10 @@
 //!   lists the fixture's kit; no hull is for sale in the fixture yet, so
 //!   the shipyard opens over a variant of it with the cutter for sale.
 //!   The Mission BBS, with no mission offered, says so and closes back.
+//! - **Landscape.** The fixture has no landscape `PICT`, so the landscape
+//!   item draws the stellar's stand-in from the store: Hearth Dock's disc
+//!   in the guild's colour, or, over a variant whose Hearth Dock has a
+//!   model's outline, that outline and no disc.
 //! - **Recharge.** A pilot short of fuel clicks Recharge: the tank fills,
 //!   at `nova_sim::FUEL_PRICE_PER_UNIT` a unit.
 //! - **Missions.** In port, I opens the missions log on the dock job.
@@ -37,7 +41,7 @@ use nova::startup::{DataSource, DiskData, NewGameOpened};
 use nova_data::new_game::fixture::folder;
 use nova_data::new_game::kits::YARD_TECH_LEGAL;
 use nova_data::records::ship::Ship;
-use nova_data::{AnyRecord, Entry, GameData, ShipId};
+use nova_data::{AnyRecord, Entry, GameData, ShipId, StandIn, StandInOf};
 use nova_render::wgpu::GlyphonMetrics;
 use nova_render::{Batch, FontFaces, Frame};
 use nova_sim::fixture::MemoryPilots;
@@ -48,11 +52,13 @@ use nova_sim::{
     News, OfferPrompt, Pilot, PilotStore, RuleSource, Rulebook, Service, ShipFacts, ShipFields,
     ShipRow, ShipSpecs, Shipyard,
 };
-use nova_view::geometry::Point;
+use nova_view::color::Color;
+use nova_view::draw::{DrawCommand, DrawList};
+use nova_view::geometry::{Bounds, Point};
 use nova_view::input::{Input, Key};
 use nova_view::menu::MenuChoice;
 use nova_view::spaceport::bar::LEAVE_ITEM as BAR_LEAVE_ITEM;
-use nova_view::spaceport::layout::{LEAVE_ITEM, RECHARGE_ITEM, service_item};
+use nova_view::spaceport::layout::{LANDSCAPE_ITEM, LEAVE_ITEM, RECHARGE_ITEM, service_item};
 use nova_view::spaceport::missions::{
     COMPUTER_DIALOG, INFO_DIALOG, MissionComputerScreen, MissionInfoScreen,
 };
@@ -421,6 +427,117 @@ fn the_mission_bbs_says_there_is_nothing_here_and_closes_back() {
     game.frame();
     assert_eq!(open_over(&game), "nothing", "closed");
     assert_eq!(game.showing(), Showing::Spaceport);
+}
+
+/// The guild's colour, Hearth Dock's look's.
+const GUILD: Color = Color::rgba(0xc0, 0x80, 0x40, 255);
+
+/// The spaceport's landscape item, and every triangle it draws: its
+/// corners and its colour.
+fn landscape_triangles(game: &Harness) -> (Bounds, Vec<([Point; 3], Color)>) {
+    let port = spaceport(game);
+    let area = port
+        .dialog()
+        .expect("laid out")
+        .item_bounds(LANDSCAPE_ITEM)
+        .expect("the landscape item");
+    let mut list = DrawList::new();
+    port.draw(&mut list);
+    let triangles = list
+        .iter()
+        .filter_map(|command| match command {
+            DrawCommand::Triangle { corners, color } => Some((*corners, *color)),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !list.iter().any(|command| matches!(
+            command,
+            DrawCommand::StretchedPicture { top_left, .. } if *top_left == area.min
+        )),
+        "no picture over the landscape"
+    );
+    (area, triangles)
+}
+
+/// Hearth Dock is a station with no model, so its stand-in, a disc in the
+/// guild's colour, is drawn in the landscape item: a fan of triangles
+/// round the item's centre, three or more sharing it.
+#[test]
+fn hearth_dock_s_landscape_is_its_disc_stand_in() {
+    let mut game = at_hearth_dock();
+    game.frame();
+    let (area, triangles) = landscape_triangles(&game);
+    let disc: Vec<_> = triangles
+        .iter()
+        .filter(|(_, color)| *color == GUILD)
+        .collect();
+    assert!(!disc.is_empty(), "a disc in the guild's colour");
+    assert!(
+        disc.iter()
+            .all(|(corners, _)| corners.iter().all(|&p| area.contains(p))),
+        "inside {area:?}: {disc:?}"
+    );
+    let centre = area.center();
+    let sharing = disc
+        .iter()
+        .filter(|(corners, _)| corners.contains(&centre))
+        .count();
+    assert!(sharing >= 3, "fanned from the centre: {disc:?}");
+}
+
+/// The fixture, opened as `main` opens it, with Hearth Dock's stand-in a
+/// model's outline: two triangles in `MODEL`, a colour nothing else is.
+/// No stellar of the fixture has a model that reads; that a model becomes
+/// such an outline is nova-data's (`nova_data::new_game::looks`).
+fn hearth_dock_modelled() -> Rc<GameData> {
+    let NewGameOpened::Loaded(loaded) = DiskData.open_new_game(&folder()) else {
+        panic!("the fixture opens");
+    };
+    let dock = nova_of(&fixture().ids.stellars, "hearth-dock");
+    let triangle = |corners| nova_data::OutlineTriangle {
+        corners,
+        color: MODEL_RGB,
+    };
+    let outline = nova_data::Outline {
+        triangles: vec![
+            triangle([[0.0, 30.0], [20.0, -10.0], [-20.0, -10.0]]),
+            triangle([[0.0, -10.0], [10.0, -20.0], [-10.0, -20.0]]),
+        ],
+    };
+    Rc::new(loaded.data.with_stand_in(
+        StandInOf::Stellar(nova_data::StellarId(dock)),
+        StandIn::Outline(outline),
+    ))
+}
+
+const MODEL_RGB: [u8; 3] = [0x12, 0xab, 0x34];
+const MODEL: Color = Color::rgba(0x12, 0xab, 0x34, 255);
+
+/// A stellar whose stand-in is its model's outline draws that outline in
+/// the landscape item, read from the store through the app's own catalog,
+/// and no disc.
+#[test]
+fn a_modelled_stellar_s_landscape_is_its_model_s_outline() {
+    let (mut game, _store) = resumed_over(&hearth_dock_modelled(), on_the_dock_job);
+    land_at(&mut game, "hearth-dock");
+    game.frame();
+    let (area, triangles) = landscape_triangles(&game);
+    let model: Vec<_> = triangles
+        .iter()
+        .filter(|(_, color)| *color == MODEL)
+        .collect();
+    assert_eq!(model.len(), 2, "the outline's two triangles: {triangles:?}");
+    assert!(
+        model
+            .iter()
+            .all(|(corners, _)| corners.iter().all(|&p| area.contains(p))),
+        "inside {area:?}: {model:?}"
+    );
+    assert!(
+        !triangles.iter().any(|(_, color)| *color == GUILD),
+        "no disc: {triangles:?}"
+    );
 }
 
 #[test]
