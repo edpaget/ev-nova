@@ -115,8 +115,10 @@ jobs:
         env:
           NOVA_LINUX_VALIDATORS: ${{ runner.os == 'Linux' && '1' || '' }}
 
-  # infra/github's structural checks: tofu fmt, validate and the
-  # mocked-provider tests. It gets no secrets, no GITHUB_TOKEN and no OP_*
+  # The infra/ roots' structural checks (infra/github and
+  # infra/windows-signing): tofu fmt, validate, the mocked-provider tests and
+  # the encryption guard. It gets no secrets, no Azure credential, no
+  # GITHUB_TOKEN and no OP_*
   # variables, and needs the network only for `tofu init` to download the
   # pinned providers. The dummy state passphrase lives in the infra-check
   # task itself; no state exists here, so it protects nothing. Nothing
@@ -184,6 +186,11 @@ jobs:
     needs: [ci, build-id]
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     uses: ./.github/workflows/build.yml
+    # build.yml's Windows leg signs in to Azure with OIDC on main; a called
+    # workflow can only narrow what its caller grants.
+    permissions:
+      contents: read
+      id-token: write
     with:
       build-id: ${{ needs.build-id.outputs.id }}
       channel: ${{ inputs.channel || 'nightly' }}

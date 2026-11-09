@@ -87,6 +87,25 @@
 //!     [`RuleKey::ReusedSlotScoop`](crate::RuleKey::ReusedSlotScoop): its
 //!     berth's by the engine, its class's by the other reading.
 //!
+//! # Escape pods
+//!
+//! `_boxLayer` holds the 32 escape pods after the boxes (`_InitSprites`
+//! @0x1fc71-0x1fd57), so the scoop branch sees a pod as it sees a box.
+//! Each pod's sprite is cloned from the escape pod's master
+//! (`_SWCloneSprite` @0xa9462 copies its +0xd0), which `_SWCreateSprite`
+//! zeroed (@0xa8d4c), and nothing writes a pod's +0xd0 after: so the
+//! branch takes a pod for box slot 0 (`cmpl $0x3f` @0x370e1). While box
+//! slot 0's scoopable byte holds (@0x370ea-0x370ff), whether its box is
+//! live or long gone ([`SlotBytes`]), and the ship's mask touches the
+//! *pod's* (@0x3710c, [`Scooping::touches_pod`]), box slot 0's life
+//! becomes −1 (@0x3711c), the pod is hidden (@0x3712e) and slot 0's
+//! contents are hauled as a box's would be ([`pod_scoop`]). The handler
+//! never reads box 0's life or the pod's `_podData`. A hidden pod is
+//! skipped by every later collision. No sound and no message. The engine
+//! follows it under
+//! [`RuleKey::PodScoopsBoxZero`](crate::RuleKey::PodScoopsBoxZero)'s
+//! engine reading, the default; by the other, pods are never scooped.
+//!
 //! The murk (`_HandleSpriteMurkiness` @0x2e15e-0x2e181) is the view's:
 //! `nova_view::flight::murk` mixes each box toward the background
 //! (rdm:phase/play-feel-4/phase-17-murk-other-sprites).
@@ -94,9 +113,10 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use crate::cargo_box::{CargoBox, CargoBoxes};
+use crate::cargo_box::{CargoBox, CargoBoxes, SlotBytes};
 use crate::catalog::outfit_mods;
 use crate::catalog::{BOX_GRAPHICS, JunkId, OutfitId, OutfitRecord};
+use crate::escape_pod::{EscapePods, Pod};
 use crate::geometry::Vec2;
 use crate::ship_layer::{ShipLayer, disabled};
 use crate::sprite_mask::{MaskWalk, PlacedMask, RleSheet};
@@ -282,6 +302,36 @@ impl Scooping<'_> {
         })
     }
 
+    /// Whether it touches `pod`, drawn from shän 895's sheet `sheet`,
+    /// where it was read: `_SWRLECollision(ship, pod)` (@0x3710c) over its
+    /// mask and the pod's, placed by the standard rule
+    /// ([`Placement::Standard`]) at the pod's whole-pixel place from the
+    /// player and its frame, as `_HandleEscapePods` places it
+    /// (@0x39ef0-0x39f7d), the ship's first; else, where either mask can't
+    /// be laid out, its disc against the pod's rect, centred on the pod
+    /// ([`touches`]), or against its point with no sheet.
+    #[must_use]
+    pub fn touches_pod(&self, pod: &Pod, sheet: Option<&Rc<RleSheet>>) -> bool {
+        let masks = self.mask.zip(sheet).map(|(ship, sheet)| {
+            let offset = pod.position - self.camera;
+            let held = PlacedMask {
+                sheet: Rc::clone(sheet),
+                frame: pod.frame,
+                rect: Placement::Standard.rect(offset, (sheet.width, sheet.height)),
+            };
+            ship.touches(&held, self.walk)
+        });
+        masks.flatten().unwrap_or_else(|| {
+            // Sprite sizes, far inside f32's exact range.
+            #[allow(clippy::cast_precision_loss)]
+            let half = sheet.map_or(Vec2::ZERO, |sheet| {
+                Vec2::new(sheet.width as f32 * 0.5, sheet.height as f32 * 0.5)
+            });
+            // [`touches`] takes the rect's bottom right.
+            touches(self.at, self.radius, pod.position + half, half)
+        })
+    }
+
     /// Whether its mask touches `cargo_box`'s, none where either can't be
     /// laid out.
     fn mask_touches(&self, cargo_box: &CargoBox) -> Option<bool> {
@@ -312,6 +362,57 @@ pub fn npc_in_ship_layer(npc: &Npc) -> bool {
         disabled(npc.condition, npc.defends.is_some()),
         npc.escorts_player(),
     ) == ShipLayer::Ships
+}
+
+/// What a scooping ship `by` does to a shown escape pod it touches, box
+/// slot 0's last bytes `slot_zero` (see the module docs' pods): nothing
+/// unless the slot's scoopable byte holds (@0x370fb); else the pod is
+/// hidden, box slot 0 is taken and what it hauls is slot 0's contents'
+/// ([`haul`], @0x3713a-0x37188), which may be nothing.
+#[must_use]
+pub fn pod_scoop(slot_zero: SlotBytes, by: Scooper) -> Option<Haul> {
+    slot_zero.scoopable.then(|| haul(slot_zero.contents, by))
+}
+
+/// Takes the first shown pod of `pods`, in slot order, that `scooping`
+/// touches ([`Scooping::touches_pod`], the pods drawn from shän 895's
+/// `sheet`), for box slot 0 of `boxes`, as `by` scoops it
+/// ([`pod_scoop`]): the pod is hidden, box slot 0 is taken
+/// ([`CargoBoxes::take_slot_zero`]), and what it hauls is given. None when
+/// no shown pod touches, or slot 0 isn't scoopable, which no later pod in
+/// the pass changes.
+pub fn take_touching_pod(
+    boxes: &mut CargoBoxes,
+    pods: &mut EscapePods,
+    sheet: Option<&Rc<RleSheet>>,
+    scooping: &Scooping,
+    by: Scooper,
+) -> Option<Haul> {
+    let index = pods
+        .pods()
+        .iter()
+        .position(|pod| pod.shown && scooping.touches_pod(pod, sheet))?;
+    let haul = pod_scoop(boxes.slot_zero(), by)?;
+    pods.hide(index);
+    boxes.take_slot_zero();
+    Some(haul)
+}
+
+/// The NPC side of the scoop branch over the pods: a `scooping` NPC takes
+/// every shown pod of `pods` it touches for box slot 0
+/// ([`take_touching_pod`]), each commodity adding a ton of it to `hold`.
+pub fn npc_scoop_pods(
+    boxes: &mut CargoBoxes,
+    pods: &mut EscapePods,
+    sheet: Option<&Rc<RleSheet>>,
+    scooping: &Scooping,
+    hold: &mut NpcHold,
+) {
+    while let Some(haul) = take_touching_pod(boxes, pods, sheet, scooping, Scooper::Npc) {
+        if let Haul::Commodity(commodity) = haul {
+            hold.add(commodity, 1);
+        }
+    }
 }
 
 /// The NPC side of the scoop branch: a `scooping` NPC takes every
@@ -670,6 +771,242 @@ mod tests {
             Some(&ship_mask((16, 16))),
             Some(&box_sheets(|x, y| x < 4 && y < 4))
         ));
+    }
+
+    fn slot(scoopable: bool, contents: Option<i16>) -> SlotBytes {
+        SlotBytes {
+            scoopable,
+            contents,
+        }
+    }
+
+    #[test]
+    fn a_pod_takes_box_slot_0_only_while_its_scoopable_byte_holds() {
+        for by in [Scooper::Player, Scooper::Npc] {
+            assert_eq!(pod_scoop(slot(false, Some(3)), by), None, "{by:?}");
+            assert_eq!(pod_scoop(SlotBytes::default(), by), None, "unwritten");
+            assert_eq!(pod_scoop(slot(true, Some(3)), by), Some(Haul::Commodity(3)));
+        }
+    }
+
+    #[test]
+    fn a_pod_hauls_box_slot_0s_contents_as_a_box_would() {
+        assert_eq!(
+            pod_scoop(slot(true, Some(1003)), Scooper::Player),
+            Some(Haul::Junk(JunkId(131)))
+        );
+        assert_eq!(
+            pod_scoop(slot(true, Some(1003)), Scooper::Npc),
+            Some(Haul::Nothing),
+            "an NPC still takes it for nothing"
+        );
+        assert_eq!(
+            pod_scoop(slot(true, None), Scooper::Player),
+            Some(Haul::Nothing)
+        );
+    }
+
+    /// A shown pod at `at` on frame 0.
+    fn pod_at(at: Vec2) -> Pod {
+        Pod {
+            position: at,
+            velocity: Vec2::ZERO,
+            life: 100.0,
+            frame: 0,
+            shown: true,
+        }
+    }
+
+    /// A table whose slot 0 holds a scoopable box of `contents` at
+    /// (500, 0), out of every test ship's reach.
+    fn box_zero(contents: Option<i16>) -> CargoBoxes {
+        let mut boxes = CargoBoxes::default();
+        boxes.spawn_scoopable(Vec2::new(500.0, 0.0), contents, 1, &mut NeverFires);
+        boxes
+    }
+
+    #[test]
+    fn a_touched_pod_is_hidden_and_takes_box_slot_0() {
+        let mut boxes = box_zero(Some(2));
+        let mut pods = EscapePods::adrift(&[pod_at(Vec2::new(90.0, 0.0)), pod_at(Vec2::ZERO)]);
+        let disc = Scooping::disc(Vec2::ZERO, 4.0);
+        let taken = take_touching_pod(&mut boxes, &mut pods, None, &disc, Scooper::Player);
+        assert_eq!(taken, Some(Haul::Commodity(2)));
+        assert!(boxes.boxes().is_empty(), "box slot 0 is gone");
+        let shown: Vec<bool> = pods.pods().iter().map(|pod| pod.shown).collect();
+        assert_eq!(shown, [true, false], "the touched pod alone hidden");
+        assert_eq!(
+            take_touching_pod(&mut boxes, &mut pods, None, &disc, Scooper::Player),
+            None,
+            "a hidden pod is not taken again"
+        );
+    }
+
+    #[test]
+    fn a_pod_takes_a_dead_slot_0_by_its_last_bytes() {
+        let mut boxes = box_zero(Some(4));
+        boxes.take_slot_zero();
+        let mut pods = EscapePods::adrift(&[pod_at(Vec2::ZERO), pod_at(Vec2::ZERO)]);
+        let disc = Scooping::disc(Vec2::ZERO, 4.0);
+        for _ in 0..2 {
+            assert_eq!(
+                take_touching_pod(&mut boxes, &mut pods, None, &disc, Scooper::Npc),
+                Some(Haul::Commodity(4)),
+                "once a pod"
+            );
+        }
+        assert_eq!(
+            take_touching_pod(&mut boxes, &mut pods, None, &disc, Scooper::Npc),
+            None
+        );
+    }
+
+    #[test]
+    fn a_pod_is_left_while_box_slot_0_is_not_scoopable() {
+        let mut boxes = CargoBoxes::default();
+        boxes.spawn(
+            &crate::flight::ShipState {
+                position: Vec2::new(500.0, 0.0),
+                velocity: Vec2::ZERO,
+                heading: 0.0,
+            },
+            None,
+            &mut NeverFires,
+        );
+        let mut pods = EscapePods::adrift(&[pod_at(Vec2::ZERO)]);
+        let disc = Scooping::disc(Vec2::ZERO, 4.0);
+        let before = (boxes.clone(), pods.clone());
+        assert_eq!(
+            take_touching_pod(&mut boxes, &mut pods, None, &disc, Scooper::Player),
+            None
+        );
+        assert_eq!((boxes, pods), before, "a jettisoned slot 0: nothing");
+    }
+
+    #[test]
+    fn a_pod_out_of_reach_is_left() {
+        let mut boxes = box_zero(Some(2));
+        let mut pods = EscapePods::adrift(&[pod_at(Vec2::new(30.0, 0.0))]);
+        let disc = Scooping::disc(Vec2::ZERO, 4.0);
+        assert_eq!(
+            take_touching_pod(&mut boxes, &mut pods, None, &disc, Scooper::Player),
+            None
+        );
+        assert!(pods.pods()[0].shown);
+        assert_eq!(boxes.boxes().len(), 1);
+    }
+
+    #[test]
+    fn a_scooping_npc_takes_every_pod_it_touches_into_its_own_hold() {
+        let mut boxes = box_zero(Some(3));
+        let mut pods = EscapePods::adrift(&[
+            pod_at(Vec2::ZERO),
+            pod_at(Vec2::new(60.0, 0.0)),
+            pod_at(Vec2::new(2.0, 0.0)),
+        ]);
+        let mut hold = NpcHold::default();
+        npc_scoop_pods(
+            &mut boxes,
+            &mut pods,
+            None,
+            &Scooping::disc(Vec2::ZERO, 4.0),
+            &mut hold,
+        );
+        assert_eq!(hold.tons(3), 2, "a ton a pod");
+        let shown: Vec<bool> = pods.pods().iter().map(|pod| pod.shown).collect();
+        assert_eq!(shown, [false, true, false]);
+    }
+
+    #[test]
+    fn a_scooping_npc_takes_a_junk_slot_0_for_nothing() {
+        let mut boxes = box_zero(Some(1003));
+        let mut pods = EscapePods::adrift(&[pod_at(Vec2::ZERO)]);
+        let mut hold = NpcHold::default();
+        npc_scoop_pods(
+            &mut boxes,
+            &mut pods,
+            None,
+            &Scooping::disc(Vec2::ZERO, 4.0),
+            &mut hold,
+        );
+        assert_eq!(hold, NpcHold::default());
+        assert!(!pods.pods()[0].shown, "the pod still hides");
+        assert!(boxes.boxes().is_empty(), "and box 0 still dies");
+    }
+
+    #[test]
+    fn a_scooping_ship_touches_a_pod_only_where_their_masks_touch() {
+        // The pod's 8-square frame is centred on (20, 20): 16 to 24. It
+        // draws only its top-left quarter, 16 to 20.
+        let sheet = square(8, |x, y| x < 4 && y < 4);
+        let pod = pod_at(Vec2::new(20.0, 20.0));
+        let touches = |at| {
+            let mask = ship_mask(at);
+            Scooping {
+                mask: Some(&mask),
+                ..Scooping::disc(Vec2::new(22.0, 22.0), 40.0)
+            }
+            .touches_pod(&pod, Some(&sheet))
+        };
+        assert!(
+            !touches((21, 21)),
+            "the rects overlap only over clear pixels"
+        );
+        assert!(touches((11, 11)));
+    }
+
+    #[test]
+    fn a_pod_is_laid_out_from_where_the_player_stood_at_whole_pixels() {
+        let camera = Vec2::new(300.0, 200.0);
+        let sheet = square(8, |x, y| x < 4 && y < 4);
+        let mask = ship_mask((11, 11));
+        let scooping = Scooping {
+            mask: Some(&mask),
+            camera,
+            ..Scooping::disc(Vec2::ZERO, 0.0)
+        };
+        // 20.9 from the player is 20 whole: the frame from 16.
+        let pod = pod_at(camera + Vec2::new(20.9, 20.9));
+        assert!(scooping.touches_pod(&pod, Some(&sheet)));
+        let past = pod_at(camera + Vec2::new(26.0, 26.0));
+        assert!(!scooping.touches_pod(&past, Some(&sheet)));
+    }
+
+    #[test]
+    fn with_no_mask_a_ships_disc_reaches_a_pods_rect_by_its_own_height() {
+        // 8 across and 20 down, centred on (20, 20): y 10 to 30.
+        let rows = vec!["........"; 20];
+        let sheet = Rc::new(nova_sim_base::fixture::rle::sheet(&[&rows]));
+        let pod = pod_at(Vec2::new(20.0, 20.0));
+        let below = |y| Scooping::disc(Vec2::new(20.0, y), 4.0).touches_pod(&pod, Some(&sheet));
+        assert!(below(33.0), "3 off its bottom edge");
+        assert!(!below(35.0), "5 off it");
+    }
+
+    #[test]
+    fn with_no_mask_a_ships_disc_touches_a_pods_rect() {
+        let sheet = square(8, |_, _| false);
+        let pod = pod_at(Vec2::new(20.0, 20.0));
+        // The rect is 16 to 24 each way: the disc, 4 about (27, 20), is 3
+        // off its right edge.
+        let disc = Scooping::disc(Vec2::new(27.0, 20.0), 4.0);
+        assert!(disc.touches_pod(&pod, Some(&sheet)), "no ship mask");
+        let far = Scooping::disc(Vec2::new(29.0, 20.0), 4.0);
+        assert!(!far.touches_pod(&pod, Some(&sheet)));
+        assert!(
+            !disc.touches_pod(&pod, None),
+            "no sheet: the pod's point alone, 7 off"
+        );
+        assert!(Scooping::disc(Vec2::new(23.0, 20.0), 4.0).touches_pod(&pod, None));
+        let mask = ship_mask((0, 0));
+        let masked = Scooping {
+            mask: Some(&mask),
+            ..Scooping::disc(Vec2::new(20.0, 20.0), 4.0)
+        };
+        assert!(
+            masked.touches_pod(&pod, None),
+            "a ship mask but no pod sheet: the disc"
+        );
     }
 
     #[test]

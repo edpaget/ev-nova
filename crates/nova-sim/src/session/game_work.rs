@@ -10,10 +10,15 @@
 //!    defence (@0x68c74), sabotage (@0x692e5), trigger (@0x6ab55) and
 //!    reloads' countdown (@0x6ae25), its recoil (@0x62f35) and its bays'
 //!    fighters (@0x62c61) settled, and its regeneration (@0x6cf86), before
-//!    it moves ([`Session::player_fires`]).
+//!    it moves ([`Session::player_fires`]); then L's pick and the dock
+//!    approach (@0x6a8c5-0x6a97a), on the ship where the last frame left
+//!    it (see the `land_key` and `clearance` modules).
 //! 2. The move, the turn, thrust and position step (@0x6c770-0x6d4eb),
-//!    or the escape pod's flight; the rescue, which ends the pass
-//!    (@0x68ddd); then the player's display step: its death timer's tick
+//!    or the escape pod's flight; the fighters' warning on a new jump
+//!    (@0x6b3de); the exit, the jump's arrival (@0x6c625) or the pod's
+//!    rescue (@0x692ce), settled in the pass, the rest of which then
+//!    runs among the new system (see the `settled_in_pass` module); then
+//!    the player's display step: its death timer's tick
 //!    (@0x6d7e6), the klaxon (@0x6f1e4), the eject check (@0x6f22c) and
 //!    its display (@0x43e29), which starts its breakup's countdown or
 //!    explodes it, then steps its frame, sets, lights and ion tint (see
@@ -154,6 +159,7 @@
 use std::collections::BTreeSet;
 
 use super::hit_turns::Turns;
+use super::settled_in_pass::Exit;
 use super::ship_loop::Motion;
 use super::{FightTerms, NpcBefore, Session, Space, TrafficMarks};
 use crate::ai::Behaviour;
@@ -197,34 +203,76 @@ pub(super) struct PassCatalogs<'a> {
     /// rolls no quotes and counts nothing down ([`Session::game_work`],
     /// [`Session::tick_again`]), for the tests that count a pass's work.
     pub(super) quotes: Option<&'a dyn CommCatalog>,
+    /// Whether it is a priming pass at game entry (see the
+    /// `priming_passes` module). Only the quote clock reads it: a frame's
+    /// advance pass, after its ship loop, moves the quote clock, which
+    /// stands for `TickCount`, on a tick when handed
+    /// [`PassCatalogs::quotes`], and a priming pass takes no real time,
+    /// so it moves none. It runs the sprite tick
+    /// (`_HandleStellarSprites` @0x444d2,
+    /// [`Session::stellar_sprite_tick`]) as every advance pass does.
+    pub(super) priming: bool,
+}
+
+/// How an advance pass runs ([`Session::advance_pass`]): the hail quotes'
+/// lines it reads, if any ([`PassCatalogs::quotes`]), and whether it is a
+/// priming pass ([`PassCatalogs::priming`]).
+#[derive(Clone, Copy)]
+pub(super) struct AdvanceRun<'a> {
+    /// The hail quotes' lines.
+    pub(super) quotes: Option<&'a dyn CommCatalog>,
+    /// Whether it is a priming pass.
+    pub(super) priming: bool,
 }
 
 /// What `_HandlePlayer` computes of the player at its top
 /// (@0x68aba-0x68ac6), before the pass's display settles a new
 /// condition.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)] // each is one flag `_HandlePlayer` reads at its top
 pub(super) struct PlayerHead {
     /// Whether the player was dying or destroyed, `_IsDying` (-0x2ca),
     /// which the self-destruct reads (see the `self_destruct` module).
     pub(super) dying: bool,
     /// Whether the player was disabled or breaking up, `_IsDisabled`
     /// (-0x2cb), which the cloak key and upkeep read (see the
-    /// `player_cloak` module).
+    /// `player_cloak` module), and the pre-jump's collapse (see the
+    /// `jump_collapse` module).
     pub(super) disabled: bool,
     /// Whether the player was destroyed, so `_HandlePlayer` takes its dead
     /// branch (0x6870d-0x6888c) and returns (@0x68853, @0x6888c) before
     /// the escort menu's block and the class-order bookkeeping (see the
     /// `class_orders` module).
     pub(super) dead: bool,
+    /// Whether `_HandlePlayer` left by its epilogue (@0x71113) before its
+    /// death timer on this pass: the pod's frames (`jne 0x71113`
+    /// @0x68ddd), the rescue (`jmp 0x71113` @0x692ce) or the arrival
+    /// (`jmp 0x71113` @0x6c625). That skips the rest of `_HandlePlayer`:
+    /// the death timer's tick, the escort menu's block, the klaxon, the
+    /// eject, the self-destruct and the cloak key (see the `display_step`
+    /// module).
+    ///
+    /// The pass's head sets it for the pod: the pod countdown +0xc908
+    /// above 0 as the pod block tests it (@0x68d1d), before its flight
+    /// takes the pass's tick off (@0x68dc1), on a player that isn't
+    /// destroyed, since a destroyed one takes the dead branch first
+    /// (@0x68700). It is false on the eject's own pass, whose countdown is
+    /// set after the test. An exit settled in the pass sets it as the pass
+    /// is read again (`PassStart::after_exit`, see the `settled_in_pass`
+    /// module).
+    pub(super) returned: bool,
 }
 
 impl PlayerHead {
-    /// What a pass beginning with the player in `condition` reads.
-    pub(super) fn of(condition: Condition) -> Self {
+    /// What a pass beginning with the player in `condition`, its pod
+    /// countdown `pod` (`Session::pod`), reads.
+    pub(super) fn of(condition: Condition, pod: Option<u32>) -> Self {
+        let dead = condition == Condition::Destroyed;
         Self {
             dying: matches!(condition, Condition::Dying { .. } | Condition::Destroyed),
             disabled: matches!(condition, Condition::Disabled | Condition::Dying { .. }),
-            dead: condition == Condition::Destroyed,
+            dead,
+            returned: pod.is_some() && !dead,
         }
     }
 }
@@ -234,7 +282,22 @@ impl PassStart {
     pub(super) fn of(session: &Session) -> Self {
         Self {
             npcs: session.space.npcs_before(),
-            player: PlayerHead::of(session.ship.condition),
+            player: PlayerHead::of(session.ship.condition, session.pod),
+            stood: session.ship.player.position,
+        }
+    }
+
+    /// The pass as it goes on after an exit `_HandlePlayer` settled in it
+    /// (see the `settled_in_pass` module), `session` in the new system:
+    /// every NPC and where the player stands read afresh, and the head's
+    /// flags kept, with the epilogue's mark set ([`PlayerHead::returned`]).
+    pub(super) fn after_exit(&self, session: &Session) -> Self {
+        Self {
+            npcs: session.space.npcs_before(),
+            player: PlayerHead {
+                returned: true,
+                ..self.player
+            },
             stood: session.ship.player.position,
         }
     }
@@ -258,8 +321,9 @@ impl Session {
     /// in `_DoPlayGameWork(1)`'s order (see the module docs), the traffic
     /// drawn from `catalog` and deciding as `behaviour` says, the fight by
     /// `rules`, drawing on `chance`. Whether the escape pod's rescue
-    /// settled on it, which ends the pass there (`_HandlePlayer` @0x68ddd;
-    /// see [`Session::rescue_if_due`]).
+    /// settled on it (`_HandlePlayer` @0x68ddd-0x692ce): the rest of the
+    /// pass then runs among the new system, as it does after the jump's
+    /// arrival (see the `settled_in_pass` module).
     ///
     /// Landed, it runs its landed work instead (`Session::landed_work`),
     /// as the fight and the traffic stand still then, the rescue among it.
@@ -302,29 +366,61 @@ impl Session {
         // `_HandlePlayer` (@0x43e19), up to its move.
         self.ship.warp.gate = None;
         let frame = self.pass_head();
+        // The screen's white, at the very top of `_HandlePlayer`
+        // (@0x683a4-0x68424; see the `warp_stage` module).
+        self.ship.gamma_tick(self.mode.jump());
+        let run = AdvanceRun {
+            quotes,
+            priming: false,
+        };
+        self.advance_pass(frame, controls, catalog, run, behaviour, rules, chance)
+    }
+
+    /// An advance pass in flight on `frame`, under `controls`, from
+    /// `_HandlePlayer`'s work before its move on, its head already run
+    /// (the frame's, [`Session::game_work_quoting`], or none at a priming
+    /// pass, see the `priming_passes` module), the traffic drawn from
+    /// `catalog`, run as `run` says, the NPCs deciding as `behaviour`
+    /// says, the fight by `rules`, drawing on `chance`. Whether the escape
+    /// pod's rescue settled on it, the rest of the pass run among the new
+    /// system all the same, as after the arrival (see the
+    /// `settled_in_pass` module).
+    #[allow(clippy::too_many_arguments)] // the pass's collaborators, and its frame
+    pub(super) fn advance_pass(
+        &mut self,
+        frame: i16,
+        controls: Controls,
+        catalog: &(impl PilotCatalog + TrafficCatalog),
+        run: AdvanceRun<'_>,
+        behaviour: &(impl Behaviour + ?Sized),
+        rules: Rules,
+        chance: &mut dyn Chance,
+    ) -> bool {
         let pass = GamePass::Advance {
             double_time: self.ship.warp.double_time,
         };
         self.before_move(frame, pass);
         self.ship.fate.player_exploded_this_tick = false;
-        let start = PassStart::of(self);
+        let mut start = PassStart::of(self);
         self.player_fires(pass, rules, chance);
-        self.player_move(controls, pass);
-        // The sheets the pass's contacts read, before the scoop, the first
-        // (see the `sprite_sheets` module).
-        self.load_sprite_masks(catalog);
-        // `_HandlePlayer`'s warning on a new jump (@0x6b3de-0x6b565).
+        self.player_move(controls, pass, start.player_head());
+        // `_HandlePlayer`'s warning on a new jump (@0x6b3de-0x6b565),
+        // before the warp's end (@0x6bbb8).
         self.warn_fighters_left_behind(chance);
-        if self.rescue_if_due(catalog, chance) {
-            return true;
-        }
+        // The arrival or the rescue, settled in the pass (see the
+        // `settled_in_pass` module).
+        let exit = self.settle_exit(&mut start, catalog, chance);
+        // The sheets the pass's contacts read, before the scoop, the first
+        // (see the `sprite_sheets` module): the new system's after an exit.
+        self.load_sprite_masks(catalog);
         let catalogs = PassCatalogs {
             ai: Some(catalog),
             sheets: Some(catalog),
-            quotes,
+            quotes: run.quotes,
+            priming: run.priming,
         };
         self.pass_after_move(&start, pass, catalogs, behaviour, rules, chance);
-        false
+        exit == Some(Exit::Rescue)
     }
 
     /// A pass of the game's work while landed, the traffic drawn from
@@ -352,7 +448,10 @@ impl Session {
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
         self.ship.warp.gate = None;
-        if self.rescue_if_due(catalog, chance) {
+        if self.ship.fate.rescue_due {
+            // No rest of a pass runs landed.
+            let mut start = PassStart::of(self);
+            self.settle_exit(&mut start, catalog, chance);
             return true;
         }
         self.warn_fighters_left_behind(chance);
@@ -436,7 +535,12 @@ impl Session {
         rules: Rules,
         chance: &mut dyn Chance,
     ) {
-        let PassCatalogs { ai, sheets, quotes } = catalogs;
+        let PassCatalogs {
+            ai,
+            sheets,
+            quotes,
+            priming,
+        } = catalogs;
         // The end of `_HandlePlayer` from its key block, and its display
         // (@0x43e29).
         self.player_display_rest(behaviour, pass, rules, start.player_head(), chance);
@@ -495,11 +599,19 @@ impl Session {
             None => Motion::Again,
         };
         let displayed = self.ship_loop(behaviour, start, motion, pass, quotes, rules, chance);
+        // A frame's advance pass moves the quote clock, `TickCount`'s
+        // stand-in, after the loop (see `PassCatalogs::priming`).
+        let frames = ai.is_some() && !priming;
+        if frames && quotes.is_some() {
+            self.space.tick_quote_clock();
+        }
         // `_DoPlayGameWork`'s +0x47 pass (@0x443d4-0x4444f), after the
         // ship loop and before the guns read it (see the
         // `stellar_defence` module).
         self.mark_defended_stellars();
-        // `_HandleStellarSprites` (@0x444d2), on both passes (see the
+        // `_HandleStellarSprites` (@0x444d2), on every advance pass, both
+        // passes of a frame and each priming pass, with no branch around
+        // it (@0x444c6-0x444d2), reading no `_gameFrozen` (see the
         // `stellar_frames` module), then `_HandleStellarWeapons`
         // (@0x444d7).
         self.stellar_sprite_tick(chance);
@@ -584,7 +696,6 @@ impl Session {
                 return None;
             }
             self.populate(catalog, chance);
-            self.take_entry_gate_pass(chance);
         }
         let (strikes, marks) = self.before_traffic_ai(catalog, chance);
         self.step_traffic(|traffic, world| {
@@ -618,7 +729,7 @@ impl Session {
         let pilot = &mut self.pilot;
         let mut rounds = OutfitRounds {
             owned: &mut pilot.outfits,
-            sources: &self.statics.ammo_outfits,
+            sources: self.statics.ammo_outfits(self.setup.outfit_weapon_mods()),
         };
         let mut fighters = vec![Fighter {
             ship: ShipRef::Player,
@@ -833,8 +944,9 @@ impl Session {
     }
 
     /// The fight's collision passes on `pass` by `rules`, drawing on
-    /// `chance` ([`Combat::test_hits_in_turn`]), among the stellars shown
-    /// that shots can hit and the asteroid field, lent whole, the shots
+    /// `chance` ([`Combat::test_hits_in_turn`]), among the listed stellars
+    /// shots can hit, each by the sprite it holds, a hidden one too (see
+    /// the `shot_stellars` module), and the asteroid field, lent whole, the shots
     /// touching by the masks the session holds (see the `contact_masks`
     /// module), each direct hit settled and answered before the next
     /// lands, as `_DamageShip`'s reaction block runs in `_HandleShipHit`
@@ -850,7 +962,7 @@ impl Session {
         rules: Rules,
         chance: &mut dyn Chance,
     ) {
-        let mut stellars = self.stellar_targets();
+        let mut stellars = self.shot_stellar_targets();
         let sprites = self.contact_sprites();
         let types = std::rc::Rc::clone(&self.statics.asteroid_types);
         let mut asteroids = std::mem::take(&mut self.space.asteroids);
@@ -977,6 +1089,22 @@ mod tests {
     use crate::testkit::FakePilotCatalog;
     use crate::traffic::autopilot::Outcome;
     use crate::traffic::npc::{Mode, Npc, NpcId};
+
+    #[test]
+    fn a_pass_head_is_in_the_pod_while_the_countdown_runs_on_a_player_not_destroyed() {
+        use super::PlayerHead;
+        let dying = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        for condition in [Condition::Intact, Condition::Disabled, dying] {
+            assert!(PlayerHead::of(condition, Some(2)).returned, "{condition:?}");
+            assert!(!PlayerHead::of(condition, None).returned, "{condition:?}");
+        }
+        // The dead branch comes first (@0x68700).
+        assert!(!PlayerHead::of(Condition::Destroyed, Some(2)).returned);
+        assert!(PlayerHead::of(Condition::Destroyed, Some(2)).dead);
+    }
 
     /// What a decision saw of an NPC: whether it was provoked, the ship it
     /// targeted, and the damage aimed at it.

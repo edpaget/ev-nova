@@ -7,8 +7,8 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 # `mise run bundle` runs `cargo run -p nova-bundle`; nova-installer,
-# nova-linux, nova-flatpak, nova-flatpak-repo, nova-site, nova-build-id
-# and nova-appcast are the other binaries.
+# nova-sign-windows, nova-linux, nova-flatpak, nova-flatpak-repo,
+# nova-site, nova-build-id and nova-appcast are the other binaries.
 default-run = "nova-bundle"
 
 [dependencies]

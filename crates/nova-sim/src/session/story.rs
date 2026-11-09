@@ -1571,7 +1571,10 @@ mod tests {
             "by the engine"
         );
 
-        let mut session = quiet(at_gate(&catalog).with_gate_arrival(GateArrivalRule::LikeJump));
+        let mut session = quiet(at_gate(&catalog).with_rules(crate::session::setup::reading(
+            crate::rulebook::RuleKey::GateArrival,
+            GateArrivalRule::LikeJump,
+        )));
         let left = session.date();
         session
             .enter_hypergate(Some(SystemId(131)), &catalog, &mut NeverFires)

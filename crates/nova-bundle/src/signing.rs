@@ -5,7 +5,7 @@
 //! [`Signing::from_env`] picks Developer ID when all of [`VARS`] are set
 //! and non-empty, and ad-hoc when none is. A mix is an error naming the
 //! missing variables, so a half-configured CI fails instead of shipping an
-//! ad-hoc build.
+//! ad-hoc build ([`all_or_none`]'s rule).
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -15,6 +15,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 
 use crate::bundle::{BundleError, Step, make_dmg, run, verify};
+use crate::env_set::all_or_none;
 use crate::layout::Layout;
 use crate::notary::Notarization;
 use crate::ports::{Env, Invocation, Process};
@@ -118,27 +119,19 @@ impl Signing {
 
     /// The mode the signing variables in `env` choose.
     pub fn from_env(env: &impl Env) -> Result<Self, SigningError> {
-        let values = VARS.map(|name| env.var(name).filter(|v| !v.is_empty()));
-        let missing: Vec<_> = VARS
-            .iter()
-            .zip(&values)
-            .filter(|(_, value)| value.is_none())
-            .map(|(name, _)| *name)
-            .collect();
-        if missing.len() == VARS.len() {
+        let Some(
+            [
+                cert_p12,
+                cert_password,
+                identity,
+                api_key_p8,
+                api_key_id,
+                api_issuer,
+            ],
+        ) = all_or_none(env, VARS).map_err(|missing| SigningError::Partial { missing })?
+        else {
             return Ok(Self::AdHoc);
-        }
-        if !missing.is_empty() {
-            return Err(SigningError::Partial { missing });
-        }
-        let [
-            cert_p12,
-            cert_password,
-            identity,
-            api_key_p8,
-            api_key_id,
-            api_issuer,
-        ] = values.map(Option::unwrap_or_default);
+        };
         Ok(Self::DeveloperId(Credentials {
             identity,
             cert_p12: decode(CERT_P12, &cert_p12)?,

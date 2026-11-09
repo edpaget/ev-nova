@@ -14,11 +14,12 @@
 //!
 //! **The approach** ([`Session::dock_approach`]) runs in the player's
 //! part of every game-work pass, so on both of double time's passes, as
-//! `_HandlePlayer` runs on both, and whatever the ship's condition, after
-//! the ship moves. The original reaches the approach (@0x6a97a) before
-//! its position step (@0x6d4b0): @0x6864d, once read as the move, is
-//! `_WrapPlayerPosition` (see the `player_wrap` module; rdm weapons-fidelity
-//! phase 28's findings; filed as a hud-fidelity-followups phase). It is
+//! `_HandlePlayer` runs on both, and whatever the ship's condition, before
+//! the ship moves, as `_HandlePlayer` reaches it (@0x6a97a) before its
+//! position step (@0x6d4b0-0x6d4eb), so it reads the ship where the last
+//! frame left it. @0x6864d, which runs before both, is
+//! `_WrapPlayerPosition` (see the `player_wrap` module), which wraps the
+//! position and doesn't move the ship. It is
 //! skipped while L's latch is set ([`Session::set_dock_try`], the
 //! original's `_dockTryFlag`, @0x6a965-0x6a97a), which only a dock request
 //! sets (@0x6a953): L held with its latch clear doesn't hold it back. A request whose stellar
@@ -435,6 +436,77 @@ mod tests {
         assert_eq!(session.dock_request(), request(128, CLEARED));
     }
 
+    /// `session` with 129 requested from `x` off it, moving at `vx`.
+    fn requested_off_129(x: f32, vx: f32) -> Session {
+        let mut session = on_129(session());
+        session.ship.settle_box(&session.pilot, &session.setup);
+        session.ship.player.position = Vec2::new(2000.0 + x, 0.0);
+        session.ship.player.velocity = Vec2::new(vx, 0.0);
+        assert_eq!(session.land(), requested(129));
+        quiet(session)
+    }
+
+    #[test]
+    fn an_approach_the_move_brings_within_reach_clears_on_the_next_tick() {
+        // `_HandlePlayerDockApproach` (@0x6a97a) reads the position before
+        // the position step (@0x6d4b0): 251 off is out of reach.
+        let mut session = requested_off_129(-251.0, 4.0);
+        assert_eq!(session.dock_request(), request(129, 0));
+        tick(&mut session);
+        assert!(
+            session.ship.player.position.x > 2000.0 - 250.0,
+            "moved into reach"
+        );
+        assert_eq!(session.dock_request(), request(129, 0));
+        assert_eq!(session.take_messages(), []);
+        assert_eq!(session.take_sounds(), []);
+        tick(&mut session);
+        assert_eq!(session.dock_request(), request(129, CLEARED));
+        assert_eq!(session.take_messages(), [cleared_at(129, DockKind::Planet)]);
+        assert_eq!(session.take_sounds(), [SimSound::TrafficControl]);
+    }
+
+    #[test]
+    fn an_approach_the_move_carries_out_of_reach_still_clears() {
+        // Requested out of reach (counter 0, not the press's
+        // `REQUESTED_NEAR`), then left in reach by the last frame.
+        let mut session = requested_off_129(-251.0, 0.0);
+        assert_eq!(session.dock_request(), request(129, 0));
+        session.ship.player.position = Vec2::new(2000.0 - 247.0, 0.0);
+        session.ship.player.velocity = Vec2::new(-4.0, 0.0);
+        tick(&mut session);
+        assert!(
+            session.ship.player.position.x < 2000.0 - 250.0,
+            "moved out of reach"
+        );
+        assert_eq!(session.dock_request(), request(129, CLEARED));
+        assert_eq!(session.take_messages(), [cleared_at(129, DockKind::Planet)]);
+        assert_eq!(session.take_sounds(), [SimSound::TrafficControl]);
+    }
+
+    #[test]
+    fn the_again_pass_approach_reads_the_position_before_its_move() {
+        // The advance pass leaves the ship 251 off (out of reach), moving
+        // in; the again pass's approach still reads it there.
+        let mut session = requested_off_129(-255.0, 4.0);
+        session.set_double_time_key(true);
+        tick(&mut session);
+        assert_eq!(session.dock_request(), request(129, 0), "advance pass");
+        let before = session.ship.player.position.x;
+        assert!(before <= 2000.0 - 250.0, "still out of reach: {before}");
+        session.tick_again(
+            Controls::default(),
+            &crate::testkit::catalog(),
+            &crate::ai::NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
+        assert!(session.ship.player.position.x > 2000.0 - 250.0, "moved in");
+        assert_eq!(session.dock_request(), request(129, 0), "again pass");
+        tick(&mut session);
+        assert_eq!(session.dock_request(), request(129, CLEARED));
+    }
+
     #[test]
     fn the_request_reads_cleared_once_the_approach_clears_it() {
         let mut session = session();
@@ -616,6 +688,7 @@ mod tests {
         assert_eq!(session.dock_request(), request(128, CLEARED));
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &crate::ai::NovaAi::default(),
             Rules::default(),
             &mut NeverFires,
@@ -634,6 +707,7 @@ mod tests {
             );
             session.tick_again(
                 Controls::default(),
+                &crate::testkit::catalog(),
                 &crate::ai::NovaAi::default(),
                 Rules::default(),
                 &mut NeverFires,

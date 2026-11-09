@@ -424,7 +424,7 @@ are manual by operator choice and must never be loosened by hand.
 | Setting | Managed by | Value |
 |---|---|---|
 | Actions enabled | `github_actions_repository_permissions.enabled` | `true` |
-| Allowed actions | `github_actions_repository_permissions.allowed_actions` and `allowed_actions_config` | `selected`: GitHub-owned, no verified creators, `Swatinem/rust-cache@*`, `jdx/mise-action@*` |
+| Allowed actions | `github_actions_repository_permissions.allowed_actions` and `allowed_actions_config` | `selected`: GitHub-owned, no verified creators, `Swatinem/rust-cache@*`, `jdx/mise-action@*`, `azure/login@*` |
 | SHA pinning | `github_actions_repository_permissions.sha_pinning_required` | `true`: every external `uses:` is a full commit SHA with the release tag in a trailing comment |
 | Default `GITHUB_TOKEN` permissions | `github_workflow_repository_permissions.default_workflow_permissions` | `read` |
 | Actions may approve PRs | `github_workflow_repository_permissions.can_approve_pull_request_reviews` | `false` |
@@ -668,10 +668,12 @@ fails while the temporary block is in place (its guard expects
 
 `mise run infra-check` runs `tofu fmt -check`, `tofu init -backend=false`,
 `tofu validate`, `tofu test` with mocked providers, and
-`check-encryption.sh`. It needs no credentials and is what CI's `infra` job
-runs.
+`infra/check-encryption.sh infra/github`, for this root and then for
+`infra/windows-signing`. It needs no credentials and is what CI's `infra`
+job runs.
 
-`tofu test` can't see the encryption block, so `check-encryption.sh` guards
+`tofu test` can't see the encryption block, so `infra/check-encryption.sh`
+(shared by every root under `infra/`, which it takes as its argument) guards
 it by behaviour, in a temporary directory with copies of the `*.tf` files and
 the infra-check task's dummy passphrase. It checks that the config refuses a
 planted plaintext state and a plaintext plan file ("unencrypted payload"),

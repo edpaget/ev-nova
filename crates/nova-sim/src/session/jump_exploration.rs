@@ -248,9 +248,9 @@ pub(super) mod tests {
         for &n in bits {
             pilot.bits.set(bit(n));
         }
-        let mut session = Session::fly(catalog, pilot)
-            .expect("flies")
-            .with_multi_jump(rule);
+        let mut session = Session::fly(catalog, pilot).expect("flies").with_rules(
+            crate::session::setup::reading(crate::rulebook::RuleKey::MultiJump, rule),
+        );
         settle(&mut session, catalog);
         session
     }

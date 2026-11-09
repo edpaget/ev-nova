@@ -85,7 +85,7 @@ impl Session {
         let index = self.space.fleet_index(id)?;
         let escort = self.pilot.escorts.get(index)?;
         let record = self.statics.ship_record(escort.ship)?;
-        let facts = self.ship.facts(&self.pilot, &self.statics);
+        let facts = self.ship.facts(&self.pilot, &self.statics, &self.setup);
         let gate = Gate {
             control_bits: &*self.setup.control_bits.0,
             pilot: &facts,

@@ -16,7 +16,7 @@
 //!    overlaps (`_SWRLECollision` @0x372a8) takes `MassDmg` + `EnergyDmg`
 //!    (@0x372dc-0x372eb), the shot exploding (@0x3732a) and spraying its
 //!    hit particles (@0x373b4) at life -1, hidden (@0x373c4-0x373fe), and
-//!    the loop ends there (@0x37521) ([`stellar::met`]);
+//!    the loop ends there (@0x37521) ([`Combat::stellar_met`]);
 //! 3. reads its life again and goes no further below 0 (@0x3752d-0x37543),
 //!    nor without a `ProxRadius` above none (@0x3755b-0x37560);
 //! 4. walks the 64 ship slots (@0x3757b-0x376a5): the first in reach that
@@ -45,9 +45,13 @@
 //! `PilotCatalog::landing_sites`' order), so the first in that order that
 //! a shot's move meets is struck, not the nearest along it.
 //!
-//! *The engine.* A stellar is a disc and a shot's move is swept to it, as
-//! the [`stellar`] module records, where the original overlaps the
-//! sprites where the shot is.
+//! *The masks.* A stellar is struck where the shot's mask touches the
+//! stellar's, the shot's first, the hit at the shot's position, both laid
+//! out from where the player was seen as the last tick closed, as the
+//! session lends them ([`stellar_contact`](super::stellar_contact)).
+//! Where either can't be read, and by the other reading of
+//! [`RuleKey::ShotContact`](crate::RuleKey::ShotContact), a stellar is a
+//! disc and a shot's move is swept to it ([`stellar::entered`]).
 //!
 //! *Ordering against the original.* Each hit lands as the pass finds it,
 //! a hidden shot's asteroid blast included, before the next slot is
@@ -56,10 +60,11 @@
 
 use super::asteroid_walk::{AsteroidField, Struck};
 use super::collision::{Among, WalkTerms};
+use super::lineup::Lineup;
 use super::projectile::Shot;
 use super::stellar::{self, StellarStrike, StellarTarget};
 use super::walk::Pending;
-use super::{Combat, CombatEvent, asteroid_hit};
+use super::{Combat, CombatEvent, ShipRef, asteroid_hit, position_of};
 use crate::chance::Chance;
 use crate::geometry::Vec2;
 
@@ -71,6 +76,12 @@ enum Turn {
     Live(usize),
     /// A shot point defence ended, hidden at life 0.
     Hidden(usize),
+}
+
+/// Where the player was seen as the last tick closed, which the sprites'
+/// rects are laid out from (see the [`contact`](super::contact) module).
+fn seen_from(lineup: &Lineup) -> Vec2 {
+    position_of(&lineup.seen, ShipRef::Player).unwrap_or(Vec2::ZERO)
 }
 
 impl Combat {
@@ -144,7 +155,7 @@ impl Combat {
     /// `_HandleShot` ([`Combat::shot_stretch`]); nor is one that has not
     /// moved, a sub-munition released in the pass among them, whose life
     /// is still its `Count` (@0x3720e-0x3721e). Otherwise a planet-type
-    /// shot meeting a stellar on its move strikes it
+    /// shot meeting a stellar ([`Combat::stellar_met`]) strikes it
     /// ([`Combat::strike_stellar`]), and goes no further; or else the
     /// first ship in slot order whose reach its fuse is in
     /// ([`Shot::fused`]) takes its direct hit at once
@@ -169,7 +180,8 @@ impl Combat {
             return None;
         }
         let from = shot.moved_from?;
-        if let Some((met, at)) = stellar::met(&shot, from, stellars) {
+        let lent = (terms.sprites, seen_from(lineup));
+        if let Some((met, at)) = self.stellar_met((&shot, from), stellars, lent) {
             self.spend(index);
             self.strike_stellar(&shot, &mut stellars[met], at);
         } else if let Some(met) = shot.fused(from, &lineup.sides(), self.proximity_fuse) {
@@ -198,7 +210,8 @@ impl Combat {
 
     /// The turn of `shot`, hidden at life 0 (see the
     /// [`hidden`](super::hidden) module): a planet-type one meeting a
-    /// stellar on its move, or where it is if it never moved, strikes it
+    /// stellar ([`Combat::stellar_met`]), by its disc on its move, or where
+    /// it is if it never moved, strikes it
     /// ([`Combat::strike_stellar`]), and goes no further; it meets no
     /// ship; or else the first active asteroid in slot order its armed
     /// fuse reaches takes its hit where it is, the player's blast landing
@@ -212,7 +225,8 @@ impl Combat {
         (stellars, asteroids): (&mut [StellarTarget], &mut AsteroidField),
     ) {
         let was = shot.moved_from.unwrap_or(shot.position);
-        if let Some((met, at)) = stellar::met(shot, was, stellars) {
+        let lent = (terms.sprites, seen_from(among.1));
+        if let Some((met, at)) = self.stellar_met((shot, was), stellars, lent) {
             self.strike_stellar(shot, &mut stellars[met], at);
         } else if let Some(slot) =
             asteroid_hit::fused(shot, asteroids.asteroids, self.asteroid_fuse)

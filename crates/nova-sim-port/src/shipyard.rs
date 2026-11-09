@@ -955,7 +955,10 @@ pub(crate) fn stock_lines(
 ///
 /// It starts at `FreeMass` plus the mass of the class's standard
 /// equipment (its default items and its stock weapons and ammunition as
-/// outfits), as the loader holds it (@0x7aaf7, @0x7ac61, @0x7ad8d). It
+/// outfits), as the loader holds it (@0x7aaf7, @0x7ac61, @0x7ad8d), its
+/// stock held by the outfits whose mods name them as `rules` reads
+/// [`RuleKey::OutfitWeaponMods`]: by the engine the first mod alone
+/// (`_LoadObjectData` @0x7aab8, @0x7ac29), by the other reading any. It
 /// then takes off, through [`floored_space`]: each stock weapon by
 /// ascending ID (as [`Arsenal::stock_slots`] gives its count and
 /// `AmmoLoad`), its count of the lowest-ID outfit
@@ -985,7 +988,11 @@ pub(crate) fn space(
     let record = |outfit: OutfitId| outfits.iter().find(|record| record.id == outfit);
     let standard = merged(
         &tally(ship.defaults.iter().copied()),
-        &arsenal.stock_outfits(ship.id, outfits),
+        &arsenal.stock_outfits(
+            ship.id,
+            outfits,
+            rules.source_for(RuleKey::OutfitWeaponMods),
+        ),
     );
     let start = standard
         .iter()
@@ -1890,7 +1897,12 @@ pub fn purchase(sale: &Sale, quote: Quote) -> Purchase {
     let defaults = tally(sale.new.defaults.iter().copied());
     let before = merged(&carry.carried, &defaults);
     let mut outfits = before.clone();
-    fit_stock(&mut outfits, sale.fits, sale.records);
+    fit_stock(
+        &mut outfits,
+        sale.fits,
+        sale.records,
+        sale.rules.source_for(RuleKey::OutfitWeaponMods),
+    );
     let held = stock_held().of(&Topped {
         sale,
         before: &before,
@@ -3737,6 +3749,33 @@ mod tests {
     }
 
     #[test]
+    fn the_top_up_counts_a_default_items_later_mod_weapon_only_by_the_other_reading() {
+        // Default item 300 names a blaster in its second mod alone: by the
+        // engine it holds none of the two (`_DoShipyardDialog` compares
+        // against the weapon array, @0x5eebc-0x5ef92), by the other
+        // reading of `OutfitWeaponMods` one.
+        let mut records = armoury();
+        records.push(outfit(300, &[(4, 1), (MOD_WEAPON, 128)]));
+        let new = ShipRecord {
+            defaults: vec![(OutfitId(300), 1)],
+            ..heavy()
+        };
+        let bought = |rules| {
+            let mut pilot = pilot();
+            buy_stocked(&mut pilot, &new, &STOCK, &records, rules);
+            pilot.outfits
+        };
+        assert_eq!(
+            bought(Rulebook::default()),
+            map(&[(201, 20), (205, 2), (300, 1)])
+        );
+        assert_eq!(
+            bought(Rulebook::default().with_override(RuleKey::OutfitWeaponMods, RuleSource::Bible)),
+            map(&[(201, 20), (205, 1), (300, 1)])
+        );
+    }
+
+    #[test]
     fn a_carried_persistent_weapon_counts_towards_the_stock_count() {
         let mut records = armoury();
         records.push(OutfitRecord {
@@ -5333,12 +5372,32 @@ mod tests {
     }
 
     #[test]
+    fn the_space_start_holds_no_later_mod_stock_by_the_engine() {
+        // `_LoadObjectData` weighs the first-mod holders alone (@0x7aab8,
+        // @0x7ac29): by the engine a gun of 130 held only in 150's second
+        // pair adds nothing to the start, so the space is the free mass,
+        // 20; by the other reading it adds 5, giving 25. The same for 2
+        // rounds of 130's: 20 by the engine, 20 + 2 x 5 = 30 by the other.
+        let class = freeing(129, 20, &[]);
+        let any_slot =
+            Rulebook::default().with_override(RuleKey::OutfitWeaponMods, RuleSource::Bible);
+        let arsenal = stocking(&[], 129, &[(130, 1, 0)]);
+        let outfits = [weighing(150, 5, &[(0, 0), (MOD_WEAPON, 130)])];
+        assert_eq!(space(&class, &arsenal, &outfits, &Rulebook::default()), 20);
+        assert_eq!(space(&class, &arsenal, &outfits, &any_slot), 25);
+        let arsenal = stocking(&[weapon(130)], 129, &[(130, 0, 2)]);
+        let outfits = [weighing(150, 5, &[(0, 0), (MOD_AMMO, 130)])];
+        assert_eq!(space(&class, &arsenal, &outfits, &Rulebook::default()), 20);
+        assert_eq!(space(&class, &arsenal, &outfits, &any_slot), 30);
+    }
+
+    #[test]
     fn the_space_walk_reads_the_first_mod_and_skips_tech_0x7fff() {
         let never = |record: OutfitRecord| OutfitRecord {
             tech_level: wares::OUTFIT_TECH_NEVER,
             ..record
         };
-        // The start (unchanged: any pair, any tech) is -10 + 6 - 4 = -8,
+        // The start (any tech) is -10 + 6 - 4 = -8,
         // with 1 gun of 130 held by 150 (6 tons, never sold) and the
         // default item 152 (-4 tons, never sold). The walk takes off the
         // next holder, 151's 2 (floored to 0), and not 152 at all, so 0;
@@ -5360,18 +5419,21 @@ mod tests {
             weighing(151, -3, &[(MOD_WEAPON, 130)]),
         ];
         assert_eq!(space(&class, &arsenal, &outfits, &Rulebook::default()), 28);
-        // A holder naming 130 only in its second pair is ignored: the
-        // start is 20 + 5 = 25 and nothing is taken off; the old walk
-        // takes off 5, leaving 20.
+        // A holder naming 130 only in its second pair is ignored by the
+        // walk under both readings. By the other reading of
+        // `OutfitWeaponMods` the start holds it, 20 + 5 = 25, and
+        // nothing is taken off; the old walk takes off 5, leaving 20.
+        let any_slot =
+            Rulebook::default().with_override(RuleKey::OutfitWeaponMods, RuleSource::Bible);
         let outfits = [weighing(150, 5, &[(0, 0), (MOD_WEAPON, 130)])];
-        assert_eq!(space(&class, &arsenal, &outfits, &Rulebook::default()), 25);
-        // The same for ammunition, 2 rounds of 130's: the start is
-        // 20 + 2 x 5 = 30. A second-pair holder is ignored, leaving 30
-        // (the old walk 20); a first-pair one of tech 0x7fff is skipped
-        // for the next, of -1 ton, giving 32 (the old walk 20).
+        assert_eq!(space(&class, &arsenal, &outfits, &any_slot), 25);
+        // The same for ammunition, 2 rounds of 130's: by the other reading
+        // the start is 20 + 2 x 5 = 30. A second-pair holder is ignored,
+        // leaving 30 (the old walk 20); a first-pair one of tech 0x7fff is
+        // skipped for the next, of -1 ton, giving 32 (the old walk 20).
         let arsenal = stocking(&[weapon(130)], 129, &[(130, 0, 2)]);
         let outfits = [weighing(150, 5, &[(0, 0), (MOD_AMMO, 130)])];
-        assert_eq!(space(&class, &arsenal, &outfits, &Rulebook::default()), 30);
+        assert_eq!(space(&class, &arsenal, &outfits, &any_slot), 30);
         let outfits = [
             never(weighing(150, 5, &[(MOD_AMMO, 130)])),
             weighing(151, -1, &[(MOD_AMMO, 130)]),

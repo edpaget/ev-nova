@@ -38,9 +38,13 @@
 //! `_HandleShipPointDefense` instead (@0x68c6e-0x68c74), which the fight
 //! already runs for every ship.
 //!
-//! **Landed or jumping**, where the fight stands still, the countdown
-//! pauses with it. No one can see it: no regeneration happens there, and
-//! an arrival or a take-off resets the inhibit anyway.
+//! **Through a jump** the countdown runs on every pass, both of double
+//! time's, as `_HandlePlayer` reaches @0x68b09-0x68b2c with no jump test:
+//! the only return before it is the dead branch's (@0x68853, @0x6888c).
+//! The arrival's `_ResetPlayerPrecalcedValues` (@0x6c51f;
+//! `Session::reset_precalced`) turns it off. **Landed**, no pass reaches
+//! it, as the spaceport runs no `_DoPlayGameWork` (`Session::landed_work`
+//! runs none of the player's fight), so it waits; a take-off resets it.
 //!
 //! *Ordering against the original.* On the frame of a repair the original
 //! skips the shield's regeneration, as it tests the disabled flag it took
@@ -371,6 +375,7 @@ mod tests {
             work(session, &catalog, Controls::default());
             session.tick_again(
                 crate::flight::Controls::default(),
+                &crate::testkit::catalog(),
                 &crate::ai::NovaAi::default(),
                 Rules::default(),
                 &mut NeverFires,
@@ -382,6 +387,47 @@ mod tests {
         assert_eq!(armor(&session), 30.0, "300 passes held");
         pass(&mut session);
         assert_eq!(armor(&session), 32.0, "a point on each pass after");
+    }
+
+    #[test]
+    fn the_repair_inhibit_counts_down_on_every_pass_of_a_jump_both_passes_and_the_arrival_turns_it_off()
+     {
+        // `_HandlePlayer` counts it down with no jump test
+        // (@0x68b09-0x68b2c), on both of double time's passes, and the
+        // arrival's `_ResetPlayerPrecalcedValues` (@0x6c51f) turns it off.
+        use crate::session::tests::{OUT, bound_for_131};
+        let catalog = crate::testkit::catalog();
+        let mut session = bound_for_131(&catalog, OUT, crate::geometry::Vec2::ZERO, 90.0);
+        session.statics_mut().warp_sounds = [364, 252];
+        session.begin_jump().expect("jumps");
+        session.ship.arm_repair_inhibit();
+        let mut expected = session.ship.repair_inhibit;
+        for frame in 0..40 {
+            work(&mut session, &catalog, Controls::default());
+            session.tick_again(
+                Controls::default(),
+                &catalog,
+                &crate::ai::NovaAi::default(),
+                Rules::default(),
+                &mut NeverFires,
+            );
+            expected.tick(session.speed_mult());
+            expected.tick(session.speed_mult());
+            assert!(session.jumping().is_some() || session.preparing_jump().is_some());
+            assert_eq!(session.ship.repair_inhibit, expected, "frame {frame}");
+        }
+        assert!(session.ship.repair_inhibit.holds(), "still counting");
+        for _ in 0..1000 {
+            if session.jumping().is_none() && session.preparing_jump().is_none() {
+                break;
+            }
+            work(&mut session, &catalog, Controls::default());
+        }
+        assert_eq!(session.system(), crate::catalog::SystemId(131));
+        assert!(
+            !session.ship.repair_inhibit.holds(),
+            "the arrival turns it off"
+        );
     }
 
     #[test]

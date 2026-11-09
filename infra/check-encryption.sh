@@ -1,6 +1,10 @@
 #!/bin/sh
-# Guard for infra/github's state and plan encryption, run by `mise run
-# infra-check` (and so by CI's `infra` job). `tofu test` can't see the
+# Guard for one OpenTofu root's state and plan encryption:
+#
+#   sh infra/check-encryption.sh <root>    # e.g. infra/github
+#
+# Run by `mise run infra-check` once per root under infra/ (and so by CI's
+# `infra` job). `tofu test` can't see the
 # encryption block, so this probes the behaviour directly, against copies of
 # the *.tf files in a temporary directory. It needs no credentials, no
 # network and no `tofu init`, and it never touches the real state.
@@ -19,7 +23,11 @@
 # a dummy value (the infra-check task sets one).
 set -eu
 
-here=$(cd "$(dirname "$0")" && pwd)
+if [ $# -ne 1 ]; then
+  printf 'usage: %s <root directory>\n' "$0" >&2
+  exit 2
+fi
+here=$(cd "$1" && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 unset TF_ENCRYPTION

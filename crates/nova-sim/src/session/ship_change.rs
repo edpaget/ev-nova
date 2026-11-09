@@ -406,12 +406,11 @@ impl Session {
         self.pilot.ship = ship.id;
         self.ship.fit.fields = ship.fields;
         self.ship.fit.defaults = pilot::tally(ship.defaults.iter().copied());
-        self.ship.fit.stock = armament::fitted(
-            &self
-                .statics
-                .arsenal
-                .stock_fits(ship.id, &self.statics.outfits),
-        );
+        self.ship.fit.stock = armament::fitted(&self.statics.arsenal.stock_fits(
+            ship.id,
+            &self.statics.outfits,
+            self.setup.outfit_weapon_mods(),
+        ));
         self.ship.refit(
             &mut self.pilot,
             &self.statics,
@@ -1016,7 +1015,7 @@ mod tests {
             session
                 .statics
                 .arsenal
-                .player(&kept, &session.statics.outfits)
+                .player(&kept, &session.statics.outfits, RuleSource::Engine)
         );
         assert!(
             session.ship.fit.armament.mounts().is_empty(),
@@ -1165,7 +1164,7 @@ mod tests {
             session
                 .statics
                 .arsenal
-                .player(&before, &session.statics.outfits)
+                .player(&before, &session.statics.outfits, RuleSource::Engine)
         );
         let mounted: Vec<(WeaponId, u32)> = session
             .ship
@@ -1196,10 +1195,11 @@ mod tests {
         assert_eq!(own(FIGHTERS), 0, "by the engine the fighters are lost");
         assert_eq!(
             session.ship.fit.armament,
-            session
-                .statics
-                .arsenal
-                .player(&session.pilot.outfits, &session.statics.outfits)
+            session.statics.arsenal.player(
+                &session.pilot.outfits,
+                &session.statics.outfits,
+                RuleSource::Engine
+            )
         );
     }
 

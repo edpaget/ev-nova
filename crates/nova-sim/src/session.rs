@@ -39,13 +39,13 @@
 //! The player plots a course to a system on the star map: the fewest
 //! jumps along the hyperlinks, which the
 //! session's [`HyperlinkRule`] (the engine's, one way along each system's
-//! own links, unless `Session::with_hyperlinks` says otherwise) lets it
+//! own links, unless the rulebook's `hyperlinks` key reads otherwise) lets it
 //! follow. J
 //! ([`Session::begin_jump`]) is accepted when the
 //! [`hyperspace`](crate::hyperspace) rules allow a jump to the next system
 //! on it, with the no-jump zone applying where the session's
 //! [`JumpZoneRule`] says (the engine's, only in a system with a stellar
-//! that is no gate, unless `Session::with_jump_zone` says otherwise).
+//! that is no gate, unless the rulebook's `jump_zone` key reads otherwise).
 //! The ship then flies the pre-jump stage on its own, the player's
 //! controls ignored: it brakes and turns to the map bearing of that system
 //! as [`pre_jump`] says ([`Session::preparing_jump`]), and the jump begins
@@ -56,8 +56,8 @@
 //! the rest of the course still ahead. A ship with a multi-jump outfit
 //! passes on along the course in the same jump, as many systems as
 //! [`hops_per_jump`] gives, and enters only the last; the session's
-//! [`MultiJumpRule`] (the engine's unless `Session::with_multi_jump`
-//! says otherwise) decides whether the chain costs one jump's fuel and
+//! [`MultiJumpRule`] (the engine's unless the rulebook's `multi_jump` key
+//! reads otherwise) decides whether the chain costs one jump's fuel and
 //! days or each hop's. An arrival that made no hop clears the course, or
 //! drops its first hop when that stands at the arrival, and each rebuild
 //! point rewrites a hidden hop to the system at its place and cuts the
@@ -100,7 +100,7 @@
 //! Hyper Select ([`Session::select_next_system`], the original's `\`
 //! key) cycles the selection through the systems linked with the one the
 //! ship is in, as the session's [`HyperSelectRule`] says (the engine's
-//! unless `Session::with_hyper_select` says otherwise). By the engine's
+//! unless the rulebook's `hyper_select` key reads otherwise). By the engine's
 //! reading each press steps to the next Con slot that holds a link, moves
 //! only the selection and keeps the course; by
 //! [`HyperSelectRule::OneJumpCourse`] it leaves a one-jump course.
@@ -500,6 +500,7 @@ mod edit;
 mod effects_gain;
 mod eject;
 mod entry;
+mod escape_pods;
 mod escort_arrival;
 #[cfg(test)]
 mod escort_carriers;
@@ -564,6 +565,7 @@ mod jump_collapse;
 mod jump_exploration;
 mod jump_hops;
 mod jump_moves;
+mod jump_rekey;
 mod kept_berths;
 mod kept_rescues;
 mod killed_explosions;
@@ -611,6 +613,7 @@ mod npc_kinds;
 mod opening_rest;
 mod operator_moves;
 mod outbox;
+mod outfit_weapon_mods;
 mod outfits;
 mod owners_unset;
 #[cfg(test)]
@@ -637,10 +640,12 @@ mod player_wrap;
 mod players_hits;
 mod plunder_ammo;
 mod plunder_loop;
+mod pod_scoop;
 mod port;
 mod port_desc;
 mod precalced;
 mod prepare_frames;
+mod priming_passes;
 #[cfg(test)]
 mod quote_roll_order;
 mod radar;
@@ -649,6 +654,8 @@ mod ranks;
 mod rating_stretch;
 mod recharge;
 mod red_alert;
+#[cfg(test)]
+mod refilled_slot;
 mod refuel_dock;
 mod reinforcements;
 mod repair_dock;
@@ -664,6 +671,7 @@ mod secondary_select;
 mod self_destruct;
 mod self_repair;
 mod session_setup;
+mod settled_in_pass;
 mod setup;
 mod ship_change;
 mod ship_display;
@@ -672,6 +680,7 @@ mod ship_paint;
 mod shipyard_listing;
 mod shot_gain;
 mod shot_slots;
+mod shot_stellars;
 #[cfg(test)]
 mod slot_scoop;
 #[cfg(test)]
@@ -805,7 +814,7 @@ use crate::control::ScriptNote;
 use crate::date::{self, GameDate};
 use crate::flight::{Controls, FlightRules, ShipState, player_step};
 use crate::fuel::regenerate;
-#[cfg(any(test, doc))]
+#[cfg(doc)]
 use crate::gate::WormholeRule;
 use crate::gate::{
     self, GateArrivalRule, GateKind, GateRefusal, emerge, has_links, hypergate_exit, wormhole_exit,
@@ -815,12 +824,14 @@ use crate::glow::step_glow;
 use crate::govt::{Governments, HALF_JAMMING};
 use crate::grant::{GrantStock, Granted, PersonGrant};
 use crate::handling::Handling;
+#[cfg(any(test, doc))]
+use crate::hyperspace::MultiJumpRule;
 use crate::hyperspace::{
     CoLocated, JUMP_FUEL, JumpReadiness, JumpRefusal, RouteError, StarMap, arrival, check_jump,
     hold_jump, hops_per_jump, jump_zone,
 };
-#[cfg(any(test, doc))]
-use crate::hyperspace::{HyperSelectRule, HyperlinkRule, JumpZoneRule, MultiJumpRule};
+#[cfg(doc)]
+use crate::hyperspace::{HyperSelectRule, HyperlinkRule, JumpZoneRule};
 use crate::landing::{DockStage, LandOutcome, LandingRefusal, Standing, dock_request};
 use crate::legal::{self, Crime, LegalCode};
 use crate::market::{self, Direction, EscortHolds, Goods, Market, Markup, Order, TradeRefusal};
@@ -1150,7 +1161,8 @@ impl Session {
         catalog: &(impl PilotCatalog + CombatCatalog + AsteroidCatalog),
         rules: &Rulebook,
     ) -> Result<Self, StartError> {
-        let mut session = Self::load(catalog, Pilot::new(catalog, "")?, rules)?;
+        let mods = rules.source_for(RuleKey::OutfitWeaponMods);
+        let mut session = Self::load(catalog, Pilot::new_reading(catalog, "", mods)?, rules)?;
         // A new pilot's ship folds as `_ResetPlayer` leaves it
         // (@0x1d55a-0x1d565; see the `ship_display` module).
         session.ship.reset_fold();
@@ -1373,7 +1385,8 @@ impl Session {
         let defaults = pilot::default_outfits(catalog, ship);
         let outfits = catalog.outfits();
         let arsenal = Arsenal::read(catalog);
-        let stock = arsenal.stock_outfits(ship, &outfits);
+        let stock =
+            arsenal.stock_outfits(ship, &outfits, rules.source_for(RuleKey::OutfitWeaponMods));
         let ships = catalog.ships();
         fill_in(&mut pilot, &defaults, &stock, &ships);
         // A saved escort of no class spawns none (see `loaded_berths`).
@@ -1384,7 +1397,8 @@ impl Session {
             .map(|life| (life.id, life))
             .collect();
         let statics = Statics {
-            ammo_outfits: Arsenal::ammo_outfits(&outfits),
+            ammo_first_mod: Arsenal::ammo_outfits(&outfits, RuleSource::Engine),
+            ammo_any_mod: Arsenal::ammo_outfits_any_slot(&outfits),
             outfits,
             ships,
             warp_sounds: [catalog.warp_sound(), catalog.warp_sound_double_time()]
@@ -1630,12 +1644,21 @@ impl Session {
             .set_seeker_lock_angle(rules.source_for(RuleKey::SeekerLockAngle));
         self.space
             .combat
+            .set_locked_shot_ship_slot(rules.source_for(RuleKey::LockedShotShipSlot));
+        self.space
+            .combat
+            .set_reused_slot_shot_target(rules.source_for(RuleKey::ReusedSlotShotTarget));
+        self.space
+            .combat
             .set_quadrant_blind_spots(rules.source_for(RuleKey::QuadrantTurretBlindSpots));
         self.space
             .combat
             .set_player_forward_recoil(rules.source_for(RuleKey::PlayerForwardRecoil));
         self.space
             .combat
+            .set_combat_caps(rules.source_for(RuleKey::CombatCaps));
+        self.space
+            .boxes
             .set_combat_caps(rules.source_for(RuleKey::CombatCaps));
         self.space
             .combat
@@ -1657,13 +1680,19 @@ impl Session {
             .set_reused_shot_slot_roll(rules.source_for(RuleKey::ReusedShotSlotRoll));
         self.space
             .combat
-            .set_reused_shot_slot_spin(rules.source_for(RuleKey::ReusedShotSlotSpin));
-        self.space
-            .combat
             .set_ion_lockout(rules.source_for(RuleKey::IonFireLockout));
         self.space.read_reused_slot_rules(&rules);
         self.chart.read_rescue_rule(&rules);
+        let remount =
+            rules.source_for(RuleKey::OutfitWeaponMods) != self.setup.outfit_weapon_mods();
         self.setup.rules = rules;
+        // The armament is mounted by `RuleKey::OutfitWeaponMods`, as the
+        // rounds are read by it: a new reading mounts it again, so the two
+        // never read the mods differently (see the `outfit_weapon_mods`
+        // module).
+        if remount {
+            self.ship.remount(&self.pilot, &self.statics, &self.setup);
+        }
         self
     }
 
@@ -1674,72 +1703,6 @@ impl Session {
     #[must_use]
     pub fn rules(&self) -> &Rulebook {
         self.setup.rules()
-    }
-
-    /// This session with multi-jumps following `rule`; the engine's by
-    /// default.
-    ///
-    /// For the tests: no production code calls it, so only they set this reading.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn with_multi_jump(mut self, rule: MultiJumpRule) -> Self {
-        self.setup.multi_jump = rule;
-        self
-    }
-
-    /// This session with Hyper Select following `rule`; the engine's by
-    /// default.
-    ///
-    /// For the tests: no production code calls it, so only they set this reading.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn with_hyper_select(mut self, rule: HyperSelectRule) -> Self {
-        self.setup.hyper_select = rule;
-        self
-    }
-
-    /// This session with jumps following the hyperlinks under `rule`; the
-    /// engine's by default.
-    ///
-    /// For the tests: no production code calls it, so only they set this reading.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn with_hyperlinks(mut self, rule: HyperlinkRule) -> Self {
-        self.setup.hyperlinks = rule;
-        self
-    }
-
-    /// This session with the no-jump zone applying where `rule` says; the
-    /// engine's by default, only in a system with an ordinary stellar.
-    ///
-    /// For the tests: no production code calls it, so only they set this reading.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn with_jump_zone(mut self, rule: JumpZoneRule) -> Self {
-        self.setup.jump_zone = rule;
-        self
-    }
-
-    /// This session with ships coming out of hypergates and wormholes as
-    /// `rule` says; the engine's by default.
-    ///
-    /// For the tests: no production code calls it, so only they set this reading.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn with_gate_arrival(mut self, rule: GateArrivalRule) -> Self {
-        self.setup.gate_arrival = rule;
-        self
-    }
-
-    /// This session with unlinked wormholes leading where `rule` says; the
-    /// engine's by default.
-    ///
-    /// For the tests: no production code calls it, so only they set this reading.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn with_wormholes(mut self, rule: WormholeRule) -> Self {
-        self.setup.wormholes = rule;
-        self
     }
 
     /// The head of an advance pass in flight: the warp-ups and the
@@ -1767,9 +1730,10 @@ impl Session {
     }
 
     /// `_HandlePlayer`'s work on `frame` before its move, on `pass`: first
-    /// the tractor's hold on the player and the screen's white, at the very
-    /// top of `_HandlePlayer` (see the `tractor_hold` and `warp_stage`
-    /// modules), then the player's wrap (see the `player_wrap` module),
+    /// the tractor's hold on the player, at the very top of `_HandlePlayer`
+    /// (see the `tractor_hold` module), after the screen's white, which
+    /// its callers run unless the keys are ignored (see the `warp_stage`
+    /// and `priming_passes` modules), then the player's wrap (see the `player_wrap` module),
     /// then its lost-target check (see the `lost_target`
     /// module), then the Red Alert's check (@0x68c79), then the work that
     /// runs after the key block ([`Session::work_from_key_block`]): the
@@ -1782,7 +1746,6 @@ impl Session {
         // The very top of `_HandlePlayer`, before the pod's return (see
         // the `tractor_hold` module).
         self.hold_player(pass);
-        self.ship.gamma_tick(self.mode.jump());
         self.wrap_player_position();
         self.let_go_of_lost_target();
         self.red_alert_check(frame);
@@ -1792,22 +1755,30 @@ impl Session {
     /// `_HandlePlayer`'s move under `controls` on `pass`: the escape pod's
     /// flight while its countdown runs, in place of the controls, the
     /// jump, the fuel and the dock approach (see the `eject` module's
-    /// `pod_tick`), else the ship's motion ([`Session::move_player`]) and
-    /// the dock approach (see the `clearance` module).
-    fn player_move(&mut self, controls: Controls, pass: GamePass) {
-        if self.pod.is_some() {
+    /// `pod_tick`), else L's pick (see the `land_key` module) and the dock
+    /// approach (see the `clearance` module), then the ship's motion
+    /// ([`Session::move_player`]). A destroyed player
+    /// never flies the pod, whatever its countdown holds: `_HandlePlayer`
+    /// tests the active byte (@0x68700) before the pod block (@0x68d1d),
+    /// so a destroyed player beside a word a stray beam stepped takes the
+    /// dead branch and is held, the word left as it is (see the
+    /// `stray_words` module).
+    fn player_move(&mut self, controls: Controls, pass: GamePass, head: game_work::PlayerHead) {
+        if self.pod.is_some() && self.ship.condition != Condition::Destroyed {
             self.pod_tick();
             return;
         }
-        self.move_player(controls, pass);
-        // After the ship moves, though `_HandlePlayer` runs the approach
-        // (@0x6a97a) before its position step (@0x6d4b0); @0x6864d, which
-        // the `clearance` module reads as the move, is
-        // `_WrapPlayerPosition`, in the `player_wrap` module (filed as
-        // hud-fidelity-followups' dock approach phase). L's pick
-        // (@0x6a8c5) runs before it.
+        // `_HandlePlayer` runs L's pick and the dock approach
+        // (@0x6a8c5-0x6a97a) before its position step (@0x6d4b0-0x6d4eb),
+        // so both read the ship where the last frame left it. The trigger,
+        // reloads, recoil and regeneration (`player_fires`,
+        // @0x6ab55-0x6d093) run before this here, where the original runs
+        // them after the approach: that only reorders one tick's sounds
+        // and writes nothing the pick or the approach reads, so it crosses
+        // no boundary the player sees.
         self.land_key_pass();
         self.dock_approach();
+        self.move_player(controls, pass, head);
     }
 
     /// The ship's motion in [`Session::player_move`] on `pass`: by its
@@ -1825,10 +1796,13 @@ impl Session {
     /// player leads let go of their targets (`_MakeEscortsHyperWithParent`
     /// @0x3fdc0-0x3fdc2; see the `escorts` module). A ship that is not
     /// intact ignores the controls and drifts, slowing by
-    /// [`crate::flight::DISABLED_DRAG`] a pass before it moves, its
-    /// pre-jump collapsing first (see the `jump_collapse` module), and a
+    /// [`crate::flight::DISABLED_DRAG`] a pass before it moves, and a
     /// destroyed one stays where it is, letting go of its targets and
     /// counting the hold after its explosion down (see `dead_tick`).
+    ///
+    /// A player disabled or dying as the pass began (`start`,
+    /// [`game_work::PlayerHead::disabled`]) has its pre-jump collapse
+    /// first, whatever its condition now (see the `jump_collapse` module).
     ///
     /// The warp's clock moves on only on the advance pass: it is
     /// `TickCount`, real time, which double time's second pass doesn't
@@ -1846,20 +1820,20 @@ impl Session {
     /// while it is on, and the box bleeds back in the pre-jump and the
     /// warp's run as at any other time it is off. The ship's tick is
     /// capped by the box the last tick left ([`Session::player_caps`]).
-    fn move_player(&mut self, controls: Controls, pass: GamePass) {
+    fn move_player(&mut self, controls: Controls, pass: GamePass, start: game_work::PlayerHead) {
         let again = pass == GamePass::Again;
         let gain = self.speed_mult();
         self.ship
             .engage_afterburner(&self.pilot, self.mode.jump(), controls);
+        if start.disabled {
+            self.collapse_jump(again);
+        }
         let controls = match self.ship.condition {
             Condition::Intact => controls,
-            Condition::Disabled | Condition::Dying { .. } => {
-                self.collapse_jump(again);
-                Controls {
-                    face: controls.face,
-                    ..Controls::default()
-                }
-            }
+            Condition::Disabled | Condition::Dying { .. } => Controls {
+                face: controls.face,
+                ..Controls::default()
+            },
             Condition::Destroyed => {
                 self.ship.stop_thrust(&mut self.out);
                 self.ship.player.velocity = Vec2::ZERO;
@@ -1914,7 +1888,12 @@ impl Session {
                     warp: if again { warp } else { warp.saturating_add(1) },
                 });
                 let bearing = self.chart.jump_aim(&self.pilot, to);
-                self.fly_warp_stage(bearing, controls);
+                // The natural end returns before the ionization, the burn
+                // and the fuel's regeneration (`jmp 0x71113` @0x6c625; see
+                // the `settled_in_pass` module).
+                if self.fly_warp_stage(bearing, controls) {
+                    return;
+                }
                 self.ship.ionize_tick(&self.pilot, &self.setup, gain);
                 self.burn_afterburner();
                 // `_HandlePlayer` regenerates and clamps the fuel through
@@ -2037,8 +2016,10 @@ impl Session {
     /// coming out of a gate shown that the governments allow, or by
     /// hyperspace. Then every slot is displayed
     /// ([`Session::prepare_all_sprites`]), as the take-off
-    /// (`_HandlePlayerDockRequest` @0x6764e) and the entry into flight
-    /// (`_PlayGame` @0x45834) that populate the system display them.
+    /// (`_HandlePlayerDockRequest` @0x6764e) that populates the system
+    /// displays them, and as the developer's flight's first step does.
+    /// Game entry sets the ships up without it, before its own two
+    /// (see the `priming_passes` module).
     pub fn populate(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -2097,7 +2078,7 @@ impl Session {
             .spawn_table(&self.pilot, &self.statics, &self.setup, catalog);
         let (missions, set_up) =
             self.setup_mission_ships(&table, entry.and_then(Entry::hook_pending), chance);
-        let facts = self.ship.facts(&self.pilot, &self.statics);
+        let facts = self.ship.facts(&self.pilot, &self.statics, &self.setup);
         let world = World {
             govts: &self.statics.govts,
             persons: PersonWorld {
@@ -2245,7 +2226,7 @@ impl Session {
     fn step_traffic<R>(&mut self, f: impl FnOnce(&mut Traffic, World<'_>) -> R) -> R {
         self.lend_defence_ships();
         let system_govt = self.chart.galaxy.govt(self.pilot.system);
-        let facts = self.ship.facts(&self.pilot, &self.statics);
+        let facts = self.ship.facts(&self.pilot, &self.statics, &self.setup);
         let targeted = self.space.combat.targeted_damage();
         let type_widths = self.gate_type_widths();
         let world = World {
@@ -2513,7 +2494,8 @@ impl Session {
     #[cfg(test)]
     #[must_use]
     pub(crate) fn secondary_line_count(&self) -> Option<u32> {
-        self.ship.secondary_line_count(&self.pilot, &self.statics)
+        self.ship
+            .secondary_line_count(&self.pilot, &self.statics, &self.setup)
     }
 
     /// Notes the heading each ship is drawn at as the fight's tick ends,
@@ -3055,13 +3037,15 @@ impl Session {
     /// turns to the map bearing of that system as [`pre_jump`] says, and
     /// the jump itself begins on the tick it is ready, or here and now if
     /// it is ready already. Once accepted the jump is committed: J again
-    /// during the stage gives the same system and changes nothing, without
+    /// during the stage or once the jump has begun gives the same system
+    /// and changes nothing (see the `jump_rekey` module), without
     /// asking the rules again, so a ship that brakes into its no-jump zone
     /// still jumps. Once it has stopped braking the warp's clock runs (see
     /// `Session::move_player`), and the warp-up sounds here when the ship needs
     /// no braking. Through the warp stage the ship moves off toward the
     /// bearing and the world runs on (see the `warp_stage` module) until
-    /// the warp ends ([`Session::warp_end_due`]); the scans are held past
+    /// the warp ends and the jump arrives in that pass (see the
+    /// `settled_in_pass` module); the scans are held past
     /// the warp's lead-in (`Session::in_warp_lead_in`).
     /// Only this first hop of a multi-jump turns and slows: the rest are
     /// made in hyperspace, on arrival.
@@ -3083,11 +3067,11 @@ impl Session {
         if self.ship.condition != Condition::Intact {
             return Err(JumpRefusal::Disabled);
         }
-        if let Some(Jump::PreJump { to, .. }) = self.mode.jump() {
+        // A jump under way carries on whatever holds the ship (@0x6b21d).
+        if let Some(Jump::PreJump { to, .. } | Jump::Hyperspace { to, .. }) = self.mode.jump() {
             return Ok(to);
         }
-        // A jump under way carries on whatever holds the ship (@0x6b21d).
-        let held = self.mode.jump().is_none() && self.held_by_other();
+        let held = self.held_by_other();
         let next = hold_jump(self.check_next_jump(), held).inspect_err(|refusal| {
             if self.jump_refusal_told(*refusal) {
                 self.out.sounds.push(SimSound::Refused);
@@ -3095,7 +3079,7 @@ impl Session {
         })?;
         let bearing = self.chart.jump_aim(&self.pilot, next);
         // A new jump, for the fighters' warning (the `wait_for_me` module).
-        self.ship.warp.jump_accepted |= self.mode.jump().is_none();
+        self.ship.warp.jump_accepted = true;
         self.stage_jump(next, bearing, None);
         Ok(next)
     }
@@ -3118,7 +3102,7 @@ impl Session {
             jump_zone(
                 &self.chart.sites,
                 self.ship.fit.stats.jump_distance,
-                self.setup.jump_zone,
+                self.setup.jump_zone(),
             ),
         )
     }
@@ -3407,7 +3391,7 @@ impl Session {
         // last hop's stand-in on the multi-jump branch, else the raw Con
         // target, by the engine's `arrival_system`.
         let multi_jump =
-            on_course && hops_per_jump(self.ship.fit.stats.multi_jump, self.setup.multi_jump) > 1;
+            on_course && hops_per_jump(self.ship.fit.stats.multi_jump, self.setup.multi_jump()) > 1;
         let written = arrival_system::jump_system(&self.setup, multi_jump, at, raw);
         // The arrival written as the player's system and explored at once
         // (@0x6be0b, @0x6be12). The written system shares its stand-in's
@@ -3975,7 +3959,7 @@ impl Session {
     /// Enters the wormhole whose entry is pending and gives the system the
     /// ship comes out in: through the wormhole [`wormhole_exit`] rolls on
     /// `chance`, under the session's [`WormholeRule`] (the engine's unless
-    /// `Session::with_wormholes` says otherwise), read from `catalog`.
+    /// the rulebook's `wormhole_exit` key reads otherwise), read from `catalog`.
     /// Any outcome ends the entry and lets go of the nav selection, the
     /// mode kept, as the take-off's tail the original's wormhole joins
     /// does (@0x66edb-0x66f40, @0x674d2). With no exit it beeps
@@ -3986,7 +3970,7 @@ impl Session {
     ///
     /// Out of a hypergate or wormhole the ship comes out as the session's
     /// [`GateArrivalRule`] says (the engine's unless
-    /// `Session::with_gate_arrival` says otherwise): by the engine's at
+    /// the rulebook's `gate_arrival` key reads otherwise): by the engine's at
     /// the exit gate, as [`emerge`] says, with no day passing; like a jump,
     /// where a jump between the two systems arrives, with a jump's days
     /// passing, each stepping the planetary events on `chance`. Either way
@@ -4036,9 +4020,14 @@ impl Session {
                 .galaxy
                 .holder(id, self.statics.listers(id), player)
         };
-        let Some(exit) =
-            wormhole_exit(here, player, &sites, owner_of, self.setup.wormholes, chance)
-        else {
+        let Some(exit) = wormhole_exit(
+            here,
+            player,
+            &sites,
+            owner_of,
+            self.setup.wormholes(),
+            chance,
+        ) else {
             self.refuse_no_exit(catalog, chance);
             return Err(GateRefusal::NoExit);
         };
@@ -4085,7 +4074,7 @@ impl Session {
         if !exit_elsewhere {
             self.stellar_pass(PassKind::Entry, GateHolds::Entered(entered), chance);
         }
-        let ship = match self.setup.gate_arrival {
+        let ship = match self.setup.gate_arrival() {
             GateArrivalRule::Engine => emerge(exit, self.top_speed(), chance),
             GateArrivalRule::LikeJump => {
                 let map = |id| self.chart.galaxy.position(id).unwrap_or_default();
@@ -4176,6 +4165,8 @@ impl Session {
         self.port.bar_news = None;
         self.chart.bar_nav = None;
         self.space.combat.clear();
+        // `_killShots` frees the escape pods too (@0x39e75-0x39e84).
+        self.space.clear_pods();
         // `_HandlePlayerDockRequest` sets `_killBoxes` (@0x66f40) and
         // `_killAsteroids` (@0x66f57).
         self.space.clear_boxes();
@@ -5142,7 +5133,11 @@ impl Session {
         let old_mass = self.ship.fit.fields.mass;
         self.drop_fighters(|_, _, _| false);
         let escorts: Vec<EscortHolds> = self.escort_holds().collect();
-        let fits = self.statics.arsenal.stock_fits(ship, &self.statics.outfits);
+        let fits = self.statics.arsenal.stock_fits(
+            ship,
+            &self.statics.outfits,
+            self.setup.outfit_weapon_mods(),
+        );
         // The carry reads the outfit counts as `OnRetire` leaves them, the
         // stock still held in the weapon array left out, so a persistent
         // outfit held there is cleared with the array (@0x5edba-0x5ee19;
@@ -5625,7 +5620,7 @@ impl Session {
                         // Any slot, as `_PlunderDialogUpdate` names them
                         // (@0x92be2-0x92ccf).
                         named: crate::combat::armament::lowest_ammo_outfit(
-                            &self.statics.ammo_outfits,
+                            self.statics.named_ammo_outfits(),
                             slot,
                         ),
                     })
@@ -6403,14 +6398,7 @@ impl PlayerShip {
         // `dock_scan` module); a stock class's exits stand.
         let hull = setup.hull(statics, pilot.ship);
         self.fit.hull = statics.fitted_hull(&hull, pilot.ship, &self.counted_outfits(pilot));
-        // No refit writes the exit cursors (+0xc8fe-+0xc905) or the fold
-        // set (+0xc8fc): the new armament carries the old's (a change of
-        // class resets the fold set after, in `become_class`).
-        self.fit.armament = statics
-            .arsenal
-            .player(&pilot.outfits, &statics.outfits)
-            .with_exit_cursors(*self.fit.armament.exit_cursors())
-            .with_fold_set(self.fit.armament.fold_set());
+        self.mount(pilot, statics, setup);
         let stats = self.current_stats(pilot, statics);
         let reserves = &mut pilot.reserves;
         for (gauge, max, hold) in [
@@ -6496,6 +6484,21 @@ impl PlayerShip {
         self.secondary
     }
 
+    /// Mounts `pilot`'s weapon outfits as its armament, each read from the
+    /// mods [`RuleKey::OutfitWeaponMods`] says
+    /// ([`Arsenal::player`](crate::combat::armament::Arsenal::player)): the
+    /// refit's, and [`Session::with_rules`]'s. No refit writes the exit
+    /// cursors (+0xc8fe-+0xc905) or the fold set (+0xc8fc): the new
+    /// armament carries the old's (a change of class resets the fold set
+    /// after, in `become_class`).
+    fn mount(&mut self, pilot: &Pilot, statics: &Statics, setup: &Setup) {
+        self.fit.armament = statics
+            .arsenal
+            .player(&pilot.outfits, &statics.outfits, setup.outfit_weapon_mods())
+            .with_exit_cursors(*self.fit.armament.exit_cursors())
+            .with_fold_set(self.fit.armament.fold_set());
+    }
+
     /// The count the status bar's secondary weapon line shows after the
     /// selected secondary's name, if any: the rounds of the weapon its
     /// [`line_count`](crate::combat::weapon::line_count) names, as
@@ -6503,11 +6506,11 @@ impl PlayerShip {
     /// it; none when that names none, nothing is selected, or the
     /// session has no record of the weapon.
     #[must_use]
-    fn secondary_line_count(&self, pilot: &Pilot, statics: &Statics) -> Option<u32> {
+    fn secondary_line_count(&self, pilot: &Pilot, statics: &Statics, setup: &Setup) -> Option<u32> {
         let counted = statics.arsenal.weapon(self.secondary?)?.line_count?;
         Some(outfit_rounds(
             &pilot.outfits,
-            &statics.ammo_outfits,
+            statics.ammo_outfits(setup.outfit_weapon_mods()),
             counted,
         ))
     }
@@ -7020,7 +7023,11 @@ impl Chart {
         setup: &Setup,
         to: SystemId,
     ) -> Result<&'a [SystemId], RouteError> {
-        match self.galaxy.map().route(pilot.system, to, setup.hyperlinks) {
+        match self
+            .galaxy
+            .map()
+            .route(pilot.system, to, setup.hyperlinks())
+        {
             Ok(route) => {
                 pilot.restart_course(pilot.system);
                 pilot.course = route;
@@ -8688,9 +8695,13 @@ pub(super) mod tests {
     /// `catalog`'s session under `rule`, its course plotted to 131 and the
     /// ship at the centre.
     fn at_the_centre(catalog: &FakePilotCatalog, rule: JumpZoneRule) -> Session {
-        let mut session = Session::start(catalog)
-            .expect("starts")
-            .with_jump_zone(rule);
+        let mut session =
+            Session::start(catalog)
+                .expect("starts")
+                .with_rules(crate::session::setup::reading(
+                    crate::rulebook::RuleKey::JumpZone,
+                    rule,
+                ));
         session.plot_course(SystemId(131)).expect("a route");
         session.ship.player.position = Vec2::ZERO;
         session
@@ -11710,6 +11721,7 @@ pub(super) mod tests {
         let again = |session: &mut Session| {
             session.tick_again(
                 Controls::default(),
+                &crate::testkit::catalog(),
                 &crate::ai::NovaAi::default(),
                 Rules::default(),
                 &mut NeverFires,
@@ -12330,9 +12342,13 @@ pub(super) mod tests {
 
     /// Plots a course to 134, flies out and begins the jump.
     pub(super) fn bound_for_134(catalog: &FakePilotCatalog, rule: MultiJumpRule) -> Session {
-        let mut session = Session::start(catalog)
-            .expect("starts")
-            .with_multi_jump(rule);
+        let mut session =
+            Session::start(catalog)
+                .expect("starts")
+                .with_rules(crate::session::setup::reading(
+                    crate::rulebook::RuleKey::MultiJump,
+                    rule,
+                ));
         session.plot_course(SystemId(134)).expect("a route");
         assert_eq!(session.course(), ids(&[131, 132, 134]));
         fly_out(&mut session, &catalog);
@@ -17532,15 +17548,27 @@ pub(super) mod tests {
             .with_override(RuleKey::NpcLanding, RuleSource::Bible);
     }
 
+    /// A held fire of the [`blaster`]: the player's primary key, which
+    /// its trigger reads ([`Session::hold_trigger`]), and an NPC's pick
+    /// (`only`, never read for the player).
     pub(super) const FIRE: Trigger = Trigger {
         primary: true,
         secondary: None,
-        only: None,
+        only: Some(WeaponId(128)),
         bays: false,
         bays_after: false,
         point_defence: false,
         keep: None,
     };
+
+    /// [`FIRE`] as `npc` holds it: its pick its first weapon, whatever it
+    /// carries (none when it carries none).
+    pub(super) fn fire_of(npc: &Npc) -> Trigger {
+        Trigger {
+            only: npc.armament.mounts().first().map(|mount| mount.spec.id),
+            ..FIRE
+        }
+    }
 
     /// The fight's events about NPC 0, other than its firing.
     fn about_the_npc(events: &[CombatEvent]) -> Vec<CombatEvent> {
@@ -17573,7 +17601,7 @@ pub(super) mod tests {
             },
             order: None,
         });
-        escort.trigger = FIRE;
+        escort.trigger = fire_of(escort);
         escort.target = Some(ShipRef::Player);
         session.hold_trigger(FIRE);
         session.chart.target = Some(NpcId(0));
@@ -17612,7 +17640,7 @@ pub(super) mod tests {
             },
             order: None,
         });
-        escort.trigger = FIRE;
+        escort.trigger = fire_of(escort);
         escort.target = Some(ShipRef::Player);
         session.lead_out_of_gate(StellarId(310), Vec2::new(0.0, -100.0), &mut NeverFires);
         assert!(session.npcs()[0].emerging());
@@ -18094,7 +18122,7 @@ pub(super) mod tests {
             behav: crate::mission::ships::ShipBehav::EscortPlayer,
             formation,
         });
-        ship.trigger = FIRE;
+        ship.trigger = fire_of(ship);
         ship.target = Some(ShipRef::Player);
         session.hold_trigger(FIRE);
         session.chart.target = Some(NpcId(0));
@@ -18205,8 +18233,8 @@ pub(super) mod tests {
             Goal::Idle
         }
 
-        fn trigger(&self, _npc: &Npc, _around: &Surroundings) -> Trigger {
-            FIRE
+        fn trigger(&self, npc: &Npc, _around: &Surroundings) -> Trigger {
+            fire_of(npc)
         }
     }
 
@@ -18594,6 +18622,18 @@ pub(super) mod tests {
         );
     }
 
+    #[test]
+    fn the_rulebook_says_how_a_locked_shot_reads_its_asteroids_slot() {
+        let catalog = armed();
+        let session = |rules: Rulebook| Session::start(&catalog).expect("starts").with_rules(rules);
+        let mut none = Combat::default();
+        none.set_locked_shot_ship_slot(RuleSource::Bible);
+        assert_ne!(none, Combat::default());
+        let bible =
+            Rulebook::default().with_override(RuleKey::LockedShotShipSlot, RuleSource::Bible);
+        assert_eq!(session(bible).space.combat, none);
+    }
+
     // Jamming and sensor interference (see `combat::jamming` and the
     // `projectile` module).
 
@@ -18756,7 +18796,7 @@ pub(super) mod tests {
                 session.pilot.outfits.insert(OutfitId(240), owned);
             }
             let npc = &mut session.space.traffic.npcs_mut()[0];
-            npc.trigger = FIRE;
+            npc.trigger = fire_of(npc);
             npc.target = Some(ShipRef::Player);
             let heading = missile_after(
                 &mut session,
@@ -18788,7 +18828,7 @@ pub(super) mod tests {
             let mut session = beside_an_npc(&catalog, AiType::Warship);
             assert_eq!(session.pilot.ship, ShipId(128));
             let npc = &mut session.space.traffic.npcs_mut()[0];
-            npc.trigger = FIRE;
+            npc.trigger = fire_of(npc);
             npc.target = Some(ShipRef::Player);
             let heading = missile_after(
                 &mut session,
@@ -20936,7 +20976,10 @@ pub(super) mod tests {
                 crate::combat::weapon::WeaponSpec::new(&weapon),
                 1,
             )]);
-            ship.trigger = FIRE;
+            ship.trigger = Trigger {
+                only: Some(weapon.id),
+                ..FIRE
+            };
             ship.target = Some(ShipRef::Player);
         }
         session
@@ -21432,7 +21475,8 @@ pub(super) mod tests {
         pirate.govt = None;
         pirate.state.position.x += 100.0;
         let pirate = session.space.traffic.add_npc(pirate);
-        session.space.traffic.npcs_mut()[0].trigger = FIRE;
+        let npc = &mut session.space.traffic.npcs_mut()[0];
+        npc.trigger = fire_of(npc);
         for _ in 0..12 {
             work(&mut session, &catalog, Controls::default());
         }
@@ -21459,7 +21503,7 @@ pub(super) mod tests {
             let shooter = &mut session.space.traffic.npcs_mut()[0];
             shooter.booty = None;
             shooter.leader = Some(lead);
-            shooter.trigger = FIRE;
+            shooter.trigger = fire_of(shooter);
             shooter.target = Some(ShipRef::Player);
             for _ in 0..12 {
                 work(&mut session, &catalog, Controls::default());
@@ -23952,7 +23996,8 @@ pub(super) mod tests {
         }
     }
 
-    /// Every NPC idles, targets the player and holds its trigger.
+    /// Every NPC idles, targets the player and picks its first weapon
+    /// ([`fire_of`]) each time it thinks.
     #[derive(Debug)]
     pub(super) struct Attacking;
 
@@ -23961,8 +24006,8 @@ pub(super) mod tests {
             Goal::Idle
         }
 
-        fn trigger(&self, _npc: &Npc, _around: &Surroundings) -> Trigger {
-            FIRE
+        fn trigger(&self, npc: &Npc, _around: &Surroundings) -> Trigger {
+            fire_of(npc)
         }
 
         fn target(&self, _npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
@@ -26417,7 +26462,15 @@ pub(super) mod tests {
     pub(super) fn ammo_boarding(
         catalog: &FakePilotCatalog,
     ) -> (Session, Result<Boarding, BoardRefusal>) {
-        let mut session = alongside(catalog);
+        ammo_boarding_by(catalog, Rulebook::default())
+    }
+
+    /// [`ammo_boarding`] with the session reading `rules` as it boards.
+    pub(super) fn ammo_boarding_by(
+        catalog: &FakePilotCatalog,
+        rules: Rulebook,
+    ) -> (Session, Result<Boarding, BoardRefusal>) {
+        let mut session = alongside(catalog).with_rules(rules);
         let opened = session.board(
             &NovaLaw::default(),
             &NovaBoarding::default(),
@@ -28650,9 +28703,13 @@ pub(super) mod tests {
 
     #[test]
     fn the_one_jump_course_reading_still_plots_a_one_jump_course() {
-        let mut session = Session::start(&hub())
-            .expect("starts")
-            .with_hyper_select(HyperSelectRule::OneJumpCourse);
+        let mut session =
+            Session::start(&hub())
+                .expect("starts")
+                .with_rules(crate::session::setup::reading(
+                    crate::rulebook::RuleKey::HyperSelect,
+                    HyperSelectRule::OneJumpCourse,
+                ));
         session.plot_course(SystemId(132)).expect("a route");
         assert_eq!(session.select_next_system(), Some(SystemId(131)));
         assert_eq!(session.course(), ids(&[131]));
@@ -28734,19 +28791,26 @@ pub(super) mod tests {
             Err(RouteError::Unreachable)
         );
         assert_eq!(session.course(), [], "cleared");
-        let mut session = Session::start(&hub())
-            .expect("starts")
-            .with_hyperlinks(HyperlinkRule::BothWays);
+        let mut session =
+            Session::start(&hub())
+                .expect("starts")
+                .with_rules(crate::session::setup::reading(
+                    crate::rulebook::RuleKey::Hyperlinks,
+                    HyperlinkRule::BothWays,
+                ));
         assert_eq!(session.plot_course(SystemId(136)), Ok(&ids(&[136])[..]));
     }
 
     #[test]
     fn hyper_select_by_the_one_jump_course_reading_never_jumps_against_a_one_way_link() {
         let cycle = |hyperlinks| {
-            let mut session = Session::start(&hub())
-                .expect("starts")
-                .with_hyper_select(HyperSelectRule::OneJumpCourse)
-                .with_hyperlinks(hyperlinks);
+            let mut session = Session::start(&hub()).expect("starts").with_rules(
+                crate::session::setup::reading(crate::rulebook::RuleKey::Hyperlinks, hyperlinks)
+                    .with_override(
+                        crate::rulebook::RuleKey::HyperSelect,
+                        crate::rulebook::RuleSource::Bible,
+                    ),
+            );
             (0..4)
                 .map(|_| session.select_next_system().expect("one"))
                 .collect::<Vec<_>>()
@@ -28757,9 +28821,13 @@ pub(super) mod tests {
 
     #[test]
     fn hyper_select_by_the_one_jump_course_reading_cycles_every_jump() {
-        let mut session = Session::start(&hub())
-            .expect("starts")
-            .with_hyper_select(HyperSelectRule::OneJumpCourse);
+        let mut session =
+            Session::start(&hub())
+                .expect("starts")
+                .with_rules(crate::session::setup::reading(
+                    crate::rulebook::RuleKey::HyperSelect,
+                    HyperSelectRule::OneJumpCourse,
+                ));
         assert_eq!(session.select_next_system(), Some(SystemId(131)));
         assert_eq!(session.select_next_system(), Some(SystemId(134)));
         session.plot_course(SystemId(132)).expect("a route");
@@ -29265,7 +29333,10 @@ pub(super) mod tests {
     #[test]
     fn by_the_bible_a_wormhole_rolls_over_the_unlinked_ones_only() {
         let catalog = wormholes();
-        let mut session = at_wormhole(&catalog).with_wormholes(WormholeRule::UnlinkedOnly);
+        let mut session = at_wormhole(&catalog).with_rules(crate::session::setup::reading(
+            crate::rulebook::RuleKey::WormholeExit,
+            WormholeRule::UnlinkedOnly,
+        ));
         let mut chance = Scripted::default();
         assert_eq!(
             session.enter_wormhole(&catalog, &mut chance),
@@ -29318,7 +29389,10 @@ pub(super) mod tests {
             disasters: surplus().disasters,
             ..gated()
         };
-        let mut session = at_gate(&catalog).with_gate_arrival(GateArrivalRule::LikeJump);
+        let mut session = at_gate(&catalog).with_rules(crate::session::setup::reading(
+            crate::rulebook::RuleKey::GateArrival,
+            GateArrivalRule::LikeJump,
+        ));
         let mut chance = Scripted::answering(&[true]);
         assert_eq!(
             session.enter_hypergate(Some(SystemId(131)), &catalog, &mut chance),
@@ -29577,7 +29651,10 @@ pub(super) mod tests {
     #[test]
     fn a_gate_like_a_jump_draws_its_days_before_the_population() {
         let catalog = with_event(busy(gated()));
-        let mut session = at_gate(&catalog).with_gate_arrival(GateArrivalRule::LikeJump);
+        let mut session = at_gate(&catalog).with_rules(crate::session::setup::reading(
+            crate::rulebook::RuleKey::GateArrival,
+            GateArrivalRule::LikeJump,
+        ));
         let mut chance = Logged::default();
         session
             .enter_hypergate(Some(SystemId(131)), &catalog, &mut chance)

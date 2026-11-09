@@ -1742,19 +1742,18 @@ mod tests {
         };
         let mut reloading = shooter(&[short(128), slow, missile(132)], ATTACK);
         let mut fuel = reloading.reserves.fuel;
-        reloading.armament.fire(
-            Trigger {
-                only: Some(WeaponId(131)),
-                ..Trigger::default()
-            },
+        let volley = reloading.armament.fire_pick(
+            WeaponId(131),
             Condition::Intact,
             crate::combat::armament::Shooter::PLAYER,
             &mut LauncherRounds::default(),
             &mut fuel,
             &mut crate::chance::NeverFires,
-            &mut crate::combat::report::Reports::default(),
+            RuleSource::Engine,
             &mut |_| Some(crate::combat::aim::Aim::along(0.0, None)),
+            None,
         );
+        assert!(volley.is_some(), "fired, so reloading");
         assert_eq!(
             fired(&reloading, 0.0, -300.0, 50.0),
             None,
@@ -3141,19 +3140,18 @@ mod tests {
         assert_eq!(fired(&slow, 0.0, -100.0, 50.0), id(128));
         let mut fuel = slow.reserves.fuel;
         let mut rounds = LauncherRounds::default();
-        slow.armament.fire(
-            Trigger {
-                only: Some(WeaponId(128)),
-                ..Trigger::default()
-            },
+        let volley = slow.armament.fire_pick(
+            WeaponId(128),
             Condition::Intact,
             crate::combat::armament::Shooter::PLAYER,
             &mut rounds,
             &mut fuel,
             &mut crate::chance::NeverFires,
-            &mut crate::combat::report::Reports::default(),
+            RuleSource::Engine,
             &mut |_| Some(crate::combat::aim::Aim::along(0.0, None)),
+            None,
         );
+        assert!(volley.is_some(), "fired, so reloading");
         assert_eq!(fired(&slow, 0.0, -100.0, 50.0), None, "reloading");
     }
 
@@ -3730,19 +3728,18 @@ mod tests {
         };
         let mut reloading = shooter(&[short(128), missile(132), slow], ATTACK);
         let mut fuel = reloading.reserves.fuel;
-        reloading.armament.fire(
-            Trigger {
-                only: Some(WeaponId(131)),
-                ..Trigger::default()
-            },
+        let volley = reloading.armament.fire_pick(
+            WeaponId(131),
             Condition::Intact,
             crate::combat::armament::Shooter::PLAYER,
             &mut LauncherRounds::default(),
             &mut fuel,
             &mut crate::chance::NeverFires,
-            &mut crate::combat::report::Reports::default(),
+            RuleSource::Engine,
             &mut |_| Some(crate::combat::aim::Aim::along(0.0, None)),
+            None,
         );
+        assert!(volley.is_some(), "fired, so reloading");
         assert_eq!(fired(&reloading, 0.0, -300.0, 50.0), None);
     }
 

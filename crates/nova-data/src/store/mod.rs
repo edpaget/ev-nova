@@ -245,7 +245,7 @@ pub use self::shot_spin::shot_spin_id;
 pub use self::spin_sprite::{SpinSheet, SpinSpriteError};
 pub use self::sprite::{
     LayerError, LayerSprite, SheetScan, ShipLayer, ShipLayerInfos, ShipLayers, ShipSprite,
-    ShipSpriteInfo, ShipSpriteWords, SpriteError,
+    ShipSpriteFrame, ShipSpriteInfo, ShipSpriteWords, SpriteError,
 };
 pub use self::stand_in::{Outline, OutlineTriangle, StandIn, StandInOf, StarDot};
 pub use self::stellar_sprite::{

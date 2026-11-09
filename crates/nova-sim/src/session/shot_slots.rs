@@ -39,7 +39,7 @@ impl Space {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use super::super::tests::{FIRE, armed, facing_an_npc};
+    use super::super::tests::{FIRE, armed, facing_an_npc, fire_of};
     use super::super::*;
     use crate::catalog::WeaponRecord;
 
@@ -96,12 +96,6 @@ mod tests {
         let other =
             Rulebook::default().with_override(RuleKey::ReusedShotSlotRoll, RuleSource::Bible);
         assert_eq!(session(other).space.combat, no_roll);
-        let mut no_spin = Combat::default();
-        no_spin.set_reused_shot_slot_spin(RuleSource::Bible);
-        assert_ne!(no_spin, Combat::default());
-        let other =
-            Rulebook::default().with_override(RuleKey::ReusedShotSlotSpin, RuleSource::Bible);
-        assert_eq!(session(other).space.combat, no_spin);
     }
 
     /// [`armed`] with its ships firing a shell that releases one turret
@@ -146,7 +140,7 @@ mod tests {
             let rules = Rulebook::default().with_override(RuleKey::SubmunitionSourceSlot, source);
             let mut session = facing_an_npc(&catalog, 180).with_rules(rules);
             let npc = &mut session.space.traffic.npcs_mut()[0];
-            npc.trigger = FIRE;
+            npc.trigger = fire_of(npc);
             npc.target = Some(ShipRef::Player);
             let berth = npc.berth;
             work(&mut session, &catalog, Controls::default());
@@ -204,40 +198,5 @@ mod tests {
             .expect("starts")
             .with_slot_sprites(session.slot_sprites().clone());
         assert_eq!(next.space.combat.shot_slots(), left);
-    }
-
-    #[test]
-    fn a_slots_spin_timer_reaches_the_next_session_and_its_first_spinning_shot() {
-        // `_SpawnShot` never writes +0x1c (@0x3e550-0x3f143), and the shot
-        // table outlives a system change and a pilot, so a spinning shot
-        // starts on what its slot's last one left.
-        let mut catalog = armed();
-        catalog.weapons[0].flags |= crate::combat::weapon::SPINS;
-        catalog.weapons[0].beam_width = 9;
-        let mut history = crate::combat::shot_slots::ShotSlots::new();
-        history.spin_pass(0, 9);
-        history.spin_pass(0, 9);
-        let sprites = crate::ship_layer::SlotSprites {
-            shots: history,
-            ..Default::default()
-        };
-        let mut session = Session::start(&catalog)
-            .expect("starts")
-            .with_slot_sprites(sprites);
-        session.hold_trigger(FIRE);
-        work(&mut session, &catalog, Controls::default());
-        assert_eq!(session.shots().len(), 1);
-        let visited = crate::combat::spin_timer::pass(2.0, 9, crate::SpeedMult::FULL).0;
-        assert_eq!(
-            session.shots()[0].spin_timer,
-            visited,
-            "the slot's leftover, run its first visit"
-        );
-        let left = session.slot_sprites().shots.spin(0);
-        assert!(left >= 2.0, "{left}");
-        let next = Session::start(&catalog)
-            .expect("starts")
-            .with_slot_sprites(session.slot_sprites().clone());
-        assert_eq!(next.space.combat.shot_slots().spin(0), left);
     }
 }

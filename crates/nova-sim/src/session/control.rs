@@ -134,25 +134,33 @@ impl PilotFacts for Facts<'_> {
 /// The session's pilot, as its `Facts` read it.
 impl PilotFacts for Session {
     fn bit(&self, bit: Bit) -> bool {
-        self.ship.facts(&self.pilot, &self.statics).bit(bit)
+        self.ship
+            .facts(&self.pilot, &self.statics, &self.setup)
+            .bit(bit)
     }
 
     fn gender(&self) -> Gender {
-        self.ship.facts(&self.pilot, &self.statics).gender()
+        self.ship
+            .facts(&self.pilot, &self.statics, &self.setup)
+            .gender()
     }
 
     fn paid(&self, days: u16) -> bool {
-        self.ship.facts(&self.pilot, &self.statics).paid(days)
+        self.ship
+            .facts(&self.pilot, &self.statics, &self.setup)
+            .paid(days)
     }
 
     fn has_outfit(&self, outfit: OutfitId) -> bool {
         self.ship
-            .facts(&self.pilot, &self.statics)
+            .facts(&self.pilot, &self.statics, &self.setup)
             .has_outfit(outfit)
     }
 
     fn explored(&self, system: SystemId) -> bool {
-        self.ship.facts(&self.pilot, &self.statics).explored(system)
+        self.ship
+            .facts(&self.pilot, &self.statics, &self.setup)
+            .explored(system)
     }
 }
 
@@ -375,11 +383,16 @@ impl Outbox {
 
 impl PlayerShip {
     /// What a control-bit test reads about the pilot.
-    pub(super) fn facts<'a>(&'a self, pilot: &'a Pilot, statics: &'a Statics) -> Facts<'a> {
+    pub(super) fn facts<'a>(
+        &'a self,
+        pilot: &'a Pilot,
+        statics: &'a Statics,
+        setup: &Setup,
+    ) -> Facts<'a> {
         Facts {
             pilot,
             outfits: self.counted_outfits(pilot),
-            ammo_outfits: &statics.ammo_outfits,
+            ammo_outfits: statics.ammo_outfits(setup.outfit_weapon_mods()),
             armament: &self.fit.armament,
         }
     }
@@ -473,7 +486,9 @@ mod tests {
     fn the_pilot_view_reads_the_bits_gender_and_explored_systems() {
         let mut session = session();
         session.set_control_bit(bit(12), true);
-        let facts = session.ship.facts(&session.pilot, &session.statics);
+        let facts = session
+            .ship
+            .facts(&session.pilot, &session.statics, &session.setup);
         assert!(facts.bit(bit(12)));
         assert!(!facts.bit(bit(13)));
         assert_eq!(facts.gender(), Gender::Male);
@@ -488,7 +503,7 @@ mod tests {
         assert_eq!(
             session
                 .ship
-                .facts(&session.pilot, &session.statics)
+                .facts(&session.pilot, &session.statics, &session.setup)
                 .gender(),
             Gender::Female
         );
@@ -524,7 +539,7 @@ mod tests {
             assert!(
                 session
                     .ship
-                    .facts(&session.pilot, &session.statics)
+                    .facts(&session.pilot, &session.statics, &session.setup)
                     .paid(days),
                 "{days}"
             );
@@ -540,13 +555,13 @@ mod tests {
         assert!(
             session
                 .ship
-                .facts(&session.pilot, &session.statics)
+                .facts(&session.pilot, &session.statics, &session.setup)
                 .has_outfit(OutfitId(300))
         );
         assert!(
             !session
                 .ship
-                .facts(&session.pilot, &session.statics)
+                .facts(&session.pilot, &session.statics, &session.setup)
                 .has_outfit(OutfitId(301))
         );
     }

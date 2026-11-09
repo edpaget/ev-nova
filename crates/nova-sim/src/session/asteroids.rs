@@ -685,6 +685,7 @@ mod tests {
         let first = *session.asteroids().next().expect("spawned");
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &crate::ai::NovaAi::default(),
             crate::combat::Rules::default(),
             &mut NeverFires,
@@ -1515,6 +1516,7 @@ mod tests {
         session.set_double_time_key(true);
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &crate::ai::NovaAi::default(),
             Rules::default(),
             &mut NeverFires,
@@ -1581,6 +1583,7 @@ mod tests {
         session.set_double_time_key(true);
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &crate::ai::NovaAi::default(),
             Rules::default(),
             &mut NeverFires,

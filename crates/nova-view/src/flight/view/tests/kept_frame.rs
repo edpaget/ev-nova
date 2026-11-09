@@ -110,10 +110,7 @@ fn an_arrival_draws_the_ship_where_it_arrives_and_the_new_systems_stellars_as_it
     let mut view = world(catalog, sol());
     jump_now(&mut view);
     lit(&mut view, 1.0);
-    view.sim.set_frame(FlightFrame {
-        warp_end_due: true,
-        ..under_way(true)
-    });
+    view.sim.set_frame(under_way(true));
     view.refresh_frame();
     let arrived = Vec2::new(-300.0, 200.0);
     let in_alpha = FlightFrame {
@@ -125,18 +122,17 @@ fn an_arrival_draws_the_ship_where_it_arrives_and_the_new_systems_stellars_as_it
         }],
         ..sol()
     };
-    view.sim.queue_answer_telling(
-        Answer::Arrived {
-            system: SystemId(131),
-            combat: Vec::new(),
-        },
+    let place = nova_sim::flight_frame::ShipPlace {
+        position: arrived,
+        heading: 45.0,
+    };
+    view.sim.queue_report_telling(
+        super::faked_travel::arrival_report(0, place),
         in_alpha,
         vec![FlightEvent::Session(SessionEvent::SystemChanged)],
     );
     view.tick(TICK);
-    assert!(sent(&view).contains(&FlightCommand::Arrive), "arrived");
-    assert_eq!(view.alpha(), 0.0, "drawn where it arrived");
-    assert_eq!(view.previous.position, arrived);
+    assert_eq!(view.previous, place, "drawn from where it arrived");
     assert_eq!(view.shown_position(), at(arrived.x, arrived.y));
     assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
     let record = view.frame.stellar(StellarId(140)).expect("Proxima's");

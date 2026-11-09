@@ -75,7 +75,7 @@ fn at_half_gain_by_the_bibles_decay_the_fight_steps_a_slug_by_its_own_rule() {
 }
 
 #[test]
-fn at_half_gain_a_spinning_shots_slot_keeps_the_timer_its_visit_left_for_the_next_shot() {
+fn at_half_gain_a_spinning_shots_timer_runs_half_a_visit_and_the_next_shot_starts_at_0() {
     let spinning = WeaponRecord {
         flags: weapon::SPINS,
         beam_width: 9,
@@ -87,10 +87,9 @@ fn at_half_gain_a_spinning_shots_slot_keeps_the_timer_its_visit_left_for_the_nex
     handle_in(&mut combat, &mut far_off(), &Arsenal::default(), at(HALF));
     let left = spin_timer::pass(0.0, 9, HALF).0;
     assert_eq!(combat.shots()[0].spin_timer, left);
-    assert_eq!(combat.slots.spin(0), left, "its slot keeps it");
     combat.clear();
     combat.put_in_flight(flying(spinning));
-    assert_eq!(combat.shots()[0].spin_timer, left, "the next starts on it");
+    assert_eq!(combat.shots()[0].spin_timer, 0.0, "the next starts at 0");
 }
 
 /// The player's homing missile at (-500, -100), aimed at NPC 3, `aged`

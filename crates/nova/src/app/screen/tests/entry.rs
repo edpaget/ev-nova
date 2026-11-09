@@ -211,16 +211,17 @@ fn flight_shows_once_the_fade_ends_under_a_black_that_clears_over_a_second_untic
     assert!(screen.entering(), "fading in");
     assert!(screen.game_in_progress().is_none(), "moved into flight");
     assert_eq!(cover(&screen), Some(255), "the first frame under black");
-    assert_eq!(flight(&screen).message(), None, "the warm-up ran no step");
+    // The warm-up ran no step: the session is as the entry left it.
+    let entered = flight(&screen).session().expect("a session").clone();
     screen.tick(SECOND / 2);
     assert_eq!(cover(&screen), Some(128));
     assert_eq!(ship(&screen), before, "not ticked");
-    assert_eq!(flight(&screen).message(), None, "not ticked");
+    assert_eq!(flight(&screen).session(), Ok(&entered), "not ticked");
     screen.tick(SECOND / 2);
     assert!(!screen.entering());
     assert_eq!(cover(&screen), None);
     screen.tick(TICK);
-    assert!(flight(&screen).message().is_some(), "it ticks now");
+    assert_ne!(flight(&screen).session(), Ok(&entered), "it ticks now");
 }
 
 #[test]
@@ -247,10 +248,6 @@ fn the_handovers_warm_up_frame_reads_the_coming_traffics_sheet_and_card_before_a
     assert_eq!(screen.showing(), Showing::Flight, "handed over");
     assert!(screen.entering(), "fading in, before any step");
     let flight = flight(&screen);
-    assert!(
-        flight.session().expect("flying").npcs().is_empty(),
-        "no traffic yet"
-    );
     assert!(
         flight.has_read_traffic(trader),
         "the trader's sheet and card, read under the black"

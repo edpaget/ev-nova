@@ -492,6 +492,60 @@ mod tests {
         assert_eq!(fired(full), Trigger::default());
     }
 
+    /// Flight rules whose `thrust_divisor` is 1000: FAST's `Accel` 900
+    /// thrusts 0.9 a tick, so order 0x14's step of 1.5 times that snaps
+    /// the miner's velocity to slot 0's, where the original's divisor
+    /// eases it part way.
+    fn strong_thrust() -> crate::flight::FlightRules {
+        crate::flight::FlightRules {
+            thrust_divisor: std::num::NonZeroU32::new(1000).expect("non-zero"),
+            ..crate::flight::FlightRules::default()
+        }
+    }
+
+    #[test]
+    fn under_other_flight_rules_a_miner_fires_by_the_lead_from_its_hold_under_those_rules() {
+        // The think predicts order 0x14's hold under the flight rules the
+        // miner flies by (`Surroundings::flight`).
+        let strong = strong_thrust();
+        let default = crate::flight::FlightRules::default();
+        let slot0 = crossing(0.5);
+        let (probe, weapons) = picking(100, 0.0);
+        let wanted = |rules| {
+            let accel = probe.flying_handling(0.0, rules).accel;
+            let mut held = probe.state;
+            mine_orders::hold(
+                &mut held,
+                &slot0,
+                mine_orders::kill_step(accel, crate::speed_mult::SpeedMult::FULL),
+            );
+            let pick = probe.pick.and_then(|pick| weapons.weapon(pick));
+            mine_orders::kill_heading(&held, &slot0, pick)
+        };
+        let (at_strong, at_default) = (wanted(strong), wanted(default));
+        assert_ne!(at_strong, at_default);
+        let heading = (0_i16..360)
+            .map(f32::from)
+            .find(|&heading| {
+                mine_orders::fires(heading, at_strong, probe.turn_rate())
+                    && !mine_orders::fires(heading, at_default, probe.turn_rate())
+            })
+            .expect("a heading between the two windows");
+        let (miner, weapons) = picking(100, heading);
+        let fired = |rules| {
+            let npcs = [miner.clone()];
+            let around = Surroundings {
+                mining_rock: Some(slot0),
+                weapons: &weapons,
+                flight: rules,
+                ..Surroundings::new(&[], &npcs)
+            };
+            crate::ai::fire::trigger(&miner, &around, crate::ai::fire::FireRules::default())
+        };
+        assert_eq!(fired(strong).only, id(128), "facing the strong hold's lead");
+        assert_eq!(fired(default), Trigger::default());
+    }
+
     /// Whether `npc` fires at slot 0 by [`fires_at_rock`] with `slot0` in
     /// slot 0.
     fn at_rock(npc: &Npc, slot0: Option<Asteroid>) -> bool {

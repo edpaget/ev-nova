@@ -13,7 +13,10 @@
 //!   none, an invisible graphic type 0 frame at the slot's last screen
 //!   place, as [`RuleKey::StaleStellarSprite`] reads (see
 //!   `nova_sim::story::sprite_pool` and the session's `stale_sprites`
-//!   module). A stellar never shown holds none.
+//!   module). A stellar never shown holds none. The same reading has a
+//!   planet-type shot strike a destroyable hidden stellar by that sprite
+//!   (`_CheckShotProximities` @0x37288-0x372a8; the session's
+//!   `shot_stellars` module).
 //! - **Which ships.** Every active ship, the player included, that is not
 //!   breaking up (`_IsDying`) and does not resist ([`resists_deadly`],
 //!   `_ShipResistsDeadlyStellars` @0x7bbe-0x7c59): a class of `Flags3`

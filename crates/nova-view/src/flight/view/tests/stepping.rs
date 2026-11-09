@@ -7,10 +7,10 @@
 
 use nova_sim::catalog::Explosion;
 use nova_sim::combat::projectile::ShotId;
-use nova_sim::flight_frame::ShipPlace;
 use nova_sim::flight_frame::{
     FlightEvent, FrameShip, FrameShot, PassReport, RaisedLine, StepInput, StepReport, StepRun,
 };
+use nova_sim::flight_frame::{PassExit, ShipPlace};
 use nova_sim::player_wrap::{PlayerWrap, WRAP_EDGE, WRAP_SHIFT};
 use nova_sim::{CommNote, FireSound, Gauge, PersonQuote};
 
@@ -757,8 +757,7 @@ fn a_held_pass_dropped_by_a_layout_was_heard() {
         1,
         "heard on its frame"
     );
-    super::faked_screen::warp_ends(&mut view);
-    view.arrive();
+    lays_out_alpha(&mut view);
     frame(&mut view, stopped());
     assert_eq!(view.effects.explosions().len(), 0, "never shown");
     assert_eq!(
@@ -769,6 +768,15 @@ fn a_held_pass_dropped_by_a_layout_was_heard() {
 }
 
 // A double-time frame, drawn between its passes.
+
+/// Lays `view` out afresh in Alpha Centauri, as the flight tells it has
+/// entered the system ([`FlightView::catch_up`]).
+fn lays_out_alpha(view: &mut Faked) {
+    view.sim.set_frame(in_alpha());
+    view.sim
+        .queue_event(FlightEvent::Session(nova_sim::SessionEvent::SystemChanged));
+    view.catch_up();
+}
 
 /// A frame whose stepping stopped before its first step.
 fn stopped() -> StepReport {
@@ -853,8 +861,7 @@ fn a_single_time_step_draws_the_frame_as_it_stands() {
 #[test]
 fn a_layout_a_placing_a_takeover_a_landing_and_the_holds_expiry_drop_it() {
     let (mut view, ..) = held();
-    super::faked_screen::warp_ends(&mut view);
-    view.arrive();
+    lays_out_alpha(&mut view);
     assert_eq!(view.drawn(), &in_alpha(), "laid out afresh");
 
     let (mut view, _, now) = held();
@@ -1474,7 +1481,7 @@ fn a_wrap_marks_the_stars_so_none_streaks_across_it() {
     assert_eq!(list(&view, 0.0), list(&view, 1.0));
 }
 
-/// Effects at `near` and `far` of [`STOOD`]: an explosion, a pod and a puff
+/// Effects at `near` and `far` of [`STOOD`]: an explosion and a puff
 /// each, and particles at `near`.
 fn effects_about(view: &mut Faked, near: Vec2, far: Vec2) {
     let shot_at = |id, at| FrameShot {
@@ -1491,11 +1498,6 @@ fn effects_about(view: &mut Faked, near: Vec2, far: Vec2) {
         },
         size: 0.0,
     };
-    let podded = |at| CombatEvent::PodEjected {
-        ship: NPC,
-        at,
-        velocity: Vec2::ZERO,
-    };
     let burst = CombatEvent::Particles(nova_sim::combat::ParticleBurst {
         at: near,
         speed: 0.0,
@@ -1508,28 +1510,21 @@ fn effects_about(view: &mut Faked, near: Vec2, far: Vec2) {
     let pass = PassReport {
         shots: vec![shot_at(1, near), shot_at(2, far)],
         smoke_frame: true,
-        combat: vec![
-            exploded(near),
-            exploded(far),
-            podded(near),
-            podded(far),
-            burst,
-        ],
+        combat: vec![exploded(near), exploded(far), burst],
         ..wrapping(STOOD, None)
     };
     frame(view, one_step(vec![pass]));
 }
 
-/// [`effects_about`]'s places, as lists of where each explosion, pod and
-/// puff is and each particle.
-fn places(view: &Faked) -> (Vec<Point>, Vec<Point>, Vec<Vec2>, Point) {
+/// [`effects_about`]'s places, as lists of where each explosion and puff
+/// is and each particle.
+fn places(view: &Faked) -> (Vec<Point>, Vec<Vec2>, Point) {
     (
         view.effects
             .explosions()
             .iter()
             .map(|boom| boom.at)
             .collect(),
-        view.effects.pods().iter().map(|pod| pod.at).collect(),
         view.shot_looks
             .smoke()
             .puffs()
@@ -1541,7 +1536,7 @@ fn places(view: &Faked) -> (Vec<Point>, Vec<Point>, Vec<Vec2>, Point) {
 }
 
 #[test]
-fn explosions_pods_and_smoke_near_the_ship_keep_their_place_on_screen_and_those_far_stay() {
+fn explosions_and_smoke_near_the_ship_keep_their_place_on_screen_and_those_far_stay() {
     let catalog = blaster_looking(|look| {
         look.flags = crate::flight::smoke::SMALL_SMOKE;
         look.smoke_set = 1;
@@ -1552,18 +1547,15 @@ fn explosions_pods_and_smoke_near_the_ship_keep_their_place_on_screen_and_those_
         STOOD - Vec2::new(WRAP_EDGE * 2.0, 0.0),
     );
     effects_about(&mut view, near, far);
-    let (booms, pods, puffs, particle) = places(&view);
-    assert_eq!((booms.len(), pods.len(), puffs.len()), (2, 2, 2));
-    let drift = view.effects.pods()[0].velocity.x;
+    let (booms, puffs, particle) = places(&view);
+    assert_eq!((booms.len(), puffs.len()), (2, 2));
     frame(
         &mut view,
         one_step(vec![wrapping(STOOD + SHIFT, Some(wrap()))]),
     );
     let shifted = |at: Point| Point::new(at.x + SHIFT.x, at.y + SHIFT.y);
-    let (now_booms, now_pods, now_puffs, now_particle) = places(&view);
+    let (now_booms, now_puffs, now_particle) = places(&view);
     assert_eq!(now_booms, [shifted(booms[0]), booms[1]]);
-    assert!((now_pods[0].x - (shifted(pods[0]).x + drift)).abs() < 1e-2);
-    assert!((now_pods[1].x - (pods[1].x + drift)).abs() < 1e-2);
     assert_eq!(now_puffs, [puffs[0] + SHIFT, puffs[1]]);
     assert_eq!(now_particle.x, particle.x, "the particles aren't carried");
 }
@@ -1640,7 +1632,7 @@ fn the_inbox_comm_and_quotes_go_with_the_first_step_and_pass_that_ran() {
     let mut view = stepping(catalog());
     view.inbox.receive(held.clone());
     let rescued = StepRun {
-        rescued: Some(ShipPlace::default()),
+        rescued: Some(PassExit::default()),
         ..step(vec![])
     };
     frame(
@@ -1808,8 +1800,11 @@ fn a_rescue_keeps_the_ship_where_it_put_it_and_says_so() {
         ..ShipPlace::default()
     };
     let run = StepRun {
-        rescued: Some(there),
-        ..step(vec![])
+        rescued: Some(PassExit {
+            place: there,
+            ..PassExit::default()
+        }),
+        ..step(vec![fight(vec![])])
     };
     let rescued = frame(
         &mut view,

@@ -392,6 +392,7 @@ mod tests {
         assert_eq!(session.ship.fate.self_destruct.count(), Some(149.0));
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &crate::ai::NovaAi::default(),
             Rules::default(),
             &mut NeverFires,
@@ -400,6 +401,7 @@ mod tests {
         hold(&mut session, 1);
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &crate::ai::NovaAi::default(),
             Rules::default(),
             &mut NeverFires,

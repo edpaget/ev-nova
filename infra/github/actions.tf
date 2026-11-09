@@ -23,10 +23,14 @@ resource "github_actions_repository_permissions" "ev_nova" {
   allowed_actions_config {
     github_owned_allowed = true
     verified_allowed     = false
-    # Any ref: pinning refs is sha_pinning_required's job.
+    # Any ref: pinning refs is sha_pinning_required's job. azure/login signs
+    # build.yml's Windows leg into Azure with OIDC, for Artifact Signing
+    # (infra/windows-signing); it runs only on main, in the windows-signing
+    # environment, but the policy is checked when any run starts.
     patterns_allowed = [
       "Swatinem/rust-cache@*",
       "jdx/mise-action@*",
+      "azure/login@*",
     ]
   }
   # Every workflow pins its actions by full commit SHA, with the release tag

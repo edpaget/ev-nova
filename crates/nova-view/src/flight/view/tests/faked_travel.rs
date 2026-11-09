@@ -9,7 +9,7 @@ use super::*;
 use crate::flight::escorts::fighters_abandoned_message;
 use crate::flight::fake_catalog::scripted;
 use crate::flight::jump::{FADE_IN_FOR, FADE_OUT_FOR, JumpEffect, JumpPhase};
-use nova_sim::flight_frame::{FlightEvent, PassReport};
+use nova_sim::flight_frame::{FlightEvent, PassExit, PassReport, ShipPlace};
 use nova_sim::{SessionEvent, SimSound};
 
 /// One tick of flight time on `view`'s clock, as a frame's tick moves it
@@ -529,21 +529,64 @@ pub(super) fn arrived_in_alpha(view: &mut Faked) {
         .queue_event(FlightEvent::Message(SimMessage::Arrived(SystemId(131))));
 }
 
-/// The warp's end: the frame says it is due, and the flight answers the
-/// arrival with `combat`.
-pub(super) fn at_the_warps_end(view: &mut Faked, combat: Vec<CombatEvent>) {
-    now_shows(
-        view,
-        FlightFrame {
-            warp_end_due: true,
-            ..under_way(true)
-        },
+/// A report of one step whose pass `pass` settled the jump's arrival, the
+/// player left at `place` ([`StepRun::arrival`]): on pass 0 a step of that
+/// pass alone, the rest of it among the new system; on pass 1 a
+/// double-time step, its frame between the passes in the system left
+/// ([`under_way`]).
+///
+/// [`StepRun::arrival`]: nova_sim::flight_frame::StepRun::arrival
+pub(super) fn arrival_report(pass: usize, place: ShipPlace) -> StepReport {
+    let mut report = if pass == 0 {
+        super::stepping::one_step(vec![PassReport::default()])
+    } else {
+        doubled_from(under_way(true))
+    };
+    report.steps[0].arrival = Some(exit_on(pass, place));
+    report
+}
+
+/// The arrival settled on pass `pass`, the player left at `place`, with
+/// nothing before it.
+pub(super) fn exit_on(pass: usize, place: ShipPlace) -> PassExit {
+    PassExit {
+        pass,
+        place,
+        before: Vec::new(),
+        comm: 0,
+    }
+}
+
+/// Queues `report`, which reports the jump's arrival, for `view`'s next
+/// step: from it on the flight shows [`in_alpha`], and tells the system
+/// entered and the arrival's message.
+pub(super) fn queue_arrival(view: &mut Faked, report: StepReport) {
+    view.sim.queue_report_telling(
+        report,
+        in_alpha(),
+        vec![
+            FlightEvent::Session(SessionEvent::SystemChanged),
+            FlightEvent::Message(SimMessage::Arrived(SystemId(131))),
+        ],
     );
-    view.sim.queue_answer(Answer::Arrived {
-        system: SystemId(131),
-        combat,
-    });
+}
+
+/// The warp's end: the next step reports the arrival on its advance pass
+/// ([`arrival_report`]), the rest of that pass raising `combat` in the
+/// new system, and the flight arrived in Alpha Centauri
+/// ([`arrived_in_alpha`]).
+pub(super) fn at_the_warps_end(view: &mut Faked, combat: Vec<CombatEvent>) {
+    now_shows(view, under_way(true));
+    let mut report = arrival_report(0, ShipPlace::default());
+    report.steps[0].passes[0].combat = combat;
+    view.sim.queue_report(report);
     arrived_in_alpha(view);
+}
+
+/// Runs the step [`at_the_warps_end`] queued, as a tick runs its steps
+/// ([`FlightView::run_steps`]).
+pub(super) fn step_the_arrival(view: &mut Faked) {
+    view.run_steps(1, None);
 }
 
 /// A frame's report of a double-time step, `first` the flight between
@@ -557,65 +600,61 @@ fn doubled_from(first: FlightFrame) -> StepReport {
 }
 
 #[test]
-fn a_double_time_warp_end_draws_a_frame_before_the_arrival() {
+fn a_step_reporting_the_arrival_lays_out_the_new_system_with_no_command_sent() {
     let mut view = warping();
-    super::faked_screen::warp_ends(&mut view);
-    view.sim.queue_report(doubled_from(under_way(true)));
+    let from = sent_but_lines(&view).len();
+    queue_arrival(&mut view, arrival_report(0, ShipPlace::default()));
     view.tick(TICK);
-    assert!(!view.drawn().warp_end_due, "drawn before the warp's end");
-    assert!(
-        !sent_but_lines(&view).contains(&FlightCommand::Arrive),
-        "that frame shows the old system"
-    );
-    view.tick(TICK);
-    assert!(
-        !sent_but_lines(&view).contains(&FlightCommand::Arrive),
-        "a tick with no step keeps showing it"
-    );
-    view.sim.queue_report(StepReport {
-        steps: Vec::new(),
-        stopped: true,
-    });
-    view.tick(TICK);
-    assert!(sent_but_lines(&view).contains(&FlightCommand::Arrive));
+    assert_eq!(sent_but_lines(&view)[from..], [], "nothing asked of it");
+    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+    assert_eq!(view.course_map().current(), Some(SystemId(131)));
+    let line = view.message().expect("the arrival's line");
+    assert!(line.contains("Alpha Centauri"), "{line}");
 }
 
-/// [`warping`]'s view whose warp ended on double time's second pass, its
-/// frame between the passes drawn, the arrival waiting for the next step.
-fn held_at_the_warps_end() -> Faked {
+/// [`warping`]'s view whose warp ended on double time's second pass, the
+/// frame between its passes, `between`, drawn on this tick, the arrival
+/// held for the frame after.
+fn held_arrival(between: FlightFrame) -> Faked {
     let mut view = warping();
-    super::faked_screen::warp_ends(&mut view);
-    view.sim.queue_report(doubled_from(under_way(true)));
+    let mut report = arrival_report(1, ShipPlace::default());
+    report.steps[0].between_passes = Some(Box::new(between));
+    queue_arrival(&mut view, report);
     view.tick(TICK);
-    assert!(!sent_but_lines(&view).contains(&FlightCommand::Arrive));
+    assert!(view.holds_arrival(), "held for the frame after");
     view
 }
 
 #[test]
-fn a_double_time_held_arrival_draws_one_pass_in_the_new_system_on_its_frame() {
-    let mut view = held_at_the_warps_end();
+fn a_second_pass_arrival_draws_its_frame_between_in_the_old_system_and_lays_out_at_the_next_tick() {
+    let mut view = held_arrival(under_way(true));
+    assert_eq!(view.drawn(), &under_way(true), "drawn before the arrival");
+    assert_eq!(
+        view.scene().map(SystemScene::id),
+        Some(SystemId(130)),
+        "that frame shows the old system"
+    );
+    assert_eq!(view.message(), None, "no arrival line yet");
+    view.tick(TICK);
+    assert!(!view.holds_arrival());
+    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+    assert_eq!(view.drawn(), &in_alpha());
+    let line = view.message().expect("the arrival's line");
+    assert!(line.contains("Alpha Centauri"), "{line}");
+}
+
+#[test]
+fn a_held_arrivals_next_tick_steps_on_in_the_new_system() {
+    let mut view = held_arrival(under_way(true));
     let called = view.sim.steps();
     let mut between = in_alpha();
     between.ships[0].position = Vec2::new(12.0, -8.0);
-    view.sim.queue_report(StepReport {
-        steps: Vec::new(),
-        stopped: true,
-    });
     view.sim
         .queue_report_showing(doubled_from(between.clone()), in_alpha());
     view.tick(TICK);
-    assert!(sent_but_lines(&view).contains(&FlightCommand::Arrive));
-    assert_eq!(
-        view.sim.steps(),
-        called + 2,
-        "the stop, then the steps there"
-    );
-    assert_eq!(view.drawn(), &between, "its first pass in the new system");
-    assert_eq!(
-        view.shown_position(),
-        Point::new(12.0, -8.0),
-        "at its target"
-    );
+    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+    assert_eq!(view.sim.steps(), called + 1, "the tick's own steps alone");
+    assert_eq!(view.drawn(), &between, "its frame between, there");
 }
 
 #[test]
@@ -624,20 +663,15 @@ fn a_second_pass_line_stands_over_its_own_passs_arrival() {
     // `_HandlePlayer` (@0x6bbb8-0x6c625), its line raised there; the rest
     // of that pass raises the held line after it, so frame 98 shows it.
     let mut view = warping();
-    super::faked_screen::warp_ends(&mut view);
-    let mut report = doubled_from(under_way(true));
+    let mut report = arrival_report(1, ShipPlace::default());
     report.steps[0].second_pass_lines = vec![nova_sim::flight_frame::RaisedLine::Message(
         SimMessage::NoActiveMissions,
     )];
-    view.sim.queue_report(report);
+    queue_arrival(&mut view, report);
     view.tick(TICK);
-    view.sim.queue_report(StepReport {
-        steps: Vec::new(),
-        stopped: true,
-    });
-    view.sim.queue_report(doubled_from(in_alpha()));
+    assert_eq!(view.message(), None, "the frame between says neither");
     view.tick(TICK);
-    assert!(sent_but_lines(&view).contains(&FlightCommand::Arrive));
+    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
     assert_eq!(
         view.message(),
         Some(NO_ACTIVE_MISSIONS),
@@ -646,12 +680,51 @@ fn a_second_pass_line_stands_over_its_own_passs_arrival() {
 }
 
 #[test]
-fn a_held_arrival_on_a_tick_with_no_step_still_waits() {
-    let mut view = held_at_the_warps_end();
+fn a_held_arrival_lays_out_on_a_tick_with_no_step() {
+    let mut view = held_arrival(under_way(true));
     let called = view.sim.steps();
     view.tick(ms(1));
-    assert!(!sent_but_lines(&view).contains(&FlightCommand::Arrive));
     assert_eq!(view.sim.steps(), called + 1, "the tick's own call alone");
+    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+}
+
+#[test]
+fn a_catch_up_before_the_held_frame_is_presented_leaves_the_arrival_and_its_events_waiting() {
+    // Frame 97 is drawn between the passes before the arrival's
+    // `_RefreshSAT` (@0x6c605): nothing lays the new system out first.
+    let mut view = warping();
+    let mut report = arrival_report(1, ShipPlace::default());
+    report.steps[0].between_passes = Some(Box::new(under_way(true)));
+    queue_arrival(&mut view, report);
+    view.run_steps(1, None);
+    assert!(view.holds_arrival(), "held, its frame not yet presented");
+    view.catch_up();
+    assert!(view.holds_arrival(), "still held");
+    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(130)));
+    assert_eq!(view.drawn(), &under_way(true), "the frame between drawn");
+    view.present_jump_effect();
+    view.catch_up();
+    assert!(!view.holds_arrival());
+    assert_eq!(
+        view.scene().map(SystemScene::id),
+        Some(SystemId(131)),
+        "the events left waiting lay it out"
+    );
+}
+
+#[test]
+fn a_press_after_the_held_frame_is_drawn_lays_the_arrival_out_first() {
+    let mut view = held_arrival(under_way(true));
+    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(130)));
+    view.input(&key(Key::ArrowUp, true));
+    assert!(!view.holds_arrival());
+    assert_eq!(
+        view.scene().map(SystemScene::id),
+        Some(SystemId(131)),
+        "laid out before the press is read"
+    );
+    let line = view.message().expect("the arrival's line");
+    assert!(line.contains("Alpha Centauri"), "{line}");
 }
 
 #[test]
@@ -660,18 +733,16 @@ fn a_second_pass_line_stands_over_a_first_pass_arrival_on_the_frame_after() {
     // @0x6bbb8-0x6c625), its line raised there; the second pass's line
     // comes after it, so it shows on the next frame.
     let mut view = warping();
-    super::faked_screen::warp_ends(&mut view);
-    let mut report = doubled_from(FlightFrame {
-        warp_end_due: true,
-        ..under_way(true)
-    });
+    let mut report = doubled_from(in_alpha());
+    report.steps[0].arrival = Some(exit_on(0, ShipPlace::default()));
     report.steps[0].second_pass_lines = vec![nova_sim::flight_frame::RaisedLine::Message(
         SimMessage::NoActiveMissions,
     )];
-    view.sim.queue_report(report);
+    queue_arrival(&mut view, report);
     view.tick(TICK);
-    assert!(sent_but_lines(&view).contains(&FlightCommand::Arrive));
-    assert_eq!(view.message(), None, "the arrival's line on its frame");
+    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+    let line = view.message().expect("the arrival's line on its frame");
+    assert!(line.contains("Alpha Centauri"), "{line}");
     view.sim.queue_report(StepReport {
         steps: vec![nova_sim::flight_frame::StepRun::default()],
         stopped: false,
@@ -685,19 +756,116 @@ fn a_second_pass_line_stands_over_a_first_pass_arrival_on_the_frame_after() {
 }
 
 #[test]
-fn a_double_time_warp_end_on_the_first_pass_arrives_on_that_tick() {
+fn a_double_time_arrival_on_the_first_pass_lays_out_on_that_tick_and_holds_its_frame_between() {
     let mut view = warping();
-    super::faked_screen::warp_ends(&mut view);
-    view.sim.queue_report(doubled_from(FlightFrame {
-        warp_end_due: true,
-        ..under_way(true)
-    }));
+    let mut between = in_alpha();
+    between.ships[0].position = Vec2::new(12.0, -8.0);
+    let mut report = doubled_from(between.clone());
+    report.steps[0].arrival = Some(exit_on(0, ShipPlace::default()));
+    queue_arrival(&mut view, report);
     view.tick(TICK);
-    assert!(
-        sent_but_lines(&view).contains(&FlightCommand::Arrive),
-        "the frame held has reached the end, so none waits for it"
+    assert!(!view.holds_arrival(), "none waits for the frame after");
+    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+    assert_eq!(
+        view.drawn(),
+        &between,
+        "its frame between, in the new system"
     );
-    assert_eq!(view.drawn(), &in_alpha(), "laid out, the hold dropped");
+}
+
+#[test]
+fn the_fight_before_the_arrival_is_heard_and_not_drawn() {
+    // `_HandleShot`'s `PlaySound` started it in its pass (@0x44385), and
+    // the arrival stops no sound (F6); the system it was drawn in is left.
+    let boom = nova_sim::catalog::Explosion::decode(0).expect("type 0");
+    let before = vec![
+        CombatEvent::Fired {
+            ship: ShipRef::Player,
+            weapon: BLASTER,
+            at: Vec2::ZERO,
+            sound: Some(nova_sim::FireSound::at(
+                nova_sim::combat::PLAYER_FIRE_PRIORITY,
+            )),
+        },
+        CombatEvent::Exploded {
+            at: Vec2::ZERO,
+            explosion: boom,
+            size: 0.0,
+        },
+    ];
+    for pass in [0, 1] {
+        let mut view = world(
+            armed(0, &[BLASTER]),
+            in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]),
+        );
+        jump_now(&mut view);
+        view.drained_sounds();
+        let mut report = arrival_report(pass, ShipPlace::default());
+        if let Some(exit) = &mut report.steps[0].arrival {
+            exit.before.clone_from(&before);
+        }
+        queue_arrival(&mut view, report);
+        view.tick(TICK);
+        if pass == 1 {
+            assert!(view.holds_arrival(), "pass {pass}");
+            view.tick(TICK);
+        }
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+        assert_eq!(view.effects().explosions(), [], "pass {pass}: not drawn");
+        let heard: Vec<_> = view
+            .drained_sounds()
+            .into_iter()
+            .filter_map(|sound| match sound {
+                Sound::Combat(sound) => Some(sound.sound),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            heard.contains(&nova_sim::SoundId(208)),
+            "pass {pass}: the blaster's `snd `, heard: {heard:?}"
+        );
+    }
+}
+
+#[test]
+fn comm_before_the_arrival_shows_before_its_line_and_a_quote_after_it_stands_over_it() {
+    let note = |ship: &str| nova_sim::CommNote {
+        from: NpcId(0),
+        comm_name: "Ally".to_owned(),
+        ship_name: ship.to_owned(),
+        done: nova_sim::Help::Repair,
+    };
+    let quote = nova_sim::PersonQuote {
+        npc: NpcId(0),
+        text: "Halt!".to_owned(),
+    };
+    // A note before the arrival: the arrival's line, said after it,
+    // stands over it.
+    let mut view = warping();
+    let mut report = arrival_report(0, ShipPlace::default());
+    report.steps[0].comm = vec![note("Shuttle")];
+    if let Some(exit) = &mut report.steps[0].arrival {
+        exit.comm = 1;
+    }
+    queue_arrival(&mut view, report);
+    view.tick(TICK);
+    let line = view.message().expect("the arrival's line");
+    assert!(line.contains("Alpha Centauri"), "over the note: {line}");
+    // A quote the rest of the pass raised after it stands over its line.
+    let mut view = warping();
+    let mut report = arrival_report(0, ShipPlace::default());
+    report.steps[0].passes[0].quotes = vec![quote];
+    queue_arrival(&mut view, report);
+    view.tick(TICK);
+    assert_eq!(view.message(), Some("Halt!"), "over the arrival's line");
+    // A note after it stands over its line too.
+    let mut view = warping();
+    let mut report = arrival_report(0, ShipPlace::default());
+    report.steps[0].comm = vec![note("Shuttle")];
+    queue_arrival(&mut view, report);
+    view.tick(TICK);
+    let line = view.message().expect("the note");
+    assert!(line.contains("Shuttle"), "over the arrival's line: {line}");
 }
 
 #[test]
@@ -723,11 +891,11 @@ fn the_fade_to_white_starts_as_the_frame_lights_the_screen_and_the_arrival_waits
         view.jump_effect().map(JumpEffect::phase),
         Some(JumpPhase::Warp)
     );
-    view.arrival_frame(0);
+    step_the_arrival(&mut view);
     assert_eq!(
-        sent_but_lines(&view),
-        [FlightCommand::Jump],
-        "no arrival yet"
+        view.scene().map(SystemScene::id),
+        Some(SystemId(130)),
+        "a step that reports none arrives nowhere"
     );
     lit(&mut view, 0.5);
     assert!(matches!(
@@ -742,17 +910,14 @@ fn the_fade_to_white_starts_as_the_frame_lights_the_screen_and_the_arrival_waits
     let mut list = DrawList::new();
     view.draw_fades(&mut list);
     assert!(fade(&list).is_some(), "fading to white");
-    view.arrival_frame(0);
+    step_the_arrival(&mut view);
     assert!(matches!(
         view.jump_effect().map(JumpEffect::phase),
         Some(JumpPhase::FadeOut(_))
     ));
     at_the_warps_end(&mut view, Vec::new());
-    view.arrival_frame(0);
-    assert_eq!(
-        sent_but_lines(&view),
-        [FlightCommand::Jump, FlightCommand::Arrive]
-    );
+    step_the_arrival(&mut view);
+    assert_eq!(sent_but_lines(&view), [FlightCommand::Jump], "none asked");
     assert_eq!(
         view.jump_effect().map(JumpEffect::phase),
         Some(JumpPhase::FadeIn(0.0)),
@@ -807,7 +972,7 @@ fn with_effects_off_the_arrival_flashes_white_once() {
     assert!(!view.hyperspace_effects());
     jump_now(&mut view);
     at_the_warps_end(&mut view, Vec::new());
-    view.arrival_frame(0);
+    step_the_arrival(&mut view);
     let mut list = DrawList::new();
     view.draw_fades(&mut list);
     assert_eq!(
@@ -815,7 +980,10 @@ fn with_effects_off_the_arrival_flashes_white_once() {
         Some(Color::WHITE),
         "opaque white"
     );
-    view.fade_frame(ms(33));
+    // The white lasts one presented frame (`_HandlePlayer` @0x6bf3a to
+    // `_RefreshSAT`'s first flush, F2), not a time.
+    view.present_jump_effect();
+    view.fade_frame(ms(1));
     assert_eq!(view.jump_effect(), None, "no fade in");
     let mut on = faked(sol()).with_hyperspace_effects(false);
     on.set_hyperspace_effects(true);
@@ -831,12 +999,142 @@ fn with_effects_off_the_arrival_flashes_white_once() {
     );
 }
 
+/// The colour of the fade `view` draws over its screen, if any, as
+/// [`Screen::draw`] draws it.
+fn screen_fade(view: &Faked) -> Option<Color> {
+    let mut list = DrawList::new();
+    Screen::draw(view, &mut list);
+    fade(&list).map(|(_, color)| color)
+}
+
+/// Asserts that `view`, its warp's end ticked with the Hyperspace Effects
+/// off, arrived on that tick and drew the arrival's white on its frame,
+/// and that the next tick, with no step, draws the new system with no
+/// white: `_HandlePlayer` flushes the white (@0x6bf3a) and `_RefreshSAT`'s
+/// first flush (@0xb94ae) shows the new system inside the same arrival,
+/// one display refresh, one presented frame of ours (F2).
+#[track_caller]
+fn the_white_shows_on_the_arrivals_frame_alone(view: &mut Faked) {
+    assert_eq!(
+        view.scene().map(SystemScene::id),
+        Some(SystemId(131)),
+        "laid out on its frame"
+    );
+    assert_eq!(screen_fade(view), Some(Color::WHITE), "the arrival's frame");
+    view.tick(ms(1));
+    assert_eq!(screen_fade(view), None, "the next tick's draw");
+    assert_eq!(view.jump_effect(), None);
+    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+}
+
+#[test]
+fn without_hyperspace_effects_an_arrival_reported_on_a_step_shows_white_on_that_frame_and_the_new_system_on_the_next()
+ {
+    let mut view = faked(sol()).with_hyperspace_effects(false);
+    jump_now(&mut view);
+    queue_arrival(&mut view, arrival_report(0, ShipPlace::default()));
+    view.tick(TICK);
+    the_white_shows_on_the_arrivals_frame_alone(&mut view);
+}
+
+#[test]
+fn a_first_pass_arrival_in_double_time_draws_its_frame_between_in_the_new_system_white_on_that_frame()
+ {
+    let mut view = faked(sol()).with_hyperspace_effects(false);
+    jump_now(&mut view);
+    let mut between = in_alpha();
+    between.ships[0].position = Vec2::new(12.0, -8.0);
+    let mut report = doubled_from(between.clone());
+    report.steps[0].arrival = Some(exit_on(0, ShipPlace::default()));
+    queue_arrival(&mut view, report);
+    view.tick(TICK);
+    assert_eq!(
+        view.drawn(),
+        &between,
+        "its frame between, in the new system"
+    );
+    the_white_shows_on_the_arrivals_frame_alone(&mut view);
+}
+
+#[test]
+fn without_hyperspace_effects_a_second_pass_arrival_shows_the_frame_between_then_white_then_the_new_system()
+ {
+    // Frame 97 is drawn between the passes (@0x45dff-0x45e82), then the
+    // second pass's arrival flushes the white (@0x6bf3a) and `_RefreshSAT`
+    // (@0x6c605) shows the new system.
+    for stepped in [false, true] {
+        let mut view = faked(sol()).with_hyperspace_effects(false);
+        jump_now(&mut view);
+        let mut between = under_way(true);
+        between.ships[0].position = Vec2::new(7.0, 0.0);
+        let mut report = arrival_report(1, ShipPlace::default());
+        report.steps[0].between_passes = Some(Box::new(between.clone()));
+        queue_arrival(&mut view, report);
+        view.tick(TICK);
+        assert_eq!(view.drawn(), &between, "tick N: the frame between");
+        assert_eq!(
+            view.scene().map(SystemScene::id),
+            Some(SystemId(130)),
+            "tick N: not laid out"
+        );
+        assert_eq!(screen_fade(&view), None, "tick N: no white");
+        if stepped {
+            view.sim
+                .queue_report(super::stepping::one_step(vec![PassReport::default()]));
+        }
+        view.tick(TICK);
+        assert_eq!(
+            view.scene().map(SystemScene::id),
+            Some(SystemId(131)),
+            "tick N+1 (a step: {stepped}): laid out"
+        );
+        assert!(view.jump_effect().is_some(), "tick N+1: the flash");
+        assert_eq!(
+            screen_fade(&view),
+            Some(Color::WHITE),
+            "tick N+1 (a step: {stepped}): white on its frame"
+        );
+        view.tick(TICK);
+        assert_eq!(screen_fade(&view), None, "tick N+2: no flash");
+        assert_eq!(view.jump_effect(), None);
+        assert_eq!(view.drawn().system, SystemId(131), "tick N+2");
+    }
+}
+
+#[test]
+fn a_held_arrivals_second_pass_effects_show_after_its_layout() {
+    let boom = nova_sim::catalog::Explosion::decode(0).expect("type 0");
+    let mut view = world(
+        armed(0, &[BLASTER]),
+        in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]),
+    );
+    jump_now(&mut view);
+    let mut report = arrival_report(1, ShipPlace::default());
+    report.steps[0].passes[1].combat = vec![CombatEvent::Exploded {
+        at: Vec2::new(5.0, 0.0),
+        explosion: boom,
+        size: 0.0,
+    }];
+    queue_arrival(&mut view, report);
+    view.tick(TICK);
+    assert_eq!(view.effects().explosions(), [], "held with its pass");
+    view.tick(TICK);
+    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+    let explosions = view.effects().explosions();
+    assert_eq!(explosions.len(), 1, "after the layout: {explosions:?}");
+    assert_eq!(explosions[0].boom, boom.boom);
+    assert_eq!(
+        explosions[0].frame, 1.0,
+        "advanced once, for the arrival pass's `_HandleExplods` (@0x444e1)"
+    );
+}
+
 #[test]
 fn arriving_shows_the_arrival_line_with_the_date_and_lets_a_refusal_go() {
     let mut view = warping();
     view.say_for(NO_DESTINATION, 360);
     at_the_warps_end(&mut view, Vec::new());
-    view.arrival_frame(0);
+    step_the_arrival(&mut view);
     faked_lasts(&mut view, &alpha_arrival(), 240);
 }
 
@@ -844,7 +1142,7 @@ fn arriving_shows_the_arrival_line_with_the_date_and_lets_a_refusal_go() {
 fn j_during_the_arrival_fade_in_begins_the_next_jump_and_the_fade_plays_on() {
     let mut view = warping();
     at_the_warps_end(&mut view, Vec::new());
-    view.arrival_frame(0);
+    step_the_arrival(&mut view);
     let arrival = view.message().expect("the arrival line").to_owned();
     view.sim.queue_answer_showing(
         Answer::Jumped(SystemId(132)),
@@ -984,7 +1282,7 @@ fn an_arrivals_pending_explosions_are_drawn_on_its_first_frame_and_unheard_from_
         }],
     );
     view.drained_sounds();
-    view.arrival_frame(0);
+    step_the_arrival(&mut view);
     let explosions = view.effects().explosions();
     assert_eq!(explosions.len(), 1, "{explosions:?}");
     assert_eq!(explosions[0].boom, boom.boom);
@@ -1000,7 +1298,40 @@ fn an_arrivals_pending_explosions_are_drawn_on_its_first_frame_and_unheard_from_
 }
 
 #[test]
-fn arriving_lays_out_the_new_system_letting_go_of_the_effects_pods_and_smoke() {
+fn a_fights_sound_on_an_arrivals_tick_is_still_taken_after_its_layout() {
+    // `_HandleShot`'s `PlaySound` started it in its pass (@0x44385), and
+    // the arrival stops no sound (F6).
+    let mut view = world(
+        armed(0, &[BLASTER]),
+        in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]),
+    );
+    jump_now(&mut view);
+    let fired = CombatEvent::Fired {
+        ship: ShipRef::Player,
+        weapon: BLASTER,
+        at: Vec2::ZERO,
+        sound: Some(nova_sim::FireSound::at(
+            nova_sim::combat::PLAYER_FIRE_PRIORITY,
+        )),
+    };
+    // Fired in the rest of the arrival's pass, among the new system.
+    let mut report = arrival_report(0, ShipPlace::default());
+    report.steps[0].passes[0].combat = vec![fired];
+    queue_arrival(&mut view, report);
+    view.tick(TICK);
+    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+    let heard: Vec<_> = Screen::take_sounds(&mut view)
+        .into_iter()
+        .filter_map(|sound| match sound {
+            Sound::Combat(sound) => Some(sound.sound),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(heard, [nova_sim::SoundId(208)], "the blaster's `snd `");
+}
+
+#[test]
+fn arriving_lays_out_the_new_system_letting_go_of_the_effects_and_smoke() {
     let mut view = world(
         armed(0, &[BLASTER]),
         in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]),
@@ -1014,11 +1345,13 @@ fn arriving_lays_out_the_new_system_letting_go_of_the_effects_pods_and_smoke() {
         }],
     );
     assert_ne!(*view.effects(), Effects::default());
+    // A clear keeps the sounds not yet taken (F6): take them first, so
+    // this is about the sprites and the smoke.
+    view.drained_sounds();
     jump_now(&mut view);
     at_the_warps_end(&mut view, Vec::new());
-    view.arrival_frame(0);
+    step_the_arrival(&mut view);
     assert_eq!(*view.effects(), Effects::default());
-    assert!(view.effects().pods().is_empty());
     assert_eq!(view.shot_looks.smoke().puffs(), []);
 }
 
@@ -1029,7 +1362,7 @@ fn arriving_reads_the_new_systems_traffic_sheets() {
     let read = view.catalog().sheets_asked.borrow().clone();
     at_the_warps_end(&mut view, Vec::new());
     view.sim.frame_mut().traffic_ships = vec![ShipId(129)];
-    view.arrival_frame(0);
+    step_the_arrival(&mut view);
     let asked = view.catalog().sheets_asked.borrow().clone();
     assert_eq!(asked[read.len()..], [ShipId(129)], "read on arrival");
 }
@@ -1039,7 +1372,7 @@ fn a_jumps_arrival_puts_the_maps_scroll_back_on_the_current_system() {
     let mut view = warping();
     view.map.centre_on_system(SystemId(132));
     at_the_warps_end(&mut view, Vec::new());
-    view.arrival_frame(0);
+    step_the_arrival(&mut view);
     let mut recentred = faked(FlightFrame {
         system: SystemId(131),
         ..FlightFrame::default()
@@ -1063,7 +1396,7 @@ fn an_arrival_shows_the_new_systems_stellars_on_the_radar_at_once_leaving_the_ca
     at_the_warps_end(&mut view, Vec::new());
     view.sim.frame_mut().stellars = vec![record::stellar(StellarId(140))];
     view.sim.frame_mut().radar_stellars = vec![record::radar_stellar(StellarId(140), Vec2::ZERO)];
-    view.arrival_frame(0);
+    step_the_arrival(&mut view);
     assert_eq!(view.hud_cadence, cadence, "neither timed nor flipped");
     let stellars: Vec<Point> = view
         .radar_shown(&view.frame_now())
@@ -1078,7 +1411,7 @@ fn an_arrival_shows_the_new_systems_stellars_on_the_radar_at_once_leaving_the_ca
 fn the_escape_pods_rescue_lays_the_view_out_where_it_put_the_ship_once_faded_out_and_gives_its_desc()
  {
     use crate::flight::rescue_screen::RESCUE_FADE_FOR;
-    use nova_sim::flight_frame::{ShipPlace, StepReport, StepRun};
+    use nova_sim::flight_frame::{StepReport, StepRun};
     let mut view = faked(sol());
     view.map.centre_on_system(SystemId(132));
     let there = ShipPlace {
@@ -1087,7 +1420,8 @@ fn the_escape_pods_rescue_lays_the_view_out_where_it_put_the_ship_once_faded_out
     };
     view.sim.queue_report(StepReport {
         steps: vec![StepRun {
-            rescued: Some(there),
+            rescued: Some(exit_on(0, there)),
+            passes: vec![PassReport::default()],
             ..StepRun::default()
         }],
         stopped: true,
@@ -1271,7 +1605,7 @@ fn alpha_arrival() -> String {
 fn a_jump_into_a_buoyed_system_shows_the_buoy_for_480_ticks_in_place_of_the_arrival() {
     let buoy = SimMessage::Buoy(HELLO.to_owned());
     let mut view = arriving_with(vec![FlightEvent::Message(buoy.clone())]);
-    view.arrival_frame(0);
+    step_the_arrival(&mut view);
     assert_eq!(buoy.ticks(), 480);
     faked_lasts(&mut view, HELLO, buoy.ticks());
 }
@@ -1283,7 +1617,7 @@ fn an_empty_buoy_replaces_the_line_shown_before_the_jump() {
     at_the_warps_end(&mut view, Vec::new());
     view.sim
         .queue_event(FlightEvent::Message(SimMessage::Buoy(String::new())));
-    view.arrival_frame(0);
+    step_the_arrival(&mut view);
     assert_eq!(view.message(), Some(""));
 }
 
@@ -1292,7 +1626,7 @@ fn fighters_abandoned_in_a_jump_are_told_on_arrival() {
     let mut view = arriving_with(vec![FlightEvent::FighterNote(
         nova_sim::FighterNote::Abandoned(2),
     )]);
-    view.arrival_frame(0);
+    step_the_arrival(&mut view);
     let said = format!("{}  {}", alpha_arrival(), fighters_abandoned_message(2));
     assert_eq!(view.message(), Some(said.as_str()));
 }
@@ -1308,7 +1642,7 @@ fn a_jumps_arrival_leads_with_what_a_roll_of_three_gives() {
         let mut view = arriving_with(Vec::new());
         let (script, chance) = scripted(&[draw]);
         view.words_chance = chance;
-        view.arrival_frame(0);
+        step_the_arrival(&mut view);
         let said = arrival_message_with(lead, "Alpha Centauri", DATE, false);
         assert_eq!(view.message(), Some(said.as_str()));
         assert_eq!(script.borrow().asked, [3], "one roll of three");
@@ -1321,7 +1655,7 @@ fn a_buoyed_arrival_rolls_no_lead() {
     let mut view = arriving_with(vec![FlightEvent::Message(buoy)]);
     let (script, chance) = scripted(&[]);
     view.words_chance = chance;
-    view.arrival_frame(0);
+    step_the_arrival(&mut view);
     assert_eq!(view.message(), Some(HELLO));
     assert_eq!(script.borrow().asked, Vec::<u32>::new());
 }
@@ -1333,7 +1667,7 @@ fn a_flight_message_on_an_arrival_comes_after_the_fighters_abandoned() {
         FlightEvent::Message(SimMessage::CargoJettisoned),
         FlightEvent::FighterNote(nova_sim::FighterNote::Abandoned(2)),
     ]);
-    view.arrival_frame(0);
+    step_the_arrival(&mut view);
     let said = view.message().expect("the arrival").to_owned();
     let tail = format!("{}  {}  ", alpha_arrival(), fighters_abandoned_message(2));
     assert!(said.starts_with(&tail), "{said}");
@@ -1343,7 +1677,7 @@ fn a_flight_message_on_an_arrival_comes_after_the_fighters_abandoned() {
 #[test]
 fn an_escort_left_unpaid_by_a_jump_is_kept_for_a_dialog_off_the_message_line() {
     let mut view = arriving_with(vec![FlightEvent::PayNote(nova_sim::PayNote::Defected(1))]);
-    view.arrival_frame(0);
+    step_the_arrival(&mut view);
     assert_eq!(
         view.message(),
         Some(alpha_arrival().as_str()),
@@ -1359,7 +1693,7 @@ fn fighters_abandoned_are_said_and_escorts_defected_kept_on_one_arrival() {
         FlightEvent::PayNote(nova_sim::PayNote::Defected(1)),
         FlightEvent::FighterNote(nova_sim::FighterNote::Abandoned(2)),
     ]);
-    view.arrival_frame(0);
+    step_the_arrival(&mut view);
     let said = format!("{}  {}", alpha_arrival(), fighters_abandoned_message(2));
     assert_eq!(view.message(), Some(said.as_str()));
     assert_eq!(view.take_defections(), [DEFECTED_ONE]);
@@ -1474,7 +1808,7 @@ fn a_text_on_the_arrivals_tick_finds_the_white_and_its_fade_in_ends_the_effect()
     let mut view = warping();
     lit(&mut view, 0.5);
     at_the_warps_end(&mut view, Vec::new());
-    view.arrival_frame(0);
+    step_the_arrival(&mut view);
     assert!(view.screen_faded(), "until the next pass's _FadeWhiteOut");
     view.screen_faded_in();
     assert_eq!(view.jump_effect(), None, "nothing left to fade from white");
@@ -1482,7 +1816,7 @@ fn a_text_on_the_arrivals_tick_finds_the_white_and_its_fade_in_ends_the_effect()
     let mut view = warping();
     lit(&mut view, 0.5);
     at_the_warps_end(&mut view, Vec::new());
-    view.arrival_frame(0);
+    step_the_arrival(&mut view);
     view.fade_frame(TICK);
     assert!(!view.screen_faded(), "the next pass cleared it");
     view.advance_white(FADE_IN_FOR);

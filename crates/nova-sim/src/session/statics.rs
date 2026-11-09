@@ -14,9 +14,10 @@ use crate::geometry::Vec2;
 use crate::govt::Governments;
 use crate::market::Goods;
 use crate::mission::StellarMarks;
+use crate::rulebook::{RuleKey, RuleSource};
 use crate::traffic::table::SpawnDude;
 
-use super::Session;
+use super::{Session, Setup};
 
 /// The catalog data a session reads as it starts, in `Session`'s former
 /// field order.
@@ -51,8 +52,12 @@ pub(super) struct Statics {
     /// Every government and their relations, read when the session
     /// starts.
     pub(super) govts: Governments,
-    /// Each ammunition outfit, with the weapon it is the rounds of.
-    pub(super) ammo_outfits: Vec<(WeaponId, OutfitId)>,
+    /// Each ammunition outfit by its first mod alone, with the weapon it
+    /// is the rounds of ([`Statics::ammo_outfits`]).
+    pub(super) ammo_first_mod: Vec<(WeaponId, OutfitId)>,
+    /// Each ammunition outfit by any of its four mods, with the weapon it
+    /// is the rounds of ([`Statics::named_ammo_outfits`]).
+    pub(super) ammo_any_mod: Vec<(WeaponId, OutfitId)>,
     /// Every asteroid type, by kind, read when the session starts.
     pub(super) asteroid_types: Rc<[crate::asteroid::AsteroidType; crate::asteroid::KINDS]>,
     /// Each box graphic's frame size, read when the session starts, which
@@ -156,6 +161,27 @@ pub(super) struct Statics {
 }
 
 impl Statics {
+    /// Each ammunition outfit, with the weapon it is the rounds of, read
+    /// from the mods `mods` says ([`RuleKey::OutfitWeaponMods`]): by the
+    /// engine the first alone, as the rounds array is built
+    /// (`_SystemInfoToShipStats` @0xcab1), and by the other reading any of
+    /// the four. What every reader of the player's rounds takes.
+    pub(super) fn ammo_outfits(&self, mods: RuleSource) -> &[(WeaponId, OutfitId)] {
+        match mods {
+            RuleSource::Engine => &self.ammo_first_mod,
+            RuleSource::Bible => &self.ammo_any_mod,
+        }
+    }
+
+    /// Each ammunition outfit by any of its four mods, with the weapon it
+    /// is the rounds of, whatever [`RuleKey::OutfitWeaponMods`] says: the
+    /// original's all-slot scans, the plunder dialog's name for the
+    /// rounds (`_PlunderDialogUpdate` @0x92c59-0x92c81) and
+    /// `_CanBuyFighter`'s bay outfit (@0x5b95-0x5bd8).
+    pub(super) fn named_ammo_outfits(&self) -> &[(WeaponId, OutfitId)] {
+        &self.ammo_any_mod
+    }
+
     /// The stellar `system`'s `NavDefs` slot `slot` names, from 0, as
     /// `_HandlePlayer`'s slot keys read it (@0x69e28-0x69e46): `None` for
     /// an empty slot (-1, or a `spöb` that didn't load), a slot past the
@@ -171,6 +197,14 @@ impl Statics {
     pub(super) fn stellar_position(&self, stellar: StellarId) -> Vec2 {
         let (x, y) = self.stellar_marks.place(stellar).unwrap_or_default();
         Vec2::new(f32::from(x), f32::from(y))
+    }
+}
+
+impl Setup {
+    /// How [`RuleKey::OutfitWeaponMods`] reads: which of an outfit's mods
+    /// make it a weapon or ammunition.
+    pub(super) fn outfit_weapon_mods(&self) -> RuleSource {
+        self.rules.source_for(RuleKey::OutfitWeaponMods)
     }
 }
 

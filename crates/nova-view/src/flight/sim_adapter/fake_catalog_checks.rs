@@ -175,23 +175,24 @@ fn jump_to_alpha(flight: &mut SessionFlight<FakeCatalog>) {
     assert!(frame.jump_under_way && !frame.warping, "preparing");
     contract(flight, "preparing");
     let mut warped = false;
+    let mut arrived = false;
     for _ in 0..3000 {
         let frame = frame_of(flight);
         if frame.warping && !warped {
             warped = true;
             contract(flight, "warping");
         }
-        if frame.warp_end_due {
+        // The pass the warp ends arrives in it, and its step says so.
+        if step(flight, &StepInput::default())
+            .steps
+            .iter()
+            .any(|run| run.arrival.is_some())
+        {
+            arrived = true;
             break;
         }
-        step(flight, &StepInput::default());
     }
-    assert!(warped && frame_of(flight).warp_end_due, "the warp ended");
-    contract(flight, "the warp's end due");
-    assert!(matches!(
-        flight.apply(FlightCommand::Arrive),
-        Answer::Arrived { system, .. } if system == alpha
-    ));
+    assert!(warped && arrived, "the warp ended");
     assert_eq!(frame_of(flight).system, alpha, "arrived");
     contract(flight, "arrived");
 }
@@ -726,19 +727,34 @@ fn random_gate_held() -> (Rc<FakeCatalog>, Session) {
         .over(StellarId(150))
         .build();
     session.land().expect("requests clearance");
-    session.enter_game(SpeedMult::FULL, &mut NeverFires);
+    enter_by_hand(&mut session, &catalog, &mut NeverFires);
     (catalog, session)
+}
+
+/// `session` entering play at full gain as a flight of Nova's
+/// collaborators over `catalog` enters it, on `chance`.
+fn enter_by_hand(session: &mut Session, catalog: &Rc<FakeCatalog>, chance: &mut dyn Chance) {
+    let mut collab = nova_sim::StepCollaborators {
+        catalog: &**catalog,
+        behaviour: &nova_sim::NovaAi::default(),
+        rules: Rules::default(),
+        chance,
+    };
+    session.enter_game(SpeedMult::FULL, &mut collab);
 }
 
 #[test]
 fn entering_play_forwards_on_the_flights_chance() {
     let (catalog, session) = random_gate_held();
-    let (script, chance) = scripted(&[1]);
+    // Draws of 1 and 0 by turns, so the random gate's pick, which draws
+    // again on its frame, always moves on: a script run out draws `n - 1`.
+    let draws: Vec<u32> = (0..256).map(|draw| 1 - draw % 2).collect();
+    let (script, chance) = scripted(&draws);
     let mut flight = flight_of(&catalog, session.clone(), rolling_on(chance));
     assert!(flight.enter_game(SpeedMult::FULL));
     let mut by_hand = session;
-    let (own, mut own_chance) = scripted(&[1]);
-    by_hand.enter_game(SpeedMult::FULL, &mut own_chance);
+    let (own, mut own_chance) = scripted(&draws);
+    enter_by_hand(&mut by_hand, &catalog, &mut own_chance);
     assert_eq!(flight.session(), Ok(&by_hand));
     assert_eq!(script.borrow().asked, own.borrow().asked, "on its chance");
     assert!(!own.borrow().asked.is_empty());
@@ -1159,7 +1175,8 @@ impl nova_sim::PointDefenceRule for Unalarmed {
     }
 }
 
-/// Every NPC idles, targets the player and holds its trigger.
+/// Every NPC idles, targets the player and picks its first weapon each
+/// time it thinks.
 #[derive(Debug)]
 struct Attacking;
 
@@ -1173,15 +1190,11 @@ impl Behaviour for Attacking {
         Goal::Idle
     }
 
-    fn trigger(&self, _npc: &nova_sim::Npc, _around: &nova_sim::Surroundings) -> nova_sim::Trigger {
+    fn trigger(&self, npc: &nova_sim::Npc, _around: &nova_sim::Surroundings) -> nova_sim::Trigger {
+        // Its pick, its first weapon.
         nova_sim::Trigger {
-            primary: true,
-            secondary: None,
-            only: None,
-            bays: false,
-            bays_after: false,
-            point_defence: false,
-            keep: None,
+            only: npc.armament.mounts().first().map(|mount| mount.spec.id),
+            ..nova_sim::Trigger::default()
         }
     }
 

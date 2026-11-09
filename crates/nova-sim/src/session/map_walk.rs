@@ -121,7 +121,7 @@ impl<C: SettlingCatalog + ?Sized> WalkSite for SessionWalk<'_, C> {
             .chart
             .galaxy
             .map()
-            .ordered_jumps(system, self.session.setup.hyperlinks)
+            .ordered_jumps(system, self.session.setup.hyperlinks())
     }
 
     fn known_pass(&mut self) {

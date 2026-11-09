@@ -101,7 +101,7 @@ use Status::{Implemented, Presentation};
 /// Every documented bit: its field, the bit, which weapons it applies to,
 /// and what the simulation does with it.
 const TABLE: [(FlagField, u16, Scope, Status); 44] = [
-    // Spin the graphic: the fight runs each shot slot's spin timer
+    // Spin the graphic: the fight runs each shot's spin timer
     // (`WeaponSpec::spins`, `spin_timer`), and the view draws the frames.
     (Flags, 0x0001, Any, Presentation),
     // Fired by the second trigger.

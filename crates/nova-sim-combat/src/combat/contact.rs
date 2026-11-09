@@ -9,8 +9,10 @@
 //! relative to the player as it then stood (the walk's `seen` places, see
 //! [`Lineup`](super::lineup::Lineup)): a ship by the standard rule at its
 //! drawn frame's size (`_HandleShipDisplay`, [`Placement::Standard`]), the
-//! sheet's when it was read, else its `shän`'s `BaseXSize` and
-//! `BaseYSize`, which every stock sheet's frame equals; a shot by the
+//! sheet's when it was read, else its loaded frame's size
+//! ([`HullSpec::sprite_size`](super::hull::HullSpec::sprite_size) and
+//! [`sprite_height`](super::hull::HullSpec::sprite_height): a `PICT`
+//! sheet's `shän` sizes), which every stock sheet's frame equals; a shot by the
 //! shot rule, half its frame's width off both axes (`_HandleShot`
 //! @0x35c66-0x35cc0, [`Placement::Shot`]), carried back on a wrap's pass
 //! ([`wrap_carry`](super::wrap_carry)); an asteroid by the standard rule
@@ -44,6 +46,12 @@
 //! says, quirk 2 included: the ship's or asteroid's last drawn pixel at
 //! x − 1 touches the shot's first at x.
 //!
+//! **A stellar** (`_CheckShotProximities`' stellar branch, @0x372a8, the
+//! shot first, the stellar second) is laid out in the proximity pass, by
+//! [`stellar_contact`](super::stellar_contact), from the sprite the
+//! session lends ([`StellarSprite`]), around a place or fixed on screen
+//! ([`SpriteAt`]).
+//!
 //! **The hit's place.** `_HandleShipHit` and `_HandleAsteroidHit` explode
 //! where the shot is (@0x36aa9, @0x3667d), so a contact lands at the
 //! shot's position after its move.
@@ -71,6 +79,7 @@ use super::hull::HullSpec;
 use super::projectile::{Shot, Target};
 use super::{Combat, ShipRef};
 use crate::asteroid::KINDS;
+use crate::catalog::StellarId;
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
 use crate::speed_mult::SpeedMult;
@@ -135,6 +144,49 @@ pub struct ShipSprite {
     pub frame: u16,
 }
 
+/// Where a stellar's sprite stands for the proximity pass (see the
+/// [`stellar_contact`](super::stellar_contact) module).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SpriteAt {
+    /// Around a place in the world, which its slot's owner is at: the slot
+    /// is placed there each pass (`_HandleStellarSprites`
+    /// @0x2eeab-0x2ef1a), and the wrap never carries it.
+    Place(Vec2),
+    /// Fixed on screen, its rect's top left from where the player was
+    /// seen: an unowned slot, which `_HandleStellarSprites` no longer
+    /// moves (it moves only owned slots, @0x2eeab-0x2ef1a), so it stays
+    /// at its last screen place, and which the wrap carries no more than
+    /// any stellar (`_WrapPlayerPosition` carries shots only,
+    /// @0x68010-0x68091).
+    Screen {
+        /// Its rect's top left, from where the player was seen.
+        top_left: (i32, i32),
+    },
+}
+
+/// A stellar's sprite as its slot last showed it, for the proximity pass
+/// to lay out (see the [`stellar_contact`](super::stellar_contact)
+/// module): the sheet and frame its slot draws, where it stands, and
+/// the sizes its slot was placed by. A hidden stellar is lent the sprite
+/// its last slot holds now, under its own ID: its slot's owner's, or the
+/// screen-fixed ghost of an unowned slot.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StellarSprite {
+    /// The sheet its slot draws: its `Type`'s, its `DeadType`'s once
+    /// destroyed, or graphic type 0's.
+    pub sheet: Rc<RleSheet>,
+    /// The frame its slot shows (`nova_sim::Session::stellar_frame`).
+    pub frame: u16,
+    /// Where it stands: a place, not its slot's centre, or a rect fixed
+    /// on screen.
+    pub at: SpriteAt,
+    /// The size of the frame drawn.
+    pub size: (u32, u32),
+    /// The size its slot is placed by: the frame's, or 32 square for a
+    /// frozen slot, whose stale frame then sits at the place less 16.
+    pub placed_as: (u32, u32),
+}
+
 /// What the session lends the contact passes (see the module docs): each
 /// ship's sprite and each shot's and asteroid's sheet it holds, the pass's
 /// speed multiplier and the readings of the two rules. A ship, weapon
@@ -147,6 +199,8 @@ pub struct ContactSprites {
     pub shots: BTreeMap<i16, Rc<RleSheet>>,
     /// Each asteroid kind's sheet, where it was read.
     pub asteroids: [Option<Rc<RleSheet>>; KINDS],
+    /// Each destroyable stellar's sprite whose sheet was read.
+    pub stellars: Vec<(StellarId, StellarSprite)>,
     /// The pass's speed multiplier, `_gSpeedMult`.
     pub speed_mult: f64,
     /// How the masks are walked, by
@@ -163,6 +217,7 @@ impl Default for ContactSprites {
             ships: Vec::new(),
             shots: BTreeMap::new(),
             asteroids: std::array::from_fn(|_| None),
+            stellars: Vec::new(),
             speed_mult: SpeedMult::FULL.get(),
             walk: MaskWalk::default(),
             reading: ShotContact::default(),
@@ -173,9 +228,11 @@ impl Default for ContactSprites {
 /// One sprite as the contact lays it out: its rect, and its mask where its
 /// sheet was read.
 #[derive(Clone, Debug, PartialEq)]
-struct Laid {
-    rect: MaskRect,
-    mask: Option<PlacedMask>,
+pub(super) struct Laid {
+    /// Its rect.
+    pub(super) rect: MaskRect,
+    /// Its mask, where its sheet was read.
+    pub(super) mask: Option<PlacedMask>,
 }
 
 /// A whole size of `side` pixels, none below none.
@@ -188,8 +245,9 @@ fn whole(side: f32) -> u32 {
 
 impl ContactSprites {
     /// `ship` of `hull` laid out `offset` from the player (see the module
-    /// docs): at its sheet's size with its mask, else at its `shän`
-    /// sizes with none; none without either.
+    /// docs): at its sheet's size with its mask, else at its hull's
+    /// loaded frame size (a `PICT` sheet's `shän` sizes) with none; none
+    /// without either.
     fn ship(&self, ship: ShipRef, hull: &HullSpec, offset: Vec2) -> Option<Laid> {
         if let Some((_, sprite)) = self.ships.iter().find(|(id, _)| *id == ship) {
             let rect = Placement::Standard.rect(offset, (sprite.sheet.width, sprite.sheet.height));
@@ -213,7 +271,7 @@ impl ContactSprites {
     /// `shot` laid out `offset` from the player by the shot rule: at its
     /// sheet's size with its mask at [`Shot::frame_on`], else at its weapon's
     /// frame size with none; none without either.
-    fn shot(&self, shot: &Shot, offset: Vec2) -> Option<Laid> {
+    pub(super) fn shot(&self, shot: &Shot, offset: Vec2) -> Option<Laid> {
         let read = self
             .shots
             .get(&shot.weapon.graphic)
@@ -367,6 +425,7 @@ mod tests {
         let lent = ContactSprites::default();
         assert!((lent.speed_mult - SpeedMult::FULL.get()).abs() < f64::EPSILON);
         assert!(lent.asteroids.iter().all(Option::is_none));
+        assert!(lent.stellars.is_empty());
     }
 
     /// A sheet of one frame, its rows `rows`.

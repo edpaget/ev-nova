@@ -430,12 +430,14 @@ pub mod ion;
 pub mod ion_tint;
 pub mod jamming;
 mod lineup;
+pub mod locked_slot;
 pub mod phases;
 pub mod planet_type;
 mod player_berths;
 pub mod plunder;
 pub mod projectile;
 mod proximity;
+pub mod refilled_slot;
 pub mod report;
 pub mod script_explosions;
 pub mod ship_frames;
@@ -452,6 +454,7 @@ pub mod spin_timer;
 pub mod spots;
 pub mod sprite_load;
 pub mod stellar;
+mod stellar_contact;
 pub mod stellar_guns;
 pub mod stellar_hazards;
 pub mod submunition;
@@ -480,6 +483,7 @@ use hull::{
 use impact::{Body, Tractor, TractorLock};
 use ion::{Burst, Dose, Ion, IonLockout};
 use jamming::Jamming;
+use locked_slot::LockedSlot;
 pub use phases::Arena;
 use planet_type::{BeamPlanetFlag, BlastKind, PlanetBlasts};
 use plunder::Plunderer;
@@ -487,6 +491,7 @@ use projectile::{
     BombLaunch, DecayStep, Jam, LockAngle, ProximityFuse, Shot, ShotId, ShotLayer, Sight, Source,
     Target,
 };
+use refilled_slot::RefilledSlot;
 use report::{Reports, SimDiagnostic};
 use shot_slots::ShotSlots;
 use sides::{PassThrough, Sides, Ties};
@@ -1306,6 +1311,12 @@ pub struct Combat {
     planet_blasts: PlanetBlasts,
     /// Which of its weapon's bits makes a beam planet-type.
     beam_planet_flag: BeamPlanetFlag,
+    /// How a shot locked on an asteroid reads the slot it holds
+    /// ([`RuleKey::LockedShotShipSlot`](crate::RuleKey::LockedShotShipSlot)).
+    locked_slot: LockedSlot,
+    /// What becomes of a shot whose ship's slot a new ship takes
+    /// ([`RuleKey::ReusedSlotShotTarget`](crate::RuleKey::ReusedSlotShotTarget)).
+    refilled_slot: RefilledSlot,
     /// Whether a planet-type beam hits a stellar
     /// ([`RuleKey::BeamStellars`](crate::RuleKey::BeamStellars)).
     beam_stellars: RuleSource,
@@ -1398,10 +1409,6 @@ pub struct Combat {
     /// ([`RuleKey::ReusedShotSlotRoll`](crate::RuleKey::ReusedShotSlotRoll)):
     /// by the engine, it does.
     reused_roll: RuleSource,
-    /// Whether a shot starts on its slot's leftover spin timer
-    /// ([`RuleKey::ReusedShotSlotSpin`](crate::RuleKey::ReusedShotSlotSpin)):
-    /// by the engine, it does.
-    reused_spin: RuleSource,
     /// Each ship slot's record of the last ship in it, which a
     /// sub-munition reads as it spawns ([`source_slot`]).
     slot_ships: BTreeMap<Slot, source_slot::SlotShip>,
@@ -1660,10 +1667,10 @@ impl Combat {
     }
 
     /// The readings the hit rules take ([`Sides`]): who counts as the
-    /// player for the pass-through flags, and which bit makes a beam
-    /// planet-type.
-    fn hit_readings(&self) -> (PassThrough, BeamPlanetFlag) {
-        (self.pass_through, self.beam_planet_flag)
+    /// player for the pass-through flags, which bit makes a beam
+    /// planet-type, and how a locked shot reads its slot.
+    fn hit_readings(&self) -> (PassThrough, BeamPlanetFlag, LockedSlot) {
+        (self.pass_through, self.beam_planet_flag, self.locked_slot)
     }
 
     /// Has a decaying shot take a step as `step` says: by default,
@@ -1738,6 +1745,16 @@ impl Combat {
     /// those the fight's [`PointDefenceRule`] calls hostile.
     pub fn set_pd_hostility(&mut self, source: RuleSource) {
         self.pd_hostility = source;
+    }
+
+    /// Has a shot locked on an asteroid read the slot it holds as
+    /// `source` says
+    /// ([`RuleKey::LockedShotShipSlot`](crate::RuleKey::LockedShotShipSlot),
+    /// see [`locked_slot`]): by default, the engine's, as a ship slot, in
+    /// the hit rules and for its end-of-life sub-munitions; by the other
+    /// reading, as no ship.
+    pub fn set_locked_shot_ship_slot(&mut self, source: RuleSource) {
+        self.locked_slot = LockedSlot::from(source);
     }
 
     /// Has a `Seeker` 0x4000 shot measure how far its target is off ahead
@@ -2031,6 +2048,7 @@ impl Combat {
                 id: self.next_id(),
                 target: launch.target,
                 aimed_at,
+                aimed_slot: aimed_at.and_then(|ship| projectile::slot_among(targets, ship)),
                 source: Source::Ship(ties),
                 miss_roll: rolls.then(|| chance.below(muzzle.miss_class) + 1),
                 // Every ship's, the player's (slot 0) too (@0x3f0a9-0x3f143).
@@ -2179,52 +2197,30 @@ impl Combat {
     }
 
     /// `fighter` fires what its trigger holds, aimed at its target among
-    /// `targets`: the player's trigger and an NPC's primary or secondary
-    /// while that can be hit ([`ai_dispatch::standing`]), an NPC's pick
+    /// `targets`: the player's trigger while that target can be hit
+    /// ([`ai_dispatch::standing`]), an NPC's pick ([`Trigger::only`])
     /// while its slot is active, breaking up included
     /// ([`ai_dispatch::active`]). The player as step 1 fires it
     /// ([`Combat::fire_player`]), an NPC at its own step of `_HandleShip`
     /// (@0x34ffd, [`Combat::handle_npcs`]).
-    /// An NPC fires a primary or secondary trigger through
-    /// [`Armament::fire`], its quadrant turrets testing their blind spots
-    /// as the original's AI picks them (`_AIFireTurret` @0x80d0b), each
-    /// weapon sounding at [`AI_FIRE_PRIORITY`] (no AI sets one now: an
-    /// escort's formation fire is `_AIFireTurret`'s pick, rdm
-    /// escort-fleet-fidelity phase 1), then fires its pick
-    /// ([`Trigger::only`]) as `_FireAIShipWeapon` does
-    /// ([`Armament::fire_pick`], [`ai_fire`]), its first copy sounding at
-    /// [`AI_FIRE_PRIORITY`], lighting its glow; a recoil sets its
+    /// An NPC fires its pick alone, as `_FireAIShipWeapon` does
+    /// ([`Armament::fire_pick`], [`ai_fire`]), never its trigger's
+    /// `primary` or `secondary`, the player's keys: its first copy sounds
+    /// at [`AI_FIRE_PRIORITY`] and lights its glow; a recoil sets its
     /// velocity, reported as a [`Shove`]. An escort's formation pick goes
-    /// this way too, glow and recoil alike. A shot of `AmmoType` [`SELF_DESTRUCT`] that spawns
-    /// destroys its firer ([`self_destruct`]).
+    /// this way too, glow and recoil alike. A shot of `AmmoType`
+    /// [`SELF_DESTRUCT`] that spawns destroys its firer
+    /// ([`self_destruct`]).
     fn fire_one(&mut self, fighter: &mut Fighter, targets: &[Target], chance: &mut dyn Chance) {
-        let target = ai_dispatch::standing(fighter.target, targets);
         if fighter.ship == ShipRef::Player {
+            let target = ai_dispatch::standing(fighter.target, targets);
             self.pull_player_trigger(fighter, target, targets, chance);
             return;
         }
-        let (state, hull) = (fighter.state, fighter.hull);
-        let trigger = Trigger {
-            only: None,
-            ..fighter.trigger
-        };
-        let launches = fighter.armament.fire(
-            trigger,
-            *fighter.condition,
-            fighter.shooter(),
-            fighter.rounds,
-            &mut fighter.reserves.fuel,
-            chance,
-            &mut self.reports,
-            &mut |spec| aim::aim(spec, &state, &hull, target, RuleSource::Bible),
-        );
-        // Each weapon launches at most once a call, its copies as one,
-        // and sounds as `_FireAIShipWeapon` does, once a call.
-        let sound = |_| Some(FireSound::at(AI_FIRE_PRIORITY));
-        self.launch_volley(fighter, &launches, sound, targets, chance);
         let Some(pick) = fighter.trigger.only else {
             return;
         };
+        let (state, hull) = (fighter.state, fighter.hull);
         let arc = self.quadrant_arc;
         let picked = ai_dispatch::active(fighter.target, targets);
         let volley = fighter.armament.fire_pick(
@@ -2877,7 +2873,7 @@ impl Combat {
         }
     }
 
-    /// Puts in flight the sub-munitions `parent` releases at `target`
+    /// Puts in flight the sub-munitions `parent` releases at `given`
     /// among `targets`, their weapon read from `arsenal` (none when it
     /// cannot be read), heard from where the parent is. Of a guidance not
     /// flown yet, they report it and none fly. Under the
@@ -2887,10 +2883,16 @@ impl Combat {
     /// fly, and the release is heard all the same, its sound coming before
     /// its loop. A sub-munition whose weapon places no shot
     /// ([`WeaponSpec::spawns_shot`](weapon::WeaponSpec::spawns_shot)) ends it at the first, so none fly.
+    /// Each holds the ship slot `given` names
+    /// ([`Given::slot`](locked_slot::Given::slot), the original's +0x2a),
+    /// unless its seek finds another ship: given a locked parent's empty
+    /// ship slot, it is aimed at no ship and holds that slot, so its first
+    /// handling's gone-ship rule makes it lost unless a new ship takes the
+    /// slot first ([`refilled_slot`]).
     fn release(
         &mut self,
         parent: &Shot,
-        (target, fighters): (Option<ShipRef>, &[Fighter]),
+        (given, fighters): (locked_slot::Given, &[Fighter]),
         sides: &Sides,
         arsenal: &Arsenal,
         chance: &mut dyn Chance,
@@ -2905,6 +2907,8 @@ impl Combat {
         // `_SpawnShotSubmunitions` spawns as the parent's source slot
         // (+0x2c): its ship's class and plunder as they are now.
         let (turret_over, owner) = self.source_slot_reads(parent, fighters, arsenal);
+        let target = given.ship();
+        let aimed_slot = given.slot(parent, sides.targets);
         let shots = submunition::release(parent, sub, (target, turret_over));
         if shots.is_empty() {
             return;
@@ -2928,6 +2932,7 @@ impl Combat {
             sound: Some(FireSound::at(SUBMUNITION_PRIORITY)),
         });
         for (mut shot, n) in shots.into_iter().zip(0..) {
+            shot.aimed_slot = aimed_slot;
             // `_SpawnShot` failing ends the loop (@0x3f32d-0x3f331).
             if !sub.spawns_shot() {
                 break;
@@ -3682,7 +3687,9 @@ mod tests {
     mod interfered_hits;
     mod ion_lockout_tick;
     mod lineup;
+    mod locked_submunitions;
     mod npc_gain;
+    mod npc_trigger;
     mod pd_parent;
     mod phase;
     mod pick_at_breakup;
@@ -3692,13 +3699,16 @@ mod tests {
     mod plunder_fire;
     mod proximity_slots;
     mod rating_stretch;
+    mod refilled_slot;
     mod rock_blasts;
     mod shot_gain;
     mod shot_slots;
     mod shot_visits;
+    mod speed_cap_sites;
     mod spin_starts;
     mod stellar_guns;
     mod stellar_hazards;
+    mod stellar_masks;
     mod strike_terms;
     mod tick_phases;
     mod turn_reads;
@@ -3826,14 +3836,17 @@ mod tests {
             }
         }
 
-        /// The ship armed with `record`, its trigger held.
+        /// The ship armed with `record`, its trigger held: as an NPC, it
+        /// picks `record` (`only`, the pick `_FireAIShipWeapon` fires); as
+        /// the player, it holds its primary key (`primary`, which
+        /// [`Armament::player_picks`] reads, never `only`).
         fn armed(self, record: WeaponRecord) -> Self {
             Self {
                 armament: Armament::new([(WeaponSpec::new(&record), 1)]),
                 trigger: Trigger {
                     primary: true,
                     secondary: None,
-                    only: None,
+                    only: Some(record.id),
                     bays: false,
                     bays_after: false,
                     point_defence: true,
@@ -3979,23 +3992,21 @@ mod tests {
     }
 
     #[test]
-    fn a_front_turret_firing_ahead_is_aimed_at_nothing() {
+    fn the_players_front_turret_firing_ahead_is_aimed_at_nothing() {
         let front = WeaponRecord {
             guidance: 7,
             ..blaster()
         };
+        let player = || Ship {
+            id: ShipRef::Player,
+            fleet: ShipRef::Player,
+            slot: Slot::Player,
+            ..Ship::at(0, 0.0, 0.0)
+        };
         // Facing right: B ahead, C behind.
-        let ahead = launched_by(
-            Ship::at(1, 0.0, 0.0).targeting(B),
-            front,
-            vec![Ship::at(2, 300.0, 0.0)],
-        );
+        let ahead = launched_by(player().targeting(B), front, vec![Ship::at(2, 300.0, 0.0)]);
         assert_eq!(ahead.shots()[0].aimed_at, Some(B));
-        let astern = launched_by(
-            Ship::at(1, 0.0, 0.0).targeting(C),
-            front,
-            vec![Ship::at(3, -300.0, 0.0)],
-        );
+        let astern = launched_by(player().targeting(C), front, vec![Ship::at(3, -300.0, 0.0)]);
         assert_eq!(astern.shots()[0].aimed_at, None, "fired straight ahead");
     }
 
@@ -6251,15 +6262,15 @@ mod tests {
 
     #[test]
     fn diagnostics_are_taken_once() {
-        // An undocumented guidance, reported as it fails to fire.
+        // An undocumented guidance, reported as the player fails to fire it.
         let undocumented = WeaponRecord {
             guidance: 11,
             ..blaster()
         };
         let mut combat = Combat::default();
-        let mut ships = [Ship::at(1, 0.0, 0.0).armed(undocumented)];
+        let mut ships = [player_with(undocumented)];
         for _ in 0..3 {
-            phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+            phase::fire_player(&mut combat, &mut ships, &NovaDisable);
         }
         assert_eq!(combat.take_diagnostics().len(), 1);
         assert_eq!(combat.take_diagnostics(), []);
@@ -7233,13 +7244,8 @@ mod tests {
         let mut combat = Combat::default();
         let mut ships = missile_attack(gun);
         ships[0].trigger = Trigger {
-            primary: true,
-            secondary: None,
-            only: None,
-            bays: false,
-            bays_after: false,
-            point_defence: true,
-            keep: None,
+            only: Some(gun.id),
+            ..QUIET
         };
         // A's gun and B's missile, fired in the ship loop, close 25 pixels
         // a move: their seventh ends them 25 apart, their 35- and 18-pixel
@@ -7939,7 +7945,8 @@ mod tests {
         let mut combat = Combat::default();
         let mut ships = [
             Ship::at(1, 0.0, 0.0).armed(turret_shell).targeting(C),
-            Ship::at(3, 500.0, 0.0),
+            // Inside the box of the shell's reach, as an NPC's pick asks.
+            Ship::at(3, 60.0, 0.0),
         ];
         // Fired in the ship loop, its third move spends it; the fourth
         // `_HandleShot` releases them where it ended, into later slots, and
@@ -8766,28 +8773,6 @@ mod tests {
         let sorties = combat.take_sorties();
         assert_eq!(sorties.len(), 1);
         assert_eq!(sorties[0].target, None);
-    }
-
-    #[test]
-    fn an_npcs_trigger_sounds_each_weapon_once_a_volley_at_priority_4() {
-        let mut combat = Combat::default();
-        let other = WeaponRecord {
-            id: WeaponId(131),
-            ..turret(4)
-        };
-        let mut firer = Ship::at(1, 0.0, 0.0).armed(turret(4)).targeting(B);
-        firer.armament = Armament::new([
-            (WeaponSpec::new(&turret(4)), 3),
-            (WeaponSpec::new(&other), 1),
-        ]);
-        let mut ships = [firer, Ship::at(2, -150.0, 0.0)];
-        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
-        let heard = Some(FireSound::at(AI_FIRE_PRIORITY));
-        assert_eq!(
-            sounds(&combat.take_events()),
-            [(WeaponId(130), heard), (WeaponId(131), heard)],
-            "once per weapon, its 3 copies firing as one, as _FireAIShipWeapon sounds once a call"
-        );
     }
 
     #[test]
@@ -9895,7 +9880,7 @@ mod tests {
             ..ship.armed(record).of(exits_at(0, [(3, 10); 4]))
         }];
         let firer = ships[0].id;
-        phase::fire(&mut combat, &mut ships, firer, &NovaDisable);
+        fire_or_spawn_drawing(&mut combat, &mut ships, firer, &mut NeverFires);
         ships[0].trigger = QUIET;
         phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
         let shot = combat.shots().last().expect("a shot");
@@ -11156,6 +11141,42 @@ mod tests {
         });
     }
 
+    /// `_SpawnShot` for one copy of NPC `ships[0]`'s first weapon, along
+    /// its heading at its target, its inaccuracy drawn on `chance`, with no
+    /// sound ([`Combat::launch_volley`]). No AI pick spawns a freefall bomb
+    /// (`ai_fire::spawn` gives guidance 5 nothing), so a test of how an
+    /// NPC's bomb leaves its ship launches it this way.
+    fn spawn_drawing(combat: &mut Combat, ships: &mut [Ship], chance: &mut dyn Chance) {
+        drawing(combat, ships, chance, |combat, fighters, _, chance| {
+            let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
+            let fighter = &mut fighters[0];
+            let weapon = fighter.armament.mounts()[0].spec;
+            let launch = Launch {
+                weapon,
+                pointing: aim::Pointing::Along(fighter.state.heading),
+                inaccuracy: armament::inaccuracy(weapon.inaccuracy, chance),
+                target: fighter.target,
+            };
+            combat.launch_volley(fighter, &[launch], |_| None, &targets, chance);
+        });
+    }
+
+    /// `firer` fires as [`fire_drawing`] says; but an NPC's freefall bomb,
+    /// which no AI pick spawns, is launched as [`spawn_drawing`] says.
+    fn fire_or_spawn_drawing(
+        combat: &mut Combat,
+        ships: &mut [Ship],
+        firer: ShipRef,
+        chance: &mut dyn Chance,
+    ) {
+        let bomb = ships[0].armament.mounts()[0].spec.guidance == Guidance::FreefallBomb;
+        if firer != ShipRef::Player && bomb {
+            spawn_drawing(combat, ships, chance);
+        } else {
+            fire_drawing(combat, ships, firer, chance);
+        }
+    }
+
     /// The NPCs' point defence and launches, drawing on `chance`
     /// ([`phase::defend_npcs`]).
     fn defend_drawing(combat: &mut Combat, ships: &mut [Ship], chance: &mut dyn Chance) {
@@ -11193,7 +11214,7 @@ mod tests {
         let firer = ship.id;
         let mut ships = [ship.armed(record).targeting(B), Ship::at(2, 0.0, -300.0)];
         let mut chance = nova_sim_base::fixture::Draws::of(draws);
-        fire_drawing(&mut combat, &mut ships, firer, &mut chance);
+        fire_or_spawn_drawing(&mut combat, &mut ships, firer, &mut chance);
         let shot = combat.shots().first().expect("a shot");
         (shot.miss_roll, chance.asked)
     }
@@ -11390,7 +11411,7 @@ mod tests {
         }];
         let firer = ships[0].id;
         let mut draws = nova_sim_base::fixture::Draws::of(draws);
-        fire_drawing(&mut combat, &mut ships, firer, &mut draws);
+        fire_or_spawn_drawing(&mut combat, &mut ships, firer, &mut draws);
         fly_drawing(&mut combat, &mut ships, &mut draws);
         let shot = combat.shots().last().expect("a shot");
         assert!(shot.moved_from.is_some(), "moved");
@@ -11537,8 +11558,8 @@ mod tests {
                 },
                 ..Ship::at(1, 0.0, 0.0).armed(dropping(5, 0))
             }];
-            // Thrown in the ship loop, it turns on its first move.
-            phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+            // Thrown, it turns on its first move.
+            spawn_drawing(&mut combat, &mut ships, &mut NeverFires);
             phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
             assert_eq!(combat.shots()[0].heading, heading, "{wrap:?}");
         }
@@ -11623,24 +11644,21 @@ mod tests {
     }
 
     #[test]
-    fn a_turret_at_a_resting_target_fires_at_its_table_bearing_turned_and_wrapped() {
-        // B reads 0 by the table from A; inaccuracy 9 draws below 18, less
-        // 9: 4 is -5, taken round to 355.
+    fn the_players_turret_at_a_resting_target_fires_at_its_table_bearing_turned_and_wrapped() {
+        // B reads 0 by the table from the player; inaccuracy 9 draws below
+        // 18, less 9: 4 is -5, taken round to 355.
         let wild = WeaponRecord {
             inaccuracy: 9,
             ..turret(4)
         };
         let mut combat = Combat::default();
-        let mut ships = [
-            Ship::at(1, 0.0, 0.0).armed(wild).targeting(B).facing(90.0),
-            Ship::at(2, 10.0, -1000.0),
-        ];
+        let mut ships = [player_with(wild), Ship::at(2, 10.0, -1000.0)];
         assert_eq!(
             trig::intercept_angle(Vec2::ZERO, Vec2::new(10.0, -1000.0)),
             0
         );
         let mut chance = nova_sim_base::fixture::Draws::of(&[4]);
-        fire_drawing(&mut combat, &mut ships, A, &mut chance);
+        fire_drawing(&mut combat, &mut ships, ShipRef::Player, &mut chance);
         let shot = combat.shots()[0];
         assert_eq!(shot.heading, 355.0);
         assert_eq!(shot.velocity, trig::accel(355, 20.0));
@@ -14126,15 +14144,6 @@ mod tests {
             blind_front_shots(player, PRIMARY_HELD, RuleSource::Bible),
             0
         );
-        // An NPC's primary trigger (`Armament::fire`); its pick is tested
-        // for blind spots as its AI picks it (`_AIFireTurret` @0x80d0b).
-        for reading in RuleSource::ALL {
-            assert_eq!(
-                blind_front_shots(A, PRIMARY_HELD, reading),
-                0,
-                "an NPC's primary trigger: {reading:?}"
-            );
-        }
         // A full turret holds fire in its blind spot under both readings.
         for reading in RuleSource::ALL {
             let blind = WeaponRecord {

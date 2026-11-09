@@ -395,6 +395,8 @@ mod think_run_tests;
 mod tractor_freed_tests;
 pub mod tractor_hold;
 #[cfg(test)]
+mod tractor_live_tests;
+#[cfg(test)]
 mod trader_hit_target_tests;
 pub mod vacated;
 #[cfg(test)]
@@ -412,6 +414,8 @@ mod warship_ally_tests;
 pub mod weigh;
 #[cfg(test)]
 mod window_tests;
+#[cfg(test)]
+mod world_flight_tests;
 mod wrap_carry;
 
 use crate::ai::interceptor::within_reach;
@@ -8594,7 +8598,7 @@ mod tests {
     }
 
     #[test]
-    fn a_berths_pick_outlives_a_jump_but_not_a_new_traffic() {
+    fn a_berths_pick_outlives_a_jump_and_reaches_a_new_traffic_given_the_kept_berths() {
         let mut traffic = left_picking(WeaponId(131), RuleSource::Engine);
         traffic.retarget(table(0), &BTreeSet::new(), Leave::Dropped);
         traffic.enter(table(0), &mut Draws::of(&[]));
@@ -8605,8 +8609,12 @@ mod tests {
         );
         let mut fresh = Traffic::new();
         fresh.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
-        assert_eq!(fresh.npcs()[0].pick, None);
+        assert_eq!(fresh.npcs()[0].pick, None, "a launch's empty table");
         assert_eq!(fresh.reused_slot_pick(), RuleSource::Engine);
+        let mut given = Traffic::new();
+        given.keep_berths(traffic.kept_berths());
+        given.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
+        assert_eq!(given.npcs()[0].pick, Some(WeaponId(131)));
     }
 
     #[test]

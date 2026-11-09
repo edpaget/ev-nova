@@ -3,9 +3,9 @@
 //! past an arrival (the `faded_keys` module).
 
 use super::faked_screen::{sent_count, sent_since};
-use super::faked_travel::{lit, now_shows, warping};
+use super::faked_travel::{arrival_report, lit, now_shows, warping};
 use super::*;
-use nova_sim::flight_frame::{FadedPress, FlightEvent, PassReport, StepRun};
+use nova_sim::flight_frame::{FadedPress, FlightEvent, PassReport, ShipPlace, StepRun};
 use nova_sim::{HailRefusal, Hailed, MissionInfoPress, VenueOffer};
 
 /// A report of one step, carrying a lit collapse as `lit_collapse` says.
@@ -70,36 +70,21 @@ fn collapses_unlit(view: &mut Faked) {
     view.tick(TICK);
 }
 
-/// A tick whose step ends the warp, and the arrival it runs.
+/// A tick whose step ends the warp, its advance pass settling the
+/// arrival, over the frame of no jump.
 fn arrives(view: &mut Faked) {
     view.sim.queue_report_showing(
-        one_step(false),
-        FlightFrame {
-            warp_end_due: true,
-            ..white()
-        },
+        arrival_report(0, ShipPlace::default()),
+        super::frames::sol(),
     );
-    queue_arrival(view);
     view.tick(TICK);
     assert!(!view.jump_under_way(), "arrived");
 }
 
-/// The flight answers the arrival, over the frame of no jump.
-fn queue_arrival(view: &mut Faked) {
-    view.sim.queue_answer_showing(
-        Answer::Arrived {
-            system: SystemId(131),
-            combat: Vec::new(),
-        },
-        super::frames::sol(),
-    );
-}
-
-/// The commands sent since `from`, the arrival left out.
+/// The commands sent since `from`: none is the arrival's, which its step
+/// reports.
 fn sent(view: &Faked, from: usize) -> Vec<FlightCommand> {
-    let mut sent = sent_since(view, from);
-    sent.retain(|command| *command != FlightCommand::Arrive);
-    sent
+    sent_since(view, from)
 }
 
 /// A prompt for a person's mission.
@@ -738,30 +723,20 @@ fn p_and_y_let_go_before_the_arrivals_next_tick_do_nothing() {
 }
 
 /// The arrival held for double time's frame: a step whose second pass
-/// ends the warp, then the tick that stops before its step and arrives.
+/// ends the warp, its frame between the passes under the white and the
+/// arrival held for the frame after, then `between`, after that frame is
+/// drawn.
 fn arrives_held(view: &mut Faked, between: impl Fn(&mut Faked)) {
-    let pass = PassReport {
-        double_time: true,
-        ..PassReport::default()
-    };
-    let report = super::stepping::doubled(pass.clone(), pass, white());
-    view.sim.queue_report_showing(
-        report,
-        FlightFrame {
-            warp_end_due: true,
-            ..white()
-        },
+    let mut report = arrival_report(1, ShipPlace::default());
+    report.steps[0].between_passes = Some(Box::new(white()));
+    view.sim.queue_report_showing(report, super::frames::sol());
+    view.tick(TICK);
+    assert!(
+        view.holds_arrival(),
+        "the arrival waits for the frame after"
     );
-    view.tick(TICK);
-    assert!(view.jump_under_way(), "the arrival waits for its frame");
+    assert!(!view.jump_under_way(), "the flight has arrived");
     between(view);
-    view.sim.queue_report(StepReport {
-        steps: Vec::new(),
-        stopped: true,
-    });
-    queue_arrival(view);
-    view.tick(TICK);
-    assert!(!view.jump_under_way(), "arrived");
 }
 
 #[test]
@@ -789,11 +764,22 @@ fn y_let_go_during_double_times_held_arrival_does_nothing() {
 }
 
 #[test]
-fn m_pressed_in_double_times_held_arrival_does_not_open_the_map() {
+fn m_pressed_after_double_times_held_arrival_frame_opens_the_map_after_its_layout() {
+    // The second pass settled the arrival before the press: the press is
+    // the next frame's, read with the jump over.
     let mut view = under_the_white();
     arrives_held(&mut view, |view| {
         view.input(&key(MAP_KEY, true));
+        assert!(!view.holds_arrival(), "laid out before the press is read");
     });
+    assert!(view.map_open(), "a plain press after the arrival");
+}
+
+#[test]
+fn m_kept_and_held_over_a_second_pass_arrival_does_not_open_the_map() {
+    let mut view = under_the_white();
+    view.input(&key(MAP_KEY, true));
+    arrives_held(&mut view, |_| {});
     view.tick(TICK);
     assert!(!view.map_open(), "@0x6a89f latched it");
 }

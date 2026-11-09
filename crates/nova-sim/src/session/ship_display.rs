@@ -120,12 +120,10 @@
 //! @0x3a783), so every ship's set, lights and ion tint step once there,
 //! through [`PlayerShip::display_frames`] and
 //! [`Space::display_npc_frames`] (`Session::display_slots`), at its site's
-//! gain: the entry's in `Session::enter_game` (@0x1a36c), a loaded
-//! pilot's escorts' as the first setup places them
-//! (`Session::prepare_entered_escorts`), at the carried
-//! gain by the engine's reading of [`RuleKey::SpeedMultRamp`]; a
-//! take-off's two at 0; a gate's, an arrival's and the first setup's at
-//! the frame's. The `prepare_frames` module says where each runs; the
+//! gain: the entry's two in `Session::enter_game` (@0x1a36c, @0x45834),
+//! at the carried gain by the engine's reading of
+//! [`RuleKey::SpeedMultRamp`]; a take-off's two at 0; a gate's, an
+//! arrival's and the developer's flight's first setup's at the frame's. The `prepare_frames` module says where each runs; the
 //! layers, visibility and fades there are the `slot_visibility` module's
 //! (`Session::prepare_all_sprites`).
 //! Each display ends with the ship's ion tint
@@ -406,7 +404,7 @@ impl PlayerShip {
         let spec = self.fit.hull.frames;
         let rounds = OutfitRounds {
             owned: &mut pilot.outfits,
-            sources: &statics.ammo_outfits,
+            sources: statics.ammo_outfits(setup.outfit_weapon_mods()),
         };
         let moment = Moment {
             disabled,
@@ -891,6 +889,7 @@ pub(in crate::session) mod tests {
         assert_eq!(session.ship.fit.armament.fold().since_fire, 2);
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &crate::ai::NovaAi::default(),
             Rules::default(),
             &mut NeverFires,
@@ -1036,26 +1035,32 @@ pub(in crate::session) mod tests {
     }
 
     #[test]
-    fn entering_play_steps_the_players_lights_once_before_the_first_frame() {
+    fn entering_play_steps_the_players_lights_at_each_display_before_the_first_frame() {
         // `_EnterGameFromMainScreen`'s `_PrepareAllSprites` (@0x1a36c,
-        // its display @0x3a783), at the entry's gain; none at
+        // its display @0x3a783), the two priming passes' displays and
+        // `_PlayGame`'s (@0x45834), at the entry's gain; none at
         // construction.
-        let mut session = Session::start(&lit(0)).expect("starts");
+        let catalog = lit(0);
+        let mut session = Session::start(&catalog).expect("starts");
         let lights = session.ship.ship_display.frames.lights;
         assert_eq!((lights.intensity, lights.count), (0.0, 0), "no step yet");
-        session.enter_game(SpeedMult::FULL, &mut NeverFires);
+        crate::testkit::enter_game(&mut session, &catalog, SpeedMult::FULL, &mut NeverFires);
         let lights = session.ship.ship_display.frames.lights;
-        assert_eq!((lights.intensity, lights.count), (0.75, 0), "one step");
-        assert_eq!(session.player_drawn().lights, None, "0.75: not drawn");
+        assert_eq!(
+            (lights.intensity, lights.count),
+            (3.0, 0),
+            "a step a display"
+        );
+        assert_eq!(session.player_drawn().lights, Some(3), "drawn at 3");
         let mut steady = lit(0);
         let display = steady.hulls[0].display.as_mut().expect("a shän");
         display.blink = crate::blink::Blink::STEADY;
         let mut session = Session::start(&steady).expect("starts");
-        session.enter_game(SpeedMult::FULL, &mut NeverFires);
+        crate::testkit::enter_game(&mut session, &steady, SpeedMult::FULL, &mut NeverFires);
         assert_eq!(session.player_drawn().lights, Some(32), "no tick needed");
         let pilot = session.pilot.clone();
         let mut loaded = Session::fly(&steady, pilot).expect("loads");
-        loaded.enter_game(SpeedMult::FULL, &mut NeverFires);
+        crate::testkit::enter_game(&mut loaded, &steady, SpeedMult::FULL, &mut NeverFires);
         assert_eq!(loaded.player_drawn().lights, Some(32), "a load's too");
     }
 
@@ -1404,6 +1409,7 @@ pub(in crate::session) mod tests {
             let before = (session.npcs().len(), set(&session));
             session.tick_again(
                 Controls::default(),
+                &crate::testkit::catalog(),
                 &crate::ai::NovaAi::default(),
                 Rules::default(),
                 &mut NeverFires,

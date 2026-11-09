@@ -2,9 +2,9 @@
 //! `_HandleSpriteMurkiness` (@0x2b42f-0x2b513) murks them, at their
 //! positions seen from the player's ship in the frame's effective murk
 //! (rdm:phase/play-feel-4/phase-17-murk-other-sprites). On [`FakeFlight`]:
-//! each frame scripted, the pod raised on the view's own effects.
+//! each frame scripted, the pod among them.
 
-use super::faked_world::{asteroid_at, box_at, raise, world, world_list};
+use super::faked_world::{asteroid_at, box_at, world, world_list};
 use super::missions::rocky;
 use super::*;
 use crate::Colorize;
@@ -45,30 +45,22 @@ fn mixed_of(list: &DrawList, id: i16) -> (Color, Colorize) {
         .unwrap_or_else(|| panic!("{id} not mixed: {list:?}"))
 }
 
-/// A frame in Sol in [`MURK`], the player at `player`, a cargo box and an
-/// asteroid at `at`.
+/// A frame in Sol in [`MURK`], the player at `player`, a cargo box, an
+/// asteroid and an escape pod at `at`.
 fn murky(player: Vec2, at: Vec2) -> FlightFrame {
     FlightFrame {
         asteroids: vec![asteroid_at(at)],
         cargo_boxes: vec![box_at(at)],
+        pods: vec![crate::flight::pods::pod_at(at, 100.0)],
         effective_murk: MURK,
         murk_colour: MURK_COLOUR,
         ..in_sol_with(vec![the_player_at(player, 0.0)])
     }
 }
 
-/// The view over [`murky`], a pod adrift from `at`.
+/// The view over [`murky`].
 fn view_of(player: Vec2, at: Vec2) -> Faked {
-    let mut view = world(rocky(trading()), murky(player, at));
-    raise(
-        &mut view,
-        &[CombatEvent::PodEjected {
-            ship: ShipRef::Npc(NpcId(9)),
-            at,
-            velocity: Vec2::ZERO,
-        }],
-    );
-    view
+    world(rocky(trading()), murky(player, at))
 }
 
 /// How a sprite at `at` is drawn seen from `player` in [`MURK`]: at its
@@ -98,13 +90,8 @@ fn a_murky_asteroid_far_from_the_player_is_mixed_and_one_beside_it_is_not() {
 #[test]
 fn a_murky_escape_pod_far_from_the_player_is_mixed_and_one_beside_it_is_not() {
     let view = view_of(Vec2::ZERO, FAR);
-    let pod = view.effects.pods()[0];
-    let at = Vec2::new(pod.at.x, pod.at.y);
-    assert_eq!(mixed_of(&world_list(&view), 1095), murked(at, Vec2::ZERO));
-    let beside = view_of(at, FAR);
-    let pod = beside.effects.pods()[0];
-    let level = sprite_murk(Vec2::new(pod.at.x, pod.at.y), at, MURK);
-    assert_eq!(level, 0, "beside the player, as the push is the same");
+    assert_eq!(mixed_of(&world_list(&view), 1095), murked(FAR, Vec2::ZERO));
+    let beside = view_of(FAR, FAR);
     assert_eq!(tint_of(&world_list(&beside), 1095), Color::WHITE);
 }
 

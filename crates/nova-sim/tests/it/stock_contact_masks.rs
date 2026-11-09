@@ -3,8 +3,10 @@
 //! stock sheet a contact reads is read, so stock never falls back to the
 //! swept discs; every stock ship's `shän` sizes are its sheet's; a stock
 //! shot over a stock ship's middle touches it by the masks; and the
-//! Asteroid Miner on a box's point takes it. Skips, passing, when
-//! `NOVA_DATA` is unset.
+//! Asteroid Miner on a box's point takes it; and every stock destroyable
+//! stellar's sheets are read at their frame sizes, so a plug-in's
+//! planet-type shot meets stock stellars by their masks. Skips, passing,
+//! when `NOVA_DATA` is unset.
 
 use std::collections::BTreeSet;
 use std::rc::Rc;
@@ -68,6 +70,38 @@ fn every_stock_sheet_a_contact_reads_is_read_at_its_shans_size() {
         (65, 24, 16),
         "sprite bases, shot graphics and asteroid kinds"
     );
+}
+
+#[test]
+fn every_stock_destroyable_stellars_sheets_are_read_at_their_frame_sizes() {
+    let Some(data) = common::opened() else {
+        return;
+    };
+    let strong: BTreeSet<_> = data
+        .stellar_lives()
+        .iter()
+        .filter(|life| life.strength > 0)
+        .map(|life| life.id)
+        .collect();
+    let mut seen = BTreeSet::new();
+    let mut wrong = Vec::new();
+    for system in data.star_map() {
+        for site in data.landing_sites(system.id) {
+            if !strong.contains(&site.id) || !seen.insert(site.id) {
+                continue;
+            }
+            let sheets = std::iter::once((site.graphic, site.frame_size))
+                .chain(site.dead_graphic.map(|dead| (dead, site.dead_frame_size)));
+            for (graphic, size) in sheets {
+                let read = read(&data, MaskSheet::Stellar(graphic));
+                if read.map(|rle| (rle.width, rle.height)) != size {
+                    wrong.push((site.id.0, graphic));
+                }
+            }
+        }
+    }
+    assert!(!seen.is_empty(), "stock has destroyable stellars");
+    assert_eq!(wrong, [], "(spöb, graphic) unread or of another size");
 }
 
 #[test]

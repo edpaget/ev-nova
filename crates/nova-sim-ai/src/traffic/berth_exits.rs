@@ -16,14 +16,14 @@
 //! written after each fight ([`Traffic::keep_berth_exits`]), and gives a
 //! new ship its berth's by the reading of
 //! [`RuleKey::ReusedSlotExits`](crate::RuleKey::ReusedSlotExits): the last
-//! ship's by the engine, all at exit 0 by the other reading. The player's
-//! own cursors are the session's to carry.
+//! ship's by the engine, all at exit 0 by the other reading.
 //!
 //! It lives as long as the [`Traffic`](crate::traffic::Traffic) holding
-//! it, across systems but not across a new traffic. The original keeps a
-//! slot's cursors through a pilot load or a new game until the app quits;
-//! that is recorded only (rdm phase
-//! weapons-fidelity/phase-18-exit-cursors-left-out-of-phase-6).
+//! it, and is handed on to the next through
+//! [`KeptBerths`](super::kept_berths::KeptBerths): the original keeps a
+//! slot's cursors through a relocation, a pilot load and a new game until
+//! the app quits. The player's ride beside them
+//! ([`KeptBerths::with_player_exits`](super::kept_berths::KeptBerths::with_player_exits)).
 //!
 //! [`Traffic::keep_berth_exits`]: crate::traffic::Traffic::keep_berth_exits
 
@@ -67,6 +67,15 @@ impl Traffic {
     /// module docs).
     pub(super) fn berth_cursors(&self, berth: u32) -> ExitCursors {
         self.berth_exits.seed(berth).unwrap_or_default()
+    }
+
+    /// Writes `cursors` as the exit cursors of the ship last in `berth`,
+    /// for tests that set a berth's word up.
+    ///
+    /// Kept for nova-sim's kept-berths tests (`session::kept_berths`).
+    #[cfg(any(test, feature = "fixture"))]
+    pub fn write_berth_exits(&mut self, berth: u32, cursors: ExitCursors) {
+        self.berth_exits.write(berth, Some(cursors));
     }
 }
 

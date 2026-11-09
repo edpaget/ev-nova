@@ -189,16 +189,21 @@ impl<
 
     /// Plays `effect` for the ship having come out of a gate, `combat` the
     /// fight's events its arrival left pending, caught up with as an
-    /// arrival is ([`FlightView::arrived`]). The latched flight keys are
+    /// arrival is ([`FlightView::arrived`]). A hypergate passes its
+    /// [`JumpEffect::emerging`]; a wormhole passes none, as
+    /// `_PlayerEnterWormhole` paints the window white (@0x643ea-0x64414)
+    /// but never flushes it before `_RefreshSAT` copies the new system over
+    /// it, so its white is never on screen (see "Gates" in the `jump`
+    /// module docs). The latched flight keys are
     /// let go, their repeats dropped until their release, and the
     /// unlatched ones kept, as `_PlayerEnterHypergate` and
     /// `_PlayerEnterWormhole` set every latch after their movie
     /// (`_SetAllKeyCmdFlags` @0x639f2, @0x6429c) and `_HandlePlayer` polls
     /// the rest: neither touches the jump counter +0x50 its keys test.
-    pub(super) fn came_through(&mut self, effect: JumpEffect, combat: &[CombatEvent]) {
+    pub(super) fn came_through(&mut self, effect: Option<JumpEffect>, combat: &[CombatEvent]) {
         self.keep_unlatched_keys();
         self.arrived(combat);
-        self.fade_in = Some(effect);
+        self.fade_in = effect;
     }
 
     /// Closes the course map, abandoning any gesture on it, and goes back
@@ -207,8 +212,8 @@ impl<
     /// enters the hypergate for the system picked on it
     /// ([`FlightCommand::EnterHypergate`]): the ship comes out there, and
     /// the new system fades in from white ([`JumpEffect::emerging`], or
-    /// flashes white with the Hyperspace Effects preference off), its
-    /// arrival said; with no pick, the jump is cancelled
+    /// shows white on one presented frame with the Hyperspace Effects
+    /// preference off), its arrival said; with no pick, the jump is cancelled
     /// ([`HYPERGATE_CANCELLED`]). With movies on, the entry first plays
     /// the movie of the `dësc` the flight names for it (see the `movies`
     /// module). The hypergate map closes silently:

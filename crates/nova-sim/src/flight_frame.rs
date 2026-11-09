@@ -48,6 +48,7 @@ use crate::combat::ship_frames::{Drawn, FrameSpec};
 use crate::combat::shot_layer::ShotLayer;
 use crate::combat::{CombatEvent, ShipRef};
 use crate::dialog::conversation::ConversationPage;
+use crate::escape_pod::Pod;
 use crate::escort::{ClassRow, Commanded, EscortClass, EscortCommand, EscortGroup};
 use crate::escort_dialog::{EscortButton, EscortDialogView};
 use crate::flight::{Amounts, Controls, ShipState};
@@ -125,9 +126,6 @@ pub struct FlightFrame {
     /// ship is not yet arrived
     /// ([`Session::jumping`](crate::Session::jumping) is some).
     pub warping: bool,
-    /// Whether the warp has ended, so the jump arrives
-    /// ([`Session::warp_end_due`](crate::Session::warp_end_due)).
-    pub warp_end_due: bool,
     /// Where the player's ship is in its lifecycle
     /// ([`Session::player_fate`](crate::Session::player_fate)).
     pub fate: PlayerFate,
@@ -186,6 +184,11 @@ pub struct FlightFrame {
     /// Each cargo box in space, in its table's order
     /// ([`Session::cargo_boxes`](crate::Session::cargo_boxes)).
     pub cargo_boxes: Vec<FrameBox>,
+    /// Each escape pod adrift, shown or hidden, in slot order
+    /// ([`Session::escape_pods`](crate::Session::escape_pods)): drawn
+    /// after the cargo boxes in their layer, each shown one at its life's
+    /// fade.
+    pub pods: Vec<Pod>,
     /// Each asteroid in the field, in the field's order
     /// ([`Session::asteroids`](crate::Session::asteroids)).
     pub asteroids: Vec<FrameAsteroid>,
@@ -282,7 +285,6 @@ impl Default for FlightFrame {
             landed: None,
             jump_under_way: false,
             warping: false,
-            warp_end_due: false,
             fate: PlayerFate::Flying,
             hold_expired: false,
             leave_due: false,
@@ -299,6 +301,7 @@ impl Default for FlightFrame {
             shots: Vec::new(),
             beams: Vec::new(),
             cargo_boxes: Vec::new(),
+            pods: Vec::new(),
             asteroids: Vec::new(),
             stellars: Vec::new(),
             radar_stellars: Vec::new(),
@@ -893,9 +896,6 @@ pub enum FlightCommand {
     /// Pass through the wormhole the ship is at
     /// ([`Session::enter_wormhole`](crate::Session::enter_wormhole)).
     EnterWormhole,
-    /// End the jump once its warp has ended
-    /// ([`Session::arrive`](crate::Session::arrive)).
-    Arrive,
     /// The port's Leave: take off
     /// ([`Session::leave_port`](crate::Session::leave_port)).
     TakeOff,
@@ -1257,7 +1257,6 @@ impl FlightCommand {
             | Self::RestoreMapNav(_)
             | Self::RestoreMapSelection(_)
             | Self::EnterHypergate(_)
-            | Self::Arrive
             | Self::TakeOff
             | Self::LeaveIfDue
             | Self::LandEscorts
@@ -1434,12 +1433,12 @@ pub enum Answer {
     /// Why entering or opening a gate took the ship nowhere. Not
     /// [`Answer::Refused`]: the hypergate's entry is consumed.
     GateRefused(GateRefusal),
-    /// The system an arrival ([`FlightCommand::Arrive`],
-    /// [`FlightCommand::EnterHypergate`], [`FlightCommand::EnterWormhole`])
-    /// arrived in, and what happened in the fight up to the arrival that
-    /// no step took: the explosions the jump left pending, a crön's `Y` on
-    /// its days among them, for the view to show on the arrival's first
-    /// frame.
+    /// The system a gate's arrival ([`FlightCommand::EnterHypergate`],
+    /// [`FlightCommand::EnterWormhole`]) arrived in, and what happened in
+    /// the fight up to the arrival that no step took: the explosions the
+    /// jump left pending, a crön's `Y` on its days among them, for the
+    /// view to show on the arrival's first frame. A jump's arrival comes
+    /// with its step instead ([`StepRun::arrival`]).
     Arrived {
         /// The system arrived in.
         system: SystemId,
@@ -1726,8 +1725,9 @@ pub struct StepReport {
     /// Each step that ran, in order.
     pub steps: Vec<StepRun>,
     /// Whether the stepping stopped before a step it was asked for: the
-    /// warp's end or the hold's expiry before it, or the escape pod's
-    /// rescue on the step before.
+    /// hold's expiry before it, or the jump's arrival or the escape pod's
+    /// rescue on the step before ([`StepRun::arrival`],
+    /// [`StepRun::rescued`]).
     pub stopped: bool,
 }
 
@@ -1749,23 +1749,41 @@ pub struct StepRun {
     /// double time's second's: what was raised before the step's first
     /// take, then this step's.
     pub comm: Vec<CommNote>,
-    /// Each pass that ran to its end: the advance pass, then double
-    /// time's second; none when the rescue settled on the advance pass.
+    /// Each pass that ran: the advance pass (or the rest of the frame a
+    /// dialog opened on), then double time's second. A pass an exit
+    /// settled in ([`StepRun::arrival`], [`StepRun::rescued`]) is reported
+    /// too: the rest of it, among the new system.
     pub passes: Vec<PassReport>,
     /// The flight as it stood between double time's two passes, which is
     /// what the original draws (`_PlayGame` @0x45d96-0x45e82 between
     /// @0x45bc8 and @0x45f31): the frame the view shows for this step.
-    /// `None` in single time, whose frame is the flight as it stands, and
-    /// when a rescue settled on the step's advance pass. A rescue on the
-    /// second pass keeps it, the pod where the first pass left it, as the
-    /// original fades out over that frame (`_FadeScreenOut` @0x68de3).
+    /// `None` in single time, whose frame is the flight as it stands. An
+    /// exit on the advance pass leaves it in the new system; one on the
+    /// second pass leaves it in the old, as the original draws it before
+    /// that pass (a rescue fades out over it, `_FadeScreenOut` @0x68de3).
     pub between_passes: Option<Box<FlightFrame>>,
-    /// The player's ship where the escape pod's rescue put it, when the
-    /// rescue settled on this step and ended the stepping.
-    pub rescued: Option<ShipPlace>,
+    /// Where the jump's arrival settled, when it settled on this step and
+    /// ended the stepping: `_HandlePlayer` arrives in the pass the warp
+    /// ends (@0x6bc0d-0x6c620) and leaves by its epilogue (`jmp 0x71113`
+    /// @0x6c625), so the rest of that pass runs among the new system.
+    pub arrival: Option<PassExit>,
+    /// Where the escape pod's rescue settled, when it settled on this step
+    /// and ended the stepping: `_HandlePlayer` rescues the pilot in place
+    /// (@0x68ddd-0x692ce) and leaves by its epilogue (`jmp 0x71113`
+    /// @0x692ce), so the rest of that pass runs among the new system.
+    pub rescued: Option<PassExit>,
     /// Where the texts that rescue queued fell against its writes
     /// ([`RescueTexts`]), with [`StepRun::rescued`].
     pub rescue_texts: Option<RescueTexts>,
+    /// Every line raised after a rescue to its step's end, in the order
+    /// raised: in the rest of its pass and, after an advance-pass rescue
+    /// in double time, in the second pass. They come after `_ResetPlayer`
+    /// empties the message line (`_commCount` @0x1d8ff-0x1d904) and after
+    /// `_FadeScreenIn`, so the view shows them once its rescue screen is
+    /// over. Kept off the step's comm, its quotes, the drained messages,
+    /// its last line and [`StepRun::second_pass_lines`]. Empty without a
+    /// rescue.
+    pub rescue_lines: Vec<RaisedLine>,
     /// The line the step raised last, whatever its kind: what
     /// `_DisplayComm`'s slot holds at the step's end (@0x90251); `None`
     /// when it raised none. On a step that holds second-pass lines
@@ -1789,6 +1807,28 @@ pub struct StepRun {
     /// next), the one pass the dialogs' guards decide. A one-shot, as the
     /// flag can be gone from the frame by the step's end.
     pub lit_collapse: bool,
+}
+
+/// Where a pass's `_HandlePlayer` took the player to another system and
+/// left by its epilogue (@0x71113): the jump's arrival (`jmp 0x71113`
+/// @0x6c625) or the escape pod's rescue (@0x692ce). The rest of that pass
+/// runs among the new system ([`StepRun::arrival`], [`StepRun::rescued`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PassExit {
+    /// The pass it settled in, an index of [`StepRun::passes`]: 0 is the
+    /// advance pass (or the rest of the frame a dialog opened on), 1 is
+    /// double time's second pass. The pass report at that index is the
+    /// rest of the pass, among the new system.
+    pub pass: usize,
+    /// The player's place as the exit left it.
+    pub place: ShipPlace,
+    /// The fight's events that pass raised before the exit, in the system
+    /// left, in order: heard, as `PlaySound` starts at once, but drawn in
+    /// no system.
+    pub before: Vec<CombatEvent>,
+    /// How many of the step's comm notes ([`StepRun::comm`]) were raised
+    /// before the exit.
+    pub comm: usize,
 }
 
 /// One line on the message line as `_DisplayComm` (@0x90201) takes it:
@@ -2458,7 +2498,6 @@ mod tests {
             (C::RestoreMapNav(saved), None),
             (C::RestoreMapSelection(saved), None),
             (C::EnterHypergate(Some(SystemId(131))), None),
-            (C::Arrive, None),
             (C::TakeOff, None),
             (C::LeaveIfDue, None),
             (C::LandEscorts, None),

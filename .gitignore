@@ -19,5 +19,12 @@ infra/github/*.tfstate.*
 infra/github/*.tfplan
 infra/github/.terraform.tfstate.lock.info
 infra/github/crash*.log
+# The same for infra/windows-signing.
+infra/windows-signing/.terraform/
+infra/windows-signing/*.tfstate
+infra/windows-signing/*.tfstate.*
+infra/windows-signing/*.tfplan
+infra/windows-signing/.terraform.tfstate.lock.info
+infra/windows-signing/crash*.log
 # Per-machine mise settings, e.g. OP_ACCOUNT for the infra-* tasks.
 mise.local.toml

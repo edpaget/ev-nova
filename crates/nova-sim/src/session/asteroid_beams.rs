@@ -190,6 +190,7 @@ mod tests {
     fn again(session: &mut Session) -> Vec<CombatEvent> {
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &NovaAi::default(),
             Rules::default(),
             &mut NeverFires,

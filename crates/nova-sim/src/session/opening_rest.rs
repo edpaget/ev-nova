@@ -153,6 +153,7 @@ impl Session {
             ai: Some(catalog),
             sheets: Some(catalog),
             quotes,
+            priming: false,
         };
         self.pass_from_key_block(&start, pass, catalogs, behaviour, rules, chance);
     }

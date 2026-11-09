@@ -859,6 +859,7 @@ pub(super) mod tests {
         let id = start_breakup(session);
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &Passive,
             crate::combat::Rules::default(),
             &mut NeverFires,

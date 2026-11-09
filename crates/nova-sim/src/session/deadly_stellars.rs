@@ -675,6 +675,7 @@ pub(super) mod tests {
             fight(&mut session);
             session.tick_again(
                 Controls::default(),
+                &crate::testkit::catalog(),
                 &crate::ai::NovaAi::default(),
                 Rules::default(),
                 &mut NeverFires,
@@ -807,15 +808,17 @@ pub(super) mod tests {
             session.pod = Some(1);
             session.tick_again(
                 Controls::default(),
+                &catalog,
                 &crate::ai::NovaAi::default(),
                 Rules::default(),
                 &mut NeverFires,
             );
-            assert!(session.ship.fate.rescue_due, "its countdown ran out");
-            assert_eq!(session.pod, Some(0), "not killed");
+            // The rescue settles in the pass (@0x692ce), whose rest runs
+            // among the new system.
+            assert!(!session.ship.fate.rescue_due, "rescued in the pass");
+            assert_eq!(session.player().position, crate::session::rescue::RESCUE_AT);
             assert_ne!(session.ship.condition, Condition::Destroyed);
             assert_eq!(exploded(&session.take_combat_events()), []);
-            assert!(session.rescue_if_due(&catalog, &mut NeverFires));
         }
     }
 
@@ -831,6 +834,7 @@ pub(super) mod tests {
             session.chart.listed = session.chart.sites.clone();
             session.tick_again(
                 Controls::default(),
+                &crate::testkit::catalog(),
                 &crate::ai::NovaAi::default(),
                 Rules::default(),
                 &mut NeverFires,

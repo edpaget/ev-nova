@@ -758,6 +758,13 @@ mod tests {
                 .cloned()
                 .expect("ship 128");
             let mut probe = session.clone();
+            // The carry alone: by the engine's reading of
+            // `eject_persistent_weapons` the launcher, which ship 128
+            // doesn't stock, would be held to none after it.
+            probe.setup.rules = probe.setup.rules.with_override(
+                crate::rulebook::RuleKey::EjectPersistentWeapons,
+                crate::rulebook::RuleSource::Bible,
+            );
             probe.board_class(&record, &BTreeMap::new());
             probe.pilot.owned(LAUNCHER)
         };

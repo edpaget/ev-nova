@@ -277,8 +277,9 @@
 //!   once. The ship comes out in the new system, which is read and laid
 //!   out, the message line says so ([`arrival_message_with`]), and the
 //!   screen fades in from white out of a hypergate
-//!   ([`JumpEffect::emerging`]) or flashes white out of a wormhole
-//!   ([`JumpEffect::flash`]). The request's line, the greeting and the
+//!   ([`JumpEffect::emerging`]), or shows white on one presented frame
+//!   with the Hyperspace Effects preference off; out of a wormhole it shows
+//!   no white, as the original never flushes the wormhole's. The request's line, the greeting and the
 //!   denial at a hypergate, and why a gate cannot be entered, are in the
 //!   gate's own words ([`request_line`], [`approach_greeting`],
 //!   [`HYPERGATE_DENIED`], [`gate_refusal_message`]).
@@ -1313,6 +1314,9 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// What was pressed under the rescue, until the router takes it
     /// ([`FlightView::take_rescue_replay`]).
     rescue_replay: Vec<crate::Input>,
+    /// The rest of the rescue's pass and what came after it in its step,
+    /// shown once the rescue's screen is over (see the `rescue` module).
+    rescue_rest: Option<rescue::RescueRest>,
     /// The message line's one slot (`_DisplayComm`'s 0x3b565c): a new
     /// message replaces the old and its time. Its ticks count the
     /// flight's, so they stop while the map is open and while the router
@@ -1406,7 +1410,8 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// white.
     jump: Option<JumpEffect>,
     /// The rest of an arrival's effect, once the ship has arrived: the
-    /// fade-in from white, or the white flash. Flight goes on under it.
+    /// fade-in from white, or the white flash for one presented frame.
+    /// Flight goes on under it.
     fade_in: Option<JumpEffect>,
     /// The lines a double-time frame's second pass raised, worded, for the
     /// frame after (see the `between_passes` module): relayed once, at the
@@ -1417,10 +1422,6 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// then leaves the held lines to stand over it (see the
     /// `between_passes` module).
     writing_in_frame: bool,
-    /// Whether the warp's end waited for a double-time frame between its
-    /// passes to go ([`FlightView::arrival_frame`]): its arrival then runs
-    /// the tick's steps in the new system.
-    arrival_waited: bool,
     /// The fade to black after the player's death, once begun
     /// ([`FlightView::begin_fade`]).
     death_fade: Option<ScreenFade>,
@@ -1744,7 +1745,6 @@ fn frame_fields_differing(kept: &FlightFrame, fresh: &FlightFrame) -> Vec<&'stat
         kept.jump_under_way == fresh.jump_under_way,
     );
     check("warping", kept.warping == fresh.warping);
-    check("warp_end_due", kept.warp_end_due == fresh.warp_end_due);
     check("fate", kept.fate == fresh.fate);
     check("hold_expired", kept.hold_expired == fresh.hold_expired);
     check("leave_due", kept.leave_due == fresh.leave_due);
@@ -1767,6 +1767,7 @@ fn frame_fields_differing(kept: &FlightFrame, fresh: &FlightFrame) -> Vec<&'stat
     check("shots", kept.shots == fresh.shots);
     check("beams", kept.beams == fresh.beams);
     check("cargo_boxes", kept.cargo_boxes == fresh.cargo_boxes);
+    check("pods", kept.pods == fresh.pods);
     check("asteroids", kept.asteroids == fresh.asteroids);
     check("stellars", kept.stellars == fresh.stellars);
     check(
@@ -1878,9 +1879,9 @@ fn show_combat(
             }
         }
         if heard {
-            effects.show_event(event, scene, looks, gain, chance);
+            effects.show_event(event, scene, looks, chance);
         } else {
-            effects.apply(event, scene, looks, gain, chance);
+            effects.apply(event, scene, looks, chance);
         }
     }
     step_flashes(flashes, ships, sheets, gain);

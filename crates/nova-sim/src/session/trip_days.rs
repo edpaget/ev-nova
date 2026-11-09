@@ -285,9 +285,12 @@ mod tests {
         let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
         pilot.escorts = vec![warship(Some(100))];
         pilot.cash = 1000;
-        let mut session = Session::fly(&catalog, pilot)
-            .expect("flies")
-            .with_multi_jump(MultiJumpRule::PerHop);
+        let mut session = Session::fly(&catalog, pilot).expect("flies").with_rules(
+            crate::session::setup::reading(
+                crate::rulebook::RuleKey::MultiJump,
+                MultiJumpRule::PerHop,
+            ),
+        );
         work(&mut session, &catalog, Controls::default());
         session.plot_course(SystemId(134)).expect("a route");
         let mut date = session.date();
@@ -316,7 +319,10 @@ mod tests {
                     record.fields.mass = 250;
                 }
             }
-            let mut session = accepted(&catalog).with_gate_arrival(rule);
+            let mut session = accepted(&catalog).with_rules(crate::session::setup::reading(
+                crate::rulebook::RuleKey::GateArrival,
+                rule,
+            ));
             take_off(&mut session, &catalog);
             assert!(
                 session

@@ -564,6 +564,7 @@ mod tests {
             let once = session.ship.player.velocity;
             session.tick_again(
                 Controls::default(),
+                &crate::testkit::catalog(),
                 &crate::ai::NovaAi::default(),
                 Rules::default(),
                 &mut NeverFires,

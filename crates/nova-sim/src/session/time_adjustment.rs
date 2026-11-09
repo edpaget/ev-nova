@@ -38,7 +38,9 @@
 //!   a step, the original's frame of `new` ≥ 10.0, which keeps the gain.
 //! - **Game entry** ([`Session::enter_game`]): the gain the last game left,
 //!   carried by the app ([`Session::carry_speed_mult`]): 0.0 after a game
-//!   that ended landed, as the stay's tail ran on the way out.
+//!   that ended landed, as the stay's tail ran on the way out. The entry's
+//!   stellar passes and its two priming passes run at it, with no ramp
+//!   before them (see the `priming_passes` module).
 //!
 //! By the other reading of [`RuleKey::SpeedMultRamp`] neither a zero nor
 //! a game entry moves the gain from full, the port's earlier feel.

@@ -165,6 +165,14 @@ impl HoverCursor {
         self.fade = 0;
     }
 
+    /// `_cursorAlpha` = 0, as `_PlayGame` sets it as play is entered
+    /// (@0x45822): the fade drops to 0, the pointer and the stamp kept, so
+    /// the cursor is hidden until the mouse next moves or its button is
+    /// held ([`HoverCursor::pointer`], [`HoverCursor::step`]).
+    pub fn fade_out(&mut self) {
+        self.fade = 0;
+    }
+
     /// Where the pointer is while the cursor shows: `None` when it is
     /// hidden, and nothing is hovered.
     #[must_use]
@@ -606,6 +614,17 @@ mod tests {
         cursor.pointer(at());
         cursor.pointer(at());
         assert_eq!(cursor.shown_at(), Some(at()), "a second move shows it");
+    }
+
+    #[test]
+    fn fading_out_hides_it_until_the_mouse_moves() {
+        let mut cursor = moved();
+        cursor.fade_out();
+        assert_eq!(cursor.shown_at(), None);
+        cursor.read(at());
+        assert_eq!(cursor.shown_at(), None, "read where it was: no move");
+        cursor.pointer(other());
+        assert_eq!(cursor.fade(), FADE_LEVELS);
     }
 
     #[test]

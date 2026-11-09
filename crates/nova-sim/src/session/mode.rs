@@ -231,6 +231,7 @@ mod tests {
             assert!(!rescued, "pass {pass}");
             session.tick_again(
                 thrust,
+                &crate::testkit::catalog(),
                 &NovaAi::default(),
                 Rules::default(),
                 &mut NeverFires,

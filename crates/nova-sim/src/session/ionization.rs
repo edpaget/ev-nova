@@ -334,6 +334,7 @@ mod tests {
         work(&mut session, &catalog, Controls::default());
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &crate::ai::NovaAi::default(),
             crate::combat::Rules::default(),
             &mut crate::chance::NeverFires,
@@ -712,7 +713,7 @@ mod tests {
                 session,
                 &catalog(),
                 Controls::default(),
-                &Passive,
+                &crate::testkit::Picking(crate::catalog::WeaponId(128)),
                 crate::combat::Rules::default(),
                 &mut crate::chance::NeverFires,
             );
@@ -870,8 +871,13 @@ mod tests {
             if npc_fired(&mut session) {
                 fired.push((tick, 1));
             }
+            // The second pass thinks no more, and the fight clears a
+            // fired pick: it picks its gun again.
+            let npc = &mut session.space.traffic.npcs_mut()[0];
+            npc.trigger = crate::session::tests::fire_of(npc);
             session.tick_again(
                 Controls::default(),
+                &crate::testkit::catalog(),
                 &crate::ai::NovaAi::default(),
                 rules(),
                 &mut crate::chance::NeverFires,
@@ -913,6 +919,7 @@ mod tests {
         // hold reads the 0.5, so the gun is held.
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &crate::ai::NovaAi::default(),
             crate::combat::Rules::default(),
             &mut crate::chance::NeverFires,
@@ -956,7 +963,7 @@ mod tests {
                 &mut session,
                 &catalog,
                 Controls::default(),
-                &Passive,
+                &crate::testkit::Picking(crate::catalog::WeaponId(128)),
                 crate::combat::Rules::default(),
                 &mut crate::chance::NeverFires,
             );

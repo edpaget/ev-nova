@@ -705,7 +705,7 @@ impl Chart {
             stand_in.filter(|system| {
                 self.galaxy
                     .map()
-                    .jumps(pilot.system, setup.hyperlinks)
+                    .jumps(pilot.system, setup.hyperlinks())
                     .contains(system)
             })
         })
@@ -854,7 +854,7 @@ impl Chart {
         if self
             .galaxy
             .map()
-            .jumps(pilot.system, setup.hyperlinks)
+            .jumps(pilot.system, setup.hyperlinks())
             .contains(&hop)
         {
             self.select_at_place(pilot, hop);
@@ -948,7 +948,7 @@ impl Chart {
         if jump.is_some() {
             return None;
         }
-        if setup.hyper_select == HyperSelectRule::OneJumpCourse {
+        if setup.hyper_select() == HyperSelectRule::OneJumpCourse {
             return self.select_one_jump_course(pilot, setup, out);
         }
         let Some((slot, selected)) = self.next_link_slot(pilot, self.mode_3_slot(pilot)) else {
@@ -976,7 +976,7 @@ impl Chart {
             self.galaxy.map(),
             pilot.system,
             &self.course_shown(pilot),
-            setup.hyperlinks,
+            setup.hyperlinks(),
         ) else {
             self.deselect();
             return None;
@@ -1657,11 +1657,12 @@ mod tests {
 
     #[test]
     fn hyper_select_by_the_one_jump_course_reading_beeps_and_selects_too() {
-        let mut session = quiet(
-            Session::start(&hub())
-                .expect("starts")
-                .with_hyper_select(HyperSelectRule::OneJumpCourse),
-        );
+        let mut session = quiet(Session::start(&hub()).expect("starts").with_rules(
+            crate::session::setup::reading(
+                crate::rulebook::RuleKey::HyperSelect,
+                HyperSelectRule::OneJumpCourse,
+            ),
+        ));
         assert_eq!(session.select_next_system(), Some(SystemId(131)));
         assert_eq!(session.nav_mode(), hyperspace(131));
         assert_eq!(session.take_sounds(), [SimSound::HyperSelected]);
@@ -1675,9 +1676,13 @@ mod tests {
 
     #[test]
     fn hyper_select_by_the_one_jump_course_reading_notes_no_slot() {
-        let mut session = Session::start(&hub())
-            .expect("starts")
-            .with_hyper_select(HyperSelectRule::OneJumpCourse);
+        let mut session =
+            Session::start(&hub())
+                .expect("starts")
+                .with_rules(crate::session::setup::reading(
+                    crate::rulebook::RuleKey::HyperSelect,
+                    HyperSelectRule::OneJumpCourse,
+                ));
         assert_eq!(session.select_next_system(), Some(SystemId(131)));
         assert_eq!(cycle(&mut session), hyperspace(131), "slot 2, after slot 1");
         assert_eq!(cycle(&mut session), hyperspace(130));
@@ -1918,9 +1923,9 @@ mod tests {
             (HyperlinkRule::Engine, Err(JumpRefusal::NoDestination)),
             (HyperlinkRule::BothWays, Ok(SystemId(136))),
         ] {
-            let mut session = Session::start(&catalog)
-                .expect("starts")
-                .with_hyperlinks(rule);
+            let mut session = Session::start(&catalog).expect("starts").with_rules(
+                crate::session::setup::reading(crate::rulebook::RuleKey::Hyperlinks, rule),
+            );
             session.chart.nav = hyperspace(136);
             fly_out(&mut session, &catalog);
             assert_eq!(session.begin_jump(), expected, "{rule:?}");

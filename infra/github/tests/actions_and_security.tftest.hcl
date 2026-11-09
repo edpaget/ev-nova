@@ -67,9 +67,9 @@ run "actions_permissions_are_declared" {
   assert {
     condition = (
       toset(github_actions_repository_permissions.ev_nova.allowed_actions_config[0].patterns_allowed) ==
-      toset(["Swatinem/rust-cache@*", "jdx/mise-action@*"])
+      toset(["Swatinem/rust-cache@*", "jdx/mise-action@*", "azure/login@*"])
     )
-    error_message = "patterns_allowed must be exactly the two third-party actions the workflows use."
+    error_message = "patterns_allowed must be exactly the three third-party actions the workflows use."
   }
 }
 

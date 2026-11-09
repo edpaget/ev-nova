@@ -194,12 +194,17 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S
     /// Enters play from the main screen, `enter` the flight's half (a
     /// `SessionFlight`'s `enter_game`), which says whether it entered: the
     /// stars are scattered afresh when the flight is next caught up with,
-    /// as `_EnterGameFromMainScreen` scatters them (@0x19f7c). The kept
-    /// frame is filled afresh after `enter` ([`FlightView::change_sim`]).
-    /// A flight that enters nothing changes nothing else here.
+    /// as `_EnterGameFromMainScreen` scatters them (@0x19f7c), and the
+    /// cursor's fade is 0, as `_PlayGame` zeroes `_cursorAlpha` after its
+    /// priming pass (@0x45822; [`HoverCursor::fade_out`]). The kept frame
+    /// is filled afresh after `enter` ([`FlightView::change_sim`]). A
+    /// flight that enters nothing changes nothing else here.
+    ///
+    /// [`HoverCursor::fade_out`]: crate::flight::cursor::HoverCursor::fade_out
     pub fn enter_game(&mut self, enter: impl FnOnce(&mut S) -> bool) {
         if self.change_sim(enter) {
             self.stars_due = true;
+            self.cursor.fade_out();
         }
     }
 }
@@ -635,7 +640,6 @@ impl<C, S: FlightSim> FlightView<C, S> {
             floating_picture: None,
             jump: None,
             fade_in: None,
-            arrival_waited: false,
             held_lines: Vec::new(),
             writing_in_frame: false,
             death_fade: None,
@@ -686,6 +690,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             rescue: None,
             rescue_later: None,
             rescue_replay: Vec::new(),
+            rescue_rest: None,
             message: None,
             overlays: FlightOverlays::default(),
             pending_boarding: false,
@@ -833,10 +838,10 @@ impl<C: ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S> {
     /// Reads, in the warm-up frame of entering play, the sheets and target
     /// cards of the ship types the system's traffic will bring, asked of
     /// the flight once ([`ScreenAsk::ComingTraffic`],
-    /// `nova_sim::Session::coming_traffic_ships`), so the first step,
-    /// which fills the system, reads none: their reading is the one-time
-    /// cost of a run's first stepped frame, and the warm-up frame is drawn
-    /// under black. Any answer but
+    /// `nova_sim::Session::coming_traffic_ships`): the traffic entry set
+    /// up, or the developer's flight's first step will, so that step reads
+    /// none: their reading is the one-time cost of a run's first stepped
+    /// frame, and the warm-up frame is drawn under black. Any answer but
     /// [`ScreenAnswer::ComingTraffic`], a failed flight's nothing among
     /// them, brings none.
     pub fn warm_up_traffic(&mut self) {

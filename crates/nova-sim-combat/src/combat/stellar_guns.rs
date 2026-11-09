@@ -353,9 +353,7 @@ impl Combat {
     /// - seated as [`Combat::seat`] seats it, writing no miss roll and,
     ///   by [`RuleKey::ReusedShotSlotRoll`](crate::RuleKey::ReusedShotSlotRoll)'s
     ///   engine reading, carrying the slot's leftover; its spin timer is
-    ///   written 0 (@0x2f26d) whatever
-    ///   [`RuleKey::ReusedShotSlotSpin`](crate::RuleKey::ReusedShotSlotSpin)
-    ///   says.
+    ///   0 (@0x2f26d), as every seated shot's is.
     fn stellar_shot(
         &mut self,
         gun: &StellarGun,
@@ -391,6 +389,7 @@ impl Combat {
             id: ShotId::default(),
             target: Some(ship),
             aimed_at: Some(ship),
+            aimed_slot: Some(target.slot),
             jam: Jam::Clear,
             durability: spec.durability,
             generation: 0,
@@ -414,11 +413,9 @@ impl Combat {
             decay_steps: 0,
             firer_slot: None,
         };
-        let Some(taken) = self.seat(&mut shot) else {
+        if self.seat(&mut shot).is_none() {
             return;
-        };
-        self.slots.reset_spin(taken);
-        shot.spin_timer = 0.0;
+        }
         shot.id = self.next_id();
         self.insert_seated(&shot);
     }
@@ -1138,21 +1135,32 @@ mod tests {
 
     #[test]
     fn the_shot_starts_its_spin_timer_at_0_whatever_its_slot_left() {
-        for reading in [RuleSource::Engine, RuleSource::Bible] {
-            let mut combat = Combat::default();
-            combat.set_reused_shot_slot_spin(reading);
-            combat.slots.spin_pass(0, 9);
-            combat.slots.spin_pass(0, 9);
-            fire(
-                &mut combat,
-                &mut [gun()],
-                &[pirate(1, 100.0, 0.0)],
-                turret(),
-                &mut NeverFires,
-            );
-            assert_eq!(combat.shots()[0].spin_timer, 0.0, "{reading:?}");
-            assert_eq!(combat.slots.spin(0), 0.0, "{reading:?}: the slot's too");
-        }
+        let mut combat = Combat::default();
+        let mut left = Shot {
+            spin_timer: 2.0,
+            ..Shot::launch(
+                WeaponSpec::new(&turret()),
+                ShipRef::Player,
+                ShipRef::Player,
+                &crate::flight::ShipState::default(),
+                0.0,
+            )
+        };
+        assert_eq!(combat.seat(&mut left), Some(0));
+        left.spin_timer = 2.0;
+        combat.insert_seated(&left);
+        combat.shots.clear();
+        combat.slots.hold(0);
+        combat.slots.free(0);
+        fire(
+            &mut combat,
+            &mut [gun()],
+            &[pirate(1, 100.0, 0.0)],
+            turret(),
+            &mut NeverFires,
+        );
+        assert_eq!(combat.shots()[0].slot, 0);
+        assert_eq!(combat.shots()[0].spin_timer, 0.0);
     }
 
     #[test]

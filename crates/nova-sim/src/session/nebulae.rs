@@ -671,7 +671,10 @@ pub(super) mod tests {
             crate::gate::GateArrivalRule::default(),
             crate::gate::GateArrivalRule::LikeJump,
         ] {
-            let mut session = at_gate(&catalog).with_gate_arrival(arrival);
+            let mut session = at_gate(&catalog).with_rules(crate::session::setup::reading(
+                crate::rulebook::RuleKey::GateArrival,
+                arrival,
+            ));
             settle(&mut session, &catalog);
             session
                 .enter_hypergate(Some(SystemId(131)), &catalog, &mut NeverFires)

@@ -21,7 +21,7 @@ pub(crate) use laned::{DRIFT, HEARTH, VERGE, laned, laned_stable};
 use crate::ai::{Behaviour, Goal, Reaction, Surroundings};
 use crate::catalog::{
     PilotCatalog, ShipId, StellarId, StellarLife, StellarMark, SystemId, SystemVisibility,
-    TrafficCatalog,
+    TrafficCatalog, WeaponId,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::Trigger;
@@ -199,6 +199,31 @@ impl Behaviour for Passive {
 }
 
 /// Every NPC keeps its goal, its target and its trigger, as [`Passive`],
+/// but picks this weapon again each time it thinks (`Trigger::only`): the
+/// traffic of a pass whose test needs an NPC to fire whenever it can, as
+/// the fight clears an NPC's fired pick
+/// ([`after_firing`](crate::ai::fire::after_firing)).
+#[derive(Debug)]
+pub(crate) struct Picking(pub(crate) WeaponId);
+
+impl Behaviour for Picking {
+    fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+        Passive.decide(npc, around, chance)
+    }
+
+    fn trigger(&self, npc: &Npc, _around: &Surroundings) -> Trigger {
+        Trigger {
+            only: Some(self.0),
+            ..npc.trigger
+        }
+    }
+
+    fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
+        Passive.target(npc, around)
+    }
+}
+
+/// Every NPC keeps its goal, its target and its trigger, as [`Passive`],
 /// but answers the hits it takes as Nova's AI does
 /// ([`NovaAi`](crate::ai::NovaAi)): the traffic of a pass whose test is
 /// about the answers.
@@ -237,6 +262,24 @@ impl crate::catalog::CommCatalog for QuoteLines {
             Vec::new()
         }
     }
+}
+
+/// Enters play at `gain` ([`Session::enter_game`]), its passes reading
+/// `catalog`, the NPCs deciding as Nova's do, the fight by the default
+/// rules, drawing on `chance`.
+pub(crate) fn enter_game(
+    session: &mut Session,
+    catalog: &dyn crate::session::SimCatalog,
+    gain: crate::SpeedMult,
+    chance: &mut dyn Chance,
+) {
+    let mut collab = crate::session::StepCollaborators {
+        catalog,
+        behaviour: &crate::ai::NovaAi::default(),
+        rules: Rules::default(),
+        chance,
+    };
+    session.enter_game(gain, &mut collab);
 }
 
 /// One advance pass under `controls` ([`Session::game_work`]), the traffic

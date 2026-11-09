@@ -11,6 +11,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use crate::authenticode::tools;
 use crate::build_id::{BuildId, VAR};
 use crate::bundle::{BundleError, Host, bundle};
 use crate::channel::FeedStatus;
@@ -51,7 +52,7 @@ pub(crate) const KEYCHAIN_PATHS: [&str; 2] = [
 /// Records each run. Answers with `respond`'s outcome when it gives one,
 /// else with canned output: the spec for `cargo metadata`, `archs` for
 /// `lipo -archs`, the pinned Sparkle digest for `shasum -a 256`, the
-/// pinned WinSparkle digests for `certutil -hashfile`,
+/// pinned WinSparkle and signing-tool digests for `certutil -hashfile`,
 /// [`KEYCHAINS`] for `security list-keychains -d user`,
 /// `{"id":"abc"}` for `notarytool submit` and `{"status":"Accepted"}` for
 /// `notarytool info`.
@@ -86,11 +87,17 @@ impl Process for Recorder {
     }
 }
 
-/// What `certutil -hashfile <path> SHA256` prints for the WinSparkle
-/// file at `path`: the pinned archive's digest or the pinned DLL's, by
-/// name, with `certutil`'s CRLF lines around it.
+/// What `certutil -hashfile <path> SHA256` prints for the pinned file at
+/// `path`: a signing tool's `.nupkg` digest, WinSparkle's DLL's or else
+/// WinSparkle's archive's, by name, with `certutil`'s CRLF lines around it.
 fn certutil_output(path: &str) -> Vec<u8> {
-    let digest = if Path::new(path).ends_with(winsparkle::DLL) {
+    let path_ = Path::new(path);
+    let digest = if let Some(package) = [tools::DLIB, tools::SIGNTOOL]
+        .into_iter()
+        .find(|package| path_.ends_with(package.file_name()))
+    {
+        package.pin.sha256
+    } else if path_.ends_with(winsparkle::DLL) {
         winsparkle::DLL_SHA256
     } else {
         winsparkle::ARCHIVE_SHA256

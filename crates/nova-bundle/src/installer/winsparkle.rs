@@ -9,8 +9,8 @@
 //! their paths stripped, and checks the DLL against [`DLL_PIN`]: a DLL that
 //! isn't the pinned one stops the pack before `wix`. Both checks run
 //! `certutil`, which every Windows has. The DLL carries no Authenticode
-//! signature of its own; the signing phase signs the staged file after the
-//! pin check.
+//! signature of its own; a signed pack ([`crate::authenticode`]) signs the
+//! staged file in place after the pin check, before `wix build`.
 //!
 //! # Bumping the pin
 //!
@@ -28,7 +28,7 @@
 
 use super::layout::InstallerLayout;
 use crate::bundle::Step;
-use crate::digest::{DigestTool, Pin};
+use crate::digest::{DigestTool, Pin, download};
 use crate::ports::Invocation;
 
 /// The pinned WinSparkle release.
@@ -78,22 +78,7 @@ pub fn stage(layout: &InstallerLayout) -> Vec<Step> {
     vec![
         Step::RemoveDir(downloads.clone()),
         Step::CreateDir(downloads.clone()),
-        Step::Run(
-            Invocation::new("curl")
-                .args([
-                    "--fail",
-                    "--silent",
-                    "--show-error",
-                    "--location",
-                    "--proto",
-                    "=https",
-                    "--retry",
-                    "3",
-                    "--output",
-                ])
-                .arg(&archive)
-                .arg(URL),
-        ),
+        Step::Run(download(&archive, URL)),
         Step::CheckSha256 {
             path: archive.clone(),
             pin: ARCHIVE_PIN,

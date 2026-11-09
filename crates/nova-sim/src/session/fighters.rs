@@ -125,7 +125,8 @@ impl Session {
         let mut placed = Vec::new();
         for sortie in sorties {
             let Some(id) = self.launch_fighter(sortie, chance) else {
-                self.space.put_back(&mut self.pilot, &self.statics, sortie);
+                self.space
+                    .put_back(&mut self.pilot, &self.statics, &self.setup, sortie);
                 continue;
             };
             placed.push(id);
@@ -308,9 +309,9 @@ impl Session {
         match carrier {
             ShipRef::Player => {
                 let base = self.statics.arsenal.sprite_base(ship);
-                let stowed = self
-                    .ship
-                    .stow_fighter(&mut self.pilot, &self.statics, ship, base);
+                let stowed =
+                    self.ship
+                        .stow_fighter(&mut self.pilot, &self.statics, &self.setup, ship, base);
                 self.unfleet(id);
                 if !stowed {
                     self.out.save_due = true;
@@ -388,10 +389,13 @@ impl Session {
     /// makes a save due.
     fn recall_fighters(&mut self) {
         for fighter in self.drop_fighters(|_, _, _| false) {
-            if !self
-                .ship
-                .stow_fighter(&mut self.pilot, &self.statics, fighter.ship, fighter.ship)
-            {
+            if !self.ship.stow_fighter(
+                &mut self.pilot,
+                &self.statics,
+                &self.setup,
+                fighter.ship,
+                fighter.ship,
+            ) {
                 self.out.save_due = true;
             }
         }
@@ -432,7 +436,8 @@ impl Session {
     /// of that type; none when the ship carries no such bay.
     pub(super) fn fighter_room(&self) -> BTreeMap<OutfitId, u32> {
         let mut room = BTreeMap::new();
-        for &(ammo, outfit) in &self.statics.ammo_outfits {
+        let sources = self.statics.ammo_outfits(self.setup.outfit_weapon_mods());
+        for &(ammo, outfit) in sources {
             let Some(bay) = self
                 .statics
                 .arsenal
@@ -468,7 +473,8 @@ impl Session {
             .iter()
             .find(|record| record.id == outfit)
             .map_or(0, |record| record.max);
-        let held = outfit_rounds(&self.pilot.outfits, &self.statics.ammo_outfits, bay.id)
+        let sources = self.statics.ammo_outfits(self.setup.outfit_weapon_mods());
+        let held = outfit_rounds(&self.pilot.outfits, sources, bay.id)
             .saturating_add(self.fighters_out(carried));
         capacity(bay.max_ammo, bays, max).saturating_sub(held)
     }
@@ -487,7 +493,7 @@ impl Session {
         };
         let last_outfit = self
             .statics
-            .ammo_outfits
+            .named_ammo_outfits()
             .iter()
             .filter(|&&(ammo, _)| ammo == bay.id)
             .map(|&(_, outfit)| outfit)
@@ -518,7 +524,7 @@ impl Session {
             .map(|(outfit, magazine)| {
                 let aboard = outfit_rounds(
                     &self.pilot.outfits,
-                    &self.statics.ammo_outfits,
+                    self.statics.ammo_outfits(self.setup.outfit_weapon_mods()),
                     magazine.ammo,
                 );
                 let out = if magazine.carried.is_some() {
@@ -562,12 +568,13 @@ impl PlayerShip {
         &mut self,
         pilot: &mut Pilot,
         statics: &Statics,
+        setup: &Setup,
         ship: ShipId,
         base: ShipId,
     ) -> bool {
         let mut rounds = OutfitRounds {
             owned: &mut pilot.outfits,
-            sources: &statics.ammo_outfits,
+            sources: statics.ammo_outfits(setup.outfit_weapon_mods()),
         };
         self.fit.armament.stow(ship, base, &mut rounds)
     }
@@ -646,11 +653,11 @@ impl Space {
     /// full: the fight attempts the player's copy only into a free berth
     /// ([`Space::count_player_berths`]), and the traffic's room ledger
     /// gives an NPC's sortie its berth.
-    fn put_back(&mut self, pilot: &mut Pilot, statics: &Statics, sortie: &Sortie) {
+    fn put_back(&mut self, pilot: &mut Pilot, statics: &Statics, setup: &Setup, sortie: &Sortie) {
         match sortie.carrier {
             ShipRef::Player => OutfitRounds {
                 owned: &mut pilot.outfits,
-                sources: &statics.ammo_outfits,
+                sources: statics.ammo_outfits(setup.outfit_weapon_mods()),
             }
             .stow(sortie.bay),
             ShipRef::Npc(id) => {
@@ -2310,6 +2317,7 @@ pub(super) mod tests {
         (1..=600).any(|_| {
             session.tick_again(
                 Controls::default(),
+                &crate::testkit::catalog(),
                 &NovaAi::default(),
                 Rules::default(),
                 &mut NeverFires,
@@ -2997,6 +3005,7 @@ pub(super) mod tests {
         );
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &Launching,
             Rules::default(),
             &mut NeverFires,
@@ -4037,7 +4046,7 @@ pub(super) mod tests {
         assert!(
             session
                 .ship
-                .facts(&session.pilot, &session.statics)
+                .facts(&session.pilot, &session.statics, &session.setup)
                 .has_outfit(VIPERS),
             "aboard"
         );
@@ -4046,19 +4055,21 @@ pub(super) mod tests {
         assert!(
             session
                 .ship
-                .facts(&session.pilot, &session.statics)
+                .facts(&session.pilot, &session.statics, &session.setup)
                 .has_outfit(VIPERS),
             "out of its bay"
         );
         assert!(
             !session
                 .ship
-                .facts(&session.pilot, &session.statics)
+                .facts(&session.pilot, &session.statics, &session.setup)
                 .has_outfit(OutfitId(159))
         );
-        let snapshot = super::super::spawn_availability::RefreshedFacts::of(
-            &session.ship.facts(&session.pilot, &session.statics),
-        );
+        let snapshot = super::super::spawn_availability::RefreshedFacts::of(&session.ship.facts(
+            &session.pilot,
+            &session.statics,
+            &session.setup,
+        ));
         assert!(snapshot.has_outfit(VIPERS), "the snapshot counts it too");
         assert!(!snapshot.has_outfit(OutfitId(159)));
         // A carried escort of a type no bay launches docks into nothing.
@@ -4077,7 +4088,7 @@ pub(super) mod tests {
         assert!(
             !session
                 .ship
-                .facts(&session.pilot, &session.statics)
+                .facts(&session.pilot, &session.statics, &session.setup)
                 .has_outfit(VIPERS)
         );
         // Nor does an escort of the fighter's type that is not carried.
@@ -4090,7 +4101,7 @@ pub(super) mod tests {
         assert!(
             !session
                 .ship
-                .facts(&session.pilot, &session.statics)
+                .facts(&session.pilot, &session.statics, &session.setup)
                 .has_outfit(VIPERS)
         );
     }
@@ -4121,7 +4132,9 @@ pub(super) mod tests {
             berth: None,
         };
         let session = Session::fly(&catalog, pilot(&catalog, 0, vec![fighter])).expect("flies");
-        let facts = session.ship.facts(&session.pilot, &session.statics);
+        let facts = session
+            .ship
+            .facts(&session.pilot, &session.statics, &session.setup);
         assert!(facts.has_outfit(OutfitId(157)));
         assert!(!facts.has_outfit(VIPERS));
         assert!(!facts.has_outfit(OutfitId(160)));

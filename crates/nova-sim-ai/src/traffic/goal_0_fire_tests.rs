@@ -136,7 +136,7 @@ impl crate::ai::Behaviour for FiresAtTwo {
 
     fn trigger(&self, npc: &Npc, _around: &crate::ai::Surroundings) -> Trigger {
         Trigger {
-            primary: npc.target == Some(n(2)),
+            only: (npc.target == Some(n(2))).then_some(WeaponId(128)),
             ..Trigger::default()
         }
     }
@@ -168,7 +168,11 @@ fn the_trigger_reads_the_target_the_frame_ends_with() {
         );
         let npc = &traffic.npcs()[0];
         assert_eq!(npc.target, Some(n(2)), "{before:?}");
-        assert!(npc.trigger.primary, "{before:?}: fired at the held target");
+        assert_eq!(
+            npc.trigger.only,
+            Some(WeaponId(128)),
+            "{before:?}: fired at the held target"
+        );
     }
 }
 

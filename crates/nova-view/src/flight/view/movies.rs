@@ -280,7 +280,7 @@ impl<
                     Answer::Arrived { combat, .. } => {
                         self.hide_cursor();
                         let effect = JumpEffect::emerging(self.hyperspace_effects);
-                        self.came_through(effect, &combat);
+                        self.came_through(Some(effect), &combat);
                     }
                     Answer::GateRefused(refusal) => self.gate_refused(refusal),
                     _ => {}
@@ -288,7 +288,7 @@ impl<
             }
             AfterMovie::EnterWormhole => match self.send_gated(FlightCommand::EnterWormhole) {
                 Answer::Arrived { combat, .. } => {
-                    self.came_through(JumpEffect::flash(), &combat);
+                    self.came_through(None, &combat);
                 }
                 Answer::GateRefused(refusal) => self.gate_refused(refusal),
                 _ => {}

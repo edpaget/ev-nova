@@ -344,7 +344,7 @@ impl Combat {
             let sides = lineup.sides();
             self.release(
                 &parent,
-                (Some(ship), &*fighters),
+                (super::locked_slot::Given::Ship(Some(ship)), &*fighters),
                 &sides,
                 terms.arsenal,
                 chance,

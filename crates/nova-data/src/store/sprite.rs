@@ -7,8 +7,8 @@ use super::ship_pict::{ImageFault, ShipImage};
 use super::{GameData, SourceFile, StoreEntry};
 use crate::error::DecodeError;
 use crate::graphics::{
-    GraphicsError, RleWords, RledInfo, SheetLayout, SpriteSheet, decode_rled, rled_words,
-    scan_rled, sheet_rle_words,
+    GraphicsError, RleWords, RledFrameSize, RledInfo, SheetLayout, SpriteSheet, decode_rled,
+    rled_frame, rled_words, scan_rled, sheet_rle_words,
 };
 use crate::records::ship::Ship;
 use crate::records::ship_anim::ShipAnim;
@@ -122,6 +122,10 @@ pub type ShipSpriteInfo<'a> = ShipSprite<'a, SheetScan>;
 /// run-length tokens, which its pixels touch by.
 pub type ShipSpriteWords<'a> = ShipSprite<'a, RleWords>;
 
+/// A ship's base sheet as [`GameData::ship_sprite_frame`] reads it: its
+/// frame size alone.
+pub type ShipSpriteFrame<'a> = ShipSprite<'a, RledFrameSize>;
+
 /// What a sheet would hold once decoded, read without decoding it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SheetScan {
@@ -180,6 +184,22 @@ impl ReadSheet for RleWords {
 
     fn from_sheet(sheet: SpriteSheet) -> Self {
         sheet_rle_words(&sheet, PICT_SHEET_DEPTH)
+    }
+}
+
+/// An `rlëD`'s header frame size ([`rled_frame`]), which ignores the
+/// layout; a cut sheet's is its frames', which the cut sizes by the
+/// `shän`.
+impl ReadSheet for RledFrameSize {
+    fn from_rled(data: &[u8], _: Option<SheetLayout>) -> Result<Self, GraphicsError> {
+        rled_frame(data)
+    }
+
+    fn from_sheet(sheet: SpriteSheet) -> Self {
+        Self {
+            width: sheet.frame_width(),
+            height: sheet.frame_height(),
+        }
     }
 }
 
@@ -395,6 +415,17 @@ impl GameData {
     /// but for an `rlëD`'s tokens, which it checks only as [`rled_words`]
     /// does.
     pub fn ship_sprite_words(&self, ship: ShipId) -> Result<ShipSpriteWords<'_>, SpriteError> {
+        self.resolve_sprite(ship)
+    }
+
+    /// What [`GameData::ship_sprite`] resolves, with the sheet read only as
+    /// its frame size, as the original makes a ship's base sprite from it:
+    /// an `rlëD`'s header alone ([`rled_frame`],
+    /// `_SWCreateSpriteFromRLEResource` @0x228b5), or the frames its `PICT`
+    /// pair is cut into, by the `shän`'s `BaseXSize` and `BaseYSize`. It
+    /// fails where that does, but for an `rlëD`'s tokens, which it does not
+    /// read.
+    pub fn ship_sprite_frame(&self, ship: ShipId) -> Result<ShipSpriteFrame<'_>, SpriteError> {
         self.resolve_sprite(ship)
     }
 
@@ -624,6 +655,76 @@ mod tests {
             }
         );
         assert_eq!(err.to_string(), "rlëD 1000: unsupported rlëD depth 1");
+    }
+
+    #[test]
+    fn a_ships_frame_is_its_base_rleds_header_size() {
+        let corrupt = RledBuilder::new(30, 50)
+            .frame(|f| f.line().token(5, 0))
+            .build();
+        let data = store(&[("Big Paint", fork(&[(RLED, 1000, corrupt)]))]);
+        let sprite = data.ship_sprite_frame(ShipId(128)).expect("resolves");
+        assert_eq!(
+            sprite.sheet,
+            RledFrameSize {
+                width: 30,
+                height: 50
+            }
+        );
+        assert_eq!(sprite.image_id, 1000);
+        assert_eq!(sprite.sheet_source.path, Path::new("/p/Big Paint"));
+    }
+
+    #[test]
+    fn a_base_pict_pairs_frame_is_its_cut_by_the_shäns_sizes() {
+        use crate::graphics::PICT;
+        use crate::graphics::fixture::rgb888_pict;
+        let anim = anim_builder(2000, 1, 2)
+            .base_mask_id(2100)
+            .base_x_size(2)
+            .base_y_size(1)
+            .build();
+        let pair = fork(&[
+            (ShipAnim::TYPE, 128, anim),
+            (PICT, 2000, rgb888_pict(4, 1, &[[0; 3]; 4])),
+            (PICT, 2100, rgb888_pict(4, 1, &[[0xFF; 3]; 4])),
+        ]);
+        let data = store(&[("Pair", pair)]);
+        let sprite = data.ship_sprite_frame(ShipId(128)).expect("resolves");
+        assert_eq!(sprite.kind, SheetKind::PictPair { mask_id: 2100 });
+        assert_eq!(
+            sprite.sheet,
+            RledFrameSize {
+                width: 2,
+                height: 1
+            }
+        );
+    }
+
+    #[test]
+    fn a_ships_frame_fails_where_its_sprite_does() {
+        let other_image = fork(&[(ShipAnim::TYPE, 128, anim(1001, 3, 4))]);
+        let data = store(&[("Other", other_image)]);
+        assert_eq!(
+            data.ship_sprite_frame(ShipId(128)).map(|s| s.sheet),
+            Err(SpriteError::NoSheet {
+                ship: 128,
+                image_id: 1001
+            })
+        );
+        let deep = RledBuilder::new(2, 1).depth(1).build();
+        let data = store(&[("Bad Paint", fork(&[(RLED, 1000, deep)]))]);
+        assert_eq!(
+            data.ship_sprite_frame(ShipId(128)).map(|s| s.sheet),
+            Err(SpriteError::Graphics {
+                image_id: 1000,
+                source: GraphicsError::UnsupportedDepth { depth: 1 },
+            })
+        );
+        assert_eq!(
+            store(&[]).ship_sprite_frame(ShipId(129)).map(|s| s.sheet),
+            Err(SpriteError::NoShip(129))
+        );
     }
 
     /// A plug-in, `Layers`, giving ship 128 a `shän` with glow image `glow`

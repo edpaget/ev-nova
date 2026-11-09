@@ -214,7 +214,7 @@ impl Chart {
             if self
                 .galaxy
                 .map()
-                .jumps(pilot.system, setup.hyperlinks)
+                .jumps(pilot.system, setup.hyperlinks())
                 .contains(&pick)
             {
                 self.select_at_place(pilot, pick);
@@ -322,7 +322,7 @@ impl Chart {
     /// Whether, by [`HyperlinkRule::BothWays`], `to` links to `source`, so
     /// its jumps reach `to` from `source`.
     fn links_back(&self, setup: &Setup, source: SystemId, to: SystemId) -> bool {
-        setup.hyperlinks == HyperlinkRule::BothWays
+        setup.hyperlinks() == HyperlinkRule::BothWays
             && self
                 .galaxy
                 .map()
@@ -574,7 +574,10 @@ mod tests {
         // 136 lists 130, one way.
         let mut session = hub_session();
         assert_eq!(click(&mut session, &[136]), None, "by the engine");
-        let mut session = hub_session().with_hyperlinks(HyperlinkRule::BothWays);
+        let mut session = hub_session().with_rules(crate::session::setup::reading(
+            crate::rulebook::RuleKey::Hyperlinks,
+            HyperlinkRule::BothWays,
+        ));
         assert_eq!(click(&mut session, &[136]), selects(136));
         assert_eq!(session.nav_mode(), hyperspace(136), "a jump both ways");
     }
@@ -755,7 +758,10 @@ mod tests {
         let mut session = hub_session();
         assert_eq!(shift_click(&mut session, &[136]), None, "by the engine");
         assert_eq!(session.course(), []);
-        let mut session = hub_session().with_hyperlinks(HyperlinkRule::BothWays);
+        let mut session = hub_session().with_rules(crate::session::setup::reading(
+            crate::rulebook::RuleKey::Hyperlinks,
+            HyperlinkRule::BothWays,
+        ));
         assert_eq!(shift_click(&mut session, &[136]), shifted(Some(136)));
         assert_eq!(session.course(), ids(&[136]), "a jump both ways");
     }

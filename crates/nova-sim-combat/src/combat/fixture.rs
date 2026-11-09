@@ -11,7 +11,8 @@ use super::{Combat, Nominal, ShipRef, Strike};
 static NO_GOVERNMENTS: crate::govt::Governments = crate::govt::Governments::empty();
 
 /// The fight's sides as `targets` alone make them: no governments, and
-/// the original's pass-through and beam planet-type bit.
+/// the original's pass-through, beam planet-type bit and locked shot's
+/// slot.
 #[cfg(test)]
 #[must_use]
 pub fn among(targets: &[super::projectile::Target]) -> super::sides::Sides<'_> {
@@ -20,6 +21,7 @@ pub fn among(targets: &[super::projectile::Target]) -> super::sides::Sides<'_> {
         govts: &NO_GOVERNMENTS,
         pass_through: super::sides::PassThrough::default(),
         beam_planet_flag: super::planet_type::BeamPlanetFlag::default(),
+        locked_slot: super::locked_slot::LockedSlot::default(),
     }
 }
 

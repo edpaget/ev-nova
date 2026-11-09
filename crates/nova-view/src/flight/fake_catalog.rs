@@ -1550,7 +1550,7 @@ impl DisableRule for Counting {
     }
 }
 
-/// Every NPC idles and holds its trigger.
+/// Every NPC idles and picks its first weapon each time it thinks.
 #[derive(Debug)]
 pub(in crate::flight) struct Firing;
 
@@ -1564,15 +1564,11 @@ impl Behaviour for Firing {
         Goal::Idle
     }
 
-    fn trigger(&self, _npc: &nova_sim::Npc, _around: &nova_sim::Surroundings) -> nova_sim::Trigger {
+    fn trigger(&self, npc: &nova_sim::Npc, _around: &nova_sim::Surroundings) -> nova_sim::Trigger {
+        // Its pick, its first weapon.
         nova_sim::Trigger {
-            primary: true,
-            secondary: None,
-            only: None,
-            bays: false,
-            bays_after: false,
-            point_defence: false,
-            keep: None,
+            only: npc.armament.mounts().first().map(|mount| mount.spec.id),
+            ..nova_sim::Trigger::default()
         }
     }
 }
@@ -1661,6 +1657,7 @@ pub(in crate::flight) fn hull_of(id: i16, weapons: &[WeaponId]) -> nova_sim::Hul
             .collect(),
         size: None,
         height: None,
+        frame: None,
         strength: 0,
         key_carried: None,
         cost: 0,

@@ -152,6 +152,7 @@ fn pass(session: &mut Session, data: &GameData, controls: Controls) {
     if session.double_time() {
         session.tick_again(
             controls,
+            data,
             &nova_sim::ai::NovaAi::default(),
             Rules::default(),
             &mut NeverFires,
@@ -182,8 +183,8 @@ fn out_and_jump(session: &mut Session, data: &GameData, next: SystemId, double: 
 struct Warp {
     /// The warp-up's rate.
     rate: u32,
-    /// The advance passes from the warp-up's to the one the warp is due
-    /// to end on.
+    /// The advance passes from the warp-up's to the one the warp ends and
+    /// the jump arrives on.
     passes: u32,
     /// The sounds each of those passes raised, the first pass's first
     /// (both halves of a double-time frame together).
@@ -191,7 +192,8 @@ struct Warp {
 }
 
 /// Passes `session` until its warp-up sounds, then counts the advance
-/// passes until the warp is due to end, keeping the sounds of each.
+/// passes until the warp ends and the jump arrives in its pass, keeping
+/// the sounds of each.
 fn passes_to_end(session: &mut Session, data: &GameData, double: bool) -> Warp {
     let mut rate = None;
     for _ in 0..10_000 {
@@ -211,7 +213,7 @@ fn passes_to_end(session: &mut Session, data: &GameData, double: bool) -> Warp {
     for passes in 1..10_000 {
         pass(session, data, Controls::default());
         sounds.push(common::drained_sounds(session));
-        if session.warp_end_due() {
+        if session.jumping().is_none() && session.preparing_jump().is_none() {
             return Warp {
                 rate,
                 passes,
@@ -287,23 +289,18 @@ fn the_stock_warp_up_lasts_its_pitched_length_against_the_warp_end() {
         for (pass, sounds) in (1..).zip(&raised) {
             if !expected.natural && pass == fallback {
                 assert_eq!(sounds[..], warp_end, "{label}: the fallback's pass");
+            } else if pass == passes && expected.natural {
+                // The arrival, in the pass the warp ends.
+                assert!(sounds.contains(&SimSound::Arrived), "{label}: {sounds:?}");
             } else {
+                // 130 still plays at an arrival after the fallback.
                 assert!(
                     !sounds.contains(&HALT) && !sounds.contains(&SimSound::Arrived),
                     "{label}: pass {pass}: {sounds:?}"
                 );
             }
         }
-        assert!(session.arrive(&data, &mut NeverFires).is_some(), "{label}");
-        let sounds = common::drained_sounds(&mut session);
-        if expected.natural {
-            assert!(sounds.contains(&SimSound::Arrived), "{label}: {sounds:?}");
-        } else {
-            assert!(
-                !sounds.contains(&HALT) && !sounds.contains(&SimSound::Arrived),
-                "{label}: 130 still plays: {sounds:?}"
-            );
-        }
+        assert_eq!(session.system(), next, "{label}: arrived");
     }
 }
 
@@ -317,10 +314,11 @@ fn back_to_back_stock_jumps_never_skip_the_warp_out() {
         let mut session = flying_in(&data, ENTERPRISE);
         let start = session.system();
         out_and_jump(&mut session, &data, first_link(&data, start), double);
-        let _ = passes_to_end(&mut session, &data, double);
-        assert!(session.arrive(&data, &mut NeverFires).is_some());
+        let warp = passes_to_end(&mut session, &data, double);
         assert!(
-            common::drained_sounds(&mut session).contains(&SimSound::Arrived),
+            warp.sounds
+                .last()
+                .is_some_and(|sounds| sounds.contains(&SimSound::Arrived)),
             "{double}"
         );
 
@@ -328,17 +326,14 @@ fn back_to_back_stock_jumps_never_skip_the_warp_out() {
         // tick.
         out_and_jump(&mut session, &data, start, double);
         let mut since = 0;
-        while !session.warp_end_due() {
+        let mut last = Vec::new();
+        while session.jumping().is_some() || session.preparing_jump().is_some() {
             pass(&mut session, &data, Controls::default());
             since += 1;
+            last = common::drained_sounds(&mut session);
             assert!(since < 10_000, "the warp never ended");
         }
         assert!(since * 2 > 151, "{double}: {since} passes");
-        let _ = common::drained(&mut session);
-        assert!(session.arrive(&data, &mut NeverFires).is_some());
-        assert!(
-            common::drained_sounds(&mut session).contains(&SimSound::Arrived),
-            "{double}"
-        );
+        assert!(last.contains(&SimSound::Arrived), "{double}: {last:?}");
     }
 }

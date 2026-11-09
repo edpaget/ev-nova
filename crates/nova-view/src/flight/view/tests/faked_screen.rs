@@ -604,20 +604,15 @@ fn i_while_disabled_is_taken() {
 
 // The keys held across the arrival.
 
-/// Brings `view`'s warp to its end: the frame says the end is due, and
-/// the flight answers the arrival showing [`in_alpha`], telling the
-/// system entered as it arrives.
+/// Brings `view`'s warp to its end: the next step reports the arrival on
+/// its advance pass ([`arrival_report`](super::faked_travel::arrival_report))
+/// and shows [`in_alpha`] from then on, telling the system entered as it
+/// arrives.
 pub(super) fn warp_ends(view: &mut Faked) {
-    view.sim.set_frame(FlightFrame {
-        warp_end_due: true,
-        ..under_way(true)
-    });
+    view.sim.set_frame(under_way(true));
     view.refresh_frame();
-    view.sim.queue_answer_telling(
-        Answer::Arrived {
-            system: SystemId(131),
-            combat: Vec::new(),
-        },
+    view.sim.queue_report_telling(
+        super::faked_travel::arrival_report(0, nova_sim::flight_frame::ShipPlace::default()),
         in_alpha(),
         vec![FlightEvent::Session(SessionEvent::SystemChanged)],
     );
@@ -638,7 +633,7 @@ fn a_slot_key_pressed_in_a_jump_and_held_selects_after_it() {
     let from = sent_count(&view);
     warp_ends(&mut view);
     view.tick(TICK);
-    assert!(sent_since(&view, from).contains(&FlightCommand::Arrive));
+    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
     assert_eq!(
         picks_since(&view, from),
         [],

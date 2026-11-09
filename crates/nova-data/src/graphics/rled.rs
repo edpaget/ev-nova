@@ -235,6 +235,31 @@ pub fn scan_rled(data: &[u8]) -> Result<RledInfo, GraphicsError> {
     })
 }
 
+/// What [`rled_frame`] reads from an `rlëD`'s header.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RledFrameSize {
+    /// Each frame's width in pixels: at least one.
+    pub width: u32,
+    /// Each frame's height in pixels: at least one.
+    pub height: u32,
+}
+
+/// Reads an `rlëD`'s frame size from its header alone, as the original's
+/// `_SWCreateSpriteFromRLEResource` (@0xa9990) makes a sprite from one:
+/// it reads the header (width, height, depth, count) and decodes no token,
+/// so a sheet whose tokens are corrupt still has its header's frame.
+///
+/// The header is checked as [`decode_rled`] checks it, so a bad depth, a
+/// zero size, no frames or a sheet over the decode budget fails with the
+/// same [`GraphicsError`].
+pub fn rled_frame(data: &[u8]) -> Result<RledFrameSize, GraphicsError> {
+    let header = read_header(&mut Reader::new(data), data.len())?;
+    Ok(RledFrameSize {
+        width: header.width,
+        height: header.height,
+    })
+}
+
 /// The [`SpriteSheet::clip_quirks`] of the sheet `data`, whose checked
 /// header is `header`, as [`decode_rled`] reads it: the walk
 /// [`decode_rled_with`] takes, under the default readings.
@@ -1260,6 +1285,48 @@ mod tests {
                 decode(bytes).map(|sheet| info_of(&sheet)),
                 "{len}"
             );
+        }
+    }
+
+    /// `_SWCreateSpriteFromRLEResource` (@0xa9990) reads only the header,
+    /// so a sheet whose tokens are corrupt still has its header's frame.
+    #[test]
+    fn the_frame_is_the_headers_size_without_reading_a_token() {
+        let bytes = RledBuilder::new(30, 50)
+            .frame(|f| f.line().token(5, 0))
+            .build();
+        assert!(scan_rled(&bytes).is_err());
+        assert_eq!(
+            rled_frame(&bytes),
+            Ok(RledFrameSize {
+                width: 30,
+                height: 50
+            })
+        );
+    }
+
+    #[test]
+    fn the_frame_checks_the_header_as_decode_does() {
+        let cases: Vec<(&str, Vec<u8>)> = vec![
+            (
+                "bad depth",
+                RledBuilder::new(2, 2).depth(7).frame(|f| f).build(),
+            ),
+            ("zero width", RledBuilder::new(0, 2).frame(|f| f).build()),
+            ("zero height", RledBuilder::new(2, 0).frame(|f| f).build()),
+            ("no frames", RledBuilder::new(2, 2).frame_count(0).build()),
+            (
+                "over budget",
+                RledBuilder::new(65535, 65535).frame_count(65535).build(),
+            ),
+            (
+                "truncated header",
+                RledBuilder::new(2, 2).build()[..15].to_vec(),
+            ),
+        ];
+        for (name, bytes) in cases {
+            let decoded = decode(&bytes).map(|_| ()).unwrap_err();
+            assert_eq!(rled_frame(&bytes), Err(decoded), "{name}");
         }
     }
 

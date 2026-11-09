@@ -625,9 +625,9 @@ fn a_pilot_loaded_after_another_starts_from_the_layers_it_left() {
     assert!(screen.flight_view().is_none(), "put away");
     create(&mut screen, "Bea");
     assert_eq!(pilot(&screen).name(), "Bea");
-    // The entry's `_PrepareAllSprites` (@0x1a36c, its display @0x3a783)
-    // then lays Bea's own slot out on that history, so only the berth Ada
-    // left is compared.
+    // Entering play (its `_PrepareAllSprites` @0x1a36c and @0x45834, its
+    // displays @0x3a783, and its priming passes) then lays Bea's own slot
+    // out on that history, so only the berth Ada left is compared.
     let sprites = carried(flight(&screen)).slot_sprites.expect("carried");
     let left = led_berth_1();
     assert_eq!(sprites.layers, left.layers);
@@ -919,7 +919,8 @@ fn new_pilot_asks_for_a_name_then_flies_and_saves_the_pilot() {
     assert_eq!(store.keys(), ["Ada"], "saved at once");
     // Entering play marks the intro seen, which only the next save keeps.
     assert!(pilot(&screen).seen_intro());
-    assert_eq!(saved(&store, "Ada"), unseen(pilot(&screen)));
+    let ada = saved(&store, "Ada");
+    assert_eq!(ada, unseen(pilot(&screen), &ada));
     assert_eq!(screen.take_warnings(), Vec::<String>::new());
 }
 
@@ -932,8 +933,8 @@ fn a_new_pilot_is_shown_the_land_hint() {
     let store = MemoryPilots::new();
     let mut screen = menu(&store);
     create(&mut screen, "Ada");
-    assert_eq!(flight(&screen).message(), None, "before the first tick");
-    screen.tick(FLIGHT_TICK);
+    // Shown by the entry's priming passes, before the first tick (when is
+    // nova-sim's to pin).
     let shown = flight(&screen).message().expect("the land hint");
     assert!(
         shown.starts_with(TUTORIAL_LAND) || shown.starts_with(TUTORIAL_DOCK),
@@ -967,11 +968,8 @@ fn a_new_pilot_runs_the_chärs_on_start_once_and_is_saved_with_what_it_did() {
     let bit_5 = nova_sim::Bit::new(5).expect("a bit");
     assert!(pilot(&screen).control_bit(bit_5), "toggled once");
     assert!(pilot(&screen).has_explored(nova_sim::SystemId(129)));
-    assert_eq!(
-        saved(&store, "Ada"),
-        unseen(pilot(&screen)),
-        "saved with them"
-    );
+    let ada = saved(&store, "Ada");
+    assert_eq!(ada, unseen(pilot(&screen), &ada), "saved with them");
     assert_eq!(screen.take_warnings(), Vec::<String>::new());
     // Opening the pilot runs no OnStart: a second toggle would clear it.
     assert_eq!(screen.quit_and_reopen(&store), Showing::MainMenu);

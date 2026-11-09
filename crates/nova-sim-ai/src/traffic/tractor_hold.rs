@@ -41,7 +41,7 @@
 //! ship (`_GenericRandomShipSpawn` @0x3c8b1-0x3c90b), so a ship whose
 //! holder's berth is taken before its step is held, and pulled, by the
 //! newcomer. A launch into a berth since the pass began (an escape ship's
-//! `_LaunchFighter` @0x354ea) is read as it stands ([`Holders::launched`]).
+//! `_LaunchFighter` @0x354ea) is read as it stands ([`Holders::read_live`]).
 //! Each take is read out in order ([`Traffic::take_berths_taken`], a
 //! [`BerthTaken`]) for the player's hold, as `_HandlePlayer` reads its
 //! +0xc8dc as a slot too (@0x68468-0x684b7): a player held by a ship whose
@@ -54,10 +54,15 @@
 //! [`player_pass`](crate::combat::tractor_hold::player_pass)), so a
 //! holder gone that way pulls the player not at all.
 //!
-//! The hold reads its holder's velocity as the pass began, where the
-//! original reads the holder's slot live, so a holder of a lower slot has
-//! already moved this frame: a one-pass lag settled before the frame is
-//! drawn, crossing no boundary the player sees.
+//! **Read live** ([`Holders::read_live`]): the pull reads the holder's
+//! slot as it stands (+0x20/+0x24, @0x3401f-0x34032) and the release its
+//! +0xb8, `_IsDisabled` and `_IsDying` (@0x353e2-0x3540c), with no copy
+//! taken earlier, so the hold reads its holder, velocity and condition, as
+//! the ship loop has left it at the held ship's own step: a holder in a
+//! lower slot after its flight, step and display this pass, one in a
+//! higher slot as the last pass left it, plus any push or damage a lower
+//! slot's display gave it, and the player always after its move this frame
+//! (`_HandlePlayer` @0x43e19 comes before the loop).
 //!
 //! **The held handling** ([`Npc::own_handling`]): every reader of an
 //! NPC's `_ShipMaxSpeed`, `_ShipTurnRate` and `_ShipAccelRate` reads it,
@@ -100,7 +105,8 @@ impl Npc {
     }
 }
 
-/// The ships a hold may name, as the pass began: each one's velocity and
+/// The ships a hold may name, as the pass began, a held ship's holder
+/// re-read at its step ([`Holders::read_live`]): each one's velocity and
 /// whether it is intact.
 #[derive(Clone, Debug, Default)]
 pub struct Holders {
@@ -115,10 +121,7 @@ impl Holders {
     #[must_use]
     pub fn of(world: &World, npcs: &[Npc]) -> Self {
         Self {
-            player: world.player.map(|player| Holder::There {
-                velocity: player.state.velocity,
-                intact: player.condition == Condition::Intact,
-            }),
+            player: player(world),
             npcs: npcs.iter().map(|npc| (npc.id, there(npc))).collect(),
         }
     }
@@ -143,10 +146,23 @@ impl Holders {
         self.npcs.insert(freed.id, record(freed));
     }
 
-    /// `launched`, launched into a berth since the pass began, is read as
-    /// it stands, unless the pass already holds it (see the module docs).
-    pub fn launched(&mut self, launched: &Npc) {
-        (self.npcs.entry(launched.id)).or_insert_with(|| there(launched));
+    /// `holder` read as it stands at a held ship's step, among `npcs` and
+    /// the player of `world`: `_HandleShip`'s pull and release read the
+    /// holder's slot live (@0x3401f-0x34032, @0x353e2-0x3540c). An NPC not
+    /// among `npcs` (one freed at its step, or gone before the pass) keeps
+    /// its record, or stays gone (see the module docs); one taken out at
+    /// its step with no record (a mission ship that leaves as it lands,
+    /// under [`RuleKey::LandedLeaves`](crate::RuleKey::LandedLeaves)' other
+    /// reading) stays as the half began.
+    pub fn read_live(&mut self, holder: ShipRef, npcs: &[Npc], world: &World) {
+        match holder {
+            ShipRef::Player => self.player = player(world),
+            ShipRef::Npc(id) => {
+                if let Some(npc) = npcs.iter().find(|npc| npc.id == id) {
+                    self.npcs.insert(id, there(npc));
+                }
+            }
+        }
     }
 
     /// `ship` as a hold reads it: gone when it is not in the system.
@@ -157,6 +173,15 @@ impl Holders {
         }
         .unwrap_or(Holder::Gone)
     }
+}
+
+/// The player of `world` as a hold reads it, while it flies in the
+/// system: its velocity, and intact unless disabled or dying.
+fn player(world: &World) -> Option<Holder> {
+    world.player.map(|player| Holder::There {
+        velocity: player.state.velocity,
+        intact: player.condition == Condition::Intact,
+    })
 }
 
 /// `npc` as a hold reads it in the system: its velocity, and intact

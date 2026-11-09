@@ -245,6 +245,40 @@ fn point_defence_meets_a_missile_each_side_of_the_reach_where_their_sprites_stoo
     assert_eq!(combat.shots.len(), 0, "both spent: {:?}", combat.shots);
 }
 
+#[test]
+fn point_defence_left_behind_meets_a_carried_missile_where_their_sprites_stood() {
+    let mut combat = Combat {
+        player_stood: Some(STOOD),
+        ..Combat::default()
+    };
+    let (missile_at, defender_at) = (off(-WRAP_EDGE + 2.0), off(-WRAP_EDGE - 2.0));
+    fly(
+        &mut combat,
+        (still_missile(), A, ShotLayer::Homing),
+        (missile_at, missile_at),
+        None,
+    );
+    fly(
+        &mut combat,
+        (pd_shot(), D, ShotLayer::PointDefence),
+        (defender_at, defender_at),
+        None,
+    );
+    combat.carry(&wrap(), none_left());
+    assert_eq!(
+        combat.shots[0].position,
+        missile_at + SHIFT,
+        "missile carried"
+    );
+    assert_eq!(
+        combat.shots[1].position, defender_at,
+        "defender left behind"
+    );
+    assert_eq!(combat.left_back(&combat.shots[1]), SHIFT);
+    walk(&mut combat, &mut []);
+    assert_eq!(combat.shots.len(), 0, "both spent: {:?}", combat.shots);
+}
+
 /// Whether a fused shot carried to where it is, with an asteroid `off`
 /// from the shot's place before the wrap, `wraps` or not, is set off.
 fn fuse_set_off(rock_at: Vec2, wraps: bool) -> bool {
