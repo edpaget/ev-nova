@@ -62,3 +62,18 @@ fn with_neither_dialogs_nor_pilots_flights_text_is_laid_out_without_metrics() {
         flown_no_target_x(with_dialogs(bar_data()))
     ));
 }
+
+#[test]
+fn the_dialogs_metrics_win_over_the_menus() {
+    let store = MemoryPilots::default();
+    let dialog_metrics: Rc<dyn TextMetrics> = Rc::new(MonoMetrics);
+    let menu_metrics: Rc<dyn TextMetrics> = Rc::new(MonoMetrics);
+    let screen = AppScreen::new(bar_data())
+        .with_dialogs(Rc::new(Dialogs), Rc::clone(&dialog_metrics))
+        .with_pilots(Some(keeper(&store)), Rc::clone(&menu_metrics));
+    let metrics = screen.metrics().expect("the dialogs'");
+    assert!(std::ptr::addr_eq(
+        Rc::as_ptr(&metrics),
+        Rc::as_ptr(&dialog_metrics)
+    ));
+}
