@@ -29,10 +29,12 @@
     "vintage-wine": 128
   },
   "kits": {
-    "cargo-racks": 129
+    "cargo-racks": 129,
+    "gun-mount": 131
   },
   "outfits": {
-    "dock-pass": 128
+    "dock-pass": 128,
+    "mass-driver": 130
   },
   "ships": {
     "cutter": 128,
@@ -45,12 +47,15 @@
   "stellars": {
     "hearth-dock": 128,
     "hearth-moon": 129,
-    "verge-camp": 130
+    "verge-camp": 130,
+    "verge-workshop": 140
   },
   "systems": {
     "drift": 128,
     "hearth": 129,
     "verge": 130
   },
-  "weapons": {}
+  "weapons": {
+    "mass-driver": 128
+  }
 }

@@ -6,15 +6,21 @@
 //!
 //! It holds the factions `guild` and `warden`; the systems `drift`, of
 //! jump points alone, `hearth`, the guild's, and `verge`, ungoverned;
-//! the stellars `hearth-dock`, `hearth-moon` and `verge-camp`; jump
+//! the stellars `hearth-dock`, `hearth-moon`, `verge-camp` and
+//! `verge-workshop`, an unowned outpost with an outfitter and fuel, so a
+//! lawless yard; jump
 //! points that cover every case a link can take (two from `hearth` to
 //! `verge`, a dead pair between `verge` and `drift`, and `drift`'s
 //! one-way back door to `verge`); the civilian hull `hauler`, in guild
 //! paint, the crown hull `cutter`, bare, and the wardens' crown hull
 //! `warden-picket`, in `warden-colours`, all on a placeholder model; the
-//! outfit `dock-pass`, a Dock pass; the legal mod kit `cargo-racks`,
+//! outfits `dock-pass`, a Dock pass, and `mass-driver`, a turret weapon
+//! sold at `hearth-dock` alone (`sold_at`), so it is listed there only
+//! for a ship with a turret hardpoint; the legal mod kit `cargo-racks`,
 //! fitting freighters, so Hearth Dock's outfitter lists it for the
-//! hauler; the start `dock-hand`, in the hauler
+//! hauler, and the lawless kit `gun-mount`, fitting freighters, which
+//! adds a turret hardpoint with no gun on it (the bare hauler has none),
+//! so only Verge Workshop fits it; the start `dock-hand`, in the hauler
 //! in `hearth`; seven goods, the six standard ones `alloys` (400 a ton),
 //! `fuel-cells` (150), `grain` (100), `machinery` (600), `medicine` (800)
 //! and `textiles` (250), in slots 0 to 5, and the special good

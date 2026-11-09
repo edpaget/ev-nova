@@ -22,6 +22,7 @@ use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::stellar::{Stellar, flags2};
 use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
+use nova_data::records::weapon::Weapon;
 use nova_data::store::GameData;
 use nova_data::{
     GovtId, Record, Registered, ShipId, StandIn, StandInOf, StellarId, SystemId, new_game,
@@ -31,16 +32,19 @@ use nova_galaxy_media::BARE;
 
 /// The checked-in fixture (`new_game::fixture::folder`): one region; the
 /// factions `guild` and `warden`; the systems `drift` (jump points alone),
-/// `hearth` (the guild's) and `verge` (ungoverned); three stellars:
+/// `hearth` (the guild's) and `verge` (ungoverned); four stellars:
 /// `hearth-dock`, a guild station with every service; `hearth-moon`, with
-/// none; and `verge-camp`, a warden outpost with a bar, an exchange and
-/// no fuel; seven goods, six standard and `vintage-wine` a `jünk`, which
+/// none; `verge-camp`, a warden outpost with a bar, an exchange and
+/// no fuel; and `verge-workshop`, an unowned outpost, a lawless yard, with
+/// an outfitter and fuel; seven goods, six standard and `vintage-wine` a `jünk`, which
 /// the two exchanges price; jump
 /// points two of which lead from `hearth` to `verge`, a dead pair between
 /// `verge` and `drift`, and `drift`'s one-way back door to `verge`; the
 /// civilian hull `hauler`, the crown hull `cutter` and the wardens'
-/// crown hull `warden-picket`, in their colours; the outfit
-/// `dock-pass`; the start `dock-hand`, in the hauler in `hearth`; the
+/// crown hull `warden-picket`, in their colours; the outfits
+/// `dock-pass` and `mass-driver`, a turret sold at `hearth-dock`; the mod
+/// kits `cargo-racks` (legal) and `gun-mount` (lawless, adding a turret
+/// hardpoint); the start `dock-hand`, in the hauler in `hearth`; the
 /// storyline `dock-work`,
 /// whose four missions and two news items run over the conversations of
 /// `dialog/dock-job.ink`, compiled, whose greeting `verge-camp` names.
@@ -171,10 +175,14 @@ fn the_fixture_folder_holds_a_record_for_each_thing_it_maps() {
     assert_eq!(data.ids(System::TYPE), [128, 129, 130]);
     assert_eq!(
         data.ids(Stellar::TYPE),
-        (128..=139).collect::<Vec<_>>(),
-        "three stellars, then nine jump points' gates"
+        (128..=140).collect::<Vec<_>>(),
+        "three stellars, nine jump points' gates, then the workshop, pinned after them"
     );
-    assert_eq!(data.ids(Desc::TYPE), [128, 130], "the stellars with a body");
+    assert_eq!(
+        data.ids(Desc::TYPE),
+        [128, 130, 140],
+        "the stellars with a body"
+    );
     assert_eq!(data.ids(Ship::TYPE), [128, 129, 130], "the three hulls");
     assert_eq!(data.ids(ShipAnim::TYPE), [128, 129, 130]);
     assert_eq!(
@@ -186,9 +194,10 @@ fn the_fixture_folder_holds_a_record_for_each_thing_it_maps() {
     assert_eq!(data.ids(Character::TYPE), [128], "the start");
     assert_eq!(
         data.ids(Outfit::TYPE),
-        [128, 129],
-        "the dock pass, then the cargo racks kit"
+        [128, 129, 130, 131],
+        "the dock pass, the cargo racks kit, the mass driver, then the gun mount kit"
     );
+    assert_eq!(data.ids(Weapon::TYPE), [128], "the mass driver");
     assert_eq!(
         data.ids(StrList::TYPE),
         [4000, 4001, 4003, 4004],
@@ -231,7 +240,7 @@ fn the_systems_are_placed_governed_and_hold_their_stellars_then_gates_with_no_li
     assert_eq!(name, "Verge");
     assert_eq!((verge.x_pos, verge.y_pos), (300, -120));
     assert_eq!(verge.govt, None);
-    assert_eq!(ids(&verge.nav_def), [130, 137, 138, 139]);
+    assert_eq!(ids(&verge.nav_def), [130, 140, 137, 138, 139]);
     for system in [drift, hearth, verge] {
         assert_eq!(system.con, [None; 16], "the jump points are not links");
         assert_eq!(system.dude_types[0], 128, "the civilian traffic");
@@ -263,6 +272,49 @@ fn the_stellars_are_placed_owned_and_flagged_by_their_services() {
         "landing, the commodity exchange, a station, a bar, no fuel"
     );
     assert_eq!(camp.hyper_link, [None; 8]);
+    let (name, workshop) = named::<Stellar>(&data, 140);
+    assert_eq!(name, "Verge Workshop");
+    assert_eq!(workshop.govt, None);
+    assert_eq!(
+        workshop.flags.bits() & 0xFF,
+        0x15,
+        "landing, an outfitter, a station"
+    );
+}
+
+/// The `SpecialTech` slots of `spob`.
+fn special_tech(spob: &Stellar) -> Vec<i16> {
+    spob.special_tech1_3
+        .iter()
+        .chain(&spob.special_tech4_8)
+        .copied()
+        .collect()
+}
+
+#[test]
+fn the_mass_driver_is_sold_at_hearth_dock_alone_and_verge_workshop_is_a_lawless_yard() {
+    use nova_data::new_game::kits::{FitBits, YARD_TECH_LAWLESS, YARD_TECH_LEGAL};
+    use nova_data::new_game::yards::SOLD_TECH_FIRST;
+    use nova_galaxy_format::fleet::Mount;
+
+    let game = new_game::open(&fixture()).expect("lists");
+    let (name, driver) = named::<Outfit>(&game.data, game.ids.outfits[&id("mass-driver")]);
+    assert_eq!(name, "Mass driver");
+    assert_eq!(
+        (driver.tech_level, driver.buy_random, driver.cost),
+        (SOLD_TECH_FIRST, 100, 2500)
+    );
+    assert_eq!(driver.require.bits(), FitBits::mount_bit(Mount::Turret));
+    let spob = |stellar: &str| named::<Stellar>(&game.data, game.ids.stellars[&id(stellar)]).1;
+    let dock = spob("hearth-dock");
+    assert_eq!(dock.tech_level, YARD_TECH_LEGAL);
+    assert_eq!(special_tech(&dock), [3, -1, -1, -1, -1, -1, -1, -1]);
+    for stellar in ["hearth-moon", "verge-camp", "verge-workshop"] {
+        assert_eq!(special_tech(&spob(stellar)), [-1; 8], "{stellar}");
+    }
+    assert_eq!(spob("verge-workshop").tech_level, YARD_TECH_LAWLESS);
+    let (_, mount) = named::<Outfit>(&game.data, game.ids.kits[&id("gun-mount")]);
+    assert_eq!(mount.contribute.bits(), FitBits::mount_bit(Mount::Turret));
 }
 
 #[test]
@@ -542,7 +594,13 @@ fn a_stellar_s_body_is_its_landing_text() {
 #[test]
 fn the_dock_pass_is_an_outfit_the_dock_job_lends_and_takes_back() {
     let game = new_game::open(&fixture()).expect("lists");
-    assert_eq!(pairs(&game.ids.outfits), [("dock-pass".to_owned(), 128)]);
+    assert_eq!(
+        pairs(&game.ids.outfits),
+        [
+            ("dock-pass".to_owned(), 128),
+            ("mass-driver".to_owned(), 130)
+        ]
+    );
     let (name, pass) = named::<Outfit>(&game.data, 128);
     assert_eq!(name, "Dock pass");
     assert_eq!(pass.cost, 0);
@@ -566,7 +624,8 @@ fn the_ids_map_back_to_the_bible_s() {
         [
             ("hearth-dock".to_owned(), 128),
             ("hearth-moon".to_owned(), 129),
-            ("verge-camp".to_owned(), 130)
+            ("verge-camp".to_owned(), 130),
+            ("verge-workshop".to_owned(), 140)
         ]
     );
     assert_eq!(
