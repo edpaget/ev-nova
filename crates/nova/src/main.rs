@@ -45,7 +45,8 @@
 //!
 //! Dialogs come from the interface file beside `Nova Files`
 //! (`Nova-DF.rsrc`, or the Windows `Nova.rez`). Without one, the game runs
-//! with a warning, and I and P do nothing.
+//! with a warning, and I and P do nothing; the new game, without one, uses
+//! its placeholder dialogs instead, with no warning ([`nova::interface`]).
 //!
 //! A `dësc`'s QuickTime movie plays, unless the QuickTime Movies
 //! preference is off, from the file its name names: looked for by bare
@@ -119,7 +120,8 @@
 //! that doesn't load or map is a warning, as are media that are Git LFS
 //! pointers (with the `git lfs` commands that fetch them) and a folder
 //! with no systems; the game starts with what loaded (and the missing
-//! interface file and music warn as they do anywhere). A folder that
+//! music warns as it does anywhere; a missing interface file doesn't, as
+//! the placeholder dialogs stand in for it). A folder that
 //! can't be listed ends the launch with exit status 2. Its pilots are
 //! saved in `New Game Pilots`, beside `Pilots`, so a stock pilot never
 //! opens over the new game's data. An empty `GAME_DATA` is unset.
@@ -200,7 +202,7 @@ use nova::stock_look::StockLook;
 use nova_audio::{Audio, AudioCore, FileSettings, KiraAudio, SettingsStore};
 use nova_data::fonts::open_charcoal;
 use nova_data::music::open_music;
-use nova_data::{GameData, InterfaceData, StockArt, open_interface};
+use nova_data::{GameData, StockArt, open_interface};
 use nova_render::GameImages;
 use nova_render::wgpu::GlyphonMetrics;
 use nova_sim::{Chance, PilotKeeper, PilotStore, Rulebook};
@@ -256,15 +258,6 @@ fn open_pilots(
         report.warn("nova: there is nowhere to save pilots (no home directory); saving nothing");
     }
     pilots
-}
-
-/// The interface file beside the data in `dir`, shared by the dialogs and
-/// the renderer; none, with a warning to `report`, when it did not open.
-fn open_interface_file(dir: &Path, report: &mut Report) -> Option<Rc<InterfaceData>> {
-    open_interface(dir)
-        .map_err(|error| report.warn(&format!("nova: running without dialogs: {error}")))
-        .ok()
-        .map(Rc::new)
 }
 
 /// The new game's stock ship look over the player's own stock data
@@ -452,16 +445,20 @@ fn main() -> ExitCode {
         screen = screen.with_ship_looks(Rc::new(looks));
     }
     screen = with_platform(screen);
-    let interface = open_interface_file(&dir, &mut report);
-    if let Some(interface) = &interface {
-        screen = screen.with_dialogs(Rc::<InterfaceData>::clone(interface), metrics);
+    // The interface file beside the data, or the new game's placeholders.
+    let interface = nova::interface::wire(ruleset, open_interface(&dir));
+    for warning in &interface.warnings {
+        report.warn(warning);
+    }
+    if let Some(dialogs) = interface.dialogs {
+        screen = screen.with_dialogs(dialogs, metrics);
     }
     // Last, once the rules and the chance its load reads are given.
     let screen = screen.open_last_pilot();
     let audio = open_audio(&data, &dir, &rulebook, &mut report);
     let report = Rc::new(RefCell::new(report));
     // The simulation's diagnostics are the running game's, not startup's.
-    let images = nova::stock_look::images(&data, &rulebook, interface, stock_art);
+    let images = nova::stock_look::images(&data, &rulebook, interface.file, stock_art);
     let runner = with_gamepads(Runner::new(images, screen, fonts), &report)
         .with_diagnostics(Box::new(std::io::stderr()))
         .with_report(Rc::clone(&report));
