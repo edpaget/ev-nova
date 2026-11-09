@@ -10,10 +10,18 @@
 //! (`infra/windows-signing/github.tf`), which only main's Windows `build`
 //! leg enters.
 
+pub mod host;
+pub mod sign;
 pub mod tools;
 
+use std::ffi::OsString;
+use std::path::PathBuf;
+
 use crate::build_id;
-use crate::ports::Env;
+use crate::bundle::{self, BundleError, execute, metadata};
+use crate::ports::{Env, Files, Process};
+use crate::spec::BundleSpec;
+use tools::AuthenticodeLayout;
 
 /// The Artifact Signing account's endpoint, e.g.
 /// `https://eus.codesigning.azure.net/`.
@@ -64,6 +72,47 @@ pub enum AuthenticodeError {
         /// The unset or empty variables, in [`VARS`]' order.
         missing: Vec<&'static str>,
     },
+    /// A file to sign is not there.
+    #[error("{} is missing: build it before signing it", .0.display())]
+    MissingFile(PathBuf),
+    /// `cargo metadata`, a download, a digest check or `signtool` failed.
+    #[error(transparent)]
+    Step(#[from] BundleError),
+}
+
+/// What [`sign_files`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Signed {
+    /// Nothing: the mode is [`Authenticode::Unsigned`].
+    Skipped,
+    /// Signed and verified these files, in place.
+    Signed(Vec<PathBuf>),
+}
+
+/// Signs and verifies `paths` in place under `signing`
+/// ([`sign::steps`]), staging the tools under the target directory
+/// `cargo metadata` names. Unsigned runs nothing at all. A missing file is
+/// an error before anything runs.
+pub fn sign_files(
+    process: &mut impl Process,
+    files: &mut impl Files,
+    cargo: &OsString,
+    signing: &Authenticode,
+    paths: &[PathBuf],
+) -> Result<Signed, AuthenticodeError> {
+    if *signing == Authenticode::Unsigned {
+        return Ok(Signed::Skipped);
+    }
+    if let Some(missing) = paths.iter().find(|path| !files.is_file(path)) {
+        return Err(AuthenticodeError::MissingFile(missing.clone()));
+    }
+    let json = bundle::run(process, &metadata(cargo))?;
+    let spec = BundleSpec::from_metadata(&json).map_err(BundleError::from)?;
+    let layout = AuthenticodeLayout::new(&spec.target_dir);
+    for step in sign::steps(signing, &layout, paths) {
+        execute(&step, process, files)?;
+    }
+    Ok(Signed::Signed(paths.to_vec()))
 }
 
 impl Authenticode {
@@ -239,6 +288,223 @@ mod tests {
         );
         for name in VARS {
             assert!(message.contains(name), "{message}");
+        }
+    }
+
+    mod signing_files {
+        use std::path::Path;
+        use std::rc::Rc;
+
+        use super::*;
+        use crate::authenticode::sign::{sign, verify};
+        use crate::authenticode::tools::{AuthenticodeLayout, DLIB, SIGNTOOL};
+        use crate::bundle::metadata;
+        use crate::digest::DigestTool;
+        use crate::ports::{Invocation, RunError};
+        use crate::spec::BundleSpec;
+        use crate::spec::tests::sample_metadata;
+        use crate::test_support::{Event, FakeFiles, Log, Recorder, failing};
+
+        fn cargo() -> OsString {
+            "C:/rust/cargo.exe".into()
+        }
+
+        fn layout() -> AuthenticodeLayout {
+            let spec = BundleSpec::from_metadata(&sample_metadata()).expect("spec");
+            AuthenticodeLayout::new(&spec.target_dir)
+        }
+
+        fn exes() -> Vec<PathBuf> {
+            let release = Path::new("C:/work").join("release");
+            vec![release.join("nova.exe"), release.join("nova-dump.exe")]
+        }
+
+        struct SignRun {
+            result: Result<Signed, AuthenticodeError>,
+            events: Vec<Event>,
+        }
+
+        impl SignRun {
+            fn runs(&self) -> Vec<Invocation> {
+                self.events
+                    .iter()
+                    .filter_map(|e| match e {
+                        Event::Run(i) => Some(i.clone()),
+                        _ => None,
+                    })
+                    .collect()
+            }
+
+            fn programs(&self) -> Vec<String> {
+                self.runs()
+                    .iter()
+                    .map(|i| {
+                        Path::new(&i.program)
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default()
+                    })
+                    .collect()
+            }
+        }
+
+        fn sign_with(
+            signing: &Authenticode,
+            respond: impl Fn(&Invocation) -> Option<Result<Vec<u8>, RunError>> + 'static,
+            absent: impl Fn(&Path) -> bool + 'static,
+        ) -> SignRun {
+            let log = Log::default();
+            let mut process = Recorder {
+                log: Rc::clone(&log),
+                archs: Vec::new(),
+                respond: Box::new(respond),
+            };
+            let mut files = FakeFiles {
+                log: Rc::clone(&log),
+                fails: Box::new(|_| false),
+                absent: Box::new(absent),
+            };
+            let result = sign_files(&mut process, &mut files, &cargo(), signing, &exes());
+            let events = log.borrow().clone();
+            SignRun { result, events }
+        }
+
+        fn signing() -> Authenticode {
+            Authenticode::ArtifactSigning(account())
+        }
+
+        fn is_signtool(i: &Invocation, command: &str) -> bool {
+            Path::new(&i.program).ends_with("signtool.exe")
+                && i.args.first().is_some_and(|a| a == command)
+        }
+
+        #[test]
+        fn unsigned_runs_nothing() {
+            let run = sign_with(&Authenticode::Unsigned, |_| None, |_| true);
+            assert_eq!(run.result.expect("skipped"), Signed::Skipped);
+            assert_eq!(run.events, []);
+        }
+
+        #[test]
+        fn signing_reads_the_target_dir_then_stages_signs_and_verifies() {
+            let run = sign_with(&signing(), |_| None, |_| false);
+            assert_eq!(
+                run.result.as_ref().expect("signed"),
+                &Signed::Signed(exes())
+            );
+            assert_eq!(
+                run.programs(),
+                [
+                    "cargo.exe",
+                    "curl",
+                    "certutil",
+                    "tar",
+                    "curl",
+                    "certutil",
+                    "tar",
+                    "signtool.exe",
+                    "signtool.exe",
+                    "signtool.exe",
+                    "signtool.exe",
+                ]
+            );
+            let runs = run.runs();
+            let layout = layout();
+            assert_eq!(runs[0], metadata(&cargo()));
+            assert_eq!(
+                runs[2],
+                DigestTool::Certutil.invocation(&layout.nupkg(&DLIB))
+            );
+            assert_eq!(
+                runs[5],
+                DigestTool::Certutil.invocation(&layout.nupkg(&SIGNTOOL))
+            );
+            let exes = exes();
+            assert_eq!(
+                runs[7..],
+                [
+                    sign(&layout, &exes[0]),
+                    sign(&layout, &exes[1]),
+                    verify(&layout, &exes[0]),
+                    verify(&layout, &exes[1]),
+                ]
+            );
+            assert!(
+                run.events
+                    .iter()
+                    .any(|e| matches!(e, Event::Write(path, _) if *path == layout.metadata())),
+                "{:?}",
+                run.events
+            );
+        }
+
+        #[test]
+        fn a_missing_file_is_an_error_before_anything_runs() {
+            let run = sign_with(&signing(), |_| None, |p| p.ends_with("nova-dump.exe"));
+            let Err(AuthenticodeError::MissingFile(path)) = &run.result else {
+                panic!("{:?}", run.result);
+            };
+            assert_eq!(path, &exes()[1]);
+            assert_eq!(run.events, []);
+        }
+
+        #[test]
+        fn a_package_with_another_digest_stops_before_unpacking_or_signing() {
+            let name = SIGNTOOL.file_name();
+            let run = sign_with(
+                &signing(),
+                move |i| {
+                    (i.program == "certutil"
+                        && i.args.get(1).is_some_and(|p| Path::new(p).ends_with(&name)))
+                    .then(|| Ok(format!("hash:\r\n{}\r\nok\r\n", "0".repeat(64)).into_bytes()))
+                },
+                |_| false,
+            );
+            assert!(
+                matches!(
+                    &run.result,
+                    Err(AuthenticodeError::Step(BundleError::Checksum { pinned, .. }))
+                        if *pinned == SIGNTOOL.pin.what
+                ),
+                "{:?}",
+                run.result
+            );
+            assert_eq!(
+                run.programs(),
+                ["cargo.exe", "curl", "certutil", "tar", "curl", "certutil"]
+            );
+        }
+
+        #[test]
+        fn a_failing_sign_names_its_command_line_and_verifies_nothing() {
+            let run = sign_with(&signing(), failing(|i| is_signtool(i, "sign")), |_| false);
+            let message = run.result.as_ref().expect_err("fails").to_string();
+            assert!(
+                message.contains("signtool.exe sign /v /fd SHA256"),
+                "{message}"
+            );
+            assert!(message.contains("nova.exe"), "{message}");
+            assert!(message.contains("exited with code 1"), "{message}");
+            assert_eq!(
+                run.runs().iter().filter(|i| is_signtool(i, "sign")).count(),
+                1
+            );
+            assert!(!run.runs().iter().any(|i| is_signtool(i, "verify")));
+        }
+
+        #[test]
+        fn an_untimestamped_file_fails_its_verify() {
+            let run = sign_with(
+                &signing(),
+                |i| is_signtool(i, "verify").then_some(Err(RunError::Failed(Some(2)))),
+                |_| false,
+            );
+            let message = run.result.as_ref().expect_err("fails").to_string();
+            assert!(
+                message.contains("signtool.exe verify /pa /tw /v"),
+                "{message}"
+            );
+            assert!(message.contains("exited with code 2"), "{message}");
         }
     }
 }
