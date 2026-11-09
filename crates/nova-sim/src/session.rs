@@ -3710,13 +3710,14 @@ impl Session {
         if self.mode.jump().is_some() {
             return (Err(LandingRefusal::Jumping), false);
         }
-        let disabled = match self.ship.condition {
-            Condition::Intact => false,
-            Condition::Disabled => true,
+        match self.ship.condition {
+            Condition::Intact | Condition::Disabled => {}
             Condition::Dying { .. } | Condition::Destroyed => {
                 return (Err(LandingRefusal::Disabled), false);
             }
-        };
+        }
+        // Read once, for the dock scan and the refusal both.
+        let barred = self.ship.landing_bar();
         let candidates = self.chart.pick_candidates(&self.pilot, &self.statics);
         // The stellar held, wherever its system lists it, and the dock
         // request's recheck of it (@0x6699a-0x669aa): its owner word the
@@ -3744,43 +3745,23 @@ impl Session {
         );
         let press = match stage {
             DockStage::Done(press) => press,
-            DockStage::Asks(ask) => {
-                // The new game's dock scan, before traffic control answers
-                // and only for a ship the press would not refuse as
-                // cloaked or disabled (see the `dock_scan` module).
-                if let Some(law) = law
-                    && !disabled
-                    && !self.ship.cloak.cloak.is_cloaked()
-                {
-                    self.dock_scan(ask.site(), law);
-                }
-                let blessing = self.blessing();
-                let reading = self.setup.rules.source_for(RuleKey::BlessingLanding);
-                let site = ask.site();
-                ask.answer(crate::landing::cleared(
-                    site,
-                    self.standing(site, &blessing),
-                    reading,
-                ))
-            }
+            DockStage::Asks(ask) => self.answer_dock_ask(ask, law, barred),
         };
         let requested = had_target || press.selected.is_some();
-        (self.land_picked(press, disabled), requested)
+        (self.land_picked(press, barred), requested)
     }
 
     /// The rest of the land key's press once its pick is made, `press`
-    /// what [`dock_request`] and traffic control gave and the ship
-    /// `disabled` or not.
+    /// what [`dock_request`] and traffic control gave and `barred` what
+    /// refuses the ship itself, if anything (`PlayerShip::landing_bar`).
     fn land_picked(
         &mut self,
         press: crate::landing::DockPress,
-        disabled: bool,
+        barred: Option<LandingRefusal>,
     ) -> Result<LandPress, LandingRefusal> {
-        // The fee's refusal (@0x669b4) comes before the cloak's
-        // (`_ShipIsCloaked` @0x66a8e), which comes before the disabled one
-        // (@0x66aee), all after the landability (@0x66977-0x669ae).
-        let cloaked = self.ship.cloak.cloak.is_cloaked();
-        if cloaked || disabled {
+        // The fee's refusal (@0x669b4) comes before the ship's own, all
+        // after the landability (@0x66977-0x669ae).
+        if let Some(bar) = barred {
             self.chart.select_pressed(press.selected);
             return match press.outcome {
                 Err(refusal @ LandingRefusal::CannotPayFee { .. }) => {
@@ -3794,8 +3775,7 @@ impl Session {
                     | LandingRefusal::NoStellars
                     | LandingRefusal::NothingLandable),
                 ) => Err(refusal),
-                Ok(_) | Err(_) if cloaked => Err(LandingRefusal::Cloaked),
-                Ok(_) | Err(_) => Err(LandingRefusal::Disabled),
+                Ok(_) | Err(_) => Err(bar),
             };
         }
         let outcome = self.apply_press(press)?;

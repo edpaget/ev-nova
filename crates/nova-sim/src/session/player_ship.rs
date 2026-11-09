@@ -20,6 +20,7 @@ use crate::combat::impact::TractorLock;
 use crate::combat::ion::Ion;
 use crate::flight::{Amounts, ShipState};
 use crate::handling::ShipFields;
+use crate::landing::LandingRefusal;
 use crate::pilot::Pilot;
 use crate::shipyard;
 use crate::stats::ShipStats;
@@ -372,6 +373,22 @@ impl PlayerShip {
                 counted.outfits = outfits;
                 Cow::Owned(counted)
             }
+        }
+    }
+
+    /// What refuses a press of the land key for the ship itself, once
+    /// the landability and the fee have passed: its cloak
+    /// (`_ShipIsCloaked` @0x66a8e), before its being disabled (@0x66aee);
+    /// none for a ship free to land. The land press reads it once, so the
+    /// dock scan never runs on a press this refuses (see the `dock_scan`
+    /// module).
+    pub(super) fn landing_bar(&self) -> Option<LandingRefusal> {
+        if self.cloak.cloak.is_cloaked() {
+            Some(LandingRefusal::Cloaked)
+        } else if matches!(self.condition, Condition::Disabled) {
+            Some(LandingRefusal::Disabled)
+        } else {
+            None
         }
     }
 

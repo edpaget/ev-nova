@@ -4,12 +4,14 @@
 //!
 //! **The scan.** The land press stops at traffic control's request
 //! ([`dock_request`](crate::landing::dock_request) gives
-//! [`DockStage::Asks`](crate::landing::DockStage::Asks)), and there, when
-//! the press carries a [`LegalCode`] to convict by, [`Session::dock_scan`]
-//! runs before the clearance, which then reads the record the scan
-//! leaves. It runs only for a ship neither cloaked nor disabled (the
-//! original refuses those first: `_ShipIsCloaked` @0x66a8e, `_IsDisabled`
-//! @0x66aee), at a stellar that is no hypergate or wormhole, governed by
+//! [`DockStage::Asks`](crate::landing::DockStage::Asks)), and
+//! [`Session::answer_dock_ask`] answers it: when the press carries a
+//! [`LegalCode`] to convict by, [`Session::dock_scan`] runs before the
+//! clearance, which then reads the record the scan leaves. It runs only
+//! for a ship neither cloaked nor disabled (the original refuses those
+//! first: `_ShipIsCloaked` @0x66a8e, `_IsDisabled` @0x66aee), read once
+//! for the scan and the refusal both (`PlayerShip::landing_bar`), at a
+//! stellar that is no hypergate or wormhole, governed by
 //! a government that keeps the law, with no request already granted, for
 //! a ship whose kits draw any attention. A find is applied as an
 //! interceptor's is ([`Session::apply_find`]: convicted of smuggling
@@ -38,6 +40,7 @@ use super::{Session, Statics};
 use crate::catalog::{LandingSite, OutfitId, ShipId};
 use crate::clearance::CLEARED;
 use crate::combat::hull::HullSpec;
+use crate::landing::{DockAsk, DockPress, LandingRefusal};
 use crate::legal::LegalCode;
 use crate::message::{DockFind, SimMessage};
 use crate::rulebook::RuleKey;
@@ -72,6 +75,33 @@ impl Statics {
 }
 
 impl Session {
+    /// Traffic control's answer to `ask`, the land press's request: the
+    /// dock scan first ([`Session::dock_scan`]), convicting by `law`,
+    /// when the press carries one and nothing bars the ship itself from
+    /// landing (`barred`, `PlayerShip::landing_bar`: the original refuses
+    /// a cloaked or disabled ship before it asks); then the clearance,
+    /// which reads the record the scan leaves.
+    pub(super) fn answer_dock_ask(
+        &mut self,
+        ask: DockAsk,
+        law: Option<&dyn LegalCode>,
+        barred: Option<LandingRefusal>,
+    ) -> DockPress {
+        if let Some(law) = law
+            && barred.is_none()
+        {
+            self.dock_scan(ask.site(), law);
+        }
+        let blessing = self.blessing();
+        let reading = self.setup.rules.source_for(RuleKey::BlessingLanding);
+        let site = ask.site();
+        ask.answer(crate::landing::cleared(
+            site,
+            self.standing(site, &blessing),
+            reading,
+        ))
+    }
+
     /// Traffic control's scan of the player as it asks `site` for
     /// clearance, convicting by `law` (see the module docs): nothing at a
     /// hypergate or wormhole, a stellar of no government or one that keeps
