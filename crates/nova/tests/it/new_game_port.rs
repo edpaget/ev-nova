@@ -26,8 +26,9 @@
 //!   back to the spaceport through their own Leave or Done. What the
 //!   Trade Center lists and trades, here and at Verge Camp, is
 //!   `new_game_trade`'s. The outfitter
-//!   lists the fixture's kit; no hull is for sale in the fixture yet, so
-//!   the shipyard opens over a variant of it with the cutter for sale.
+//!   lists the fixture's kit, and the shipyard the cutter and the racked
+//!   hauler the fixture sells there (what it lists and sells is
+//!   `new_game_shipyard`'s).
 //!   The Mission BBS, with no mission offered, says so and closes back.
 //! - **Landscape.** The fixture has no landscape `PICT`, so the landscape
 //!   item draws the stellar's stand-in from the store: Hearth Dock's disc
@@ -48,9 +49,7 @@ use nova::rulebook::ruleset_rulebook;
 use nova::ruleset::Ruleset;
 use nova::startup::{DataSource, DiskData, NewGameOpened};
 use nova_data::new_game::fixture::folder;
-use nova_data::new_game::kits::YARD_TECH_LEGAL;
-use nova_data::records::ship::Ship;
-use nova_data::{AnyRecord, Entry, GameData, ShipId, StandIn, StandInOf};
+use nova_data::{GameData, ShipId, StandIn, StandInOf};
 use nova_render::wgpu::GlyphonMetrics;
 use nova_render::{Batch, FontFaces, Frame};
 use nova_sim::fixture::MemoryPilots;
@@ -138,34 +137,6 @@ fn resumed_over(data: &Rc<GameData>, edit: impl FnOnce(&mut Pilot)) -> (Harness,
         .write("Ada", &nova_sim::save::encode(&pilot))
         .expect("writes");
     (resumed_in(app_over(Rc::clone(data), &store)), store)
-}
-
-/// The fixture, opened as `main` opens it, with the cutter for sale at
-/// every legal yard: a price, the legal yards' tech level and always on
-/// offer. No hull is for sale in the fixture's own data until hulls gain
-/// their prices and yards.
-fn selling_the_cutter() -> Rc<GameData> {
-    let NewGameOpened::Loaded(loaded) = DiskData.open_new_game(&folder()) else {
-        panic!("the fixture opens");
-    };
-    let id = nova_of(&fixture().ids.ships, "cutter");
-    let entry = loaded
-        .data
-        .get::<Ship>(id)
-        .expect("present")
-        .expect("decoded");
-    let name = entry.name.map(str::to_owned);
-    let cutter = Ship {
-        cost: 5_000,
-        tech_level: YARD_TECH_LEGAL,
-        buy_random: 100,
-        ..entry.record.clone()
-    };
-    Rc::new(loaded.data.with_decoded(Entry {
-        id,
-        name,
-        record: AnyRecord::Ship(Box::new(cutter)),
-    }))
 }
 
 /// Carrying the dock job, so Hearth Dock offers it no more.
@@ -581,12 +552,12 @@ fn the_outfitter_opens_from_its_button_and_its_done_closes_it_back() {
     assert_eq!(game.showing(), Showing::Spaceport);
 }
 
-/// Over the fixture with the cutter for sale, the button opens the
+/// Over the fixture, whose Hearth Dock sells hulls, the button opens the
 /// shipyard over its placeholder, its buttons labelled on their items,
 /// and Done closes it back to the spaceport.
 #[test]
 fn the_shipyard_opens_from_its_button_and_its_done_closes_it_back() {
-    let (mut game, _store) = resumed_over(&selling_the_cutter(), on_the_dock_job);
+    let (mut game, _store) = resumed_after(on_the_dock_job);
     land_at(&mut game, "hearth-dock");
     click_port_item(&mut game, service_item(Service::Shipyard));
     let frame = game.frame();
