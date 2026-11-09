@@ -16,7 +16,8 @@ use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::weapon::Weapon;
 use nova_data::sound::decode_snd;
 use nova_data::{
-    GameData, LayerError, LayerSprite, SheetScan, ShipImage, StandIn, StandInOf, shot_spin_id,
+    GameData, LayerError, LayerSprite, SheetKind, SheetScan, ShipImage, ShipLayerInfos,
+    ShipSpriteInfo, SpriteError, StandIn, StandInOf, shot_spin_id,
 };
 use nova_rsrc::ResType;
 use nova_sim::TICKS_PER_SECOND;
@@ -43,42 +44,13 @@ use crate::sheet_image::SheetImage;
 impl ShipSprites for GameData {
     fn ship_sheet(&self, id: ShipId) -> Result<ShipSheet, String> {
         let sprite = self.ship_sprite_info(id).map_err(|err| err.to_string())?;
-        let sheet = &sprite.sheet;
-        // The sheet's layout is the `shän`'s frames per rotation as columns.
-        let rotations = NonZeroU16::new(sheet.layout.columns())
-            .expect("a sheet layout has at least one column");
-        // A layer that cannot be resolved is drawn as no layer; the ship
-        // browser is where its error is shown.
-        let [glow, lights, weapon, alt, shield] =
-            self.ship_layer_infos(id).map_or([None; 5], |layers| {
-                [
-                    (ShipImage::Glow, layers.glow),
-                    (ShipImage::Lights, layers.lights),
-                    (ShipImage::Weapon, layers.weapon),
-                    (ShipImage::Alt, layers.alt),
-                    (ShipImage::Shield, layers.shield),
-                ]
-                .map(|(image, layer)| layer.and_then(|layer| layer_sheet(id, image, layer)))
-            });
         let anim = self.get::<ShipAnim>(id.0).and_then(Result::ok);
-        let field = |read: fn(&ShipAnim) -> i16| anim.map_or(0, |anim| read(anim.record));
-        Ok(ShipSheet {
-            image: SheetImage::of_ship(sprite.kind, id.0, ShipImage::Base, sprite.image_id),
-            rotations,
-            frame_width: sheet.info.frame_width,
-            frame_height: sheet.info.frame_height,
-            image_size: (sheet.info.image_width, sheet.info.image_height),
-            clip_quirks: sheet.info.clip_quirks,
-            glow,
-            lights,
-            weapon,
-            weap_decay: field(|anim| anim.weap_decay),
-            alt,
-            shield,
-            base_transp: field(|anim| anim.base_transp),
-            solid: sheet.info.has_runs,
-            eight_bit: sheet.info.depth == 8,
-        })
+        Ok(sheet_of(
+            &sprite,
+            self.ship_layer_infos(id),
+            anim.map(|anim| anim.record),
+            |kind, image, image_id| SheetImage::of_ship(kind, id.0, image, image_id),
+        ))
     }
 
     /// The ship type's stand-in when it is an outline (only the new game
@@ -91,13 +63,60 @@ impl ShipSprites for GameData {
     }
 }
 
-/// Ship `ship`'s resolved layer `image`'s image, frame count, frame size,
-/// image size, clip quirks, whether it holds solid runs and whether it is
-/// 8-bit; `None` for one that failed.
+/// The sheet a ship's scanned base `sprite`, its scanned `layers` and its
+/// `shän` `anim` make, each image keyed by `image_of` (its kind, which
+/// image, its image ID): the one reading of a `shän`'s sprites, which the
+/// game data's adapter and the borrowed stock look
+/// ([`StockShipLooks`](super::stock_looks::StockShipLooks)) share.
+pub(super) fn sheet_of(
+    sprite: &ShipSpriteInfo<'_>,
+    layers: Result<ShipLayerInfos<'_>, SpriteError>,
+    anim: Option<&ShipAnim>,
+    image_of: impl Fn(SheetKind, ShipImage, i16) -> SheetImage,
+) -> ShipSheet {
+    let sheet = &sprite.sheet;
+    // The sheet's layout is the `shän`'s frames per rotation as columns.
+    let rotations =
+        NonZeroU16::new(sheet.layout.columns()).expect("a sheet layout has at least one column");
+    // A layer that cannot be resolved is drawn as no layer; the ship
+    // browser is where its error is shown.
+    let [glow, lights, weapon, alt, shield] = layers.map_or([None; 5], |layers| {
+        [
+            (ShipImage::Glow, layers.glow),
+            (ShipImage::Lights, layers.lights),
+            (ShipImage::Weapon, layers.weapon),
+            (ShipImage::Alt, layers.alt),
+            (ShipImage::Shield, layers.shield),
+        ]
+        .map(|(image, layer)| layer.and_then(|layer| layer_sheet(image, layer, &image_of)))
+    });
+    let field = |read: fn(&ShipAnim) -> i16| anim.map_or(0, read);
+    ShipSheet {
+        image: image_of(sprite.kind, ShipImage::Base, sprite.image_id),
+        rotations,
+        frame_width: sheet.info.frame_width,
+        frame_height: sheet.info.frame_height,
+        image_size: (sheet.info.image_width, sheet.info.image_height),
+        clip_quirks: sheet.info.clip_quirks,
+        glow,
+        lights,
+        weapon,
+        weap_decay: field(|anim| anim.weap_decay),
+        alt,
+        shield,
+        base_transp: field(|anim| anim.base_transp),
+        solid: sheet.info.has_runs,
+        eight_bit: sheet.info.depth == 8,
+    }
+}
+
+/// A resolved layer `image`'s image (keyed by `image_of`), frame count,
+/// frame size, image size, clip quirks, whether it holds solid runs and
+/// whether it is 8-bit; `None` for one that failed.
 fn layer_sheet(
-    ship: ShipId,
     image: ShipImage,
     layer: Result<LayerSprite<'_, SheetScan>, LayerError>,
+    image_of: impl Fn(SheetKind, ShipImage, i16) -> SheetImage,
 ) -> Option<LayerSheet> {
     let layer = layer.ok()?;
     // The scan, like the decoder, rejects a sheet with no frames
@@ -105,7 +124,7 @@ fn layer_sheet(
     let frames =
         NonZeroU16::new(layer.sheet.info.frames).expect("a scanned rlëD has at least one frame");
     Some(LayerSheet {
-        image: SheetImage::of_ship(layer.kind, ship.0, image, layer.image_id),
+        image: image_of(layer.kind, image, layer.image_id),
         frames,
         frame_width: layer.sheet.info.frame_width,
         frame_height: layer.sheet.info.frame_height,

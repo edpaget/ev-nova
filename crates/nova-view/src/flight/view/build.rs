@@ -700,6 +700,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             glow_rolls: HashedRolls::new(1),
             npc_sheets: BTreeMap::new(),
             npc_outlines: BTreeMap::new(),
+            ship_looks: super::ship_looks::ShipLooks::default(),
             npc_previous: Vec::new(),
             scroll: crate::flight::scroll_offset::ScrollOffset::default(),
             unread_looks: opening.unread_looks,
@@ -860,8 +861,8 @@ impl<C: ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S> {
         if self.npc_sheets.contains_key(&ship) {
             return;
         }
-        let sheet = self.catalog.ship_sheet(ship);
-        if let Some(outline) = super::outline_for(&self.catalog, ship, &sheet) {
+        let (sheet, outline) = super::ship_looks::read_ship(&*self.catalog, &self.ship_looks, ship);
+        if let Some(outline) = outline {
             self.npc_outlines.insert(ship, outline);
         }
         self.npc_sheets.insert(ship, sheet);

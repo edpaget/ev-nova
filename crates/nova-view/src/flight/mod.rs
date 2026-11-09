@@ -92,6 +92,8 @@ pub mod pods;
 pub mod radar;
 pub mod rescue_screen;
 pub mod scroll_offset;
+#[cfg(any(test, feature = "fixture"))]
+pub mod sheet_check;
 pub mod ship_layers;
 pub mod shot_fade;
 pub mod sim_adapter;
@@ -101,6 +103,7 @@ pub mod smoke;
 pub mod solid_runs;
 pub mod sprite;
 pub mod stars;
+pub mod stock_looks;
 pub mod target;
 pub mod touch_controls;
 pub mod trails;
@@ -120,6 +123,7 @@ pub use jump::{JumpEffect, JumpPhase};
 pub use sim_adapter::{Collaborators, SessionFlight};
 pub use sim_port::FlightSim;
 pub use sprite::rotation_frame;
+pub use stock_looks::StockShipLooks;
 pub use view::{
     FlightOverlays, FlightView, LiveKeys, MapOpener, PortScreen, RaceShown, SharedChance,
 };

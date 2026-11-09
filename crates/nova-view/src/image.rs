@@ -39,6 +39,18 @@ pub enum ImageKind {
         /// Which of the ship's images.
         image: nova_data::ShipImage,
     },
+    /// The frames stock `shïp` `id`'s `image` resolves to in the player's
+    /// own stock data (`nova_data::StockArt`), scaled by `scale`: a
+    /// new-game hull's borrowed look (`nova_data::stock_look`). It
+    /// resolves only in the stock art, never in the game data, so a
+    /// game-data image with the same ID never stands in for it (nor it
+    /// for one).
+    StockShip {
+        /// Which of the stock ship's images.
+        image: nova_data::ShipImage,
+        /// How much each frame is scaled.
+        scale: nova_data::stock_look::Scale,
+    },
     /// An `rlëD`'s frames as the original draws a frame whose box the
     /// world's edge cuts (`_BlitPixieRLEClipped`, see
     /// `nova_data::graphics::decode_rled_clipped`): each the box's size,
@@ -150,6 +162,22 @@ impl ImageKey {
     pub const fn ship_sheet(ship: i16, image: nova_data::ShipImage, frame: u16) -> Self {
         Self {
             kind: ImageKind::ShipSheet { image },
+            id: ship,
+            frame,
+        }
+    }
+
+    /// Frame `frame` of the sheet stock `shïp` `ship`'s `image` resolves
+    /// to in the stock art, scaled by `scale` ([`ImageKind::StockShip`]).
+    #[must_use]
+    pub const fn stock_ship(
+        ship: i16,
+        image: nova_data::ShipImage,
+        scale: nova_data::stock_look::Scale,
+        frame: u16,
+    ) -> Self {
+        Self {
+            kind: ImageKind::StockShip { image, scale },
             id: ship,
             frame,
         }
@@ -295,6 +323,32 @@ mod tests {
         assert_ne!(key, ImageKey::spin_sheet(128, 3));
         assert_ne!(key, ImageKey::ship_sheet(128, ShipImage::Lights, 3));
         assert_ne!(key, ImageKey::ship_sheet(129, ShipImage::Glow, 3));
+    }
+
+    #[test]
+    fn a_stock_ship_is_keyed_by_its_stock_ship_image_and_scale() {
+        use nova_data::ShipImage;
+        use nova_data::stock_look::Scale;
+        let half = Scale::of(1, 2);
+        let key = ImageKey::stock_ship(136, ShipImage::Base, half, 3);
+        assert_eq!(
+            key,
+            ImageKey {
+                kind: ImageKind::StockShip {
+                    image: ShipImage::Base,
+                    scale: half
+                },
+                id: 136,
+                frame: 3
+            }
+        );
+        assert_ne!(key, ImageKey::ship_sheet(136, ShipImage::Base, 3));
+        assert_ne!(key, ImageKey::sprite(136, 3));
+        assert_ne!(
+            key,
+            ImageKey::stock_ship(136, ShipImage::Base, Scale::ONE, 3)
+        );
+        assert_ne!(key, ImageKey::stock_ship(136, ShipImage::Glow, half, 3));
     }
 
     #[test]

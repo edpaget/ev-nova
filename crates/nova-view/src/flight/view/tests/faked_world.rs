@@ -13,8 +13,8 @@ pub(super) fn world_by(catalog: FakeCatalog, frame: FlightFrame, rules: &Ruleboo
     let looks = Looks::read(&catalog, catalog.weapons().iter().map(|weapon| weapon.id));
     let mut view = scripted_over(catalog, scripted_flight(frame), rules);
     let class = view.frame.player().class;
-    view.sheet = view.catalog.ship_sheet(class);
-    view.outline = super::super::outline_for(&view.catalog, class, &view.sheet);
+    (view.sheet, view.outline) =
+        super::super::ship_looks::read_ship(&*view.catalog, &view.ship_looks, class);
     view.sheet_ship = Some(class);
     view.looks = looks;
     view.read_npc_sheets();

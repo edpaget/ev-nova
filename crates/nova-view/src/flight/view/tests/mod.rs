@@ -136,6 +136,7 @@ mod port_screen_map;
 mod rebinding;
 mod rescue;
 mod ship_drawing;
+mod ship_looks;
 mod ship_outlines;
 mod shots;
 mod stars;

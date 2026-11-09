@@ -11,6 +11,13 @@
 //! looked up only in the interface file, so a game-data `PICT` with the
 //! same ID never stands in for it, and [`ImageKind::Pict`] never reads the
 //! interface file.
+//!
+//! Given the player's own stock art ([`GameImages::with_stock_art`]), it
+//! decodes a new-game hull's borrowed look too, [`ImageKind::StockShip`],
+//! scaled to the hull ([`stock`]). That reads the stock art alone, and no
+//! game-data kind ever reads it.
+
+mod stock;
 
 use std::borrow::Borrow;
 use std::rc::Rc;
@@ -20,7 +27,9 @@ use nova_data::graphics::{
     ThirtyTwoBitReading, apply_mask, decode_cicn, decode_pict, decode_pict_deep, decode_ppat,
     decode_rled_clipped, decode_rled_with,
 };
-use nova_data::{GameData, InterfaceData, PictId, SheetKind, ShipId, ShipImage, SpinSpriteError};
+use nova_data::{
+    GameData, InterfaceData, PictId, SheetKind, ShipId, ShipImage, SpinSpriteError, StockArt,
+};
 use nova_view::ImageKind;
 
 use crate::images::{ImageError, ImageSource};
@@ -46,6 +55,9 @@ pub struct GameImages<D> {
     data: D,
     readings: RledReadings,
     interface: Option<Rc<InterfaceData>>,
+    /// The player's own stock art, which [`ImageKind::StockShip`] alone
+    /// reads ([`GameImages::with_stock_art`]).
+    stock_art: Option<Rc<StockArt>>,
 }
 
 impl<D: Borrow<GameData>> GameImages<D> {
@@ -59,6 +71,7 @@ impl<D: Borrow<GameData>> GameImages<D> {
                 ..RledReadings::default()
             },
             interface: None,
+            stock_art: None,
         }
     }
 
@@ -123,7 +136,8 @@ impl<D: Borrow<GameData>> GameImages<D> {
             | ImageKind::Pattern
             | ImageKind::Icon
             | ImageKind::SpinSheet
-            | ImageKind::ShipSheet { .. } => return None,
+            | ImageKind::ShipSheet { .. }
+            | ImageKind::StockShip { .. } => return None,
         })
     }
 
@@ -203,6 +217,7 @@ impl<D: Borrow<GameData>> ImageSource for GameImages<D> {
             ImageKind::Icon => vec![decode_cicn(bytes(CICN, id)?)?],
             ImageKind::SpinSheet => self.spin_frames(id)?,
             ImageKind::ShipSheet { image } => self.ship_frames(id, image)?,
+            ImageKind::StockShip { image, scale } => self.stock_frames(id, image, scale)?,
             ImageKind::Pict | ImageKind::InterfacePict | ImageKind::MaskedPict { .. } => {
                 unreachable!("a picture is decoded deep")
             }

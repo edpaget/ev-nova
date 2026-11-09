@@ -1087,6 +1087,10 @@ mod tests {
             ImageKind::ShipSheet {
                 image: nova_data::ShipImage::Base,
             },
+            ImageKind::StockShip {
+                image: nova_data::ShipImage::Glow,
+                scale: nova_data::stock_look::Scale::of(3, 2),
+            },
         ] {
             assert_eq!(
                 SuperXbr.enlarge(kind, &frame).into_owned(),
