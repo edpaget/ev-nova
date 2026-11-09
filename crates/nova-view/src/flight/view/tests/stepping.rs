@@ -1464,7 +1464,11 @@ fn a_wrap_marks_the_stars_so_none_streaks_across_it() {
     let list = |view: &Faked, alpha: f32| {
         let mut view_list = DrawList::new();
         let sheet = view.looks.star_sheet().expect("the stars' sheet");
-        view.stars.draw(&mut view_list, sheet, alpha);
+        view.stars.draw(
+            &mut view_list,
+            crate::flight::stars::StarArt::Sheet(sheet),
+            alpha,
+        );
         view_list
     };
     assert_eq!(list(&view, 0.0), list(&view, 1.0));

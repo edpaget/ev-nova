@@ -25,8 +25,8 @@ use nova_sim::data::FIRST_ASTEROID_SPIN;
 
 use super::catalog::{
     BoomId, BoomLook, CombatLooks, EffectSheet, FIRST_SMOKE_ICON, GovtId, LayerSheet, SMOKE_FRAMES,
-    SMOKE_SETS, ShipId, ShipSheet, ShipSprites, SmokeSheet, SoundId, StarSheet, StatusBarLayout,
-    StatusBars, TargetCard, WeaponId, WeaponLook,
+    SMOKE_SETS, ShipId, ShipSheet, ShipSprites, SmokeSheet, SoundId, StarDot, StarDots, StarSheet,
+    StatusBarLayout, StatusBars, TargetCard, WeaponId, WeaponLook,
 };
 use super::escorts::{EscortMenuColors, EscortMenuLooks};
 use crate::color::Color;
@@ -338,6 +338,20 @@ impl CombatLooks for GameData {
         })
     }
 
+    /// The store's stand-in dots ([`GameData::star_dots`]), each grey as
+    /// an opaque view colour; none in a stock store.
+    fn star_dots(&self) -> Option<StarDots> {
+        StarDots::new(
+            GameData::star_dots(self)
+                .iter()
+                .map(|dot| StarDot {
+                    side: dot.side,
+                    color: Color::rgba(dot.grey, dot.grey, dot.grey, 255),
+                })
+                .collect(),
+        )
+    }
+
     fn smoke_sheet(&self, set: u8) -> Option<SmokeSheet> {
         if set >= SMOKE_SETS {
             return None;
@@ -510,6 +524,34 @@ mod tests {
         assert_eq!(data.ship_outline(ShipId(130)), None, "a stellar's");
         assert_eq!(GameData::default().ship_outline(ShipId(128)), None, "stock");
         assert_eq!(store(&[]).ship_outline(ShipId(128)), None, "stock, loaded");
+    }
+
+    #[test]
+    fn a_stock_store_has_no_star_dots() {
+        assert_eq!(CombatLooks::star_dots(&GameData::default()), None, "stock");
+        assert_eq!(CombatLooks::star_dots(&store(&[])), None, "stock, loaded");
+    }
+
+    #[test]
+    fn a_store_s_star_dots_are_its_sides_in_view_greys() {
+        let data = GameData::default().with_star_dots(vec![
+            nova_data::StarDot { side: 1, grey: 90 },
+            nova_data::StarDot { side: 3, grey: 250 },
+        ]);
+        let dots = CombatLooks::star_dots(&data).expect("dots");
+        assert_eq!(
+            dots.as_slice(),
+            [
+                StarDot {
+                    side: 1,
+                    color: Color::rgba(90, 90, 90, 255),
+                },
+                StarDot {
+                    side: 3,
+                    color: Color::rgba(250, 250, 250, 255),
+                },
+            ]
+        );
     }
 
     /// A `shän` with base image `base`, `sets` sets of `frames_per`

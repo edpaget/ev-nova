@@ -28,7 +28,8 @@
 //!   marks them as moved so none streaks (see the `stepping` module); the
 //!   ship's move is read after the view's carry, so the scroll is its own.
 //! - **Drawing.** First in the world, under the message line and the
-//!   stellars; without the stars' sheet, none.
+//!   stellars: the stars' sheet's frames; without the sheet, the data's
+//!   stand-in dots; else none.
 //!
 //! The Parallax Starfield preference (`_settings` +0xb, on by default:
 //! `_LoadPrefs` @0xcecda-0xced11) decides each scattering's factors, as
@@ -47,11 +48,12 @@ use crate::system::camera::{Anchor, Camera, STATUS_BAR_WIDTH};
 use crate::system::starfield;
 
 /// Whether the view draws the original's starfield, by `source`, its
-/// reading of [`RuleKey::FlightStarfield`](nova_sim::RuleKey::FlightStarfield), with the stars' sheet read
-/// into `looks`: without it no star is drawn, so none is scattered or
-/// stepped, and the effects' chance draws nothing for them.
+/// reading of [`RuleKey::FlightStarfield`](nova_sim::RuleKey::FlightStarfield), with some star art read
+/// into `looks` ([`Looks::star_art`]: the sheet, else the data's stand-in
+/// dots): without any no star is drawn, so none is scattered or stepped,
+/// and the effects' chance draws nothing for them.
 pub(super) fn original(source: RuleSource, looks: &Looks) -> bool {
-    source == RuleSource::Engine && looks.star_sheet().is_some()
+    source == RuleSource::Engine && looks.star_art().is_some()
 }
 
 /// Where the stars are handled about `frame`'s ship in a view `view`
@@ -87,7 +89,7 @@ pub(super) fn surroundings_at(
         ship,
         anchor: (whole(point.x), whole(point.y)),
         murk,
-        look: StarLook::of(looks.star_sheet()),
+        look: StarLook::of(looks.star_art()),
     }
 }
 
@@ -135,7 +137,7 @@ pub(super) fn step(
 }
 
 /// Draws the starfield by `source`'s reading of
-/// [`RuleKey::FlightStarfield`](nova_sim::RuleKey::FlightStarfield): `stars` from `looks`' sheet, `alpha` of
+/// [`RuleKey::FlightStarfield`](nova_sim::RuleKey::FlightStarfield): `stars` from `looks`' art, `alpha` of
 /// the way between their last two snapshots, by the engine's; the
 /// procedural dots through `camera` by the other.
 pub(super) fn draw(
@@ -147,8 +149,8 @@ pub(super) fn draw(
 ) {
     match source {
         RuleSource::Engine => {
-            if let Some(sheet) = looks.star_sheet() {
-                stars.draw(list, sheet, alpha);
+            if let Some(art) = looks.star_art() {
+                stars.draw(list, art, alpha);
             }
         }
         RuleSource::Bible => starfield::draw(list, camera),

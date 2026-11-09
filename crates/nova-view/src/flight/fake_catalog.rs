@@ -22,8 +22,8 @@ use nova_sim::{
 
 use crate::flight::Collaborators;
 use crate::flight::catalog::{
-    BoomLook, CombatLooks, EffectSheet, GovtId, LayerSheet, ShipSheet, ShipSprites, StarSheet,
-    StatusBarLayout, StatusBars, TargetCard, WeaponLook,
+    BoomLook, CombatLooks, EffectSheet, GovtId, LayerSheet, ShipSheet, ShipSprites, StarDots,
+    StarSheet, StatusBarLayout, StatusBars, TargetCard, WeaponLook,
 };
 use crate::flight::escorts::{EscortMenuColors, EscortMenuLooks};
 use crate::flight::sim_port::FlightSim;
@@ -130,6 +130,9 @@ pub(in crate::flight) struct FakeCatalog {
     /// The stars' sheet: none, by default, so no star is drawn
     /// (`flight::view::tests::star_sheet` draws them).
     pub(in crate::flight) star_sheet: Result<StarSheet, String>,
+    /// The stars' stand-in dots: none, by default, as stock data has
+    /// (`flight::view::tests::stars` draws them).
+    pub(in crate::flight) star_dots: Option<StarDots>,
     /// The asteroid types: none, by default.
     pub(in crate::flight) asteroid_types: Vec<nova_sim::AsteroidTypeRecord>,
     /// Each system's asteroid field: none, by default.
@@ -360,6 +363,7 @@ pub(in crate::flight) fn catalog() -> FakeCatalog {
             frames: NonZeroU16::new(8).expect("non-zero"),
         }),
         star_sheet: Err("no spïn 700".to_owned()),
+        star_dots: None,
         asteroid_types: Vec::new(),
         asteroid_fields: Vec::new(),
         strings: Vec::new(),
@@ -1089,6 +1093,10 @@ impl CombatLooks for FakeCatalog {
 
     fn star_sheet(&self) -> Result<StarSheet, String> {
         self.star_sheet.clone()
+    }
+
+    fn star_dots(&self) -> Option<StarDots> {
+        self.star_dots.clone()
     }
 }
 

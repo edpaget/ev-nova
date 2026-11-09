@@ -13,6 +13,7 @@ pub use nova_sim::{Blink, BoomId, GovtId, ShipId, SoundId, WeaponId};
 
 use crate::box_cut::SheetEdge;
 use crate::color::Color;
+use crate::flight::stars::StarArt;
 use crate::font::Font;
 use crate::geometry::Bounds;
 use crate::outline::Outline;
@@ -380,6 +381,45 @@ pub struct StarSheet {
     pub size: (u32, u32),
 }
 
+/// One kind of stand-in star ([`StarDots`]): a solid square dot `side`
+/// pixels across in `color` at full brightness, which the system's murk
+/// dims.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StarDot {
+    /// Its side, in pixels.
+    pub side: u8,
+    /// Its colour at full brightness; the alpha is unused, as an OR fill's
+    /// is.
+    pub color: Color,
+}
+
+/// The dots the stars draw as where the data has no star sheet
+/// ([`CombatLooks::star_dots`]): never empty. Each star picks one as it
+/// would pick a frame of the sheet.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StarDots(Vec<StarDot>);
+
+impl StarDots {
+    /// `dots`, or `None` when there are none.
+    #[must_use]
+    pub fn new(dots: Vec<StarDot>) -> Option<Self> {
+        (!dots.is_empty()).then_some(Self(dots))
+    }
+
+    /// Each dot, in order: a star's frame picks one by its index.
+    #[must_use]
+    pub fn as_slice(&self) -> &[StarDot] {
+        &self.0
+    }
+
+    /// The largest dot's side: what the stars wrap and are placed by, as
+    /// they would be by a frame's size.
+    #[must_use]
+    pub fn side(&self) -> u8 {
+        self.0.iter().map(|dot| dot.side).max().unwrap_or_default()
+    }
+}
+
 /// A smoke set's sprite: the eight `cicn`s from
 /// [`FIRST_SMOKE_ICON`] + 8 × set, which `_LoadSprites` makes its master
 /// from (@0x21855-0x21907), for sets 0 and 1 only.
@@ -539,6 +579,20 @@ pub trait CombatLooks {
     /// master star sprite from (`_GetSpriteInfo(0x2bc)` @0x21037), or why
     /// it cannot be read.
     fn star_sheet(&self) -> Result<StarSheet, String>;
+    /// The dots the stars draw as in place of their sheet: a new game's
+    /// stand-in stars, which has no sheet. `None` for data with none,
+    /// every stock data among them, whose stars draw only from the sheet.
+    ///
+    /// The view draws them only when [`CombatLooks::star_sheet`] has
+    /// failed: a sheet that reads always wins.
+    ///
+    /// A method, not data on the sheet's error, for the reason
+    /// [`ShipSprites::ship_outline`] is one: the dots are a second answer,
+    /// not part of a sheet, and on the error they would change every
+    /// holder of the sheet's result for what only the stars' drawing
+    /// reads. It has no default body, so the `&T` and `Rc<T>` forwards
+    /// can't answer `None` by mistake.
+    fn star_dots(&self) -> Option<StarDots>;
 }
 
 /// A borrowed catalog is a catalog.
@@ -585,6 +639,10 @@ impl<T: CombatLooks + ?Sized> CombatLooks for &T {
 
     fn star_sheet(&self) -> Result<StarSheet, String> {
         (**self).star_sheet()
+    }
+
+    fn star_dots(&self) -> Option<StarDots> {
+        (**self).star_dots()
     }
 }
 
@@ -633,6 +691,10 @@ impl<T: CombatLooks + ?Sized> CombatLooks for Rc<T> {
     fn star_sheet(&self) -> Result<StarSheet, String> {
         (**self).star_sheet()
     }
+
+    fn star_dots(&self) -> Option<StarDots> {
+        (**self).star_dots()
+    }
 }
 
 /// The first explosion type, `bööm` 128.
@@ -669,9 +731,13 @@ pub struct Looks {
     /// Each smoke set's sprite there is ([`SMOKE_SETS`]).
     pub smokes: BTreeMap<u8, SmokeSheet>,
     /// The starfield's sheet ([`CombatLooks::star_sheet`]), or why it
-    /// cannot be read; `None` when it was not read. No star is drawn
-    /// without it.
+    /// cannot be read; `None` when it was not read. Without it the stars
+    /// draw as [`Looks::star_dots`], else none is drawn.
     pub stars: Option<Result<StarSheet, String>>,
+    /// The dots the stars draw as without their sheet
+    /// ([`CombatLooks::star_dots`]); `None` when the data has none or they
+    /// were not read.
+    pub star_dots: Option<StarDots>,
 }
 
 impl Looks {
@@ -700,6 +766,7 @@ impl Looks {
                 .filter_map(|set| Some((set, catalog.smoke_sheet(set)?)))
                 .collect(),
             stars: Some(catalog.star_sheet()),
+            star_dots: catalog.star_dots(),
         }
     }
 
@@ -707,6 +774,15 @@ impl Looks {
     #[must_use]
     pub fn star_sheet(&self) -> Option<&StarSheet> {
         self.stars.as_ref()?.as_ref().ok()
+    }
+
+    /// What the stars draw as: their sheet when it was read, which always
+    /// wins, else the data's stand-in dots, else nothing.
+    #[must_use]
+    pub fn star_art(&self) -> Option<StarArt<'_>> {
+        self.star_sheet()
+            .map(StarArt::Sheet)
+            .or_else(|| self.star_dots.as_ref().map(StarArt::Dots))
     }
 
     /// Smoke set `set`'s sprite, if there is one: only sets 0 and 1 have
@@ -759,7 +835,8 @@ impl Looks {
     /// `wëap`, `bööm` or cargo box graphic ("wëap 140: no spïn 3005");
     /// the weapons' by ID, then the explosions', then the boxes', then the
     /// cursor's ("cursor: no spïn 650"), then the stars' ("stars: no spïn
-    /// 700"). An asteroid type's sheet is left
+    /// 700") unless stand-in dots draw in the sheet's place. An asteroid
+    /// type's sheet is left
     /// out: a scenario may lack the types no system holds, and an asteroid
     /// whose sheet was not read draws as a crossed box.
     #[must_use]
@@ -788,8 +865,10 @@ impl Looks {
             Some(Err(reason)) => Some(format!("cursor: {reason}")),
             _ => None,
         };
-        let stars = match &self.stars {
-            Some(Err(reason)) => Some(format!("stars: {reason}")),
+        // The dots draw the sky in the sheet's place, as an outline makes a
+        // ship's missing sheet moot.
+        let stars = match (&self.stars, &self.star_dots) {
+            (Some(Err(reason)), None) => Some(format!("stars: {reason}")),
             _ => None,
         };
         weapons
@@ -804,6 +883,7 @@ impl Looks {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::flight::stars::StarArt;
     use crate::geometry::Point;
 
     /// Every ship has a 36-rotation sheet with its own ID, and an
@@ -1021,14 +1101,34 @@ mod tests {
                 size: (5, 5),
             })
         }
+
+        fn star_dots(&self) -> Option<StarDots> {
+            Some(dots())
+        }
+    }
+
+    /// Two stand-in dots: a dim pixel and a bright 3 × 3.
+    fn dots() -> StarDots {
+        StarDots::new(vec![
+            StarDot {
+                side: 1,
+                color: Color::rgba(90, 90, 90, 255),
+            },
+            StarDot {
+                side: 3,
+                color: Color::rgba(250, 250, 250, 255),
+            },
+        ])
+        .expect("dots")
     }
 
     /// Everything `catalog` says about weapon 128, `bööm` 129, ship 130,
-    /// govt 131, cargo box graphic 2, asteroid type 3, smoke set 1 and the
-    /// stars, and ships 132 and 133's cards in a batch.
+    /// govt 131, cargo box graphic 2, asteroid type 3, smoke set 1, the
+    /// stars and their dots' sides, and ships 132 and 133's cards in a
+    /// batch.
     fn looks(catalog: impl CombatLooks) -> String {
         format!(
-            "{:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?}",
+            "{:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?}",
             catalog.weapon_look(WeaponId(128)).map(|look| look.name),
             catalog
                 .target_cards(&[ShipId(132), ShipId(133)])
@@ -1044,6 +1144,11 @@ mod tests {
             catalog.asteroid_sheet(3).map(|sheet| sheet.image),
             catalog.smoke_sheet(1).map(|sheet| sheet.first_icon),
             catalog.star_sheet().map(|sheet| sheet.image),
+            catalog.star_dots().map(|dots| dots
+                .as_slice()
+                .iter()
+                .map(|dot| dot.side)
+                .collect::<Vec<_>>()),
         )
     }
 
@@ -1118,6 +1223,7 @@ mod tests {
             cursor: Some(Err("no".to_owned())),
             pod: Some(Err("no".to_owned())),
             stars: Some(Err("no".to_owned())),
+            star_dots: None,
         };
         assert_eq!(unread.asteroid_sheet(0), None);
         assert_eq!(unread.weapon(WeaponId(1)), None);
@@ -1127,6 +1233,38 @@ mod tests {
         assert_eq!(Looks::default().cursor_sheet(), None, "not read");
         assert_eq!(unread.pod_sheet(), None);
         assert_eq!(Looks::default().pod_sheet(), None, "not read");
+    }
+
+    #[test]
+    fn a_stars_sheet_that_reads_wins_over_the_dots() {
+        let looks = Looks::read(&Named, []);
+        assert_eq!(looks.star_dots, Some(dots()), "both read");
+        let sheet = looks.star_sheet().expect("the sheet");
+        assert_eq!(looks.star_art(), Some(StarArt::Sheet(sheet)));
+    }
+
+    #[test]
+    fn without_the_stars_sheet_the_dots_are_the_art_and_no_problem() {
+        let looks = Looks {
+            stars: Some(Err("no spïn 700".to_owned())),
+            star_dots: Some(dots()),
+            ..Looks::default()
+        };
+        assert_eq!(looks.star_art(), Some(StarArt::Dots(&dots())));
+        assert_eq!(looks.problems(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn without_the_stars_sheet_or_dots_there_is_no_art_and_the_sheet_s_problem() {
+        let looks = Looks::read(&Broken, []);
+        assert_eq!(looks.star_dots, None);
+        assert_eq!(looks.star_art(), None);
+        assert!(
+            looks.problems().contains(&"stars: no spïn 700".to_owned()),
+            "{:?}",
+            looks.problems()
+        );
+        assert_eq!(Looks::default().star_art(), None, "not read");
     }
 
     #[test]
@@ -1150,7 +1288,7 @@ mod tests {
 
     #[test]
     fn borrowed_and_shared_combat_looks_are_combat_looks() {
-        let direct = r#"Ok("w128") ["s132", "s133"] Some(Ok(Ok(Rled(129)))) "s130" Some("g131") Ok(Rled(502)) Ok(Rled(803)) Some(1008) Ok(Rled(700))"#;
+        let direct = r#"Ok("w128") ["s132", "s133"] Some(Ok(Ok(Rled(129)))) "s130" Some("g131") Ok(Rled(502)) Ok(Rled(803)) Some(1008) Ok(Rled(700)) Some([1, 3])"#;
         assert_eq!(looks(Named), direct);
         assert_eq!(looks(&Named), direct);
         assert_eq!(looks(Rc::new(Named)), direct);
@@ -1217,6 +1355,10 @@ mod tests {
 
         fn star_sheet(&self) -> Result<StarSheet, String> {
             Err("no spïn 700".to_owned())
+        }
+
+        fn star_dots(&self) -> Option<StarDots> {
+            None
         }
     }
 

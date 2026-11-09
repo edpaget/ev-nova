@@ -34,6 +34,15 @@
 //!   `(src × level) >> 5 | dest` below it, through
 //!   `_BlitPixieTranslucentCopy` @0xc11cc-0xc1275) draw it at 16 bits:
 //!   [`Blend::Or`](crate::Blend::Or) at [`lights_tint`]`(level)`.
+//! - **Stand-in dots** ([`StarArt::Dots`]). Data with no star sheet but
+//!   stand-in dots (the new game's) draws each star as one: the dots
+//!   stand for the frames, so a star's frame roll picks its dot, and the
+//!   look is as many frames as dots at the largest dot's side, which the
+//!   wrap and the placement read as they read a frame's size. A dot is an
+//!   OR fill of its side, centred where the frame would be and snapped to
+//!   whole pixels, in its colour dimmed to the level the way the OR at a
+//!   level dims a frame ([`dimmed`]). Not the original's: it has no
+//!   stand-in.
 //!
 //! The draws are made on the flight's effects chance, never the
 //! simulation's: the stars are view-only. Their ranges and conditions are
@@ -54,8 +63,9 @@ use nova_sim::Vec2;
 use nova_sim::chance::Chance;
 
 use crate::draw::lights_tint;
-use crate::flight::catalog::StarSheet;
-use crate::{DrawList, Point};
+use crate::flight::catalog::{StarDots, StarSheet};
+use crate::geometry::Bounds;
+use crate::{Color, DrawList, Point};
 
 /// How many star slots there are (`_InitArrays` @0x1bb95, 0x190 bytes of
 /// 0x14-byte slots).
@@ -127,6 +137,38 @@ pub fn murk_level(murk: i16) -> u8 {
     }
 }
 
+/// What the stars are drawn as: the star sheet's frames, or, where the
+/// data has no sheet, its stand-in dots, each dot standing for a frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StarArt<'a> {
+    /// The star sheet, `spïn` 700.
+    Sheet(&'a StarSheet),
+    /// The data's stand-in dots.
+    Dots(&'a StarDots),
+}
+
+/// `color` dimmed to `level`, out of 32, as the OR at a level dims a
+/// frame's pixels (see the module docs): each of red, green and blue
+/// (channel × level) >> 5, the colour itself at [`FULL_LEVEL`] and above.
+/// The alpha is kept: an OR fill doesn't read it.
+#[must_use]
+pub fn dimmed(color: Color, level: u8) -> Color {
+    let level = u16::from(level.min(FULL_LEVEL));
+    // At most 255 × 32 >> 5: a channel.
+    #[allow(clippy::cast_possible_truncation)]
+    let shade = |channel: u8| ((u16::from(channel) * level) >> 5) as u8;
+    Color::rgba(shade(color.r), shade(color.g), shade(color.b), color.a)
+}
+
+/// The `side` × `side` pixel square centred as near `centre` as whole
+/// pixels allow: a dot's area.
+fn dot_area(centre: Point, side: u8) -> Bounds {
+    let side = f32::from(side);
+    let half = side / 2.0;
+    let top_left = Point::new((centre.x - half).floor(), (centre.y - half).floor());
+    Bounds::at(top_left, side, side)
+}
+
 /// What the stars are drawn with: the master sprite's frame count and each
 /// frame's size in pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,24 +180,30 @@ pub struct StarLook {
 }
 
 impl StarLook {
-    /// The look of `sheet`, or, without one, no frames at
-    /// [`NO_FRAME_SIZE`], as the original's sizes read a sprite without a
-    /// frame.
+    /// The look of `art`: a sheet's frames and their size, or as many
+    /// frames as there are dots, each the largest dot's side square; or,
+    /// without art, no frames at [`NO_FRAME_SIZE`], as the original's
+    /// sizes read a sprite without a frame.
     #[must_use]
-    pub fn of(sheet: Option<&StarSheet>) -> Self {
-        sheet.map_or(
-            Self {
+    pub fn of(art: Option<StarArt<'_>>) -> Self {
+        let side = |pixels: u32| i32::try_from(pixels).unwrap_or(i32::MAX);
+        match art {
+            None => Self {
                 frames: 0,
                 size: (NO_FRAME_SIZE, NO_FRAME_SIZE),
             },
-            |sheet| {
-                let side = |pixels: u32| i32::try_from(pixels).unwrap_or(i32::MAX);
-                Self {
-                    frames: sheet.frames.get(),
-                    size: (side(sheet.size.0), side(sheet.size.1)),
-                }
+            Some(StarArt::Sheet(sheet)) => Self {
+                frames: sheet.frames.get(),
+                size: (side(sheet.size.0), side(sheet.size.1)),
             },
-        )
+            Some(StarArt::Dots(dots)) => {
+                let dot = i32::from(dots.side());
+                Self {
+                    frames: u16::try_from(dots.as_slice().len()).unwrap_or(u16::MAX),
+                    size: (dot, dot),
+                }
+            }
+        }
     }
 }
 
@@ -397,23 +445,36 @@ impl Starfield {
     }
 
     /// Draws each star of the last snapshot `alpha` of the way from where
-    /// it was to where it is, its frame of `sheet` centred on its sprite's
-    /// rect, OR-ed onto what is behind it at the murk's level (see the
-    /// module docs).
-    pub fn draw(&self, list: &mut DrawList, sheet: &StarSheet, alpha: f32) {
-        let tint = lights_tint(self.drawn_level);
+    /// it was to where it is, centred on its sprite's rect: its frame of
+    /// a sheet OR-ed onto what is behind it at the murk's level, or its
+    /// dot OR-ed in its colour dimmed to that level (see the module docs).
+    pub fn draw(&self, list: &mut DrawList, art: StarArt<'_>, alpha: f32) {
+        let look = StarLook::of(Some(art));
         #[allow(clippy::cast_precision_loss)]
-        let (half_w, half_h) = (sheet.size.0 as f32 / 2.0, sheet.size.1 as f32 / 2.0);
+        let (half_w, half_h) = (look.size.0 as f32 / 2.0, look.size.1 as f32 / 2.0);
         for drawn in self.slots.iter().filter_map(|slot| slot.drawn) {
             #[allow(clippy::cast_precision_loss)]
             let between = |from: i32, to: i32| (to - from) as f32 * alpha + from as f32;
             let left = between(drawn.from.0, drawn.to.0);
             let top = between(drawn.from.1, drawn.to.1);
-            list.or_sprite(
-                sheet.image.frame(drawn.frame),
-                Point::new(left + half_w, top + half_h),
-                tint,
-            );
+            let centre = Point::new(left + half_w, top + half_h);
+            match art {
+                StarArt::Sheet(sheet) => {
+                    list.or_sprite(
+                        sheet.image.frame(drawn.frame),
+                        centre,
+                        lights_tint(self.drawn_level),
+                    );
+                }
+                StarArt::Dots(dots) => {
+                    if let Some(dot) = dots.as_slice().get(usize::from(drawn.frame)) {
+                        list.or_fill(
+                            dot_area(centre, dot.side),
+                            dimmed(dot.color, self.drawn_level),
+                        );
+                    }
+                }
+            }
         }
     }
 }
@@ -460,6 +521,8 @@ mod tests {
     use nova_sim::player_wrap::WRAP_SHIFT;
 
     use super::*;
+    use crate::flight::catalog::StarDot;
+    use crate::geometry::Bounds;
     use crate::{Blend, DrawCommand, ImageKey};
 
     /// What a draw asked for: a `Rand(sides)` roll or a wide draw below
@@ -811,13 +874,13 @@ mod tests {
         assert!(field.stars().iter().all(|star| !star.shown));
         field.snapshot();
         let mut list = DrawList::new();
-        field.draw(&mut list, &sheet(), 0.5);
+        field.draw(&mut list, StarArt::Sheet(&sheet()), 0.5);
         assert!(list.is_empty());
     }
 
     fn drawn(field: &Starfield, alpha: f32) -> Vec<DrawCommand> {
         let mut list = DrawList::new();
-        field.draw(&mut list, &sheet(), alpha);
+        field.draw(&mut list, StarArt::Sheet(&sheet()), alpha);
         list.iter().cloned().collect()
     }
 
@@ -853,7 +916,7 @@ mod tests {
             ..sheet()
         };
         let mut list = DrawList::new();
-        field.draw(&mut list, &sheet, 0.7);
+        field.draw(&mut list, StarArt::Sheet(&sheet), 0.7);
         let mut expected = DrawList::new();
         expected.or_sprite(
             ImageKey::spin_sheet(700, 3),
@@ -977,7 +1040,7 @@ mod tests {
 
     #[test]
     fn the_look_of_a_sheet_is_its_frames_and_size_and_without_one_32_square() {
-        assert_eq!(StarLook::of(Some(&sheet())), LOOK);
+        assert_eq!(StarLook::of(Some(StarArt::Sheet(&sheet()))), LOOK);
         assert_eq!(
             StarLook::of(None),
             StarLook {
@@ -999,5 +1062,167 @@ mod tests {
         field.randomize(&at, false, &mut chance);
         assert_eq!(chance.asked[..2], [Asked::Roll(0), Asked::Below(768)]);
         assert_eq!(field.stars()[0].x, 1000.0);
+    }
+
+    /// Four stand-in dots: a bright 3 × 3, a 2 × 2 and two single pixels,
+    /// the last (frame 3, [`one_star`]'s) grey 160.
+    fn dots() -> StarDots {
+        let dot = |side, grey| StarDot {
+            side,
+            color: Color::rgba(grey, grey, grey, 255),
+        };
+        StarDots::new(vec![dot(3, 250), dot(2, 200), dot(1, 90), dot(1, 160)]).expect("dots")
+    }
+
+    /// [`surroundings`] with the stars drawn as [`dots`].
+    fn dotted() -> Surroundings {
+        Surroundings {
+            look: StarLook::of(Some(StarArt::Dots(&dots()))),
+            ..surroundings()
+        }
+    }
+
+    /// A sheet whose frames are the size of [`dots`]' largest.
+    fn dot_sized_sheet() -> StarSheet {
+        StarSheet {
+            size: (3, 3),
+            ..sheet()
+        }
+    }
+
+    fn drawn_as(field: &Starfield, art: StarArt<'_>, alpha: f32) -> Vec<DrawCommand> {
+        let mut list = DrawList::new();
+        field.draw(&mut list, art, alpha);
+        list.iter().cloned().collect()
+    }
+
+    /// The one star `field` draws as a dot: its area and colour.
+    fn dot_drawn(field: &Starfield, alpha: f32) -> (Bounds, Color) {
+        match drawn_as(field, StarArt::Dots(&dots()), alpha)[..] {
+            [DrawCommand::OrFill { area, color }] => (area, color),
+            ref other => panic!("one OR fill: {other:?}"),
+        }
+    }
+
+    /// Where `field`'s one star's frame of a dot-sized sheet is centred.
+    fn frame_centre(field: &Starfield, alpha: f32) -> Point {
+        let DrawCommand::Sprite { center, .. } =
+            drawn_as(field, StarArt::Sheet(&dot_sized_sheet()), alpha)[0]
+        else {
+            panic!("a sprite")
+        };
+        center
+    }
+
+    #[test]
+    fn the_look_of_dots_is_one_frame_a_dot_at_the_largest_side() {
+        assert_eq!(
+            StarLook::of(Some(StarArt::Dots(&dots()))),
+            StarLook {
+                frames: 4,
+                size: (3, 3),
+            }
+        );
+    }
+
+    #[test]
+    fn with_dots_each_star_rolls_one_of_them_as_its_frame() {
+        let mut field = Starfield::new();
+        let mut chance = Scripted::giving(&[2]);
+        field.randomize(&dotted(), true, &mut chance);
+        assert_eq!(chance.asked[0], Asked::Roll(4));
+        assert_eq!(field.stars()[0].frame, 2);
+    }
+
+    #[test]
+    fn a_dot_is_one_or_fill_of_its_side_centred_where_its_frame_would_be() {
+        let mut field = one_star(1010.0, -520.0, 0.0, (0, 0));
+        field.handle(&dotted(), &mut Scripted::default());
+        field.snapshot();
+        let (area, color) = dot_drawn(&field, 0.7);
+        assert_eq!((area.width(), area.height()), (1.0, 1.0), "frame 3's side");
+        assert_eq!(area.center(), frame_centre(&field, 0.7));
+        assert_eq!(color, Color::rgba(160, 160, 160, 255), "full at no murk");
+    }
+
+    #[test]
+    fn a_dot_is_snapped_to_whole_pixels() {
+        let mut field = one_star(1010.0, -520.0, 0.0, (0, 0));
+        field.slots[0].star.frame = 1;
+        field.handle(&dotted(), &mut Scripted::default());
+        field.snapshot();
+        let (area, _) = dot_drawn(&field, 0.0);
+        assert_eq!((area.width(), area.height()), (2.0, 2.0));
+        assert_eq!(area.min.x.fract(), 0.0);
+        assert_eq!(area.min.y.fract(), 0.0);
+        let centre = frame_centre(&field, 0.0);
+        assert!(
+            (area.center().x - centre.x).abs() <= 0.5,
+            "{area:?} {centre:?}"
+        );
+        assert!(
+            (area.center().y - centre.y).abs() <= 0.5,
+            "{area:?} {centre:?}"
+        );
+    }
+
+    #[test]
+    fn a_murky_systems_dots_are_their_grey_dimmed_to_its_level() {
+        let mut field = one_star(1010.0, -520.0, 0.0, (0, 0));
+        let murky = Surroundings {
+            murk: 8,
+            ..dotted()
+        };
+        field.handle(&murky, &mut Scripted::default());
+        field.snapshot();
+        let (_, color) = dot_drawn(&field, 0.0);
+        assert_eq!(color, dimmed(Color::rgba(160, 160, 160, 255), 7));
+        assert_eq!(color, Color::rgba(35, 35, 35, 255), "160 × 7 >> 5");
+    }
+
+    #[test]
+    fn a_dot_is_dimmed_as_the_or_at_level_dims_a_frame() {
+        let grey = Color::rgba(160, 200, 255, 9);
+        for murk in [0, 3, 8, 32, 50] {
+            let level = murk_level(murk);
+            let shade = |channel: u8| u8::try_from((u16::from(channel) * u16::from(level)) >> 5);
+            assert_eq!(
+                dimmed(grey, level),
+                Color::rgba(
+                    shade(160).expect("a channel"),
+                    shade(200).expect("a channel"),
+                    shade(255).expect("a channel"),
+                    9
+                ),
+                "murk {murk}, level {level}"
+            );
+        }
+        assert_eq!(dimmed(grey, FULL_LEVEL), grey, "full at 32");
+    }
+
+    #[test]
+    fn a_dot_is_drawn_between_its_last_two_snapshots_as_a_frame_is() {
+        let mut field = one_star(1010.0, -520.0, 0.0, (0, 0));
+        field.handle(&dotted(), &mut Scripted::default());
+        field.snapshot();
+        let moved = Surroundings {
+            ship: Vec2::new(1000.0 - 10.0, -500.0 + 4.0),
+            ..dotted()
+        };
+        field.handle(&moved, &mut Scripted::default());
+        field.snapshot();
+        let (area, _) = dot_drawn(&field, 0.5);
+        assert_eq!(area.center(), frame_centre(&field, 0.5));
+        let (start, _) = dot_drawn(&field, 0.0);
+        assert_eq!(area.center().x - start.center().x, 5.0, "half of 10");
+    }
+
+    #[test]
+    fn a_frame_past_the_dots_draws_nothing() {
+        let mut field = one_star(1010.0, -520.0, 0.0, (0, 0));
+        field.slots[0].star.frame = 4;
+        field.handle(&dotted(), &mut Scripted::default());
+        field.snapshot();
+        assert_eq!(drawn_as(&field, StarArt::Dots(&dots()), 0.0), []);
     }
 }
