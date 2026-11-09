@@ -164,6 +164,7 @@ pub mod dialogs;
 pub mod fixture;
 pub mod fleet;
 pub mod gates;
+pub mod goods;
 pub mod ids;
 pub mod interface;
 pub mod kits;

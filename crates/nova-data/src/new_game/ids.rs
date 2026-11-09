@@ -3,8 +3,9 @@
 //! Each kind has its range: [`GOVT_IDS`] for factions, [`SYSTEM_IDS`] and
 //! [`STELLAR_IDS`] for systems and stellars, [`SHIP_IDS`] for ships,
 //! [`OUTFIT_IDS`] for outfits, [`WEAPON_IDS`] for the outfits that are
-//! weapons, [`CHARACTER_IDS`] for starts and [`MISSION_IDS`] for the
-//! `take_point` missions' blockades ([`super::blockades`]). The one traffic
+//! weapons, [`CHARACTER_IDS`] for starts, [`MISSION_IDS`] for the
+//! `take_point` missions' blockades ([`super::blockades`]), and
+//! [`COMMODITY_SLOTS`] then [`JUNK_IDS`] for goods ([`super::goods`]). The one traffic
 //! `düde` is [`CIVILIAN_DUDE`] and the one `ïntf` [`DEFAULT_INTERFACE`];
 //! neither depends on the data. The holders' guard `düde`s number after
 //! [`CIVILIAN_DUDE`], unpinned: nothing saves a `düde` ID.
@@ -29,6 +30,13 @@
 //! - An entry whose record has left the folder is retired: it stays in
 //!   the table, so its ID, and every ID below the highest, is never handed
 //!   out again.
+//! - Goods fill the standard commodity slots first, then `jünk` IDs: each
+//!   good the table pins in `commodities` keeps its slot, and each in
+//!   `junk` its `jünk`; every other good takes the next free slot after
+//!   the highest pinned one, in id order, and those left over the next
+//!   `jünk` IDs after the highest pinned one. A slot holds a pilot's
+//!   cargo as `Commodity(slot)`, so a pinned good keeps meaning the same
+//!   good in a saved hold.
 //! - A record past its range's end gets no ID, and the caller leaves it
 //!   out.
 //!
@@ -69,6 +77,15 @@ pub const CHARACTER_IDS: RangeInclusive<i16> = 128..=255;
 /// and `F` set operators act on.
 pub const MISSION_IDS: RangeInclusive<i16> = 128..=1127;
 
+/// The standard commodity slots a good can take: 0 (food, in stock
+/// terms) to 5 (equipment). The engine always has all six
+/// (`nova_sim_state::market::COMMODITIES`).
+pub const COMMODITY_SLOTS: RangeInclusive<i16> = 0..=5;
+
+/// The `jünk` IDs Nova gives data: 128 to 255, whose scoop contents are
+/// 1000 to 1127.
+pub const JUNK_IDS: RangeInclusive<i16> = 128..=255;
+
 /// The one traffic `düde`, "Civilian traffic" (see
 /// [`super::fleet`]).
 pub const CIVILIAN_DUDE: i16 = 128;
@@ -104,6 +121,12 @@ pub struct IdTable {
     /// Each `take_point` mission's blockade `mïsn`, by the mission's id
     /// ([`super::blockades`]).
     pub blockades: BTreeMap<Id, i16>,
+    /// Each good's standard commodity slot, for the goods that take one
+    /// ([`COMMODITY_SLOTS`], [`super::goods`]).
+    pub commodities: BTreeMap<Id, i16>,
+    /// Each good's `jünk`, for the goods past the standard slots
+    /// ([`JUNK_IDS`]).
+    pub junk: BTreeMap<Id, i16>,
 }
 
 /// Numbers `ids`, in the order given, from the start of `range`: the
@@ -252,6 +275,8 @@ mod tests {
         assert_eq!(OUTFIT_IDS, 128..=639);
         assert_eq!(WEAPON_IDS, 128..=383);
         assert_eq!(MISSION_IDS, 128..=1127);
+        assert_eq!(COMMODITY_SLOTS, 0..=5);
+        assert_eq!(JUNK_IDS, 128..=255);
     }
 
     #[test]

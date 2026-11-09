@@ -409,7 +409,7 @@ fn parse_reads_every_kind() {
         br#"{"factions": {"f": 128}, "systems": {"s": 129}, "stellars": {"p": 130},
              "gates": {"s/g": 131}, "ships": {"h": 132}, "starts": {"c": 133},
              "outfits": {"o": 134}, "kits": {"k": 135}, "weapons": {"o": 136},
-             "blockades": {"m": 137}}"#,
+             "blockades": {"m": 137}, "commodities": {"g": 5}, "junk": {"w": 255}}"#,
     )
     .expect("parses");
     assert_eq!(table.problems, Vec::<String>::new());
@@ -427,8 +427,59 @@ fn parse_reads_every_kind() {
             kits: one("k", 135),
             weapons: one("o", 136),
             blockades: one("m", 137),
+            commodities: one("g", 5),
+            junk: one("w", 255),
         }
     );
+}
+
+#[test]
+fn a_good_s_entry_outside_its_slots_or_junk_ids_is_ignored() {
+    let table = parse(
+        br#"{"commodities": {"grain": 6, "rice": -1, "salt": 0},
+             "junk": {"wine": 127, "ale": 256, "mead": 128}}"#,
+    )
+    .expect("parses");
+    assert_eq!(
+        table.problems,
+        [
+            "its commodities entry `grain` is 6, outside 0 to 5; it is ignored",
+            "its commodities entry `rice` is -1, outside 0 to 5; it is ignored",
+            "its junk entry `ale` is 256, outside 128 to 255; it is ignored",
+            "its junk entry `wine` is 127, outside 128 to 255; it is ignored",
+        ]
+    );
+    assert_eq!(table.pins.commodities, BTreeMap::from([(id("salt"), 0)]));
+    assert_eq!(table.pins.junk, BTreeMap::from([(id("mead"), 128)]));
+}
+
+#[test]
+fn two_goods_on_one_slot_go_to_the_first_and_a_slot_and_a_junk_id_never_clash() {
+    let table = parse(
+        br#"{"commodities": {"grain": 0, "rice": 0}, "junk": {"wine": 128},
+             "systems": {"alpha": 128}}"#,
+    )
+    .expect("parses");
+    assert_eq!(
+        table.problems,
+        ["its commodities entry `rice` is 0, which `commodities/grain` holds; it is ignored"]
+    );
+    assert_eq!(table.pins.junk[&id("wine")], 128, "its own range");
+    assert_eq!(table.pins.systems[&id("alpha")], 128);
+}
+
+#[test]
+fn the_goods_round_trip_through_the_text() {
+    let mut table = todays();
+    table.commodities.insert(id("grain"), 2);
+    table.junk.insert(id("wine"), 130);
+    let written = text(&table);
+    let parsed = parse(written.as_bytes()).expect("parses");
+    assert_eq!(parsed.problems, Vec::<String>::new());
+    assert_eq!(parsed.pins, table);
+    let merged = pin(Some(written.as_bytes()), &todays()).expect("pins");
+    assert_eq!(merged.table.commodities[&id("grain")], 2, "kept");
+    assert_eq!(merged.table.junk[&id("wine")], 130, "kept");
 }
 
 #[test]

@@ -27,7 +27,7 @@ use super::records::{
     ANY_RECORD, clamp_i16, default_interface, neutral_govt, neutral_stellar, neutral_system, rgb,
     stellar_flags, text_desc,
 };
-use super::{blockades, gates};
+use super::{blockades, gates, goods};
 use crate::decode::Entry;
 use crate::records::govt::Govt;
 use crate::records::stellar::Stellar;
@@ -97,6 +97,8 @@ pub fn map_pinned(galaxy: &Galaxy, pins: &IdTable) -> Mapped {
             });
         }
     }
+    records.extend(goods::standard_strings(galaxy, &ids, &mut problems));
+    records.extend(goods::junk(galaxy, &ids, &mut problems));
     for (at, &nova) in &ids.gates {
         let doc = &galaxy.systems[&at.system()];
         if let Some(point) = doc.data.jump_points.iter().find(|p| p.id == at.point()) {
@@ -183,6 +185,7 @@ fn number_all(galaxy: &Galaxy, pins: &IdTable, problems: &mut Vec<Problem>) -> (
     let fit = FitBits::of(galaxy, problems);
     let kits = kits::number_kits(galaxy, &fit, &pins.kits, &mut free, problems);
     let blockades = blockades::number_blockades(galaxy, &gates, &pins.blockades, problems);
+    let (commodities, junk) = goods::number_goods(galaxy, pins, problems);
     let mut ids = IdTable {
         factions,
         systems,
@@ -194,6 +197,8 @@ fn number_all(galaxy: &Galaxy, pins: &IdTable, problems: &mut Vec<Problem>) -> (
         weapons,
         kits,
         blockades,
+        commodities,
+        junk,
     };
     ids.starts = fleet::number_starts(galaxy, &ids, &pins.starts, problems);
     (ids, fit)
@@ -338,7 +343,8 @@ fn system(
     }
 }
 
-/// The `spöb` of the stellar `doc`: a law-keeping owner's lists legal
+/// The `spöb` of the stellar `doc`, its `Flags` its services' bits and
+/// its standard goods' price levels ([`goods::price_flags`]): a law-keeping owner's lists legal
 /// kits ([`YARD_TECH_LEGAL`]) and clears by record (`MinStatus` 0); a
 /// lawless owner's, or one with none, lists every kit
 /// ([`YARD_TECH_LAWLESS`]) and clears any record ([`ANY_RECORD`]).
@@ -359,7 +365,10 @@ fn stellar(
     let stellar = Stellar {
         x_pos,
         y_pos,
-        flags: Flags32(stellar_flags(data.kind, &data.services)),
+        flags: Flags32(
+            stellar_flags(data.kind, &data.services)
+                | goods::price_flags(galaxy, ids, doc, problems),
+        ),
         govt,
         tech_level: if lawful {
             YARD_TECH_LEGAL

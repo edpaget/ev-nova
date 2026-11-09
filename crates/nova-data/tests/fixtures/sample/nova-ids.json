@@ -2,6 +2,7 @@
   "blockades": {
     "take-the-point": 128
   },
+  "commodities": {},
   "factions": {
     "association": 128,
     "commonwealth": 129,
@@ -16,6 +17,7 @@
     "marrow/far-gate": 134,
     "marrow/luyten-road": 135
   },
+  "junk": {},
   "kits": {
     "armour-plating": 129,
     "gun-mount": 130
