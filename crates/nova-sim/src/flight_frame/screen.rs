@@ -17,6 +17,10 @@
 //! ([`ScreenAsk::Shops`], [`PortShops`]) and the bar's news
 //! ([`ScreenAsk::News`], [`BarNews`]).
 //!
+//! The new game's own screens ask too: the news heard where the ship is
+//! ([`ScreenAsk::HeardNews`]), answered empty for a session whose data
+//! holds no storylines.
+//!
 //! An ask is a read: asked twice in a row, it answers the same, but for
 //! one that draws afresh at each ask ([`ScreenAsk::draws_afresh`]). The
 //! shops' and the bar's asks draw the day's rolls not drawn yet on the
