@@ -2954,6 +2954,45 @@ mod tests {
     }
 
     #[test]
+    fn a_plunderer_at_a_victim_breaking_up_docks_firing_nothing_but_its_kept_snipe_fires_its_gun() {
+        // A fresh frame reads `_IsDisabled` of the victim (@0x8e866), which
+        // has no dying test: it docks and fires no gun. A kept frame flies
+        // on, as the low level never re-reads its target (@0x85216,
+        // @0x87e38): its snipe fires the gun.
+        let fired = |frame: Option<pursuit::Frame>| {
+            let mut npc = shooter(
+                &[gun(128, 1, 1)],
+                Goal::Plunder {
+                    ship: ShipRef::Npc(NpcId(2)),
+                    hopeless: true,
+                },
+            );
+            npc.pursuit.frame = frame.map(|frame| pursuit::Frame {
+                goal: npc.goal,
+                ..frame
+            });
+            let mut victim = crate::traffic::fixture::npc(2, ShipStats::new(FAST, &[]));
+            victim.state.position = SHOOTER + Vec2::new(0.0, -200.0);
+            breaking_up(&mut victim);
+            let npcs = [npc.clone(), victim];
+            trigger(&npc, &Surroundings::new(&[], &npcs), FireRules::default())
+        };
+        assert_eq!(fired(None), Trigger::default(), "it docks");
+        let snipe = pursuit::Frame {
+            goal: Goal::Idle,
+            bodies: [
+                Some(pursuit::Body {
+                    manoeuvre: Manoeuvre::Snipe,
+                    heading: 0,
+                }),
+                None,
+            ],
+            speed_cap: None,
+        };
+        assert_eq!(fired(Some(snipe)).only, id(128), "its kept snipe");
+    }
+
+    #[test]
     fn a_dogfighter_launching_a_bay_leads_from_the_bay_and_wants_the_plain_bearing() {
         // Holding its gun at a crossing target in the box, a carrier whose
         // bay is ready launches it before its low level (@0x8e6fa,
