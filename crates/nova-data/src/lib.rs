@@ -198,7 +198,7 @@ pub use store::{
     InterfaceData, Kit, LayerError, LayerSprite, MissionCompletion, MissionObjective, MissionOffer,
     NewsItem, NoInterfaceFile, OpenError, Origin, Outcome, Outline, OutlineTriangle, ParsedSet,
     ParsedTest, PointAt, PointState, Provenance, Requires, SheetKind, SheetScan, ShipImage,
-    ShipImageError, ShipImageFields, ShipLayer, ShipLayerInfos, ShipLayers, ShipSprite,
+    ShipImageError, ShipImageFields, ShipLayer, ShipLayerInfos, ShipLayers, ShipLine, ShipSprite,
     ShipSpriteInfo, ShipSpriteWords, SourceFile, SpinSheet, SpinSpriteError, Spot, SpotKind,
     SpriteError, StandIn, StandInOf, StarDot, StellarSprite, StellarSpriteError, StoreEntry,
     StoreResource, StoryEffects, StoryMission, Storylines, interface_path_candidates,

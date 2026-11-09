@@ -62,7 +62,7 @@ use nova_galaxy_media::{BARE, Model, NoModel, Placement, read_model, rgb, silhou
 use super::fleet::PX_PER_METRE;
 use super::ids::IdTable;
 use super::map::absent;
-use crate::store::{StandIn, StandInOf, StarDot};
+use crate::store::{ShipLine, StandIn, StandInOf, StarDot};
 use crate::wire::id::{ShipId, StellarId};
 
 /// The dots the new game's stars draw as: the bible has no star sheet
@@ -229,6 +229,25 @@ impl<'a, S: Source> Models<'a, S> {
             .as_ref()
             .ok()
     }
+}
+
+/// The lineage of each ship of `galaxy` that has a record in `ids`, by its
+/// record: its chain of bible ids, nearest first, and its resolved role,
+/// which the opt-in stock look picks its borrowed sprites by
+/// ([`crate::stock_look`]). A ship whose chain doesn't resolve has none.
+#[must_use]
+pub fn ship_lines(galaxy: &Galaxy, ids: &IdTable) -> BTreeMap<ShipId, ShipLine> {
+    ids.ships
+        .iter()
+        .filter_map(|(id, &nova)| {
+            let ship = resolve(galaxy, id).ok()?;
+            let line = ShipLine {
+                chain: ship.chain.iter().map(|id| id.as_str().to_owned()).collect(),
+                role: ship.role,
+            };
+            Some((ShipId(nova), line))
+        })
+        .collect()
 }
 
 #[cfg(test)]

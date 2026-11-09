@@ -235,12 +235,14 @@ pub fn load(source: &impl Source, dir: &Path) -> NewGame {
     problems.extend(mapping);
     problems.extend(pins.and_then(|pins| pins::unpinned(&pins, &ids, dir)));
     let stand_ins = looks::stand_ins(&galaxy, &ids, source, &mut problems);
+    let ship_lines = looks::ship_lines(&galaxy, &ids);
     let compiled = dialogs::compiled(&galaxy, source, &mut problems);
     let dialogs = dialogs::read(&galaxy, &ids, &compiled, &mut problems);
     let storylines = missions::map(&galaxy, &ids, &compiled, &mut problems);
     NewGame {
         data: GameData::from_decoded(dir.to_path_buf(), records)
             .with_stand_ins(stand_ins)
+            .with_ship_lines(ship_lines)
             .with_star_dots(looks::STAR_DOTS.to_vec())
             .with_dialogs(dialogs)
             .with_storylines(storylines)

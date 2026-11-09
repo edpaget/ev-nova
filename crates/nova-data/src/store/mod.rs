@@ -219,6 +219,7 @@ mod interface;
 pub mod order;
 mod pict_pair;
 mod ship_desc;
+mod ship_line;
 mod ship_pict;
 mod shot_spin;
 mod spin_sprite;
@@ -237,6 +238,7 @@ pub use self::interface::{
 };
 pub use self::pict_pair::SheetKind;
 pub use self::ship_desc::ship_desc_id;
+pub use self::ship_line::ShipLine;
 pub use self::ship_pict::{ShipImage, ShipImageError, ShipImageFields};
 pub use self::shot_spin::shot_spin_id;
 pub use self::spin_sprite::{SpinSheet, SpinSpriteError};
@@ -405,6 +407,9 @@ pub struct GameData {
     /// attention: the new game's ([`GameData::with_fittings`]); none in a
     /// stock store.
     fittings: Fittings,
+    /// Each new-game ship's lineage, its chain of bible ids and its role
+    /// ([`GameData::with_ship_lines`]); none in a stock store.
+    ship_lines: BTreeMap<crate::wire::id::ShipId, ShipLine>,
 }
 
 /// A test expression parsed once and shared: its tree, or why it did not
@@ -460,6 +465,7 @@ impl GameData {
             dialogs: Dialogs::default(),
             storylines: Storylines::default(),
             fittings: Fittings::default(),
+            ship_lines: BTreeMap::new(),
         })
     }
 

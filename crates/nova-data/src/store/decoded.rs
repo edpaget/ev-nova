@@ -66,6 +66,7 @@ impl GameData {
             dialogs: super::Dialogs::default(),
             storylines: super::Storylines::default(),
             fittings: super::Fittings::default(),
+            ship_lines: BTreeMap::new(),
         }
     }
 }

@@ -1688,3 +1688,56 @@ fn an_empty_galaxy_maps_the_placeholder_status_bar_too() {
     let game = loaded(&MemSource::default());
     assert_eq!(game.data.ids(Interface::TYPE), [DEFAULT_INTERFACE]);
 }
+
+/// Ship `ship`'s lineage in `game`'s store.
+fn line_of(game: &NewGame, ship: &str) -> Option<crate::ShipLine> {
+    let nova = game.ids.ships[&id(ship)];
+    game.data.ship_line(ShipId(nova)).cloned()
+}
+
+fn chain(ids: &[&str]) -> Vec<String> {
+    ids.iter().map(|&id| id.to_owned()).collect()
+}
+
+#[test]
+fn a_hull_s_line_is_itself_and_its_role() {
+    use nova_galaxy_format::fleet::Role;
+    let line = line_of(&loaded(&galaxy()), "skiff").expect("a line");
+    assert_eq!(line.chain, chain(&["skiff"]));
+    assert_eq!(line.role, Some(Role::Shuttle));
+}
+
+#[test]
+fn a_variant_s_line_is_itself_then_its_bases_with_the_role_inherited() {
+    use nova_galaxy_format::fleet::Role;
+    let game = loaded(&variants());
+    let heavy = line_of(&game, "heavy").expect("a line");
+    assert_eq!(heavy.chain, chain(&["heavy", "technical", "skiff"]));
+    assert_eq!(heavy.role, Some(Role::Shuttle), "the skiff's");
+    let armed = line_of(&game, "armed-skiff").expect("a line");
+    assert_eq!(armed.chain, chain(&["armed-skiff", "skiff"]));
+}
+
+#[test]
+fn a_ship_that_does_not_resolve_has_no_line() {
+    let source = galaxy().with("ships/lost.md", "---\nname: Lost\nbase: zeppelin\n---\n");
+    let (galaxy, _) = nova_galaxy_format::load::load(&source);
+    let mut ids = IdTable::default();
+    ids.ships.insert(id("lost"), 140);
+    ids.ships.insert(id("skiff"), 141);
+    let lines = looks::ship_lines(&galaxy, &ids);
+    assert_eq!(lines.keys().copied().collect::<Vec<_>>(), [ShipId(141)]);
+}
+
+#[test]
+fn the_fixture_folder_s_hulls_have_their_roles() {
+    use nova_galaxy_format::fleet::Role;
+    let game = open(&super::fixture::folder()).expect("lists");
+    let hauler = line_of(&game, "hauler").expect("a line");
+    assert_eq!(
+        (hauler.chain, hauler.role),
+        (chain(&["hauler"]), Some(Role::Freighter))
+    );
+    let cutter = line_of(&game, "cutter").expect("a line");
+    assert_eq!(cutter.role, Some(Role::Corvette));
+}
