@@ -14,6 +14,13 @@
 //!   for each of its services and for Leave. The format has no mission
 //!   service, but the Mission BBS is any inhabited stellar's, as the
 //!   original's is (`nova_sim::landing::services`), so it has one too.
+//! - **Story.** Under the new game's rulebook the dock job's offer still
+//!   opens by itself at landing; deferred, it is listed in Hearth Dock's
+//!   bar by its title and opens from there, and once taken it leaves the
+//!   list. At Verge Camp the completion still opens first at the landing
+//!   that delivers, and the bar lists the camp's own greeting, which
+//!   opens again from it. The bar's Holovid lists the news heard in the
+//!   system, with its source and age.
 //! - **Services.** Bar, Trade Center, Outfitter and Shipyard each open
 //!   from their button, their buttons labelled on their items, and close
 //!   back to the spaceport through their own Leave or Done. The outfitter
@@ -57,7 +64,10 @@ use nova_view::draw::{DrawCommand, DrawList};
 use nova_view::geometry::{Bounds, Point};
 use nova_view::input::{Input, Key};
 use nova_view::menu::MenuChoice;
-use nova_view::spaceport::bar::LEAVE_ITEM as BAR_LEAVE_ITEM;
+use nova_view::spaceport::bar::{
+    HOLOVID_ITEM as BAR_HOLOVID_ITEM, LEAVE_ITEM as BAR_LEAVE_ITEM, OWN_CONVERSATION_LABEL,
+    STORY_ITEMS,
+};
 use nova_view::spaceport::layout::{LANDSCAPE_ITEM, LEAVE_ITEM, RECHARGE_ITEM, service_item};
 use nova_view::spaceport::missions::{
     COMPUTER_DIALOG, INFO_DIALOG, MissionComputerScreen, MissionInfoScreen,
@@ -318,6 +328,195 @@ fn the_bar_and_the_trade_center_open_from_their_buttons_and_close_back_through_t
     game.frame();
     assert_eq!(open_over(&game), "nothing", "the trade center closed");
     assert_eq!(game.showing(), Showing::Spaceport);
+}
+
+/// The texts the next frame draws.
+fn drawn(game: &mut Harness) -> Vec<String> {
+    texts(&game.frame())
+}
+
+/// Clicks the bar's item `item`.
+fn click_bar_item(game: &mut Harness, item: usize) {
+    let at = centre_of(spaceport(game).open_bar().expect("open").dialog(), item);
+    game.click(at);
+}
+
+/// Under the new game's rulebook the dock job's offer still opens by
+/// itself as the pilot lands; deferred, it is listed in the bar by its
+/// title, opens from there, and once taken leaves the bar's list.
+#[test]
+fn a_deferred_offer_is_listed_in_the_bar_and_opens_from_it() {
+    let store = MemoryPilots::new();
+    let mut game = new_pilot_flying(app(&store));
+    land_at(&mut game, "hearth-dock");
+    let page = drawn(&mut game);
+    assert!(
+        page.contains(&"The dockmaster looks up from a slate.".to_owned()),
+        "the landing opens the offer: {page:?}"
+    );
+    game.press(KeyCode::Digit3);
+    game.press(KeyCode::Enter);
+    assert_eq!(
+        pilot(&game).story.mission("dock-job"),
+        Some(MissionState::Offered)
+    );
+    let page = drawn(&mut game);
+    assert!(!page.contains(&"The dockmaster looks up from a slate.".to_owned()));
+
+    click_port_item(&mut game, service_item(Service::Bar));
+    let frame = game.frame();
+    assert_eq!(open_over(&game), "bar");
+    let bar = spaceport(&game).open_bar().expect("open");
+    assert_labelled(
+        &frame,
+        bar.dialog(),
+        &[(STORY_ITEMS[0], "Hull plate for Verge Camp")],
+    );
+    click_bar_item(&mut game, STORY_ITEMS[0]);
+    let page = drawn(&mut game);
+    assert!(
+        page.contains(&"The dockmaster looks up from a slate.".to_owned()),
+        "the offer opens from the bar: {page:?}"
+    );
+    assert_eq!(open_over(&game), "bar", "over the bar");
+    game.press(KeyCode::Digit1);
+    game.press(KeyCode::Enter);
+    assert!(matches!(
+        pilot(&game).story.mission("dock-job"),
+        Some(MissionState::Active { .. })
+    ));
+    let page = drawn(&mut game);
+    assert_eq!(open_over(&game), "bar", "closed back to the bar");
+    assert!(
+        !page.contains(&"Hull plate for Verge Camp".to_owned()),
+        "taken, it leaves the list: {page:?}"
+    );
+}
+
+/// A pilot carrying the dock job, flying in the Verge.
+fn in_the_verge_on_the_dock_job(pilot: &mut Pilot) {
+    on_the_dock_job(pilot);
+    pilot.system = nova_sim::SystemId(nova_of(&fixture().ids.systems, "verge"));
+    pilot.stellar = None;
+}
+
+/// The completion still opens first at the landing that delivers; then
+/// the camp's own greeting and the news the success released; then the
+/// bar lists the greeting, which opens again from it.
+#[test]
+fn verge_camp_s_bar_lists_its_own_conversation_and_reopens_it() {
+    let (mut game, _store) = resumed_after(in_the_verge_on_the_dock_job);
+    let camp = crate::new_game_conversation::position_of("verge-camp");
+    game.app
+        .screen_mut()
+        .flight_view_mut()
+        .expect("flying")
+        .change_sim(|sim| {
+            nova_sim::fixture::put_player_at(sim.session_mut().expect("a session"), camp);
+        });
+    // An ungoverned outpost: one L lands.
+    game.press(KeyCode::KeyL);
+    assert_eq!(game.showing(), Showing::Spaceport, "landed at Verge Camp");
+    let page = drawn(&mut game);
+    assert!(
+        page.contains(&"The camp boss signs for the plate.".to_owned()),
+        "the completion first: {page:?}"
+    );
+    assert_eq!(
+        pilot(&game).story.mission("dock-job"),
+        Some(MissionState::Done)
+    );
+    game.press(KeyCode::Enter);
+    let page = drawn(&mut game);
+    assert!(
+        page.contains(&"Wind snaps at the tents.".to_owned()),
+        "{page:?}"
+    );
+    game.press(KeyCode::Enter);
+    let page = drawn(&mut game);
+    assert!(
+        page.contains(&"Hull plate reaches Verge Camp".to_owned()),
+        "the news pop: {page:?}"
+    );
+    game.press(KeyCode::Enter);
+
+    click_port_item(&mut game, service_item(Service::Bar));
+    let frame = game.frame();
+    assert_eq!(open_over(&game), "bar");
+    let bar = spaceport(&game).open_bar().expect("open");
+    assert_labelled(
+        &frame,
+        bar.dialog(),
+        &[(STORY_ITEMS[0], OWN_CONVERSATION_LABEL)],
+    );
+    click_bar_item(&mut game, STORY_ITEMS[0]);
+    let page = drawn(&mut game);
+    assert!(
+        page.contains(&"Wind snaps at the tents.".to_owned()),
+        "the greeting again: {page:?}"
+    );
+    game.press(KeyCode::Enter);
+    let page = drawn(&mut game);
+    assert_eq!(open_over(&game), "bar");
+    assert!(
+        !page.contains(&"Wind snaps at the tents.".to_owned()),
+        "{page:?}"
+    );
+    assert!(
+        !page.contains(&"Hull plate reaches Verge Camp".to_owned()),
+        "the news doesn't pop twice: {page:?}"
+    );
+}
+
+/// On day 3 the side road closes as the pilot lands at Hearth Dock, its
+/// news breaking there; the bar's Holovid lists it with its source and
+/// age, and closes back to the bar.
+#[test]
+fn holovid_lists_the_news_heard_here_with_its_source_and_age() {
+    let (mut game, _store) = resumed_after(|pilot| {
+        on_the_dock_job(pilot);
+        pilot.story.day = 3;
+    });
+    land_at(&mut game, "hearth-dock");
+    let page = drawn(&mut game);
+    assert!(
+        page.contains(&"The side road has failed".to_owned()),
+        "the landing's news: {page:?}"
+    );
+    game.press(KeyCode::Enter);
+    click_port_item(&mut game, service_item(Service::Bar));
+    let page = drawn(&mut game);
+    assert!(
+        !page.contains(&"The side road has failed".to_owned()),
+        "{page:?}"
+    );
+    click_bar_item(&mut game, BAR_HOLOVID_ITEM);
+    let page = drawn(&mut game);
+    for line in [
+        "News",
+        "The side road has failed",
+        "From Hearth, today.",
+        "The side road's gates went dark this morning; the wardens' road is the",
+    ] {
+        assert!(
+            page.iter().any(|drawn| drawn.starts_with(line)),
+            "{line}: {page:?}"
+        );
+    }
+    assert!(
+        spaceport(&game)
+            .open_bar()
+            .and_then(nova_view::spaceport::BarScreen::news_screen)
+            .is_none(),
+        "not the drawn news"
+    );
+    game.press(KeyCode::Enter);
+    let page = drawn(&mut game);
+    assert_eq!(open_over(&game), "bar", "closed back to the bar");
+    assert!(
+        !page.contains(&"The side road has failed".to_owned()),
+        "{page:?}"
+    );
 }
 
 /// The centre of `dialog`'s item `item`.

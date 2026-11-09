@@ -17,6 +17,16 @@
 //! page it was decided on. The spaceport dropped (a take-off, the pilot
 //! put away) drops it with it. What each conversation plays is the
 //! session's.
+//!
+//! **The bar.** Under the new game's reading of
+//! [`RuleKey::BarStory`](nova_sim::RuleKey::BarStory), the bar is given
+//! the story it hosts as it opens ([`FlightView::bar_story`]), and a slot
+//! clicked opens its scene the same way
+//! ([`AppScreen::open_bar_conversation`], [`FlightView::open_bar_scene`]),
+//! over the bar. Its close goes through the same close: the next
+//! conversation due opens if any (one the bar's conversation made hold),
+//! the news doesn't open twice in a visit, and the bar open is given its
+//! story afresh, so a decided offer leaves its slots.
 
 use nova_view::flight::FlightView;
 use nova_view::spaceport::{ConversationChoice, ConversationScreen};
@@ -43,6 +53,33 @@ impl AppScreen {
         }
     }
 
+    /// Opens the scene at `index` of the bar's story over the bar, if
+    /// flight opens it and the router has metrics to lay it out with,
+    /// replacing any open conversation; its first page's accept refused
+    /// for room is told on it (see the module docs).
+    pub(super) fn open_bar_conversation(&mut self, index: usize) {
+        let Some(metrics) = self.metrics() else {
+            return;
+        };
+        let page = self
+            .flight
+            .as_mut()
+            .and_then(|flight| flight.open_bar_scene(index));
+        if let Some(page) = page {
+            self.conversation = Some(ConversationScreen::new(page, metrics));
+            self.tell_room_refusals();
+        }
+    }
+
+    /// Gives the bar open its story afresh, as flight answers it now.
+    fn refresh_bar_story(&mut self) {
+        if let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight)
+            && spaceport.open_bar().is_some()
+        {
+            spaceport.set_bar_story(flight.bar_story());
+        }
+    }
+
     /// Gives `input` to the open conversation, acting on its choice or
     /// close: whether one was open to take it.
     pub(super) fn conversation_input(&mut self, input: &Input) -> bool {
@@ -61,6 +98,7 @@ impl AppScreen {
             Some(ConversationChoice::Close) => {
                 self.flight.as_mut().expect(ENTERED).close_conversation();
                 self.open_conversation();
+                self.refresh_bar_story();
             }
             None => {}
         }

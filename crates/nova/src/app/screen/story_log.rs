@@ -12,6 +12,14 @@
 //! scan's find needs no page here: a press that scans never lands, and
 //! the message line keeps the find over a denial (`FlightView::land`).
 //!
+//! **The bar's news.** Under the new game's reading of
+//! [`RuleKey::BarStory`](nova_sim::RuleKey::BarStory), the bar's Holovid
+//! opens the news log on the news its story lists, the news heard in the
+//! system, saying so when nothing has been heard
+//! ([`AppScreen::open_bar_news`]). It beeps as it opens and closes, as the
+//! stock news does, and closes back to the bar. The landing's news stays
+//! silent.
+//!
 //! **The missions.** The mission info key, in flight or in port, opens the
 //! missions log in place of the stock mission info screen when the
 //! flight's answer lists storyline missions ([`MissionInfo::story`]), so
@@ -32,6 +40,7 @@
 //! [`FlightView::take_room_refusals`]: nova_view::flight::FlightView::take_room_refusals
 
 use nova_sim::MissionInfo;
+use nova_view::sound::{Sound, UiSound};
 use nova_view::spaceport::conversation::room_refusal_text;
 use nova_view::ui::story_log::{StoryLog, StoryLogScreen, missions_log, news_log};
 use nova_view::{Input, Screen, ScreenAction};
@@ -95,6 +104,26 @@ impl AppScreen {
         self.open_story_log(log, AfterLog::Nothing);
     }
 
+    /// Opens the news log on the bar's story's news, with the stock news's
+    /// beeps, over the bar (see the module docs).
+    pub(super) fn open_bar_news(&mut self) {
+        let (Some(spaceport), Some(flight)) = (&self.spaceport, &self.flight) else {
+            return;
+        };
+        let Some(story) = spaceport.bar_story() else {
+            return;
+        };
+        let log = news_log(&story.news, flight.names());
+        if self.open_story_log(log, AfterLog::Nothing)
+            && let Some(open) = &mut self.story_log
+        {
+            open.screen = open.screen.clone().with_sounds(
+                Sound::Ui(UiSound::NewsOpened),
+                Sound::Ui(UiSound::NewsClosed),
+            );
+        }
+    }
+
     /// Opens the missions log on `info`'s storyline missions, when it
     /// lists any, followed by `then`: whether it opened.
     pub(super) fn open_missions_log(&mut self, info: &MissionInfo, then: AfterLog) -> bool {
@@ -128,6 +157,8 @@ impl AppScreen {
         if !open.screen.take_closed() {
             return ScreenAction::None;
         }
+        // Its closing beep outlives it.
+        self.sounds.extend(open.screen.take_sounds());
         let then = open.then;
         self.story_log = None;
         match then {

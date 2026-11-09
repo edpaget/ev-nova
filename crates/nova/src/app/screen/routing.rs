@@ -17,6 +17,33 @@ use nova_view::menu::MenuChoice;
 use super::story_log::AfterLog;
 use super::{AppScreen, ENTERED, LANDED, MenuAction, Side, chord_command};
 
+/// The bar's opening and its news, through `flight`: the bar draws the
+/// visit's news as it opens, before News can show it, and News shows what
+/// was drawn. Under the new game's reading of
+/// [`RuleKey::BarStory`] the bar is given the story it hosts as it opens
+/// too (the `conversation` module). What the story's slots and its
+/// Holovid asked for, the scene by its index and whether the story's news
+/// is wanted, comes back for the router to open once the spaceport is let
+/// go.
+fn serve_bar(
+    spaceport: &mut nova_view::spaceport::SpaceportView,
+    flight: &mut FlightView<std::rc::Rc<nova_data::GameData>>,
+) -> (Option<usize>, bool) {
+    if spaceport.take_bar_opened() {
+        flight.open_bar();
+        spaceport.set_bar_story(flight.bar_story());
+    }
+    if spaceport.take_news_request()
+        && let Some(shown) = flight.news()
+    {
+        spaceport.open_news(&shown.news, shown.picture);
+    }
+    (
+        spaceport.take_bar_scene_request(),
+        spaceport.take_bar_story_news_request(),
+    )
+}
+
 impl AppScreen {
     /// The spaceport's input, all of it: the outfitter opening tells the
     /// flight and shows its outfitter afresh; the bar opening has the
@@ -77,16 +104,8 @@ impl AppScreen {
         // `mission_info_rebuild` rule reads it, closing once nothing is
         // left; a refusal changes nothing.
         abort_and_refresh(spaceport, self.flight.as_mut());
-        // The bar draws the visit's news as it opens, before News can
-        // show it; News shows what was drawn.
-        if spaceport.take_bar_opened() {
-            self.flight.as_mut().expect(ENTERED).open_bar();
-        }
-        if spaceport.take_news_request()
-            && let Some(shown) = self.flight.as_mut().expect(ENTERED).news()
-        {
-            spaceport.open_news(&shown.news, shown.picture);
-        }
+        let (bar_scene, bar_story_news) =
+            serve_bar(spaceport, self.flight.as_mut().expect(ENTERED));
         if let Some(ship) = spaceport.take_ship_request()
             && let Ok(naming) = self.flight.as_mut().expect(ENTERED).ship_naming(ship)
         {
@@ -166,6 +185,12 @@ impl AppScreen {
         }
         if let Some(info) = story_info {
             self.open_missions_log(&info, AfterLog::Nothing);
+        }
+        if let Some(index) = bar_scene {
+            self.open_bar_conversation(index);
+        }
+        if bar_story_news {
+            self.open_bar_news();
         }
         self.serve_closings();
         self.serve_mission_screens();

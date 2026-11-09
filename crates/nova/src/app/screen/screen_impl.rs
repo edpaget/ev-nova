@@ -500,6 +500,9 @@ impl Screen for AppScreen {
             self.missions
                 .as_mut()
                 .map(|dialogs| dialogs as &mut dyn Screen),
+            self.story_log
+                .as_mut()
+                .map(|open| &mut open.screen as &mut dyn Screen),
             self.spaceport.as_mut().map(|port| port as &mut dyn Screen),
             self.flight.as_mut().map(|flight| flight as &mut dyn Screen),
             self.game.as_mut().map(|game| game as &mut dyn Screen),
