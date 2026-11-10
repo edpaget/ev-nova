@@ -918,9 +918,11 @@ fn person_offer_fork_of(fit: impl FnOnce(&mut Vec<u8>), persons: usize) -> ForkB
             sheet.frame(|f| f.line().pixels(&[0x7C00]))
         })
         .build();
-    let mut character = vec![0; Character::SIZE.expect("fixed")];
-    put(&mut character, 0x04, &[128, 128, -1, -1, -1]);
-    put(&mut character, 0x0E, &[-1; 4]);
+    let character = CharacterBuilder::new()
+        .ship_type(128)
+        .system(&[128, -1, -1, -1])
+        .govt(&[-1; 4])
+        .build();
     let mut system = vec![0; System::SIZE.expect("fixed")];
     put(&mut system, 0x04, &[-1; 32]);
     put(&mut system, 0x44, &[-1; 8]);

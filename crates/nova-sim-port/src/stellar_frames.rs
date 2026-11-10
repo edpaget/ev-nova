@@ -61,7 +61,7 @@ use nova_sim_base::SpeedMult;
 use crate::catalog::LandingSite;
 use crate::chance::Chance;
 use crate::gate::HYPERGATE;
-use crate::gate_sprite::{ALTERNATE, ONLY_WHEN_DESTROYED, RANDOM};
+use crate::landing::{ALTERNATE, ANIMATE_ONLY_WHEN_DESTROYED, RANDOM};
 
 /// A stellar's animation fields, raw from its `spöb`: what the
 /// sequential branch reads.
@@ -72,7 +72,7 @@ pub struct StellarAnimation {
     /// `Frame0Bias`: how many times longer frame 0 shows for.
     pub frame0_bias: i16,
     /// `Flags2`, raw: its animation bits ([`ALTERNATE`], [`RANDOM`],
-    /// [`ONLY_WHEN_DESTROYED`]) and its hypergate bit ([`HYPERGATE`]) are
+    /// [`ANIMATE_ONLY_WHEN_DESTROYED`]) and its hypergate bit ([`HYPERGATE`]) are
     /// read.
     pub flags2: u16,
 }
@@ -96,7 +96,7 @@ impl StellarAnimation {
 pub fn is_animated(data: StellarAnimation, destroyed: bool, counted: NonZeroU16) -> bool {
     counted.get() > 1
         && data.flags2 & HYPERGATE == 0
-        && (data.flags2 & ONLY_WHEN_DESTROYED != 0) == destroyed
+        && (data.flags2 & ANIMATE_ONLY_WHEN_DESTROYED != 0) == destroyed
 }
 
 /// A stellar's animation state: its current and next frame, its timer,
@@ -679,7 +679,11 @@ mod tests {
     fn an_uncounted_or_still_stellar_draws_nothing() {
         for flags2 in [RANDOM, ALTERNATE | RANDOM] {
             stays_on_frame_0(flagged(flags2, 1, 0), false, 1);
-            stays_on_frame_0(flagged(flags2 | ONLY_WHEN_DESTROYED, 1, 0), false, 4);
+            stays_on_frame_0(
+                flagged(flags2 | ANIMATE_ONLY_WHEN_DESTROYED, 1, 0),
+                false,
+                4,
+            );
             stays_on_frame_0(flagged(flags2 | HYPERGATE, 1, 0), false, 4);
             let mut frames = StellarFrames::new();
             frames.step_frozen(flagged(flags2, 1, 0), false, count(1), &mut Draws::none());
@@ -692,7 +696,7 @@ mod tests {
     fn live(only_when_destroyed: bool) -> StellarAnimation {
         StellarAnimation {
             flags2: if only_when_destroyed {
-                ONLY_WHEN_DESTROYED
+                ANIMATE_ONLY_WHEN_DESTROYED
             } else {
                 0
             },

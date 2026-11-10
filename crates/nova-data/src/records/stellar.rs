@@ -167,11 +167,21 @@ pub mod flags {
     }
 }
 
-/// The Bible's gate bits of [`Stellar::flags2`], the one place they are
-/// spelled out: the new game's mapping (`nova_data::new_game`) sets them,
-/// and `nova_sim_state::landing::GateKind` reads them, the hypergate bit
-/// first, as the original does.
+/// The Bible's gate and animation bits of [`Stellar::flags2`], the one
+/// place they are spelled out. The new game's mapping
+/// (`nova_data::new_game`) sets the gate bits, and
+/// `nova_sim_state::landing::GateKind` reads them, the hypergate bit
+/// first, as the original does. The animation bits reach the stellar
+/// sprites (`nova_sim_port::gate_sprite`, `nova_sim_port::stellar_frames`)
+/// through `nova_sim_state::landing`'s aliases.
 pub mod flags2 {
+    /// Show the open frame between every other frame of the loop.
+    pub const ALTERNATE: u16 = 0x0001;
+    /// Pick the loop's frames at random.
+    pub const RANDOM: u16 = 0x0002;
+    /// Animate only while destroyed. Not the `Flags` landing bit
+    /// [`super::flags::ONLY_WHEN_DESTROYED`] (land only once destroyed).
+    pub const ANIMATE_ONLY_WHEN_DESTROYED: u16 = 0x0080;
     /// A hypergate: landing on it opens the hypergate map, whose pick
     /// leaves through the first of its `HyperLink1-8` (`spöb` IDs) whose
     /// system is the one picked.
@@ -222,6 +232,18 @@ mod tests {
     #[test]
     fn the_gate_bits_are_the_bibles() {
         assert_eq!([flags2::HYPERGATE, flags2::WORMHOLE], [0x1000, 0x2000]);
+    }
+
+    #[test]
+    fn the_stellar_animation_bits_are_the_bibles() {
+        assert_eq!(
+            [
+                flags2::ALTERNATE,
+                flags2::RANDOM,
+                flags2::ANIMATE_ONLY_WHEN_DESTROYED
+            ],
+            [0x0001, 0x0002, 0x0080]
+        );
     }
 
     #[test]

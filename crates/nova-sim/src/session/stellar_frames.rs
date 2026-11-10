@@ -365,7 +365,7 @@ mod tests {
     use crate::combat::Rules;
     use crate::control::SetExpr;
     use crate::flight::Controls;
-    use crate::gate_sprite::{ONLY_WHEN_DESTROYED, RANDOM};
+    use crate::landing::{ANIMATE_ONLY_WHEN_DESTROYED, RANDOM};
     use crate::testkit::{
         FakePilotCatalog, Passive, Scripted, catalog, land_now, life, planet, work, work_with,
     };
@@ -582,7 +582,7 @@ mod tests {
     fn a_frozen_slot_keeps_the_frame_from_before_the_pass_that_froze_it() {
         // Animating only while destroyed, its `Type` counting no frames:
         // `U` after its `DeadType` frames ran freezes the slot on one.
-        let mut catalog = animated(ONLY_WHEN_DESTROYED, 1, 4, 4);
+        let mut catalog = animated(ANIMATE_ONLY_WHEN_DESTROYED, 1, 4, 4);
         catalog.sites[0].1[1].type_counts_frames = false;
         let mut session = Session::start(&catalog).expect("starts");
         let anim = anim(&session);
@@ -777,7 +777,7 @@ mod tests {
         // the start, a rebuild point, copies a count of none. Destroyed,
         // a frame clones in its `DeadType` of 4, which counts, and it
         // draws that, but the count copied stays until the next point.
-        let mut catalog = animated(ONLY_WHEN_DESTROYED, 1, 4, 4);
+        let mut catalog = animated(ANIMATE_ONLY_WHEN_DESTROYED, 1, 4, 4);
         catalog.sites[0].1[1].type_counts_frames = false;
         let mut session = Session::start(&catalog).expect("starts");
         let anim = anim(&session);
@@ -815,7 +815,7 @@ mod tests {
         // `DeadType` sheet: a rebuild point while destroyed fills its slot
         // with graphic type 0, of 3 frames here, the count the catalog
         // reports and the start reads.
-        let mut catalog = animated(ONLY_WHEN_DESTROYED, 1, 5, 0);
+        let mut catalog = animated(ANIMATE_ONLY_WHEN_DESTROYED, 1, 5, 0);
         catalog.fallback_frames = 3;
         let site = &mut catalog.sites[0].1[1];
         site.dead_graphic = None;
@@ -866,7 +866,7 @@ mod tests {
         // Animating only while destroyed, a `Type` of 5 and a `DeadType`
         // of 2: destroyed with no rebuild point since, its slot held its
         // `Type`, and it draws its `DeadType`.
-        let catalog = animated(ONLY_WHEN_DESTROYED, 1, 5, 2);
+        let catalog = animated(ANIMATE_ONLY_WHEN_DESTROYED, 1, 5, 2);
         for reading in [RuleSource::Engine, RuleSource::Bible] {
             let rules = crate::rulebook::Rulebook::default()
                 .with_override(RuleKey::StellarFrameCount, reading);

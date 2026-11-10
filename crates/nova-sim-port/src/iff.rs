@@ -37,8 +37,9 @@
 //!
 //! Tested in order: the player's own slot (+0x86 == 0) is cyan
 //! (@0x4afa-0x4b0f), which the view draws for the player pixel and no NPC
-//! ever is; disabled (`_IsDisabled` @0x2ce6, whose armour test also holds
-//! for a ship breaking up) dark grey (@0x4b14-0x4b25); a threat
+//! ever is; disabled ([`Npc::is_disabled`], `_IsDisabled` @0x2ce6, whose
+//! armour test also holds for a ship breaking up, but not for a stellar's
+//! defence ship, branch 3 @0x2d6f) dark grey (@0x4b14-0x4b25); a threat
 //! (`_IsThreatToPlayer` @0x7f501, ours [`Npc::threatens_player_among`],
 //! which counts a ship attacking one the player leads, @0x7f572-0x7f590)
 //! red (@0x4b27-0x4b44); an escort green (@0x4b46-0x4b8f); anything else
@@ -127,7 +128,6 @@
 use std::collections::BTreeMap;
 
 use crate::catalog::{LandingSite, OutfitId, OutfitRecord};
-use crate::combat::hull::Condition;
 use crate::exploration::GATES;
 use crate::gate::{HYPERGATE, WORMHOLE};
 use crate::landing::{StellarFlags, is_landable, landable};
@@ -185,7 +185,7 @@ impl RadarGear {
 /// What IFF shows a ship as (`_ColorCodeShip`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShipIff {
-    /// Disabled or breaking up: dark grey.
+    /// Disabled or breaking up ([`Npc::is_disabled`]): dark grey.
     Disabled,
     /// Threatening the player: red.
     Threat,
@@ -201,7 +201,7 @@ pub enum ShipIff {
 /// `_ColorCodeShip`'s order (see the module docs).
 #[must_use]
 pub fn ship_iff(npc: &Npc, leader: Option<&Npc>, npcs: &[Npc]) -> ShipIff {
-    if matches!(npc.condition, Condition::Disabled | Condition::Dying { .. }) {
+    if npc.is_disabled() {
         ShipIff::Disabled
     } else if npc.threatens_player_among(npcs) {
         ShipIff::Threat
@@ -394,6 +394,7 @@ mod tests {
     use super::*;
     use crate::ai::Goal;
     use crate::combat::ShipRef;
+    use crate::combat::hull::Condition;
     use crate::escort::{EscortDuty, FormationSlot};
     use crate::market::DOMINATED;
     use crate::stats::ShipStats;
@@ -519,23 +520,35 @@ mod tests {
     }
 
     #[test]
-    fn a_disabled_or_breaking_up_ship_is_disabled_even_attacking() {
-        for condition in [
-            Condition::Disabled,
-            Condition::Dying {
-                ticks_left: 3,
-                starting: false,
+    fn a_ship_is_coded_disabled_even_attacking_exactly_when_it_is_disabled() {
+        // `_ColorCodeShip` reads `_IsDisabled` (@0x4b17) before the
+        // threat: whichever ships `Npc::is_disabled` holds of are grey,
+        // and the rest fall through to the threat.
+        let attacker = attacking(hired());
+        let ships = [
+            attacker.clone(),
+            Npc {
+                condition: Condition::Disabled,
+                ..attacker.clone()
             },
-        ] {
-            let npc = Npc {
-                condition,
-                ..attacking(hired())
+            Npc {
+                condition: Condition::Dying {
+                    ticks_left: 3,
+                    starting: false,
+                },
+                ..attacker.clone()
+            },
+            crate::traffic::fixture::breaking_up_guard(attacker),
+        ];
+        assert!(ships.iter().any(Npc::is_disabled), "one disabled");
+        assert!(!ships.iter().all(Npc::is_disabled), "one not");
+        for npc in ships {
+            let want = if npc.is_disabled() {
+                ShipIff::Disabled
+            } else {
+                ShipIff::Threat
             };
-            assert_eq!(
-                ship_iff(&npc, None, &[]),
-                ShipIff::Disabled,
-                "{condition:?}"
-            );
+            assert_eq!(ship_iff(&npc, None, &[]), want, "{npc:?}");
         }
     }
 

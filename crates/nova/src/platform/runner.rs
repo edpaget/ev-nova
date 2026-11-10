@@ -635,10 +635,8 @@ impl<S: ImageSource> Running<S> {
 
 #[cfg(test)]
 mod tests {
-    use nova_data::graphics::Image;
-    use nova_render::ImageError;
+    use nova_render::recording::NoImages;
     use nova_render::wgpu::InitError;
-    use nova_view::ImageKind;
 
     use std::io;
 
@@ -656,14 +654,6 @@ mod tests {
     use super::*;
     use crate::app::start_screen;
     use crate::exit::OpenFailure;
-
-    struct NoImages;
-
-    impl ImageSource for NoImages {
-        fn frames(&self, _kind: ImageKind, _id: i16) -> Result<Vec<Image>, ImageError> {
-            Err(ImageError::Missing)
-        }
-    }
 
     /// A data directory with no files in it.
     fn no_data() -> Rc<GameData> {

@@ -1,4 +1,5 @@
-//! A [`Gpu`] that records what it is asked to do, for tests.
+//! Test support: a [`Gpu`] that records what it is asked to do, and
+//! [`NoImages`], an [`ImageSource`] with nothing in it.
 //!
 //! Compiled for this crate's tests and, through the `recording` feature,
 //! for other crates' tests.
@@ -7,10 +8,24 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use nova_data::graphics::Image;
+use nova_view::ImageKind;
 
 use crate::gpu::{Frame, Gpu, PageId};
+use crate::images::{ImageError, ImageSource};
 use crate::upscale::{Upscaler, UpscalerProbe, WorldResolution, resolution_of};
 use crate::viewport::PixelRect;
+
+/// An [`ImageSource`] with no images at all: every
+/// [`ImageSource::frames`] is [`ImageError::Missing`], and
+/// [`ImageSource::deep_frames`] keeps its default, so it is missing too.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoImages;
+
+impl ImageSource for NoImages {
+    fn frames(&self, _kind: ImageKind, _id: i16) -> Result<Vec<Image>, ImageError> {
+        Err(ImageError::Missing)
+    }
+}
 
 /// One call a [`RecordingGpu`] received.
 #[derive(Clone, Debug, PartialEq)]
@@ -249,5 +264,17 @@ mod tests {
         assert_eq!(gpu.calls, []);
         assert_eq!(gpu.world_resolution(), WorldResolution::Native);
         assert_eq!(RecordingGpu::probing(&[]).upscalers(), []);
+    }
+
+    #[test]
+    fn no_images_has_every_image_missing() {
+        assert_eq!(
+            NoImages.frames(ImageKind::Pict, 128),
+            Err(ImageError::Missing)
+        );
+        assert_eq!(
+            NoImages.deep_frames(ImageKind::Pict, 128),
+            Err(ImageError::Missing)
+        );
     }
 }

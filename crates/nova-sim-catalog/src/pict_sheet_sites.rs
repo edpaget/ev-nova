@@ -6,6 +6,7 @@
 use nova_data::Record;
 use nova_data::graphics::fixture::{RledBuilder, rgb888_pict};
 use nova_data::graphics::{PICT, RLED};
+use nova_data::records::fixture::SpinBuilder;
 use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
@@ -33,9 +34,14 @@ fn stellar(graphic_type: i16, dead_type: i16) -> Vec<u8> {
 /// A `spïn` naming sprites `sprites` and masks `masks`, `size` x `size`
 /// each, `x_tiles` x 1.
 fn spin(sprites: i16, masks: i16, size: i16, x_tiles: i16) -> Vec<u8> {
-    let mut bytes = vec![0; Spin::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[sprites, masks, size, size, x_tiles, 1]);
-    bytes
+    SpinBuilder::new()
+        .sprites_id(sprites)
+        .masks_id(masks)
+        .x_size(size)
+        .y_size(size)
+        .x_tiles(x_tiles)
+        .y_tiles(1)
+        .build()
 }
 
 #[test]

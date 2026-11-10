@@ -34,7 +34,8 @@ nova-view = { workspace = true, features = ["fixture"] }
 nova-render = { workspace = true, features = ["recording"] }
 
 [features]
-# Exposes the recording Gpu mock to other crates' tests.
+# Exposes the test support in `recording` (the recording Gpu mock and the
+# empty `NoImages` source) to other crates' tests.
 recording = []
 
 [lints]

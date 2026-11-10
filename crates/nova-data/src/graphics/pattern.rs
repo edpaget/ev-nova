@@ -10,8 +10,8 @@ use nova_rsrc::ResType;
 
 use super::GraphicsError;
 use super::color::ColorTable;
-use super::icon::{checked_indexed_size, indexed_image};
 use super::image::Image;
+use super::indexed::{checked_indexed_size, indexed_image};
 use super::pixmap::PixMap;
 use super::reader::Reader;
 

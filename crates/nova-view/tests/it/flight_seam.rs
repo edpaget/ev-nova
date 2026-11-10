@@ -27,7 +27,7 @@
 use std::rc::Rc;
 
 use nova_data::records::character::Character;
-use nova_data::records::fixture::ShipBuilder;
+use nova_data::records::fixture::{CharacterBuilder, InterfaceBuilder, ShipBuilder, SpinBuilder};
 use nova_data::records::mission::Mission;
 use nova_data::records::ship::Ship;
 use nova_data::records::stellar::Stellar;
@@ -429,8 +429,14 @@ fn animated_data() -> Rc<GameData> {
     let mut prime = planet();
     put_i16s(&mut prime, 0x04, &[1]);
     put_i16s(&mut prime, 0x22, &[1, 0]);
-    let mut spin = vec![0; Spin::SIZE.expect("fixed")];
-    put_i16s(&mut spin, 0x00, &[1001, -1, 4, 4, 2, 1]);
+    let spin = SpinBuilder::new()
+        .sprites_id(1001)
+        .masks_id(-1)
+        .x_size(4)
+        .y_size(4)
+        .x_tiles(2)
+        .y_tiles(1)
+        .build();
     let sheet = (0..2)
         .fold(RledBuilder::new(4, 4), |sheet, _| {
             sheet.frame(|f| (0..4).fold(f, |f, _| f.line().pixels(&[0x7C00; 4])))
@@ -475,10 +481,13 @@ fn put_i16s(bytes: &mut [u8], at: usize, values: &[i16]) {
 
 /// The first `chär`: ship 128 from system 128.
 fn character() -> Vec<u8> {
-    let mut bytes = vec![0; Character::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x04, &[128, 128, -1, -1, -1]);
-    put_i16s(&mut bytes, 0x134, &[23, 6, 1177]);
-    bytes
+    CharacterBuilder::new()
+        .ship_type(128)
+        .system(&[128, -1, -1, -1])
+        .unknown_0x134(23)
+        .unknown_0x136(6)
+        .start_year(1177)
+        .build()
 }
 
 /// A ship that flies.
@@ -955,37 +964,28 @@ fn traders() -> Vec<u8> {
 /// `ïntf` 128, the status bar: the stock bar's areas, in plain colours,
 /// in Geneva 12, over `PICT` 700, which the data doesn't hold.
 fn interface() -> Vec<u8> {
-    let mut bytes = vec![0; nova_data::records::interface::Interface::SIZE.expect("fixed")];
-    let colour = |bytes: &mut [u8], at: usize, rgb: u32| {
-        bytes[at..at + 4].copy_from_slice(&rgb.to_be_bytes());
-    };
-    for (at, rgb) in [
-        (0x00, 0x00FF_FFFF),
-        (0x04, 0x0080_8080),
-        (0x10, 0x0000_FF00),
-        (0x14, 0x0000_8000),
-        (0x20, 0x0000_00FF),
-        (0x2C, 0x00FF_0000),
-        (0x38, 0x00FF_FF00),
-        (0x3C, 0x0080_8000),
-    ] {
-        colour(&mut bytes, at, rgb);
-    }
-    for (at, rect) in [
-        (0x08, [8, 8, 184, 184]),
-        (0x18, [199, 35, 206, 184]),
-        (0x24, [216, 35, 223, 184]),
-        (0x30, [234, 35, 241, 184]),
-        (0x40, [250, 8, 330, 184]),
-        (0x48, [340, 8, 360, 184]),
-        (0x50, [370, 8, 450, 184]),
-        (0x58, [458, 8, 552, 184]),
-    ] {
-        put_i16s(&mut bytes, at, &rect);
-    }
-    bytes[0x60..0x67].copy_from_slice(b"Geneva\0");
-    put_i16s(&mut bytes, 0xA0, &[12, 10, 700]);
-    bytes
+    InterfaceBuilder::new()
+        .bright_text(0x00FF_FFFF)
+        .dim_text(0x0080_8080)
+        .bright_radar(0x0000_FF00)
+        .dim_radar(0x0000_8000)
+        .shield_color(0x0000_00FF)
+        .armor_color(0x00FF_0000)
+        .fuel_full(0x00FF_FF00)
+        .fuel_partial(0x0080_8000)
+        .radar_area([8, 8, 184, 184])
+        .shield_area([199, 35, 206, 184])
+        .armor_area([216, 35, 223, 184])
+        .fuel_area([234, 35, 241, 184])
+        .nav_area([250, 8, 330, 184])
+        .weap_area([340, 8, 360, 184])
+        .targ_area([370, 8, 450, 184])
+        .cargo_area([458, 8, 552, 184])
+        .status_font("Geneva")
+        .stat_font_size(12)
+        .subtitle_size(10)
+        .status_bkgnd(700)
+        .build()
 }
 
 /// The first `chär` flies the "Gunship" (ship 128, 30 shield, 45 armour,
@@ -995,10 +995,11 @@ fn interface() -> Vec<u8> {
 /// escape pod (`ModType` 11) and 187 an auto-eject (20). The status bar
 /// is [`interface`]'s, and the mouse cursor `spïn` 650 is [`cursor`]'s.
 fn fighting_data(items: &[(i16, i16)]) -> Rc<GameData> {
-    let mut trader = armed_ship(0, 10, &[], &[]);
-    put_i16s(&mut trader, 0x06, &[0]);
     // A crew of 3, so it can be boarded.
-    put_i16s(&mut trader, 0x44, &[3]);
+    let trader = ShipBuilder::from_bytes(armed_ship(0, 10, &[], &[]))
+        .speed(0)
+        .crew(3)
+        .build();
     let mut holder = fitting(1, 128);
     put_i16s(&mut holder, 0x0A, &[10]);
     let fork = ForkBuilder::new()
@@ -1060,9 +1061,14 @@ const CURSOR: i16 = 651;
 
 /// `spïn` 650, the mouse cursor: [`cursor`]'s four frames in a row.
 fn cursor_spin() -> Vec<u8> {
-    let mut bytes = vec![0; nova_data::records::spin::Spin::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[CURSOR, -1, 3, 2, 4, 1]);
-    bytes
+    SpinBuilder::new()
+        .sprites_id(CURSOR)
+        .masks_id(-1)
+        .x_size(3)
+        .y_size(2)
+        .x_tiles(4)
+        .y_tiles(1)
+        .build()
 }
 
 /// The mouse cursor's sheet: four 3 x 2 frames.
@@ -1608,16 +1614,14 @@ fn str_list(strings: &[&str]) -> Vec<u8> {
 
 /// The first `chär`, with 25,000 credits: ship 128 from system 128.
 fn rich_character() -> Vec<u8> {
-    let mut bytes = character();
-    bytes[0x00..0x04].copy_from_slice(&25_000_i32.to_be_bytes());
-    bytes
+    CharacterBuilder::from_bytes(character())
+        .cash(25_000)
+        .build()
 }
 
 /// A ship that flies, with 10 tons of cargo space.
 fn hauler() -> Vec<u8> {
-    let mut bytes = ship();
-    put_i16s(&mut bytes, 0x00, &[10]);
-    bytes
+    ShipBuilder::from_bytes(ship()).holds(10).build()
 }
 
 /// Alpha Prime: a landable planet at the centre, a trade center trading

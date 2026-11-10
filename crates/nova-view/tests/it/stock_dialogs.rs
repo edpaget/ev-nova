@@ -1360,8 +1360,8 @@ fn blank_player_info() -> nova_sim::PlayerInfo {
 fn player_info_lays_out_its_seven_items_where_recorded_over_its_pictures() {
     use nova_view::ui::player_info::{
         BACKGROUND, BackgroundSizes, PLAYER_INFO_DIALOG, PlayerInfoButton, PlayerInfoScreen, Tab,
-        YES_NO_DIALOG,
     };
+    use nova_view::ui::yes_no::YES_NO_DIALOG;
     for (dir, path) in builds() {
         let ui = interface(&path);
         let template = ui.dialog_template(PLAYER_INFO_DIALOG).expect("converts");

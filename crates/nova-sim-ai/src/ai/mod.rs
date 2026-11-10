@@ -838,6 +838,23 @@ pub static NO_DESTROYABLE: BTreeSet<StellarId> = BTreeSet::new();
 /// pursues, as every lead then takes the table bearing.
 pub static NO_WEAPONS: Arsenal = Arsenal::EMPTY;
 
+/// The player as it sees ships, as `_ShipVisibleToShip(ship, player)`
+/// reads it: from where `player` is (the centre with no player), with its
+/// cloak `scanner` on screen. The player escorts no NPC, so it is never a
+/// cloaked escort. [`Surroundings::seen_by_player`] (the friend-strength
+/// and threat reads) and
+/// [`World::gate_view`](crate::traffic::World::gate_view) (the
+/// attack-quote gate) both build it here, so the two can't disagree about
+/// what the player sees.
+#[must_use]
+pub fn player_observer(player: Option<&PlayerSide>, scanner: bool) -> crate::cloak::Observer {
+    crate::cloak::Observer {
+        at: player.map_or(crate::geometry::Vec2::ZERO, |player| player.state.position),
+        scanner,
+        cloaked_escort: false,
+    }
+}
+
 impl<'a> Surroundings<'a> {
     /// `npcs` among `sites`, every one listed, with no player, no governments, no record, no
     /// damage aimed, no asteroid in slot 0, no cargo boxes, the original's
@@ -884,18 +901,12 @@ impl<'a> Surroundings<'a> {
     }
 
     /// Whether the player sees `npc` (`_ShipVisibleToShip(npc, player)`):
-    /// [`cloak::visible`](crate::cloak::visible) from where the player is
-    /// (the centre with no player), with its
+    /// [`cloak::visible`](crate::cloak::visible) through the
+    /// [`player_observer`] with its
     /// [`cloak_scanner`](Surroundings::cloak_scanner).
     #[must_use]
     pub fn seen_by_player(&self, npc: &Npc) -> bool {
-        let observer = crate::cloak::Observer {
-            at: self
-                .player
-                .map_or(crate::geometry::Vec2::ZERO, |player| player.state.position),
-            scanner: self.cloak_scanner,
-            cloaked_escort: false,
-        };
+        let observer = player_observer(self.player.as_ref(), self.cloak_scanner);
         crate::cloak::visible(npc.cloak, npc.state.position, npc.emerging(), observer)
     }
 
@@ -1027,6 +1038,29 @@ impl<'a> Surroundings<'a> {
     #[must_use]
     pub fn breaking_up(&self, ship: ShipRef) -> bool {
         matches!(self.condition_of(ship), Some(Condition::Dying { .. }))
+    }
+
+    /// `_IsDisabled` (@0x2ce6-0x2e0d) of `ship`, as the high level reads
+    /// its target: the stand-off band's halving (@0x8e4ca) and the
+    /// plunder's dock-or-fight (@0x8e866); and as `_InterceptorAI` lets a
+    /// target go (@0x8d319, [`target::let_go`]). The player reads
+    /// [`Condition::disabled`]: disabled or breaking up. An NPC reads
+    /// [`Npc::is_disabled`]: the same, but for a stellar's defence ship,
+    /// which `_IsDisabled` never calls disabled by its armour and so not
+    /// while it breaks up (branch 3, @0x2d6f). A ship not in the system,
+    /// or destroyed (its slot inactive), is not disabled.
+    ///
+    /// `_IsDisabled` has no dying test, so a quarry breaking up reads
+    /// disabled. The plunder's read (@0x8e856) tests only the slot, not
+    /// `_IsDying`, so a plunderer at a victim breaking up docks rather than
+    /// fights. The band's read follows the attack block's `_IsDying` drop
+    /// (@0x8e3ef, [`attack_drop`]), so it never sees one breaking up.
+    #[must_use]
+    pub fn is_disabled(&self, ship: ShipRef) -> bool {
+        match ship {
+            ShipRef::Player => self.player.is_some_and(|p| p.condition.disabled()),
+            ShipRef::Npc(id) => self.npc(id).is_some_and(Npc::is_disabled),
+        }
     }
 
     /// Whether `ship` is [`standing`](Self::standing) and done arriving
@@ -1535,6 +1569,29 @@ mod tests {
     use crate::traffic::npc::{AiType, Mode};
     use nova_sim_base::fixture::{Draws, FAST};
     use nova_sim_catalog::fixture::planet;
+
+    #[test]
+    fn the_player_observer_stands_where_the_player_is_or_the_centre_and_is_never_a_cloaked_escort()
+    {
+        use crate::cloak::Observer;
+        use crate::geometry::Vec2;
+        assert_eq!(
+            player_observer(None, true),
+            Observer {
+                at: Vec2::ZERO,
+                scanner: true,
+                cloaked_escort: false,
+            }
+        );
+        assert_eq!(
+            player_observer(Some(&fixture::player(30.0, -40.0)), false),
+            Observer {
+                at: Vec2::new(30.0, -40.0),
+                scanner: false,
+                cloaked_escort: false,
+            }
+        );
+    }
 
     fn npc(id: u32, ai_type: AiType) -> Npc {
         Npc {
@@ -2562,6 +2619,47 @@ mod tests {
         let around = Surroundings::new(&[], &npcs);
         assert!(!around.active(ShipRef::Npc(NpcId(1))));
         assert!(!around.standing(ShipRef::Npc(NpcId(1))));
+    }
+
+    #[test]
+    fn is_disabled_reads_disabled_and_breaking_up_ships_but_not_a_breaking_up_guard() {
+        let dying = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        let with = |id, condition| Npc {
+            condition,
+            ..npc(id, AiType::Warship)
+        };
+        let npcs = [
+            npc(1, AiType::Warship),
+            with(2, Condition::Disabled),
+            with(3, dying),
+            crate::traffic::fixture::breaking_up_guard(npc(4, AiType::Warship)),
+            with(5, Condition::Destroyed),
+        ];
+        let mut around = Surroundings::new(&[], &npcs);
+        let read: Vec<bool> = (1..=6)
+            .map(|id| around.is_disabled(ShipRef::Npc(NpcId(id))))
+            .collect();
+        assert_eq!(
+            read,
+            [false, true, true, false, false, false],
+            "intact, disabled, breaking up, a defence ship breaking up (@0x2d6f), \
+             destroyed (inactive slot), absent"
+        );
+        assert!(!around.is_disabled(P), "no player");
+        for (condition, disabled) in [
+            (Condition::Intact, false),
+            (Condition::Disabled, true),
+            (dying, true),
+        ] {
+            around.player = Some(PlayerSide {
+                condition,
+                ..fixture::player(0.0, 0.0)
+            });
+            assert_eq!(around.is_disabled(P), disabled, "{condition:?}");
+        }
     }
 
     #[test]

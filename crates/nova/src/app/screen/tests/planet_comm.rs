@@ -43,19 +43,15 @@ pub(super) fn planet_data(min_status: i16) -> Rc<GameData> {
             sheet.frame(|f| f.line().pixels(&[0x7C00]))
         })
         .build();
-    let mut character = vec![0; Character::SIZE.expect("fixed")];
-    character[0x00..0x04].copy_from_slice(&1_000_000_i32.to_be_bytes());
-    character[0x04..0x06].copy_from_slice(&128_i16.to_be_bytes());
-    character[0x06..0x08].copy_from_slice(&128_i16.to_be_bytes());
-    for slot in 1..4 {
-        let at = 0x06 + 2 * slot;
-        character[at..at + 2].copy_from_slice(&(-1_i16).to_be_bytes());
-    }
+    let character = CharacterBuilder::new()
+        .cash(1_000_000)
+        .ship_type(128)
+        .system(&[128, -1, -1, -1])
+        .build();
     let mut stellar = landable();
     stellar[0x14..0x18].copy_from_slice(&[0xFF, 0xFF, 0, 0]);
     stellar[0x16..0x18].copy_from_slice(&min_status.to_be_bytes());
-    let mut spin = vec![0; Spin::SIZE.expect("fixed")];
-    spin[0..2].copy_from_slice(&1000_i16.to_be_bytes());
+    let spin = SpinBuilder::new().sprites_id(1000).build();
     let replies: Vec<String> = (1..=60).map(|n| format!("s{n}")).collect();
     let fork = with_main_screen(ForkBuilder::new())
         .resource(

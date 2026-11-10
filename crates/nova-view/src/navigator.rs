@@ -287,7 +287,7 @@ mod tests {
                     animation: StellarAnimation {
                         delay: 1,
                         frame0_bias: 0,
-                        flags2: nova_sim::gate_sprite::RANDOM,
+                        flags2: nova_sim::landing::RANDOM,
                     },
                     stand_in: None,
                 }]

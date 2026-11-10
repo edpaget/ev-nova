@@ -290,17 +290,9 @@ impl Space {
                 self.reinforcements.every_government = true;
                 continue;
             }
-            let classed: Vec<GovtId> = statics
-                .govts
-                .ids()
-                .filter(|&govt| {
-                    statics
-                        .govts
-                        .get(govt)
-                        .is_some_and(|record| record.classes.contains(&owned.mod_val))
-                })
-                .collect();
-            self.reinforcements.inhibited.extend(classed);
+            self.reinforcements
+                .inhibited
+                .extend(statics.govts.of_class(owned.mod_val));
         }
     }
 }

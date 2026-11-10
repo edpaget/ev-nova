@@ -347,11 +347,9 @@ mod tests {
         assert_eq!(self::data().ship_looks(), []);
     }
 
-    /// A `shïp` whose `MovieFile` (offset 0x6AE) is `movie`.
+    /// A `shïp` whose `MovieFile` is `movie`.
     fn ship_naming(movie: &str) -> Vec<u8> {
-        let mut bytes = ShipBuilder::new().build();
-        bytes[0x6AE..0x6AE + movie.len()].copy_from_slice(movie.as_bytes());
-        bytes
+        ShipBuilder::new().movie_file(movie).build()
     }
 
     #[test]

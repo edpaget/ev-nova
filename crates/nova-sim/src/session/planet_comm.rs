@@ -80,9 +80,8 @@ use crate::legal::{Crime, LegalCode};
 use crate::message::SimMessage;
 use crate::pilot::Pilot;
 use crate::planet_comm::{
-    ALWAYS_DOMINATED, BRIBE_PERMISSION, Bribery, Demand, DemandFacts, Opening, PLANETS_TAKE_BRIBES,
-    PlanetComm, PlanetCommItem, PlanetCommView, Pressed, Standing, record_after_offence,
-    type_label,
+    BRIBE_PERMISSION, Bribery, Demand, DemandFacts, Opening, PLANETS_TAKE_BRIBES, PlanetComm,
+    PlanetCommItem, PlanetCommView, Pressed, Standing, record_after_offence, type_label,
 };
 use crate::rank::Blessed;
 use crate::traffic::stellar_defence::wave_on_demand;
@@ -114,7 +113,7 @@ impl Chart {
     fn planet_standing(&self, pilot: &Pilot, setup: &Setup, site: &LandingSite) -> Standing {
         Standing {
             dominated: domination::dominated(site),
-            always_dominated: site.flags2 & ALWAYS_DOMINATED != 0,
+            always_dominated: site.flags2 & domination::DOMINATED != 0,
             station: site.flags & StellarFlags::STATION != 0,
             record: self.landing_record(pilot, setup, site),
         }
@@ -555,7 +554,7 @@ pub(in crate::session) mod tests {
             Some(crate::planet_comm::PlanetCommButton::Release)
         );
         let mut session = at_earth(&catalog, 1_000_000, 0);
-        session.set_earth(|site| site.flags2 = ALWAYS_DOMINATED);
+        session.set_earth(|site| site.flags2 = domination::DOMINATED);
         let (view, _, _) = hail(&mut session, &catalog, 0, 0);
         assert_eq!(view.third, None);
         assert_eq!(view.status, Some(crate::planet_comm::PlanetStatus::Owned));
@@ -1041,7 +1040,7 @@ pub(in crate::session) mod tests {
             .set_dominated(&mut session.pilot, &mut session.out, EARTH, true);
         let site = LandingSite {
             flags: earth.flags | StellarFlags::STATION,
-            flags2: ALWAYS_DOMINATED,
+            flags2: domination::DOMINATED,
             ..earth
         };
         assert_eq!(
@@ -1105,7 +1104,7 @@ pub(in crate::session) mod tests {
     fn item_three_of_an_always_dominated_stellar_beeps_and_does_nothing_more() {
         let catalog = planet_catalog();
         let mut session = at_earth(&catalog, 1_000_000, 0);
-        session.set_earth(|site| site.flags2 = ALWAYS_DOMINATED);
+        session.set_earth(|site| site.flags2 = domination::DOMINATED);
         hail(&mut session, &catalog, 0, 0);
         let (view, sounds) = press(&mut session, &catalog, PlanetCommItem::Third, 0);
         assert_eq!(view.expect("open").reply, "c6", "No response.");

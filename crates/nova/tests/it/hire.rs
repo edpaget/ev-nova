@@ -41,7 +41,9 @@ use nova_data::records::character::Character;
 use nova_data::records::desc::Desc;
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
-use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
+use nova_data::records::fixture::{
+    CharacterBuilder, InterfaceBuilder, ShipAnimBuilder, ShipBuilder, SpinBuilder,
+};
 use nova_data::records::interface::Interface;
 use nova_data::records::mission::Mission;
 use nova_data::records::ship::Ship;
@@ -85,12 +87,6 @@ fn put_i16s(bytes: &mut [u8], at: usize, values: &[i16]) {
     }
 }
 
-fn put_u32s(bytes: &mut [u8], at: usize, values: &[u32]) {
-    for (i, value) in values.iter().enumerate() {
-        bytes[at + 4 * i..at + 4 * i + 4].copy_from_slice(&value.to_be_bytes());
-    }
-}
-
 /// The starting credits.
 const CASH: i32 = 25_000;
 /// The size of the Hireling's sprite's frames.
@@ -98,11 +94,12 @@ const HIRELING_SIZE: f32 = 6.0;
 
 /// The `chär`: 25,000 credits, ship 128 in system 128, no legal records.
 fn character() -> Vec<u8> {
-    let mut bytes = vec![0; Character::SIZE.expect("fixed")];
-    bytes[0x00..0x04].copy_from_slice(&CASH.to_be_bytes());
-    put_i16s(&mut bytes, 0x04, &[128, 128, -1, -1, -1]);
-    put_i16s(&mut bytes, 0x0E, &[-1; 4]);
-    bytes
+    CharacterBuilder::new()
+        .cash(CASH)
+        .ship_type(128)
+        .system(&[128, -1, -1, -1])
+        .govt(&[-1; 4])
+        .build()
 }
 
 /// A `shïp` of 30 shield and 45 armour, slow and steady, unarmed, of tech
@@ -137,9 +134,12 @@ fn ship_anim(image: i16) -> Vec<u8> {
 
 /// A `spïn` naming `rlëD` `image`, one frame across.
 fn spin(image: i16) -> Vec<u8> {
-    let mut bytes = vec![0; Spin::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[image, -1, 0, 0, 1, 1]);
-    bytes
+    SpinBuilder::new()
+        .sprites_id(image)
+        .masks_id(-1)
+        .x_tiles(1)
+        .y_tiles(1)
+        .build()
 }
 
 /// An `rlëD` of `frames` frames of `size` x `size`.
@@ -200,22 +200,27 @@ fn desc(text: &str) -> Vec<u8> {
 
 /// Stock `ïntf` 128's areas and font, over background `PICT` 700.
 fn status_bar() -> Vec<u8> {
-    let mut bytes = vec![0; Interface::SIZE.expect("fixed")];
-    put_u32s(&mut bytes, 0x00, &[0x00FF_FFFF, 0x0080_8080]);
-    put_i16s(&mut bytes, 0x08, &[8, 8, 184, 184]);
-    put_u32s(&mut bytes, 0x10, &[0x0000_FF00, 0x0000_8000]);
-    put_i16s(&mut bytes, 0x18, &[199, 35, 206, 184]);
-    put_u32s(&mut bytes, 0x20, &[0x0000_00FF]);
-    put_i16s(&mut bytes, 0x24, &[216, 35, 223, 184]);
-    put_u32s(&mut bytes, 0x2C, &[0x00FF_0000]);
-    put_i16s(&mut bytes, 0x30, &[234, 35, 241, 184]);
-    put_u32s(&mut bytes, 0x38, &[0x00FF_FF00, 0x0080_8000]);
-    put_i16s(&mut bytes, 0x40, &[254, 8, 286, 184]);
-    put_i16s(&mut bytes, 0x48, &[300, 8, 315, 184]);
-    put_i16s(&mut bytes, 0x50, &[330, 8, 442, 184]);
-    bytes[0x60..0x66].copy_from_slice(b"Geneva");
-    put_i16s(&mut bytes, 0xA0, &[12, 10, 700]);
-    bytes
+    InterfaceBuilder::new()
+        .bright_text(0x00FF_FFFF)
+        .dim_text(0x0080_8080)
+        .radar_area([8, 8, 184, 184])
+        .bright_radar(0x0000_FF00)
+        .dim_radar(0x0000_8000)
+        .shield_area([199, 35, 206, 184])
+        .shield_color(0x0000_00FF)
+        .armor_area([216, 35, 223, 184])
+        .armor_color(0x00FF_0000)
+        .fuel_area([234, 35, 241, 184])
+        .fuel_full(0x00FF_FF00)
+        .fuel_partial(0x0080_8000)
+        .nav_area([254, 8, 286, 184])
+        .weap_area([300, 8, 315, 184])
+        .targ_area([330, 8, 442, 184])
+        .status_font("Geneva")
+        .stat_font_size(12)
+        .subtitle_size(10)
+        .status_bkgnd(700)
+        .build()
 }
 
 /// The game data (see the module docs): the Boarder (ship 128, a 1 x 1

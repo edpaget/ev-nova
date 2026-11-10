@@ -125,6 +125,18 @@ impl Bounds {
     }
 }
 
+/// A QuickDraw rect (an `ïntf` area or a `DLOG`/`DITL` item's bounds) as
+/// bounds: its top-left corner (`left`, `top`) becomes `min` and its
+/// bottom-right corner (`right`, `bottom`) becomes `max`.
+impl From<nova_data::Rect> for Bounds {
+    fn from(rect: nova_data::Rect) -> Self {
+        Self {
+            min: Point::new(f32::from(rect.left), f32::from(rect.top)),
+            max: Point::new(f32::from(rect.right), f32::from(rect.bottom)),
+        }
+    }
+}
+
 /// The point `t` of the way from `from` to `to`: exactly `from` at 0 and
 /// `to` at 1.
 pub(crate) fn lerp(from: Point, to: Point, t: f32) -> Point {
@@ -180,6 +192,17 @@ mod tests {
             min: at(min.0, min.1),
             max: at(max.0, max.1),
         }
+    }
+
+    #[test]
+    fn a_quickdraw_rect_becomes_bounds_from_its_top_left_to_its_bottom_right() {
+        let rect = nova_data::Rect {
+            top: 20,
+            left: 10,
+            bottom: 40,
+            right: 30,
+        };
+        assert_eq!(Bounds::from(rect), bounds((10.0, 20.0), (30.0, 40.0)));
     }
 
     #[test]

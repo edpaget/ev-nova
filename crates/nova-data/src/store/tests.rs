@@ -10,15 +10,14 @@ use super::fixture::FakeTree;
 use super::fs::EntryKind::{Dir, File};
 use super::*;
 use crate::decode::Record;
+use crate::records::fixture::ShipBuilder;
 use crate::records::ship::Ship;
 
 const PICT: ResType = ResType::new(*b"PICT");
 
-/// A `shïp` whose `holds` (offset 0) is `holds`.
+/// A `shïp` whose `holds` is `holds`.
 fn ship_bytes(holds: i16) -> Vec<u8> {
-    let mut bytes = vec![0; Ship::SIZE.expect("fixed size")];
-    bytes[..2].copy_from_slice(&holds.to_be_bytes());
-    bytes
+    ShipBuilder::new().holds(holds).build()
 }
 
 /// A fork defining one ship per `(id, holds)`, each named `{tag} {id}`.

@@ -20,6 +20,7 @@ use super::budget::check_budget;
 use super::color::{ColorTable, indices, rgb555};
 use super::deep_image::{DeepImage, PixelDepth};
 use super::image::Image;
+use super::indexed::check_indexed_depth;
 use super::packbits::unpack;
 use super::pixmap::{PixMap, PixelMap, QdRect};
 use super::reader::Reader;
@@ -556,13 +557,7 @@ fn indexed_bits(
             ColorTable::black_on_white(),
         ),
         PixelMap::PixMap(pm) => {
-            if !matches!(pm.pixel_size, 1 | 2 | 4 | 8) {
-                return Err(GraphicsError::UnsupportedPixMap {
-                    pixel_size: pm.pixel_size,
-                    pack_type: pm.pack_type,
-                    cmp_count: pm.cmp_count,
-                });
-            }
+            check_indexed_depth(&pm)?;
             (pm, ColorTable::read(r)?)
         }
     };

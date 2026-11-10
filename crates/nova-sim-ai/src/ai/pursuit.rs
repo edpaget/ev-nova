@@ -125,7 +125,6 @@ use crate::catalog::WeaponId;
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::armament::Arsenal;
-use crate::combat::hull::Condition;
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::inertialess::InertialDampener;
@@ -596,7 +595,7 @@ pub fn step(
     let Some(at) = around.state_of(ship) else {
         return Pursuit::default();
     };
-    let disabled = around.condition_of(ship) == Some(Condition::Disabled);
+    let disabled = around.is_disabled(ship);
     let swarm = swarm::lead(npc, around);
     let Some(start) = high_level(npc, &at, disabled, swarm) else {
         return Pursuit::default();
@@ -724,6 +723,7 @@ mod tests {
     use crate::ai::PlayerSide;
     use crate::ai::fixture::player;
     use crate::combat::ShipRef;
+    use crate::combat::hull::Condition;
     use crate::stats::ShipStats;
     use crate::traffic::npc::NpcId;
     use nova_sim_base::fixture::{FAST, Ranged};
@@ -1583,6 +1583,91 @@ mod tests {
             assert_eq!(start_at(&npc, Vec2::new(0.0, -100.0), true), None);
             assert_eq!(start_at(&npc, Vec2::new(0.0, -600.0), true), None);
         }
+    }
+
+    /// NPC 2 breaking up, `off` from [`AT`].
+    fn breaking_up_at(off: Vec2) -> Npc {
+        let mut other = crate::traffic::fixture::npc(2, ShipStats::new(FAST, &[]));
+        other.state.position = AT + off;
+        other.condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        other
+    }
+
+    /// `npc`'s step at `quarry`, NPC 2.
+    fn stepped_at(npc: &Npc, quarry: Npc) -> Pursuit {
+        let npcs = [npc.clone(), quarry];
+        let around = Surroundings::new(&[], &npcs);
+        step(npc, &around, PursuitRules::default(), &mut Ranged::of(&[]))
+    }
+
+    #[test]
+    fn a_plunderer_flies_no_fight_at_a_victim_breaking_up_as_it_docks() {
+        // Goal 0xd tests its victim's slot (@0x8e856) and `_IsDisabled`
+        // (@0x8e866), which holds of a ship breaking up, and no `_IsDying`.
+        for hopeless in [false, true] {
+            let npc = burning(fighter(
+                Goal::Plunder {
+                    ship: OTHER,
+                    hopeless,
+                },
+                0.0,
+            ));
+            for off in [Vec2::new(0.0, -100.0), Vec2::new(0.0, -600.0)] {
+                assert_eq!(
+                    stepped_at(&npc, breaking_up_at(off)),
+                    Pursuit::default(),
+                    "{hopeless} {off:?}"
+                );
+            }
+        }
+    }
+
+    /// A stand-off attacker of NPC 2 whose beam reaches 1000: a band of
+    /// 850, halved to 425 at a disabled quarry.
+    fn standing_off() -> Npc {
+        let mut npc = fighter(Goal::Attack(OTHER), 0.0);
+        npc.hull.stands_off = true;
+        npc.armament = Armament::new([(
+            WeaponSpec::new(&WeaponRecord {
+                guidance: 0,
+                beam_length: 1000,
+                ..nova_sim_catalog::fixture::weapon(128)
+            }),
+            1,
+        )]);
+        npc
+    }
+
+    /// A unit pin of [`Surroundings::is_disabled`] in the band's read
+    /// (@0x8e4ca), not a change the player sees: in the real flow the
+    /// attack block drops a target breaking up first
+    /// ([`attack_drop`](crate::ai::attack_drop), `_IsDying` @0x8e3ef →
+    /// @0x8e714), so the band never reads one.
+    #[test]
+    fn a_stand_off_ship_reads_a_breaking_up_quarry_as_disabled_where_the_attack_drop_would_not_filter_it()
+     {
+        let off = Vec2::new(0.0, -600.0);
+        assert_eq!(
+            bodies(&stepped_at(&standing_off(), breaking_up_at(off))),
+            [Manoeuvre::Approach],
+            "beyond the half band of 425"
+        );
+    }
+
+    /// The same pin at a stellar's defence ship breaking up, which
+    /// `_IsDisabled` never calls disabled (@0x2d6f): the full band.
+    #[test]
+    fn a_stand_off_ship_keeps_its_full_band_at_a_defence_ship_breaking_up() {
+        let off = Vec2::new(0.0, -600.0);
+        let guard = crate::traffic::fixture::breaking_up_guard(breaking_up_at(off));
+        assert_eq!(
+            bodies(&stepped_at(&standing_off(), guard)),
+            [Manoeuvre::Snipe],
+            "within the full band of 850"
+        );
     }
 
     #[test]

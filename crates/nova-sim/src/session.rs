@@ -1829,18 +1829,22 @@ impl Session {
         if start.disabled {
             self.collapse_jump(again);
         }
+        // The keys let go while `_IsDisabled` holds of the player
+        // (`Condition::disabled`). Phase
+        // `combat-and-flight-2/phase-9-head-disabled-readers-after-the-bomb`
+        // repoints this at the head's flag (-0x2cb).
         let controls = match self.ship.condition {
-            Condition::Intact => controls,
-            Condition::Disabled | Condition::Dying { .. } => Controls {
-                face: controls.face,
-                ..Controls::default()
-            },
             Condition::Destroyed => {
                 self.ship.stop_thrust(&mut self.out);
                 self.ship.player.velocity = Vec2::ZERO;
                 self.dead_tick();
                 return;
             }
+            condition if condition.disabled() => Controls {
+                face: controls.face,
+                ..Controls::default()
+            },
+            _ => controls,
         };
         match self.mode.jump() {
             None => {

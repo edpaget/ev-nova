@@ -438,7 +438,6 @@ use crate::combat::hull::{Condition, DisableRule, NovaDisable};
 use crate::combat::{ShipRef, Strike};
 use crate::control::Gate;
 use crate::flight::{NpcFormation, ShipState};
-use crate::geometry::Vec2;
 use crate::govt::Governments;
 use crate::landing::TypeWidth;
 use crate::rulebook::RuleSource;
@@ -1024,19 +1023,13 @@ impl<'a> World<'a> {
 
     /// What `_AIMakeShipAttackPlayer`'s quote gate reads of the player
     /// here: whether it is dying or destroyed, and its sight from where it
-    /// is (the centre with no player) with its [`World::cloak_scanner`].
-    /// The player escorts no NPC, so it is never a cloaked escort.
+    /// is (the centre with no player) with its [`World::cloak_scanner`],
+    /// as [`player_observer`](crate::ai::player_observer) builds it.
     #[must_use]
     pub fn gate_view(&self) -> GateView {
         GateView {
             player_dying: player_dying(self),
-            observer: cloak::Observer {
-                at: self
-                    .player
-                    .map_or(Vec2::ZERO, |player| player.state.position),
-                scanner: self.cloak_scanner,
-                cloaked_escort: false,
-            },
+            observer: crate::ai::player_observer(self.player.as_ref(), self.cloak_scanner),
         }
     }
 

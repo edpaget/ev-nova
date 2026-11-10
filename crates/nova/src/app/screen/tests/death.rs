@@ -117,9 +117,11 @@ fn deadly_fork(items: &[(i16, [i16; 3])]) -> ForkBuilder {
             sheet.frame(|f| f.line().pixels(&[0x7C00]))
         })
         .build();
-    let mut character = vec![0; Character::SIZE.expect("fixed")];
-    put(&mut character, 0x04, &[128, 128, -1, -1, -1]);
-    put(&mut character, 0x0E, &[-1; 4]);
+    let character = CharacterBuilder::new()
+        .ship_type(128)
+        .system(&[128, -1, -1, -1])
+        .govt(&[-1; 4])
+        .build();
     let mut system = system(0, &[128]);
     put(&mut system, 0x44, &[128, -1, -1, -1, -1, -1, -1, -1]);
     put(&mut system, 0x54, &[100]);
@@ -129,8 +131,7 @@ fn deadly_fork(items: &[(i16, [i16; 3])]) -> ForkBuilder {
     put(&mut dude, 0x08, &[-1; 16]);
     put(&mut dude, 0x08, &[129]);
     put(&mut dude, 0x28, &[100]);
-    let mut spin = vec![0; Spin::SIZE.expect("fixed")];
-    spin[0..2].copy_from_slice(&1000_i16.to_be_bytes());
+    let spin = SpinBuilder::new().sprites_id(1000).build();
     let fork = items.iter().fold(
         with_main_screen(ForkBuilder::new()),
         |fork, &(outfit, mods)| {

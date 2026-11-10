@@ -27,6 +27,7 @@ use super::{Session, Space};
 mod tests {
     use crate::asteroid::Asteroid;
     use crate::catalog::{AsteroidTypeRecord, WeaponRecord};
+    use crate::chance::NeverFires;
 
     use crate::combat::CombatEvent;
     use crate::combat::weapon::Explosion;
@@ -177,11 +178,27 @@ mod tests {
         let catalog = armed();
         let mut session = shots_set(&catalog, &[INTO_THE_ROCK]);
         frail_rock(&mut session);
+        assert!(
+            session.statics.asteroid_types[0].yield_qty > 0,
+            "the catalog's rock yields"
+        );
+        // The boxes and what they hold are the field's break-up
+        // (nova-sim-combat's `Asteroids::destroy`), drawn on `work`'s
+        // `NeverFires`; the clone leaves the session's field as it was.
+        let remains = session
+            .space
+            .asteroids
+            .clone()
+            .destroy(0, &session.statics.asteroid_types, &mut NeverFires)
+            .expect("remains");
         work(&mut session, &catalog, Controls::default());
-        // 4 × (Rand(101) + 50) %: 2 boxes of commodity 2.
         let boxes = session.cargo_boxes();
-        assert_eq!(boxes.len(), 2, "{boxes:?}");
-        assert!(boxes.iter().all(|made| made.contents == Some(2)));
+        assert_eq!(
+            boxes.len(),
+            usize::try_from(remains.boxes).expect("fits"),
+            "{boxes:?}"
+        );
+        assert!(boxes.iter().all(|made| made.contents == remains.contents));
         let events = session.take_combat_events();
         let boom = Explosion::decode(3);
         let debris: Vec<&str> = events

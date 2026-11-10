@@ -203,26 +203,16 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use nova_data::graphics::Image;
-    use nova_view::{Color, DrawList, ImageKind, Point};
+    use nova_view::{Color, DrawList, Point};
 
     use super::*;
     use crate::batch::Renderer;
     use crate::fonts::FontFaces;
     use crate::gpu::Gpu;
-    use crate::images::{ImageError, ImageSource};
+    use crate::recording::NoImages;
     use crate::viewport::{LogicalSize, Viewport};
     use crate::wgpu::OffscreenGpu;
     use crate::wgpu::sharp_bilinear::SharpBilinear;
-
-    /// No images: the frames below draw solids alone.
-    struct NoImages;
-
-    impl ImageSource for NoImages {
-        fn frames(&self, _kind: ImageKind, _id: i16) -> Result<Vec<Image>, ImageError> {
-            Err(ImageError::Missing)
-        }
-    }
 
     /// The size pairs a stand-in was asked to make a scaler for, shared
     /// with the test.

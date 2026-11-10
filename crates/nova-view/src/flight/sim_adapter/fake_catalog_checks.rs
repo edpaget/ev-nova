@@ -21,8 +21,8 @@ use nova_sim::flight_frame::{
     StepInput, StepReport,
 };
 use nova_sim::gate::HYPERGATE;
-use nova_sim::gate_sprite::RANDOM;
 use nova_sim::hyperspace::MIN_JUMP_DISTANCE;
+use nova_sim::landing::RANDOM;
 use nova_sim::landing::StellarFlags;
 use nova_sim::mission::screens::SPACEPORT;
 use nova_sim::{

@@ -10,7 +10,6 @@
 use crate::common;
 
 use std::collections::HashMap;
-use std::path::Path;
 
 use nova_data::decode_all;
 use nova_data::graphics::{
@@ -19,32 +18,12 @@ use nova_data::graphics::{
 };
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
-use nova_rsrc::{ResType, ResourceFile};
+use nova_rsrc::ResType;
 
-use common::{ndat_files, nova_data};
-
-/// Every stock file, opened, with its name.
-fn stock_files(dir: &Path) -> Vec<(String, ResourceFile)> {
-    ndat_files(dir)
-        .into_iter()
-        .map(|path| {
-            let name = path
-                .file_name()
-                .expect("file name")
-                .to_string_lossy()
-                .into_owned();
-            let file = ResourceFile::open(&path).expect("stock file opens");
-            (name, file)
-        })
-        .collect()
-}
+use common::{nova_data, stock_files, u16_at};
 
 fn code(text: &str) -> ResType {
     ResType::from_mac_roman(text).expect("four Mac Roman characters")
-}
-
-fn u16_at(data: &[u8], at: usize) -> u16 {
-    u16::from_be_bytes([data[at], data[at + 1]])
 }
 
 /// The width and height of the QuickDraw rectangle at `at`.

@@ -86,8 +86,8 @@
 //! records.
 
 use crate::catalog::{GovtId, SystemId};
-use crate::exploration::{GATES, UNINHABITED};
-use crate::landing::landable;
+use crate::exploration::GATES;
+use crate::landing::{StellarFlags, landable};
 use crate::market::price_level;
 use crate::navigation::NavMode;
 use crate::pilot::ExploredLevel;
@@ -216,7 +216,7 @@ pub struct PanelStellar {
 impl PanelStellar {
     /// Whether it is uninhabited (`Flags` 0x20).
     fn uninhabited(&self) -> bool {
-        self.flags & UNINHABITED != 0
+        self.flags & StellarFlags::UNINHABITED != 0
     }
 
     /// Whether `_StellarIsLandable` takes it (@0xa989-0xa9f7).
@@ -794,7 +794,7 @@ mod tests {
     #[test]
     fn the_ports_leave_out_an_uninhabited_and_an_unlandable_stellar() {
         let uninhabited = PanelStellar {
-            flags: 0x0001 | UNINHABITED,
+            flags: 0x0001 | StellarFlags::UNINHABITED,
             ..port("Jupiter")
         };
         let unlandable = PanelStellar {
@@ -1170,7 +1170,7 @@ mod tests {
             ..base.clone()
         };
         let uninhabited = PanelStellar {
-            flags: base.flags | UNINHABITED,
+            flags: base.flags | StellarFlags::UNINHABITED,
             ..base.clone()
         };
         let unlandable = PanelStellar {

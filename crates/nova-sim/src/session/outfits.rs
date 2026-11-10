@@ -104,18 +104,12 @@ use crate::grant::{GrantStock, held_to_max};
 use crate::has_max::{AtMax, ItemFacts, ItemRoom, has_max_of_item};
 use crate::outfit_effects::{GrantEffect, OutfitRules, clean_records, cleaned_records};
 use crate::outfitter::{self, Hardpoints, resale, unit_mass, unit_price};
-use crate::pilot::{ExploredLevel, Pilot};
+use crate::pilot::{self, ExploredLevel, Pilot};
 use crate::rulebook::{RuleKey, RuleSource};
 
 /// The outfit IDs the grant path and `D` take: an index below 0x200
 /// (`_GrantOutfitItem` @0x44d5c, `_EvalSetExp` @0x15427 and @0x15455).
 pub const OUTFIT_IDS: std::ops::RangeInclusive<i16> = 128..=639;
-
-/// Adds one of `outfit` to `pilot`'s.
-fn add_one(pilot: &mut Pilot, outfit: OutfitId) {
-    let owned = pilot.outfits.entry(outfit).or_default();
-    *owned = owned.saturating_add(1);
-}
 
 /// Whether `record` mounts the secondary `selected`: whether one of its
 /// mod slots is a weapon (`ModType` 1) whose `ModVal` names it, as the
@@ -144,21 +138,6 @@ pub(super) fn carries(pilot: &Pilot, outfits: &[OutfitRecord], selected: Option<
     outfits
         .iter()
         .any(|record| pilot.owned(record.id) > 0 && launches(record, selected))
-}
-
-/// Takes one of `outfit` from `pilot`'s, if it owns any: whether it did.
-fn take_one(pilot: &mut Pilot, outfit: OutfitId) -> bool {
-    match pilot.outfits.get_mut(&outfit) {
-        Some(owned) if *owned > 1 => {
-            *owned -= 1;
-            true
-        }
-        Some(_) => {
-            pilot.outfits.remove(&outfit);
-            true
-        }
-        None => false,
-    }
 }
 
 impl Session {
@@ -205,7 +184,7 @@ impl Session {
             self.pilot.set_system_record(system, 0);
         }
         if effect.added {
-            add_one(&mut self.pilot, outfit);
+            pilot::add_outfit(&mut self.pilot.outfits, outfit);
         }
         effect.added
     }
@@ -231,7 +210,7 @@ impl Session {
     /// Takes away one of `outfit` just bought, when the outfitter's rules
     /// remove it after purchase (see the module docs).
     pub(crate) fn remove_after_purchase(&mut self, outfit: OutfitId) {
-        take_one(&mut self.pilot, outfit);
+        pilot::take_outfit(&mut self.pilot.outfits, outfit);
     }
 }
 
@@ -403,7 +382,7 @@ impl PlayerShip {
         setup: &Setup,
         outfit: OutfitId,
     ) {
-        if !OUTFIT_IDS.contains(&outfit.0) || !take_one(pilot, outfit) {
+        if !OUTFIT_IDS.contains(&outfit.0) || !pilot::take_outfit(&mut pilot.outfits, outfit) {
             return;
         }
         if setup.outfit_rules().remove_refund == RuleSource::Bible {
@@ -898,6 +877,33 @@ mod tests {
         };
         assert_eq!(refund(RuleSource::Engine), 50, "half the cost");
         assert_eq!(refund(RuleSource::Bible), 0, "half of 100 x 0");
+    }
+
+    /// Pins the two paths' agreement (wiring): a sale through
+    /// [`Session::outfit`] and a `D` from the same pilot leave the same
+    /// outfit map, whatever the counting rule is, including when the
+    /// count reaches none. It does not pin the counts; the `pilot`
+    /// module's helper tests do.
+    #[test]
+    fn selling_one_and_d_leave_identical_outfit_maps() {
+        use crate::session::tests::{buy, outfitted, outfitting, sell};
+        const SPEED: OutfitId = OutfitId(300);
+        let catalog = outfitting();
+        for n in [2, 1] {
+            let mut session = outfitted(&catalog);
+            for _ in 0..n {
+                assert_eq!(session.outfit(buy(SPEED), &mut NeverFires), Ok(()), "{n}");
+            }
+            let mut sold = session.clone();
+            let mut removed = session;
+            assert_eq!(sold.outfit(sell(SPEED), &mut NeverFires), Ok(()), "{n}");
+            removed.apply_op(&SetOp::RemoveOutfit(SPEED), &mut Scripted::default());
+            assert_eq!(
+                sold.pilot().outfits().collect::<Vec<_>>(),
+                removed.pilot().outfits().collect::<Vec<_>>(),
+                "{n}"
+            );
+        }
     }
 
     #[test]

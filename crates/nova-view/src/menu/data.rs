@@ -191,7 +191,7 @@ fn picture(data: &GameData, id: i16) -> Result<Image, String> {
 mod tests {
     use nova_data::Record;
     use nova_data::graphics::RLED;
-    use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
+    use nova_data::records::fixture::{CharacterBuilder, ShipAnimBuilder, ShipBuilder};
     use nova_data::records::ship_anim::ShipAnim;
     use nova_data::records::string_list::StrList;
     use nova_rsrc::ResType;
@@ -678,15 +678,11 @@ mod tests {
     /// A `chär` whose intro is `pictures` (each its `PICT` and delay) and
     /// `text`.
     fn character(pictures: [(i16, i16); 4], text: i16) -> Vec<u8> {
-        let mut bytes = vec![0; Character::SIZE.expect("fixed")];
-        for (slot, (picture, delay)) in pictures.into_iter().enumerate() {
-            let at = 0x20 + 2 * slot;
-            bytes[at..at + 2].copy_from_slice(&picture.to_be_bytes());
-            let at = 0x28 + 2 * slot;
-            bytes[at..at + 2].copy_from_slice(&delay.to_be_bytes());
-        }
-        bytes[0x30..0x32].copy_from_slice(&text.to_be_bytes());
-        bytes
+        CharacterBuilder::new()
+            .intro_pict(&pictures.map(|(picture, _)| picture))
+            .pict_delay(&pictures.map(|(_, delay)| delay))
+            .intro_text_id(text)
+            .build()
     }
 
     #[test]

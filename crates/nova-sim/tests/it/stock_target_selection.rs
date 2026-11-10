@@ -147,17 +147,8 @@ fn the_stock_iff_projectors_mark_federation_and_moash_governments() {
         .count();
     assert_eq!(scramblers, 2);
     let govts = Governments::read(&data);
-    let of_class = |class: i16| -> BTreeSet<i16> {
-        govts
-            .ids()
-            .filter(|&govt| {
-                govts
-                    .get(govt)
-                    .is_some_and(|record| record.classes.contains(&class))
-            })
-            .map(|govt| govt.0)
-            .collect()
-    };
+    let of_class =
+        |class: i16| -> BTreeSet<i16> { govts.of_class(class).map(|govt| govt.0).collect() };
     assert_eq!(of_class(1), BTreeSet::from([128, 136, 146, 151, 154, 186]));
     assert_eq!(of_class(3), BTreeSet::from([131, 188]));
     for govt in of_class(1).into_iter().chain(of_class(3)) {

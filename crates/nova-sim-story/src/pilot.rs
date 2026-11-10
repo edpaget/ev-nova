@@ -13,6 +13,10 @@
 //! starts in. It holds no cargo, no planetary event is under way, and it
 //! has no escorts.
 //!
+//! One outfit is added to or taken from an owned-outfit map through
+//! [`add_outfit`] and [`take_outfit`], which the grant path, `D`, the
+//! outfitter's sale and its preview of a sale all share.
+//!
 //! The fleet is a list of [`Escort`] records, each a ship class with its
 //! reserves and its standing order, in the order the ships joined; a ship
 //! captured joins it (`nova_sim::Session::assign`), and
@@ -829,6 +833,29 @@ pub fn default_outfits(catalog: &impl PilotCatalog, ship: ShipId) -> BTreeMap<Ou
     tally(catalog.default_outfits(ship))
 }
 
+/// Adds one of `outfit` to `outfits`, the count held at `u16::MAX`.
+pub fn add_outfit(outfits: &mut BTreeMap<OutfitId, u16>, outfit: OutfitId) {
+    let owned = outfits.entry(outfit).or_default();
+    *owned = owned.saturating_add(1);
+}
+
+/// Takes one of `outfit` from `outfits`, if it is listed: whether it was.
+/// One whose count falls to none is no longer listed; a listed count of
+/// none is taken away (and counts as taken).
+pub fn take_outfit(outfits: &mut BTreeMap<OutfitId, u16>, outfit: OutfitId) -> bool {
+    match outfits.get_mut(&outfit) {
+        Some(owned) if *owned > 1 => {
+            *owned -= 1;
+            true
+        }
+        Some(_) => {
+            outfits.remove(&outfit);
+            true
+        }
+        None => false,
+    }
+}
+
 /// `a` and `b` together, saturating.
 #[must_use]
 pub fn merged(a: &BTreeMap<OutfitId, u16>, b: &BTreeMap<OutfitId, u16>) -> BTreeMap<OutfitId, u16> {
@@ -850,6 +877,42 @@ mod tests {
     use crate::reserves::Gauge;
     use nova_sim_base::fixture::FAST;
     use nova_sim_catalog::fixture::{FakePilotCatalog, START, catalog, starting};
+
+    #[test]
+    fn adding_an_outfit_lists_one_more() {
+        let mut outfits = BTreeMap::new();
+        add_outfit(&mut outfits, OutfitId(300));
+        assert_eq!(outfits, BTreeMap::from([(OutfitId(300), 1)]));
+        add_outfit(&mut outfits, OutfitId(300));
+        assert_eq!(outfits, BTreeMap::from([(OutfitId(300), 2)]));
+        let mut full = BTreeMap::from([(OutfitId(300), u16::MAX)]);
+        add_outfit(&mut full, OutfitId(300));
+        assert_eq!(full, BTreeMap::from([(OutfitId(300), u16::MAX)]));
+    }
+
+    #[test]
+    fn taking_an_outfit_leaves_one_fewer() {
+        let mut outfits = BTreeMap::from([(OutfitId(300), 3)]);
+        assert!(take_outfit(&mut outfits, OutfitId(300)));
+        assert_eq!(outfits, BTreeMap::from([(OutfitId(300), 2)]));
+    }
+
+    #[test]
+    fn taking_the_last_outfit_unlists_it() {
+        let mut outfits = BTreeMap::from([(OutfitId(300), 1)]);
+        assert!(take_outfit(&mut outfits, OutfitId(300)));
+        assert_eq!(outfits, BTreeMap::new());
+        let mut zero = BTreeMap::from([(OutfitId(300), 0)]);
+        assert!(take_outfit(&mut zero, OutfitId(300)));
+        assert_eq!(zero, BTreeMap::new());
+    }
+
+    #[test]
+    fn taking_an_outfit_not_owned_changes_nothing() {
+        let mut outfits = BTreeMap::from([(OutfitId(301), 2)]);
+        assert!(!take_outfit(&mut outfits, OutfitId(300)));
+        assert_eq!(outfits, BTreeMap::from([(OutfitId(301), 2)]));
+    }
 
     #[test]
     fn a_new_pilot_flies_the_first_chärs_ship_from_its_first_system_that_exists() {

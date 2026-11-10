@@ -29,7 +29,7 @@ use nova_audio::{
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{EightBitReading, PICT, RLED};
 use nova_data::records::character::Character;
-use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
+use nova_data::records::fixture::{CharacterBuilder, ShipAnimBuilder, ShipBuilder, SpinBuilder};
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
@@ -153,8 +153,10 @@ const LANDING_SOUND: i16 = 10_032;
 /// (0, 0), which can be landed on; with Nova's button pictures and the
 /// hover cursor (`spïn` 650).
 fn game_data() -> Rc<GameData> {
-    let mut character = vec![0; Character::SIZE.expect("fixed")];
-    put_i16s(&mut character, 0x04, &[128, 128, -1, -1, -1]);
+    let character = CharacterBuilder::new()
+        .ship_type(128)
+        .system(&[128, -1, -1, -1])
+        .build();
     let ship = ShipBuilder::new()
         .shield(30)
         .accel(300)
@@ -175,10 +177,20 @@ fn game_data() -> Rc<GameData> {
     put_i16s(&mut stellar, 0x00, &[0, 0, 4]);
     stellar[0x06..0x0A].copy_from_slice(&0x01_u32.to_be_bytes());
     put_i16s(&mut stellar, 0x18, &[-1, LANDING_SOUND]);
-    let mut spin = vec![0; Spin::SIZE.expect("fixed")];
-    put_i16s(&mut spin, 0x00, &[1000, -1, 0, 0, 1, 1]);
-    let mut cursor = vec![0; Spin::SIZE.expect("fixed")];
-    put_i16s(&mut cursor, 0x00, &[651, -1, 1, 1, 8, 1]);
+    let spin = SpinBuilder::new()
+        .sprites_id(1000)
+        .masks_id(-1)
+        .x_tiles(1)
+        .y_tiles(1)
+        .build();
+    let cursor = SpinBuilder::new()
+        .sprites_id(651)
+        .masks_id(-1)
+        .x_size(1)
+        .y_size(1)
+        .x_tiles(8)
+        .y_tiles(1)
+        .build();
     let mut resources = vec![
         (Character::TYPE, 128, character),
         (Ship::TYPE, 128, ship),

@@ -35,7 +35,7 @@
 use std::collections::BTreeMap;
 
 use super::{Session, Setup, Space, Statics};
-use crate::catalog::{GovtId, OutfitId, outfit_mods};
+use crate::catalog::{OutfitId, outfit_mods};
 use crate::rulebook::{RuleKey, RuleSource};
 
 /// An owned outfit's `ModType` that marks governments as the IFF
@@ -66,17 +66,8 @@ impl Space {
             if owned.mod_type != IFF_SCRAMBLER || owned.mod_val == NO_CLASS {
                 continue;
             }
-            let classed: Vec<GovtId> = statics
-                .govts
-                .ids()
-                .filter(|&govt| {
-                    statics
-                        .govts
-                        .get(govt)
-                        .is_some_and(|record| record.classes.contains(&owned.mod_val))
-                })
-                .collect();
-            self.iff_marked.extend(classed);
+            self.iff_marked
+                .extend(statics.govts.of_class(owned.mod_val));
         }
     }
 }
@@ -86,7 +77,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::catalog::{GovtRecord, OutfitId, ShipId};
+    use crate::catalog::{GovtId, GovtRecord, OutfitId, ShipId};
     use crate::pilot::Pilot;
     use crate::rulebook::Rulebook;
     use crate::testkit::{FAST, FakePilotCatalog, catalog, govt, outfit, ship};

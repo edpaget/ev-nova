@@ -47,7 +47,8 @@ use std::collections::BTreeMap;
 
 /// `npc`'s low level at its slot of the AI loop, among `sites`, the gates
 /// among them as wide as `type_widths` says, the ship its goal is about at
-/// `other` when it is there, disabled as `other_disabled` says, with
+/// `other` when it is there, disabled as `other_disabled` says (its
+/// `_IsDisabled`, @0x2ce6, as `Traffic::disabled_at_slot` reads it), with
 /// `beside` what it reads beside that ship ([`Beside`]), at its top speed
 /// `speeds.own`, under the flight rules, by the disputed rules' readings,
 /// leading by the weapon records (`flight`, `readings`, `weapons`), rolling

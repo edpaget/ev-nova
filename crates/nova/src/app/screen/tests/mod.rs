@@ -5,7 +5,9 @@ use nova_data::graphics::RLED;
 use nova_data::graphics::fixture::RledBuilder;
 use nova_data::records::character::Character;
 use nova_data::records::desc::Desc;
-use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
+use nova_data::records::fixture::{
+    CharacterBuilder, InterfaceBuilder, ShipAnimBuilder, ShipBuilder, SpinBuilder,
+};
 use nova_data::records::mission::Mission;
 use nova_data::records::outfit::Outfit;
 use nova_data::records::ship::Ship;
@@ -27,6 +29,7 @@ use nova_view::ships::{ShipBrowser, ShipId};
 use nova_view::sound::SimSound;
 use nova_view::spaceport::layout::LEAVE_ITEM;
 use nova_view::text::fixture::MonoMetrics;
+use nova_view::ui::catalog::fixture::NoDialogs;
 use nova_view::ui::{DialogTemplate, ItemSpec, ItemTemplate, Placement};
 use nova_view::{DrawCommand, Font, Key, MouseButton, Point, Sound, UiSound};
 
@@ -47,9 +50,10 @@ use nova_view::ui::DescDialog;
 use nova_view::ui::DescriptionSource;
 use nova_view::ui::desc::{DESC_DIALOG, DescTemplates, PICTURE_DESC_DIALOG};
 use nova_view::ui::mission_dialogs::DescShown;
-use nova_view::ui::player_info::{PLAYER_INFO_DIALOG, YES_NO_DIALOG};
+use nova_view::ui::player_info::PLAYER_INFO_DIALOG;
 use nova_view::ui::prefs::PREFS_DIALOG;
 use nova_view::ui::text_input::TEXT_INPUT_DIALOG;
+use nova_view::ui::yes_no::YES_NO_DIALOG;
 use nova_view::{DrawList, Screen, ScreenAction};
 
 use nova_data::graphics::PICT;
@@ -112,6 +116,7 @@ mod entry;
 mod escort_defection;
 mod flight;
 mod flight_cursor_dialogs;
+mod flight_metrics;
 mod game;
 mod held_press_chords;
 mod info_dialog_gain;
@@ -350,8 +355,10 @@ fn game_data_fork(
         })
         .build();
     let mut average = ShipBuilder::new().accel(300).speed(300).maneuver(10);
-    let mut character = vec![0; Character::SIZE.expect("fixed")];
-    character[0x32..0x32 + on_start.len()].copy_from_slice(on_start);
+    let mut character = CharacterBuilder::new()
+        .ship_type(128)
+        .system(&[128, -1, -1, -1])
+        .on_start(std::str::from_utf8(on_start).expect("an ASCII OnStart"));
     let mut stellar = landable();
     stellar[0x1A..0x1C].copy_from_slice(&AMBIENT.to_be_bytes());
     let mut beta = landable();
@@ -359,7 +366,7 @@ fn game_data_fork(
     let mut fork = ForkBuilder::new();
     if trading {
         average = average.holds(10);
-        character[0x00..0x04].copy_from_slice(&1000_i32.to_be_bytes());
+        character = character.cash(1000);
         stellar[0x06..0x0A].copy_from_slice(&0x2000_0043_u32.to_be_bytes());
         fork = fork
             .resource(StrList::TYPE, 4000, None, &str_list(&["Food"]))
@@ -394,18 +401,11 @@ fn game_data_fork(
     } else {
         ShipBuilder::new().build()
     };
-    character[0x04..0x06].copy_from_slice(&128_i16.to_be_bytes());
-    character[0x06..0x08].copy_from_slice(&128_i16.to_be_bytes());
-    for slot in 1..4 {
-        let at = 0x06 + 2 * slot;
-        character[at..at + 2].copy_from_slice(&(-1_i16).to_be_bytes());
-    }
-    let mut spin = vec![0; Spin::SIZE.expect("fixed")];
-    spin[0..2].copy_from_slice(&1000_i16.to_be_bytes());
+    let spin = SpinBuilder::new().sprites_id(1000).build();
     with_main_screen(fork)
         .resource(Ship::TYPE, 129, Some(b"Second"), &ship)
         .resource(Ship::TYPE, 128, Some(b"First"), &average.build())
-        .resource(Character::TYPE, 128, Some(b"Pilot"), &character)
+        .resource(Character::TYPE, 128, Some(b"Pilot"), &character.build())
         .resource(ShipAnim::TYPE, 128, None, &anim)
         .resource(ShipAnim::TYPE, 129, None, &anim)
         .resource(RLED, 1000, None, &sheet)
@@ -1244,15 +1244,6 @@ fn prefs_template() -> DialogTemplate {
         bounds: Bounds::at(Point::new(0.0, 0.0), 300.0, 260.0),
         placement: Placement::Fixed,
         items,
-    }
-}
-
-/// No dialogs at all.
-struct NoDialogs;
-
-impl DialogResources for NoDialogs {
-    fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
-        Err(format!("no DLOG {id}"))
     }
 }
 
@@ -2134,13 +2125,6 @@ fn put_i16s(bytes: &mut [u8], at: usize, values: &[i16]) {
     }
 }
 
-/// Writes `values` big-endian into `bytes` from `at`.
-fn put_u32s(bytes: &mut [u8], at: usize, values: &[u32]) {
-    for (n, value) in values.iter().enumerate() {
-        bytes[at + 4 * n..at + 4 * n + 4].copy_from_slice(&value.to_be_bytes());
-    }
-}
-
 /// The fuel gauge's full colour in [`bar_interface`].
 const BAR_FUEL: u32 = 0x00FF_FF00;
 
@@ -2148,23 +2132,26 @@ const BAR_FUEL: u32 = 0x00FF_FF00;
 /// (184, 184), green and dim green, the shield, armour and fuel
 /// gauges 149 wide from x 35, over `PICT` 700.
 fn bar_interface() -> Vec<u8> {
-    let mut bytes = vec![0; Interface::SIZE.expect("fixed")];
-    put_u32s(&mut bytes, 0x00, &[0x00FF_FFFF, 0x0080_8080]);
-    put_i16s(&mut bytes, 0x08, &[8, 8, 184, 184]);
-    put_u32s(&mut bytes, 0x10, &[0x0000_FF00, 0x0000_8000]);
-    put_i16s(&mut bytes, 0x18, &[199, 35, 206, 184]);
-    put_u32s(&mut bytes, 0x20, &[0x0000_00FF]);
-    put_i16s(&mut bytes, 0x24, &[216, 35, 223, 184]);
-    put_u32s(&mut bytes, 0x2C, &[0x00FF_0000]);
-    put_i16s(&mut bytes, 0x30, &[234, 35, 241, 184]);
-    put_u32s(&mut bytes, 0x38, &[BAR_FUEL, 0x0080_8000]);
-    put_i16s(&mut bytes, 0x40, &[254, 8, 286, 184]);
-    put_i16s(&mut bytes, 0x48, &[300, 8, 315, 184]);
-    put_i16s(&mut bytes, 0x50, &[330, 8, 442, 184]);
-    bytes[0x60..0x66].copy_from_slice(b"Geneva");
-    put_i16s(&mut bytes, 0xA0, &[12]);
-    put_i16s(&mut bytes, 0xA4, &[700]);
-    bytes
+    InterfaceBuilder::new()
+        .bright_text(0x00FF_FFFF)
+        .dim_text(0x0080_8080)
+        .radar_area([8, 8, 184, 184])
+        .bright_radar(0x0000_FF00)
+        .dim_radar(0x0000_8000)
+        .shield_area([199, 35, 206, 184])
+        .shield_color(0x0000_00FF)
+        .armor_area([216, 35, 223, 184])
+        .armor_color(0x00FF_0000)
+        .fuel_area([234, 35, 241, 184])
+        .fuel_full(BAR_FUEL)
+        .fuel_partial(0x0080_8000)
+        .nav_area([254, 8, 286, 184])
+        .weap_area([300, 8, 315, 184])
+        .targ_area([330, 8, 442, 184])
+        .status_font("Geneva")
+        .stat_font_size(12)
+        .status_bkgnd(700)
+        .build()
 }
 
 /// A grey 194 x 16 `PICT`: the status bar's background, cut short.

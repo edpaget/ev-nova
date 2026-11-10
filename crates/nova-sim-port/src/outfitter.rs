@@ -355,7 +355,7 @@ use crate::has_max::{AtMax, ItemFacts, has_max_of_item};
 use crate::landing::StellarFlags;
 use crate::market::{Direction, MORE_CARGO};
 use crate::order_loop::{OrderRun, Pass};
-use crate::pilot::Pilot;
+use crate::pilot::{Pilot, take_outfit};
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::rules::{Check, Checks, Context, Value};
 use crate::wares::{self, ALWAYS_RANDOM, DayRolls, HideBits, HideHigher, Roll, ShownTons};
@@ -2468,7 +2468,7 @@ impl Shop<'_> {
                 required,
                 available,
                 sold_here,
-                ..self.facts(&offer, owned)
+                ..self.facts(&offer)
             };
             let row = OutfitRow {
                 id: record.id,
@@ -2502,13 +2502,12 @@ impl Shop<'_> {
         })
     }
 
-    /// The facts the outfitter's rules read about `offer`'s outfit, the
-    /// player owning `owned` of it, settled as the outfitter is built:
+    /// The facts the outfitter's rules read about `offer`'s outfit, settled as the outfitter is built:
     /// whether Buy's own tech test passes it, and what the records, the
     /// ship and the rule set say of it. The listing's outcomes (`listed`,
     /// `required`, `available` and `sold_here`) are left false for the
     /// build to fill in.
-    fn facts(&self, offer: &Offer, owned: u16) -> OutfitFacts {
+    fn facts(&self, offer: &Offer) -> OutfitFacts {
         let record = offer.record;
         let multiplier = max_multiplier().of(offer);
         let launcher = self.launchers.get(&record.id).copied();
@@ -2526,29 +2525,21 @@ impl Shop<'_> {
                 .and_then(|launcher| launcher.ammo)
                 .and_then(|ammo| self.records.iter().find(|named| named.id == ammo))
                 .map(lc_names),
-            raises: self.raises(record, owned, offer.owned),
+            raises: self.raises(record, offer.owned),
             mass_field: record.mass,
             ..OutfitFacts::default()
         }
     }
 
     /// One [`Raise`] for each [`RAISES_MAX`] mod of `record`, in slot
-    /// order, the player owning `owned` of it and `all` the outfits: the
+    /// order, `all` the outfits: the
     /// target, how many of it are held, its `Max`, and its [`raised_max`]
     /// by the Bible once one `record` is sold, which reads every record.
     /// The original reads only a `ModVal` of 128-639 (@0x5c819-0x5c827);
     /// one outside names no outfit and none of it is owned.
-    fn raises(
-        &self,
-        record: &OutfitRecord,
-        owned: u16,
-        all: &BTreeMap<OutfitId, u16>,
-    ) -> Vec<Raise> {
+    fn raises(&self, record: &OutfitRecord, all: &BTreeMap<OutfitId, u16>) -> Vec<Raise> {
         let mut after = all.clone();
-        match owned.saturating_sub(1) {
-            0 => after.remove(&record.id),
-            left => after.insert(record.id, left),
-        };
+        take_outfit(&mut after, record.id);
         record
             .mods
             .iter()
@@ -2724,12 +2715,7 @@ pub fn settle(pilot: &mut Pilot, record: &OutfitRecord, direction: Direction, am
         Direction::Buy => pilot.cash = pilot.cash.saturating_sub(amount),
         Direction::Sell => {
             pilot.cash = pilot.cash.saturating_add(amount);
-            let owned = pilot.owned(record.id).saturating_sub(1);
-            if owned == 0 {
-                pilot.outfits.remove(&record.id);
-            } else {
-                pilot.outfits.insert(record.id, owned);
-            }
+            take_outfit(&mut pilot.outfits, record.id);
         }
     }
 }

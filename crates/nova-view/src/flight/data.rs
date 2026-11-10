@@ -32,7 +32,7 @@ use super::catalog::{
 use super::escorts::{EscortMenuColors, EscortMenuLooks};
 use crate::color::Color;
 use crate::font::Font;
-use crate::geometry::{Bounds, Point};
+use crate::geometry::Bounds;
 use crate::outline::Outline;
 use crate::outline_data::{self, opaque};
 use crate::sheet_image::SheetImage;
@@ -150,14 +150,14 @@ impl StatusBars for GameData {
             None => return Err(format!("no ïntf {id}")),
         };
         Ok(StatusBarLayout {
-            radar: bounds(intf.radar_area),
-            shield: bounds(intf.shield_area),
-            armor: bounds(intf.armor_area),
-            fuel: bounds(intf.fuel_area),
-            nav: bounds(intf.nav_area),
-            weap: bounds(intf.weap_area),
-            targ: bounds(intf.targ_area),
-            cargo: bounds(intf.cargo_area),
+            radar: Bounds::from(intf.radar_area),
+            shield: Bounds::from(intf.shield_area),
+            armor: Bounds::from(intf.armor_area),
+            fuel: Bounds::from(intf.fuel_area),
+            nav: Bounds::from(intf.nav_area),
+            weap: Bounds::from(intf.weap_area),
+            targ: Bounds::from(intf.targ_area),
+            cargo: Bounds::from(intf.cargo_area),
             bright_text: Color::from_rgb24(intf.bright_text),
             dim_text: Color::from_rgb24(intf.dim_text),
             bright_radar: Color::from_rgb24(intf.bright_radar),
@@ -215,7 +215,7 @@ impl CombatLooks for GameData {
         let sound = offset_sound(FIRST_WEAPON_SOUND, weapon.sound);
         let falloff = loaded_falloff(weapon.beam_length, weapon.falloff, weapon.li_density);
         Ok(WeaponLook {
-            name: resource_name(entry.name.unwrap_or_default()),
+            name: nova_data::shown_name(entry.name.unwrap_or_default()).to_owned(),
             sheet,
             sound,
             sound_ticks: sound.and_then(|sound| sound_ticks(self, sound)),
@@ -392,11 +392,6 @@ fn effect_sheet(data: &GameData, id: i16) -> Result<EffectSheet, String> {
     })
 }
 
-/// A resource's name as the game shows it: up to any ';'.
-fn resource_name(name: &str) -> String {
-    name.split(';').next().unwrap_or_default().to_owned()
-}
-
 /// How long `snd ` `sound` lasts in `data`, in ticks rounded up: its
 /// frames over its rate; none when it is missing or cannot be decoded
 /// (which a rate of none cannot).
@@ -413,13 +408,6 @@ const SND: ResType = ResType::new(*b"snd ");
 /// The `snd ` `index` past `first`, or none for a negative index.
 fn offset_sound(first: i16, index: i16) -> Option<SoundId> {
     (index >= 0).then(|| SoundId(first.saturating_add(index)))
-}
-
-fn bounds(rect: nova_data::Rect) -> Bounds {
-    Bounds {
-        min: Point::new(f32::from(rect.left), f32::from(rect.top)),
-        max: Point::new(f32::from(rect.right), f32::from(rect.bottom)),
-    }
 }
 
 /// The `cölr` the escort menu's colours come from.
@@ -447,7 +435,9 @@ mod tests {
     use crate::outline::OutlineTriangle;
     use nova_data::graphics::fixture::{Cicn, Ctab, DirectBits, PictBuilder, RledBuilder};
     use nova_data::graphics::{PICT, RLED};
-    use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
+    use nova_data::records::fixture::{
+        InterfaceBuilder, ShipAnimBuilder, ShipBuilder, SpinBuilder,
+    };
     use nova_data::records::ship::Ship;
     use nova_data::records::ship_anim::ShipAnim;
     use nova_data::store::fixture::one_file;
@@ -456,6 +446,7 @@ mod tests {
     use nova_rsrc::fixture::ForkBuilder;
 
     use super::*;
+    use crate::geometry::Point;
 
     fn store(resources: &[(ResType, i16, Vec<u8>)]) -> GameData {
         let fork = resources
@@ -1060,38 +1051,31 @@ mod tests {
         bytes[at..at + 4].copy_from_slice(&value.to_be_bytes());
     }
 
-    /// Writes `(top, left, bottom, right)` at `at`.
-    fn put_rect(bytes: &mut [u8], at: usize, (top, left, bottom, right): (i16, i16, i16, i16)) {
-        for (i, edge) in [top, left, bottom, right].into_iter().enumerate() {
-            put_i16(bytes, at + 2 * i, edge);
-        }
-    }
-
     /// Stock `ïntf` 128's areas, distinct colours 1 to 8, `font` at
     /// `size`, and background `bkgnd`.
     fn interface(font: &str, size: i16, bkgnd: i16) -> Vec<u8> {
-        let mut bytes = vec![0; Interface::SIZE.expect("fixed")];
-        put_u32(&mut bytes, 0x00, 0x00FF_FFFF);
-        put_u32(&mut bytes, 0x04, 0x0080_8080);
-        put_rect(&mut bytes, 0x08, (8, 8, 184, 184));
-        put_u32(&mut bytes, 0x10, 0x0000_FF00);
-        put_u32(&mut bytes, 0x14, 0x0000_8000);
-        put_rect(&mut bytes, 0x18, (199, 35, 206, 184));
-        put_u32(&mut bytes, 0x20, 0x0000_00FF);
-        put_rect(&mut bytes, 0x24, (216, 35, 223, 184));
-        put_u32(&mut bytes, 0x2C, 0x00FF_0000);
-        put_rect(&mut bytes, 0x30, (234, 35, 241, 184));
-        put_u32(&mut bytes, 0x38, 0x00FF_FF00);
-        put_u32(&mut bytes, 0x3C, 0x0080_8000);
-        put_rect(&mut bytes, 0x40, (254, 8, 286, 184));
-        put_rect(&mut bytes, 0x48, (300, 8, 315, 184));
-        put_rect(&mut bytes, 0x50, (330, 8, 442, 184));
-        put_rect(&mut bytes, 0x58, (458, 8, 552, 184));
-        bytes[0x60..0x60 + font.len()].copy_from_slice(font.as_bytes());
-        put_i16(&mut bytes, 0xA0, size);
-        put_i16(&mut bytes, 0xA2, size - 2);
-        put_i16(&mut bytes, 0xA4, bkgnd);
-        bytes
+        InterfaceBuilder::new()
+            .bright_text(0x00FF_FFFF)
+            .dim_text(0x0080_8080)
+            .radar_area([8, 8, 184, 184])
+            .bright_radar(0x0000_FF00)
+            .dim_radar(0x0000_8000)
+            .shield_area([199, 35, 206, 184])
+            .shield_color(0x0000_00FF)
+            .armor_area([216, 35, 223, 184])
+            .armor_color(0x00FF_0000)
+            .fuel_area([234, 35, 241, 184])
+            .fuel_full(0x00FF_FF00)
+            .fuel_partial(0x0080_8000)
+            .nav_area([254, 8, 286, 184])
+            .weap_area([300, 8, 315, 184])
+            .targ_area([330, 8, 442, 184])
+            .cargo_area([458, 8, 552, 184])
+            .status_font(font)
+            .stat_font_size(size)
+            .subtitle_size(size - 2)
+            .status_bkgnd(bkgnd)
+            .build()
     }
 
     /// A `gövt` whose `Interface` is `interface`.
@@ -1266,12 +1250,12 @@ mod tests {
 
     /// A `spïn` of sprites `image` in a 6 x 6 grid.
     fn spin(image: i16) -> Vec<u8> {
-        let mut bytes = vec![0; Spin::SIZE.expect("fixed")];
-        put_i16(&mut bytes, 0x00, image);
-        put_i16(&mut bytes, 0x02, -1);
-        put_i16(&mut bytes, 0x08, 6);
-        put_i16(&mut bytes, 0x0A, 6);
-        bytes
+        SpinBuilder::new()
+            .sprites_id(image)
+            .masks_id(-1)
+            .x_tiles(6)
+            .y_tiles(6)
+            .build()
     }
 
     fn boom(advance: i16, sound: i16, graphic: i16) -> Vec<u8> {
@@ -1607,9 +1591,10 @@ mod tests {
     #[test]
     fn the_stars_sheet_counts_its_spins_tiles_when_fewer_than_its_rleds_frames() {
         // 2 x 2 tiles over a 16-frame `rlëD` (`_LoadSprites` @0x210a4-0x210d2).
-        let mut two_by_two = spin(701);
-        put_i16(&mut two_by_two, 0x08, 2);
-        put_i16(&mut two_by_two, 0x0A, 2);
+        let two_by_two = SpinBuilder::from_bytes(spin(701))
+            .x_tiles(2)
+            .y_tiles(2)
+            .build();
         let data = named_store(&[
             (Spin::TYPE, 700, None, two_by_two),
             (RLED, 701, None, sheet(16)),
@@ -1623,17 +1608,14 @@ mod tests {
 
         // `spïn` 700 has no `rlëD`: sprites `PICT` 2700 and mask 2800, two
         // 4 x 4 frames cut from the 8 x 4 picture (@0x21126-0x21225).
-        let mut pict_pair = vec![0; Spin::SIZE.expect("fixed")];
-        for (at, value) in [
-            (0x00, 2700),
-            (0x02, 2800),
-            (0x04, 4),
-            (0x06, 4),
-            (0x08, 2),
-            (0x0A, 1),
-        ] {
-            put_i16(&mut pict_pair, at, value);
-        }
+        let pict_pair = SpinBuilder::new()
+            .sprites_id(2700)
+            .masks_id(2800)
+            .x_size(4)
+            .y_size(4)
+            .x_tiles(2)
+            .y_tiles(1)
+            .build();
         let data = named_store(&[
             (Spin::TYPE, 700, None, pict_pair),
             (
@@ -1733,17 +1715,14 @@ mod tests {
 
         // `spïn` 402 has no `rlëD`: sprites `PICT` 2402 and mask 2502, two
         // 4 x 4 frames cut from the 8 x 4 picture.
-        let mut pict_pair = vec![0; Spin::SIZE.expect("fixed")];
-        for (at, value) in [
-            (0x00, 2402),
-            (0x02, 2502),
-            (0x04, 4),
-            (0x06, 4),
-            (0x08, 2),
-            (0x0A, 1),
-        ] {
-            put_i16(&mut pict_pair, at, value);
-        }
+        let pict_pair = SpinBuilder::new()
+            .sprites_id(2402)
+            .masks_id(2502)
+            .x_size(4)
+            .y_size(4)
+            .x_tiles(2)
+            .y_tiles(1)
+            .build();
         let data = named_store(&[
             (Boom::TYPE, 128, None, boom(100, -1, 2)),
             (Spin::TYPE, 402, None, pict_pair),
@@ -1783,9 +1762,7 @@ mod tests {
 
     /// A `shïp` with `subtitle`.
     fn subtitled(subtitle: &str) -> Vec<u8> {
-        let mut bytes = ship();
-        bytes[0x6E6..0x6E6 + subtitle.len()].copy_from_slice(subtitle.as_bytes());
-        bytes
+        ShipBuilder::from_bytes(ship()).subtitle(subtitle).build()
     }
 
     #[test]

@@ -378,44 +378,10 @@ const FLICKER_DROP: i32 = 4;
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
+    use nova_sim_base::fixture::blink::ScriptedRolls;
 
     use super::*;
     use crate::blink::HashedRolls;
-
-    /// Answers every roll from a script, by call (the last answer repeats
-    /// past its end), and records every `(change, sides)` it is asked.
-    #[derive(Default)]
-    struct ScriptedRolls {
-        answers: Vec<u16>,
-        asked: RefCell<Vec<(u64, u16)>>,
-    }
-
-    impl ScriptedRolls {
-        fn new(answers: &[u16]) -> Self {
-            Self {
-                answers: answers.to_vec(),
-                asked: RefCell::default(),
-            }
-        }
-
-        fn asked(&self) -> Vec<(u64, u16)> {
-            self.asked.borrow().clone()
-        }
-    }
-
-    impl BlinkChance for ScriptedRolls {
-        fn roll(&self, change: u64, sides: u16) -> u16 {
-            let mut asked = self.asked.borrow_mut();
-            let at = asked.len();
-            asked.push((change, sides));
-            self.answers
-                .get(at)
-                .or(self.answers.last())
-                .copied()
-                .unwrap_or(0)
-        }
-    }
 
     /// The level for `base` with a roll of `roll`.
     fn rolled(base: u8, roll: u16) -> Option<u8> {

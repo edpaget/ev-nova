@@ -3,8 +3,11 @@
 //! follows a script, [`Draws`] draws from a queue, and [`Ranged`] draws by
 //! the range asked. [`FAST`] is a fast, light ship class. [`chance`] holds
 //! the port's contract, which every source must meet. [`rle`] draws
-//! run-length sheets as text, for the sprite masks' tests.
+//! run-length sheets as text, for the sprite masks' tests. [`blink`] holds
+//! a scripted [`BlinkChance`](crate::blink::BlinkChance) for the ship
+//! lights' tests.
 
+pub mod blink;
 pub mod chance;
 pub mod rle;
 

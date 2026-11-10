@@ -29,7 +29,7 @@
 //! whose +0x34 has neither 0x1000 nor 0x2000. `_LoadObjectData` fills
 //! +0x30 from the `spöb`'s `Flags` (@0x77361-0x7736a) and +0x34 from its
 //! `Flags2` (@0x7736e-0x77378), so that is a stellar neither uninhabited
-//! ([`UNINHABITED`], `Flags` 0x0020) nor a hypergate or wormhole
+//! ([`StellarFlags::UNINHABITED`], `Flags` 0x0020) nor a hypergate or wormhole
 //! ([`GATES`], `Flags2` 0x1000 and 0x2000). By the Bible, any of the
 //! system's stellars counts.
 //!
@@ -91,6 +91,7 @@ use std::collections::BTreeSet;
 use crate::catalog::SystemId;
 use crate::govt::Governments;
 use crate::hyperspace::{Places, StarMap};
+use crate::landing::StellarFlags;
 use crate::outfit_effects::MapReach;
 use crate::rulebook::RuleSource;
 use crate::story::OverlaidGalaxy;
@@ -98,8 +99,6 @@ use crate::story::OverlaidGalaxy;
 /// How many of a system's first `NavDefs` slots the engine reads for
 /// whether it is inhabited (@0x4c4f).
 pub const ENGINE_SLOTS: usize = 4;
-/// The `spöb` `Flags` bit of an uninhabited stellar.
-pub const UNINHABITED: u32 = 0x0020;
 /// The `spöb` `Flags2` bits of a hypergate (0x1000) and a wormhole
 /// (0x2000).
 pub const GATES: u16 = 0x3000;
@@ -116,7 +115,7 @@ pub fn inhabited(stellars: &[Option<(u32, u16)>], source: RuleSource) -> bool {
     stellars[..read]
         .iter()
         .flatten()
-        .any(|&(flags, flags2)| flags & UNINHABITED == 0 && flags2 & GATES == 0)
+        .any(|&(flags, flags2)| flags & StellarFlags::UNINHABITED == 0 && flags2 & GATES == 0)
 }
 
 /// The walks a map reaching `reach` runs from the player's system
@@ -139,11 +138,7 @@ pub fn map_walks(
             .collect(),
         MapReach::GovtClass(class) => map
             .systems()
-            .filter(|&id| {
-                map.govt(id)
-                    .and_then(|govt| govts.get(govt))
-                    .is_some_and(|record| record.classes.contains(&class))
-            })
+            .filter(|&id| govts.has_class(map.govt(id), class))
             .map(|id| (id, 0))
             .collect(),
         MapReach::Nothing => Vec::new(),
@@ -273,7 +268,7 @@ mod tests {
     }
 
     const LIVED_IN: Option<(u32, u16)> = Some((0x0001, 0));
-    const EMPTY: Option<(u32, u16)> = Some((UNINHABITED, 0));
+    const EMPTY: Option<(u32, u16)> = Some((StellarFlags::UNINHABITED, 0));
 
     fn with(system: StarSystem, govt: Option<i16>, stellars: &[Option<(u32, u16)>]) -> StarSystem {
         StarSystem {
@@ -360,7 +355,10 @@ mod tests {
             assert!(!inhabited(&[Some((0x0001, 0x1000))], source), "a hypergate");
             assert!(!inhabited(&[Some((0x0001, 0x2000))], source), "a wormhole");
             assert!(inhabited(&[Some((0x0001, 0x0FFF))], source), "other bits");
-            assert!(inhabited(&[Some((!UNINHABITED, 0xCFFF))], source));
+            assert!(inhabited(
+                &[Some((!StellarFlags::UNINHABITED, 0xCFFF))],
+                source
+            ));
         }
         let fifth = [None, EMPTY, None, EMPTY, LIVED_IN];
         assert!(!inhabited(&fifth, RuleSource::Engine));

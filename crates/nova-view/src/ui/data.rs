@@ -10,7 +10,7 @@ use nova_data::records::colors::Colors;
 use nova_data::records::desc::Desc;
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::{DialogItem, ItemKind};
-use nova_data::{GameData, InterfaceData, Rect};
+use nova_data::{GameData, InterfaceData};
 use nova_sim::DescMovie;
 
 use super::button::ButtonStyle;
@@ -19,7 +19,7 @@ use super::dialog::{DialogTemplate, ItemSpec, ItemTemplate, Placement};
 use crate::color::Color;
 use crate::font::Font;
 use crate::galaxy::find::{self, FIND_DIALOG};
-use crate::geometry::{Bounds, Point};
+use crate::geometry::Bounds;
 use crate::ui::comm::{self, COMM_DIALOG, HAGGLE_DIALOG};
 use crate::ui::escort_dialog::{self, ESCORT_DIALOG};
 use crate::ui::new_pilot::{self, NEW_PILOT_DIALOG};
@@ -98,7 +98,7 @@ fn template(
     has_picture: impl Fn(i16) -> bool,
 ) -> DialogTemplate {
     DialogTemplate {
-        bounds: bounds(dlog.bounds),
+        bounds: Bounds::from(dlog.bounds),
         placement: Placement::for_dlog(id, dlog.position),
         items: items.into_iter().map(|it| item(it, &has_picture)).collect(),
     }
@@ -107,7 +107,7 @@ fn template(
 fn item(item: DialogItem, has_picture: impl Fn(i16) -> bool) -> ItemTemplate {
     let text = |text: nova_data::MacString| text.as_str().to_owned();
     ItemTemplate {
-        bounds: bounds(item.bounds),
+        bounds: Bounds::from(item.bounds),
         enabled: item.enabled,
         kind: match item.kind {
             ItemKind::User => ItemSpec::User,
@@ -122,13 +122,6 @@ fn item(item: DialogItem, has_picture: impl Fn(i16) -> bool) -> ItemTemplate {
             ItemKind::Picture { pict } => ItemSpec::MissingPicture(pict.0),
             ItemKind::Other { .. } => ItemSpec::Other,
         },
-    }
-}
-
-fn bounds(rect: Rect) -> Bounds {
-    Bounds {
-        min: Point::new(f32::from(rect.left), f32::from(rect.top)),
-        max: Point::new(f32::from(rect.right), f32::from(rect.bottom)),
     }
 }
 
@@ -201,6 +194,7 @@ mod tests {
     use nova_data::new_game::interface::DefaultDialog;
 
     use super::*;
+    use crate::geometry::Point;
     use crate::ui::dialog::ItemSpec;
 
     fn fork(resources: &[(ResType, i16, Vec<u8>)]) -> Vec<u8> {

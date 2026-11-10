@@ -51,9 +51,9 @@
 //! click is tracked on all six rectangles, Jettison's even when hidden,
 //! and chooses the button it is released on. Done closes; a tab shows its
 //! tab; Jettison acts only on the Cargo tab with cargo that can be
-//! jettisoned (@0x5a621-0x5a634): it asks `STR#` 2002 #291 in the Yes/No
-//! dialog (`DLOG` 3002, `_EVYesNoDialog` 0x5558c), OK (item 1) yes and
-//! Cancel (5) no, Return OK and Escape nothing; a yes jettisons
+//! jettisoned (@0x5a621-0x5a634): it asks `STR#` 2002 #291 through
+//! [`YesNoDialog`](super::yes_no::YesNoDialog) (`DLOG` 3002,
+//! `_EVYesNoDialog` 0x5558c), OK (item 1) yes and Cancel (5) no, Return OK and Escape nothing; a yes jettisons
 //! everything ([`PlayerInfoScreen::take_jettison`]) and closes the
 //! screen; with no Yes/No dialog the answer is no. No button is inert
 //! ([`INERT_BUTTONS`]).
@@ -92,10 +92,11 @@ use nova_sim::player_info::{EnergyShown, IncomeLine, Reach, Words, cheat_suffix}
 
 use super::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
 use super::catalog::PictureSizes;
-use super::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing};
+use super::dialog::{Dialog, DialogTemplate, FocusRing};
 use super::key_wait::KeyWait;
 use super::pad_focus::{FocusState, from_pad};
 use super::text_box::TextBox;
+use super::yes_no::YesNoDialog;
 use crate::bound_names::{CONFIRM_OR_BACK, press_clause};
 use crate::color::Color;
 use crate::draw::{DrawCommand, DrawList, fill_rect};
@@ -164,15 +165,6 @@ impl BackgroundSizes {
         }
     }
 }
-/// The Yes/No dialog Jettison asks in (`DLOG` 3002).
-pub const YES_NO_DIALOG: i16 = 3002;
-/// The Yes/No dialog's OK, its yes.
-pub const YES_ITEM: usize = 1;
-/// The Yes/No dialog's question item.
-pub const QUESTION_ITEM: usize = 3;
-/// The Yes/No dialog's Cancel, its no.
-pub const NO_ITEM: usize = 5;
-
 /// Done's item.
 pub const DONE_ITEM: usize = 1;
 /// The tabs' items, General first.
@@ -576,7 +568,7 @@ pub struct PlayerInfoScreen {
     /// The Yes/No dialog's template, or why there is none.
     confirm_template: Result<DialogTemplate, String>,
     /// The Yes/No dialog, while it asks.
-    confirm: Option<Dialog>,
+    confirm: Option<YesNoDialog>,
     /// Whether the Yes/No dialog's buttons take the keyboard focus.
     focus_ring: FocusRing,
     info: PlayerInfo,
@@ -727,7 +719,7 @@ impl PlayerInfoScreen {
     /// The Yes/No dialog, while Jettison asks.
     #[must_use]
     pub fn confirm(&self) -> Option<&Dialog> {
-        self.confirm.as_ref()
+        self.confirm.as_ref().map(YesNoDialog::dialog)
     }
 
     /// Whether the Yes/No dialog is asking.
@@ -769,31 +761,32 @@ impl PlayerInfoScreen {
         let (Ok(template), Ok(laid)) = (&self.confirm_template, &self.laid) else {
             return;
         };
-        let mut dialog = Dialog::new(template, &[], Rc::clone(&laid.metrics.0))
-            .with_buttons(ButtonSkin::NOVA, self.style)
-            .with_default(Some(YES_ITEM))
-            .with_cancel(None)
-            .with_focus_ring(self.focus_ring)
-            .with_bindings(self.keys.bindings().clone());
-        dialog.set_text(QUESTION_ITEM, &self.info.words.jettison_question);
-        dialog.input(&self.told());
-        self.confirm = Some(dialog);
+        let mut question = YesNoDialog::new(
+            template,
+            &self.info.words.jettison_question,
+            self.style,
+            Rc::clone(&laid.metrics.0),
+        )
+        .with_focus_ring(self.focus_ring)
+        .with_bindings(self.keys.bindings().clone());
+        question.input(&self.told());
+        self.confirm = Some(question);
     }
 
     /// The Yes/No dialog's input: yes jettisons and closes; no goes back.
     fn confirm_input(&mut self, input: &Input) {
-        let Some(dialog) = &mut self.confirm else {
+        let Some(question) = &mut self.confirm else {
             return;
         };
-        let event = dialog.input(input);
-        match event {
-            Some(DialogEvent::Item(YES_ITEM)) => {
+        question.input(input);
+        match question.take_answer() {
+            Some(true) => {
                 self.confirm = None;
                 self.jettison = true;
                 self.close();
             }
-            Some(DialogEvent::Item(NO_ITEM)) => self.confirm = None,
-            _ => {}
+            Some(false) => self.confirm = None,
+            None => {}
         }
     }
 
@@ -1004,17 +997,16 @@ impl Screen for PlayerInfoScreen {
         }
         self.draw_content(laid, list);
         self.draw_pad_highlight(list);
-        if let Some(dialog) = &self.confirm {
-            fill_rect(list, dialog.bounds(), Color::BLACK);
-            dialog.draw(list);
+        if let Some(question) = &self.confirm {
+            question.draw(list);
         }
     }
 
     fn cancel_pointer(&mut self) {
         self.tracker.cancel_pointer();
         self.tracked = None;
-        if let Some(dialog) = &mut self.confirm {
-            dialog.cancel_pointer();
+        if let Some(question) = &mut self.confirm {
+            question.cancel_pointer();
         }
     }
 
@@ -1071,6 +1063,7 @@ mod tests {
     use crate::sound::Sound;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
+    use crate::ui::yes_no::{NO_ITEM, QUESTION_ITEM, YES_ITEM};
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds {
         Bounds::at(Point::new(x, y), w, h)
@@ -1369,7 +1362,6 @@ mod tests {
     #[test]
     fn the_named_values() {
         assert_eq!(PLAYER_INFO_DIALOG, 1017);
-        assert_eq!(YES_NO_DIALOG, 3002);
         assert_eq!(BACKGROUND.map(|image| image.id), [8518, 8519, 8520]);
         assert_eq!(
             (DONE_ITEM, TAB_ITEMS, CONTENT_ITEM, JETTISON_ITEM),
@@ -2315,6 +2307,46 @@ mod tests {
         assert!(screen.closed());
         assert!(screen.take_jettison());
         assert!(!screen.take_jettison(), "once");
+    }
+
+    #[test]
+    fn jettisons_item_3_is_laid_out_as_the_quit_questions() {
+        let static_text = yes_no();
+        let mut user_item = yes_no();
+        user_item.items[QUESTION_ITEM - 1].kind = ItemSpec::User;
+        for (name, confirm) in [("static text", static_text), ("user item", user_item)] {
+            let mut screen = PlayerInfoScreen::new(
+                Ok((template(), Rc::new(MonoMetrics))),
+                Ok(confirm.clone()),
+                info(),
+                ButtonStyle::STOCK,
+                stock(),
+            );
+            screen.input(&press(Key::Tab));
+            click_button(&mut screen, PlayerInfoButton::Jettison);
+            let mut reference = YesNoDialog::new(
+                &confirm,
+                &info().words.jettison_question,
+                ButtonStyle::STOCK,
+                Rc::new(MonoMetrics),
+            );
+            reference.input(&screen.told());
+            assert!(reference.dialog().text(QUESTION_ITEM).is_some(), "{name}");
+            assert_eq!(
+                screen
+                    .confirm()
+                    .and_then(|dialog| dialog.text(QUESTION_ITEM)),
+                reference.dialog().text(QUESTION_ITEM),
+                "{name}"
+            );
+            let mut expected = DrawList::new();
+            reference.draw(&mut expected);
+            let expected: Vec<DrawCommand> = expected.iter().cloned().collect();
+            assert!(
+                drawn(&screen).ends_with(&expected),
+                "{name}: drawn as the reference"
+            );
+        }
     }
 
     #[test]

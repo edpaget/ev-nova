@@ -1,13 +1,22 @@
 //! The Yes/No dialog (`DLOG` 3002, `_EVYesNoDialog` @0x5558c): a question
 //! and two buttons, such as the main screen's close box asking
-//! [`QUIT_QUESTION`].
+//! [`QUIT_QUESTION`] or the player info screen's Jettison asking `STR#`
+//! 2002 #291 ([`PlayerInfoScreen`](super::player_info::PlayerInfoScreen)).
 //!
-//! `_EVYesNoDialog` opens `DLOG` 3002, makes OK (item 1) the default,
-//! copies the question into item 3 and waits in `ModalDialog` with no
+//! `_EVYesNoDialog` opens `DLOG` 3002 (`GetNewDialog` @0x555bb), makes OK
+//! (item 1) the default (@0x555dd), copies the question into item 3 and
+//! waits in `ModalDialog` with no
 //! filter of its own (@0x5569e) until OK, the yes, or Cancel (item 5),
 //! the no, is hit. Return answers yes; Escape does nothing, as the
 //! player info screen's Jettison question reads it. It draws none of the
 //! game's picture frames and plays no sound of its own.
+//!
+//! Item 3 is the `DITL`'s own static text: the question is `strncpy`'d
+//! (@0x5563c), then `GetDialogItem(3)` @0x55663 and `SetDialogItemText`
+//! @0x55675 set it, and the Dialog Manager draws it static. Stock `DITL`
+//! 3002 makes item 3 static text, which the dialog lays out as static text
+//! whatever role it is given; the `ScrollText` role [`YesNoDialog::new`]
+//! gives item 3 takes effect only on a template whose item 3 is a user item.
 
 use std::rc::Rc;
 use std::time::Duration;
