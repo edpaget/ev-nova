@@ -13,6 +13,7 @@ use nova_data::graphics::Image;
 use nova_view::{Blend, Color, DrawLayer, Font, Point};
 
 pub use crate::atlas::{PageId, Uv};
+use crate::model::Mesh;
 pub use crate::model::MeshId;
 use crate::upscale::{Upscaler, WorldResolution};
 use crate::viewport::{LogicalSize, PixelRect};
@@ -34,6 +35,12 @@ pub trait Gpu {
     /// Drops every page, atlas and stream pages alike, for an atlas started
     /// afresh: the next page created is page 0 again.
     fn clear_pages(&mut self);
+    /// Holds `data` as mesh `mesh`, replacing any mesh of that id, for
+    /// [`Batch::Models`] to draw. The renderer uploads a mesh the first
+    /// frame that draws it, and again after it is replaced
+    /// ([`crate::Renderer::add_model`]); it never hands over one with no
+    /// triangles. Meshes are not pages: [`Gpu::clear_pages`] keeps them.
+    fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh);
     /// Draws `frame` to the window or target.
     fn submit(&mut self, frame: &Frame);
     /// The resolution it draws the world layer at, which decides each

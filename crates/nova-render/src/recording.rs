@@ -12,6 +12,7 @@ use nova_view::ImageKind;
 
 use crate::gpu::{Frame, Gpu, PageId};
 use crate::images::{ImageError, ImageSource};
+use crate::model::{Mesh, MeshId};
 use crate::upscale::{Upscaler, UpscalerProbe, WorldResolution, resolution_of};
 use crate::viewport::PixelRect;
 
@@ -52,6 +53,13 @@ pub enum GpuCall {
     },
     /// [`Gpu::clear_pages`].
     ClearPages,
+    /// [`Gpu::upload_mesh`].
+    UploadMesh {
+        /// The mesh's id.
+        mesh: MeshId,
+        /// The mesh.
+        data: Mesh,
+    },
     /// [`Gpu::submit`].
     Submit(Frame),
 }
@@ -169,6 +177,13 @@ impl Gpu for RecordingGpu {
         self.calls.push(GpuCall::ClearPages);
     }
 
+    fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh) {
+        self.calls.push(GpuCall::UploadMesh {
+            mesh,
+            data: data.clone(),
+        });
+    }
+
     fn submit(&mut self, frame: &Frame) {
         self.calls.push(GpuCall::Submit(frame.clone()));
     }
@@ -241,6 +256,20 @@ mod tests {
                 },
                 GpuCall::ClearPages
             ]
+        );
+    }
+
+    #[test]
+    fn recording_gpu_records_a_mesh_upload() {
+        let mut gpu = RecordingGpu::new();
+        let cube = Mesh::cube([nova_view::Color::WHITE; 6]);
+        gpu.upload_mesh(MeshId(3), &cube);
+        assert_eq!(
+            gpu.calls,
+            [GpuCall::UploadMesh {
+                mesh: MeshId(3),
+                data: cube
+            }]
         );
     }
 

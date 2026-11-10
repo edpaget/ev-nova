@@ -11,6 +11,7 @@ use super::upscale::{Native, Upscale};
 use super::{InitError, WgpuRenderer, acquire};
 use crate::fonts::FontFaces;
 use crate::gpu::{Frame, Gpu, PageId};
+use crate::model::{Mesh, MeshId};
 use crate::upscale::{Upscaler, UpscalerProbe, WorldResolution};
 use crate::viewport::PixelRect;
 
@@ -188,6 +189,10 @@ impl Gpu for OffscreenGpu {
 
     fn clear_pages(&mut self) {
         self.renderer.clear_pages();
+    }
+
+    fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh) {
+        self.renderer.upload_mesh(mesh, data);
     }
 
     fn submit(&mut self, frame: &Frame) {

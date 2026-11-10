@@ -117,12 +117,15 @@ pub mod wgpu;
 
 pub use atlas::{Atlas, AtlasEntry, GUTTER, PAGE_SIZE, PackError, PageId, ShelfPacker, Uv};
 pub use batch::{RenderReport, Renderer};
+pub use camera::Light;
 pub use enlarge::{Enlarger, NativeDetail, enlarger_for};
 pub use fonts::{FALLBACK_FONT, Face, FontFaces, Loaded, SERIF_FONT, face_for};
 pub use gpu::{
-    Batch, Frame, Gpu, MAX_TEXTURE_SIDE, QuadInstance, Rect, SolidQuad, TextRun, WorldSpace,
+    Batch, Frame, Gpu, MAX_TEXTURE_SIDE, ModelInstance, QuadInstance, Rect, SolidQuad, TextRun,
+    WorldSpace,
 };
 pub use images::{ImageError, ImageSource};
+pub use model::{Mesh, MeshError, MeshId, Vertex};
 pub use present::{AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action};
 pub use source::GameImages;
 pub use super_xbr::SuperXbr;

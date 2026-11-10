@@ -7,6 +7,7 @@ use super::overlay::{OverlayGpu, OverlayPainter, PaintTarget};
 use super::{InitError, WgpuRenderer, acquire};
 use crate::fonts::FontFaces;
 use crate::gpu::{Frame, Gpu, PageId};
+use crate::model::{Mesh, MeshId};
 use crate::present::{
     AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action,
 };
@@ -82,6 +83,10 @@ impl Gpu for SurfaceGpu {
 
     fn clear_pages(&mut self) {
         self.renderer.clear_pages();
+    }
+
+    fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh) {
+        self.renderer.upload_mesh(mesh, data);
     }
 
     fn submit(&mut self, frame: &Frame) {

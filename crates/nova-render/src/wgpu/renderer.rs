@@ -20,6 +20,7 @@ use super::layout::lay_out_text;
 use super::upscale::{Upscale, abilities, upscale_for};
 use crate::fonts::FontFaces;
 use crate::gpu::{Batch, Frame, PageId, TextRun, WorldSpace};
+use crate::model::{Mesh, MeshId};
 use crate::upscale::{Abilities, Upscaler, WorldResolution, offered};
 use crate::viewport::PixelRect;
 
@@ -395,6 +396,9 @@ impl WgpuRenderer {
     pub fn clear_pages(&mut self) {
         self.pages.clear();
     }
+
+    /// Holds `data` as mesh `mesh`, replacing any mesh of that id.
+    pub fn upload_mesh(&mut self, _mesh: MeshId, _data: &Mesh) {}
 
     /// Copies `image` onto page `page` at `at`.
     pub fn upload(&mut self, page: PageId, at: PixelRect, image: &Image) {

@@ -6,6 +6,7 @@
 use nova_data::graphics::Image;
 
 use crate::gpu::{Frame, Gpu, PageId};
+use crate::model::{Mesh, MeshId};
 use crate::upscale::{Upscaler, WorldResolution};
 use crate::viewport::PixelRect;
 
@@ -61,6 +62,10 @@ impl<G: OverlayGpu + ?Sized> Gpu for WithOverlay<'_, G> {
         self.gpu.clear_pages();
     }
 
+    fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh) {
+        self.gpu.upload_mesh(mesh, data);
+    }
+
     fn submit(&mut self, frame: &Frame) {
         self.gpu.submit_with(frame, self.painter);
     }
@@ -93,6 +98,7 @@ mod tests {
         CreatePage(PageId, u32),
         Upload(PageId, PixelRect, Image),
         ClearPages,
+        UploadMesh(MeshId, Mesh),
         Submit(Frame),
         SubmitWith(Frame, *const ()),
         SetUpscaler(Upscaler),
@@ -118,6 +124,10 @@ mod tests {
 
         fn clear_pages(&mut self) {
             self.calls.push(Call::ClearPages);
+        }
+
+        fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh) {
+            self.calls.push(Call::UploadMesh(mesh, data.clone()));
         }
 
         fn submit(&mut self, frame: &Frame) {
@@ -243,6 +253,21 @@ mod tests {
                 Call::ClearPages
             ]
         );
+    }
+
+    #[test]
+    fn with_overlay_forwards_mesh_uploads() {
+        let mut gpu = FakeGpu::default();
+        let mut painter = NoPainter;
+        let cube = Mesh::cube([Color::WHITE; 6]);
+        {
+            let mut with = WithOverlay {
+                gpu: &mut gpu,
+                painter: &mut painter,
+            };
+            with.upload_mesh(MeshId(5), &cube);
+        }
+        assert_eq!(gpu.calls, [Call::UploadMesh(MeshId(5), cube)]);
     }
 
     #[test]
