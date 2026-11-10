@@ -216,9 +216,8 @@ impl ShipFrames {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use std::cell::RefCell;
-
-    use nova_sim_base::blink::{BlinkChance, lights_level};
+    use nova_sim_base::blink::lights_level;
+    use nova_sim_base::fixture::blink::ScriptedRolls;
 
     use super::*;
     use crate::combat::armament::Fold;
@@ -245,38 +244,6 @@ mod tests {
         c: 32,
         d: 75,
     };
-
-    /// Answers each change from a script (the last answer repeats past its
-    /// end), recording what it is asked.
-    struct ScriptedRolls {
-        answers: Vec<u16>,
-        asked: RefCell<Vec<(u64, u16)>>,
-    }
-
-    impl ScriptedRolls {
-        fn new(answers: &[u16]) -> Self {
-            Self {
-                answers: answers.to_vec(),
-                asked: RefCell::default(),
-            }
-        }
-
-        fn answer(&self, change: u64) -> u16 {
-            let at = usize::try_from(change).unwrap_or(usize::MAX);
-            self.answers
-                .get(at)
-                .or(self.answers.last())
-                .copied()
-                .unwrap_or(0)
-        }
-    }
-
-    impl BlinkChance for ScriptedRolls {
-        fn roll(&self, change: u64, sides: u16) -> u16 {
-            self.asked.borrow_mut().push((change, sides));
-            self.answer(change)
-        }
-    }
 
     /// The levels `lights` draws over `n` frames of `blink`, its `k`-th
     /// roll answered as `rolls` answers change `k`, each roll's sides
@@ -362,7 +329,7 @@ mod tests {
         let (_, sides) = from_rest(&random, 9, &rolls);
         assert_eq!(sides, [27, 27, 27], "B held to 31: 31 - 5 + 1");
         let _ = lights_level(&random, 0, &rolls);
-        assert_eq!(rolls.asked.borrow()[0], (0, 27));
+        assert_eq!(rolls.asked()[0], (0, 27));
         let (_, sides) = from_rest(&blink(3, 5, 4, 0, 0), 3, &rolls);
         assert_eq!(sides, Vec::<u16>::new(), "a top below the bottom: unrolled");
     }
