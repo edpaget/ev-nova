@@ -66,11 +66,12 @@ use crate::spaceport::credits::comma_number;
 use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
-use super::comm::{CLOSE_CHANNEL, LABEL_COLOR, TEXT_COLOR, TEXT_SIZE, backdrop, ship_picture};
+use super::comm::{CLOSE_CHANNEL, LABEL_COLOR, TEXT_COLOR, TEXT_SIZE, ship_picture};
 use super::dialog::{
     Dialog, DialogEvent, DialogTemplate, FocusRing, ItemSpec, ItemTemplate, Placement, Role,
     STOCK_WORD,
 };
+use super::panel::backdrop;
 
 /// The escort dialog's `DLOG` (and `DITL`) ID.
 pub const ESCORT_DIALOG: i16 = 1022;

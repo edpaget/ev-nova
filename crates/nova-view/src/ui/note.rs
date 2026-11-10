@@ -13,7 +13,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use crate::draw::{DrawList, fill_rect};
+use crate::draw::DrawList;
 use crate::font::Font;
 use crate::input::Input;
 use crate::keymap::SharedBindings;
@@ -23,9 +23,8 @@ use crate::text::TextMetrics;
 use super::button::{ButtonSkin, ButtonStyle};
 use super::dialog::{
     Dialog, DialogEvent, DialogTemplate, FocusRing, Role, STATIC_TEXT_COLOR, STATIC_TEXT_SIZE,
-    outline,
 };
-use super::prefs::{BACKDROP, BORDER};
+use super::panel::backdrop;
 
 /// The note alert's `DLOG` (and `DITL`) ID.
 pub const NOTE_DIALOG: i16 = 3000;
@@ -150,12 +149,8 @@ impl Screen for NoteDialog {
     /// The backdrop and its outline, unless the dialog brings its own
     /// backing, then the dialog.
     fn draw(&self, list: &mut DrawList) {
-        if self.dialog.backing().is_none() {
-            let bounds = self.dialog.bounds();
-            fill_rect(list, bounds, BACKDROP);
-            outline(list, bounds, BORDER);
-        }
-        self.dialog.draw(list);
+        backdrop(list, &self.dialog, None);
+        self.dialog.draw_items(list);
     }
 
     fn cancel_pointer(&mut self) {
@@ -169,13 +164,14 @@ pub(crate) use tests::pad_probe;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::draw::DrawCommand;
+    use crate::draw::{DrawCommand, fill_rect};
     use crate::geometry::{Bounds, Point};
     use crate::input::{Key, MouseButton};
     use crate::text::fixture::MonoMetrics;
-    use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
+    use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement, outline};
     use crate::ui::panel::PanelBacking;
     use crate::ui::panel::testing::assert_backed_first;
+    use crate::ui::prefs::{BACKDROP, BORDER};
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds {
         Bounds::at(Point::new(x, y), w, h)

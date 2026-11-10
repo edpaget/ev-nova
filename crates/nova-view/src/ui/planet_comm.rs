@@ -56,12 +56,12 @@ use crate::text::TextMetrics;
 use super::button::{ButtonSkin, ButtonStyle};
 use super::comm::{
     CLOSE_CHANNEL, ESCORT_COLOR, HOSTILE_COLOR, HOSTILE_GAP, LABEL_COLOR, TEXT_COLOR, TEXT_SIZE,
-    backdrop,
 };
 use super::dialog::{
     Dialog, DialogEvent, DialogTemplate, FocusRing, ItemSpec, ItemTemplate, Placement, Role,
     STOCK_WORD, TextBacking,
 };
+use super::panel::backdrop;
 
 /// The planet comm dialog's `DLOG` (and `DITL`) ID (@0x96b85).
 pub const PLANET_COMM_DIALOG: i16 = 1009;

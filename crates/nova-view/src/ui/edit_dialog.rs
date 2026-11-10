@@ -26,7 +26,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use crate::draw::{DrawList, fill_rect};
+use crate::draw::DrawList;
 use crate::geometry::Bounds;
 use crate::input::Input;
 use crate::keymap::SharedBindings;
@@ -35,9 +35,9 @@ use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
-use super::dialog::{Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Role, outline};
+use super::dialog::{Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Role};
 use super::entry_keyboard::{self, EntryHost, EntryKeyboard};
-use super::prefs::{BACKDROP, BORDER};
+use super::panel::backdrop;
 use super::text_field::{TextField, is_text_entry};
 
 /// What OK and Cancel make of the field: each dialog's own rule.
@@ -245,12 +245,8 @@ impl<P: Confirm> Screen for EditDialog<P> {
     /// backing), the dialog, and the field; then the on-screen keyboard,
     /// or the ask for the system's entry.
     fn draw(&self, list: &mut DrawList) {
-        if self.dialog.backing().is_none() {
-            let bounds = self.dialog.bounds();
-            fill_rect(list, bounds, BACKDROP);
-            outline(list, bounds, BORDER);
-        }
-        self.dialog.draw(list);
+        backdrop(list, &self.dialog, None);
+        self.dialog.draw_items(list);
         self.field.draw(&*self.metrics, list);
         entry_keyboard::draw(self, list);
     }
@@ -449,11 +445,13 @@ mod tests {
     use std::collections::VecDeque;
 
     use super::*;
+    use crate::draw::fill_rect;
     use crate::geometry::{Bounds, Point};
     use crate::input::{Key, MouseButton};
     use crate::keymap::{Bindings, KeyCombo, UiCommand};
     use crate::text::fixture::MonoMetrics;
-    use crate::ui::dialog::Placement;
+    use crate::ui::dialog::{Placement, outline};
+    use crate::ui::prefs::{BACKDROP, BORDER};
 
     /// A policy answering OK from a script, and recording each text it
     /// was asked to confirm. A refusal sets the field to "reset".

@@ -56,7 +56,7 @@ use crate::text::TextMetrics;
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE};
 use crate::ui::dialog::DialogTemplate;
 use crate::ui::pad_focus::{FocusState, PadRead, Target, draw_highlight, from_pad};
-use crate::ui::panel::PanelBacking;
+use crate::ui::panel::{PanelBacking, filled_backdrop};
 use crate::ui::text_box::TextBox;
 
 /// The news dialog's `DLOG` ID.
@@ -284,10 +284,7 @@ impl Screen for NewsScreen {
     fn draw(&self, list: &mut DrawList) {
         match &self.laid {
             Ok(laid) => {
-                match laid.backing {
-                    Some(backing) => backing.draw(list, laid.bounds),
-                    None => fill_rect(list, laid.bounds, Color::BLACK),
-                }
+                filled_backdrop(list, laid.backing, laid.bounds, Color::BLACK);
                 if let Some(id) = laid.picture {
                     list.stretched_picture(
                         ImageKey::picture(id),

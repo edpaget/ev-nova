@@ -61,7 +61,7 @@ use std::time::Duration;
 use nova_sim::{Gender, RuleKey, RuleSource, Rulebook};
 
 use crate::color::Color;
-use crate::draw::{DrawList, fill_rect};
+use crate::draw::DrawList;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::input::Input;
@@ -75,7 +75,7 @@ use super::dialog::{
     Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Placement, STOCK_WORD, outline,
 };
 use super::entry_keyboard::{self, EntryKeyboard};
-use super::prefs::{BACKDROP, BORDER};
+use super::panel::backdrop;
 use super::text_field::{TextField, is_text_entry};
 use super::toggle::Toggle;
 
@@ -600,12 +600,8 @@ impl Screen for NewPilotDialog {
     /// selection), the gender control, and the refusal under the name in
     /// the error colour.
     fn draw(&self, list: &mut DrawList) {
-        if self.dialog.backing().is_none() {
-            let bounds = self.dialog.bounds();
-            fill_rect(list, bounds, BACKDROP);
-            outline(list, bounds, BORDER);
-        }
-        self.dialog.draw(list);
+        backdrop(list, &self.dialog, None);
+        self.dialog.draw_items(list);
         if let Some(toggle) = &self.strict_play {
             toggle.draw(false, &self.metrics, list);
         }
@@ -658,13 +654,14 @@ pub(crate) mod pad;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::draw::DrawCommand;
+    use crate::draw::{DrawCommand, fill_rect};
     use crate::geometry::Point;
     use crate::input::{Key, MouseButton};
     use crate::keymap::{Bindings, KeyCombo};
     use crate::sound::{Sound, UiSound};
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
+    use crate::ui::prefs::{BACKDROP, BORDER};
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds {
         Bounds::at(Point::new(x, y), w, h)

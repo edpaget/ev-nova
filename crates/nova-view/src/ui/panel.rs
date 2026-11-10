@@ -5,10 +5,19 @@
 //! The story log, the conversation panel and every dialog the new game
 //! lays out ([`DialogTemplate::backing`](super::dialog::DialogTemplate::backing))
 //! draw it, so the new game's panels read as one family.
+//!
+//! A backed dialog's backing replaces whatever its host would draw under
+//! an unbacked one: [`backdrop`] for the hosts drawing a picture or the
+//! dark outlined backdrop, [`filled_backdrop`] for those filling a colour
+//! of their own.
 
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect, frame_rect};
 use crate::geometry::Bounds;
+use crate::image::ImageKey;
+
+use super::dialog::{Dialog, outline};
+use super::prefs::{BACKDROP, BORDER};
 
 /// An opaque backing: `fill` over the whole area, then a one-pixel `frame`
 /// just inside its edge.
@@ -31,6 +40,41 @@ impl PanelBacking {
     pub fn draw(self, list: &mut DrawList, bounds: Bounds) {
         fill_rect(list, bounds, self.fill);
         frame_rect(list, bounds, self.frame);
+    }
+}
+
+/// Draws what goes under `dialog`'s items: its backing, standing in for
+/// the art a backed template's source lacks; else `picture` stretched
+/// over its window; else a dark backdrop with an outline. A backed
+/// dialog's backing replaces the host's own backdrop. The caller draws
+/// the items after it with [`Dialog::draw_items`].
+pub(crate) fn backdrop(list: &mut DrawList, dialog: &Dialog, picture: Option<ImageKey>) {
+    let bounds = dialog.bounds();
+    match (dialog.backing(), picture) {
+        (Some(_), _) => dialog.draw_backing(list),
+        (None, Some(image)) => {
+            list.stretched_picture(image, bounds.min, bounds.width(), bounds.height());
+        }
+        (None, None) => {
+            fill_rect(list, bounds, BACKDROP);
+            outline(list, bounds, BORDER);
+        }
+    }
+}
+
+/// Draws `backing` over `bounds`, else, for a host whose own backdrop is
+/// a plain fill, `fill` over them: the rule of [`backdrop`] for a host
+/// that lays out its window's `backing` and `bounds` itself, or fills
+/// under an unbacked dialog in a colour of its own.
+pub(crate) fn filled_backdrop(
+    list: &mut DrawList,
+    backing: Option<PanelBacking>,
+    bounds: Bounds,
+    fill: Color,
+) {
+    match backing {
+        Some(backing) => backing.draw(list, bounds),
+        None => fill_rect(list, bounds, fill),
     }
 }
 

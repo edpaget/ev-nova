@@ -81,7 +81,7 @@ use nova_sim::hire::{ESCORT, HIRED_ESCORT};
 use nova_sim::{Haggle, HailView, ShipId};
 
 use crate::color::Color;
-use crate::draw::{DrawList, fill_rect};
+use crate::draw::DrawList;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
@@ -95,10 +95,10 @@ use crate::text::TextMetrics;
 use super::button::{ButtonSkin, ButtonStyle};
 use super::dialog::{
     Dialog, DialogEvent, DialogTemplate, FocusRing, ItemSpec, ItemTemplate, Placement, Role,
-    STOCK_WORD, TextBacking, outline,
+    STOCK_WORD, TextBacking,
 };
 use super::pad_focus::from_pad;
-use super::prefs::{BACKDROP, BORDER};
+use super::panel::backdrop;
 
 /// The comm dialog's `DLOG` (and `DITL`) ID.
 pub const COMM_DIALOG: i16 = 1007;
@@ -299,24 +299,6 @@ pub fn status_line(view: &HailView) -> Option<StatusLine> {
 #[must_use]
 pub fn ship_picture(ship: ShipId) -> ImageKey {
     ImageKey::picture(FIRST_SHIP_PICTURE.saturating_add(ship.0.saturating_sub(FIRST_SHIP)))
-}
-
-/// Draws what goes under `dialog`'s items: its backing, standing in for
-/// the art a backed template's source lacks; else `picture` stretched
-/// over its window; else a dark backdrop with an outline. The caller
-/// draws the items after it with [`Dialog::draw_items`].
-pub(super) fn backdrop(list: &mut DrawList, dialog: &Dialog, picture: Option<ImageKey>) {
-    let bounds = dialog.bounds();
-    match (dialog.backing(), picture) {
-        (Some(_), _) => dialog.draw_backing(list),
-        (None, Some(image)) => {
-            list.stretched_picture(image, bounds.min, bounds.width(), bounds.height());
-        }
-        (None, None) => {
-            fill_rect(list, bounds, BACKDROP);
-            outline(list, bounds, BORDER);
-        }
-    }
 }
 
 /// The reply's box: `_CommDialogUpdate` paints item 10 inset 1 white
@@ -989,13 +971,16 @@ mod tests {
     use nova_sim::{EscortStatus, HailButton, NpcId};
 
     use super::*;
+    use crate::draw::fill_rect;
     use crate::draw::{DrawCommand, fill_command};
     use crate::input::MouseButton;
     use crate::keymap::{Bindings, KeyCombo};
     use crate::sound::Sound;
     use crate::text::fixture::MonoMetrics;
+    use crate::ui::dialog::outline;
     use crate::ui::panel::PanelBacking;
     use crate::ui::panel::testing::assert_backed_first;
+    use crate::ui::prefs::{BACKDROP, BORDER};
 
     fn button(label: &str, key: Option<char>) -> HailButton {
         HailButton {

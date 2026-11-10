@@ -57,11 +57,11 @@ use crate::spaceport::trade::LIGHT_GREY;
 use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
-use super::comm::backdrop;
 use super::dialog::{
     Dialog, DialogEvent, DialogTemplate, FocusRing, ItemSpec, ItemTemplate, Placement, Role,
     STOCK_WORD, TextBacking,
 };
+use super::panel::backdrop;
 use super::scroll_text::{TextRow, TextRun};
 
 /// The plunder dialog's `DLOG` (and `DITL`) ID.

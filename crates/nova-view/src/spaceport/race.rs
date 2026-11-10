@@ -59,7 +59,7 @@ use super::quantity_ask::{Purpose, QuantityAsk};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::bound_names::{CONFIRM_OR_BACK, press_clause};
 use crate::color::Color;
-use crate::draw::{DrawList, fill_rect};
+use crate::draw::DrawList;
 use crate::image::ImageKey;
 use crate::input::Input;
 use crate::keymap::{Command, RaceCommand, SharedBindings, UiCommand, contexts};
@@ -70,6 +70,7 @@ use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::dialog::{
     Dialog, DialogEvent, DialogTemplate, FocusRing, ItemSpec, Placement, Role,
 };
+use crate::ui::panel::filled_backdrop;
 
 /// The race dialog's `DLOG` (and `DITL`) ID (`GetNewDialog` 0x3ff
 /// @0x489ef).
@@ -461,10 +462,7 @@ impl Screen for RaceScreen {
         match &self.laid {
             Ok(laid) => {
                 let bounds = laid.dialog.bounds();
-                if laid.dialog.backing().is_none() {
-                    fill_rect(list, bounds, Color::BLACK);
-                }
-                laid.dialog.draw_backing(list);
+                filled_backdrop(list, laid.dialog.backing(), bounds, Color::BLACK);
                 list.picture(BACKGROUND, bounds.min);
                 for racer in 0..RACERS {
                     let item = FIRST_RACER_ITEM + usize::from(racer);
@@ -528,7 +526,7 @@ pub(crate) use tests::pad_probe;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::draw::DrawCommand;
+    use crate::draw::{DrawCommand, fill_rect};
     use crate::geometry::{Bounds, Point};
     use crate::input::{Key, MouseButton};
     use crate::text::fixture::MonoMetrics;

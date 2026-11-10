@@ -22,7 +22,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use crate::color::Color;
-use crate::draw::{DrawList, fill_rect};
+use crate::draw::DrawList;
 use crate::font::Font;
 use crate::input::Input;
 use crate::keymap::SharedBindings;
@@ -33,6 +33,7 @@ use super::button::{ButtonSkin, ButtonStyle};
 use super::dialog::{
     Dialog, DialogEvent, DialogTemplate, FocusRing, Role, STATIC_TEXT_COLOR, STATIC_TEXT_SIZE,
 };
+use super::panel::filled_backdrop;
 
 /// The Yes/No dialog's `DLOG` (and `DITL`) ID.
 pub const YES_NO_DIALOG: i16 = 3002;
@@ -152,10 +153,13 @@ impl Screen for YesNoDialog {
     /// The dialog over black, as the player info screen draws its
     /// question, or over its own backing if it brings one.
     fn draw(&self, list: &mut DrawList) {
-        if self.dialog.backing().is_none() {
-            fill_rect(list, self.dialog.bounds(), Color::BLACK);
-        }
-        self.dialog.draw(list);
+        filled_backdrop(
+            list,
+            self.dialog.backing(),
+            self.dialog.bounds(),
+            Color::BLACK,
+        );
+        self.dialog.draw_items(list);
     }
 
     fn cancel_pointer(&mut self) {
@@ -169,7 +173,7 @@ pub(crate) use tests::pad_probe;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::draw::DrawCommand;
+    use crate::draw::{DrawCommand, fill_rect};
     use crate::geometry::{Bounds, Point};
     use crate::input::{Key, MouseButton};
     use crate::text::fixture::MonoMetrics;

@@ -106,7 +106,7 @@ use std::time::Duration;
 use nova_sim::Rulebook;
 
 use crate::color::Color;
-use crate::draw::{DrawList, fill_rect};
+use crate::draw::DrawList;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Surroundings};
@@ -130,6 +130,7 @@ use super::dialog::{
 use super::keys::KeysScreen;
 use super::mode_picker::ModePicker;
 use super::pad_focus::FocusState;
+use super::panel::backdrop;
 use super::picker::Picker;
 use super::scroll_text::ScrollText;
 use super::toggle::Toggle;
@@ -1217,12 +1218,8 @@ impl Screen for PrefsDialog {
     /// The focused part is outlined. The keys screen, while it is open,
     /// is drawn over it all.
     fn draw(&self, list: &mut DrawList) {
-        if self.dialog.backing().is_none() {
-            let bounds = self.dialog.bounds();
-            fill_rect(list, bounds, BACKDROP);
-            outline(list, bounds, BORDER);
-        }
-        self.dialog.draw(list);
+        backdrop(list, &self.dialog, None);
+        self.dialog.draw_items(list);
         for toggle in &self.inert {
             toggle.draw(false, &self.metrics, list);
         }
@@ -1378,7 +1375,7 @@ pub(crate) use tests::pad_probe;
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::draw::DrawCommand;
+    use crate::draw::{DrawCommand, fill_rect};
     use crate::input::{Key, MouseButton};
     use crate::keymap::{Bindings, KeyCombo};
     use crate::text::fixture::MonoMetrics;
