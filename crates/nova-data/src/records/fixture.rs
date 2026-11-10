@@ -1,12 +1,17 @@
-//! Byte builders for the records tests hand-build most: `shän` and `shïp`.
+//! Byte builders for the records tests hand-build most: `shän`, `shïp`,
+//! `chär` ([`CharacterBuilder`]), `ïntf` ([`InterfaceBuilder`]) and `spïn`
+//! ([`SpinBuilder`]).
 //!
 //! Available to this crate's tests and, through the `fixture` feature, to
 //! other crates' tests. Each builder starts from a zeroed record (or, with
 //! `from_bytes`, from a record a test already built) and writes big-endian
 //! fields by name, so a test says which field it sets instead of where the
-//! field lives. The setters are named after the decoded record's
-//! fields ([`ShipAnim`], [`Ship`]), whose docs give each offset; this
-//! module's tests decode every setter's bytes to check them. A setter is
+//! field lives. The setters are named after the decoded record's fields
+//! ([`ShipAnim`], [`Ship`],
+//! [`Character`](crate::records::character::Character),
+//! [`Interface`](crate::records::interface::Interface),
+//! [`Spin`](crate::records::spin::Spin)), whose docs give each offset;
+//! each builder's tests decode every setter's bytes to check them. A setter is
 //! added only when a test needs it.
 
 use crate::decode::Record;
@@ -34,6 +39,23 @@ impl Bytes {
 
     fn i16(&mut self, at: usize, value: i16) {
         self.put(at, &value.to_be_bytes());
+    }
+
+    fn u32(&mut self, at: usize, value: u32) {
+        self.put(at, &value.to_be_bytes());
+    }
+
+    /// Writes `values` as consecutive `i16`s from `at`, into a field of
+    /// `max` slots.
+    fn i16s(&mut self, at: usize, max: usize, values: &[i16]) {
+        assert!(
+            values.len() <= max,
+            "the field has {max} slots, not {}",
+            values.len()
+        );
+        for (slot, &value) in values.iter().enumerate() {
+            self.i16(at + 2 * slot, value);
+        }
     }
 
     /// Writes `values` from slot 0: slots 0 to 3 at `low`, 4 to 7 at
@@ -75,6 +97,14 @@ macro_rules! i16_setters {
         )*
     };
 }
+
+mod character;
+mod interface;
+mod spin;
+
+pub use character::CharacterBuilder;
+pub use interface::InterfaceBuilder;
+pub use spin::SpinBuilder;
 
 /// Builds a `shän` ([`ShipAnim`]) record's bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]

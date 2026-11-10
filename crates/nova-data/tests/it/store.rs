@@ -3,17 +3,16 @@
 use std::fs;
 
 use nova_data::Record;
+use nova_data::records::fixture::ShipBuilder;
 use nova_data::records::ship::Ship;
 use nova_data::store::order::IgnoreReason;
 use nova_data::store::{GameData, IgnoredEntry, OpenError, Origin};
 use nova_rsrc::LoadError;
 use nova_rsrc::fixture::{ForkBuilder, MacBinaryBuilder, MacBinaryVersion, RezBuilder};
 
-/// A ship whose `holds` field (at offset 0) is `holds`.
+/// A ship whose `holds` field is `holds`.
 fn ship_bytes(holds: i16) -> Vec<u8> {
-    let mut bytes = vec![0; Ship::SIZE.expect("fixed size")];
-    bytes[..2].copy_from_slice(&holds.to_be_bytes());
-    bytes
+    ShipBuilder::new().holds(holds).build()
 }
 
 /// A fork of ships, each `(id, holds)`.
