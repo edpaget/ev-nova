@@ -1593,9 +1593,10 @@ mod tests {
     #[test]
     fn the_stars_sheet_counts_its_spins_tiles_when_fewer_than_its_rleds_frames() {
         // 2 x 2 tiles over a 16-frame `rlëD` (`_LoadSprites` @0x210a4-0x210d2).
-        let mut two_by_two = spin(701);
-        put_i16(&mut two_by_two, 0x08, 2);
-        put_i16(&mut two_by_two, 0x0A, 2);
+        let two_by_two = SpinBuilder::from_bytes(spin(701))
+            .x_tiles(2)
+            .y_tiles(2)
+            .build();
         let data = named_store(&[
             (Spin::TYPE, 700, None, two_by_two),
             (RLED, 701, None, sheet(16)),
@@ -1763,9 +1764,7 @@ mod tests {
 
     /// A `shïp` with `subtitle`.
     fn subtitled(subtitle: &str) -> Vec<u8> {
-        let mut bytes = ship();
-        bytes[0x6E6..0x6E6 + subtitle.len()].copy_from_slice(subtitle.as_bytes());
-        bytes
+        ShipBuilder::from_bytes(ship()).subtitle(subtitle).build()
     }
 
     #[test]

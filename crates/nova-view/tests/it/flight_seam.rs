@@ -995,10 +995,11 @@ fn interface() -> Vec<u8> {
 /// escape pod (`ModType` 11) and 187 an auto-eject (20). The status bar
 /// is [`interface`]'s, and the mouse cursor `spïn` 650 is [`cursor`]'s.
 fn fighting_data(items: &[(i16, i16)]) -> Rc<GameData> {
-    let mut trader = armed_ship(0, 10, &[], &[]);
-    put_i16s(&mut trader, 0x06, &[0]);
     // A crew of 3, so it can be boarded.
-    put_i16s(&mut trader, 0x44, &[3]);
+    let trader = ShipBuilder::from_bytes(armed_ship(0, 10, &[], &[]))
+        .speed(0)
+        .crew(3)
+        .build();
     let mut holder = fitting(1, 128);
     put_i16s(&mut holder, 0x0A, &[10]);
     let fork = ForkBuilder::new()
@@ -1613,16 +1614,14 @@ fn str_list(strings: &[&str]) -> Vec<u8> {
 
 /// The first `chär`, with 25,000 credits: ship 128 from system 128.
 fn rich_character() -> Vec<u8> {
-    let mut bytes = character();
-    bytes[0x00..0x04].copy_from_slice(&25_000_i32.to_be_bytes());
-    bytes
+    CharacterBuilder::from_bytes(character())
+        .cash(25_000)
+        .build()
 }
 
 /// A ship that flies, with 10 tons of cargo space.
 fn hauler() -> Vec<u8> {
-    let mut bytes = ship();
-    put_i16s(&mut bytes, 0x00, &[10]);
-    bytes
+    ShipBuilder::from_bytes(ship()).holds(10).build()
 }
 
 /// Alpha Prime: a landable planet at the centre, a trade center trading
