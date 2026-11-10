@@ -29,9 +29,9 @@
 //!
 //! 1. each ship's state is recorded, which the view draws from; the
 //!    frame's gain is taken; and while the gate autopilot is engaged its
-//!    controls replace the input's (`Session::pilot_controls`, see the
-//!    `gate_pilot` module), once a step, so both passes below fly them,
-//!    as they fly a held key;
+//!    controls replace the input's, at the keys' full amounts
+//!    (`Session::step_controls`, see the `gate_pilot` module), once a
+//!    step, so both passes below fly them, as they fly a held key;
 //! 2. the advance pass (`_DoPlayGameWork(1)` @0x43de5-0x4453d,
 //!    [`Session::game_work`]), or, on the first step after a comm, escort
 //!    or info dialog's zero, the rest of the frame it opened on, at gain 0
@@ -206,7 +206,7 @@ impl Session {
             before: self.ships_before(),
             ..StepRun::default()
         };
-        let controls = self.pilot_controls(input.controls);
+        let controls = self.step_controls(input);
         if self.take_opening_rest() {
             // The rest of the frame a dialog opened on, at the gain its
             // zero left (see the `opening_rest` module).

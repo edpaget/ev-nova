@@ -37,7 +37,11 @@
 //! **Each step** ([`Session::pilot_controls`]) it re-targets (the hop,
 //! the gate, the selection) and its controls replace the player's for
 //! both of double time's passes (see the `step` module), so every flight
-//! rule applies to it as to a player. The step clears its ask for L and
+//! rule applies to it as to a player. They fly at the keys' full amounts
+//! ([`Session::step_controls`]), as it holds its keys fully: the view
+//! sends none while no key or stick is held, so the frame's own amounts
+//! would fly them at none. A stick that disengages it flies that step
+//! at its own amount. The step clears its ask for L and
 //! sets it again when the core's pilot asks; the frame shows it after
 //! the frame's steps (`FlightFrame::gate_pilot`,
 //! [`Session::gate_pilot_shown`]).
@@ -92,8 +96,8 @@
 
 use crate::catalog::{LandingSite, StellarId, SystemId};
 use crate::combat::hull::Condition;
-use crate::flight::Controls;
-use crate::flight_frame::GatePilotShown;
+use crate::flight::{Amounts, Controls};
+use crate::flight_frame::{GatePilotShown, StepInput};
 use crate::gate_pilot::{self, Craft, Gate};
 use crate::geometry::Vec2;
 use crate::landing::{LandingRefusal, is_landable};
@@ -132,6 +136,21 @@ impl Session {
         });
         self.chart.select_gate(gate);
         Some(to)
+    }
+
+    /// [`Session::pilot_controls`] for a step under `input`, holding the
+    /// amounts its controls fly at: the keys' full ones for the
+    /// autopilot's, which holds its keys fully, else the frame's own
+    /// (see the module docs).
+    pub(super) fn step_controls(&mut self, input: &StepInput) -> Controls {
+        let controls = self.pilot_controls(input.controls);
+        let amounts = if self.gate_pilot_engaged() {
+            Amounts::FULL
+        } else {
+            input.amounts
+        };
+        self.ship.hold_amounts(amounts);
+        controls
     }
 
     /// The controls the player's ship flies by this step: the
@@ -325,8 +344,8 @@ impl Chart {
 #[cfg(test)]
 pub(in crate::session) mod tests {
     use super::*;
-    use crate::flight::{Face, Turn};
-    use crate::flight_frame::{Answer, FlightCommand};
+    use crate::flight::{Amounts, Face, Turn};
+    use crate::flight_frame::{Answer, FlightCommand, StepInput};
     use crate::hyperspace::{JumpReadiness, JumpRefusal};
     use crate::rulebook::Rulebook;
     use crate::sound::SimSound;
@@ -434,7 +453,18 @@ pub(in crate::session) mod tests {
     /// One frame's step of `session` with no controls held, double time's
     /// key as `double`.
     fn step(session: &mut Session, double: bool) {
-        use crate::flight_frame::{StepInput, StepReport};
+        step_under(
+            session,
+            &StepInput {
+                double_time_key: double,
+                ..StepInput::default()
+            },
+        );
+    }
+
+    /// One frame's step of `session` under `input`, in a window 1024 wide.
+    fn step_under(session: &mut Session, input: &StepInput) {
+        use crate::flight_frame::StepReport;
         use crate::session::StepCollaborators;
         let catalog = laned_stable();
         let behaviour = crate::ai::NovaAi::default();
@@ -446,11 +476,73 @@ pub(in crate::session) mod tests {
             chance: &mut chance,
         };
         let input = StepInput {
-            double_time_key: double,
             window_width: 1024,
-            ..StepInput::default()
+            ..*input
         };
         session.step(&input, 1, &mut collab, &mut StepReport::default());
+    }
+
+    /// No amounts: what the view sends with no key or stick held.
+    const NO_AMOUNTS: Amounts = Amounts {
+        turn: 0.0,
+        thrust: 0.0,
+    };
+
+    /// The thrust `session`'s second step under `input` adds, facing up
+    /// at full gain: the first's is clamped to the box a run's first tick
+    /// leaves, none.
+    fn second_thrust(mut session: Session, input: &StepInput) -> f32 {
+        session.ship.player.heading = 0.0;
+        session.at_gain(crate::speed_mult::SpeedMult::FULL);
+        step_under(&mut session, input);
+        let before = session.ship.player.velocity.y;
+        step_under(&mut session, input);
+        before - session.ship.player.velocity.y
+    }
+
+    /// The view holds no amounts while no key or stick is held, as the
+    /// autopilot flies; its controls fly at the keys' full amounts all the
+    /// same, as it holds them fully.
+    #[test]
+    fn the_autopilots_controls_fly_at_full_amounts_whatever_the_frame_holds() {
+        let unheld = StepInput {
+            amounts: NO_AMOUNTS,
+            ..StepInput::default()
+        };
+        let thrust = second_thrust(engaged(), &unheld);
+        assert!(thrust > 0.0, "it thrusts toward 301");
+        let full = second_thrust(engaged(), &StepInput::default());
+        assert!((thrust - full).abs() < 1e-6, "{thrust} unheld, {full} full");
+    }
+
+    /// A stick that disengages the autopilot flies that step at its own
+    /// amount, as it does with the autopilot off.
+    #[test]
+    fn a_stick_that_disengages_it_flies_at_its_own_amount() {
+        let half = StepInput {
+            controls: Controls {
+                thrust: true,
+                ..Controls::default()
+            },
+            amounts: Amounts {
+                turn: 0.0,
+                thrust: 0.5,
+            },
+            ..StepInput::default()
+        };
+        let mut session = engaged();
+        // Engaged on the first step's autopilot, it lets go on the
+        // second's stick.
+        session.ship.player.heading = 0.0;
+        session.at_gain(crate::speed_mult::SpeedMult::FULL);
+        step_under(&mut session, &StepInput::default());
+        let before = session.ship.player.velocity.y;
+        step_under(&mut session, &half);
+        assert!(!session.gate_pilot_engaged());
+        let thrust = before - session.ship.player.velocity.y;
+        let off = second_thrust(autopiloted(), &half);
+        assert!(off > 0.0);
+        assert!((thrust - off).abs() < 1e-6, "{thrust} engaged, {off} off");
     }
 
     #[test]
