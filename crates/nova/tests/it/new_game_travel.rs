@@ -47,6 +47,15 @@ pub(crate) fn fixture() -> NewGame {
     new_game::open(&new_game::fixture::folder()).expect("the fixture lists")
 }
 
+/// The day the fixture's side road closes: the `not_before_day` of its
+/// event, `missions/side-road-closes.md`.
+pub(crate) fn side_road_closing_day() -> u32 {
+    fixture().data.storylines().missions["side-road-closes"]
+        .requires
+        .not_before_day
+        .expect("the event has a day")
+}
+
 /// One jump point's gate, as the mapped data holds it.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Gate {

@@ -71,7 +71,7 @@ const VERGE_CAMP: [(&str, &str, i64, PriceLevel); 3] = [
 
 /// The good the fixture's `id` maps to: its standard slot, or its
 /// `jünk`.
-fn good(id: &str) -> Good {
+pub(crate) fn good(id: &str) -> Good {
     let ids = &fixture().ids;
     if ids.commodities.keys().any(|good| good.as_str() == id) {
         Good::Commodity(u8::try_from(nova_of(&ids.commodities, id)).expect("a slot"))
@@ -96,7 +96,7 @@ fn expected(prices: &[(&str, &str, i64, PriceLevel)]) -> Vec<(Good, String, i64)
 }
 
 /// The exchange open over the spaceport.
-fn market(game: &Harness) -> Market {
+pub(crate) fn market(game: &Harness) -> Market {
     spaceport(game)
         .open_trade()
         .expect("the exchange is open")
@@ -114,13 +114,13 @@ fn listed(market: &Market) -> Vec<(Good, String, i64)> {
 }
 
 /// Opens the Trade Center from the spaceport.
-fn open_exchange(game: &mut Harness) {
+pub(crate) fn open_exchange(game: &mut Harness) {
     click_port_item(game, service_item(Service::TradeCenter));
     game.frame();
 }
 
 /// The row `good` is listed on.
-fn row_of(game: &Harness, good: Good) -> usize {
+pub(crate) fn row_of(game: &Harness, good: Good) -> usize {
     market(game)
         .rows
         .iter()
@@ -131,7 +131,7 @@ fn row_of(game: &Harness, good: Good) -> usize {
 /// Selects `good`'s row and clicks `button`, Buy or Sell. The list shows
 /// each row in its list slot (`MarketRow::slot`), which is the row's
 /// place while each slot holds one row, as in the fixture.
-fn trade(game: &mut Harness, good: Good, button: usize) {
+pub(crate) fn trade(game: &mut Harness, good: Good, button: usize) {
     let slot = market(game).rows[row_of(game, good)].slot;
     let dialog = spaceport(game).open_trade().expect("open").dialog();
     let at = centre_of(dialog, FIRST_ROW_ITEM + usize::from(slot));

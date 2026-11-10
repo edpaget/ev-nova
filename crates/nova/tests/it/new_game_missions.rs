@@ -7,7 +7,7 @@
 //! The fixture's storyline, `dock-work`: the dock job (offered at Hearth
 //! Dock, ten tons of hull plate to Verge Camp, completed there, lending a
 //! Dock pass on the way), the side
-//! road closing on day 3 (an event, with its news), the wardens' toll at
+//! road closing on its day (an event, with its news), the wardens' toll at
 //! Verge Camp (every condition group) and the road's `take_point` offer,
 //! met by beating the wardens at the road's gate.
 //! The headless tests drive the session through its commands, putting a
@@ -23,7 +23,7 @@ use nova_sim::storylines::state::MissionState;
 use nova_sim::{OutfitId, Pilot, StellarId, SystemId};
 
 use crate::new_game_play::{self, Play, texts};
-use crate::new_game_travel::{fixture, gates, nova_of};
+use crate::new_game_travel::{fixture, gates, nova_of, side_road_closing_day};
 
 /// The fixture's start pilot, changed by `edit`, flying in `system`.
 fn fixture_play(system: &str, edit: impl FnOnce(&mut Pilot)) -> Play {
@@ -110,16 +110,17 @@ fn the_dock_job_is_offered_taken_and_delivered() {
 }
 
 #[test]
-fn the_side_road_closes_on_day_3_and_its_news_spreads() {
+fn the_side_road_closes_on_its_day_and_its_news_spreads() {
+    let closing = side_road_closing_day();
     let mut play = fixture_play("hearth", |_| {});
-    play.pass(2);
+    play.pass(closing - 1);
     assert_eq!(play.state("side-road-closes"), None);
     assert!(play.session.pilot().story.points.is_empty());
     for system in ["hearth", "verge", "drift"] {
-        assert_eq!(play.heard(system), [], "{system} on day 2");
+        assert_eq!(play.heard(system), [], "{system} the day before");
     }
     play.pass(1);
-    assert_eq!(play.session.pilot().story.day, 3);
+    assert_eq!(play.session.pilot().story.day, closing);
     assert_eq!(play.state("side-road-closes"), Some(MissionState::Done));
     let dead = |point: &str| {
         play.session.pilot().story.points[point].stability == Some(nova_data::GateStability::Dead)
@@ -146,13 +147,14 @@ fn over_the_side_road(pilot: &mut Pilot, game: &NewGame) {
 }
 
 #[test]
-fn the_side_road_s_gate_clears_until_day_3_and_is_denied_after() {
+fn the_side_road_s_gate_clears_until_its_closing_day_and_is_denied_after() {
+    let closing = side_road_closing_day();
     let game = fixture();
     let side_road = StellarId(nova_of(&game.ids.gates, "hearth/side-road"));
     let mut play = fixture_play("hearth", |pilot| over_the_side_road(pilot, &game));
     let (hearth, verge) = (play.system("hearth"), play.system("verge"));
-    play.pass(2);
-    assert!(play.session.land().is_ok(), "cleared on day 2");
+    play.pass(closing - 1);
+    assert!(play.session.land().is_ok(), "cleared the day before");
     assert_eq!(
         play.session.galaxy().lanes().gates(hearth, verge),
         [side_road]
@@ -163,7 +165,7 @@ fn the_side_road_s_gate_clears_until_day_3_and_is_denied_after() {
             play.session.land(),
             Err(nova_sim::LandingRefusal::Denied { stellar, .. }) if stellar == side_road
         ),
-        "denied on day 3, its request granted or not"
+        "denied on the day, its request granted or not"
     );
     assert_eq!(play.session.galaxy().lanes().gates(hearth, verge), []);
     let drawing = play
@@ -197,8 +199,8 @@ fn the_toll_is_offered_after_the_side_road_closes_and_the_dock_job() {
             .missions
             .insert("dock-job".to_owned(), MissionState::Done);
         pilot.flags.set("dock_regular");
-        // Day 3 has come; the event happens at the next check.
-        pilot.story.day = 3;
+        // The closing day has come; the event happens at the next check.
+        pilot.story.day = side_road_closing_day();
     });
     play.land("verge-camp");
     assert_eq!(play.state("side-road-closes"), Some(MissionState::Done));
@@ -255,7 +257,7 @@ fn on_the_road() -> Play {
             .story
             .missions
             .insert("dock-job".to_owned(), MissionState::Done);
-        pilot.story.day = 3;
+        pilot.story.day = side_road_closing_day();
     });
     play.land("verge-camp");
     play.open();
@@ -353,8 +355,8 @@ fn the_toll_is_paid_and_done_on_accept() {
             .missions
             .insert("dock-job".to_owned(), MissionState::Done);
         pilot.flags.set("dock_regular");
-        // Day 3 has come; the event happens at the next check.
-        pilot.story.day = 3;
+        // The closing day has come; the event happens at the next check.
+        pilot.story.day = side_road_closing_day();
     });
     play.land("verge-camp");
     assert_eq!(
@@ -421,9 +423,10 @@ fn a_deferred_offer_comes_back_at_the_next_landing() {
 
 #[test]
 fn the_plate_news_skips_the_dead_lane_and_reaches_drift_through_hearth() {
+    let day = side_road_closing_day();
     let mut play = fixture_play("hearth", |pilot| {
-        pilot.story.day = 5;
-        pilot.story.news.insert("plate-arrives".to_owned(), 5);
+        pilot.story.day = day;
+        pilot.story.news.insert("plate-arrives".to_owned(), day);
         // The side road's event is past, so only the plate is news.
         pilot
             .story

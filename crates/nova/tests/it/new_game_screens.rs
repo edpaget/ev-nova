@@ -4,10 +4,10 @@
 //! when, and what the session decides are pinned in their own crates;
 //! this pins that they meet.
 //!
-//! - **News.** A pilot saved on story day 9, with `side-road-closes`
-//!   released on day 3 and reaching the Hearth at once, lands at Hearth
-//!   Dock with no offer to show and reads it, six days old, every line
-//!   inside the conversation panel.
+//! - **News.** A pilot saved six days after the side road's closing
+//!   day, with `side-road-closes` released that day and reaching the
+//!   Hearth at once, lands at Hearth Dock with no offer to show and
+//!   reads it, six days old, every line inside the conversation panel.
 //! - **Missions.** A pilot carrying the dock job's plate presses I in
 //!   flight and reads the job, its objective and its cargo.
 //! - **Refusal.** A pilot whose 50-ton Hauler holds 45 tons takes the dock
@@ -28,7 +28,7 @@ use winit::keyboard::KeyCode;
 
 use crate::new_game_conversation::{drawn, flying_in, land_at, resumed};
 use crate::new_game_play;
-use crate::new_game_travel::nova_of;
+use crate::new_game_travel::{nova_of, side_road_closing_day};
 use crate::pilots::{Harness, saved};
 
 /// The fixture's system `id`'s ID.
@@ -78,9 +78,13 @@ fn placed(game: &Harness) -> Vec<(String, f32, f32)> {
 fn landing_where_the_news_was_heard_shows_it_with_its_age_inside_the_panel() {
     let hearth = system("hearth");
     let drift = system("drift");
+    let closing = side_road_closing_day();
     let (mut game, _store) = resumed_after(|pilot| {
-        pilot.story.day = 9;
-        pilot.story.news.insert("side-road-closes".to_owned(), 3);
+        pilot.story.day = closing + 6;
+        pilot
+            .story
+            .news
+            .insert("side-road-closes".to_owned(), closing);
         pilot.story.reach.insert(
             "side-road-closes".to_owned(),
             BTreeMap::from([(hearth, 0), (drift, 1)]),

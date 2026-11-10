@@ -41,7 +41,7 @@
 //!   plate to `verge-camp`, completed there (`job_done`), each effect
 //!   block used; its accept lends the `dock-pass` and its success takes
 //!   it back and releases `plate-arrives`, from `verge`;
-//! - `side-road-closes`: an event on day 3 that kills both ends of the
+//! - `side-road-closes`: an event on day 8 that kills both ends of the
 //!   side road and releases `side-road-closes`, from `hearth`;
 //! - `warden-toll`: offered at `verge-camp` (`toll_offer`) once the side
 //!   road is dead and the dock job done, under `all`, `any` and `none`

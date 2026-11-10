@@ -309,7 +309,7 @@ fn drawn(game: &mut Harness) -> Vec<String> {
 }
 
 /// Clicks the bar's item `item`.
-fn click_bar_item(game: &mut Harness, item: usize) {
+pub(crate) fn click_bar_item(game: &mut Harness, item: usize) {
     let at = centre_of(spaceport(game).open_bar().expect("open").dialog(), item);
     game.click(at);
 }
@@ -441,14 +441,14 @@ fn verge_camp_s_bar_lists_its_own_conversation_and_reopens_it() {
     );
 }
 
-/// On day 3 the side road closes as the pilot lands at Hearth Dock, its
-/// news breaking there; the bar's Holovid lists it with its source and
-/// age, and closes back to the bar.
+/// On its closing day the side road closes as the pilot lands at Hearth
+/// Dock, its news breaking there; the bar's Holovid lists it with its
+/// source and age, and closes back to the bar.
 #[test]
 fn holovid_lists_the_news_heard_here_with_its_source_and_age() {
     let (mut game, _store) = resumed_after(|pilot| {
         on_the_dock_job(pilot);
-        pilot.story.day = 3;
+        pilot.story.day = crate::new_game_travel::side_road_closing_day();
     });
     land_at(&mut game, "hearth-dock");
     let page = drawn(&mut game);
@@ -753,7 +753,7 @@ fn i_in_port_opens_the_missions_log_and_it_closes_back_to_the_spaceport() {
 
 /// Presses M until the course map opens, as a take-off holds the key a
 /// while.
-fn open_the_map(game: &mut Harness) {
+pub(crate) fn open_the_map(game: &mut Harness) {
     for _ in 0..600 {
         if game.app.screen().flight_view().expect("flying").map_open() {
             return;
