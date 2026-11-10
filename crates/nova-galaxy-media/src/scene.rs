@@ -738,6 +738,62 @@ mod tests {
         (json.to_string(), bin)
     }
 
+    /// A `.gltf` whose buffer `t.bin` holds `positions`, drawn by the
+    /// 16-bit `indices` that follow them.
+    fn indexed(positions: &[[f32; 3]], indices: &[u16]) -> (String, Vec<u8>) {
+        let (json, mut bin) = unindexed(positions);
+        let mut json: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let offset = bin.len();
+        bin.extend(indices.iter().flat_map(|i| i.to_le_bytes()));
+        json["buffers"][0]["byteLength"] = bin.len().into();
+        json["bufferViews"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "buffer": 0, "byteOffset": offset, "byteLength": bin.len() - offset
+            }));
+        json["accessors"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "bufferView": 1, "componentType": 5123, "count": indices.len(), "type": "SCALAR"
+            }));
+        json["meshes"][0]["primitives"][0]["indices"] = 1.into();
+        (json.to_string(), bin)
+    }
+
+    #[test]
+    fn a_triangle_naming_a_vertex_past_the_last_is_an_error_not_a_panic() {
+        // Three vertices, 0 to 2: index 3 is one past the last.
+        let positions = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]];
+        let (good, good_bin) = indexed(&positions, &[0, 1, 2]);
+        let (json, bin) = indexed(&positions, &[0, 1, 3]);
+        let read = |bin: &Vec<u8>| {
+            let bin = bin.clone();
+            move |path: &str| (path == "t.bin").then(|| bin.clone())
+        };
+        assert!(read_scene("t.gltf", good.as_bytes(), read(&good_bin)).is_ok());
+        let missing = Err("a triangle names a vertex that does not exist".to_owned());
+        assert_eq!(
+            read_scene("t.gltf", json.as_bytes(), read(&bin)).map(|_| ()),
+            missing
+        );
+        assert_eq!(
+            crate::model::model("t.gltf", json.as_bytes(), read(&bin)).map(|_| ()),
+            missing
+        );
+        // Read from the data folder, the asset falls back to unreadable.
+        let source = MemSource::default()
+            .with_bytes("media/export/p/t.gltf", json.as_bytes())
+            .with_bytes("media/export/p/t.bin", &bin);
+        assert_eq!(
+            read_asset_scene(&source, &asset(&["media/export/p/t.gltf"], "+z")),
+            Err(NoModel::Unreadable(
+                "`media/export/p/t.gltf`: a triangle names a vertex that does not exist".into()
+            ))
+        );
+    }
+
     #[test]
     fn a_stray_vertex_is_dropped_and_a_triangle_with_no_area_faces_up() {
         // Four vertices without indices: one triangle, on a line, and one
