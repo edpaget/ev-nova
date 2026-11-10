@@ -23,6 +23,11 @@
 //!   batch holds both.
 //! - [`model`]: the [`Mesh`]es 3D models ([`nova_view::DrawCommand::Model`])
 //!   are drawn with, checked when they are made, and [`Mesh::cube`].
+//! - [`model_source`]: the [`ModelSource`] port, the new game's models by
+//!   asset id ([`ModelRequest`]) as [`LoadedModel`]s, placed and scaled
+//!   on the view's model axes, with their materials and textures, or why
+//!   not ([`ModelError`]); its fake and contract check behind the
+//!   `recording` feature.
 //! - [`camera`]: the models' orthographic camera, which puts a model where
 //!   a sprite at its centre goes at the 2D view's scale, their depth
 //!   bands, each later model of a batch nearer, and the [`Light`] they are
@@ -118,6 +123,7 @@ pub mod glyph_raster;
 pub mod gpu;
 pub mod images;
 pub mod model;
+pub mod model_source;
 mod models;
 pub mod present;
 pub mod quickdraw_stretch;
@@ -141,6 +147,7 @@ pub use gpu::{
 };
 pub use images::{ImageError, ImageSource};
 pub use model::{Mesh, MeshError, MeshId, Vertex};
+pub use model_source::{LoadedModel, ModelError, ModelRequest, ModelSource};
 pub use present::{AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action};
 pub use source::GameImages;
 pub use super_xbr::SuperXbr;
