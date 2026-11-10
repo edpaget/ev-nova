@@ -183,6 +183,62 @@ mod tests {
         orientation.rotate(point).expect("normalises")
     }
 
+    /// `point` turned `radians` about `axis` by Rodrigues' formula,
+    /// `v cos θ + (k × v) sin θ + k (k · v)(1 − cos θ)`, k the unit axis:
+    /// a reference that knows nothing of quaternions.
+    fn rodrigues(axis: [f32; 3], radians: f32, v: [f32; 3]) -> [f32; 3] {
+        let length = axis.iter().map(|c| c * c).sum::<f32>().sqrt();
+        let k = axis.map(|c| c / length);
+        let (sin, cos) = radians.sin_cos();
+        let cross = [
+            k[1] * v[2] - k[2] * v[1],
+            k[2] * v[0] - k[0] * v[2],
+            k[0] * v[1] - k[1] * v[0],
+        ];
+        let along: f32 = (0..3).map(|i| k[i] * v[i]).sum();
+        [0, 1, 2].map(|i| v[i] * cos + cross[i] * sin + k[i] * along * (1.0 - cos))
+    }
+
+    const POINTS: [[f32; 3]; 4] = [X, Y, Z, [0.4, -1.3, 2.2]];
+
+    #[test]
+    fn a_turn_about_any_axis_turns_points_as_rodrigues_formula_does() {
+        for (axis, radians) in [([0.3, -1.0, 0.7], 2.1), ([2.0, 0.5, -1.5], -0.8)] {
+            let orientation = Orientation::about(axis, radians);
+            for point in POINTS {
+                assert_near(turned(orientation, point), rodrigues(axis, radians, point));
+            }
+        }
+    }
+
+    #[test]
+    fn then_composes_general_turns_in_order() {
+        let first = Orientation::about([0.3, -1.0, 0.7], 2.1);
+        let second = Orientation::about([2.0, 0.5, -1.5], -0.8);
+        let both = first.then(second);
+        for point in POINTS {
+            assert_near(turned(both, point), turned(second, turned(first, point)));
+        }
+    }
+
+    #[test]
+    fn normalized_scales_every_part_by_the_quaternions_length() {
+        let q = Orientation {
+            w: 1.0,
+            x: 2.0,
+            y: 3.0,
+            z: 4.0,
+        };
+        let unit = q.normalized().expect("finite");
+        let length = 30.0_f32.sqrt();
+        for (got, want) in [unit.w, unit.x, unit.y, unit.z]
+            .iter()
+            .zip([1.0, 2.0, 3.0, 4.0].map(|c| c / length))
+        {
+            assert!((got - want).abs() < 1e-6, "{unit:?}");
+        }
+    }
+
     #[test]
     fn orientation_identity_leaves_axes() {
         for axis in [X, Y, Z, [0.3, -2.0, 5.0]] {
