@@ -145,6 +145,7 @@ mod deep_image;
 mod error;
 mod icon;
 mod image;
+mod indexed;
 mod mask;
 mod packbits;
 mod pattern;
