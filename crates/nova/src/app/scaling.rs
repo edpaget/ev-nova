@@ -7,7 +7,7 @@ use nova_render::{Gpu, ImageSource, UpscalerProbe, enlarger_for, listed};
 use nova_view::{Enlargement, Scaling, Screen, Upscaler};
 
 use super::App;
-use crate::settings::ScalingSetting;
+use crate::settings::{GameKeeper, ScalingSetting};
 
 /// The scaling to start with from the `stored` choice, given the list the
 /// device offers, `listed`, and a warning to show when it is not the one
@@ -87,17 +87,20 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// native otherwise, with a warning naming the stored choice kept for
     /// the caller to show: sets `gpu` drawing flight's world with its
     /// upscaler and, for a load-time scaling, the renderer enlarging with
-    /// its enlarger (before the first frame, so the atlas is still empty).
-    /// Then offers the screen the Scaling list (native, the upscalers
+    /// its enlarger (before the first frame, so the atlas is still empty),
+    /// and the renderer drawing the world layer at the stored render scale
+    /// (`nova_render::Renderer::set_render_scale`). Then offers the screen the Scaling list (native, the upscalers
     /// `gpu` can use, then Super-xBR) and the one running
     /// ([`Screen::offer_scaling`]). The stored choice is never changed
     /// here, so it comes back on a device that has it.
     pub fn restore_scaling(&mut self, gpu: &mut (impl Gpu + UpscalerProbe)) {
-        let stored = self
+        let settings = self
             .settings
             .as_ref()
-            .map(|keeper| keeper.settings().frame_upscaler)
+            .map(GameKeeper::settings)
             .unwrap_or_default();
+        self.renderer.set_render_scale(settings.render_scale);
+        let stored = settings.frame_upscaler;
         let list = Scaling::list(&listed(&gpu.upscalers()));
         let (running, warning) = resolve(&stored, &list);
         let (upscaler, enlargement) = running.sites();
@@ -701,5 +704,37 @@ mod tests {
         assert_eq!(saved(&store)["music"], false, "the change saved");
         assert_eq!(saved(&store)["frame_upscaler"], "sharp_bilinear", "kept");
         assert_eq!(gpu.upscaler(), NATIVE);
+    }
+
+    /// A store holding Scaling `name` and a render scale of `percent`.
+    fn holding_scaled(name: &str, percent: u8) -> MemorySettings {
+        let text = format!(r#"{{"frame_upscaler": "{name}", "render_scale": {percent}}}"#);
+        MemorySettings::holding(&text)
+    }
+
+    #[test]
+    fn a_stored_render_scale_sizes_the_first_frames_world() {
+        let store = holding_scaled("native", 50);
+        let mut gpu = RecordingGpu::probing(&[NATIVE]);
+        let mut app = restored(&store, &mut gpu);
+        assert_eq!(gpu.upscaler(), NATIVE);
+        // Half the 1024 x 768 window's viewport.
+        assert_eq!(
+            frame(&mut app, &mut gpu, 16).world_space,
+            WorldSpace::Texture { size: (512, 384) }
+        );
+        assert_eq!(app.take_warnings(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_stored_render_scale_sizes_an_enlarging_scalings_world_from_the_viewport() {
+        let store = holding_scaled("sharp_bilinear", 75);
+        let mut gpu = RecordingGpu::probing(&[SHARP]);
+        let mut app = restored(&store, &mut gpu);
+        assert_eq!(gpu.upscaler(), SHARP);
+        assert_eq!(
+            frame(&mut app, &mut gpu, 16).world_space,
+            WorldSpace::Texture { size: (768, 576) }
+        );
     }
 }
