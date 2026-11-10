@@ -1,5 +1,5 @@
 //! A cube model drawn in the world under the HUD, offscreen: its visible
-//! faces lit as `camera::shade` says, its hidden faces hidden by the
+//! faces lit as `camera::shade` says, its far −z face hidden by the
 //! depth test, mixed in list order with a sprite and a placeholder
 //! triangle under it and a sprite over it, and the HUD over all of it.
 //! Natively and under sharp-bilinear, which draws the world into a
@@ -44,7 +44,6 @@ const NORMALS: [[f32; 3]; 6] = [
     [0.0, 0.0, -1.0],
 ];
 const PLUS_Y: usize = 2;
-const MINUS_Y: usize = 3;
 const PLUS_Z: usize = 4;
 const MINUS_Z: usize = 5;
 
@@ -214,18 +213,19 @@ fn a_cube_model_draws_under_the_hud() {
         assert_near(&pixels, (12.5, 16.5), shaded(PLUS_Y), &format!("+y {case}"));
         assert_ne!(shaded(PLUS_Z), shaded(PLUS_Y), "the two lit apart");
 
-        // The far faces hidden by depth, though −z is drawn last.
-        for face in [MINUS_Z, MINUS_Y] {
-            for colour in [shaded(face), FACES[face]] {
-                let showing = pixels_inside(MINUS_Z_AREA)
-                    .into_iter()
-                    .filter(|&p| {
-                        let [r, g, b, _] = pixel(&pixels, p);
-                        near([r, g, b], colour)
-                    })
-                    .count();
-                assert_eq!(showing, 0, "face {face} shows at {showing} pixels {case}");
-            }
+        // The far −z face hidden by depth, though it is drawn last. Only
+        // −z witnesses the depth test: −y, the other far face, projects
+        // to y 5.17 to 10.17, outside −z's area, and draws before +z,
+        // which covers it in list order alone.
+        for colour in [shaded(MINUS_Z), FACES[MINUS_Z]] {
+            let showing = pixels_inside(MINUS_Z_AREA)
+                .into_iter()
+                .filter(|&p| {
+                    let [r, g, b, _] = pixel(&pixels, p);
+                    near([r, g, b], colour)
+                })
+                .count();
+            assert_eq!(showing, 0, "−z shows at {showing} pixels {case}");
         }
 
         // The sprite and the triangle before the cube, hidden under it
