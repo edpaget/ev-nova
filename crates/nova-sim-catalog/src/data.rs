@@ -10,6 +10,8 @@
 mod hull_collision;
 mod hull_frames;
 mod rle_sheets;
+#[cfg(test)]
+mod weapon_muzzle;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -1186,6 +1188,7 @@ impl CombatCatalog for GameData {
                     ionize_color: record.ionize_color,
                     jam_vuln: record.jam_vuln,
                     frame: shot_frame(self, record.graphic),
+                    muzzle_reach: self.muzzle_reach(WeaponId(id)),
                     hit_particles: record.hit_particles,
                     hit_part_life: record.hit_part_life,
                     hit_part_vel: record.hit_part_vel,
@@ -4386,6 +4389,7 @@ mod tests {
             ionize_color: 0x0034_c2ff,
             jam_vuln: [40, 0, 7, 0],
             frame: None,
+            muzzle_reach: None,
             hit_particles: 12,
             hit_part_life: 45,
             hit_part_vel: 300,

@@ -1594,6 +1594,13 @@ pub struct WeaponRecord {
     /// `nova_sim::combat::defence`); none for a `Graphic` below
     /// 0 or a sheet that cannot be read.
     pub frame: Option<FrameSize>,
+    /// How far ahead of its exit point its muzzle is, in whole pixels:
+    /// the new game's outfit model on its hardpoint
+    /// (`nova_data::GameData::muzzle_reach`); none in stock data, which has
+    /// no such field. A shot starts that far ahead of its exit only under
+    /// the rulebook's `mounted_muzzles` reading (see
+    /// `nova_sim::combat::muzzle`).
+    pub muzzle_reach: Option<i16>,
 }
 
 /// A sprite frame's size, in pixels.

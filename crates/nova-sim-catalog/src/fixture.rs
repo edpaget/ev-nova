@@ -266,6 +266,7 @@ pub fn weapon(id: i16) -> WeaponRecord {
         ionize_color: 0,
         jam_vuln: [0; 4],
         frame: None,
+        muzzle_reach: None,
     }
 }
 

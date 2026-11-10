@@ -1627,6 +1627,7 @@ pub(in crate::flight) fn gun(
         ionize_color: 0,
         jam_vuln: [0; 4],
         frame: None,
+        muzzle_reach: None,
         hit_particles: 0,
         hit_part_life: 0,
         hit_part_vel: 0,
