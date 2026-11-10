@@ -304,10 +304,11 @@ impl GameSettings {
     /// The settings `prefs` choose, from these, keeping a volume already
     /// at its chosen level as [`AudioSettings::with_prefs`] does, and the
     /// settings the prefs don't set: the map's borders, fullscreen, both
-    /// whether and how, the Scaling and the remembered `Nova Files`. A fullscreen kind or a scaling
-    /// the dialog chooses is the app's to apply and save, as it applies
-    /// it, so a change of another preference never overwrites a stored
-    /// scaling this device could not use.
+    /// whether and how, the Scaling, the render scale and the remembered
+    /// `Nova Files`. A fullscreen kind or a scaling the dialog chooses is
+    /// the app's to apply and save, as it applies it, so a change of
+    /// another preference never overwrites a stored scaling this device
+    /// could not use.
     #[must_use]
     pub fn with_prefs(self, prefs: Prefs) -> Self {
         Self {
@@ -1384,6 +1385,20 @@ mod tests {
             ..Prefs::default()
         });
         assert_eq!(changed.nova_files, Some(PathBuf::from("/Nova Files")));
+    }
+
+    #[test]
+    fn the_prefs_keep_the_render_scale() {
+        let scaled = GameSettings {
+            render_scale: RenderScale::percent(67),
+            ..GameSettings::default()
+        };
+        let changed = scaled.with_prefs(Prefs::default());
+        assert_eq!(
+            changed.render_scale,
+            RenderScale::Percent(67),
+            "the Preferences dialog never has it"
+        );
     }
 
     #[cfg(unix)]
