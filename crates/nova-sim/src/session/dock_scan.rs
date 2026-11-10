@@ -59,10 +59,9 @@ impl Statics {
     /// `oütf`.
     pub(super) fn spots(&self, ship: ShipId, carried: &BTreeMap<OutfitId, u16>) -> Vec<Spot> {
         let class = self.fittings.hulls.get(&ship).into_iter().flatten();
-        let kits = carried
-            .iter()
-            .filter(|&(_, &count)| count > 0)
-            .filter_map(|(outfit, _)| self.fittings.kits.get(outfit))
+        let kits = self
+            .kits_carried(carried)
+            .filter_map(|outfit| self.fittings.kits.get(&outfit))
             .flat_map(|kit| &kit.spots);
         class.chain(kits).copied().collect()
     }

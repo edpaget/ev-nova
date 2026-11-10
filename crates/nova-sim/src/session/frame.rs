@@ -10,6 +10,7 @@ use crate::flight_frame::{FlightFrame, FlightOpening, Gates, MapKey};
 use crate::rulebook::RuleKey;
 
 mod facts;
+mod fitted;
 mod hud;
 mod key_fades;
 mod names;
@@ -24,6 +25,7 @@ impl Session {
     /// filled here. The player's ship's name, the date and the systems
     /// explored are written into the strings and the list the frame kept,
     /// not fresh ones.
+    #[allow(clippy::too_many_lines)] // a line or two for each of the frame's fields
     pub fn fill_frame(&self, into: &mut FlightFrame) {
         debug_assert!(
             self.out.story_outfits.is_empty(),
@@ -73,6 +75,7 @@ impl Session {
             explored,
             floating,
             hull_turn,
+            player_kits,
         } = into;
         *nav_mode = self.nav_mode();
         *system = self.system();
@@ -124,6 +127,7 @@ impl Session {
         explored.extend(self.pilot.explored());
         self.chart.fill_floating_places(&self.pilot, floating);
         *hull_turn = self.hull_turn();
+        self.fill_player_kits(player_kits);
     }
 
     /// What every ship's hull turns with, as the rulebook's
@@ -388,6 +392,7 @@ pub(super) mod tests {
                 links: vec![(SystemId(999), Vec2::new(9.0, 9.0)); 17],
             },
             hull_turn: HullTurn::Continuous,
+            player_kits: vec![crate::catalog::OutfitId(999)],
         }
     }
 

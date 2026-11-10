@@ -275,6 +275,13 @@ pub struct FlightFrame {
     /// ([`FrameSpec::hull_angle`]), so a hull stands on the frame its
     /// sprite is drawn on. By frame for a flight that failed to start.
     pub hull_turn: HullTurn,
+    /// The kits the player's ship carries, by ascending `oütf`: each
+    /// outfit it carries that the fittings list as a kit, the set its
+    /// hardpoints come from, so the view draws a kit's mount while it is
+    /// carried (the session's `frame::fitted` module). Filled in place.
+    /// None for stock data, which has no fittings, and for a flight that
+    /// failed to start.
+    pub player_kits: Vec<OutfitId>,
 }
 
 impl Default for FlightFrame {
@@ -330,6 +337,7 @@ impl Default for FlightFrame {
             explored: Vec::new(),
             floating: FloatingLinks::default(),
             hull_turn: HullTurn::ByFrame,
+            player_kits: Vec::new(),
         }
     }
 }

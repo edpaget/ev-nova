@@ -578,6 +578,7 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         explored,
         floating,
         hull_turn,
+        player_kits,
     } = frame;
     let other_system = SystemId(if system.0 == i16::MAX { 0 } else { i16::MAX });
     FlightFrame {
@@ -711,6 +712,7 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         } else {
             HullTurn::ByFrame
         },
+        player_kits: one_or_none(player_kits, || nova_sim::OutfitId(128)),
     }
 }
 
@@ -3107,8 +3109,10 @@ mod tests {
                 explored,
                 floating,
                 hull_turn,
+                player_kits,
             } = &frame;
             assert_ne!(other.hull_turn, *hull_turn);
+            assert_ne!(other.player_kits, *player_kits);
             assert_unlike_hud(&other.hud, hud);
             assert_ne!(other.target, *target);
             assert_ne!(other.ships, *ships);
