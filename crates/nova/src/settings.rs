@@ -18,13 +18,23 @@
 //! `music_volume`, `hyperspace_effects`, `quicktime_movies`,
 //! `smoke_trails`, `weapon_effects`, `ship_animations`, `engine_glows`,
 //! `running_lights`, `parallax_starfield`, `show_map_borders`,
-//! `fullscreen`, `fullscreen_kind`, `frame_upscaler`, `nova_files` and
-//! `bindings`; files saved before the last fourteen existed load
-//! unchanged, with the hyperspace effects, the movies, the smoke trails,
-//! the weapon effects, the ship animations, the engine glows, the running
-//! lights, the parallax starfield and the map's borders on, the game
-//! windowed and, when fullscreen, borderless, the world drawn natively,
-//! no `Nova Files` remembered, and every key at its default.
+//! `fullscreen`, `fullscreen_kind`, `frame_upscaler`, `render_scale`,
+//! `nova_files` and `bindings`; files saved before the last fifteen
+//! existed load unchanged, with the hyperspace effects, the movies, the
+//! smoke trails, the weapon effects, the ship animations, the engine
+//! glows, the running lights, the parallax starfield and the map's borders
+//! on, the game windowed and, when fullscreen, borderless, the world drawn
+//! natively at the Scaling's own size, no `Nova Files` remembered, and
+//! every key at its default.
+//!
+//! `render_scale` is the percentage of the backing size flight's world
+//! layer is drawn at before the Scaling enlarges it
+//! ([`RenderScale::Percent`]), a number from 25 to 100; one outside that
+//! range is clamped to it, and a fraction rounded. Absent, it is
+//! [`RenderScale::Auto`], the size the Scaling draws at on its own, and
+//! saving `Auto` leaves it out. A value that isn't a number is `Auto` too,
+//! and the file's other keys still load. No Preferences control sets it
+//! yet; the file is the only place to.
 //!
 //! `ship_animations`, `engine_glows` and `running_lights` are the
 //! original's `ShipAnimations`, `EngineGlows` and `RunningLights`, each
@@ -89,7 +99,7 @@ use std::path::PathBuf;
 
 use nova_audio::{AudioSettings, SettingsStore, Volume};
 use nova_view::keymap::PadMap;
-use nova_view::{Bindings, FullscreenKind, KeyMap, Prefs, Scaling, VideoMode};
+use nova_view::{Bindings, FullscreenKind, KeyMap, Prefs, RenderScale, Scaling, VideoMode};
 use serde::{Deserialize, Serialize};
 
 /// The Scaling chosen, as saved: its name, kept as it was read even when
@@ -145,6 +155,22 @@ impl From<String> for ScalingSetting {
     /// The setting `name` is saved as, known or not.
     fn from(name: String) -> Self {
         Self(name)
+    }
+}
+
+/// The render scale `saved` under `render_scale` says: a number is that
+/// percentage, rounded and clamped ([`RenderScale::percent`]); anything
+/// else, or nothing, is [`RenderScale::Auto`].
+fn render_scale_of(saved: Option<&serde_json::Value>) -> RenderScale {
+    match saved.and_then(serde_json::Value::as_f64) {
+        Some(percent) => {
+            let within = percent
+                .round()
+                .clamp(f64::from(RenderScale::MIN), f64::from(RenderScale::MAX));
+            // In 25..=100, so it fits.
+            RenderScale::percent(within as u8)
+        }
+        None => RenderScale::Auto,
     }
 }
 
@@ -216,6 +242,10 @@ pub struct GameSettings {
     /// The Scaling the player chose, as saved, under the key phase 6
     /// named for the frame upscaler it then held.
     pub frame_upscaler: ScalingSetting,
+    /// The size flight's world layer is drawn at before the Scaling
+    /// enlarges it: [`RenderScale::Auto`], the Scaling's own, unless the
+    /// file says a percentage.
+    pub render_scale: RenderScale,
     /// The `Nova Files` directory the player picked when the game found
     /// none, tried before the usual places on the next launch.
     pub nova_files: Option<PathBuf>,
@@ -243,6 +273,7 @@ impl Default for GameSettings {
             parallax_starfield: true,
             map_borders: true,
             frame_upscaler: ScalingSetting::default(),
+            render_scale: RenderScale::Auto,
             nova_files: None,
             bindings: Bindings::default(),
         }
@@ -318,6 +349,11 @@ struct Saved {
     parallax_starfield: bool,
     show_map_borders: bool,
     frame_upscaler: String,
+    /// Any JSON value, so one that isn't a number is drawn at
+    /// [`RenderScale::Auto`] rather than making the file unusable
+    /// ([`render_scale_of`]); absent at `Auto`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    render_scale: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     nova_files: Option<String>,
     bindings: SavedBindings,
@@ -459,6 +495,10 @@ impl From<GameSettings> for Saved {
             parallax_starfield: settings.parallax_starfield,
             show_map_borders: settings.map_borders,
             frame_upscaler: settings.frame_upscaler.0,
+            render_scale: match settings.render_scale {
+                RenderScale::Auto => None,
+                RenderScale::Percent(p) => Some(p.into()),
+            },
             // A name that isn't UTF-8 can't be a JSON string: it is left
             // out, and the next launch looks again.
             nova_files: settings
@@ -495,6 +535,7 @@ impl From<Saved> for GameSettings {
             parallax_starfield: saved.parallax_starfield,
             map_borders: saved.show_map_borders,
             frame_upscaler: ScalingSetting(saved.frame_upscaler),
+            render_scale: render_scale_of(saved.render_scale.as_ref()),
             nova_files: saved.nova_files.map(PathBuf::from),
             bindings: saved.bindings.into(),
         }
@@ -661,6 +702,7 @@ mod tests {
             running_lights: true,
             parallax_starfield: true,
             frame_upscaler: ScalingSetting::default(),
+            render_scale: RenderScale::Auto,
             nova_files: None,
             bindings: Bindings::default(),
         }
@@ -688,6 +730,7 @@ mod tests {
                 running_lights: true,
                 parallax_starfield: true,
                 frame_upscaler: ScalingSetting::default(),
+                render_scale: RenderScale::Auto,
                 nova_files: None,
                 bindings: Bindings::default(),
             }
@@ -765,6 +808,7 @@ mod tests {
                 running_lights: true,
                 parallax_starfield: true,
                 frame_upscaler: ScalingSetting::default(),
+                render_scale: RenderScale::Auto,
                 nova_files: None,
                 bindings: Bindings::default(),
             }
@@ -797,6 +841,7 @@ mod tests {
                 running_lights: true,
                 parallax_starfield: true,
                 frame_upscaler: ScalingSetting::default(),
+                render_scale: RenderScale::Auto,
                 nova_files: None,
                 bindings: Bindings::default(),
             }
@@ -1425,6 +1470,71 @@ mod tests {
     }
 
     #[test]
+    fn a_file_without_a_render_scale_is_auto() {
+        let (keeper, warning) =
+            SettingsKeeper::open(MemorySettings::holding(r#"{"sound": false}"#));
+        assert_eq!(warning, None);
+        assert_eq!(keeper.settings().render_scale, RenderScale::Auto);
+        assert_eq!(GameSettings::default().render_scale, RenderScale::Auto);
+    }
+
+    #[test]
+    fn a_render_scale_is_saved_under_its_key_and_read_back() {
+        let store = MemorySettings::new();
+        let (mut keeper, _) = SettingsKeeper::open(store.clone());
+        keeper
+            .change(GameSettings {
+                render_scale: RenderScale::percent(67),
+                ..GameSettings::default()
+            })
+            .expect("saves");
+        assert_eq!(json(&store)["render_scale"], 67);
+        let (restarted, warning) = SettingsKeeper::open(store.clone());
+        assert_eq!(warning, None);
+        assert_eq!(restarted.settings().render_scale, RenderScale::Percent(67));
+        // Back at Auto the key is gone, as in a file saved before it was.
+        let (mut keeper, _) = SettingsKeeper::open(store.clone());
+        keeper.change(GameSettings::default()).expect("saves");
+        assert_eq!(json(&store).get("render_scale"), None);
+    }
+
+    #[test]
+    fn a_stored_render_scale_out_of_range_is_clamped() {
+        for (stored, kept) in [
+            ("0", 25),
+            ("24", 25),
+            ("-5", 25),
+            ("67.4", 67),
+            ("101", 100),
+            ("1000000", 100),
+        ] {
+            let text = format!(r#"{{"render_scale": {stored}}}"#);
+            let (keeper, warning) = SettingsKeeper::open(MemorySettings::holding(&text));
+            assert_eq!(warning, None, "{stored}");
+            assert_eq!(
+                keeper.settings().render_scale,
+                RenderScale::Percent(kept),
+                "{stored}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_render_scale_that_is_not_a_number_is_auto_and_the_other_keys_still_load() {
+        for stored in [r#""half""#, "true", "null", "[50]", r#"{"percent": 50}"#] {
+            let text = format!(r#"{{"sound": false, "render_scale": {stored}}}"#);
+            let (keeper, warning) = SettingsKeeper::open(MemorySettings::holding(&text));
+            assert_eq!(warning, None, "{stored}");
+            assert_eq!(
+                keeper.settings().render_scale,
+                RenderScale::Auto,
+                "{stored}"
+            );
+            assert!(!keeper.settings().audio.sound, "{stored}: the sound key");
+        }
+    }
+
+    #[test]
     fn an_unknown_frame_upscaler_loads_and_is_saved_back_as_it_was() {
         for name in ["warp_drive", "hd_pack_v9"] {
             let text = format!(r#"{{"frame_upscaler": "{name}"}}"#);
@@ -1619,6 +1729,7 @@ mod tests {
                 running_lights: true,
                 parallax_starfield: true,
                 frame_upscaler: ScalingSetting::default(),
+                render_scale: RenderScale::Auto,
                 nova_files: None,
                 bindings: Bindings::default(),
             })
@@ -1754,6 +1865,7 @@ mod tests {
             running_lights: true,
             parallax_starfield: true,
             frame_upscaler: ScalingSetting::default(),
+            render_scale: RenderScale::Auto,
             nova_files: None,
             bindings: Bindings::default(),
         };

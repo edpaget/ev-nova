@@ -737,6 +737,7 @@ mod tests {
             running_lights: true,
             parallax_starfield: true,
             frame_upscaler: crate::settings::ScalingSetting::default(),
+            render_scale: nova_view::RenderScale::Auto,
             nova_files: None,
             bindings: nova_view::Bindings::default(),
         };

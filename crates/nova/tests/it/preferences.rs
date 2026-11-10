@@ -239,6 +239,7 @@ pub(crate) fn seeded() -> MemorySettings {
             running_lights: true,
             parallax_starfield: true,
             frame_upscaler: ScalingSetting::default(),
+            render_scale: nova_view::RenderScale::Auto,
             nova_files: None,
             bindings: nova_view::Bindings::default(),
         })
