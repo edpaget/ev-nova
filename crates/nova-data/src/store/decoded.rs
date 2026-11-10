@@ -67,6 +67,7 @@ impl GameData {
             storylines: super::Storylines::default(),
             fittings: super::Fittings::default(),
             ship_lines: BTreeMap::new(),
+            collision_radii: BTreeMap::new(),
         }
     }
 

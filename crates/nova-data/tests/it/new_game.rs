@@ -575,6 +575,28 @@ fn the_harrow_band_blockades_the_far_gate_with_its_gunships() {
     assert_eq!(blockade.ship_syst, game.ids.systems[&id("marrow")]);
 }
 
+#[test]
+fn the_sample_s_light_freighter_and_its_gunship_collide_at_the_freighter_s_radius() {
+    let folder = new_game::fixture::sample_folder();
+    let (galaxy, _) =
+        nova_galaxy_format::load::load(&nova_galaxy_format::source::DirSource::new(&folder));
+    let size = galaxy.ships[&id("light-freighter")]
+        .data
+        .size
+        .expect("the freighter's size");
+    #[allow(clippy::cast_possible_truncation)]
+    let px = (size.collision_radius * PX_PER_METRE).round() as i16;
+    let game = new_game::open(&folder).expect("lists");
+    for ship in ["light-freighter", "harrow-gunship"] {
+        assert_eq!(
+            game.data
+                .collision_radius(ShipId(game.ids.ships[&id(ship)])),
+            Some(px),
+            "{ship}"
+        );
+    }
+}
+
 /// The size box `beam` by `length` metres, at `PX_PER_METRE`, in `color`.
 fn size_box(length: f64, beam: f64, color: [u8; 3]) -> StandIn {
     let size = Size {

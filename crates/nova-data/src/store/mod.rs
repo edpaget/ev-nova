@@ -209,6 +209,7 @@ use crate::error::{DecodeError, DecodeWarning};
 use crate::expr::{ParseError, SetExpr, TestExpr};
 use crate::registry::{AnyDecoded, AnyRecord, Registered, decode_any};
 
+mod collision_radii;
 mod decoded;
 mod dialogs;
 mod fittings;
@@ -412,6 +413,9 @@ pub struct GameData {
     /// Each new-game ship's lineage, its chain of bible ids and its role
     /// ([`GameData::with_ship_lines`]); none in a stock store.
     ship_lines: BTreeMap<crate::wire::id::ShipId, ShipLine>,
+    /// Each new-game ship's collision radius in whole pixels
+    /// ([`GameData::with_collision_radii`]); none in a stock store.
+    collision_radii: BTreeMap<crate::wire::id::ShipId, i16>,
 }
 
 /// A test expression parsed once and shared: its tree, or why it did not
@@ -468,6 +472,7 @@ impl GameData {
             storylines: Storylines::default(),
             fittings: Fittings::default(),
             ship_lines: BTreeMap::new(),
+            collision_radii: BTreeMap::new(),
         })
     }
 

@@ -1414,6 +1414,65 @@ fn a_hull_s_anim_sets_only_its_size() {
     assert!((PX_PER_METRE - 1.0).abs() < f64::EPSILON, "provisional");
 }
 
+/// The fixture galaxy with a hull `barge` whose `size` gives
+/// `collision_radius` (YAML text, so `.nan` and `.inf` can be written).
+fn barge_with_radius(collision_radius: &str) -> MemSource {
+    galaxy().with(
+        "ships/barge.md",
+        &format!(
+            "---\nname: Barge\nstyle: civilian\nrole: freighter\nmodel: hull\n\
+             size: {{length: 20, beam: 10, collision_radius: {collision_radius}}}\n---\n"
+        ),
+    )
+}
+
+fn collision_radius_of(game: &NewGame, name: &str) -> Option<i16> {
+    game.data
+        .collision_radius(ShipId(game.ids.ships[&id(name)]))
+}
+
+#[test]
+fn a_hull_s_collision_radius_is_kept_on_the_store_in_whole_pixels() {
+    let game = loaded(&barge_with_radius("9.6"));
+    #[allow(clippy::cast_possible_truncation)]
+    let px = (9.6 * PX_PER_METRE).round() as i16;
+    assert_eq!(collision_radius_of(&game, "barge"), Some(px));
+    assert_eq!(px, 10, "9.6 rounds up at one pixel a metre");
+}
+
+#[test]
+fn a_variant_collides_at_its_base_s_radius() {
+    let game = loaded(&variants());
+    let skiff = collision_radius_of(&game, "skiff");
+    assert!(skiff.is_some());
+    for name in ["technical", "heavy"] {
+        assert_eq!(collision_radius_of(&game, name), skiff, "{name}");
+    }
+}
+
+#[test]
+fn a_ship_with_no_size_has_no_collision_radius() {
+    let game = loaded(&galaxy().with(
+        "ships/barge.md",
+        "---\nname: Barge\nstyle: civilian\nrole: freighter\nmodel: hull\n---\n",
+    ));
+    assert_eq!(collision_radius_of(&game, "barge"), None);
+}
+
+#[test]
+fn a_radius_that_is_not_a_whole_positive_pixel_or_not_finite_is_none() {
+    for radius in ["0", "-3", ".nan", ".inf", "-.inf", "0.4"] {
+        let game = loaded(&barge_with_radius(radius));
+        assert_eq!(collision_radius_of(&game, "barge"), None, "{radius}");
+    }
+}
+
+#[test]
+fn a_radius_past_the_widest_pixel_count_is_held_at_it() {
+    let game = loaded(&barge_with_radius("1e9"));
+    assert_eq!(collision_radius_of(&game, "barge"), Some(i16::MAX));
+}
+
 #[test]
 fn a_hull_past_the_last_ship_id_is_a_problem_and_left_out() {
     let source = (0..767).fold(galaxy(), |source, n| {

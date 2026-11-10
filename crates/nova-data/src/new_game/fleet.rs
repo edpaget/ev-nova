@@ -34,7 +34,12 @@
 //!   that loops, or names a base that isn't there, leaves the ship out.
 //! - **Size and firing positions** ([`ship_anim`]). A ship's `shän` sets
 //!   `BaseXSize` (the beam) and `BaseYSize` (the length), in pixels at
-//!   [`PX_PER_METRE`]: the simulation collides and hovers at that size.
+//!   [`PX_PER_METRE`]: the simulation hovers at that size, and collides
+//!   at it under the engine's reading. Its `collision_radius`, which a
+//!   `shän` has no field for, rides on the store in whole pixels at the
+//!   same scale ([`collision_radius`], `GameData::collision_radius`), and
+//!   the simulation strikes the ship as that disc under the rulebook's
+//!   `data_collision` reading (`nova_sim::combat::data_collision`).
 //!   Its hardpoints, its chain's and then its kits', are its exit points:
 //!   a `fixed` one a gun point, a `turret` one a turret point, a
 //!   `launcher` one a guided point, a `bay` none, at its `position` in
@@ -425,6 +430,33 @@ pub fn chain_spots(galaxy: &Galaxy, id: &Id) -> Vec<Spot> {
     ship.hardpoints[..chain]
         .iter()
         .filter_map(|placed| spot(placed.hardpoint))
+        .collect()
+}
+
+/// The ship `id`'s collision radius, its nearest `size`'s
+/// `collision_radius` in whole pixels at [`PX_PER_METRE`] (held within
+/// `i16`, as every size is); none for a ship with no `size`,
+/// and none for a radius that isn't finite or isn't a whole positive pixel
+/// once rounded (NaN, an infinity, 0, a negative, or under half a pixel),
+/// so such a ship collides as the engine reads it.
+#[must_use]
+pub fn collision_radius(galaxy: &Galaxy, id: &Id) -> Option<i16> {
+    let radius = resolved(galaxy, id)?.size?.collision_radius;
+    if !radius.is_finite() {
+        return None;
+    }
+    Some(pixels(radius)).filter(|&px| px > 0)
+}
+
+/// Every mapped ship's collision radius ([`collision_radius`]), by its
+/// `shïp`, for the store ([`GameData::with_collision_radii`]).
+///
+/// [`GameData::with_collision_radii`]: crate::store::GameData::with_collision_radii
+#[must_use]
+pub fn collision_radii(galaxy: &Galaxy, ids: &IdTable) -> BTreeMap<ShipId, i16> {
+    ids.ships
+        .iter()
+        .filter_map(|(id, &nova)| Some((ShipId(nova), collision_radius(galaxy, id)?)))
         .collect()
 }
 
