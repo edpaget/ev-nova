@@ -71,7 +71,7 @@ use nova_sim::{
 use nova_view::Key;
 use nova_view::flight::{FlightView, SharedChance};
 use nova_view::text::fixture::MonoMetrics;
-use nova_view::ui::{DialogResources, DialogTemplate};
+use nova_view::ui::catalog::fixture::NoDialogs;
 
 /// A 1024x768 window at scale 1: window pixels are logical units.
 struct FakeWindow;
@@ -86,15 +86,6 @@ impl WindowPort for FakeWindow {
     }
 
     fn request_redraw(&mut self) {}
-}
-
-/// No dialogs: the router is given them only for their text metrics.
-struct NoDialogs;
-
-impl DialogResources for NoDialogs {
-    fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
-        Err(format!("no DLOG {id}"))
-    }
 }
 
 fn put_i16s(bytes: &mut [u8], at: usize, values: &[i16]) {

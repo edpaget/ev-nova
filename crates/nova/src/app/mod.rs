@@ -1476,13 +1476,12 @@ mod tests {
 
     use nova_audio::recording::{AudioLog, MemorySettings, RecordingAudio};
     use nova_audio::{Audio, AudioCommand, AudioCore, AudioSettings, SettingsStore, Volume};
-    use nova_data::graphics::Image;
-    use nova_render::recording::RecordingGpu;
-    use nova_render::{ImageError, ImageSource, PixelRect};
+    use nova_render::recording::{NoImages, RecordingGpu};
+    use nova_render::{ImageError, PixelRect};
     use nova_view::sound::SimSound;
     use nova_view::{
-        Color, Diagnostic, DrawList, ImageKey, ImageKind, Input, Key, MouseButton, Point, Prefs,
-        Screen, ScreenAction, Showing, Sound, SoundPrefs, UiSound, ViewShape,
+        Color, Diagnostic, DrawList, ImageKey, Input, Key, MouseButton, Point, Prefs, Screen,
+        ScreenAction, Showing, Sound, SoundPrefs, UiSound, ViewShape,
     };
 
     use super::*;
@@ -1559,15 +1558,6 @@ mod tests {
                 width: self.size_px.0,
                 height: self.size_px.1,
             })
-        }
-    }
-
-    /// No images at all.
-    struct NoImages;
-
-    impl ImageSource for NoImages {
-        fn frames(&self, _kind: ImageKind, _id: i16) -> Result<Vec<Image>, ImageError> {
-            Err(ImageError::Missing)
         }
     }
 

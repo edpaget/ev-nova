@@ -27,6 +27,7 @@ use nova_view::ships::{ShipBrowser, ShipId};
 use nova_view::sound::SimSound;
 use nova_view::spaceport::layout::LEAVE_ITEM;
 use nova_view::text::fixture::MonoMetrics;
+use nova_view::ui::catalog::fixture::NoDialogs;
 use nova_view::ui::{DialogTemplate, ItemSpec, ItemTemplate, Placement};
 use nova_view::{DrawCommand, Font, Key, MouseButton, Point, Sound, UiSound};
 
@@ -1246,15 +1247,6 @@ fn prefs_template() -> DialogTemplate {
         bounds: Bounds::at(Point::new(0.0, 0.0), 300.0, 260.0),
         placement: Placement::Fixed,
         items,
-    }
-}
-
-/// No dialogs at all.
-struct NoDialogs;
-
-impl DialogResources for NoDialogs {
-    fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
-        Err(format!("no DLOG {id}"))
     }
 }
 
