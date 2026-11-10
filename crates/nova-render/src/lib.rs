@@ -147,12 +147,13 @@ pub use batch::{RenderReport, Renderer};
 pub use camera::Light;
 pub use enlarge::{Enlarger, NativeDetail, enlarger_for};
 pub use fonts::{FALLBACK_FONT, Face, FontFaces, Loaded, SERIF_FONT, face_for};
-pub use galaxy_models::{GalaxyModels, ship_request};
+pub use galaxy_models::{GalaxyModels, ship_livery, ship_request};
 pub use gpu::{
     Batch, Frame, Gpu, MAX_TEXTURE_SIDE, ModelInstance, QuadInstance, Rect, SolidQuad, TextRun,
     WorldSpace,
 };
 pub use images::{ImageError, ImageSource};
+pub use livery::{Livery, PaintSlot, painted};
 pub use model::{Mesh, MeshError, MeshId, Vertex};
 pub use model_source::{LoadedModel, ModelError, ModelRequest, ModelSource};
 pub use present::{AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action};

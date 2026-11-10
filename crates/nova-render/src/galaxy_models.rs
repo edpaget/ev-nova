@@ -14,6 +14,12 @@
 //! [`ModelKey`](nova_view::ModelKey) a model takes
 //! ([`Renderer::add_model`](crate::Renderer::add_model) with
 //! [`LoadedModel::mesh`]).
+//!
+//! For a ship, [`ship_request`] and [`ship_livery`] read what its `base`
+//! chain gives (`nova_galaxy_format::fleet::resolve`): the model to ask
+//! for, and the livery to paint it in ([`crate::livery::painted`]), each
+//! colour's bytes as the format reads them
+//! ([`Color::rgb`](nova_galaxy_format::id::Color::rgb)).
 
 use nova_galaxy_format::asset::{AssetKind, Paint};
 use nova_galaxy_format::fleet::resolve;
@@ -24,6 +30,7 @@ use nova_galaxy_media::budget::{self, limits, measure, over_budget};
 use nova_galaxy_media::scene::{Scene, read_asset_scene};
 use nova_galaxy_media::{NoModel, Placement, Slot, slot_of};
 
+use crate::livery::Livery;
 use crate::model::MeshError;
 use crate::model_source::{
     self, LoadedModel, Material, Measure, ModelError, ModelRequest, ModelSource, Overrun,
@@ -92,6 +99,21 @@ pub fn ship_request(galaxy: &Galaxy, ship: &Id) -> Option<ModelRequest> {
     )]
     let length = resolved.size.map(|size| size.length as f32);
     Some(ModelRequest::new(resolved.model?.as_str(), length))
+}
+
+/// The livery the finished ship `ship` wears in `galaxy`: its nearest
+/// `livery`, each slot's colour read as its bytes
+/// ([`Color::rgb`](nova_galaxy_format::id::Color::rgb)). `None` for a ship
+/// that doesn't resolve, wears no livery, or names one that isn't there.
+#[must_use]
+pub fn ship_livery(galaxy: &Galaxy, ship: &Id) -> Option<Livery> {
+    let resolved = resolve(galaxy, ship).ok()?;
+    let palette = &galaxy.liveries.get(resolved.livery?)?.data.palette;
+    Some(Livery {
+        primary: palette.primary.rgb(),
+        secondary: palette.secondary.rgb(),
+        trim: palette.trim.rgb(),
+    })
 }
 
 /// Why `asset` has no model, as the port says it.
@@ -397,6 +419,41 @@ mod tests {
             "from its base"
         );
         assert_eq!(ship_request(&galaxy, &id("nothing")), None);
+    }
+
+    #[test]
+    fn a_ship_s_livery_is_its_nearest_livery_s_bytes() {
+        let source = galaxy()
+            .with("ships/bare.md", "---\nname: Bare\nmodel: hull\n---\n")
+            .with(
+                "ships/odd.md",
+                "---\nname: Odd\nmodel: hull\nlivery: no-such-paint\n---\n",
+            );
+        let (galaxy, _) = load(&source);
+        let palette = &galaxy.liveries[&id("league-paint")].data.palette;
+        let league = Livery {
+            primary: palette.primary.rgb(),
+            secondary: palette.secondary.rgb(),
+            trim: palette.trim.rgb(),
+        };
+        // Each slot read apart, so a swapped slot fails.
+        assert_eq!(
+            [league.primary, league.secondary, league.trim],
+            [[0xdd, 0xcc, 0xaa], [0xaa, 0x88, 0x00], [0x22, 0x22, 0x22]]
+        );
+        assert_eq!(ship_livery(&galaxy, &id("skiff")), Some(league));
+        assert_eq!(
+            ship_livery(&galaxy, &id("armed-skiff")),
+            Some(league),
+            "from its base"
+        );
+        assert_eq!(ship_livery(&galaxy, &id("bare")), None, "wears none");
+        assert_eq!(
+            ship_livery(&galaxy, &id("odd")),
+            None,
+            "names a missing one"
+        );
+        assert_eq!(ship_livery(&galaxy, &id("nothing")), None, "no such ship");
     }
 
     #[test]
