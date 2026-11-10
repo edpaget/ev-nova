@@ -135,6 +135,46 @@ mod tests {
     }
 
     #[test]
+    fn a_star_drawn_lights_its_centre_by_its_colour_and_nothing_far_from_it() {
+        use crate::fonts::FontFaces;
+        use crate::gpu::{Batch, Frame, Gpu, WorldSpace};
+        use crate::viewport::{LogicalSize, PixelRect};
+        // Logical 32 x 32 in the 32 x 32 target: a unit a pixel.
+        let Ok(mut gpu) = crate::wgpu::OffscreenGpu::new(32, 32, &FontFaces::bundled()) else {
+            return;
+        };
+        let star = StarInstance {
+            centre: Point::new(16.5, 16.5),
+            radius: 4.0,
+            color: [0.8, 0.4, 0.2],
+        };
+        gpu.submit(&Frame {
+            target: (32, 32),
+            viewport: PixelRect {
+                x: 0,
+                y: 0,
+                w: 32,
+                h: 32,
+            },
+            logical: LogicalSize { w: 32, h: 32 },
+            clear: nova_view::Color::BLACK,
+            world_space: WorldSpace::Target,
+            batches: vec![Batch::Sky(vec![star])],
+            world: vec![],
+            world_clip: None,
+            world_tail: None,
+        });
+        let pixels = gpu.read_pixels().expect("read back");
+        let at = |x: usize, y: usize| &pixels[(y * 32 + x) * 4..(y * 32 + x) * 4 + 3];
+        // Pixel (16, 16)'s centre is the star's: whole coverage.
+        let centre: Vec<i32> = at(16, 16).iter().map(|&c| i32::from(c)).collect();
+        for (seen, want) in centre.iter().zip([204, 102, 51]) {
+            assert!((seen - want).abs() <= 2, "{centre:?}");
+        }
+        assert_eq!(at(2, 2), [0, 0, 0]);
+    }
+
+    #[test]
     fn a_star_adds_its_colour_and_keeps_the_alpha_beneath() {
         assert_eq!(ADD.color.src_factor, wgpu::BlendFactor::One);
         assert_eq!(ADD.color.dst_factor, wgpu::BlendFactor::One);

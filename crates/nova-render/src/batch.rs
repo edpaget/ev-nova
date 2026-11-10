@@ -830,14 +830,12 @@ struct Target {
     texels: f32,
 }
 
-/// The texels a logical unit is, at least, on either axis, in a world
-/// drawn into a texture of its own (`space`); `None` for a world drawn
-/// into the target.
+/// The texels a logical unit is down, in a world drawn into a texture of
+/// its own (`space`); `None` for a world drawn into the target. The
+/// texture keeps the logical space's shape, so across is the same.
 fn texels_per_unit(space: WorldSpace, logical: LogicalSize) -> Option<f32> {
     match space {
-        WorldSpace::Texture { size: (w, h) } => {
-            Some((w as f32 / logical.w as f32).min(h as f32 / logical.h as f32))
-        }
+        WorldSpace::Texture { size: (_, h) } => Some(h as f32 / logical.h as f32),
         WorldSpace::Target => None,
     }
 }

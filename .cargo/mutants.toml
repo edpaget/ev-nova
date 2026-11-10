@@ -897,6 +897,12 @@ exclude_re = [
     # A planet texture's usage flags are disjoint bits: `^` sets the same
     # ones as `|`.
     "nova-render/src/wgpu/planets\\.rs:[0-9]+:[0-9]+: replace \\| with \\^ in texture$",
+    # The layered sky: a star exactly one texel in radius is grown to one
+    # texel with its brightness times (1 / 1)², so `<=` gives the same
+    # star as `<`; and a cell's extra star is drawn when a 24-bit draw
+    # falls below the density's fraction, which a draw equals one time in
+    # 2^24 at most, never in a pose a test can find cheaply.
+    "nova-render/src/sky\\.rs:[0-9]+:[0-9]+: replace < with <= in layer_stars$",
     # A planet's water ends at rank 0.7 (ocean) or 0.5 (garden): ranks are
     # (k + 0.5) / n for a power-of-two n, which is never 0.7 and never
     # exactly 0.5, so `<` and `<=` split the texels the same.

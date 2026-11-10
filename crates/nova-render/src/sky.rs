@@ -213,11 +213,13 @@ pub fn layer_stars(
     logical: LogicalSize,
     texels_per_unit: f32,
 ) -> Vec<StarInstance> {
-    let finite = |p: Point| p.x.is_finite() && p.y.is_finite();
     let Some(&sky_layer) = LAYERS.get(layer) else {
         return Vec::new();
     };
-    if pose.level == 0 || !finite(pose.eye) || !finite(pose.anchor) {
+    // An eye or anchor that is not finite needs no test of its own: it
+    // places every star at a point that is not finite, which the view's
+    // bounds below leave out.
+    if pose.level == 0 {
         return Vec::new();
     }
     let level = f32::from(pose.level.min(32)) / 32.0;
@@ -616,6 +618,116 @@ mod tests {
     }
 
     #[test]
+    fn the_hash_is_splitmix64s() {
+        // SplitMix64's first two outputs from a state of 0.
+        assert_eq!(mix(0), 0xE220_A839_7B1D_CDAF);
+        assert_eq!(mix(0x9E37_79B9_7F4A_7C15), 0x6E78_9E6A_A1B9_65F4);
+    }
+
+    #[test]
+    fn a_cells_stars_stand_where_its_draws_put_them_on_the_layer() {
+        // Eye and anchor at the origin: the layer's point u is drawn at u.
+        let seen = SkyPose {
+            seed: 3,
+            eye: Point::new(0.0, 0.0),
+            anchor: Point::new(0.0, 0.0),
+            level: 32,
+        };
+        // The far layer: a few stars a cell.
+        let layer = 0;
+        let shown = layer_stars(&seen, layer, LOGICAL, FINE);
+        let per_cell = LAYERS[layer].density * CELL * CELL / DENSITY_AREA;
+        let mut found = 0;
+        for (cx, cy) in [(1, 1), (2, 1), (3, 2)] {
+            let mut hashes = Draws::new(3, layer, cx, cy);
+            let whole = per_cell.floor();
+            let count = whole as u32 + u32::from(hashes.unit() < per_cell - whole);
+            for _ in 0..count {
+                let x = (cx as f32 + hashes.unit()) * CELL;
+                let y = (cy as f32 + hashes.unit()) * CELL;
+                let _ = (hashes.unit(), hashes.unit(), hashes.next());
+                assert!(
+                    shown
+                        .iter()
+                        .any(|star| (star.centre.x - x).abs() < 1e-3
+                            && (star.centre.y - y).abs() < 1e-3),
+                    "cell ({cx}, {cy}): no star at ({x}, {y})"
+                );
+                found += 1;
+            }
+        }
+        assert!(found > 0);
+        // Moving the anchor moves every star with it.
+        let moved = layer_stars(
+            &SkyPose {
+                anchor: Point::new(30.0, -20.0),
+                ..seen
+            },
+            layer,
+            LOGICAL,
+            FINE,
+        );
+        let inside = |p: Point| (100.0..900.0).contains(&p.x) && (100.0..600.0).contains(&p.y);
+        for star in shown.iter().filter(|star| inside(star.centre)) {
+            assert!(
+                moved
+                    .iter()
+                    .any(|other| (other.centre.x - star.centre.x - 30.0).abs() < 1e-3
+                        && (other.centre.y - star.centre.y + 20.0).abs() < 1e-3),
+                "{star:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn stars_reach_into_the_margin_on_every_side_and_no_further() {
+        let big = LogicalSize { w: 4096, h: 4096 };
+        let all = stars(&pose(8, (123.0, -456.0), 32), big, FINE);
+        let (w, h) = (big.w as f32, big.h as f32);
+        assert!(
+            all.iter()
+                .any(|star| (-MARGIN..0.0).contains(&star.centre.x))
+        );
+        assert!(
+            all.iter()
+                .any(|star| (w..w + MARGIN).contains(&star.centre.x))
+        );
+        assert!(
+            all.iter()
+                .any(|star| (-MARGIN..0.0).contains(&star.centre.y))
+        );
+        assert!(
+            all.iter()
+                .any(|star| (h..h + MARGIN).contains(&star.centre.y))
+        );
+        assert!(
+            all.iter()
+                .all(|star| (-MARGIN..w + MARGIN).contains(&star.centre.x)
+                    && (-MARGIN..h + MARGIN).contains(&star.centre.y))
+        );
+    }
+
+    #[test]
+    fn a_layer_shows_its_density_on_average() {
+        let big = LogicalSize { w: 4096, h: 4096 };
+        let area = 4096.0 * 4096.0;
+        for (layer, sky_layer) in LAYERS.iter().enumerate() {
+            let count = layer_stars(&pose(12, (0.0, 0.0), 32), layer, big, FINE).len() as f32;
+            let expected = sky_layer.density * area / DENSITY_AREA;
+            assert!(
+                (count - expected).abs() < expected * 0.08,
+                "layer {layer}: {count} for {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_cells_a_view_spans_count_its_margin_both_ways() {
+        // 121 + 8 is just over a cell: two, plus one.
+        assert_eq!(cell_span(LogicalSize { w: 121, h: 120 }), (3, 2));
+    }
+
+    #[test]
     fn no_layer_past_the_last_has_stars() {
         assert!(layer_stars(&pose(1, (0.0, 0.0), 32), LAYERS.len(), LOGICAL, FINE).is_empty());
     }
@@ -645,9 +757,18 @@ mod batch_tests {
 
     const SMALL: LogicalSize = LogicalSize { w: 256, h: 192 };
 
-    /// The logical space at 2 pixels a unit.
+    /// The logical space at half a pixel a unit: few enough that the
+    /// target's texels grow the stars, and a logical-sized world's don't.
     fn viewport() -> Viewport {
-        Viewport::new(SMALL, (512, 384), 2.0)
+        Viewport::new(SMALL, (128, 96), 0.5)
+    }
+
+    #[test]
+    fn the_texels_these_tests_draw_at_give_different_stars() {
+        let [half, whole, eighth] = [0.5, 1.0, 0.125].map(|t| stars(&sky(), SMALL, t));
+        assert_ne!(half, whole);
+        assert_ne!(half, eighth);
+        assert_ne!(whole, eighth);
     }
 
     fn sky() -> SkyPose {
@@ -684,8 +805,12 @@ mod batch_tests {
             &list,
             &mut RecordingGpu::new(),
         );
-        let expected = stars(&sky(), SMALL, 2.0);
+        let expected = stars(&sky(), SMALL, 0.5);
         assert!(!expected.is_empty());
+        assert_eq!(frame.batches, [Batch::Sky(expected.clone())]);
+        // An overlay sky keeps the target's texels whatever the world's.
+        let mut gpu = RecordingGpu::answering(WorldResolution::Logical);
+        let frame = frame_of(&mut Renderer::new(NoImages), &list, &mut gpu);
         assert_eq!(frame.batches, [Batch::Sky(expected)]);
     }
 
@@ -699,31 +824,38 @@ mod batch_tests {
         let frame = frame_of(&mut Renderer::new(NoImages), &list, &mut gpu);
         assert_eq!(frame.world, [0]);
         assert_eq!(frame.batches, [Batch::Sky(stars(&sky(), SMALL, 1.0))]);
-        // At a quarter of the 512-wide backing, a 128-texel world: half a
-        // texel a unit.
+        // At a quarter of the 128-wide backing, a 32-texel world: an
+        // eighth of a texel a unit.
         let mut renderer = Renderer::new(NoImages);
         renderer.set_render_scale(RenderScale::Percent(25));
         let frame = frame_of(&mut renderer, &list, &mut RecordingGpu::new());
-        assert_eq!(frame.batches, [Batch::Sky(stars(&sky(), SMALL, 0.5))]);
+        assert_eq!(frame.batches, [Batch::Sky(stars(&sky(), SMALL, 0.125))]);
         // Drawn at the target's resolution, a world sky has its texels.
         let frame = frame_of(
             &mut Renderer::new(NoImages),
             &list,
             &mut RecordingGpu::new(),
         );
-        assert_eq!(frame.batches, [Batch::Sky(stars(&sky(), SMALL, 2.0))]);
+        assert_eq!(frame.batches, [Batch::Sky(stars(&sky(), SMALL, 0.5))]);
     }
 
     #[test]
     fn a_sky_in_the_worlds_tail_takes_the_targets_texels() {
         let mut list = DrawList::new();
         list.world(|list| {
+            list.sky(sky());
             list.start_world_tail();
             list.sky(sky());
         });
         let mut gpu = RecordingGpu::answering(WorldResolution::Logical);
         let frame = frame_of(&mut Renderer::new(NoImages), &list, &mut gpu);
-        assert_eq!(frame.batches, [Batch::Sky(stars(&sky(), SMALL, 2.0))]);
+        assert_eq!(
+            frame.batches,
+            [
+                Batch::Sky(stars(&sky(), SMALL, 1.0)),
+                Batch::Sky(stars(&sky(), SMALL, 0.5))
+            ]
+        );
     }
 
     #[test]
@@ -806,7 +938,7 @@ mod batch_tests {
             .map(|frame| (*frame).clone())
             .expect("a frame");
         assert_eq!(kinds(&frame), ["planets", "sky", "sprites"]);
-        assert_eq!(frame.batches[1], Batch::Sky(stars(&sky(), SMALL, 2.0)));
+        assert_eq!(frame.batches[1], Batch::Sky(stars(&sky(), SMALL, 0.5)));
     }
 
     #[test]
@@ -835,6 +967,6 @@ mod batch_tests {
             &clipped,
             &mut RecordingGpu::new(),
         );
-        assert_eq!(frame.batches, [Batch::Sky(stars(&sky(), SMALL, 2.0))]);
+        assert_eq!(frame.batches, [Batch::Sky(stars(&sky(), SMALL, 0.5))]);
     }
 }
