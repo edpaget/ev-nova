@@ -1621,6 +1621,9 @@ impl Session {
             .set_exit_compression(rules.source_for(RuleKey::ExitCompression));
         self.space
             .combat
+            .set_continuous_headings(rules.source_for(RuleKey::ContinuousHeadings));
+        self.space
+            .combat
             .set_pd_exit_step(rules.source_for(RuleKey::PdExitStep));
         self.space
             .combat

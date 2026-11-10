@@ -12,6 +12,7 @@ use std::collections::VecDeque;
 
 use nova_sim::brackets::{NavBrackets, TargetBrackets};
 use nova_sim::catalog::SystemId;
+use nova_sim::combat::hull_turn::HullTurn;
 use nova_sim::flight_frame::{
     Answer, DrawnBoxes, FlightCommand, FlightEvent, FlightFrame, FlightOpening, FloatingLinks,
     FrameAsteroid, FrameBeam, FrameBox, FrameHud, FrameShip, GateEntry, GatePilotShown, Gates,
@@ -576,6 +577,7 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         long_date,
         explored,
         floating,
+        hull_turn,
     } = frame;
     let other_system = SystemId(if system.0 == i16::MAX { 0 } else { i16::MAX });
     FlightFrame {
@@ -703,6 +705,11 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         floating: FloatingLinks {
             current: floating.current + Vec2::new(1.0, 0.0),
             links: one_or_none(&floating.links, || (SystemId(128), Vec2::ZERO)),
+        },
+        hull_turn: if *hull_turn == HullTurn::ByFrame {
+            HullTurn::Continuous
+        } else {
+            HullTurn::ByFrame
         },
     }
 }
@@ -3099,7 +3106,9 @@ mod tests {
                 long_date,
                 explored,
                 floating,
+                hull_turn,
             } = &frame;
+            assert_ne!(other.hull_turn, *hull_turn);
             assert_unlike_hud(&other.hud, hud);
             assert_ne!(other.target, *target);
             assert_ne!(other.ships, *ships);

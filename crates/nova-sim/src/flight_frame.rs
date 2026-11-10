@@ -41,6 +41,7 @@ use crate::catalog::{
 use crate::cloak::{Area, CloakShown};
 use crate::combat::beam::Beam;
 use crate::combat::hull::Condition;
+use crate::combat::hull_turn::HullTurn;
 use crate::combat::ion_tint::IonTint;
 use crate::combat::projectile::{Shot, ShotId};
 use crate::combat::report::SimDiagnostic;
@@ -266,6 +267,14 @@ pub struct FlightFrame {
     /// allocates nothing once its list has grown. No places for a flight
     /// that failed to start.
     pub floating: FloatingLinks,
+    /// What every ship's hull turns with, as the rulebook's
+    /// `RuleKey::ContinuousHeadings` says: by the engine the frame its
+    /// sprite is drawn on, by the other reading its heading itself. One
+    /// value for the frame, not an angle per ship: the view turns the
+    /// heading it shows, which it eases between steps, by it
+    /// ([`FrameSpec::hull_angle`]), so a hull stands on the frame its
+    /// sprite is drawn on. By frame for a flight that failed to start.
+    pub hull_turn: HullTurn,
 }
 
 impl Default for FlightFrame {
@@ -320,6 +329,7 @@ impl Default for FlightFrame {
             long_date: String::new(),
             explored: Vec::new(),
             floating: FloatingLinks::default(),
+            hull_turn: HullTurn::ByFrame,
         }
     }
 }

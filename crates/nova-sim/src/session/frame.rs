@@ -5,7 +5,9 @@
 //! radar's stellars in the `radar` module.
 
 use super::Session;
+use crate::combat::hull_turn::HullTurn;
 use crate::flight_frame::{FlightFrame, FlightOpening, Gates, MapKey};
+use crate::rulebook::RuleKey;
 
 mod facts;
 mod hud;
@@ -70,6 +72,7 @@ impl Session {
             long_date,
             explored,
             floating,
+            hull_turn,
         } = into;
         *nav_mode = self.nav_mode();
         *system = self.system();
@@ -120,6 +123,16 @@ impl Session {
         explored.clear();
         explored.extend(self.pilot.explored());
         self.chart.fill_floating_places(&self.pilot, floating);
+        *hull_turn = self.hull_turn();
+    }
+
+    /// What every ship's hull turns with, as the rulebook's
+    /// [`RuleKey::ContinuousHeadings`] says.
+    fn hull_turn(&self) -> HullTurn {
+        self.setup
+            .rules
+            .source_for(RuleKey::ContinuousHeadings)
+            .into()
     }
 
     /// What the view is handed as the flight opens ([`FlightOpening`]):
@@ -172,6 +185,7 @@ pub(super) mod tests {
     use crate::navigation::NavMode;
     use crate::player_fate::Drawn as ShipDrawn;
     use crate::player_fate::PlayerCommand;
+    use crate::rulebook::{RuleSource, Rulebook};
     use crate::session::HoverPlace;
     use crate::session::StellarPick;
     use crate::session::tests::three_stellars;
@@ -370,6 +384,7 @@ pub(super) mod tests {
                 current: Vec2::new(-999.0, 999.0),
                 links: vec![(SystemId(999), Vec2::new(9.0, 9.0)); 17],
             },
+            hull_turn: HullTurn::Continuous,
         }
     }
 
@@ -468,6 +483,40 @@ pub(super) mod tests {
         let frame = filled(&session);
         assert_eq!(frame.nav_mode, NavMode::Stellar(Some(StellarId(131))));
         assert_eq!(frame.nav_mode, session.nav_mode());
+    }
+
+    #[test]
+    fn the_frame_says_hulls_turn_by_frame_by_default_and_continuously_under_the_other_reading() {
+        let session = |rules| {
+            Session::start(&catalog())
+                .expect("starts")
+                .with_rules(rules)
+        };
+        let by_frame = filled(&session(Rulebook::default()));
+        assert_eq!(by_frame.hull_turn, HullTurn::ByFrame, "over a stale one");
+        let other =
+            Rulebook::default().with_override(RuleKey::ContinuousHeadings, RuleSource::Bible);
+        let mut frame = FlightFrame::default();
+        session(other).fill_frame(&mut frame);
+        assert_eq!(frame.hull_turn, HullTurn::Continuous);
+    }
+
+    #[test]
+    fn the_rulebook_says_what_the_fights_hulls_turn_with() {
+        let session = |rules| {
+            Session::start(&catalog())
+                .expect("starts")
+                .with_rules(rules)
+        };
+        assert_eq!(
+            session(Rulebook::default()).space.combat,
+            crate::combat::Combat::default()
+        );
+        let mut continuous = crate::combat::Combat::default();
+        continuous.set_continuous_headings(RuleSource::Bible);
+        let other =
+            Rulebook::default().with_override(RuleKey::ContinuousHeadings, RuleSource::Bible);
+        assert_eq!(session(other).space.combat, continuous);
     }
 
     #[test]
