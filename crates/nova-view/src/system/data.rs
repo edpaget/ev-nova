@@ -145,6 +145,7 @@ mod tests {
 
     use nova_data::graphics::RLED;
     use nova_data::graphics::fixture::RledBuilder;
+    use nova_data::records::fixture::SpinBuilder;
     use nova_data::records::spin::Spin;
     use nova_data::records::stellar::Stellar;
     use nova_data::records::system::System;
@@ -214,19 +215,21 @@ mod tests {
         bytes
     }
 
-    /// A 12-byte `spïn` naming `rlëD` `image`, `x_tiles` across.
+    /// A `spïn` naming `rlëD` `image`, `x_tiles` across.
     fn spin(image: i16, x_tiles: i16) -> Vec<u8> {
-        let mut bytes = vec![0; 12];
-        assert_eq!(Some(bytes.len()), Spin::SIZE);
-        put_i16s(&mut bytes, 0x00, &[image, -1, 0, 0, x_tiles, 1]);
-        bytes
+        SpinBuilder::new()
+            .sprites_id(image)
+            .masks_id(-1)
+            .x_tiles(x_tiles)
+            .y_tiles(1)
+            .build()
     }
 
     /// [`spin`] with `y_tiles` down as well.
     fn spin_tiles(image: i16, x_tiles: i16, y_tiles: i16) -> Vec<u8> {
-        let mut bytes = spin(image, x_tiles);
-        put_i16s(&mut bytes, 0x0A, &[y_tiles]);
-        bytes
+        SpinBuilder::from_bytes(spin(image, x_tiles))
+            .y_tiles(y_tiles)
+            .build()
     }
 
     #[test]

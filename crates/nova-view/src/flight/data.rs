@@ -437,7 +437,9 @@ mod tests {
     use crate::outline::OutlineTriangle;
     use nova_data::graphics::fixture::{Cicn, Ctab, DirectBits, PictBuilder, RledBuilder};
     use nova_data::graphics::{PICT, RLED};
-    use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
+    use nova_data::records::fixture::{
+        InterfaceBuilder, ShipAnimBuilder, ShipBuilder, SpinBuilder,
+    };
     use nova_data::records::ship::Ship;
     use nova_data::records::ship_anim::ShipAnim;
     use nova_data::store::fixture::one_file;
@@ -1051,38 +1053,31 @@ mod tests {
         bytes[at..at + 4].copy_from_slice(&value.to_be_bytes());
     }
 
-    /// Writes `(top, left, bottom, right)` at `at`.
-    fn put_rect(bytes: &mut [u8], at: usize, (top, left, bottom, right): (i16, i16, i16, i16)) {
-        for (i, edge) in [top, left, bottom, right].into_iter().enumerate() {
-            put_i16(bytes, at + 2 * i, edge);
-        }
-    }
-
     /// Stock `ïntf` 128's areas, distinct colours 1 to 8, `font` at
     /// `size`, and background `bkgnd`.
     fn interface(font: &str, size: i16, bkgnd: i16) -> Vec<u8> {
-        let mut bytes = vec![0; Interface::SIZE.expect("fixed")];
-        put_u32(&mut bytes, 0x00, 0x00FF_FFFF);
-        put_u32(&mut bytes, 0x04, 0x0080_8080);
-        put_rect(&mut bytes, 0x08, (8, 8, 184, 184));
-        put_u32(&mut bytes, 0x10, 0x0000_FF00);
-        put_u32(&mut bytes, 0x14, 0x0000_8000);
-        put_rect(&mut bytes, 0x18, (199, 35, 206, 184));
-        put_u32(&mut bytes, 0x20, 0x0000_00FF);
-        put_rect(&mut bytes, 0x24, (216, 35, 223, 184));
-        put_u32(&mut bytes, 0x2C, 0x00FF_0000);
-        put_rect(&mut bytes, 0x30, (234, 35, 241, 184));
-        put_u32(&mut bytes, 0x38, 0x00FF_FF00);
-        put_u32(&mut bytes, 0x3C, 0x0080_8000);
-        put_rect(&mut bytes, 0x40, (254, 8, 286, 184));
-        put_rect(&mut bytes, 0x48, (300, 8, 315, 184));
-        put_rect(&mut bytes, 0x50, (330, 8, 442, 184));
-        put_rect(&mut bytes, 0x58, (458, 8, 552, 184));
-        bytes[0x60..0x60 + font.len()].copy_from_slice(font.as_bytes());
-        put_i16(&mut bytes, 0xA0, size);
-        put_i16(&mut bytes, 0xA2, size - 2);
-        put_i16(&mut bytes, 0xA4, bkgnd);
-        bytes
+        InterfaceBuilder::new()
+            .bright_text(0x00FF_FFFF)
+            .dim_text(0x0080_8080)
+            .radar_area([8, 8, 184, 184])
+            .bright_radar(0x0000_FF00)
+            .dim_radar(0x0000_8000)
+            .shield_area([199, 35, 206, 184])
+            .shield_color(0x0000_00FF)
+            .armor_area([216, 35, 223, 184])
+            .armor_color(0x00FF_0000)
+            .fuel_area([234, 35, 241, 184])
+            .fuel_full(0x00FF_FF00)
+            .fuel_partial(0x0080_8000)
+            .nav_area([254, 8, 286, 184])
+            .weap_area([300, 8, 315, 184])
+            .targ_area([330, 8, 442, 184])
+            .cargo_area([458, 8, 552, 184])
+            .status_font(font)
+            .stat_font_size(size)
+            .subtitle_size(size - 2)
+            .status_bkgnd(bkgnd)
+            .build()
     }
 
     /// A `gövt` whose `Interface` is `interface`.
@@ -1257,12 +1252,12 @@ mod tests {
 
     /// A `spïn` of sprites `image` in a 6 x 6 grid.
     fn spin(image: i16) -> Vec<u8> {
-        let mut bytes = vec![0; Spin::SIZE.expect("fixed")];
-        put_i16(&mut bytes, 0x00, image);
-        put_i16(&mut bytes, 0x02, -1);
-        put_i16(&mut bytes, 0x08, 6);
-        put_i16(&mut bytes, 0x0A, 6);
-        bytes
+        SpinBuilder::new()
+            .sprites_id(image)
+            .masks_id(-1)
+            .x_tiles(6)
+            .y_tiles(6)
+            .build()
     }
 
     fn boom(advance: i16, sound: i16, graphic: i16) -> Vec<u8> {
@@ -1614,17 +1609,14 @@ mod tests {
 
         // `spïn` 700 has no `rlëD`: sprites `PICT` 2700 and mask 2800, two
         // 4 x 4 frames cut from the 8 x 4 picture (@0x21126-0x21225).
-        let mut pict_pair = vec![0; Spin::SIZE.expect("fixed")];
-        for (at, value) in [
-            (0x00, 2700),
-            (0x02, 2800),
-            (0x04, 4),
-            (0x06, 4),
-            (0x08, 2),
-            (0x0A, 1),
-        ] {
-            put_i16(&mut pict_pair, at, value);
-        }
+        let pict_pair = SpinBuilder::new()
+            .sprites_id(2700)
+            .masks_id(2800)
+            .x_size(4)
+            .y_size(4)
+            .x_tiles(2)
+            .y_tiles(1)
+            .build();
         let data = named_store(&[
             (Spin::TYPE, 700, None, pict_pair),
             (
@@ -1724,17 +1716,14 @@ mod tests {
 
         // `spïn` 402 has no `rlëD`: sprites `PICT` 2402 and mask 2502, two
         // 4 x 4 frames cut from the 8 x 4 picture.
-        let mut pict_pair = vec![0; Spin::SIZE.expect("fixed")];
-        for (at, value) in [
-            (0x00, 2402),
-            (0x02, 2502),
-            (0x04, 4),
-            (0x06, 4),
-            (0x08, 2),
-            (0x0A, 1),
-        ] {
-            put_i16(&mut pict_pair, at, value);
-        }
+        let pict_pair = SpinBuilder::new()
+            .sprites_id(2402)
+            .masks_id(2502)
+            .x_size(4)
+            .y_size(4)
+            .x_tiles(2)
+            .y_tiles(1)
+            .build();
         let data = named_store(&[
             (Boom::TYPE, 128, None, boom(100, -1, 2)),
             (Spin::TYPE, 402, None, pict_pair),

@@ -7,6 +7,7 @@ use std::num::NonZeroU16;
 
 use nova_data::graphics::fixture::{RledBuilder, rgb888_pict};
 use nova_data::graphics::{PICT, RLED};
+use nova_data::records::fixture::SpinBuilder;
 use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
@@ -60,9 +61,14 @@ fn stellar(graphic_type: i16, dead_type: i16) -> Vec<u8> {
 /// A `spïn` naming sprites `sprites` and masks `masks`, `size` x `size`
 /// each, `x_tiles` across one row.
 fn spin(sprites: i16, masks: i16, size: i16, x_tiles: i16) -> Vec<u8> {
-    let mut bytes = vec![0; Spin::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[sprites, masks, size, size, x_tiles, 1]);
-    bytes
+    SpinBuilder::new()
+        .sprites_id(sprites)
+        .masks_id(masks)
+        .x_size(size)
+        .y_size(size)
+        .x_tiles(x_tiles)
+        .y_tiles(1)
+        .build()
 }
 
 /// An `rlëD` of one `size` x `size` frame.
@@ -178,8 +184,9 @@ fn graphic_type_0_of_a_pict_pair_keys_its_sheet_by_the_spin() {
 fn a_pict_pair_of_more_frames_than_a_u16_holds_counts_the_most_it_can() {
     // 256 x 256 tiles, as many as the frames, so the store's count is the
     // decoded one.
-    let mut tiled = spin(2001, 2001, 1, 256);
-    put_i16s(&mut tiled, 0x0A, &[256]);
+    let tiled = SpinBuilder::from_bytes(spin(2001, 2001, 1, 256))
+        .y_tiles(256)
+        .build();
     let data = store(&[
         (System::TYPE, 131, system(&[140])),
         (Stellar::TYPE, 140, stellar(1, -1)),
