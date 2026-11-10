@@ -125,11 +125,11 @@ pub(crate) const INTRO_PICT: i16 = 8200;
 
 /// [`character`] whose intro is [`INTRO_PICT`] for 2 s, and no text.
 fn intro_character() -> Vec<u8> {
-    let mut bytes = character();
-    put_i16s(&mut bytes, 0x20, &[INTRO_PICT, -1, -1, -1]);
-    put_i16s(&mut bytes, 0x28, &[2, 0, 0, 0]);
-    put_i16s(&mut bytes, 0x30, &[-1]);
-    bytes
+    CharacterBuilder::from_bytes(character())
+        .intro_pict(&[INTRO_PICT, -1, -1, -1])
+        .pict_delay(&[2, 0, 0, 0])
+        .intro_text_id(-1)
+        .build()
 }
 
 /// An average `shïp` with shield, armour and fuel.
@@ -208,8 +208,9 @@ pub(crate) fn intro_game_data() -> Rc<GameData> {
 /// pilot "Ada Lovelace", nicknamed "Ace", whatever the roll, and its
 /// `chär`'s intro picture never times out, so only a press ends it.
 fn pad_game_data() -> Rc<GameData> {
-    let mut character = intro_character();
-    put_i16s(&mut character, 0x28, &[-1, 0, 0, 0]);
+    let character = CharacterBuilder::from_bytes(intro_character())
+        .pict_delay(&[-1, 0, 0, 0])
+        .build();
     let names = [
         "Ada Lovelace",
         "Ada Lovelace",
