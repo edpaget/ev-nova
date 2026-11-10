@@ -205,6 +205,7 @@ mod tests {
                 ),
                 item(rect(7.0, 5.0, 32.0, 32.0), false, ItemSpec::Icon(0)),
             ],
+            backing: None,
         }
     }
 

@@ -121,6 +121,7 @@ mod tests {
             bounds: rect(0.0, 0.0, 441.0, 317.0),
             placement: Placement::CenterWindow,
             items,
+            backing: None,
         }
     }
 

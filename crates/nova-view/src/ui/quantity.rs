@@ -229,6 +229,7 @@ pub(crate) fn fallback_template() -> DialogTemplate {
                 ItemSpec::Button("Cancel".to_owned()),
             ),
         ],
+        backing: None,
     }
 }
 
@@ -288,6 +289,7 @@ mod tests {
                     ItemSpec::Button("Cancel".into()),
                 ),
             ],
+            backing: None,
         }
     }
 

@@ -434,6 +434,7 @@ pub(crate) fn escort_template() -> DialogTemplate {
             user(at(217.0, 30.0, 200.0, 200.0), false),
             user(at(14.0, 79.0, 192.0, 52.0), false),
         ],
+        backing: None,
     }
 }
 

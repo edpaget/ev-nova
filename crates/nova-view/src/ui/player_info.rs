@@ -1095,6 +1095,7 @@ mod tests {
                 },
                 user(60.0, 195.0, 150.0, 25.0),
             ],
+            backing: None,
         }
     }
 
@@ -1138,6 +1139,7 @@ mod tests {
                     kind: ItemSpec::Button("Cancel".into()),
                 },
             ],
+            backing: None,
         }
     }
 

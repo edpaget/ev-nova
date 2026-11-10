@@ -414,10 +414,10 @@ fn the_plunder_dialog_comes_from_the_interface_file_when_there_is_one() {
                 enabled,
                 kind: ItemSpec::User,
             };
-            Ok(DialogTemplate {
-                bounds: Bounds::at(Point::new(0.0, 0.0), 309.0, 198.0),
-                placement: Placement::Fixed,
-                items: vec![
+            Ok(DialogTemplate::new(
+                Bounds::at(Point::new(0.0, 0.0), 309.0, 198.0),
+                Placement::Fixed,
+                vec![
                     user(91.0, 166.0, 126.0, 25.0, true),
                     user(110.0, 110.0, 89.0, 25.0, true),
                     user(35.0, 138.0, 89.0, 25.0, true),
@@ -426,7 +426,7 @@ fn the_plunder_dialog_comes_from_the_interface_file_when_there_is_one() {
                     user(16.0, 110.0, 89.0, 25.0, true),
                     user(129.0, 138.0, 146.0, 25.0, true),
                 ],
-            })
+            ))
         }
     }
 
@@ -909,10 +909,10 @@ fn the_comm_dialogs_come_from_the_interface_file_when_there_is_one() {
                 kind: ItemSpec::User,
             };
             match id {
-                COMM_DIALOG => Ok(DialogTemplate {
-                    bounds: Bounds::at(Point::new(0.0, 0.0), 423.0, 215.0),
-                    placement: Placement::Fixed,
-                    items: vec![
+                COMM_DIALOG => Ok(DialogTemplate::new(
+                    Bounds::at(Point::new(0.0, 0.0), 423.0, 215.0),
+                    Placement::Fixed,
+                    vec![
                         user(21.0, 181.0, 166.0, 26.0, true),
                         user(21.0, 153.0, 166.0, 26.0, true),
                         user(21.0, 125.0, 166.0, 26.0, true),
@@ -926,16 +926,16 @@ fn the_comm_dialogs_come_from_the_interface_file_when_there_is_one() {
                         user(216.0, 7.0, 200.0, 200.0, false),
                         user(40.0, 73.0, 134.0, 46.0, false),
                     ],
-                }),
-                HAGGLE_DIALOG => Ok(DialogTemplate {
-                    bounds: Bounds::at(Point::new(0.0, 0.0), 262.0, 107.0),
-                    placement: Placement::Fixed,
-                    items: vec![
+                )),
+                HAGGLE_DIALOG => Ok(DialogTemplate::new(
+                    Bounds::at(Point::new(0.0, 0.0), 262.0, 107.0),
+                    Placement::Fixed,
+                    vec![
                         user(58.0, 74.0, 146.0, 26.0, true),
                         user(58.0, 39.0, 146.0, 26.0, true),
                         user(7.0, 6.0, 248.0, 25.0, false),
                     ],
-                }),
+                )),
                 _ => Err(format!("no DLOG {id}")),
             }
         }

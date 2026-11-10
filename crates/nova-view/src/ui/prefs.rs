@@ -1364,6 +1364,7 @@ pub mod fixture {
                 check((171.0, 143.0, 316.0, 161.0), "Hyperspace Effects"),
                 check((11.0, 165.0, 156.0, 183.0), "Check For Updates"),
             ],
+            backing: None,
         }
     }
 }

@@ -127,6 +127,7 @@ mod tests {
     use super::*;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate};
+    use crate::ui::panel::PanelBacking;
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds {
         Bounds::at(Point::new(x, y), w, h)
@@ -152,6 +153,7 @@ mod tests {
                 item(rect(330.0, 282.0, 23.0, 23.0)),
                 item(rect(363.0, 282.0, 23.0, 23.0)),
             ],
+            backing: None,
         }
     }
 
@@ -271,6 +273,7 @@ mod tests {
             .into_iter()
             .map(item)
             .collect(),
+            backing: None,
         }
     }
 
@@ -365,5 +368,17 @@ mod tests {
         let laid = placed(&short, 12.0);
         assert_eq!(laid.bounds, rect(292.0, 226.0, 441.0, 317.0));
         assert_eq!(laid.items, short.items);
+    }
+
+    #[test]
+    fn a_shrunk_template_keeps_its_backing() {
+        let backed = DialogTemplate {
+            backing: Some(PanelBacking::NEW_GAME),
+            ..stock()
+        };
+        let shrunk = shrink_to_text(&backed, 3, &[1, 5, 6], 12.0);
+        assert_eq!(shrunk.backing, Some(PanelBacking::NEW_GAME));
+        let placed = shrink_after_placing(&backed, 3, &[1, 5, 6], 12.0);
+        assert_eq!(placed.backing, Some(PanelBacking::NEW_GAME));
     }
 }

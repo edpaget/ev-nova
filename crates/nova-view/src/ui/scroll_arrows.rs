@@ -155,6 +155,7 @@ mod tests {
                 item(rect(100.0, 90.0, 23.0, 23.0), false),
                 item(rect(133.0, 90.0, 23.0, 23.0), false),
             ],
+            backing: None,
         }
     }
 

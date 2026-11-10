@@ -282,6 +282,7 @@ mod tests {
                 item(112.0, 8.0, 51.0, 16.0, ItemSpec::EditText("12345".into())),
                 item(10.0, 42.0, 70.0, 20.0, ItemSpec::Button("Cancel".into())),
             ],
+            backing: None,
         }
     }
 

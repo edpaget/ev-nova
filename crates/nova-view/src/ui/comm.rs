@@ -610,6 +610,7 @@ pub(crate) fn comm_template() -> DialogTemplate {
             user(at(216.0, 7.0, 200.0, 200.0), false),
             user(at(40.0, 73.0, 134.0, 46.0), false),
         ],
+        backing: None,
     }
 }
 
@@ -922,6 +923,7 @@ pub(crate) fn haggle_template() -> DialogTemplate {
             user(at(58.0, 39.0, 146.0, 26.0), true),
             user(at(7.0, 6.0, 248.0, 25.0), false),
         ],
+        backing: None,
     }
 }
 
@@ -985,6 +987,7 @@ mod tests {
     use crate::keymap::{Bindings, KeyCombo};
     use crate::sound::Sound;
     use crate::text::fixture::MonoMetrics;
+    use crate::ui::panel::PanelBacking;
 
     fn button(label: &str, key: Option<char>) -> HailButton {
         HailButton {
@@ -2297,5 +2300,20 @@ mod tests {
         off.input(&key(Key::Space));
         assert_eq!(off.take_choice(), None);
         assert_eq!(off.dialog().focus(), None);
+    }
+
+    #[test]
+    fn a_column_keeps_its_templates_backing() {
+        let backed = DialogTemplate {
+            backing: Some(PanelBacking::NEW_GAME),
+            ..stock()
+        };
+        for count in 0..5 {
+            assert_eq!(
+                column(&backed, count).backing,
+                Some(PanelBacking::NEW_GAME),
+                "{count}"
+            );
+        }
     }
 }

@@ -168,6 +168,7 @@ pub fn fallback() -> DialogTemplate {
                 ItemSpec::EditText(String::new()),
             ),
         ],
+        backing: None,
     }
 }
 

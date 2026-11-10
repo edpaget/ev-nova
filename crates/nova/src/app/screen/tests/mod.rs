@@ -1077,30 +1077,30 @@ impl DialogResources for Dialogs {
             return Ok(yes_no_template());
         }
         if id == NOTE_DIALOG {
-            return Ok(DialogTemplate {
-                bounds: Bounds::at(Point::new(0.0, 0.0), 200.0, 100.0),
-                placement: Placement::Fixed,
-                items: vec![
+            return Ok(DialogTemplate::new(
+                Bounds::at(Point::new(0.0, 0.0), 200.0, 100.0),
+                Placement::Fixed,
+                vec![
                     item(100.0, 70.0, 70.0, 20.0, ItemSpec::User),
                     item(10.0, 150.0, 20.0, 20.0, ItemSpec::Picture(1431)),
                     item(10.0, 10.0, 180.0, 50.0, ItemSpec::User),
                 ],
-            });
+            ));
         }
         if id != DESC_DIALOG && id != PICTURE_DESC_DIALOG {
             return Err(format!("no DLOG {id}"));
         }
         // The picture variant is wider.
         let width = if id == DESC_DIALOG { 200.0 } else { 300.0 };
-        Ok(DialogTemplate {
-            bounds: Bounds::at(Point::new(0.0, 0.0), width, 100.0),
-            placement: Placement::Fixed,
-            items: vec![
+        Ok(DialogTemplate::new(
+            Bounds::at(Point::new(0.0, 0.0), width, 100.0),
+            Placement::Fixed,
+            vec![
                 item(100.0, 70.0, 99.0, 25.0, ItemSpec::User),
                 item(10.0, 150.0, 20.0, 20.0, ItemSpec::Picture(1431)),
                 item(10.0, 10.0, 100.0, 36.0, ItemSpec::User),
             ],
-        })
+        ))
     }
 }
 
@@ -1113,10 +1113,10 @@ fn player_info_template() -> DialogTemplate {
         enabled: true,
         kind: ItemSpec::User,
     };
-    DialogTemplate {
-        bounds: Bounds::at(Point::new(0.0, 0.0), 413.0, 227.0),
-        placement: Placement::Center,
-        items: vec![
+    DialogTemplate::new(
+        Bounds::at(Point::new(0.0, 0.0), 413.0, 227.0),
+        Placement::Center,
+        vec![
             item(293.0, 195.0, 99.0, 25.0),
             item(7.0, 8.0, 99.0, 25.0),
             item(107.0, 8.0, 99.0, 25.0),
@@ -1125,7 +1125,7 @@ fn player_info_template() -> DialogTemplate {
             item(4.0, 40.0, 405.0, 141.0),
             item(60.0, 195.0, 150.0, 25.0),
         ],
-    }
+    )
 }
 
 /// `YesNo` (3002), as stock lays it out: 355 x 109, centred, with OK
@@ -1136,17 +1136,17 @@ fn yes_no_template() -> DialogTemplate {
         enabled: true,
         kind,
     };
-    DialogTemplate {
-        bounds: Bounds::at(Point::new(0.0, 0.0), 355.0, 109.0),
-        placement: Placement::Center,
-        items: vec![
+    DialogTemplate::new(
+        Bounds::at(Point::new(0.0, 0.0), 355.0, 109.0),
+        Placement::Center,
+        vec![
             item(263.0, 75.0, 70.0, 20.0, ItemSpec::Button("OK".into())),
             item(277.0, 131.0, 68.0, 30.0, ItemSpec::Picture(129)),
             item(52.0, 5.0, 295.0, 50.0, ItemSpec::StaticText(String::new())),
             item(7.0, 5.0, 32.0, 32.0, ItemSpec::Picture(130)),
             item(181.0, 75.0, 70.0, 20.0, ItemSpec::Button("Cancel".into())),
         ],
-    }
+    )
 }
 
 /// "new prefs dialog" (4003), smaller: 300 x 260 at (0, 0), with OK
@@ -1240,11 +1240,11 @@ fn prefs_template() -> DialogTemplate {
         18.0,
         ItemSpec::CheckBox("Hyperspace Effects".into()),
     );
-    DialogTemplate {
-        bounds: Bounds::at(Point::new(0.0, 0.0), 300.0, 260.0),
-        placement: Placement::Fixed,
+    DialogTemplate::new(
+        Bounds::at(Point::new(0.0, 0.0), 300.0, 260.0),
+        Placement::Fixed,
         items,
-    }
+    )
 }
 
 fn with_dialogs(data: Rc<GameData>) -> AppScreen {
@@ -1265,17 +1265,17 @@ fn about(screen: &AppScreen) -> &DescDialog {
 /// "Spaceport", smaller: 400 x 300 at (0, 0), its twelve items in a
 /// row of 30 x 20 boxes, so each service and Leave (12) has a place.
 fn spaceport_template() -> DialogTemplate {
-    DialogTemplate {
-        bounds: Bounds::at(Point::new(0.0, 0.0), 400.0, 300.0),
-        placement: Placement::Fixed,
-        items: (0..12_u8)
+    DialogTemplate::new(
+        Bounds::at(Point::new(0.0, 0.0), 400.0, 300.0),
+        Placement::Fixed,
+        (0..12_u8)
             .map(|n| ItemTemplate {
                 bounds: Bounds::at(Point::new(f32::from(n) * 32.0, 250.0), 30.0, 20.0),
                 enabled: true,
                 kind: ItemSpec::User,
             })
             .collect(),
-    }
+    )
 }
 
 const LAND: Key = Key::KeyL;
@@ -1635,11 +1635,11 @@ fn new_pilot_template() -> DialogTemplate {
         16.0,
         ItemSpec::EditText("Edit Text".into()),
     );
-    DialogTemplate {
-        bounds: Bounds::at(Point::new(0.0, 0.0), 326.0, 213.0),
-        placement: Placement::Fixed,
+    DialogTemplate::new(
+        Bounds::at(Point::new(0.0, 0.0), 326.0, 213.0),
+        Placement::Fixed,
         items,
-    }
+    )
 }
 
 // The Trade Center.
@@ -1659,11 +1659,11 @@ fn trade_template() -> DialogTemplate {
     }
     items[12] = item(100.0, 250.0);
     items[13] = item(200.0, 250.0);
-    DialogTemplate {
-        bounds: Bounds::at(Point::new(0.0, 0.0), 400.0, 300.0),
-        placement: Placement::Fixed,
+    DialogTemplate::new(
+        Bounds::at(Point::new(0.0, 0.0), 400.0, 300.0),
+        Placement::Fixed,
         items,
-    }
+    )
 }
 
 /// [`Dialogs`], with "Trade" too.
@@ -1737,11 +1737,11 @@ fn outfit_template() -> DialogTemplate {
     items[6] = item(100.0, 250.0, 30.0, 12.0);
     items[7] = item(300.0, 0.0, 100.0, 100.0);
     items[8] = item(300.0, 100.0, 100.0, 100.0);
-    DialogTemplate {
-        bounds: Bounds::at(Point::new(0.0, 0.0), 400.0, 300.0),
-        placement: Placement::Fixed,
+    DialogTemplate::new(
+        Bounds::at(Point::new(0.0, 0.0), 400.0, 300.0),
+        Placement::Fixed,
         items,
-    }
+    )
 }
 
 /// [`Dialogs`], with "Outfit" too.
@@ -1810,11 +1810,11 @@ fn bar_template() -> DialogTemplate {
     items[0] = item(156.0, 154.0, 99.0, 26.0);
     items[4] = item(6.0, 125.0, 146.0, 26.0);
     items[6] = item(16.0, 10.0, 230.0, 106.0);
-    DialogTemplate {
-        bounds: Bounds::at(Point::new(0.0, 0.0), 263.0, 185.0),
-        placement: Placement::Fixed,
+    DialogTemplate::new(
+        Bounds::at(Point::new(0.0, 0.0), 263.0, 185.0),
+        Placement::Fixed,
         items,
-    }
+    )
 }
 
 /// [`Dialogs`], with "Trade" and "Outfit" too.
@@ -1848,11 +1848,11 @@ fn shipyard_template() -> DialogTemplate {
     items[7] = item(300.0, 0.0, 100.0, 100.0);
     items[8] = item(300.0, 100.0, 100.0, 100.0);
     items[9] = item(200.0, 250.0, 30.0, 12.0);
-    DialogTemplate {
-        bounds: Bounds::at(Point::new(0.0, 0.0), 400.0, 300.0),
-        placement: Placement::Fixed,
+    DialogTemplate::new(
+        Bounds::at(Point::new(0.0, 0.0), 400.0, 300.0),
+        Placement::Fixed,
         items,
-    }
+    )
 }
 
 /// "Text Input", as stock lays it out: 360 x 138, centred, with OK
@@ -1863,10 +1863,10 @@ fn text_input_template() -> DialogTemplate {
         enabled: true,
         kind,
     };
-    DialogTemplate {
-        bounds: Bounds::at(Point::new(0.0, 0.0), 360.0, 138.0),
-        placement: Placement::Center,
-        items: vec![
+    DialogTemplate::new(
+        Bounds::at(Point::new(0.0, 0.0), 360.0, 138.0),
+        Placement::Center,
+        vec![
             item(252.0, 106.0, 70.0, 20.0, ItemSpec::Button("OK".into())),
             item(7.0, 147.0, 32.0, 32.0, ItemSpec::Picture(129)),
             item(52.0, 5.0, 295.0, 50.0, ItemSpec::StaticText(String::new())),
@@ -1874,7 +1874,7 @@ fn text_input_template() -> DialogTemplate {
             item(91.0, 64.0, 200.0, 16.0, ItemSpec::EditText(String::new())),
             item(170.0, 106.0, 70.0, 20.0, ItemSpec::Button("Cancel".into())),
         ],
-    }
+    )
 }
 
 /// [`EveryDialog`], with "Shipyard", "Shipyard Info" and "Text Input"
@@ -2062,11 +2062,11 @@ fn offer_template() -> DialogTemplate {
     items[1] = item(100.0, 170.0, 90.0, 25.0);
     items[2] = item(10.0, 10.0, 280.0, 150.0);
     items[5] = item(150.0, 170.0, 90.0, 25.0);
-    DialogTemplate {
-        bounds: Bounds::at(Point::new(0.0, 0.0), 300.0, 200.0),
-        placement: Placement::Fixed,
+    DialogTemplate::new(
+        Bounds::at(Point::new(0.0, 0.0), 300.0, 200.0),
+        Placement::Fixed,
         items,
-    }
+    )
 }
 
 /// [`ShipyardDialogs`], with the offer dialog too.
@@ -2179,10 +2179,10 @@ fn mission_info_template() -> DialogTemplate {
         enabled: true,
         kind: ItemSpec::User,
     };
-    DialogTemplate {
-        bounds: Bounds::at(Point::new(0.0, 0.0), 300.0, 150.0),
-        placement: Placement::Fixed,
-        items: vec![
+    DialogTemplate::new(
+        Bounds::at(Point::new(0.0, 0.0), 300.0, 150.0),
+        Placement::Fixed,
+        vec![
             item(190.0, 120.0, 99.0, 25.0),
             item(10.0, 24.0, 100.0, 84.0),
             item(10.0, 1.0, 190.0, 12.0),
@@ -2191,7 +2191,7 @@ fn mission_info_template() -> DialogTemplate {
             item(0.0, 300.0, 1.0, 1.0),
             item(200.0, 4.0, 90.0, 12.0),
         ],
-    }
+    )
 }
 
 /// How wide the fuel gauge's full colour is painted, at y 234 to 241

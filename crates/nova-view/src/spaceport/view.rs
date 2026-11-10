@@ -2842,6 +2842,7 @@ pub(in crate::spaceport) mod tests {
                     kind: ItemSpec::User,
                 })
                 .collect(),
+            backing: None,
         }
     }
 
@@ -3722,6 +3723,7 @@ pub(in crate::spaceport) mod tests {
             bounds: rect(32.0, 35.0, 426.0, 252.0),
             placement: Placement::Center,
             items,
+            backing: None,
         }
     }
 
@@ -3763,6 +3765,7 @@ pub(in crate::spaceport) mod tests {
                 item(80.0, ItemSpec::EditText(String::new())),
                 item(120.0, ItemSpec::Button("Cancel".into())),
             ],
+            backing: None,
         }
     }
 
@@ -3978,6 +3981,7 @@ pub(in crate::spaceport) mod tests {
             bounds: rect(100.0, 100.0, 765.0, 321.0),
             placement: Placement::Center,
             items,
+            backing: None,
         }
     }
 
@@ -4230,6 +4234,7 @@ pub(in crate::spaceport) mod tests {
                 item(rect(10.0, 150.0, 20.0, 20.0), ItemSpec::Picture(1431)),
                 item(rect(10.0, 10.0, 2000.0, 60.0), ItemSpec::User),
             ],
+            backing: None,
         }
     }
 
@@ -4498,6 +4503,7 @@ pub(in crate::spaceport) mod tests {
             bounds: rect(100.0, 100.0, 765.0, 323.0),
             placement: Placement::Center,
             items,
+            backing: None,
         }
     }
 
@@ -4764,6 +4770,7 @@ pub(in crate::spaceport) mod tests {
             bounds: rect(40.0, 40.0, 263.0, 185.0),
             placement: Placement::Center,
             items,
+            backing: None,
         }
     }
 
@@ -4773,6 +4780,7 @@ pub(in crate::spaceport) mod tests {
             bounds: rect(40.0, 40.0, 300.0, 230.0),
             placement: Placement::Center,
             items: Vec::new(),
+            backing: None,
         }
     }
 
@@ -5153,6 +5161,7 @@ pub(in crate::spaceport) mod tests {
             bounds: rect(0.0, 0.0, 300.0, 200.0),
             placement: Placement::Fixed,
             items,
+            backing: None,
         }
     }
 
@@ -5208,6 +5217,7 @@ pub(in crate::spaceport) mod tests {
                 item(rect(10.0, 150.0, 20.0, 20.0), false),
                 item(rect(10.0, 10.0, 180.0, 36.0), false),
             ],
+            backing: None,
         }
     }
 
@@ -6258,6 +6268,7 @@ pub(in crate::spaceport) mod tests {
             bounds: rect(0.0, 0.0, 300.0, 150.0),
             placement: Placement::Fixed,
             items,
+            backing: None,
         }
     }
 
@@ -6503,6 +6514,7 @@ pub(in crate::spaceport) mod tests {
                 item(4.0, 40.0, 405.0, 141.0),
                 item(60.0, 195.0, 150.0, 25.0),
             ],
+            backing: None,
         }
     }
 
@@ -7779,6 +7791,7 @@ pub(in crate::spaceport) mod tests {
                 item(300.0, 0.0, 1.0, 1.0),
                 item(9.0, 32.0, 234.0, 214.0),
             ],
+            backing: None,
         };
         InfoTemplates {
             plain: Ok(template.clone()),

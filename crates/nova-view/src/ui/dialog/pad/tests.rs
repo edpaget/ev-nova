@@ -46,6 +46,7 @@ fn row() -> DialogTemplate {
                 ItemSpec::StaticText("Hi".into()),
             ),
         ],
+        backing: None,
     }
 }
 
@@ -367,6 +368,7 @@ fn desc_like() -> DialogTemplate {
             item(rect(135.0, 10.0, 10.0, 10.0), false, ItemSpec::User),
             item(rect(135.0, 30.0, 10.0, 10.0), false, ItemSpec::User),
         ],
+        backing: None,
     }
 }
 
@@ -616,6 +618,7 @@ fn celled() -> Dialog {
             item(rect(10.0, 10.0, 280.0, 80.0), true, ItemSpec::User),
             item(rect(10.0, 110.0, 40.0, 20.0), true, ItemSpec::User),
         ],
+        backing: None,
     };
     let mut dialog = self::dialog(&template);
     dialog.set_pad_cells(3, cells());
@@ -762,6 +765,7 @@ fn a_dialog_laid_out_again_keeps_a_pad_focused_cell() {
             item(rect(10.0, 10.0, 280.0, 80.0), true, ItemSpec::User),
             item(rect(10.0, 110.0, 40.0, 20.0), true, ItemSpec::User),
         ],
+        backing: None,
     };
     dialog.lay_out_again(self::dialog(&template));
     assert_eq!(dialog.pad_highlight_cell(), Some(1));
@@ -803,6 +807,7 @@ fn controlled() -> DialogTemplate {
                 ItemSpec::EditText("Off".into()),
             ),
         ],
+        backing: None,
     }
 }
 

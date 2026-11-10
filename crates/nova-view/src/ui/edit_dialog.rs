@@ -528,6 +528,7 @@ mod tests {
                     ItemSpec::EditText(String::new()),
                 ),
             ],
+            backing: None,
         }
     }
 

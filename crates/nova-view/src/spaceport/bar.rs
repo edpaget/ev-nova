@@ -1230,6 +1230,7 @@ mod tests {
                 (103.0, 303.0, 32.0, 32.0),
                 (146.0, 303.0, 32.0, 32.0),
             ]),
+            backing: None,
         }
     }
 
@@ -1609,6 +1610,7 @@ mod tests {
                 item(243.0, 88.0, 100.0, 100.0),
                 item(357.0, 88.0, 100.0, 100.0),
             ],
+            backing: None,
         }
     }
 
@@ -1834,6 +1836,7 @@ mod tests {
                     (141.0, 288.0, 25.0, 25.0),
                     (171.0, 288.0, 25.0, 25.0),
                 ]),
+                backing: None,
             }),
             info: InfoTemplates {
                 plain: Ok(DialogTemplate {
@@ -1846,6 +1849,7 @@ mod tests {
                         (27.0, 334.0, 55.0, 31.0),
                         (9.0, 32.0, 234.0, 214.0),
                     ]),
+                    backing: None,
                 }),
                 picture: Err("no DLOG 1019".to_owned()),
             },
@@ -2065,6 +2069,7 @@ mod tests {
                         (141.0, 288.0, 25.0, 25.0),
                         (171.0, 288.0, 25.0, 25.0),
                     ]),
+                    backing: None,
                 }),
                 ..hiring(&art)
             },
@@ -2232,6 +2237,7 @@ mod tests {
                         (141.0, 288.0, 25.0, 25.0),
                         (171.0, 288.0, 25.0, 25.0),
                     ]),
+                    backing: None,
                 }),
                 ..hiring(&art)
             },
@@ -2332,6 +2338,7 @@ mod tests {
             bounds: rect(0.0, 0.0, 300.0, 200.0),
             placement: Placement::Fixed,
             items: slots,
+            backing: None,
         }
     }
 
@@ -2606,6 +2613,7 @@ mod tests {
             bounds: rect(40.0, 40.0, 300.0, 230.0),
             placement: Placement::Center,
             items: Vec::new(),
+            backing: None,
         }
     }
 
@@ -2804,6 +2812,7 @@ mod tests {
                 (11.0, 128.0, 242.0, 114.0),
                 (3.0, 3.0, 260.0, 120.0),
             ]),
+            backing: None,
         }
     }
 

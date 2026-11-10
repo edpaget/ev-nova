@@ -420,6 +420,7 @@ pub(crate) fn plunder_template() -> DialogTemplate {
             user(at(16.0, 110.0, 89.0, 25.0), true),
             user(at(129.0, 138.0, 146.0, 25.0), true),
         ],
+        backing: None,
     }
 }
 
@@ -589,6 +590,7 @@ pub(crate) fn assignment_template() -> DialogTemplate {
             user(at(55.0, 83.0, 146.0, 26.0)),
             user(at(9.0, 6.0, 238.0, 40.0)),
         ],
+        backing: None,
     }
 }
 
@@ -649,6 +651,7 @@ mod tests {
     use crate::sound::Sound;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::ScrollText;
+    use crate::ui::panel::PanelBacking;
 
     /// A trader with 13 tons of food, 2 rounds of rockets, credits and
     /// energy, at odds of 43.
@@ -1594,5 +1597,17 @@ mod tests {
             dialog.input(&key(pressed));
             assert_eq!(dialog.take_choice(), None, "{pressed:?}");
         }
+    }
+
+    #[test]
+    fn enabling_keeps_the_templates_backing() {
+        let backed = DialogTemplate {
+            backing: Some(PanelBacking::NEW_GAME),
+            ..stock()
+        };
+        assert_eq!(
+            enabling(&backed, [1, 2]).backing,
+            Some(PanelBacking::NEW_GAME)
+        );
     }
 }

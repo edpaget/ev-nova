@@ -542,6 +542,7 @@ mod tests {
                 ),
                 item(rect(10.0, 10.0, 60.0, 36.0), false, ItemSpec::User),
             ],
+            backing: None,
         }
     }
 

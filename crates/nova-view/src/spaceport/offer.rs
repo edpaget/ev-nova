@@ -1244,6 +1244,7 @@ pub(crate) mod fixture {
             bounds: rect(0.0, 0.0, 300.0, 200.0),
             placement: Placement::Fixed,
             items,
+            backing: None,
         }
     }
 
@@ -1302,6 +1303,7 @@ pub(crate) mod fixture {
                     kind: ItemSpec::User,
                 })
                 .collect(),
+            backing: None,
         }
     }
 
@@ -2357,6 +2359,7 @@ mod tests {
                     kind: ItemSpec::User,
                 })
                 .collect(),
+            backing: None,
         }
     }
 

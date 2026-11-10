@@ -1494,6 +1494,7 @@ pub(super) mod tests {
                 (204.0, 297.0, 68.0, 30.0, false),
                 (311.0, 0.0, 87.0, 15.0, false),
             ]),
+            backing: None,
         }
     }
 
@@ -2362,6 +2363,7 @@ pub(super) mod tests {
                 (177.0, 222.0, 55.0, 37.0, true),
                 (343.0, 4.0, 122.0, 12.0, false),
             ]),
+            backing: None,
         }
     }
 

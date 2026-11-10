@@ -201,6 +201,7 @@ mod tests {
                     ItemSpec::Button("Cancel".into()),
                 ),
             ],
+            backing: None,
         }
     }
 

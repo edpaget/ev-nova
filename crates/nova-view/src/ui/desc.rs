@@ -616,6 +616,7 @@ mod tests {
                 ),
                 item(rect(10.0, 10.0, 60.0, 36.0), false, ItemSpec::User),
             ],
+            backing: None,
         }
     }
 
@@ -857,6 +858,7 @@ mod tests {
                 item(rect(200.0, 10.0, 90.0, 90.0), false),
                 item(rect(10.0, 10.0, 60.0, 36.0), false),
             ],
+            backing: None,
         }
     }
 
@@ -1023,6 +1025,7 @@ mod tests {
                 item(rect(330.0, SCROLL_ARROW_Y, 23.0, 23.0)),
                 item(rect(363.0, SCROLL_ARROW_Y, 23.0, 23.0)),
             ],
+            backing: None,
         }
     }
 

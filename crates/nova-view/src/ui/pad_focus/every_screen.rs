@@ -713,6 +713,7 @@ fn dialog_probe() -> Box<dyn PadProbe> {
                 ItemSpec::StaticText("Hi".into()),
             ),
         ],
+        backing: None,
     };
     Box::new(DialogHost {
         dialog: Dialog::new(&template, &[], Rc::new(MonoMetrics)).with_cancel(Some(2)),

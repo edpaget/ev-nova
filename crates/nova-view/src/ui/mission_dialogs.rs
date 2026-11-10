@@ -883,6 +883,7 @@ mod tests {
             bounds: rect(0.0, 0.0, 200.0, 120.0),
             placement: Placement::Fixed,
             items,
+            backing: None,
         }
     }
 
@@ -900,6 +901,7 @@ mod tests {
                 (177.0, 222.0, 55.0, 37.0, true),
                 (343.0, 4.0, 122.0, 12.0, false),
             ]),
+            backing: None,
         }
     }
 

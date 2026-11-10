@@ -1569,6 +1569,7 @@ mod tests {
                     kind: ItemSpec::User,
                 })
                 .collect(),
+            backing: None,
         }
     }
 
@@ -1715,6 +1716,7 @@ mod tests {
                 item(112.0, 8.0, 51.0, 16.0, ItemSpec::EditText("12345".into())),
                 item(10.0, 42.0, 70.0, 20.0, ItemSpec::Button("Cancel".into())),
             ],
+            backing: None,
         }
     }
 
@@ -2453,13 +2455,13 @@ mod tests {
         assert!(any_info(&down) && described(&down));
         click_item(&mut down, SCROLL_DOWN_ITEM);
         assert_eq!(down.top_row(), 1);
-        for screen in [up, down] {
+        for screen in [&up, &down] {
             assert_eq!((screen.selected(), screen.selected_outfit()), (None, None));
-            assert_eq!(enabled(&screen), (false, false));
-            assert!(!any_highlight(&screen));
-            assert!(!any_info(&screen), "{:?}", words(&screen));
-            assert!(!described(&screen));
-            assert_eq!(picture_drawn(&screen), None);
+            assert_eq!(enabled(screen), (false, false));
+            assert!(!any_highlight(screen));
+            assert!(!any_info(screen), "{:?}", words(screen));
+            assert!(!described(screen));
+            assert_eq!(picture_drawn(screen), None);
         }
     }
 
@@ -4720,6 +4722,7 @@ mod tests {
                 ),
                 item(rect(10.0, 10.0, 2000.0, 60.0), false, ItemSpec::User),
             ],
+            backing: None,
         }
     }
 

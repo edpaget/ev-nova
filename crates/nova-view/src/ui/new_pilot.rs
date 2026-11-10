@@ -517,6 +517,7 @@ pub(crate) fn fallback_template() -> DialogTemplate {
         bounds: at(0.0, 0.0, 326.0, 213.0),
         placement: Placement::for_dlog(NEW_PILOT_DIALOG, Some(STOCK_WORD)),
         items,
+        backing: None,
     }
 }
 
@@ -721,6 +722,7 @@ mod tests {
                 item(rect(85.0, 277.0, 271.0, 20.0), true, ItemSpec::Control(501)),
                 item(rect(7.0, 5.0, 32.0, 32.0), false, ItemSpec::Picture(130)),
             ],
+            backing: None,
         }
     }
 

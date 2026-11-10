@@ -101,6 +101,7 @@ fn template(
         bounds: Bounds::from(dlog.bounds),
         placement: Placement::for_dlog(id, dlog.position),
         items: items.into_iter().map(|it| item(it, &has_picture)).collect(),
+        backing: None,
     }
 }
 

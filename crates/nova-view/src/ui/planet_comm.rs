@@ -443,6 +443,7 @@ pub(crate) fn planet_comm_template() -> DialogTemplate {
             user(at(222.0, 5.0, 310.0, 283.0), false),
             user(at(16.0, 82.0, 120.0, 50.0), false),
         ],
+        backing: None,
     }
 }
 

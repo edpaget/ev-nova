@@ -2034,6 +2034,7 @@ mod tests {
                 (141.0, 288.0, 25.0, 25.0, false),
                 (171.0, 288.0, 25.0, 25.0, false),
             ]),
+            backing: None,
         }
     }
 
@@ -2050,6 +2051,7 @@ mod tests {
                 (300.0, 0.0, 1.0, 1.0, false),
                 (9.0, 32.0, 234.0, 214.0, false),
             ]),
+            backing: None,
         }
     }
 
@@ -2070,6 +2072,7 @@ mod tests {
                 (7.0, 6.0, 600.0, 400.0, false),
                 (266.0, 442.0, 342.0, 59.0, false),
             ]),
+            backing: None,
         }
     }
 
@@ -3517,6 +3520,7 @@ mod tests {
                     ItemSpec::Button("Cancel".into()),
                 ),
             ],
+            backing: None,
         }
     }
 

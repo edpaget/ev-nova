@@ -332,6 +332,7 @@ mod tests {
             bounds: Bounds::at(Point::new(40.0, 40.0), 300.0, 230.0),
             placement: Placement::Center,
             items: Vec::new(),
+            backing: None,
         }
     }
 
@@ -500,6 +501,7 @@ mod tests {
             bounds: Bounds::at(Point::new(0.0, 0.0), 400.0, 300.0),
             placement: Placement::Center,
             items: Vec::new(),
+            backing: None,
         };
         let screen = NewsScreen::new(Ok((template, Rc::new(MonoMetrics))), &news(), None);
         let origin = Point::new(312.0, 234.0);

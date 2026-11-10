@@ -261,6 +261,7 @@ pub(in crate::spaceport) mod tests {
                 item(243.0, 88.0, 100.0, 100.0),
                 item(357.0, 88.0, 100.0, 100.0),
             ],
+            backing: None,
         }
     }
 
@@ -508,6 +509,7 @@ pub(in crate::spaceport) mod tests {
                 item(112.0, 8.0, 51.0, 16.0, ItemSpec::EditText("1".into())),
                 item(10.0, 42.0, 70.0, 20.0, ItemSpec::Button("Cancel".into())),
             ],
+            backing: None,
         };
         let mut view = venues().with_race(Ok(race_template()), Some(quantity));
         let _ = view.take_offer_request();

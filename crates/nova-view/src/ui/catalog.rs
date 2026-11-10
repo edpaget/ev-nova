@@ -147,6 +147,7 @@ mod tests {
                 bounds: Bounds::at(Point::new(0.0, 0.0), f32::from(id), 1.0),
                 placement: Placement::Center,
                 items: Vec::new(),
+                backing: None,
             })
         }
     }

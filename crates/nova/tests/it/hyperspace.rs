@@ -1251,15 +1251,15 @@ impl nova_view::ui::DialogResources for DescDialogOnly {
             enabled: true,
             kind,
         };
-        Ok(nova_view::ui::DialogTemplate {
-            bounds: Bounds::at(Point::new(0.0, 0.0), 200.0, 100.0),
-            placement: Placement::Fixed,
-            items: vec![
+        Ok(nova_view::ui::DialogTemplate::new(
+            Bounds::at(Point::new(0.0, 0.0), 200.0, 100.0),
+            Placement::Fixed,
+            vec![
                 item(100.0, 70.0, 99.0, 25.0, ItemSpec::User),
                 item(10.0, 150.0, 20.0, 20.0, ItemSpec::Picture(1431)),
                 item(10.0, 10.0, 100.0, 36.0, ItemSpec::User),
             ],
-        })
+        ))
     }
 }
 

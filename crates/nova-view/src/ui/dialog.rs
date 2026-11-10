@@ -65,11 +65,14 @@ use crate::text::TextMetrics;
 use super::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
 use super::held_keys::HeldKeys;
 use super::pad_focus::FocusState;
+use super::panel::PanelBacking;
 use super::scroll_arrows::{ArrowHold, ScrollArrow};
 use super::scroll_text::{ScrollText, TextRow};
 use super::slice::{Axis, three_slice};
 use pad::PadSpot;
 
+#[cfg(test)]
+mod backing;
 mod pad;
 
 /// The logical screen dialogs are placed on: Nova's 1024 x 768.
@@ -263,6 +266,25 @@ pub struct DialogTemplate {
     pub placement: Placement,
     /// Its items, item 1 first.
     pub items: Vec<ItemTemplate>,
+    /// The view's stand-in for art a template's source lacks: drawn over
+    /// the placed window before anything else. `None` for an
+    /// interface-file template, whose backdrop is a picture item.
+    pub backing: Option<PanelBacking>,
+}
+
+impl DialogTemplate {
+    /// An unbacked template of `items` in `bounds`, placed by `placement`:
+    /// how a crate above the view builds one, so a field added here
+    /// doesn't reach its literals.
+    #[must_use]
+    pub fn new(bounds: Bounds, placement: Placement, items: Vec<ItemTemplate>) -> Self {
+        Self {
+            bounds,
+            placement,
+            items,
+            backing: None,
+        }
+    }
 }
 
 /// What the caller makes of a user item.
@@ -440,6 +462,8 @@ impl FocusRing {
 pub struct Dialog {
     bounds: Bounds,
     items: Vec<Item>,
+    /// The template's backing, drawn over `bounds` under everything else.
+    backing: Option<PanelBacking>,
     frame: Option<DialogFrame>,
     skin: ButtonSkin,
     style: ButtonStyle,
@@ -554,6 +578,7 @@ impl Dialog {
         Self {
             bounds: Bounds::at(origin, width, height),
             items,
+            backing: template.backing,
             frame: None,
             skin: ButtonSkin::NOVA,
             style: ButtonStyle::STOCK,
@@ -1204,9 +1229,33 @@ impl Dialog {
         self.pad_hold = false;
     }
 
+    /// The template's backing, which [`Dialog::draw_backing`] draws: a host
+    /// that draws its own backdrop skips it when this is `Some`, so the
+    /// dialog is backed once.
+    #[must_use]
+    pub fn backing(&self) -> Option<PanelBacking> {
+        self.backing
+    }
+
+    /// Draws [`Dialog::draw_backing`], then [`Dialog::draw_items`]. A host
+    /// that draws under the dialog's items uses `draw_backing` +
+    /// `draw_items` instead, its own drawing between them.
+    pub fn draw(&self, list: &mut DrawList) {
+        self.draw_backing(list);
+        self.draw_items(list);
+    }
+
+    /// Draws the template's backing over the placed window, or nothing for
+    /// an unbacked template.
+    pub fn draw_backing(&self, list: &mut DrawList) {
+        if let Some(backing) = self.backing {
+            backing.draw(list, self.bounds);
+        }
+    }
+
     /// Draws the frame, if there is one, then each shown and drawn item in
     /// item order. The focused button is outlined.
-    pub fn draw(&self, list: &mut DrawList) {
+    pub fn draw_items(&self, list: &mut DrawList) {
         if let Some(frame) = &self.frame {
             let pieces = three_slice(
                 self.bounds,
@@ -1375,6 +1424,7 @@ mod tests {
             bounds: rect(40.0, 40.0, 441.0, 313.0),
             placement: Placement::from_word(word),
             items: Vec::new(),
+            backing: None,
         }
     }
 
@@ -1520,6 +1570,7 @@ mod tests {
                 true,
                 ItemSpec::Button("OK".into()),
             )],
+            backing: None,
         };
         let dialog = dialog(&template, &[]);
         assert_eq!(dialog.bounds(), rect(203.0, 126.0, 618.0, 517.0));
@@ -1556,6 +1607,7 @@ mod tests {
                     ItemSpec::Button("Cancel".into()),
                 ),
             ],
+            backing: None,
         }
     }
 
@@ -1699,6 +1751,7 @@ mod tests {
             bounds: rect(0.0, 0.0, 100.0, 50.0),
             placement: Placement::Fixed,
             items,
+            backing: None,
         };
         let dialog = dialog(&template, &[]);
         let shown: Vec<bool> = (1..=8).map(|n| dialog.item_shown(n)).collect();
@@ -1762,6 +1815,7 @@ mod tests {
             bounds: rect(0.0, 0.0, 100.0, 50.0),
             placement: Placement::Fixed,
             items,
+            backing: None,
         }
     }
 
@@ -1895,6 +1949,7 @@ mod tests {
             bounds: rect(0.0, 0.0, 100.0, 50.0),
             placement: Placement::Fixed,
             items,
+            backing: None,
         };
         let mut dialog = dialog(&template, &[]);
         // For each item: a point on it outside the dialog, then one inside.
@@ -1978,6 +2033,7 @@ mod tests {
                 item(rect(10.0, 0.0, 10.0, 10.0), true, ItemSpec::User),
                 item(rect(0.0, 10.0, 10.0, 10.0), true, ItemSpec::User),
             ],
+            backing: None,
         };
         let mut dialog = dialog(&template, &[]);
         assert_eq!(
@@ -2214,6 +2270,7 @@ mod tests {
                 item(rect(10.0, 10.0, 40.0, 36.0), false, ItemSpec::User),
                 item(rect(150.0, 10.0, 23.0, 23.0), true, ItemSpec::User),
             ],
+            backing: None,
         }
     }
 
@@ -2626,6 +2683,7 @@ mod tests {
                 .into_iter()
                 .map(|kind| item(rect(10.0, 10.0, 20.0, 20.0), true, kind))
                 .collect(),
+            backing: None,
         };
         assert!(drawn(&dialog(&template, &[])).is_empty());
     }
