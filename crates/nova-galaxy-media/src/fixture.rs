@@ -8,6 +8,9 @@
 //! materials with metallic, roughness, unlit and a texture ([`Mat`]), a
 //! tree of nodes ([`Node`]), an image embedded or beside it ([`ImageAt`]),
 //! and a primitive that isn't triangles.
+//!
+//! [`png`] encodes a real PNG from pixels, for the texture reader
+//! ([`texture`](crate::texture)).
 
 /// A box `[x, y, z]` wide, deep and tall, centred on the origin, as six
 /// faces of two triangles each, with the vertex positions and indices it
@@ -125,6 +128,28 @@ pub enum ImageAt {
 /// A PNG's signature and the start of its header: the bytes a test
 /// model's image holds. Nothing here decodes it.
 pub const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
+
+/// A real, decodable PNG `width` by `height`, 8-bit RGBA, from `rgba`
+/// (four bytes a pixel, row by row): a test texture, made in code.
+///
+/// # Panics
+///
+/// When `rgba` isn't four bytes for each pixel.
+#[must_use]
+pub fn png(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut encoder = ::png::Encoder::new(&mut out, width, height);
+    encoder.set_color(::png::ColorType::Rgba);
+    encoder.set_depth(::png::BitDepth::Eight);
+    let mut writer = encoder
+        .write_header()
+        .expect("a PNG header writes to memory");
+    writer
+        .write_image_data(rgba)
+        .expect("four bytes for each pixel");
+    writer.finish().expect("a PNG ends in memory");
+    out
+}
 
 /// A test model: one box mesh, its triangles split evenly into one
 /// primitive per material (one primitive with no material when there are

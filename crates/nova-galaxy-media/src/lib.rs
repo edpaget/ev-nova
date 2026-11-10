@@ -28,6 +28,10 @@
 //! covers it and each limit it breaks ([`budget`], a port of `galaxy`'s
 //! `check/art.rs` budget rule, for models and textures).
 //!
+//! For drawing planets, it reads a planet's or moon's texture asset
+//! ([`texture`]: its `.png` held to the default budget's `texture` limits
+//! from its header, then decoded to RGBA8).
+//!
 //! # What it holds, and why here
 //!
 //! The format crate keeps media decoding out, so the format's
@@ -52,9 +56,11 @@ pub mod outline;
 pub mod paint;
 pub mod placement;
 pub mod scene;
+pub mod texture;
 
 pub use model::{Bounds, Face, Model, NoModel, model, read_model};
 pub use outline::{BARE, Outline, Triangle, painted, rgb, silhouette, size_box, top_down};
 pub use paint::{Slot, slot_of};
 pub use placement::Placement;
 pub use scene::{Scene, read_asset_scene, read_scene};
+pub use texture::{NoTexture, read_texture};

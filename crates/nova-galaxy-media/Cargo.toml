@@ -1,6 +1,6 @@
 [package]
 name = "nova-galaxy-media"
-description = "The new game's media as data: glTF models read, and drawn from above as painted silhouettes"
+description = "The new game's media as data: glTF models read and drawn from above as painted silhouettes, and planet textures read"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,6 +14,9 @@ publish.workspace = true
 [dependencies]
 gltf.workspace = true
 nova-galaxy-format.workspace = true
+# A texture asset's PNG, decoded to RGBA8 (and encoded by the `fixture`
+# builders, so tests make their PNGs in code).
+png.workspace = true
 # The `fixture` builders write the test models' glTF JSON.
 serde_json = { workspace = true, optional = true }
 
