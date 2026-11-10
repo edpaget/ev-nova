@@ -16,8 +16,8 @@ use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::system::System;
 use nova_data::store::fixture::one_file;
 use nova_data::{GameData, Record, SystemId};
+use nova_render::Frame;
 use nova_render::recording::RecordingGpu;
-use nova_render::{Batch, Frame};
 use nova_rsrc::fixture::ForkBuilder;
 use nova_view::{Key, MouseButton, Point};
 
@@ -141,17 +141,12 @@ impl Harness {
     }
 }
 
-/// The frame's batches as (kind, length).
+/// The frame's batches as (kind, length), as `nova_render` names them.
 fn shape(frame: &Frame) -> Vec<(&'static str, usize)> {
     frame
         .batches
         .iter()
-        .map(|batch| match batch {
-            Batch::Sprites { quads, .. } => ("sprites", quads.len()),
-            Batch::OrFill(quads) => ("or-fill", quads.len()),
-            Batch::Solid(quads) => ("solid", quads.len()),
-            Batch::Text(runs) => ("text", runs.len()),
-        })
+        .map(|batch| (batch.kind(), batch.draws()))
         .collect()
 }
 
