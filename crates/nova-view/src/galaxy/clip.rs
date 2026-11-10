@@ -98,6 +98,7 @@ pub fn clip_opaque(map: &DrawList, area: Bounds, out: &mut DrawList) {
             | DrawCommand::MovieFrame { .. }
             | DrawCommand::OrFill { .. }
             | DrawCommand::Model { .. }
+            | DrawCommand::Planet { .. }
             | DrawCommand::Mounted { .. } => {
                 out.clipped(area, command.clone());
             }
@@ -282,6 +283,28 @@ mod tests {
             [DrawCommand::Clipped {
                 clip: area(),
                 command: Box::new(model),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_planet_clipped_to_the_map_area_is_wrapped_in_a_clip_as_a_model_is() {
+        let planet = DrawCommand::Planet {
+            planet: crate::PlanetKey(3),
+            pose: crate::PlanetPose {
+                center: at(225.0, 140.0),
+                radius: 20.0,
+                time: 0.0,
+            },
+        };
+        let drawn = clipped(|map| {
+            map.push(planet.clone());
+        });
+        assert_eq!(
+            drawn,
+            [DrawCommand::Clipped {
+                clip: area(),
+                command: Box::new(planet),
             }]
         );
     }

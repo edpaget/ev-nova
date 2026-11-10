@@ -9,6 +9,7 @@ use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::model::{ModelKey, ModelPose, Mounting};
 use crate::movie_frame::MovieFrame;
+use crate::planet::{PlanetKey, PlanetPose};
 use crate::text_entry::EntryAsk;
 
 /// How a sprite combines with what is beneath it.
@@ -331,6 +332,22 @@ pub enum DrawCommand {
         /// Where it goes, how it is turned and how big it is.
         pose: ModelPose,
     },
+    /// A planet: the globe registered under `planet`, with its clouds,
+    /// rings and atmosphere, centred at `pose`'s centre at its radius and
+    /// turned to its time (see [`crate::planet`]). It is drawn in list
+    /// order, as a sprite is: a model drawn after it covers it, and it
+    /// covers a model drawn before it. A part
+    /// ([`DrawCommand::Mounted`]) after it has no model to sit on.
+    ///
+    /// A planet whose radius is not a positive, finite number, whose
+    /// centre or time is not finite, or whose key has no planet draws
+    /// nothing; the renderer reports a key with no planet once.
+    Planet {
+        /// Which planet.
+        planet: PlanetKey,
+        /// Where it goes, how big it is and when.
+        pose: PlanetPose,
+    },
     /// A 3D part drawn on the [`DrawCommand::Model`] just before it: at
     /// that model's pose, placed on it as `mounting` says, and in that
     /// model's depth, so the two hide each other by their 3D positions
@@ -394,6 +411,7 @@ impl DrawCommand {
             }
             Self::Triangle { corners, .. } => *corners = corners.map(moved),
             Self::Model { pose, .. } => pose.center = moved(pose.center),
+            Self::Planet { pose, .. } => pose.center = moved(pose.center),
             // It sits on the model before it, which moves.
             Self::Mounted { .. } => {}
             Self::Clipped { clip, command } => {
@@ -828,6 +846,11 @@ impl DrawList {
         self.push(DrawCommand::Model { model, pose })
     }
 
+    /// Appends a [`DrawCommand::Planet`]: `planet` drawn at `pose`.
+    pub fn planet(&mut self, planet: PlanetKey, pose: PlanetPose) -> &mut Self {
+        self.push(DrawCommand::Planet { planet, pose })
+    }
+
     /// Appends a [`DrawCommand::Mounted`]: `model` drawn on the model just
     /// before it, as `mounting` places it.
     pub fn mounted(&mut self, model: ModelKey, mounting: Mounting) -> &mut Self {
@@ -1109,6 +1132,41 @@ mod tests {
         assert_eq!(
             list.layered().collect::<Vec<_>>(),
             [(DrawLayer::World, &model_at(1.0, 2.0))]
+        );
+    }
+
+    /// Planet 5 at (`x`, `y`), radius 40, at 12.5 seconds.
+    fn planet_at(x: f32, y: f32) -> DrawCommand {
+        DrawCommand::Planet {
+            planet: PlanetKey(5),
+            pose: PlanetPose {
+                center: at(x, y),
+                radius: 40.0,
+                time: 12.5,
+            },
+        }
+    }
+
+    #[test]
+    fn planet_pushes_a_planet_where_it_is_drawn() {
+        let mut list = DrawList::new();
+        let DrawCommand::Planet { planet, pose } = planet_at(1.0, 2.0) else {
+            unreachable!()
+        };
+        list.world(|list| {
+            list.planet(planet, pose);
+        });
+        assert_eq!(
+            list.layered().collect::<Vec<_>>(),
+            [(DrawLayer::World, &planet_at(1.0, 2.0))]
+        );
+    }
+
+    #[test]
+    fn a_translated_planet_moves_its_centre_only() {
+        assert_eq!(
+            planet_at(1.0, 2.0).translated(at(10.0, -4.0)),
+            planet_at(11.0, -2.0)
         );
     }
 

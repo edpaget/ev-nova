@@ -434,6 +434,8 @@ impl<S: ImageSource> Renderer<S> {
                 let missing = &mut report.missing_models;
                 (self.models).draw_model(model, pose, logical, batches, gpu, missing);
             }
+            // Planets come with their pipeline.
+            DrawCommand::Planet { .. } => {}
             DrawCommand::Mounted {
                 model,
                 ref mounting,
