@@ -93,6 +93,9 @@
 //! - [`galaxy_planets`]: [`PlanetSource`] for the new game's data,
 //!   [`GalaxyPlanets`], a thin adapter over `nova_galaxy_media`'s planet
 //!   bake and texture reading and its art budgets; it needs no GPU.
+//! - [`new_game_world`]: [`world_assets`], the new game's world models at
+//!   the program's edge: the flight's table of keys and the meshes and
+//!   planets they name, for the app to register; it needs no GPU.
 //! - [`present`]: what a window surface does before each frame.
 //!
 //! The adapter, [`wgpu`], is the only module that names `wgpu` or
@@ -157,6 +160,7 @@ pub mod livery;
 pub mod model;
 pub mod model_source;
 mod models;
+pub mod new_game_world;
 pub mod planet;
 pub mod planet_source;
 mod planets;
@@ -188,6 +192,7 @@ pub use images::{ImageError, ImageSource};
 pub use livery::{Livery, PaintSlot, painted};
 pub use model::{Mesh, MeshError, MeshId, Vertex};
 pub use model_source::{LoadedModel, ModelError, ModelRequest, ModelSource};
+pub use new_game_world::{WorldAssets, world_assets, world_assets_from};
 pub use planet_source::{LoadedPlanet, PlanetError, PlanetRequest, PlanetSource};
 pub use present::{AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action};
 pub use render_scale::{RenderScale, scaled_size};

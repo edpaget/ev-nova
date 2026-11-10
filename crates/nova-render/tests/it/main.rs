@@ -21,6 +21,7 @@ mod mounted_outfits;
 mod prefs_labels;
 mod render_scale;
 mod sample_models;
+mod sample_world;
 mod sharp_bilinear;
 mod stock_fonts;
 mod stock_interface_images;
