@@ -182,7 +182,7 @@ pub use galaxy_models::{GalaxyModels, ship_livery, ship_request};
 pub use galaxy_planets::GalaxyPlanets;
 pub use gpu::{
     Batch, Frame, Gpu, MAX_TEXTURE_SIDE, ModelInstance, PlanetId, PlanetImage, PlanetInstance,
-    PlanetTextures, QuadInstance, Rect, SolidQuad, TextRun, WorldSpace,
+    PlanetTextures, QuadInstance, Rect, SolidQuad, StarInstance, TextRun, WorldSpace,
 };
 pub use images::{ImageError, ImageSource};
 pub use livery::{Livery, PaintSlot, painted};

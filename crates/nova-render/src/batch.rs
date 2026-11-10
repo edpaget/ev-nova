@@ -14,7 +14,7 @@ use crate::atlas::{Atlas, AtlasEntry, PAGE_SIZE, PackError, Uv};
 use crate::enlarge::{Enlarger, NativeDetail};
 use crate::gpu::{
     Batch, Frame, Gpu, MAX_TEXTURE_SIDE, NO_COLORIZE, QuadInstance, Rect, SolidQuad, TextRun,
-    colorize_instance,
+    WorldSpace, colorize_instance,
 };
 use crate::images::{ImageError, ImageSource};
 use crate::model::Mesh;
@@ -23,6 +23,7 @@ use crate::planet_source::LoadedPlanet;
 use crate::planets::Planets;
 use crate::quickdraw_stretch;
 use crate::render_scale::RenderScale;
+use crate::sky;
 use crate::streams::{Owner, Streams};
 use crate::upscale::world_space;
 use crate::viewport::{LogicalSize, PixelRect, Viewport};
@@ -222,6 +223,12 @@ impl<S: ImageSource> Renderer<S> {
     /// planet draws nothing and is reported once
     /// ([`RenderReport::missing_planets`]).
     ///
+    /// A sky ([`DrawCommand::Sky`]) is a [`Batch::Sky`] of its own, the
+    /// core's stars ([`crate::sky::stars`]) for the logical size and the
+    /// texels a unit is in the canvas it draws into: the world texture's
+    /// for a world sky drawn into one, the window's otherwise. A sky with
+    /// no stars is no batch.
+    ///
     /// A frame drawn after [`Renderer::set_enlarger`] first starts the
     /// atlas afresh, the stream pages with it; a zero-area viewport leaves
     /// that to the next frame. Meshes stay where they are.
@@ -236,10 +243,17 @@ impl<S: ImageSource> Renderer<S> {
             return report;
         };
         self.rebuild(gpu);
+        let logical = viewport.logical();
+        let space = world_space(gpu.world_resolution(), self.render_scale, viewport);
         let target = Target {
             rect,
             scale,
-            logical: viewport.logical(),
+            logical,
+            texels: scale.0.min(scale.1),
+        };
+        let in_world = Target {
+            texels: texels_per_unit(space, logical).unwrap_or(target.texels),
+            ..target
         };
         let mut layers = Layers::default();
         let tail = list.world_tail();
@@ -247,8 +261,13 @@ impl<S: ImageSource> Renderer<S> {
             if tail == Some(index) {
                 layers.start_tail();
             }
+            let drawn_in = if layer == DrawLayer::World && tail.is_none_or(|tail| index < tail) {
+                in_world
+            } else {
+                target
+            };
             let run = layers.run_in(layer);
-            self.draw(command, None, target, run, gpu, &mut report);
+            self.draw(command, None, drawn_in, run, gpu, &mut report);
         }
         if tail.is_some_and(|tail| tail >= list.len()) {
             layers.start_tail();
@@ -266,7 +285,7 @@ impl<S: ImageSource> Renderer<S> {
             viewport: rect,
             logical: viewport.logical(),
             clear: Color::BLACK,
-            world_space: world_space(gpu.world_resolution(), self.render_scale, viewport),
+            world_space: space,
             batches,
             world,
             world_clip: list.world_clip().map(|clip| Rect {
@@ -296,6 +315,7 @@ impl<S: ImageSource> Renderer<S> {
             rect,
             scale,
             logical,
+            texels,
         } = target;
         // A part mounts only on the model drawn just before it.
         if !matches!(
@@ -477,8 +497,13 @@ impl<S: ImageSource> Renderer<S> {
                 let missing = &mut report.missing_planets;
                 (self.planets).draw(planet, pose, batches, gpu, missing);
             }
-            // Not drawn yet.
-            DrawCommand::Sky { .. } => {}
+            // Drawn uncut by a clip, as a model is, in a batch of its own.
+            DrawCommand::Sky { ref sky } => {
+                let stars = sky::stars(sky, logical, texels);
+                if !stars.is_empty() {
+                    batches.push(Batch::Sky(stars));
+                }
+            }
             DrawCommand::Mounted {
                 model,
                 ref mounting,
@@ -794,12 +819,27 @@ impl<S: ImageSource> Renderer<S> {
 /// Where a frame draws: the viewport's content rect in window pixels, how
 /// many pixels a logical unit is across and down
 /// ([`Viewport::axis_scales`]), and the logical space, which models are
-/// projected from.
+/// projected from, and how many pixels of the canvas the command draws
+/// into a logical unit is, at least, on either axis: the window's, or the
+/// world texture's for a world command drawn into one.
 #[derive(Clone, Copy, Debug)]
 struct Target {
     rect: PixelRect,
     scale: (f32, f32),
     logical: LogicalSize,
+    texels: f32,
+}
+
+/// The texels a logical unit is, at least, on either axis, in a world
+/// drawn into a texture of its own (`space`); `None` for a world drawn
+/// into the target.
+fn texels_per_unit(space: WorldSpace, logical: LogicalSize) -> Option<f32> {
+    match space {
+        WorldSpace::Texture { size: (w, h) } => {
+            Some((w as f32 / logical.w as f32).min(h as f32 / logical.h as f32))
+        }
+        WorldSpace::Target => None,
+    }
 }
 
 /// A frame's batches as they are made, in draw order, each run of one

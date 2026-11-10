@@ -19,6 +19,7 @@ use super::hinted_text::{GlyphRun, HintedGlyphs};
 use super::layout::lay_out_text;
 use super::models::{ModelData, Models, depth_view};
 use super::planets::{PlanetData, Planets};
+use super::sky::{Sky, StarData};
 use super::upscale::{Upscale, abilities, upscale_for};
 use crate::fonts::FontFaces;
 use crate::gpu::{Batch, Frame, PageId, PlanetId, PlanetTextures, TextRun, WorldSpace};
@@ -100,6 +101,10 @@ enum Draw {
         instances: Range<u32>,
         planets: Vec<PlanetId>,
     },
+    /// The sky's stars: the instances.
+    Sky {
+        instances: Range<u32>,
+    },
 }
 
 /// A render pass over a canvas (the scene, or the world's texture) and the
@@ -154,6 +159,8 @@ pub struct WgpuRenderer {
     models: Models,
     /// The planet pipeline and the planets' textures ([`Batch::Planets`]).
     planets: Planets,
+    /// The sky pipeline ([`Batch::Sky`]).
+    sky: Sky,
     page_layout: wgpu::BindGroupLayout,
     texture_layout: wgpu::BindGroupLayout,
     scene: Option<Scene>,
@@ -217,6 +224,7 @@ impl WgpuRenderer {
 
     /// [`WgpuRenderer::new`], drawing the world with `upscale` (made on
     /// `device`) until an upscaler is set.
+    #[allow(clippy::too_many_lines)] // every pipeline is built here, once
     pub(super) fn with_upscale(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -303,6 +311,7 @@ impl WgpuRenderer {
             blit_pipeline,
             models: Models::new(device),
             planets: Planets::new(device, &globals_layout),
+            sky: Sky::new(device, &globals_layout),
             page_layout,
             texture_layout,
             scene: None,
@@ -496,6 +505,7 @@ impl WgpuRenderer {
         let vertex_buffer = self.vertex_buffer("nova solid vertices", &layout.vertices);
         let model_buffer = self.vertex_buffer("nova model instances", &layout.models);
         let planet_buffer = self.vertex_buffer("nova planet instances", &layout.planets);
+        let star_buffer = self.vertex_buffer("nova star instances", &layout.stars);
 
         let scene = self.scene.as_ref().expect("ensured above");
         let buffers = Buffers {
@@ -503,6 +513,7 @@ impl WgpuRenderer {
             vertices: &vertex_buffer,
             models: &model_buffer,
             planets: &planet_buffer,
+            stars: &star_buffer,
         };
         let mut commands = WgpuCommands::new(DeviceEncoders(&self.device));
         let world = if layout.world.is_empty() {
@@ -613,6 +624,7 @@ impl WgpuRenderer {
             vertices: vertex_buffer,
             models: model_buffer,
             planets: planet_buffer,
+            stars: star_buffer,
         } = buffers;
         let content = target.content;
         let full = PixelRect {
@@ -683,6 +695,11 @@ impl WgpuRenderer {
                     set_viewport(pass, content);
                     let globals = &self.globals_group;
                     (self.planets).encode(pass, globals, planet_buffer, instances.clone(), planets);
+                }
+                Draw::Sky { instances } => {
+                    set_viewport(pass, content);
+                    let globals = &self.globals_group;
+                    (self.sky).encode(pass, globals, star_buffer, instances.clone());
                 }
             }
         }
@@ -1109,6 +1126,8 @@ struct Layout<'a> {
     models: Vec<ModelData>,
     /// Every planets batch's instances, in one buffer.
     planets: Vec<PlanetData>,
+    /// Every sky batch's stars, in one buffer.
+    stars: Vec<StarData>,
     /// The text batches, one glyphon renderer each.
     text: Vec<&'a [TextRun]>,
     /// What to draw for each batch, in order.
@@ -1212,6 +1231,13 @@ impl<'a> Layout<'a> {
                     planets: planets.iter().map(|planet| planet.planet).collect(),
                 }
             }
+            Batch::Sky(sky) => {
+                let first = self.stars.len() as u32;
+                self.stars.extend(sky.iter().map(StarData::from));
+                Draw::Sky {
+                    instances: first..self.stars.len() as u32,
+                }
+            }
         };
         self.draws.push(draw);
         self.scissors.push(scissor);
@@ -1239,13 +1265,14 @@ impl<'a> Layout<'a> {
 }
 
 /// The buffers a frame's draws read: sprite and OR-fill instances, solid
-/// vertices, model instances and planet instances.
+/// vertices, model instances, planet instances and stars.
 #[derive(Clone, Copy)]
 struct Buffers<'a> {
     instances: &'a wgpu::Buffer,
     vertices: &'a wgpu::Buffer,
     models: &'a wgpu::Buffer,
     planets: &'a wgpu::Buffer,
+    stars: &'a wgpu::Buffer,
 }
 
 /// The scissors a frame's draws are encoded with, in their canvas's
@@ -2711,6 +2738,12 @@ mod tests {
         gpu.upload_mesh(MeshId(0), &Mesh::cube([Color::WHITE; 6]));
         let with_models = models_frame();
         assert_builds_no_pipeline(&mut gpu, made, &with_models, "a frame of models");
+        let sky = frame_of(vec![Batch::Sky(vec![crate::sky::StarInstance {
+            centre: Point::new(16.0, 16.0),
+            radius: 2.0,
+            color: [1.0; 3],
+        }])]);
+        assert_builds_no_pipeline(&mut gpu, made, &sky, "a frame of sky");
         // A native world drawn below 100% is a texture, enlarged with
         // sharp-bilinear: neither the first such frame nor a later one
         // builds it.

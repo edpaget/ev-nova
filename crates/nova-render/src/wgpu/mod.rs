@@ -79,6 +79,10 @@
 //! textures each planet uploads ([`Gpu::upload_planet`](crate::Gpu::upload_planet))
 //! with explicit gradients so no mip seam shows where the surface wraps.
 //!
+//! A sky batch ([`Batch::Sky`](crate::Batch::Sky)) draws in an ordinary
+//! pass, with no depth: one square per star, its fragments adding the
+//! star's colour by [`sky::coverage`](crate::sky::coverage) (`sky.wgsl`).
+//!
 //! Every render pipeline, glyphon's included, the model pipeline too, is built when the renderer
 //! is made or its upscaler is set, never on a frame: building one compiles
 //! its shader, which takes tens of milliseconds when macOS's Metal shader
@@ -109,6 +113,7 @@ mod overlay;
 mod planets;
 mod renderer;
 mod sharp_bilinear;
+mod sky;
 mod surface;
 mod upscale;
 

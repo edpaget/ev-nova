@@ -16,6 +16,7 @@ pub use crate::atlas::{PageId, Uv};
 use crate::camera::Light;
 use crate::model::Mesh;
 pub use crate::model::MeshId;
+pub use crate::sky::StarInstance;
 use crate::upscale::{Upscaler, WorldResolution};
 use crate::viewport::{LogicalSize, PixelRect};
 
@@ -259,12 +260,17 @@ pub enum Batch {
         /// The planets, in draw order.
         planets: Vec<PlanetInstance>,
     },
+    /// The layered sky's stars ([`nova_view::DrawCommand::Sky`]), far
+    /// layer first (see [`crate::sky`]): each adds its colour, by the
+    /// core's falloff, to what is beneath. They test no depth and write
+    /// none.
+    Sky(Vec<StarInstance>),
 }
 
 impl Batch {
     /// A short name for its kind: `"sprites"`, `"or-fill"`, `"solid"`,
-    /// `"text"`, `"models"` or `"planets"`. Other crates' tests describe a frame's
-    /// shape by it without matching every kind.
+    /// `"text"`, `"models"`, `"planets"` or `"sky"`. Other crates' tests
+    /// describe a frame's shape by it without matching every kind.
     #[must_use]
     pub fn kind(&self) -> &'static str {
         match self {
@@ -274,10 +280,11 @@ impl Batch {
             Self::Text(_) => "text",
             Self::Models { .. } => "models",
             Self::Planets { .. } => "planets",
+            Self::Sky(_) => "sky",
         }
     }
 
-    /// How many draws it holds: quads, text runs, models or planets.
+    /// How many draws it holds: quads, text runs, models, planets or stars.
     #[must_use]
     pub fn draws(&self) -> usize {
         match self {
@@ -286,6 +293,7 @@ impl Batch {
             Self::Text(runs) => runs.len(),
             Self::Models { models, .. } => models.len(),
             Self::Planets { planets, .. } => planets.len(),
+            Self::Sky(stars) => stars.len(),
         }
     }
 }
@@ -916,6 +924,14 @@ mod tests {
                 light: Light::STANDARD,
                 planets: vec![planet; 7],
             },
+            Batch::Sky(vec![
+                StarInstance {
+                    centre: Point::new(0.0, 0.0),
+                    radius: 1.0,
+                    color: [1.0; 3],
+                };
+                8
+            ]),
         ];
         let shape: Vec<(&str, usize)> = batches
             .iter()
@@ -929,7 +945,8 @@ mod tests {
                 ("solid", 4),
                 ("text", 5),
                 ("models", 6),
-                ("planets", 7)
+                ("planets", 7),
+                ("sky", 8)
             ]
         );
     }

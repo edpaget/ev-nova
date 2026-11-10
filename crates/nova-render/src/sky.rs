@@ -617,3 +617,221 @@ mod tests {
         assert!(layer_stars(&pose(1, (0.0, 0.0), 32), LAYERS.len(), LOGICAL, FINE).is_empty());
     }
 }
+
+/// How the [`Renderer`](crate::Renderer) batches a sky.
+#[cfg(test)]
+mod batch_tests {
+    use nova_data::graphics::Image;
+    use nova_galaxy_media::planet::{Image as Layer, Surface};
+    use nova_view::geometry::Bounds;
+    use nova_view::{
+        Color, DrawCommand, DrawList, ImageKey, ImageKind, ModelKey, ModelPose, Orientation,
+        PlanetKey, PlanetPose,
+    };
+
+    use super::*;
+    use crate::Renderer;
+    use crate::gpu::{Batch, Frame};
+    use crate::images::{ImageError, ImageSource};
+    use crate::model::Mesh;
+    use crate::planet_source::LoadedPlanet;
+    use crate::recording::{NoImages, RecordingGpu};
+    use crate::render_scale::RenderScale;
+    use crate::upscale::WorldResolution;
+    use crate::viewport::Viewport;
+
+    const SMALL: LogicalSize = LogicalSize { w: 256, h: 192 };
+
+    /// The logical space at 2 pixels a unit.
+    fn viewport() -> Viewport {
+        Viewport::new(SMALL, (512, 384), 2.0)
+    }
+
+    fn sky() -> SkyPose {
+        SkyPose {
+            seed: 21,
+            eye: Point::new(40.0, -70.0),
+            anchor: Point::new(128.0, 96.0),
+            level: 32,
+        }
+    }
+
+    fn frame_of(
+        renderer: &mut Renderer<NoImages>,
+        list: &DrawList,
+        gpu: &mut RecordingGpu,
+    ) -> Frame {
+        renderer.render(list, &viewport(), gpu);
+        gpu.submits()
+            .last()
+            .map(|frame| (*frame).clone())
+            .expect("a frame")
+    }
+
+    fn kinds(frame: &Frame) -> Vec<&'static str> {
+        frame.batches.iter().map(Batch::kind).collect()
+    }
+
+    #[test]
+    fn a_sky_is_one_batch_of_the_cores_stars_at_the_targets_texels() {
+        let mut list = DrawList::new();
+        list.sky(sky());
+        let frame = frame_of(
+            &mut Renderer::new(NoImages),
+            &list,
+            &mut RecordingGpu::new(),
+        );
+        let expected = stars(&sky(), SMALL, 2.0);
+        assert!(!expected.is_empty());
+        assert_eq!(frame.batches, [Batch::Sky(expected)]);
+    }
+
+    #[test]
+    fn a_world_sky_takes_the_world_textures_texels() {
+        let mut list = DrawList::new();
+        list.world(|list| {
+            list.sky(sky());
+        });
+        let mut gpu = RecordingGpu::answering(WorldResolution::Logical);
+        let frame = frame_of(&mut Renderer::new(NoImages), &list, &mut gpu);
+        assert_eq!(frame.world, [0]);
+        assert_eq!(frame.batches, [Batch::Sky(stars(&sky(), SMALL, 1.0))]);
+        // At a quarter of the 512-wide backing, a 128-texel world: half a
+        // texel a unit.
+        let mut renderer = Renderer::new(NoImages);
+        renderer.set_render_scale(RenderScale::Percent(25));
+        let frame = frame_of(&mut renderer, &list, &mut RecordingGpu::new());
+        assert_eq!(frame.batches, [Batch::Sky(stars(&sky(), SMALL, 0.5))]);
+        // Drawn at the target's resolution, a world sky has its texels.
+        let frame = frame_of(
+            &mut Renderer::new(NoImages),
+            &list,
+            &mut RecordingGpu::new(),
+        );
+        assert_eq!(frame.batches, [Batch::Sky(stars(&sky(), SMALL, 2.0))]);
+    }
+
+    #[test]
+    fn a_sky_in_the_worlds_tail_takes_the_targets_texels() {
+        let mut list = DrawList::new();
+        list.world(|list| {
+            list.start_world_tail();
+            list.sky(sky());
+        });
+        let mut gpu = RecordingGpu::answering(WorldResolution::Logical);
+        let frame = frame_of(&mut Renderer::new(NoImages), &list, &mut gpu);
+        assert_eq!(frame.batches, [Batch::Sky(stars(&sky(), SMALL, 2.0))]);
+    }
+
+    #[test]
+    fn a_sky_splits_from_its_neighbours_in_list_order() {
+        let mut renderer = Renderer::new(NoImages);
+        renderer.add_model(ModelKey(1), Mesh::cube([Color::WHITE; 6]));
+        let mut list = DrawList::new();
+        list.dot(Point::new(4.0, 4.0), 2.0, Color::WHITE)
+            .sky(sky())
+            .sky(sky())
+            .dot(Point::new(4.0, 4.0), 2.0, Color::WHITE)
+            .model(
+                ModelKey(1),
+                ModelPose {
+                    center: Point::new(30.0, 30.0),
+                    orientation: Orientation::IDENTITY,
+                    scale: 4.0,
+                },
+            )
+            .sky(sky());
+        let frame = frame_of(&mut renderer, &list, &mut RecordingGpu::new());
+        assert_eq!(
+            kinds(&frame),
+            ["solid", "sky", "sky", "solid", "models", "sky"]
+        );
+    }
+
+    /// One white 4x4 sprite, `rlëD` 1.
+    struct OneSprite;
+
+    impl ImageSource for OneSprite {
+        fn frames(&self, kind: ImageKind, id: i16) -> Result<Vec<Image>, ImageError> {
+            match (kind, id) {
+                (ImageKind::Rled, 1) => Ok(vec![
+                    Image::from_rgba(4, 4, [255; 64].to_vec()).expect("4x4"),
+                ]),
+                _ => Err(ImageError::Missing),
+            }
+        }
+    }
+
+    /// A bare 4 by 2 grey planet.
+    fn planet() -> LoadedPlanet {
+        LoadedPlanet {
+            surface: Surface {
+                surface: Layer {
+                    width: 4,
+                    height: 2,
+                    rgba: vec![9; 32],
+                },
+                clouds: None,
+                rings: None,
+                atmosphere: None,
+                day: 100.0,
+                tilt: 0.0,
+            },
+        }
+    }
+
+    #[test]
+    fn a_planet_before_a_sky_and_a_sprite_after_it_keep_their_places() {
+        let mut renderer = Renderer::new(OneSprite);
+        renderer.add_planet(PlanetKey(1), planet());
+        let mut list = DrawList::new();
+        list.planet(
+            PlanetKey(1),
+            PlanetPose {
+                center: Point::new(20.0, 20.0),
+                radius: 5.0,
+                time: 0.0,
+            },
+        )
+        .sky(sky())
+        .sprite(ImageKey::sprite(1, 0), Point::new(4.0, 4.0), Color::WHITE);
+        let mut gpu = RecordingGpu::new();
+        renderer.render(&list, &viewport(), &mut gpu);
+        let frame = gpu
+            .submits()
+            .last()
+            .map(|frame| (*frame).clone())
+            .expect("a frame");
+        assert_eq!(kinds(&frame), ["planets", "sky", "sprites"]);
+        assert_eq!(frame.batches[1], Batch::Sky(stars(&sky(), SMALL, 2.0)));
+    }
+
+    #[test]
+    fn a_sky_that_draws_nothing_is_no_batch_and_a_clip_leaves_it_uncut() {
+        let mut list = DrawList::new();
+        list.sky(SkyPose { level: 0, ..sky() }).sky(SkyPose {
+            eye: Point::new(f32::NAN, 0.0),
+            ..sky()
+        });
+        let frame = frame_of(
+            &mut Renderer::new(NoImages),
+            &list,
+            &mut RecordingGpu::new(),
+        );
+        assert_eq!(frame.batches, []);
+        let mut clipped = DrawList::new();
+        clipped.clipped(
+            Bounds {
+                min: Point::new(0.0, 0.0),
+                max: Point::new(10.0, 10.0),
+            },
+            DrawCommand::Sky { sky: sky() },
+        );
+        let frame = frame_of(
+            &mut Renderer::new(NoImages),
+            &clipped,
+            &mut RecordingGpu::new(),
+        );
+        assert_eq!(frame.batches, [Batch::Sky(stars(&sky(), SMALL, 2.0))]);
+    }
+}
