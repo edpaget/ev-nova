@@ -8,7 +8,11 @@
 //!
 //! The frame is the simulation's ([`drawn_frame`]): the heading's share of
 //! a turn truncated, as `_HandleShipDisplay` picks it, so the ship is
-//! drawn on the frame its weapon exit points turn with.
+//! drawn on the frame its weapon exit points turn with by the engine
+//! reading of the rulebook's `RuleKey::ContinuousHeadings`. By the other
+//! reading the exits, and a ship's model ([`ship_model`](super::ship_model)),
+//! turn with the heading itself, while the sprite is still drawn on this
+//! frame.
 
 use std::num::NonZeroU16;
 

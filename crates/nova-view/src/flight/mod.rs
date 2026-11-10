@@ -45,6 +45,8 @@
 //! - [`sim_port`]: the [`FlightSim`] port, what the flight view needs of
 //!   the flight it shows: a frame, a step, the player's commands and the
 //!   events to drain.
+//! - [`ship_model`]: [`ship_orientation`], how a ship's 3D model is
+//!   turned for its heading, by its hull's angle.
 //! - [`smoke`]: the puffs a smoking shot leaves.
 //! - [`sprite`]: [`rotation_frame`], which frame of the ship's sheet shows
 //!   its heading.
@@ -93,6 +95,7 @@ pub mod scroll_offset;
 #[cfg(any(test, feature = "fixture"))]
 pub mod sheet_check;
 pub mod ship_layers;
+pub mod ship_model;
 pub mod shot_fade;
 pub mod sim_adapter;
 pub mod sim_port;
@@ -117,6 +120,7 @@ pub use edge::test_flight;
 pub use edge::{EdgeCatalog, FlightStart, begin_game, enter_game, open_flight};
 pub use escorts::{EscortMenu, EscortMenuColors, EscortMenuLooks};
 pub use jump::{JumpEffect, JumpPhase};
+pub use ship_model::ship_orientation;
 pub use sim_adapter::{Collaborators, SessionFlight};
 pub use sim_port::FlightSim;
 pub use sprite::rotation_frame;
