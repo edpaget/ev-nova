@@ -46,3 +46,106 @@ fn under_continuous_headings_a_shot_leaves_from_the_exit_turned_to_the_drawn_hea
     assert_eq!(distinct(&engine), 1, "one frame, one point: {engine:?}");
     assert!(close_to(engine[0], Vec2::new(0.0, -20.0)), "{engine:?}");
 }
+
+/// Where [`defended`]'s point-defence shot at the missile leaves from,
+/// its defender last drawn facing `heading` with every turret exit 20
+/// pixels ahead of the nose, its hull turning as `source` says.
+fn defence_start_at(heading: f32, source: RuleSource) -> Vec2 {
+    let mut combat = Combat::default();
+    combat.set_continuous_headings(source);
+    let [defender, attacker] = defended();
+    let defender = defender
+        .facing(heading)
+        .drawn_at(heading)
+        .of(exits_at(1, [(0, 20); 4]));
+    let mut ships = [defender, attacker];
+    missile_in_flight(&mut combat, &mut ships);
+    phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
+    let fired = defence_shots(&combat);
+    assert_eq!(fired.len(), 1, "{heading}: {:?}", combat.shots());
+    fired[0].0
+}
+
+#[test]
+fn under_continuous_headings_a_point_defence_shot_leaves_from_the_exit_turned_to_the_drawn_heading()
+{
+    let headings = [1.0, 3.0, 7.0];
+    let by = |source| headings.map(|h| defence_start_at(h, source));
+    let continuous = by(RuleSource::Bible);
+    assert_eq!(distinct(&continuous), 3, "{continuous:?}");
+    for (heading, at) in headings.iter().zip(continuous) {
+        let want = facing(*heading) * 20.0;
+        assert!(close_to(at, want), "{heading}: {at:?} not {want:?}");
+    }
+    let engine = by(RuleSource::Engine);
+    assert_eq!(distinct(&engine), 1, "one frame, one point: {engine:?}");
+    assert!(close_to(engine[0], Vec2::new(0.0, -20.0)), "{engine:?}");
+}
+
+/// The beam a ship at the centre fires and `_HandleBeams` first puts on
+/// its exit, every beam exit 20 pixels ahead of the nose, the ship facing
+/// and last drawn facing `heading`, its hull turning as `source` says.
+fn followed_beam(heading: f32, source: RuleSource) -> Beam {
+    let mut combat = Combat::default();
+    combat.set_continuous_headings(source);
+    let mut ships = [Ship::at(1, 0.0, 0.0)
+        .armed(exit_beam(0))
+        .facing(heading)
+        .drawn_at(heading)
+        .of(exits_at(3, [(0, 20); 4]))];
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+    phase::close_tick(&mut combat, &mut ships, &NovaDisable);
+    combat.beams()[0]
+}
+
+#[test]
+fn under_continuous_headings_a_beam_follows_its_exit_turned_to_the_heading() {
+    let headings = [1.0, 3.0, 7.0];
+    let by = |source| headings.map(|h| followed_beam(h, source));
+    let continuous = by(RuleSource::Bible);
+    let starts = continuous.map(|beam| beam.start);
+    assert_eq!(distinct(&starts), 3, "{continuous:?}");
+    for (heading, beam) in headings.iter().zip(continuous) {
+        let want = facing(*heading) * 20.0;
+        assert!(close_to(beam.start, want), "{heading}: {beam:?}");
+        assert_eq!(beam.frame, *heading, "{beam:?}");
+    }
+    let engine = by(RuleSource::Engine);
+    let starts = engine.map(|beam| beam.start);
+    assert_eq!(distinct(&starts), 1, "one frame, one point: {engine:?}");
+    assert!(close_to(starts[0], Vec2::new(0.0, -20.0)), "{engine:?}");
+    assert!(engine.iter().all(|beam| beam.frame == 0.0), "{engine:?}");
+}
+
+/// The exit a nearest-exit beam takes as it fires at a ship 100 ahead,
+/// from beam exits 30 to either side of a ship facing `heading`, its hull
+/// turning as `source` says.
+fn nearest_beam_exit(heading: f32, source: RuleSource) -> Option<usize> {
+    let mut combat = Combat::default();
+    combat.set_continuous_headings(source);
+    let nearest = WeaponRecord {
+        flags3: crate::combat::weapon::NEAREST_EXIT,
+        ..exit_beam(0)
+    };
+    let mut ships = [
+        Ship::at(1, 0.0, 0.0)
+            .armed(nearest)
+            .facing(heading)
+            .drawn_at(heading)
+            .targeting(B)
+            .of(exits_at(3, [(30, 0), (-30, 0), (30, 0), (-30, 0)])),
+        Ship::at(2, 0.0, -100.0),
+    ];
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+    combat.beams()[0].exit
+}
+
+#[test]
+fn under_continuous_headings_a_nearest_exit_beam_picks_its_exit_with_the_hull_at_the_heading() {
+    // At 0.5 degrees the port exit has turned ahead, toward the target.
+    // By the engine the heading is taken to its whole degree, 0, where
+    // the two stand level and the first of equals, starboard, is taken.
+    assert_eq!(nearest_beam_exit(0.5, RuleSource::Bible), Some(1));
+    assert_eq!(nearest_beam_exit(0.5, RuleSource::Engine), Some(0));
+    assert_eq!(nearest_beam_exit(0.0, RuleSource::Bible), Some(0));
+}
