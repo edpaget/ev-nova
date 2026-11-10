@@ -137,6 +137,45 @@ fn a_turret_shot_starts_at_its_exit_by_the_engine_and_its_reach_along_its_aim_ah
 }
 
 #[test]
+fn a_turret_s_reach_lies_along_its_aim_before_its_inaccuracy() {
+    // The same turret, true and 10 degrees off. B stands still, so the
+    // true turret's heading is the aim at the exit, which inaccuracy
+    // doesn't touch.
+    let inaccurate = WeaponRecord {
+        inaccuracy: 10,
+        ..turret_gun()
+    };
+    let aim = fired(
+        &mut fight(RuleSource::Bible),
+        &mut shooters(turret_gun(), 0.0),
+    )
+    .heading;
+    let mut headings = Vec::new();
+    for reading in READINGS {
+        let mut combat = fight(reading);
+        let mut ships = shooters(inaccurate, 0.0);
+        let shot = fired(&mut combat, &mut ships);
+        headings.push(shot.heading);
+        if reading == RuleSource::Bible {
+            let (_, exit) = exit_of(&combat, &ships[0], ExitKind::Turret, 0);
+            let moved = start(&shot) - exit;
+            let reach = f32::from(REACH);
+            assert_ne!(shot.heading, aim, "the draw turned the shot off its aim");
+            assert!(
+                close_to(moved, crate::flight::facing(aim) * reach),
+                "{moved:?} not along the aim {aim}"
+            );
+            assert!(
+                !close_to(moved, crate::flight::facing(shot.heading) * reach),
+                "{moved:?} along the jittered heading {}",
+                shot.heading
+            );
+        }
+    }
+    assert_eq!(headings[0], headings[1], "aimed from the exit both ways");
+}
+
+#[test]
 fn a_fixed_shot_starts_its_reach_along_the_hull_s_angle_under_either_hull_turn() {
     let record = fixed_gun();
     let spec = WeaponSpec::new(&record);
