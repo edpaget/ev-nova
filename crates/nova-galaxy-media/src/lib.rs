@@ -26,6 +26,7 @@
 //! `fixture` feature's builders make test models in code, so no art
 //! enters the repo.
 
+pub mod budget;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod model;

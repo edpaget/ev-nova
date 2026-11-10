@@ -18,6 +18,8 @@ nova-galaxy-format.workspace = true
 serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
+# The format's test galaxy, for the budget tests.
+nova-galaxy-format = { workspace = true, features = ["fixture"] }
 serde_json.workspace = true
 
 [features]
