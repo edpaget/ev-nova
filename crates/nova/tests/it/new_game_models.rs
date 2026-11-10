@@ -5,8 +5,11 @@
 //! app, as `nova_render::world_assets` builds them), the flight's world
 //! layer draws the player's ship and the traffic as their classes'
 //! models, Luyten Exchange as the station hub and Kestrel Reach as a
-//! planet, each key it draws registered and uploaded; and a pilot carrying
-//! the gun mount draws its turret on its hull.
+//! planet, each key it draws registered and uploaded; every ship in the
+//! frame draws its class's hull, the traffic's included; and a pilot
+//! carrying the gun mount draws its turret on its hull, facing the nose
+//! until its first turret shot and then as the view's `mounted_outfits`
+//! turns it for the frame's turret facing.
 //!
 //! Wiring only: which ship, station or planet draws a model, where and
 //! turned how, is nova-view's (its flight view's `ship_models` and
@@ -20,6 +23,8 @@ use std::path::Path;
 use std::rc::Rc;
 
 use nova::app::screen::AppScreen;
+use nova::app::{Control, WindowEvent};
+use nova::chance::SplitMix;
 use nova::rulebook::ruleset_rulebook;
 use nova::ruleset::Ruleset;
 use nova_audio::SettingsStore;
@@ -27,11 +32,11 @@ use nova_audio::recording::MemorySettings;
 use nova_data::new_game::{self, NewGame};
 use nova_render::recording::GpuCall;
 use nova_render::{WorldAssets, world_assets};
-use nova_sim::fixture::MemoryPilots;
+use nova_sim::fixture::{MemoryPilots, place, put_player_at};
 use nova_sim::flight_frame::FlightFrame;
-use nova_sim::{OutfitId, SetExpr, ShipId, StellarId};
-use nova_view::flight::StellarModel;
-use nova_view::{DrawCommand, DrawLayer, DrawList, ModelKey, Screen};
+use nova_sim::{OutfitId, SetExpr, ShipId, StellarId, TargetPick, Vec2};
+use nova_view::flight::{StellarModel, mounted_outfits};
+use nova_view::{DrawCommand, DrawLayer, DrawList, Key, ModelKey, Screen};
 
 use crate::common::{draw, fly_new_pilot_modelled};
 use crate::pilots::Harness;
@@ -229,4 +234,206 @@ fn a_pilot_carrying_the_gun_mount_draws_its_turret_on_its_hull() {
         matches!(after_hull(&world(&harness)), DrawCommand::Mounted { model, .. } if model == turret),
         "the turret right after the hull"
     );
+}
+
+/// The commands the view's [`mounted_outfits`] gives the player's ship
+/// as `frame` has it, at the pose `world` draws its hull `hull` at: what
+/// the drawn hull and its turret should be.
+fn player_as_mounted(
+    harness: &Harness,
+    assets: &WorldAssets,
+    world: &[DrawCommand],
+    hull: ModelKey,
+) -> Vec<DrawCommand> {
+    let view = harness.app.screen().flight_view().expect("flying");
+    let frame = frame(harness);
+    let player = &frame.ships[0];
+    let pose = world
+        .iter()
+        .rev()
+        .find_map(|command| match command {
+            DrawCommand::Model { model, pose } if *model == hull => Some(*pose),
+            _ => None,
+        })
+        .expect("the player's hull");
+    let angle = player
+        .frames
+        .hull_angle(view.shown_heading(), frame.hull_turn);
+    let mounts = assets.models.mounts(player.class, &frame.player_kits);
+    let facings = vec![player.turret_facing; mounts.len()];
+    mounted_outfits(hull, pose, angle, &mounts, &facings, |asset| {
+        assets.models.outfit(asset)
+    })
+}
+
+/// The turn of the turret the player's hull `hull` draws, the last
+/// drawn of it in `world`.
+fn turret_turn(world: &[DrawCommand], hull: ModelKey, turret: ModelKey) -> f32 {
+    world
+        .windows(2)
+        .rev()
+        .find_map(|pair| match pair {
+            [
+                DrawCommand::Model { model, .. },
+                DrawCommand::Mounted {
+                    model: part,
+                    mounting,
+                },
+            ] if *model == hull && *part == turret => Some(mounting.turn),
+            _ => None,
+        })
+        .expect("the player's turret")
+}
+
+#[test]
+fn the_player_s_turret_turns_to_its_first_shot_s_aim() {
+    let (game, assets) = sample();
+    let gun_mount = nova_id(&game.ids.kits, "gun-mount");
+    let mass_driver = nova_id(&game.ids.outfits, "mass-driver");
+    let freighter = assets
+        .models
+        .ship(ShipId(nova_id(&game.ids.ships, "light-freighter")))
+        .expect("a model")
+        .key;
+    let turret = assets.models.outfit("turret-mount").expect("the turret");
+    // The same data again, to fill the system from.
+    let data = sample().0.data;
+    let pilots = MemoryPilots::new();
+    let mut harness = flying(game, &assets, &pilots);
+    let target = harness
+        .app
+        .screen_mut()
+        .flight_view_mut()
+        .expect("flying")
+        .change_sim(|sim| {
+            let session = sim.session_mut().expect("a session");
+            for outfit in [gun_mount, mass_driver] {
+                session.run_set(
+                    &SetExpr::parse(&format!("G{outfit}")).expect("parses"),
+                    &mut nova_sim::NeverFires,
+                );
+            }
+            (0..200)
+                .find_map(|seed| {
+                    if session.npcs().is_empty() {
+                        session.populate(&data, &mut SplitMix::new(seed));
+                    }
+                    session.npcs().first().map(|npc| npc.id)
+                })
+                .expect("a ship to aim at")
+        });
+    // The target 100 ahead and 60 to the right, off the nose.
+    let stand = |harness: &mut Harness| {
+        harness
+            .app
+            .screen_mut()
+            .flight_view_mut()
+            .expect("flying")
+            .change_sim(|sim| {
+                let session = sim.session_mut().expect("a session");
+                put_player_at(session, Vec2::ZERO);
+                place(session, target, Vec2::new(60.0, -100.0));
+                assert_eq!(session.select_target(TargetPick::Nearest), Some(target));
+            });
+    };
+    stand(&mut harness);
+    draw(&mut harness);
+    assert_eq!(frame(&harness).ships[0].turret_facing, None);
+    let before = world(&harness);
+    let nose = turret_turn(&before, freighter, turret);
+    assert!(nose.abs() < f32::EPSILON, "the nose: {nose}");
+
+    // Space pressed again each frame until it takes, as the flight may
+    // not step its first frames.
+    for _ in 0..2000 {
+        stand(&mut harness);
+        hold_fire(&mut harness, true);
+        draw(&mut harness);
+        if frame(&harness).ships[0].turret_facing.is_some() {
+            break;
+        }
+    }
+    hold_fire(&mut harness, false);
+    assert!(
+        frame(&harness).ships[0].turret_facing.is_some(),
+        "the player fired its turret"
+    );
+    let after = world(&harness);
+    let turn = turret_turn(&after, freighter, turret);
+    assert!(turn.abs() > 1e-3, "turned off the nose: {turn}");
+    let want = player_as_mounted(&harness, &assets, &after, freighter);
+    assert!(
+        after
+            .windows(want.len())
+            .any(|drawn| drawn == want.as_slice()),
+        "the hull and its turret as the view's function draws them: {want:?} in {after:?}"
+    );
+}
+
+#[test]
+fn every_ship_in_the_frame_draws_its_class_s_model() {
+    let (game, assets) = sample();
+    // The same data again, to fill the system from.
+    let data = sample().0.data;
+    let pilots = MemoryPilots::new();
+    let mut harness = flying(game, &assets, &pilots);
+    harness
+        .app
+        .screen_mut()
+        .flight_view_mut()
+        .expect("flying")
+        .change_sim(|sim| {
+            let session = sim.session_mut().expect("a session");
+            for seed in 0..200 {
+                if !session.npcs().is_empty() {
+                    break;
+                }
+                session.populate(&data, &mut SplitMix::new(seed));
+            }
+            // Each on screen, in a row ahead of the player.
+            put_player_at(session, Vec2::ZERO);
+            let ids: Vec<_> = session.npcs().iter().map(|npc| npc.id).collect();
+            for (i, id) in ids.into_iter().enumerate() {
+                #[allow(clippy::cast_precision_loss)]
+                let x = 60.0 * i as f32 - 120.0;
+                place(session, id, Vec2::new(x, -120.0));
+            }
+        });
+    draw(&mut harness);
+    let frame = frame(&harness);
+    assert!(frame.ships.len() > 1, "the player and traffic");
+    let stellar_models: Vec<ModelKey> = assets
+        .models
+        .stellars
+        .values()
+        .filter_map(|model| match model {
+            StellarModel::Model { key, .. } => Some(*key),
+            StellarModel::Planet { .. } => None,
+        })
+        .collect();
+    let mut drawn: Vec<u32> = hulls(&world(&harness))
+        .into_iter()
+        .filter(|key| !stellar_models.contains(key))
+        .map(|key| key.0)
+        .collect();
+    let mut want: Vec<u32> = frame
+        .ships
+        .iter()
+        .filter_map(|ship| assets.models.ship(ship.class))
+        .map(|model| model.key.0)
+        .collect();
+    drawn.sort_unstable();
+    want.sort_unstable();
+    assert!(want.len() > 1, "keyed traffic: {want:?}");
+    assert_eq!(drawn, want, "one hull each, its class's");
+}
+
+/// Presses (`held`) or lets go of the fire key.
+fn hold_fire(harness: &mut Harness, held: bool) {
+    let event = WindowEvent::Key {
+        key: Key::Space,
+        pressed: held,
+        repeat: false,
+    };
+    assert_eq!(harness.handle(event), Control::Continue);
 }
