@@ -473,6 +473,7 @@ pub mod stellar_guns;
 pub mod stellar_hazards;
 pub mod submunition;
 pub mod tractor_hold;
+pub mod turret_aim;
 mod walk;
 pub mod weapon;
 mod wrap_carry;
@@ -517,6 +518,7 @@ pub use source_slot::SlotShip;
 pub use sprite_load::SpriteLoad;
 use stellar::{StellarStrike, StellarTarget};
 use stellar_hazards::{HazardResistance, StellarHazards, StellarKill};
+use turret_aim::TurretAim;
 use weapon::{Explosion, Guidance};
 
 use crate::bay::FIGHTER_BAY;
@@ -1316,6 +1318,9 @@ pub struct Combat {
     /// The words outside the fight that stray beams stepped this tick,
     /// with their firers ([`Combat::take_stray_steps`]).
     stray_steps: Vec<(ShipRef, StrayWord)>,
+    /// The turret aims recorded since they were last taken, a readout
+    /// the fight never reads ([`Combat::take_turret_aims`]).
+    turret_aims: Vec<TurretAim>,
     sorties: Vec<Sortie>,
     shoves: Vec<Shove>,
     /// The display steps run since they were last taken
@@ -2073,6 +2078,7 @@ impl Combat {
             if let Some(word) = self.beam_exit(muzzle, &mut beam, toward, chance) {
                 self.stray_steps.push((ship, word));
             }
+            self.note_turret_aim(ship, launch, &from, beam.start);
             self.beams.push(beam);
             false
         } else {
@@ -2131,6 +2137,7 @@ impl Combat {
             let Some(taken) = self.put_in_flight(shot) else {
                 return false;
             };
+            self.note_turret_aim(ship, launch, &from, start);
             // `_HandleShipPointDefense` moves a point-defence shot fired at
             // a ship to the shot layer (@0x398bd), after `_SpawnShot` put it
             // in its own: so at the shot layer's tail.
@@ -3152,6 +3159,13 @@ impl Combat {
         std::mem::take(&mut self.stray_steps)
     }
 
+    /// The turret aims recorded since they were last taken, in order, for
+    /// the session to keep as each ship's turret facing
+    /// ([`turret_aim`]); taking them empties the list.
+    pub fn take_turret_aims(&mut self) -> Vec<TurretAim> {
+        std::mem::take(&mut self.turret_aims)
+    }
+
     /// Raises a step of `word` for `ship`, as a beam of stray `ExitType`
     /// does, for the session's tests of a firer gone by the time it steps.
     #[cfg(any(test, feature = "fixture"))]
@@ -3789,6 +3803,7 @@ mod tests {
     mod strike_terms;
     mod tick_phases;
     mod turn_reads;
+    mod turret_aims;
     mod weapon_glow;
     mod wrap_carry;
 
