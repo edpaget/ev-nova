@@ -11,8 +11,9 @@ publish.workspace = true
 bytemuck.workspace = true
 glyphon.workspace = true
 nova-data.workspace = true
-# The new game's asset manifest, budgets and media, and its glTF models
-# read as data, for the `ModelSource` adapter (`galaxy_models`).
+# The new game's asset manifest, budgets and media, its glTF models read
+# as data and its planets baked or read, for the `ModelSource` and
+# `PlanetSource` adapters (`galaxy_models`, `galaxy_planets`).
 nova-galaxy-format.workspace = true
 nova-galaxy-media.workspace = true
 nova-view.workspace = true
@@ -43,9 +44,9 @@ nova-render = { workspace = true, features = ["recording"] }
 
 [features]
 # Exposes the test support in `recording` (the recording Gpu mock and the
-# empty `NoImages` source), and the model source port's fake and contract
-# check (`model_source::{FakeModels, check_contract}`), to other crates'
-# tests.
+# empty `NoImages` source), and the model and planet source ports' fakes
+# and contract checks (`model_source::{FakeModels, check_contract}`,
+# `planet_source::{FakePlanets, check_contract}`), to other crates' tests.
 recording = []
 
 [lints]

@@ -28,6 +28,11 @@
 //!   on the view's model axes, with their materials and textures, or why
 //!   not ([`ModelError`]); its fake and contract check behind the
 //!   `recording` feature.
+//! - [`planet_source`]: the [`PlanetSource`] port, the new game's planets
+//!   and moons by stellar ([`PlanetRequest`]) as [`LoadedPlanet`]s, a
+//!   generated look baked or a texture asset read, in one shape, or why
+//!   not ([`PlanetError`]); its fake and contract check behind the
+//!   `recording` feature.
 //! - [`camera`]: the models' orthographic camera, which puts a model where
 //!   a sprite at its centre goes at the 2D view's scale, their depth
 //!   bands, each later model of a batch nearer, and the [`Light`] they are
@@ -73,6 +78,9 @@
 //!   [`GalaxyModels`], a thin adapter over `nova_galaxy_media`'s glTF
 //!   reading, placement and art budgets, read through the format's
 //!   `Source` port; it needs no GPU, and `gltf` is never named here.
+//! - [`galaxy_planets`]: [`PlanetSource`] for the new game's data,
+//!   [`GalaxyPlanets`], a thin adapter over `nova_galaxy_media`'s planet
+//!   bake and texture reading and its art budgets; it needs no GPU.
 //! - [`present`]: what a window surface does before each frame.
 //!
 //! The adapter, [`wgpu`], is the only module that names `wgpu` or
@@ -129,6 +137,7 @@ pub mod camera;
 pub mod enlarge;
 pub mod fonts;
 pub mod galaxy_models;
+pub mod galaxy_planets;
 pub mod glyph_raster;
 pub mod gpu;
 pub mod images;
@@ -137,6 +146,7 @@ pub mod model;
 pub mod model_source;
 mod models;
 pub mod planet;
+pub mod planet_source;
 pub mod present;
 pub mod quickdraw_stretch;
 #[cfg(any(test, feature = "recording"))]
@@ -154,6 +164,7 @@ pub use camera::Light;
 pub use enlarge::{Enlarger, NativeDetail, enlarger_for};
 pub use fonts::{FALLBACK_FONT, Face, FontFaces, Loaded, SERIF_FONT, face_for};
 pub use galaxy_models::{GalaxyModels, ship_livery, ship_request};
+pub use galaxy_planets::GalaxyPlanets;
 pub use gpu::{
     Batch, Frame, Gpu, MAX_TEXTURE_SIDE, ModelInstance, QuadInstance, Rect, SolidQuad, TextRun,
     WorldSpace,
@@ -162,6 +173,7 @@ pub use images::{ImageError, ImageSource};
 pub use livery::{Livery, PaintSlot, painted};
 pub use model::{Mesh, MeshError, MeshId, Vertex};
 pub use model_source::{LoadedModel, ModelError, ModelRequest, ModelSource};
+pub use planet_source::{LoadedPlanet, PlanetError, PlanetRequest, PlanetSource};
 pub use present::{AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action};
 pub use source::GameImages;
 pub use super_xbr::SuperXbr;
