@@ -43,7 +43,11 @@
 //! [`exits`](super::exits)) on the frame its firer is drawn on that tick,
 //! as `_HandleBeams` places it after every ship is drawn
 //! (@0x3076a-0x30922): at its firer's centre when it has none. A beam (0)
-//! points along that frame's angle (@0x303bb-0x3042e). A turreted beam
+//! points along that frame's angle (@0x303bb-0x3042e). That is by the
+//! engine reading of
+//! [`RuleKey::ContinuousHeadings`](crate::RuleKey::ContinuousHeadings);
+//! by the other the beam starts at its exit turned to its firer's heading
+//! itself and points along it ([`hull_turn`](super::hull_turn)). A turreted beam
 //! (3) points at its target's bearing from its start, a whole degree,
 //! every tick (@0x30432-0x306bb), while the target is active, breaking up
 //! included, and ends once it is destroyed or gone. A point-defence beam
@@ -57,7 +61,7 @@
 
 use super::ShipRef;
 use super::armament::inaccuracy;
-use super::exits::{Compression, ExitKind, ExitPoints};
+use super::exits::{ExitKind, ExitPoints, ExitRules};
 use super::projectile::{Shot, ShotId, Target, contact};
 use super::sides::{Sides, Ties};
 use super::weapon::{Guidance, WeaponSpec};
@@ -215,7 +219,9 @@ pub struct Beam {
     /// The angle, in degrees, of the frame its firer was drawn on when
     /// last seen (the original's -0x48, `_HandleBeams` @0x303bb-0x3042e):
     /// whole degrees, or the firer's heading itself for a hull with no
-    /// frames. A beam held [`Aiming::Ahead`] points along it.
+    /// frames. Its firer's hull angle, so continuously the heading itself
+    /// ([`hull_turn`](super::hull_turn)). A beam held [`Aiming::Ahead`]
+    /// points along it.
     pub frame: f32,
     /// The heading it points along this tick, in degrees: its aim, turned
     /// by its jitter and never wrapped, so it may lie outside 0-360.
@@ -290,7 +296,7 @@ impl Beam {
     }
 
     /// Puts the beam on its `firer`, flying as it is with its exit points,
-    /// at its exit, compressed as `compression` says, and points it at
+    /// at its exit, placed as `rules` say, and points it at
     /// what it aims at among `targets` and `shots`, turned by its jitter
     /// drawn on `chance`, as `_HandleBeams` does every tick
     /// (@0x303bb-0x30922):
@@ -298,7 +304,9 @@ impl Beam {
     /// - Its firer gone (none: destroyed, or out of the fight), it stays
     ///   where the firer last was, with that frame: the original's slot
     ///   keeps its place and frame once inactive.
-    /// - A beam (0) points along the frame its firer is drawn on. A
+    /// - A beam (0) points along the frame its firer is drawn on, or
+    ///   continuously along its firer's heading itself
+    ///   ([`ExitPoints::hull_angle`]). A
     ///   turreted beam (3) points at its target's bearing from its start,
     ///   a whole degree (`_CalcInterceptAngle`), while the target is
     ///   active, breaking up included; a point-defence beam (10) at its
@@ -310,14 +318,14 @@ impl Beam {
     pub fn follow(
         &mut self,
         firer: Option<(&ShipState, Option<&ExitPoints>)>,
-        compression: Compression,
+        rules: ExitRules,
         targets: &[Target],
         shots: &[Shot],
         chance: &mut dyn Chance,
     ) -> bool {
         if let Some((at, exits)) = firer {
-            self.frame = exits.map_or(at.heading, |exits| exits.drawn_angle(at.heading));
-            self.start = at.position + self.exit_offset(exits, compression);
+            self.frame = exits.map_or(at.heading, |exits| exits.hull_angle(at.heading, rules.turn));
+            self.start = at.position + self.exit_offset(exits, rules);
         }
         let toward = match self.aiming {
             Aiming::Ahead => None,
@@ -349,13 +357,13 @@ impl Beam {
     }
 
     /// How far off its firer's centre it starts: its exit among `exits`
-    /// on the frame the firer is drawn on, and none without an exit
+    /// turned to its firer's hull angle, `frame`, and none without an exit
     /// (@0x30775-0x3079b).
-    fn exit_offset(&self, exits: Option<&ExitPoints>, compression: Compression) -> Vec2 {
+    fn exit_offset(&self, exits: Option<&ExitPoints>, rules: ExitRules) -> Vec2 {
         let (Some(exits), Some(kind), Some(exit)) = (exits, self.kind, self.exit) else {
             return Vec2::ZERO;
         };
-        exits.offset(self.frame, kind, exit, compression.into())
+        exits.offset(self.frame, kind, exit, rules)
     }
 
     /// Whether it can hit `target`, among the fight's `sides`
@@ -458,8 +466,10 @@ mod tests {
     use crate::catalog::{GovtId, GovtRecord, ShipId};
     use crate::chance::NeverFires;
     use crate::combat::NpcId;
+    use crate::combat::exits::Compression;
     use crate::combat::fixture::among;
     use crate::combat::hull::Condition;
+    use crate::combat::hull_turn::HullTurn;
     use crate::combat::projectile::ShotId;
     use crate::combat::sides::PassThrough;
     use crate::govt::Governments;
@@ -495,7 +505,7 @@ mod tests {
     fn follow(beam: &mut Beam, at: ShipState, targets: &[Target], shots: &[Shot]) -> bool {
         beam.follow(
             Some((&at, None)),
-            Compression::default(),
+            ExitRules::default(),
             targets,
             shots,
             &mut NeverFires,
@@ -528,7 +538,7 @@ mod tests {
         assert_eq!(beam.start, Vec2::new(-5.0, 0.0));
         assert!(close(beam.end, Vec2::new(-5.0, 100.0)), "{beam:?}");
         let left = beam;
-        assert!(beam.follow(None, Compression::default(), &[], &[], &mut NeverFires));
+        assert!(beam.follow(None, ExitRules::default(), &[], &[], &mut NeverFires));
         assert_eq!(beam, left, "where its firer last was");
     }
 
@@ -549,7 +559,13 @@ mod tests {
         let mut tick = |firer, (x, y), draw| {
             let mut draws = Draws::of(&[draw]);
             let targets = [target(2, x, y)];
-            assert!(beam.follow(firer, Compression::ByOffset, &targets, &[], &mut draws));
+            assert!(beam.follow(
+                firer,
+                Compression::ByOffset.into(),
+                &targets,
+                &[],
+                &mut draws
+            ));
             assert_eq!(draws.asked, [8], "a draw every tick");
             assert!(close(beam.start, Vec2::new(100.0, 130.0)), "{beam:?}");
             assert!(close(beam.end, beam.start + facing(beam.heading) * 100.0));
@@ -588,7 +604,7 @@ mod tests {
         let mut beam = Beam::launch(laser(), FIRER, FIRER, &at(0.0, 0.0, 350.0), Aiming::Ahead);
         let mut heading = |at: ShipState, exits| {
             let firer = Some((&at, exits));
-            assert!(beam.follow(firer, Compression::default(), &[], &[], &mut NeverFires));
+            assert!(beam.follow(firer, ExitRules::default(), &[], &[], &mut NeverFires));
             assert!(
                 close(beam.end, at.position + facing(beam.heading) * 100.0),
                 "{beam:?}"
@@ -610,6 +626,37 @@ mod tests {
     }
 
     #[test]
+    fn continuously_a_fixed_beam_points_along_its_firers_heading() {
+        let exits = beam_exits();
+        let rules = ExitRules {
+            turn: HullTurn::Continuous,
+            ..ExitRules::default()
+        };
+        let mut beam = Beam {
+            kind: Some(ExitKind::Beam),
+            exit: Some(1),
+            ..Beam::launch(laser(), FIRER, FIRER, &at(0.0, 0.0, 0.0), Aiming::Ahead)
+        };
+        for heading in [99.5, 101.25, 359.0] {
+            let firer = at(10.0, 20.0, heading);
+            assert!(beam.follow(
+                Some((&firer, Some(&exits))),
+                rules,
+                &[],
+                &[],
+                &mut NeverFires
+            ));
+            assert_eq!((beam.frame, beam.heading), (heading, heading));
+            let exit = facing(heading + 90.0) * 30.0;
+            assert!(
+                close(beam.start, firer.position + exit),
+                "{heading}: {beam:?}"
+            );
+            assert!(close(beam.end, beam.start + facing(heading) * 100.0));
+        }
+    }
+
+    #[test]
     fn a_beam_jitters_each_tick_by_its_inaccuracy_about_its_start() {
         let exits = beam_exits();
         let shaky = WeaponSpec::new(&WeaponRecord {
@@ -625,7 +672,7 @@ mod tests {
         let mut ticks = Vec::new();
         for _ in 0..3 {
             let firer = Some((&at(100.0, 100.0, 99.0), Some(&exits)));
-            assert!(beam.follow(firer, Compression::ByOffset, &[], &[], &mut draws));
+            assert!(beam.follow(firer, Compression::ByOffset.into(), &[], &[], &mut draws));
             assert!(close(beam.start, Vec2::new(100.0, 130.0)), "{beam:?}");
             assert!(close(beam.end, beam.start + facing(beam.heading) * 100.0));
             ticks.push(beam.heading);
@@ -635,7 +682,7 @@ mod tests {
         let mut draws = Draws::of(&[]);
         let mut steady = lasting(3, 0, 0, 0);
         let firer = Some((&at(0.0, 0.0, 0.0), None));
-        assert!(steady.follow(firer, Compression::default(), &[], &[], &mut draws));
+        assert!(steady.follow(firer, ExitRules::default(), &[], &[], &mut draws));
         assert!(draws.asked.is_empty(), "no inaccuracy, no draw");
     }
 
@@ -657,7 +704,7 @@ mod tests {
             let firer = Some((&at(0.0, 0.0, 90.0), None));
             let targets = [target(2, 0.0, -50.0)];
             let mut draws = Draws::of(&[draw]);
-            assert!(beam.follow(firer, Compression::default(), &targets, &[], &mut draws));
+            assert!(beam.follow(firer, ExitRules::default(), &targets, &[], &mut draws));
             assert_eq!(draws.asked, [8]);
             beam.heading
         };
@@ -682,7 +729,7 @@ mod tests {
         let mut draws = Draws::of(&[]);
         let shots = [missile(5, 40.0, 0.0)];
         let firer = Some((&at(0.0, 0.0, 0.0), None));
-        assert!(beam.follow(firer, Compression::default(), &[], &shots, &mut draws));
+        assert!(beam.follow(firer, ExitRules::default(), &[], &shots, &mut draws));
         assert!(draws.asked.is_empty());
         assert_eq!(beam.heading, 90.0);
     }
@@ -736,7 +783,7 @@ mod tests {
         let mut start = |at: ShipState, exits| {
             assert!(beam.follow(
                 Some((&at, exits)),
-                Compression::ByOffset,
+                Compression::ByOffset.into(),
                 &[],
                 &[],
                 &mut NeverFires

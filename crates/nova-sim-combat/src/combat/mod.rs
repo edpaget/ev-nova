@@ -69,8 +69,9 @@
 //!    trigger, and reads the ship before the trigger's recoil. Each weapon
 //!    is aimed as its guidance aims it at the ship's target ([`aim`]); a
 //!    turret that cannot fire spends nothing. Each shot or beam leaves
-//!    from the ship's exit point for its weapon's `ExitType`, on the frame
-//!    the ship was last drawn on ([`exits`], [`Fighter::drawn_heading`]),
+//!    from the ship's exit point for its weapon's `ExitType`, turned to
+//!    the hull the ship was last drawn with, by the engine its frame
+//!    ([`exits`], [`hull_turn`], [`Fighter::drawn_heading`]),
 //!    a turret leading its target from there (see `Combat::launch`). A
 //!    turret or point-defence shot rolls its miss in its ship's class
 //!    ([`sides`]), and an NPC's bomb or rocket leaves at its ship's
@@ -480,11 +481,12 @@ use damage::{Blast, Hit};
 use defence::{Candidate, Guard, PointDefenceRule, Quarry, Side};
 pub use display::Displayed;
 pub use escort_loss::EscortLoss;
-use exits::{Compression, ExitCursors, ExitPoints, StrayWord};
+use exits::{Compression, ExitCursors, ExitPoints, ExitRules, StrayWord};
 pub use finishing_hit::FinishingHit;
 use hull::{
     Breakup, Condition, DisableRule, HullSpec, armour_gone, holds_armour, immune, never_breaks_up,
 };
+use hull_turn::HullTurn;
 use impact::{Body, Tractor, TractorLock};
 use ion::{Burst, Dose, Ion, IonLockout};
 use jamming::Jamming;
@@ -1114,10 +1116,13 @@ pub struct Fighter<'a> {
     /// Its rounds of ammunition.
     pub rounds: &'a mut dyn Rounds,
     /// The heading it was last drawn at: its heading as the last tick
-    /// ended. Its shots leave from the exit points of the frame drawn at
+    /// ended. Its shots leave from its exit points turned to its hull at
     /// it, as every ship fires before the original draws it again
     /// (`_DoPlayGameWork` @0x43e19-0x43e29, @0x44483-0x444ad; see
-    /// [`exits`]).
+    /// [`exits`]): by the engine reading of
+    /// [`RuleKey::ContinuousHeadings`](crate::RuleKey::ContinuousHeadings)
+    /// to the frame drawn at it, by the other to it itself
+    /// ([`hull_turn`]).
     pub drawn_heading: f32,
     /// Where its slot sprite stands as the collision passes walk the
     /// ships: its layer and its entry there ([`SpriteRank`]), read once as
@@ -1337,8 +1342,10 @@ pub struct Combat {
     /// ([`RuleKey::QuadrantTurretArc`](crate::RuleKey::QuadrantTurretArc)).
     quadrant_arc: RuleSource,
     /// Which compression an exit point takes
-    /// ([`RuleKey::ExitCompression`](crate::RuleKey::ExitCompression)).
-    compression: Compression,
+    /// ([`RuleKey::ExitCompression`](crate::RuleKey::ExitCompression)) and
+    /// what its hull turns with
+    /// ([`RuleKey::ContinuousHeadings`](crate::RuleKey::ContinuousHeadings)).
+    exit_rules: ExitRules,
     /// How many exits a point-defence shot moves its cursor on
     /// ([`RuleKey::PdExitStep`](crate::RuleKey::PdExitStep)).
     pd_exit_step: RuleSource,
@@ -1490,7 +1497,7 @@ impl Combat {
         chance: &mut dyn Chance,
     ) {
         let shots = &self.shots;
-        let compression = self.compression;
+        let rules = self.exit_rules;
         let advance = pass.beams_act();
         self.beams.retain_mut(|beam| {
             if !beam.live_on(advance) {
@@ -1505,7 +1512,7 @@ impl Combat {
                 .iter()
                 .find(|fighter| fighter.ship == beam.firer && fighter.condition.active())
                 .map(|firer| (&firer.state, firer.hull.exits.as_ref()));
-            beam.follow(firer, compression, targets, shots, chance)
+            beam.follow(firer, rules, targets, shots, chance)
         });
         if advance {
             let glowing = self.beams.iter().filter(|beam| beam.glows());
@@ -1699,7 +1706,15 @@ impl Combat {
     /// Has an exit point take its compression as `source` says
     /// ([`Compression`]): by default, the engine's.
     pub fn set_exit_compression(&mut self, source: RuleSource) {
-        self.compression = Compression::from(source);
+        self.exit_rules.compression = Compression::from(source);
+    }
+
+    /// Has a ship's exit points and fixed beams turn with its hull as
+    /// `source` says ([`HullTurn`](hull_turn::HullTurn),
+    /// [`RuleKey::ContinuousHeadings`](crate::RuleKey::ContinuousHeadings)):
+    /// by default, the engine's, by the frame it is drawn on.
+    pub fn set_continuous_headings(&mut self, source: RuleSource) {
+        self.exit_rules.turn = source.into();
     }
 
     /// Has a point-defence shot move its cursor on as `source` says
@@ -2118,7 +2133,7 @@ impl Combat {
                 from.position,
                 from.heading,
                 toward,
-                self.compression.into(),
+                self.exit_rules,
             );
             if muzzle.exits.is_some() {
                 beam.kind = Some(kind);
@@ -2161,7 +2176,7 @@ impl Combat {
                     from.position,
                     muzzle.angle,
                     None,
-                    self.compression.into(),
+                    self.exit_rules,
                 );
             }
             defended.filter(|_| launch.weapon.nearest_exit)
@@ -2174,7 +2189,7 @@ impl Combat {
             from.position,
             muzzle.angle,
             toward,
-            self.compression.into(),
+            self.exit_rules,
         );
         let side = points.map_or(0.0, |points| points.side(kind, index));
         (start, side)
@@ -2352,7 +2367,12 @@ impl Combat {
         let sides = (fighter.side(), fighter.ties(), Plunderer::of(fighter));
         let drawn = fighter.drawn_heading;
         let firing_from = fighter.slot;
-        let mut muzzle = Muzzle::new(state, &hull, drawn, fighter.armament.exits_mut());
+        let mut muzzle = Muzzle::new(
+            state,
+            &hull,
+            (drawn, self.exit_rules.turn),
+            fighter.armament.exits_mut(),
+        );
         muzzle.firer_slot = Some(firing_from);
         let mut destructs = false;
         for (copy, launch) in launches.iter().enumerate() {
@@ -2479,7 +2499,12 @@ impl Combat {
             };
             let drawn = fighter.drawn_heading;
             let firing_from = fighter.slot;
-            let mut muzzle = Muzzle::new(state, &hull, drawn, fighter.armament.exits_mut());
+            let mut muzzle = Muzzle::new(
+                state,
+                &hull,
+                (drawn, self.exit_rules.turn),
+                fighter.armament.exits_mut(),
+            );
             muzzle.firer_slot = Some(firing_from);
             let shot = self.launch(
                 (side, ties, plunderer),
@@ -3385,14 +3410,15 @@ impl Firers {
 }
 
 /// Where a ship's launches leave from this tick: the ship as it fires,
-/// its hull's exit points, the angle of the frame it was last drawn on,
-/// and its cursors ([`exits`]).
+/// its hull's exit points, the angle its hull was last drawn at, and its
+/// cursors ([`exits`]).
 struct Muzzle<'a> {
     /// The ship as it fires.
     from: ShipState,
     /// Its hull's exit points, if any.
     exits: Option<&'a ExitPoints>,
-    /// The angle, in whole degrees, of the frame it was last drawn on.
+    /// The angle its hull was last drawn at ([`ExitPoints::hull_angle`]):
+    /// by the engine, the whole-degree angle of the frame it was drawn on.
     angle: f32,
     /// Its cursors.
     cursors: &'a mut ExitCursors,
@@ -3411,15 +3437,16 @@ struct Muzzle<'a> {
 
 impl<'a> Muzzle<'a> {
     /// The muzzle of a ship flying `from` with `hull`, last drawn facing
-    /// `drawn_heading`, moving `cursors` and the fold set `fold` on.
+    /// `drawn_heading`, its hull turning as `turn` says, moving `cursors`
+    /// and the fold set `fold` on.
     fn new(
         from: ShipState,
         hull: &'a HullSpec,
-        drawn_heading: f32,
+        (drawn_heading, turn): (f32, HullTurn),
         (cursors, fold): (&'a mut ExitCursors, &'a mut u16),
     ) -> Self {
         let exits = hull.exits.as_ref();
-        let angle = exits.map_or(0.0, |exits| exits.drawn_angle(drawn_heading));
+        let angle = exits.map_or(0.0, |exits| exits.hull_angle(drawn_heading, turn));
         Self {
             from,
             exits,
@@ -3688,6 +3715,7 @@ mod tests {
     mod fold_stamp;
     mod hidden_shots;
     mod hit_turns;
+    mod hull_turn;
     mod idle_bays;
     mod interfered_hits;
     mod ion_lockout_tick;
