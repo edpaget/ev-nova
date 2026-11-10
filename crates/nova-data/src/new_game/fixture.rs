@@ -69,6 +69,12 @@
 //! The sample folder read into memory with its light freighter's model
 //! and its mass driver's turret built in code, so its hardpoints stand on
 //! a hull and show a turret: [`modelled_sample`]'s docs say what each is.
+//!
+//! # `modelled_sample_3d()`
+//!
+//! [`modelled_sample`] with a station model on both stations and a
+//! generated planet in the start system, for the 3D flight screen:
+//! [`modelled_sample_3d`]'s docs say what each is.
 
 use std::path::{Path, PathBuf};
 
@@ -228,6 +234,94 @@ pub fn modelled_sample() -> MemSource {
             "---\nname: Mass driver\nmount: turret\ndamage: 12\nrange: 600\nreload: 0.5\n\
              price: 2500\nmodel: turret-mount\n---\n",
         )
+}
+
+/// The station hub's model file in [`modelled_sample_3d`].
+pub const STATION_HUB_GLB: &str = "media/export/kenney-space-kit/hangar_largeA.glb";
+
+/// The station hub's model in [`modelled_sample_3d`]: 6 wide, 2 tall and
+/// 6 long (model x, y, z), in metres.
+pub const STATION_HUB: [f32; 3] = [6.0, 2.0, 6.0];
+
+/// The ID the in-memory `nova-ids.json` of [`modelled_sample_3d`] pins
+/// Kestrel Reach at: the next free `spöb` ID, after the sample's two
+/// stations and its six gates.
+pub const KESTREL_REACH_ID: i16 = 136;
+
+/// [`modelled_sample`], with what the 3D flight screen draws besides the
+/// ships, so every kind of world model has one in the start system:
+///
+/// - the `station-hub` asset, a model facing −z, its file
+///   ([`STATION_HUB_GLB`]) a [`STATION_HUB`] box in the Kenney kit's four
+///   materials ([`KENNEY`]), as both stations' `visual`
+///   (`visual: {asset: station-hub}`), so each draws the hub, from above
+///   as its stand-in;
+/// - the generated gas giant `kestrel-reach` in `luyten-crossing`, the
+///   start system, with the look the full sample gives it (palette
+///   `#c9a36b`, `#8a5a3c`, `#e8d8b0`, clouds 0.6, rings 1.4 to 2.3 in
+///   `#d8c8a8`, an atmosphere of `#f0e0c0` 0.04 thick, seed 4417),
+///   placed where this cut puts it, not where the full sample does, and
+///   pinned at [`KESTREL_REACH_ID`] in the in-memory `nova-ids.json`, so
+///   the load reports no unpinned record.
+///
+/// [`modelled_sample`] stays as it is, so the tests over it keep their
+/// meaning.
+///
+/// # Panics
+///
+/// When the sample folder can't be read.
+#[must_use]
+pub fn modelled_sample_3d() -> MemSource {
+    let hub = KENNEY
+        .iter()
+        .fold(Builder::new(STATION_HUB), |b, (name, color)| {
+            b.material(Mat::new(name, *color))
+        });
+    let read =
+        |file: &str| std::fs::read_to_string(sample_folder().join(file)).expect("a sample file");
+    // Each station's file, its `visual` the hub, added to its front matter.
+    let station = |file: &str| {
+        let text = read(file);
+        let (front, body) = text
+            .strip_prefix("---\n")
+            .and_then(|rest| rest.split_once("\n---\n"))
+            .expect("front matter");
+        format!("---\n{front}\nvisual: {{asset: station-hub}}\n---\n{body}")
+    };
+    let ids = read("nova-ids.json");
+    let pinned = ids.replacen(
+        "\"marrow-yard\": 129",
+        &format!("\"marrow-yard\": 129,\n    \"kestrel-reach\": {KESTREL_REACH_ID}"),
+        1,
+    );
+    assert_ne!(pinned, ids, "Kestrel Reach is pinned");
+    modelled_sample()
+        .with(
+            "assets/station-hub.md",
+            &format!(
+                "---\nkind: model\nplaceholder: false\nfront: \"-z\"\n\
+                 files: [{STATION_HUB_GLB}]\n{KENNEY_CC0}---\n"
+            ),
+        )
+        .with_bytes(STATION_HUB_GLB, &hub.glb())
+        .with(
+            "stellars/luyten-exchange.md",
+            &station("stellars/luyten-exchange.md"),
+        )
+        .with(
+            "stellars/marrow-yard.md",
+            &station("stellars/marrow-yard.md"),
+        )
+        .with(
+            "stellars/kestrel-reach.md",
+            "---\nname: Kestrel Reach\nkind: planet\nsystem: luyten-crossing\n\
+             position: [700, -500]\nvisual:\n  generated:\n    type: gas-giant\n\
+             \x20   palette: [\"#c9a36b\", \"#8a5a3c\", \"#e8d8b0\"]\n    clouds: 0.6\n\
+             \x20   rings: {inner: 1.4, outer: 2.3, color: \"#d8c8a8\"}\n\
+             \x20   atmosphere: {color: \"#f0e0c0\", thickness: 0.04}\n    seed: 4417\n\
+             ---\n\nA banded giant the crossing's traffic steers around.\n",
+        )
+        .with("nova-ids.json", &pinned)
 }
 
 /// Every file under `dir`, by its path from `dir` with `/` between its

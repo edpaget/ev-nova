@@ -212,6 +212,7 @@ pub mod yards;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use nova_galaxy_format::load::Galaxy;
 use nova_galaxy_format::media::lfs_pointers;
 use nova_galaxy_format::source::{DirSource, Source};
 
@@ -237,6 +238,11 @@ pub struct NewGame {
     /// disc, so they don't stop anything, and they aren't reported again
     /// among the problems.
     pub lfs_pointers: Vec<String>,
+    /// The galaxy the records were mapped from, as the format's loader read
+    /// it: the edge reads the ships', outfits' and stellars' models and
+    /// planet looks from it for the 3D layer (`nova_render`'s
+    /// `new_game_world`), with [`ids`](Self::ids) to name them.
+    pub galaxy: Galaxy,
 }
 
 /// Why a new game's folder couldn't be read at all.
@@ -304,5 +310,6 @@ pub fn load(source: &impl Source, dir: &Path) -> NewGame {
         ids,
         problems,
         lfs_pointers,
+        galaxy,
     }
 }
