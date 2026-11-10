@@ -9,30 +9,13 @@
 use crate::common;
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use nova_data::sound::{Pcm, decode_snd};
-use nova_rsrc::{ResType, ResourceFile};
+use nova_rsrc::ResType;
 
-use common::{ndat_files, nova_data};
+use common::{nova_data, stock_files, u16_at, u32_at};
 
 const SND: ResType = ResType::new(*b"snd ");
-
-/// Every stock file, opened, with its name.
-fn stock_files(dir: &Path) -> Vec<(String, ResourceFile)> {
-    ndat_files(dir)
-        .into_iter()
-        .map(|path| {
-            let name = path
-                .file_name()
-                .expect("file name")
-                .to_string_lossy()
-                .into_owned();
-            let file = ResourceFile::open(&path).expect("stock file opens");
-            (name, file)
-        })
-        .collect()
-}
 
 /// FNV-1a (64-bit) over `bytes`, continuing from `hash`.
 fn fnv1a(hash: u64, bytes: impl IntoIterator<Item = u8>) -> u64 {
@@ -46,14 +29,6 @@ const FNV_OFFSET: u64 = 0xCBF2_9CE4_8422_2325;
 /// FNV-1a over `pcm`'s samples as little-endian bytes, from `hash`.
 fn digest(hash: u64, pcm: &Pcm) -> u64 {
     fnv1a(hash, pcm.samples().iter().flat_map(|s| s.to_le_bytes()))
-}
-
-fn u16_at(data: &[u8], at: usize) -> u16 {
-    u16::from_be_bytes([data[at], data[at + 1]])
-}
-
-fn u32_at(data: &[u8], at: usize) -> u32 {
-    u32::from_be_bytes(data[at..at + 4].try_into().expect("four bytes"))
 }
 
 /// What a resource's own bytes say it holds.

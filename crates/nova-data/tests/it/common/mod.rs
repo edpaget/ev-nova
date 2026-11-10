@@ -7,8 +7,13 @@
 //! passing, when it is unset. The new game's sample data lives in the
 //! game-bible checkout, so the sample tests ask [`game_data`] for its
 //! `data` folder and skip the same way.
+//!
+//! It also holds the helpers that open the stock files and read big-endian
+//! fields from resource bytes.
 
 use std::path::{Path, PathBuf};
+
+use nova_rsrc::ResourceFile;
 
 /// The `Nova Files` directory named by `NOVA_DATA`, or `None` (after printing
 /// a skip message) when it is unset.
@@ -78,4 +83,30 @@ fn data_files(dir: &Path, ext: &str) -> Vec<PathBuf> {
         .collect();
     files.sort();
     files
+}
+
+/// Every stock file, opened, with its name.
+pub fn stock_files(dir: &Path) -> Vec<(String, ResourceFile)> {
+    ndat_files(dir)
+        .into_iter()
+        .map(|path| {
+            let name = path
+                .file_name()
+                .expect("file name")
+                .to_string_lossy()
+                .into_owned();
+            let file = ResourceFile::open(&path).expect("stock file opens");
+            (name, file)
+        })
+        .collect()
+}
+
+/// The big-endian `u16` at byte `at` of `data`.
+pub fn u16_at(data: &[u8], at: usize) -> u16 {
+    u16::from_be_bytes([data[at], data[at + 1]])
+}
+
+/// The big-endian `u32` at byte `at` of `data`.
+pub fn u32_at(data: &[u8], at: usize) -> u32 {
+    u32::from_be_bytes(data[at..at + 4].try_into().expect("four bytes"))
 }

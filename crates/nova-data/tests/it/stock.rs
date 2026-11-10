@@ -7,7 +7,6 @@
 use crate::common;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::{Path, PathBuf};
 
 use encoding_rs::MACINTOSH;
 use nova_data::records::{
@@ -23,27 +22,15 @@ use nova_data::{
 };
 use nova_rsrc::{ResType, ResourceFile};
 
-use common::{ndat_files, nova_data};
-
-/// Every stock file, opened.
-fn stock_files(dir: &Path) -> Vec<(PathBuf, ResourceFile)> {
-    ndat_files(dir)
-        .into_iter()
-        .map(|path| {
-            let file = ResourceFile::open(&path).expect("stock file opens");
-            (path, file)
-        })
-        .collect()
-}
+use common::{nova_data, stock_files};
 
 #[test]
 fn every_stock_record_decodes_cleanly_and_round_trips_through_json() {
     let Some(dir) = nova_data() else { return };
     let mut problems = Vec::new();
     let mut decoded = 0;
-    for (path, file) in stock_files(&dir) {
+    for (name, file) in stock_files(&dir) {
         let report = decode_file(&file);
-        let name = path.file_name().expect("file name").to_string_lossy();
         problems.extend(report.errors.iter().map(|e| format!("{name}: error: {e}")));
         problems.extend(
             report
@@ -69,7 +56,7 @@ fn every_stock_record_decodes_cleanly_and_round_trips_through_json() {
 }
 
 /// Every record of type `T` across the stock files.
-fn all<T: Record>(files: &[(PathBuf, ResourceFile)]) -> Vec<Entry<T>> {
+fn all<T: Record>(files: &[(String, ResourceFile)]) -> Vec<Entry<T>> {
     files
         .iter()
         .flat_map(|(_, file)| {
@@ -154,7 +141,7 @@ fn every_stock_type_is_registered_or_out_of_scope() {
 
 /// Checks `T`'s fixed size and every stock record's length against the
 /// counts and sizes measured from the stock data while planning.
-fn sizes<T: Record>(files: &[(PathBuf, ResourceFile)], count: usize, size: usize) {
+fn sizes<T: Record>(files: &[(String, ResourceFile)], count: usize, size: usize) {
     assert_eq!(T::SIZE, Some(size), "{} layout size", T::TYPE);
     let lengths: Vec<usize> = files
         .iter()
@@ -202,7 +189,7 @@ fn every_fixed_layout_matches_the_stock_record_size() {
 }
 
 /// Every record of type `T`, keyed by ID.
-fn by_id<T: Record>(files: &[(PathBuf, ResourceFile)]) -> HashMap<i16, Entry<T>> {
+fn by_id<T: Record>(files: &[(String, ResourceFile)]) -> HashMap<i16, Entry<T>> {
     all::<T>(files).into_iter().map(|e| (e.id, e)).collect()
 }
 
