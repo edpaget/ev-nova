@@ -15,6 +15,7 @@ mod fsr1_reference;
 mod message_line;
 mod metal_fx;
 mod prefs_labels;
+mod sample_models;
 mod sharp_bilinear;
 mod stock_fonts;
 mod stock_interface_images;
