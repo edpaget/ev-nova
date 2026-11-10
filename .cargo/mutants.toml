@@ -894,10 +894,6 @@ exclude_re = [
     # gun or turret bit (0x0001 or 0x0002) share no bit, so `^` makes the
     # same flags as `|`.
     "nova-data/src/new_game/outfits\\.rs:[0-9]+:[0-9]+: replace \\| with \\^ in outfit$",
-    # The sprites' nearest sampler: its label is a debug name, and
-    # nearest is wgpu's default filter, so deleting `mag_filter` or
-    # `min_filter` makes the same sampler.
-    "nova-render/src/wgpu/renderer\\.rs:[0-9]+:[0-9]+: delete field (label|mag_filter|min_filter) from struct wgpu::SamplerDescriptor expression in nearest_sampler$",
     # A planet texture's usage flags are disjoint bits: `^` sets the same
     # ones as `|`.
     "nova-render/src/wgpu/planets\\.rs:[0-9]+:[0-9]+: replace \\| with \\^ in texture$",

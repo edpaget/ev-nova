@@ -225,8 +225,7 @@ impl WgpuRenderer {
         upscale: Box<dyn Upscale>,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
-        let globals_layout = globals_layout(device);
-        let page_layout = page_layout(device);
+        let (globals_layout, page_layout) = (globals_layout(device), page_layout(device));
         let texture_layout = unfiltered_texture_layout(device);
         let (globals, globals_group) = globals_buffer(device, &globals_layout);
         let sprite_layout =
@@ -276,7 +275,12 @@ impl WgpuRenderer {
             (SCENE_FORMAT, blend_state(Blend::Normal)),
         );
         let blit_pipeline = blit_pipeline(device, &texture_layout, format);
-        let sampler = nearest_sampler(device);
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("nova nearest"),
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
         let cache = Cache::new(device);
         let mut text_atlas = text_atlas(device, queue, &cache);
         let first_text = text_renderer(&mut text_atlas, device);
@@ -902,17 +906,6 @@ fn text_renderer(atlas: &mut TextAtlas, device: &wgpu::Device) -> TextRenderer {
 /// A text atlas on `device`, in the scene's format, made with `cache`.
 fn text_atlas(device: &wgpu::Device, queue: &wgpu::Queue, cache: &Cache) -> TextAtlas {
     TextAtlas::with_color_mode(device, queue, cache, SCENE_FORMAT, ColorMode::Web)
-}
-
-/// The sampler sprites read their pages through: nearest, as the
-/// original's blits are.
-fn nearest_sampler(device: &wgpu::Device) -> wgpu::Sampler {
-    device.create_sampler(&wgpu::SamplerDescriptor {
-        label: Some("nova nearest"),
-        mag_filter: wgpu::FilterMode::Nearest,
-        min_filter: wgpu::FilterMode::Nearest,
-        ..Default::default()
-    })
 }
 
 /// The projection uniform's layout.
