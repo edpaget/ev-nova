@@ -143,7 +143,7 @@ impl Combat {
         if self.refilled_slot == RefilledSlot::Lost {
             return;
         }
-        let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
+        let targets = self.targets(fighters);
         for shot in &mut self.shots {
             follow(shot, &targets);
         }

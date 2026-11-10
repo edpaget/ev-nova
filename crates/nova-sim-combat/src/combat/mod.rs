@@ -23,6 +23,9 @@
 //!   turn with: by the engine its drawn frame's, by
 //!   [`RuleKey::ContinuousHeadings`](crate::RuleKey::ContinuousHeadings)'
 //!   other reading its heading's.
+//! - [`data_collision`]: the shape a ship is struck by: by the engine its
+//!   sprite, by [`RuleKey::DataCollision`](crate::RuleKey::DataCollision)'s
+//!   other reading its data's collision disc.
 //! - [`spots`]: the new game's exit points, from the hardpoints a ship's
 //!   class and its mod kits place.
 //! - [`flags`]: what the simulation does with each documented weapon flag,
@@ -418,6 +421,7 @@ pub mod beam_stellar;
 mod collision;
 pub mod contact;
 pub mod damage;
+pub mod data_collision;
 pub mod defence;
 mod display;
 mod escort_loss;
@@ -478,6 +482,7 @@ use asteroid_walk::AsteroidField;
 use beam::{Aiming, Beam, BeamHitTest, BeamRules, ConeAngle};
 pub use collision::SpriteRank;
 use damage::{Blast, Hit};
+use data_collision::CollisionShape;
 use defence::{Candidate, Guard, PointDefenceRule, Quarry, Side};
 pub use display::Displayed;
 pub use escort_loss::EscortLoss;
@@ -490,6 +495,7 @@ use hull_turn::HullTurn;
 use impact::{Body, Tractor, TractorLock};
 use ion::{Burst, Dose, Ion, IonLockout};
 use jamming::Jamming;
+use lineup::HitReadings;
 use locked_slot::LockedSlot;
 pub use phases::Arena;
 use planet_type::{BeamPlanetFlag, BlastKind, PlanetBlasts};
@@ -1346,6 +1352,9 @@ pub struct Combat {
     /// what its hull turns with
     /// ([`RuleKey::ContinuousHeadings`](crate::RuleKey::ContinuousHeadings)).
     exit_rules: ExitRules,
+    /// The shape a ship is struck by
+    /// ([`RuleKey::DataCollision`](crate::RuleKey::DataCollision)).
+    collision_shape: CollisionShape,
     /// How many exits a point-defence shot moves its cursor on
     /// ([`RuleKey::PdExitStep`](crate::RuleKey::PdExitStep)).
     pd_exit_step: RuleSource,
@@ -1680,9 +1689,15 @@ impl Combat {
 
     /// The readings the hit rules take ([`Sides`]): who counts as the
     /// player for the pass-through flags, which bit makes a beam
-    /// planet-type, and how a locked shot reads its slot.
-    fn hit_readings(&self) -> (PassThrough, BeamPlanetFlag, LockedSlot) {
-        (self.pass_through, self.beam_planet_flag, self.locked_slot)
+    /// planet-type, how a locked shot reads its slot, and the shape a
+    /// ship is struck by.
+    fn hit_readings(&self) -> HitReadings {
+        (
+            self.pass_through,
+            self.beam_planet_flag,
+            self.locked_slot,
+            self.collision_shape,
+        )
     }
 
     /// Has a decaying shot take a step as `step` says: by default,
@@ -1715,6 +1730,14 @@ impl Combat {
     /// by default, the engine's, by the frame it is drawn on.
     pub fn set_continuous_headings(&mut self, source: RuleSource) {
         self.exit_rules.turn = source.into();
+    }
+
+    /// Has a ship be struck by the shape `source` says
+    /// ([`CollisionShape`],
+    /// [`RuleKey::DataCollision`](crate::RuleKey::DataCollision)): by
+    /// default, the engine's, by its sprite.
+    pub fn set_data_collision(&mut self, source: RuleSource) {
+        self.collision_shape = source.into();
     }
 
     /// Has a point-defence shot move its cursor on as `source` says
@@ -2440,7 +2463,7 @@ impl Combat {
         chance: &mut dyn Chance,
         firers: Firers,
     ) {
-        let candidates: Vec<Candidate> = fighters.iter().map(Fighter::as_candidate).collect();
+        let candidates = self.candidates(fighters);
         for fighter in fighters.iter_mut().filter(|fighter| {
             firers.take(fighter.ship) && fighter.trigger.point_defence && !fighter.jumping
         }) {
@@ -3255,10 +3278,11 @@ impl Fighter<'_> {
     }
 
     /// The ship as point defence weighs it as a quarry
-    /// ([`defence::choose_ship`]).
-    fn as_candidate(&self) -> Candidate {
+    /// ([`defence::choose_ship`]), its extent by `shape`
+    /// ([`Fighter::as_target`]).
+    fn as_candidate(&self, shape: CollisionShape) -> Candidate {
         Candidate {
-            target: self.as_target(),
+            target: self.as_target(shape),
             pd_target: self.hull.pd_target,
             held_disabled: self.held_disabled,
             cloaked: self.cloaked,
@@ -3324,8 +3348,10 @@ impl Fighter<'_> {
             )
     }
 
-    /// The ship as shots and beams see it.
-    fn as_target(&self) -> Target {
+    /// The ship as shots and beams see it, its extent by the shape `shape`
+    /// strikes it as ([`CollisionShape::extent`]).
+    fn as_target(&self, shape: CollisionShape) -> Target {
+        let extent = shape.extent(&self.hull);
         Target {
             ship: self.ship,
             ship_type: self.ship_type,
@@ -3333,9 +3359,9 @@ impl Fighter<'_> {
             ties: self.ties(),
             position: self.state.position,
             velocity: self.state.velocity,
-            radius: self.hull.hit_radius,
-            sprite_x: self.hull.sprite_size.unwrap_or(beam::NO_SPRITE_WIDTH),
-            sheet: self.hull.sprite_size.is_some(),
+            radius: extent.radius,
+            sprite_x: extent.sprite_x,
+            sheet: extent.sheet,
             condition: *self.condition,
             disabled: self.disabled_as_tick_began(),
             miss_class: self.hull.miss_class,
@@ -3707,6 +3733,7 @@ mod tests {
     mod asteroid_seekers;
     mod asteroid_walk;
     mod collision_walk;
+    mod data_collision;
     mod display_step;
     mod escort_lost_in_place;
     mod exit_steps;
@@ -4984,7 +5011,10 @@ mod tests {
         );
         assert_eq!(combat.take_events(), [], "no Disabled event");
         assert!(
-            !ships[0].fighter().as_target().disabled,
+            !ships[0]
+                .fighter()
+                .as_target(CollisionShape::Sprite)
+                .disabled,
             "the miss rule reads it"
         );
         assert!(!ships[0].fighter().disabled_now(&NovaDisable));
@@ -4993,7 +5023,10 @@ mod tests {
         phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         assert!(matches!(ships[0].condition, Condition::Dying { .. }));
         assert!(
-            !ships[0].fighter().as_target().disabled,
+            !ships[0]
+                .fighter()
+                .as_target(CollisionShape::Sprite)
+                .disabled,
             "breaking up, not disabled"
         );
         let shown: Vec<_> = combat.take_displays();
@@ -5008,7 +5041,12 @@ mod tests {
         let mut ships = [held];
         phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(ships[0].condition, Condition::Disabled);
-        assert!(ships[0].fighter().as_target().disabled);
+        assert!(
+            ships[0]
+                .fighter()
+                .as_target(CollisionShape::Sprite)
+                .disabled
+        );
     }
 
     #[test]
@@ -9806,7 +9844,7 @@ mod tests {
                 ..Ship::at(2, 0.0, -200.0)
             },
         ];
-        let target = ships[1].fighter().as_target();
+        let target = ships[1].fighter().as_target(CollisionShape::Sprite);
         phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         let shot = &combat.shots()[0];
         let from = |position| ShipState {
@@ -11181,7 +11219,7 @@ mod tests {
     /// NPC's bomb leaves its ship launches it this way.
     fn spawn_drawing(combat: &mut Combat, ships: &mut [Ship], chance: &mut dyn Chance) {
         drawing(combat, ships, chance, |combat, fighters, _, chance| {
-            let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
+            let targets = combat.targets(fighters);
             let fighter = &mut fighters[0];
             let weapon = fighter.armament.mounts()[0].spec;
             let launch = Launch {
@@ -11787,7 +11825,7 @@ mod tests {
 
     /// `ship` as point defence leads it.
     fn led_target(ship: &mut Ship) -> Target {
-        ship.fighter().as_target()
+        ship.fighter().as_target(CollisionShape::Sprite)
     }
 
     #[test]

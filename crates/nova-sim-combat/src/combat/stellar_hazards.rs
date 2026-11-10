@@ -32,7 +32,11 @@
 //! (a sheet the catalog couldn't read, a ship whose base image is a `PICT`,
 //! which nova-data doesn't read, or a frame whose start the token walk
 //! didn't find), the touch falls back to discs ([`disc_fallback`]): the
-//! ship's hit radius against the stellar's disc ([`touches`]).
+//! ship's hit radius against the stellar's disc ([`touches`]). A ship the
+//! fight strikes by its data's collision disc, by the other reading of
+//! [`RuleKey::DataCollision`](crate::RuleKey::DataCollision), lends no
+//! mask and goes by that disc's radius
+//! ([`data_collision`](super::data_collision)).
 //!
 //! Which stellars pull and which sprites kill, where each is placed and
 //! what a kill does to the ship beyond this, are the session's
@@ -148,14 +152,19 @@ impl Combat {
                     *fighter.condition,
                     Condition::Destroyed | Condition::Dying { .. }
                 );
+                // A ship struck by its data disc lends no mask, and its
+                // disc is the data's ([`data_collision`](super::data_collision)).
+                let disc = self.collision_shape.disc(&fighter.hull);
                 let ship = hazards
                     .ships
                     .iter()
+                    .filter(|_| disc.is_none())
                     .find(|(ship, _)| *ship == fighter.ship)
                     .map(|(_, mask)| mask);
+                let radius = disc.unwrap_or(fighter.hull.hit_radius);
                 if standing
                     && !fighter.resists.deadly
-                    && sprite_touches(sprite, ship, fighter, hazards.walk)
+                    && sprite_touches(sprite, ship, (fighter.state.position, radius), hazards.walk)
                 {
                     self.kill_by_stellar(fighter);
                 }
@@ -192,14 +201,14 @@ impl Combat {
     }
 }
 
-/// Whether `fighter`, its placed mask `ship` if read, touches `sprite`: by
-/// the masks walked as `walk` says, the stellar's first, as
-/// `_HandleDeadlyStellars` passes them to `_SWRLECollision` (@0x39d97);
-/// else by the [`disc_fallback`].
+/// Whether a ship at `at` of disc `radius`, its placed mask `ship` if
+/// read, touches `sprite`: by the masks walked as `walk` says, the
+/// stellar's first, as `_HandleDeadlyStellars` passes them to
+/// `_SWRLECollision` (@0x39d97); else by the [`disc_fallback`].
 fn sprite_touches(
     sprite: &DeadlySprite,
     ship: Option<&PlacedMask>,
-    fighter: &Fighter,
+    (at, radius): (Vec2, f32),
     walk: MaskWalk,
 ) -> bool {
     sprite
@@ -207,16 +216,12 @@ fn sprite_touches(
         .as_ref()
         .zip(ship)
         .and_then(|(stellar, ship)| stellar.touches(ship, walk))
-        .unwrap_or_else(|| disc_fallback(&sprite.disc, fighter))
+        .unwrap_or_else(|| disc_fallback(&sprite.disc, (at, radius)))
 }
 
 /// The disc fallback, where either mask can't be read (see the module
-/// docs): whether `fighter`'s hit disc overlaps `disc` ([`touches`]).
-fn disc_fallback(disc: &DeadlyDisc, fighter: &Fighter) -> bool {
-    touches(
-        fighter.state.position,
-        fighter.hull.hit_radius,
-        disc.at,
-        Some(disc.radius),
-    )
+/// docs): whether the ship's disc, of `radius` at `at`, overlaps `disc`
+/// ([`touches`]).
+fn disc_fallback(disc: &DeadlyDisc, (at, radius): (Vec2, f32)) -> bool {
+    touches(at, radius, disc.at, Some(disc.radius))
 }

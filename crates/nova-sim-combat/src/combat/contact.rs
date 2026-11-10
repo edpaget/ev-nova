@@ -60,7 +60,11 @@
 //! for a rect, or no mask for `_SWRLECollision`: a sheet the catalog
 //! couldn't read, which no stock sheet is), the contact keeps the
 //! engine's swept test as it stood ([`Shot::touches`],
-//! [`asteroid_hit::touches`]).
+//! [`asteroid_hit::touches`]). A ship the fight strikes by its data's
+//! collision disc, by the other reading of
+//! [`RuleKey::DataCollision`](crate::RuleKey::DataCollision), skips its
+//! rect and mask and goes straight to that swept test at the disc's
+//! radius ([`data_collision`](super::data_collision)).
 //!
 //! By the other reading of [`RuleKey::ShotContact`](crate::RuleKey::ShotContact)
 //! ([`ShotContact::Swept`]) every contact is that swept test, so no shot
@@ -332,8 +336,9 @@ impl Combat {
     /// of `hull`, if it does, as `sprites` lend the masks and readings and
     /// the player was seen at `camera` (see the module docs): the shot's
     /// position by the placed rects, or where its swept move entered the
-    /// ship's radius by the other reading or the fallback. None for a shot
-    /// that touches no ship ([`Shot::touches_ships`]).
+    /// ship's radius by the other reading, the fallback, or for a ship the
+    /// fight strikes by its data disc. None for a shot that touches no
+    /// ship ([`Shot::touches_ships`]).
     pub(super) fn ship_contact(
         &self,
         (shot, from): (&Shot, Vec2),
@@ -344,7 +349,11 @@ impl Combat {
             return None;
         }
         let back = self.left_back(shot);
-        if sprites.reading == ShotContact::Placed {
+        // A ship struck by its data disc skips its rect and mask for the
+        // swept test, `target` already of the disc's radius
+        // ([`data_collision`](super::data_collision)).
+        let by_sprite = self.collision_shape.disc(hull).is_none();
+        if sprites.reading == ShotContact::Placed && by_sprite {
             let ship = sprites.ship(target.ship, hull, target.position - camera);
             let laid = ship.zip(sprites.shot(shot, shot.position + back - camera));
             let touch = laid.and_then(|(ship, laid)| {

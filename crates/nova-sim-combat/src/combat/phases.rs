@@ -15,7 +15,7 @@ use super::stellar::StellarTarget;
 use super::stellar_hazards::StellarHazards;
 use super::walk::{BeamWalk, Walk};
 use super::{
-    Combat, Field, Fighter, Firers, GamePass, Rules, Scenery, ShipRef, Sides, Target, regenerate,
+    Combat, Field, Fighter, Firers, GamePass, Rules, Scenery, ShipRef, Sides, regenerate,
     regenerate_player,
 };
 use crate::chance::Chance;
@@ -55,7 +55,7 @@ impl Combat {
         self.note_slots(fighters);
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
-        let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
+        let targets = self.targets(fighters);
         let defence = (arena.rules.defence, arena.govts);
         self.defend(fighters, &targets, defence, chance, Firers::Player);
     }
@@ -77,7 +77,7 @@ impl Combat {
         self.note_slots(fighters);
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
-        let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
+        let targets = self.targets(fighters);
         self.fire(fighters, &targets, chance, Firers::Player);
         let lockout = self.ion_lockout;
         for fighter in fighters
@@ -200,7 +200,7 @@ impl Combat {
         self.note_slots(fighters);
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
-        let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
+        let targets = self.targets(fighters);
         let defence = (arena.rules.defence, arena.govts);
         self.dispatch_npcs(fighters, &targets, defence, (after, through), chance);
     }
@@ -303,7 +303,7 @@ impl Combat {
             fighter.armament.hold_idle_bays();
         }
         regenerate(fighter, arena.rules.disable, gain);
-        let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
+        let targets = self.targets(fighters);
         self.fire_one(&mut fighters[index], &targets, chance);
         fighters[index].condition.count_down();
     }
@@ -479,7 +479,7 @@ impl Combat {
         // A resumed walk's struck ships settled at their stops, so they
         // read afresh as the loop's refresh would read them (see the
         // `walk` module).
-        let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
+        let targets = self.targets(fighters);
         let mut walk = match self.walk.take() {
             Some(Walk::Beams(walk)) => walk,
             other => {
@@ -503,7 +503,8 @@ impl Combat {
             // left of its firer's plunder.
             while let Some(index) = (walk.next < self.beams.len()).then_some(walk.next) {
                 walk.next += 1;
-                let (pass_through, beam_planet_flag, locked_slot) = self.hit_readings();
+                // The shape the ships are struck by is read into `targets`.
+                let (pass_through, beam_planet_flag, locked_slot, _) = self.hit_readings();
                 let sides = Sides {
                     targets: &targets,
                     govts: arena.govts,

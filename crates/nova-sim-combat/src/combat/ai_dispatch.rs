@@ -41,7 +41,6 @@
 //! by [`RuleKey::LaunchFrameAi`](crate::RuleKey::LaunchFrameAi), whose
 //! other reading is one run of every slot).
 
-use super::defence::Candidate;
 use super::projectile::Target;
 use super::{
     BAY_LAUNCH_PRIORITY, Combat, Field, Fighter, FireSound, GamePass, PointDefenceRule, ShipRef,
@@ -73,7 +72,7 @@ impl Combat {
         chance: &mut dyn Chance,
     ) {
         let (after, through) = run;
-        let candidates: Vec<Candidate> = fighters.iter().map(Fighter::as_candidate).collect();
+        let candidates = self.candidates(fighters);
         let mut order: Vec<usize> = (0..fighters.len())
             .filter(|&index| fighters[index].ship != ShipRef::Player)
             .filter(|&index| after.is_none_or(|after| fighters[index].slot > after))

@@ -272,7 +272,7 @@ pub struct HullSpec {
     /// [`collision_radius`](HullRecord::collision_radius) when above none;
     /// none in stock data, or for a radius of none or less. The fight
     /// strikes it by this disc only under the rulebook's `data_collision`
-    /// reading; the sprite
+    /// reading ([`data_collision`](super::data_collision)); the sprite
     /// measures above are untouched by it.
     pub collision_radius: Option<f32>,
     /// Whether it is a planet-type ship, its `Flags` [`PLANET_TYPE`]: it

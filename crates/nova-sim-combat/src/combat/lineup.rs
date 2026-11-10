@@ -22,6 +22,7 @@
 //! answer. Each ship struck before the stop has already settled its
 //! condition there, so it reads as [`reread`] would read it.
 
+use super::data_collision::CollisionShape;
 use super::hull::DisableRule;
 use super::locked_slot::LockedSlot;
 use super::planet_type::BeamPlanetFlag;
@@ -30,6 +31,11 @@ use super::sides::{PassThrough, Sides};
 use super::{Fighter, ShipRef};
 use crate::geometry::Vec2;
 use crate::govt::Governments;
+
+/// The fight's readings a lineup takes: who counts as the player for the
+/// pass-through flags, which bit makes a beam planet-type, how a locked
+/// shot reads its slot, and the shape a ship is struck by.
+pub(super) type HitReadings = (PassThrough, BeamPlanetFlag, LockedSlot, CollisionShape);
 
 /// The fight's ships as a loop of landings reads them, one entry for each
 /// fighter, in the fighters' order, in two views: where the blasts, the
@@ -54,20 +60,27 @@ pub(super) struct Lineup<'a> {
     pub(super) beam_planet_flag: BeamPlanetFlag,
     /// How a shot locked on an asteroid reads the slot it holds.
     pub(super) locked_slot: LockedSlot,
+    /// The shape each ship is struck by, read and read again by it
+    /// ([`Fighter::as_target`]).
+    pub(super) shape: CollisionShape,
 }
 
 impl<'a> Lineup<'a> {
     /// The ships of `fighters`, each where it is for the blasts, and seen
     /// at its place among `seen_at`, by `govts`' relations,
-    /// `pass_through`'s player, `beam_planet_flag`'s beam bit and
-    /// `locked_slot`'s reading of a locked shot.
+    /// `pass_through`'s player, `beam_planet_flag`'s beam bit,
+    /// `locked_slot`'s reading of a locked shot and each ship struck as
+    /// `shape` says.
     pub(super) fn new(
         fighters: &[Fighter],
         seen_at: &[Vec2],
         govts: &'a Governments,
-        (pass_through, beam_planet_flag, locked_slot): (PassThrough, BeamPlanetFlag, LockedSlot),
+        (pass_through, beam_planet_flag, locked_slot, shape): HitReadings,
     ) -> Self {
-        let world: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
+        let world: Vec<Target> = fighters
+            .iter()
+            .map(|fighter| fighter.as_target(shape))
+            .collect();
         let seen = world
             .iter()
             .zip(seen_at)
@@ -84,6 +97,7 @@ impl<'a> Lineup<'a> {
             pass_through,
             beam_planet_flag,
             locked_slot,
+            shape,
         }
     }
 
@@ -107,8 +121,8 @@ impl<'a> Lineup<'a> {
     }
 
     /// Reads each ship among `struck` again from its fighter among
-    /// `fighters`, as `rule` says, in each view at its place there
-    /// ([`reread`]), and its sight. No other ship's record changes in a
+    /// `fighters`, as `rule` says and struck as the lineup's shape says,
+    /// in each view at its place there ([`reread`]), and its sight. No other ship's record changes in a
     /// loop but by a landing, or an answer, after which the fight's ships
     /// are lent afresh.
     pub(super) fn refresh(
@@ -119,23 +133,27 @@ impl<'a> Lineup<'a> {
     ) {
         for (index, fighter) in fighters.iter().enumerate() {
             if struck.contains(&fighter.ship) {
-                reread(fighter, &mut self.world[index], rule);
-                reread(fighter, &mut self.seen[index], rule);
+                reread(fighter, &mut self.world[index], (rule, self.shape));
+                reread(fighter, &mut self.seen[index], (rule, self.shape));
                 self.sights[index] = fighter.sight();
             }
         }
     }
 }
 
-/// Reads `target` again whole from `fighter`, as `rule` says, keeping it
-/// at its place: everything a landing may have changed (its velocity,
-/// its leader and fleet, `escort_loss`), and whether it is disabled now
-/// ([`Fighter::disabled_now`]), which reads the armour the landings left
-/// before its condition settles.
-pub(super) fn reread(fighter: &Fighter, target: &mut Target, rule: &dyn DisableRule) {
+/// Reads `target` again whole from `fighter`, as `rule` says and struck
+/// as `shape` says, keeping it at its place: everything a landing may
+/// have changed (its velocity, its leader and fleet, `escort_loss`), and
+/// whether it is disabled now ([`Fighter::disabled_now`]), which reads
+/// the armour the landings left before its condition settles.
+pub(super) fn reread(
+    fighter: &Fighter,
+    target: &mut Target,
+    (rule, shape): (&dyn DisableRule, CollisionShape),
+) {
     *target = Target {
         position: target.position,
         disabled: fighter.disabled_now(rule),
-        ..fighter.as_target()
+        ..fighter.as_target(shape)
     };
 }

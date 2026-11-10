@@ -22,10 +22,13 @@ fn a_lineup_reads_each_ship_where_it_is_and_again_where_it_is_seen() {
     let seen_at = [Vec2::new(5.0, 5.0), Vec2::new(50.0, 50.0)];
     let lineup = Lineup::new(&fighters, &seen_at, &govts, Default::default());
     for (index, fighter) in fighters.iter().enumerate() {
-        assert_eq!(lineup.world[index], fighter.as_target());
+        assert_eq!(
+            lineup.world[index],
+            fighter.as_target(CollisionShape::Sprite)
+        );
         let seen = Target {
             position: seen_at[index],
-            ..fighter.as_target()
+            ..fighter.as_target(CollisionShape::Sprite)
         };
         assert_eq!(lineup.seen[index], seen);
         assert_eq!(lineup.sights[index], fighter.sight());
@@ -63,7 +66,7 @@ fn a_struck_ship_is_read_again_whole_in_each_view_at_its_own_place() {
     lineup.refresh(&fighters, &[E], &NovaDisable);
     let reread = Target {
         disabled: true,
-        ..fighters[1].as_target()
+        ..fighters[1].as_target(CollisionShape::Sprite)
     };
     let world = Target {
         position: Vec2::new(0.0, -100.0),

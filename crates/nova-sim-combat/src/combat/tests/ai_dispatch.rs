@@ -472,7 +472,7 @@ fn a_jumping_ships_point_defence_acts_in_the_loop_but_fires_nothing() {
 fn b_in(condition: Condition) -> Target {
     let mut ship = Ship::at(2, 0.0, 0.0);
     ship.condition = condition;
-    ship.fighter().as_target()
+    ship.fighter().as_target(CollisionShape::Sprite)
 }
 
 #[test]
