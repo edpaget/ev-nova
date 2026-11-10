@@ -476,6 +476,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
                         .shown(npc.ship, ship.drawn.alt, live, ship.hull);
                 ship.draw(list, place, alt);
             }
+            // With no sheet, its class's model before its outline (see the
+            // `ship_models` module).
+            _ if let Some(model) = self.npc_model(npc) => {
+                self.draw_npc_model(list, npc, place, (model, heading));
+            }
             _ => match self.npc_outlines.get(&npc.class) {
                 Some(outline) => draw_outline(list, outline, place, heading),
                 None => crossed_box(
@@ -605,6 +610,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 ship.draw(list, place, alt);
             }
             Err(_) if drawn != ShipDrawn::Full => {}
+            // Its class's model before its outline (see the `ship_models`
+            // module).
+            Err(_) if let Some(model) = self.player_model() => {
+                self.draw_player_model(list, place, model);
+            }
             Err(_) if let Some(outline) = &self.outline => {
                 draw_outline(list, outline, place, self.shown_heading());
             }

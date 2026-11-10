@@ -22,12 +22,13 @@
 //! The caller supplies what this module can't know: the hull's model key
 //! and pose (its orientation from [`ship_orientation`]), its hull angle
 //! (`FrameSpec::hull_angle`, the angle that orientation turns by), each
-//! turret's facing, and each outfit asset's model key. Which key an asset
-//! takes, when its model is registered, and what turns a turret (the
-//! target the simulation aims at, or the nose) are the flight screen's to
-//! decide: no screen draws models yet, so nothing calls this. A live
-//! turret facing belongs on the frame the sim port fills
-//! ([`super::sim_port`]), as a field.
+//! turret's facing, and each outfit asset's model key. The flight screen
+//! calls it for each ship it draws as a model (its view's `ship_models`
+//! module), with the keys the edge registered
+//! ([`WorldModels`](super::world_models::WorldModels)) and, for every
+//! turning mount, the ship's turret facing as the frame the sim port
+//! fills carries it
+//! ([`FrameShip::turret_facing`](nova_sim::flight_frame::FrameShip::turret_facing)).
 //!
 //! A ship's mounts are its class's and its kits' hardpoints, each showing
 //! the outfit the data puts on it, the ship as built. A weapon the player

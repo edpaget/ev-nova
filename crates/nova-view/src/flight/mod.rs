@@ -64,6 +64,8 @@
 //! - [`weapon_glow`]: a ship's weapon glow, lit by a `Flags2` 0x0200
 //!   weapon it fires.
 //! - [`weapons`]: drawing shots and beams.
+//! - [`world_models`]: [`WorldModels`], the 3D models the flight draws in
+//!   place of the new game's stand-ins, by ship class, outfit and stellar.
 
 pub mod alert;
 pub mod asteroids;
@@ -117,6 +119,7 @@ pub mod trails;
 pub mod view;
 pub mod weapon_glow;
 pub mod weapons;
+pub mod world_models;
 
 pub use catalog::{
     BoomLook, CombatLooks, EffectSheet, LayerSheet, Looks, ShipSheet, ShipSprites, StarSheet,
@@ -136,3 +139,4 @@ pub use stock_looks::StockShipLooks;
 pub use view::{
     FlightOverlays, FlightView, LiveKeys, MapOpener, PortScreen, RaceShown, SharedChance,
 };
+pub use world_models::{ShipModel, StellarModel, WorldModels};

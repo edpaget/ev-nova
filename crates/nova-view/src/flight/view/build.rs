@@ -706,6 +706,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             npc_sheets: BTreeMap::new(),
             npc_outlines: BTreeMap::new(),
             ship_looks: super::ship_looks::ShipLooks::default(),
+            world_models: std::rc::Rc::default(),
             npc_previous: Vec::new(),
             scroll: crate::flight::scroll_offset::ScrollOffset::default(),
             unread_looks: opening.unread_looks,

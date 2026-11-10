@@ -13,8 +13,8 @@
 //!
 //! This is the pose a screen draws a ship's [`DrawCommand::Model`] at,
 //! and its outfits on their hardpoints with it
-//! ([`mounted_outfits`](super::mounted_outfits())); no screen draws either
-//! yet.
+//! ([`mounted_outfits`](super::mounted_outfits())): the flight screen
+//! draws a new game's ships so (its view's `ship_models` module).
 //!
 //! [`DrawCommand::Model`]: crate::DrawCommand::Model
 

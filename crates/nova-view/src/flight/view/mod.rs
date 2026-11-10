@@ -771,6 +771,7 @@ mod readouts;
 mod rescue;
 mod screen;
 mod ship_looks;
+mod ship_models;
 mod shops;
 mod shots;
 mod sky;
@@ -1473,6 +1474,10 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// before its outline ([`FlightView::with_ship_looks`]): none unless
     /// the edge gives them.
     ship_looks: ship_looks::ShipLooks,
+    /// The 3D models drawn in place of the new game's stand-ins
+    /// ([`FlightView::with_world_models`]): none unless the edge gives
+    /// them, and an empty table draws as none.
+    world_models: Rc<crate::flight::world_models::WorldModels>,
     /// Each NPC's place a step before the frame's, in the system's order
     /// as the step reported them ([`StepRun::before`](nova_sim::flight_frame::StepRun::before)).
     npc_previous: Vec<(NpcId, ShipPlace)>,

@@ -138,6 +138,7 @@ mod rebinding;
 mod rescue;
 mod ship_drawing;
 mod ship_looks;
+mod ship_models;
 mod ship_outlines;
 mod shots;
 mod sky;
