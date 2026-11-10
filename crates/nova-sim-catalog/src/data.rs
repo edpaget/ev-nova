@@ -6,6 +6,8 @@
 //! run-length tokens a sprite touches by are read in [`rle_sheets`], and a
 //! ship's loaded base-sprite frame in [`hull_frames`].
 
+#[cfg(test)]
+mod hull_collision;
 mod hull_frames;
 mod rle_sheets;
 
@@ -1233,6 +1235,7 @@ impl CombatCatalog for GameData {
                     size,
                     height,
                     frame,
+                    collision_radius: self.collision_radius(ShipId(id)),
                     strength: record.strength,
                     key_carried: record.key_carried,
                     cost: record.cost,
@@ -4511,6 +4514,7 @@ mod tests {
             size,
             height,
             frame,
+            collision_radius: None,
             strength: 325,
             key_carried: Some(ShipId(140)),
             cost: -1,

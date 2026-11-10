@@ -287,6 +287,7 @@ pub fn hull(id: i16) -> HullRecord {
         size: None,
         height: None,
         frame: None,
+        collision_radius: None,
         strength: 0,
         key_carried: None,
         cost: 0,

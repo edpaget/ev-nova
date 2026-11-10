@@ -1769,6 +1769,12 @@ pub struct HullRecord {
     /// without a `shän`. A ship sharing an earlier ship's `BaseImage`
     /// clones that ship's sprite (@0x22817), so it takes the base's frame.
     pub frame: Option<FrameSize>,
+    /// The radius of the disc it collides as, in whole pixels, from the
+    /// new game's `size` (`nova_data::GameData::collision_radius`); none
+    /// in stock data, which has no such field. The fight strikes the ship
+    /// by it only under the rulebook's `data_collision` reading (see
+    /// `nova_sim::combat::data_collision`).
+    pub collision_radius: Option<i16>,
     /// Its `Strength`: how strong it counts in a fight.
     pub strength: i16,
     /// Its `KeyCarried`: the ship a weapon of `Flags2` 0x0080 needs

@@ -1658,6 +1658,7 @@ pub(in crate::flight) fn hull_of(id: i16, weapons: &[WeaponId]) -> nova_sim::Hul
         size: None,
         height: None,
         frame: None,
+        collision_radius: None,
         strength: 0,
         key_carried: None,
         cost: 0,
