@@ -32,6 +32,11 @@
 //!   a sprite at its centre goes at the 2D view's scale, their depth
 //!   bands, each later model of a batch nearer, and the [`Light`] they are
 //!   shaded by ([`camera::shade`]).
+//! - [`planet`]: the geometry planets ([`nova_view::DrawCommand::Planet`])
+//!   are drawn with, which the planet shader mirrors: the square a planet
+//!   covers, where a fragment meets its globe, rings and atmosphere,
+//!   which surface texel it shows at its turn, the shadows, and the
+//!   surface's mip chain.
 //! - `models`: the [`Renderer`]'s meshes by [`nova_view::ModelKey`]
 //!   ([`Renderer::add_model`]), uploaded the first frame that draws them
 //!   ([`Gpu::upload_mesh`]), and the [`Batch::Models`] a list's models
@@ -131,6 +136,7 @@ pub mod livery;
 pub mod model;
 pub mod model_source;
 mod models;
+pub mod planet;
 pub mod present;
 pub mod quickdraw_stretch;
 #[cfg(any(test, feature = "recording"))]
