@@ -56,11 +56,15 @@
 //!   original lists only the highest-ID one, so two of the new game's
 //!   goods past the six standard slots, priced at one level at one port,
 //!   both trade there; `nova_data::new_game`'s `goods` maps them);
-//! - its hulls' one: [`RuleKey::ContinuousHeadings`] (a ship's hull, and
+//! - its hulls' two: [`RuleKey::ContinuousHeadings`] (a ship's hull, and
 //!   the weapon exit points and fixed beams that turn with it, stands at
 //!   its heading itself rather than its sprite frame's angle, so a model
 //!   hull turns smoothly; `nova_view::flight::ship_orientation` turns the
-//!   model by it, and sprites are still drawn on their frame).
+//!   model by it, and sprites are still drawn on their frame) and
+//!   [`RuleKey::DataCollision`] (a ship is struck as the disc of the
+//!   collision radius its `size` gives, `nova_data::new_game`'s `fleet`,
+//!   rather than by its sprite, as the new game's ships have no sprites
+//!   to collide by; `nova_sim::combat::data_collision`).
 //!
 //! It leaves [`RuleKey::MapPlotting`] at the original's Shift-click, a
 //! hop at a time, so a course is plotted a lane at a time and J flies it.
@@ -102,7 +106,7 @@ const STOCK: Profile = Profile {
 
 /// The new game's profile: its traffic's three gate readings, its map
 /// and courses' four, J's two, its mission ships' three, its port's one,
-/// its exchange's one and its hulls' one (see the module docs), and
+/// its exchange's one and its hulls' two (see the module docs), and
 /// pilots of its own.
 const NEW_GAME: Profile = Profile {
     readings: &[
@@ -121,6 +125,7 @@ const NEW_GAME: Profile = Profile {
         (RuleKey::BarStory, RuleSource::Bible),
         (RuleKey::JunkListing, RuleSource::Bible),
         (RuleKey::ContinuousHeadings, RuleSource::Bible),
+        (RuleKey::DataCollision, RuleSource::Bible),
     ],
     pilots: "New Game Pilots",
 };
@@ -187,7 +192,7 @@ mod tests {
     }
 
     #[test]
-    fn the_new_game_pins_the_other_reading_of_its_fifteen_gate_lane_map_autopilot_mission_ship_bar_exchange_and_hull_keys()
+    fn the_new_game_pins_the_other_reading_of_its_sixteen_gate_lane_map_autopilot_mission_ship_bar_exchange_and_hull_keys()
      {
         assert_eq!(
             Ruleset::NewGame.profile().readings,
@@ -207,6 +212,7 @@ mod tests {
                 (RuleKey::BarStory, RuleSource::Bible),
                 (RuleKey::JunkListing, RuleSource::Bible),
                 (RuleKey::ContinuousHeadings, RuleSource::Bible),
+                (RuleKey::DataCollision, RuleSource::Bible),
             ]
         );
     }
