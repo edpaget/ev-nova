@@ -115,6 +115,14 @@ checked_text!(
     |s: &str| s.len() == 7 && s.starts_with('#') && s[1..].bytes().all(|b| b.is_ascii_hexdigit())
 );
 
+impl Color {
+    /// Its red, green and blue, as the bytes `#rrggbb` writes.
+    #[must_use]
+    pub fn rgb(&self) -> [u8; 3] {
+        [1, 3, 5].map(|at| u8::from_str_radix(&self.0[at..at + 2], 16).expect("checked"))
+    }
+}
+
 checked_text!(
     /// A jump point anywhere in the galaxy, written `system/point`.
     PointRef,
@@ -436,6 +444,16 @@ mod tests {
         assert!(Color::try_from("c08a2e".to_string()).is_err());
         assert!(Color::try_from("#c08a2".to_string()).is_err());
         assert!(Color::try_from("#c08a2g".to_string()).is_err());
+    }
+
+    #[test]
+    fn a_color_reads_as_its_three_bytes() {
+        let rgb = |s: &str| Color::try_from(s.to_string()).unwrap().rgb();
+        // Each channel distinct, so a swapped channel fails; either case.
+        assert_eq!(rgb("#C08a2E"), [0xc0, 0x8a, 0x2e]);
+        assert_eq!(rgb("#123456"), [0x12, 0x34, 0x56]);
+        assert_eq!(rgb("#000000"), [0, 0, 0]);
+        assert_eq!(rgb("#ffffff"), [255, 255, 255]);
     }
 
     #[test]
