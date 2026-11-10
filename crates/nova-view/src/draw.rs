@@ -7,6 +7,7 @@ use crate::colorize::Colorize;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
+use crate::model::{ModelKey, ModelPose};
 use crate::movie_frame::MovieFrame;
 use crate::text_entry::EntryAsk;
 
@@ -309,11 +310,31 @@ pub enum DrawCommand {
         /// The colour OR-ed in; its alpha is unused.
         color: Color,
     },
+    /// A 3D model, lit and drawn with depth, centred at its pose's centre
+    /// as a sprite is, one model unit spanning the pose's scale in logical
+    /// units ([`crate::model`] gives the axes). The renderer resolves the
+    /// key to a mesh it was given (`nova_render::Renderer::add_model`).
+    ///
+    /// Models keep the list's order, as every other command does: a later
+    /// model or sprite draws over an earlier model. Depth resolves each
+    /// model against itself alone, so its near faces hide its far ones,
+    /// and two models never intersect by their 3D positions.
+    ///
+    /// A model whose scale is not a positive, finite number, whose
+    /// orientation is zero or not finite, whose mesh has no triangles, or
+    /// whose key has no mesh draws nothing; the renderer reports a key
+    /// with no mesh once.
+    Model {
+        /// Which model.
+        model: ModelKey,
+        /// Where it goes, how it is turned and how big it is.
+        pose: ModelPose,
+    },
     /// `command` drawn only inside `clip`: a text run cut to it, a
     /// sprite's, picture's or movie frame's quad cropped to it with its
     /// texture coordinates, a tiled picture's or OR fill's area cut to it. A
-    /// line, a dot or a triangle is drawn as it is, uncut. The floating map clips its
-    /// names and arrows to its frame so.
+    /// line, a dot, a triangle or a model is drawn as it is, uncut. The
+    /// floating map clips its names and arrows to its frame so.
     Clipped {
         /// Where it may draw.
         clip: Bounds,
@@ -352,6 +373,7 @@ impl DrawCommand {
                 *to = moved(*to);
             }
             Self::Triangle { corners, .. } => *corners = corners.map(moved),
+            Self::Model { pose, .. } => pose.center = moved(pose.center),
             Self::Clipped { clip, command } => {
                 *clip = moved_bounds(*clip);
                 **command = command.translated(by);
@@ -773,6 +795,11 @@ impl DrawList {
         self.push(DrawCommand::Triangle { corners, color })
     }
 
+    /// Appends a [`DrawCommand::Model`]: `model` drawn at `pose`.
+    pub fn model(&mut self, model: ModelKey, pose: ModelPose) -> &mut Self {
+        self.push(DrawCommand::Model { model, pose })
+    }
+
     /// Appends a [`DrawCommand::MovieFrame`]: `frame` stretched into `area`.
     pub fn movie_frame(&mut self, frame: MovieFrame, area: Bounds) -> &mut Self {
         self.push(DrawCommand::MovieFrame { frame, area })
@@ -996,6 +1023,7 @@ impl<'a> IntoIterator for &'a DrawList {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::Orientation;
     use crate::movie_frame::MovieScreen;
 
     fn at(x: f32, y: f32) -> Point {
@@ -1007,6 +1035,55 @@ mod tests {
             field: Bounds::at(at(x, 20.0), 60.0, 16.0),
             focused,
         }
+    }
+
+    /// Model 7 at (`x`, `y`), turned a little about z, at scale 3.
+    fn model_at(x: f32, y: f32) -> DrawCommand {
+        DrawCommand::Model {
+            model: ModelKey(7),
+            pose: ModelPose {
+                center: at(x, y),
+                orientation: Orientation::about([0.0, 0.0, 1.0], 0.5),
+                scale: 3.0,
+            },
+        }
+    }
+
+    #[test]
+    fn a_model_pushed_alone_is_overlay() {
+        let mut list = DrawList::new();
+        let model_at_origin = model_at(1.0, 2.0);
+        let DrawCommand::Model { model, pose } = model_at_origin.clone() else {
+            unreachable!()
+        };
+        list.model(model, pose);
+        assert_eq!(
+            list.layered().collect::<Vec<_>>(),
+            [(DrawLayer::Overlay, &model_at_origin)]
+        );
+    }
+
+    #[test]
+    fn a_model_inside_world_is_world() {
+        let mut list = DrawList::new();
+        let DrawCommand::Model { model, pose } = model_at(1.0, 2.0) else {
+            unreachable!()
+        };
+        list.world(|list| {
+            list.model(model, pose);
+        });
+        assert_eq!(
+            list.layered().collect::<Vec<_>>(),
+            [(DrawLayer::World, &model_at(1.0, 2.0))]
+        );
+    }
+
+    #[test]
+    fn a_translated_model_moves_its_centre_only() {
+        assert_eq!(
+            model_at(1.0, 2.0).translated(at(10.0, -4.0)),
+            model_at(11.0, -2.0)
+        );
     }
 
     #[test]

@@ -95,6 +95,7 @@ pub mod key_names;
 pub mod keymap;
 pub mod menu;
 pub mod menu_command;
+pub mod model;
 pub mod movie;
 pub mod movie_frame;
 pub mod navigator;
@@ -137,6 +138,7 @@ pub use keymap::{
     SharedBindings,
 };
 pub use menu_command::MenuCommand;
+pub use model::{ModelKey, ModelPose, Orientation};
 pub use movie_frame::{MovieFrame, MovieScreen, StreamId};
 pub use navigator::Navigator;
 pub use preferences::{LaunchPrefs, Prefs};

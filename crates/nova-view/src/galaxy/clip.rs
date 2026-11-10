@@ -27,7 +27,8 @@ use crate::geometry::{Bounds, Point, intersection, lerp, span_in};
 ///   draws none);
 /// - each text, sprite, picture (blended or not), movie frame and OR fill
 ///   wrapped in [`DrawCommand::Clipped`] with `area`, which the renderer
-///   crops;
+///   crops, and each model wrapped so too (the renderer draws a clipped
+///   model uncut);
 /// - each command already clipped re-clipped to the two clips' overlap,
 ///   and dropped when they share none.
 pub fn clip_opaque(map: &DrawList, area: Bounds, out: &mut DrawList) {
@@ -95,7 +96,8 @@ pub fn clip_opaque(map: &DrawList, area: Bounds, out: &mut DrawList) {
             | DrawCommand::BlendedPicture { .. }
             | DrawCommand::TiledPicture { .. }
             | DrawCommand::MovieFrame { .. }
-            | DrawCommand::OrFill { .. } => {
+            | DrawCommand::OrFill { .. }
+            | DrawCommand::Model { .. } => {
                 out.clipped(area, command.clone());
             }
         }
@@ -259,6 +261,28 @@ mod tests {
             })
             .collect();
         assert_eq!(drawn, wrapped);
+    }
+
+    #[test]
+    fn a_model_clipped_to_the_map_area_is_wrapped_in_a_clip() {
+        let model = DrawCommand::Model {
+            model: crate::ModelKey(3),
+            pose: crate::ModelPose {
+                center: at(225.0, 140.0),
+                orientation: crate::Orientation::IDENTITY,
+                scale: 20.0,
+            },
+        };
+        let drawn = clipped(|map| {
+            map.push(model.clone());
+        });
+        assert_eq!(
+            drawn,
+            [DrawCommand::Clipped {
+                clip: area(),
+                command: Box::new(model),
+            }]
+        );
     }
 
     #[test]
