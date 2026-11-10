@@ -477,6 +477,8 @@ impl<S: ImageSource> Renderer<S> {
                 let missing = &mut report.missing_planets;
                 (self.planets).draw(planet, pose, batches, gpu, missing);
             }
+            // Not drawn yet.
+            DrawCommand::Sky { .. } => {}
             DrawCommand::Mounted {
                 model,
                 ref mounting,

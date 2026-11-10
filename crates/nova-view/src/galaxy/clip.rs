@@ -99,6 +99,7 @@ pub fn clip_opaque(map: &DrawList, area: Bounds, out: &mut DrawList) {
             | DrawCommand::OrFill { .. }
             | DrawCommand::Model { .. }
             | DrawCommand::Planet { .. }
+            | DrawCommand::Sky { .. }
             | DrawCommand::Mounted { .. } => {
                 out.clipped(area, command.clone());
             }
@@ -305,6 +306,28 @@ mod tests {
             [DrawCommand::Clipped {
                 clip: area(),
                 command: Box::new(planet),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_sky_clipped_to_the_map_area_is_wrapped_in_a_clip_as_a_model_is() {
+        let sky = DrawCommand::Sky {
+            sky: crate::SkyPose {
+                seed: 3,
+                eye: at(0.0, 0.0),
+                anchor: at(225.0, 140.0),
+                level: 32,
+            },
+        };
+        let drawn = clipped(|map| {
+            map.push(sky.clone());
+        });
+        assert_eq!(
+            drawn,
+            [DrawCommand::Clipped {
+                clip: area(),
+                command: Box::new(sky),
             }]
         );
     }

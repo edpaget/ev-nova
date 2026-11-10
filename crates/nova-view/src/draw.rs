@@ -10,6 +10,7 @@ use crate::image::ImageKey;
 use crate::model::{ModelKey, ModelPose, Mounting};
 use crate::movie_frame::MovieFrame;
 use crate::planet::{PlanetKey, PlanetPose};
+use crate::sky::SkyPose;
 use crate::text_entry::EntryAsk;
 
 /// How a sprite combines with what is beneath it.
@@ -348,6 +349,19 @@ pub enum DrawCommand {
         /// Where it goes, how big it is and when.
         pose: PlanetPose,
     },
+    /// The layered sky: generated stars in layers at depth behind the play
+    /// plane, seen from `sky`'s eye and drawn around its anchor, each
+    /// layer drifting by its depth's parallax and all dimmed to its level
+    /// (see [`crate::sky`]). What the layers look like is the renderer's.
+    /// The stars add their light to what is beneath them; anything drawn
+    /// after the sky covers it. Like a model, it is drawn uncut by a clip.
+    ///
+    /// A sky at level 0, or whose eye or anchor is not finite, draws
+    /// nothing.
+    Sky {
+        /// Where it is seen from, and how bright.
+        sky: SkyPose,
+    },
     /// A 3D part drawn on the [`DrawCommand::Model`] just before it: at
     /// that model's pose, placed on it as `mounting` says, and in that
     /// model's depth, so the two hide each other by their 3D positions
@@ -412,6 +426,8 @@ impl DrawCommand {
             Self::Triangle { corners, .. } => *corners = corners.map(moved),
             Self::Model { pose, .. } => pose.center = moved(pose.center),
             Self::Planet { pose, .. } => pose.center = moved(pose.center),
+            // The eye is over the world, which a move on screen leaves.
+            Self::Sky { sky } => sky.anchor = moved(sky.anchor),
             // It sits on the model before it, which moves.
             Self::Mounted { .. } => {}
             Self::Clipped { clip, command } => {
@@ -851,6 +867,11 @@ impl DrawList {
         self.push(DrawCommand::Planet { planet, pose })
     }
 
+    /// Appends a [`DrawCommand::Sky`]: the layered sky seen as `sky` says.
+    pub fn sky(&mut self, sky: SkyPose) -> &mut Self {
+        self.push(DrawCommand::Sky { sky })
+    }
+
     /// Appends a [`DrawCommand::Mounted`]: `model` drawn on the model just
     /// before it, as `mounting` places it.
     pub fn mounted(&mut self, model: ModelKey, mounting: Mounting) -> &mut Self {
@@ -1167,6 +1188,41 @@ mod tests {
         assert_eq!(
             planet_at(1.0, 2.0).translated(at(10.0, -4.0)),
             planet_at(11.0, -2.0)
+        );
+    }
+
+    /// Sky 9 looking from (100, -50), drawn at (`x`, `y`), at half murk.
+    fn sky_at(x: f32, y: f32) -> DrawCommand {
+        DrawCommand::Sky {
+            sky: SkyPose {
+                seed: 9,
+                eye: at(100.0, -50.0),
+                anchor: at(x, y),
+                level: 16,
+            },
+        }
+    }
+
+    #[test]
+    fn sky_pushes_a_sky_where_it_is_drawn() {
+        let mut list = DrawList::new();
+        let DrawCommand::Sky { sky } = sky_at(1.0, 2.0) else {
+            unreachable!()
+        };
+        list.world(|list| {
+            list.sky(sky);
+        });
+        assert_eq!(
+            list.layered().collect::<Vec<_>>(),
+            [(DrawLayer::World, &sky_at(1.0, 2.0))]
+        );
+    }
+
+    #[test]
+    fn a_translated_sky_moves_its_anchor_and_not_its_eye() {
+        assert_eq!(
+            sky_at(1.0, 2.0).translated(at(10.0, -4.0)),
+            sky_at(11.0, -2.0)
         );
     }
 

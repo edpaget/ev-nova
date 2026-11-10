@@ -2877,6 +2877,7 @@ mod tests {
             DrawCommand::MovieFrame { .. } => "movie",
             DrawCommand::Model { .. } => "model",
             DrawCommand::Planet { .. } => "planet",
+            DrawCommand::Sky { .. } => "sky",
             DrawCommand::Mounted { .. } => "mounted",
         }
     }
