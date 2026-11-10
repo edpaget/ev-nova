@@ -20,6 +20,9 @@
 //!   so the view scales it.
 //! - **Every other stellar** is a disc: in its generated look's first
 //!   palette colour, else its owner's faction colour, else bare grey.
+//!   The disc is the 2D stand-in: the 3D layer draws a planet or moon
+//!   from its look or texture (`nova_render::GalaxyPlanets`), once the
+//!   flight screen wires it (`engine-3d/phase-10-sample-in-3d`).
 //! - **A jump point's gate** is a ring in bare grey.
 //!
 //! - **The stars** are dots ([`STAR_DOTS`]): the bible has no star art,

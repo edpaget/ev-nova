@@ -214,9 +214,10 @@ pub enum Visual {
     Asset(Id),
 }
 
-/// The parameters of a generated planet or moon. Provisional until a
-/// planet shader settles them: `data/README.md` ("Generated planets:
-/// left for the engine") lists what is still open.
+/// The parameters of a generated planet or moon. The engine bakes them
+/// into the textures its planet shader draws (`nova_galaxy_media::planet`,
+/// which says how each is read): everything else about the planet, its
+/// spin, day and tilt among them, comes from its `seed`.
 #[derive(Clone, Debug, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Look {
@@ -242,7 +243,9 @@ fn no_fraction() -> Fraction {
     Fraction::try_from(0.0).expect("0 is a fraction")
 }
 
-/// The kind of world a planet shader draws.
+/// The kind of world a planet shader draws. Each picks a recipe that turns
+/// the seed's noise and the palette into a surface: a ramp of heights,
+/// seas and land, polar caps, glowing cracks, or a gas giant's bands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum PlanetType {
@@ -278,7 +281,10 @@ impl PlanetType {
     }
 }
 
-/// A planet's rings, measured in planet radii from its centre.
+/// A planet's rings, measured in planet radii from its centre. They lie in
+/// its equator's plane. The engine adds their banding and gaps (from the
+/// seed), the planet's fixed lean toward the camera that shows them as an
+/// ellipse, and the shadows the rings and the globe cast on each other.
 #[derive(Clone, Debug, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Rings {

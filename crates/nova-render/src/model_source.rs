@@ -1,5 +1,7 @@
 //! The model source port: the new game's 3D models, by asset id, as
 //! meshes the renderer can take, with their materials and textures.
+//! Planets and moons, generated or textured, have a port of their own
+//! ([`crate::planet_source`]).
 //!
 //! [`ModelSource::model`] answers a [`ModelRequest`] (an asset id, and
 //! the length in metres to scale it to) with a [`LoadedModel`] or a
