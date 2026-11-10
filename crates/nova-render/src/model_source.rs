@@ -157,16 +157,19 @@ pub enum Measure {
     Triangles,
     /// KiB on disk.
     Kib,
+    /// A texture's longest side, in pixels.
+    Side,
 }
 
-/// One limit of its art budget a model breaks.
+/// One limit of its art budget a model or a planet's texture breaks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Overrun {
     /// What is over.
     pub measure: Measure,
-    /// What the model uses: triangles, or bytes for [`Measure::Kib`].
+    /// What it uses: triangles, bytes for [`Measure::Kib`], or pixels
+    /// for [`Measure::Side`].
     pub used: u64,
-    /// The limit: triangles, or KiB.
+    /// The limit: triangles, KiB, or pixels.
     pub most: u32,
     /// The budget's file, `budgets/<id>.md`.
     pub budget: String,
@@ -185,6 +188,11 @@ impl fmt::Display for Overrun {
                 f,
                 "is {} KiB, over the {most} KiB budget in `{budget}`",
                 self.used.div_ceil(1024)
+            ),
+            Measure::Side => write!(
+                f,
+                "is {} pixels on its longest side, over the {most} pixel budget in `{budget}`",
+                self.used
             ),
         }
     }
@@ -762,6 +770,17 @@ mod tests {
             over.to_string(),
             "asset `corsair` is over its art budget: draws 13 triangles, over the 12 budget \
              in `budgets/small-craft.md`; is 3 KiB, over the 2 KiB budget in `budgets/default.md`"
+        );
+        let side = Overrun {
+            measure: Measure::Side,
+            used: 8192,
+            most: 4096,
+            budget: "budgets/default.md".into(),
+        };
+        assert_eq!(
+            side.to_string(),
+            "is 8192 pixels on its longest side, over the 4096 pixel budget in \
+             `budgets/default.md`"
         );
         let missing = ModelError::Missing {
             asset: "hub".into(),

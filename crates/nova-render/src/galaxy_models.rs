@@ -137,12 +137,14 @@ fn paint_slot(slot: Slot) -> PaintSlot {
     }
 }
 
-/// A budget overrun, as the port says it.
-fn overrun(over: &budget::Overrun) -> Overrun {
+/// A budget overrun, as the port says it. It matches every measure: each
+/// limit the media crate checks has to reach the port as its own.
+pub(crate) fn overrun(over: &budget::Overrun) -> Overrun {
     Overrun {
         measure: match over.measure {
             budget::Measure::Triangles => Measure::Triangles,
             budget::Measure::Kib => Measure::Kib,
+            budget::Measure::Side => Measure::Side,
         },
         used: over.used,
         most: over.most,
@@ -336,6 +338,31 @@ mod tests {
             "---\nmodel: {triangles: 12, kib: 4096}\n---\n",
         );
         assert!(ask(&at_the_limit, "hull", None).is_ok());
+    }
+
+    #[test]
+    fn each_media_measure_is_the_port_s_measure_of_the_same_name() {
+        let over = |measure| budget::Overrun {
+            measure,
+            used: 9,
+            most: 8,
+            budget: id("default"),
+        };
+        for (media, port) in [
+            (budget::Measure::Triangles, Measure::Triangles),
+            (budget::Measure::Kib, Measure::Kib),
+            (budget::Measure::Side, Measure::Side),
+        ] {
+            assert_eq!(
+                overrun(&over(media)),
+                Overrun {
+                    measure: port,
+                    used: 9,
+                    most: 8,
+                    budget: "budgets/default.md".into(),
+                }
+            );
+        }
     }
 
     /// A 2 by 1 by 4 box (x, y, z) facing −z, each face its own material

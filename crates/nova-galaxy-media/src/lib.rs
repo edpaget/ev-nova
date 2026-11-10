@@ -26,8 +26,7 @@
 //! ship space by its front and length
 //! ([`Placement::ship_point_3d`]), and works out which art budget
 //! covers it and each limit it breaks ([`budget`], a port of `galaxy`'s
-//! `check/art.rs` budget rule, for models; texture limits come with the
-//! first texture the engine loads).
+//! `check/art.rs` budget rule, for models and textures).
 //!
 //! # What it holds, and why here
 //!
