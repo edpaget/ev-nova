@@ -17,7 +17,9 @@ use nova_view::geometry::Bounds;
 use nova_view::{Color, DrawList, ModelKey, ModelPose, Orientation, Point};
 
 use super::common::fill;
-use super::common::pixels::{LOGICAL, SIZE, assert_near, color_at, near, pixel, pixel_of, rgb};
+use super::common::pixels::{
+    LOGICAL, SIZE, assert_near, color_at, near, pixel, pixel_of, pixels_inside, rgb,
+};
 use super::wgpu_offscreen::{Images, gpu_with};
 
 const CUBE: ModelKey = ModelKey(1);
@@ -48,9 +50,15 @@ fn cube_pose() -> ModelPose {
     }
 }
 
+/// The HUD solid, logical: x 5 to 20 over y 14 to 18, over the cube's
+/// bottom (x 16 to 20, y 14 to 16).
+const HUD_AREA: Bounds = Bounds {
+    min: Point { x: 5.0, y: 14.0 },
+    max: Point { x: 20.0, y: 18.0 },
+};
+
 /// The world: a solid from x 5 (an odd unit, half a texel at 25%) to 13
-/// over y 2 to 6, and the cube. The HUD: a solid from x 5 to 20 over y
-/// 14 to 18, over the cube's bottom.
+/// over y 2 to 6, and the cube. The HUD: [`HUD_AREA`].
 fn scene() -> DrawList {
     let mut list = DrawList::new();
     list.world(|list| {
@@ -61,11 +69,7 @@ fn scene() -> DrawList {
         fill(list, solid, color(WORLD));
         list.model(CUBE, cube_pose());
     });
-    let hud = Bounds {
-        min: at(5.0, 14.0),
-        max: at(20.0, 18.0),
-    };
-    fill(&mut list, hud, color(HUD));
+    fill(&mut list, HUD_AREA, color(HUD));
     list
 }
 
@@ -90,15 +94,43 @@ fn lit_face() -> [u8; 3] {
     [r, g, b].map(|c| (c * 255.0).round() as u8)
 }
 
-/// The target pixels around the HUD solid: its rows (40 to 48), from
-/// four pixels left of its edge at column 10 to its right edge at 40.
-/// Left of the edge is the world's empty black; the rest is the HUD,
-/// over the cube where they meet.
+/// The target pixels around the HUD solid, from [`HUD_AREA`] through
+/// [`pixel_of`]: its rows (36 to 44), from four pixels left of its edge
+/// at column 10 to its right edge at 40. Left of the edge is the world's
+/// empty black; the rest is the HUD, over the cube in rows 36 to 40 from
+/// column 32 ([`HUD_OVER_CUBE`]).
+fn hud_window() -> Vec<(u32, u32)> {
+    let (left, top) = pixel_of(HUD_AREA.min.x - 2.0, HUD_AREA.min.y);
+    let (right, bottom) = pixel_of(HUD_AREA.max.x, HUD_AREA.max.y);
+    (top..bottom)
+        .flat_map(|y| (left..right).map(move |x| (x, y)))
+        .collect()
+}
+
+/// [`hud_window`]'s pixels of `pixels`.
 fn hud_pixels(pixels: &[u8]) -> Vec<[u8; 4]> {
-    (40..48)
-        .flat_map(|y| (6..40).map(move |x| (x, y)))
+    hud_window()
+        .into_iter()
         .map(|at| pixel(pixels, at))
         .collect()
+}
+
+/// A logical point inside both the HUD and the cube's lit face.
+const HUD_OVER_CUBE: (f32, f32) = (18.0, 15.0);
+
+/// Asserts the HUD over the cube is the HUD's own colour in `scaled`, and
+/// the same pixel as in `auto`: the enlarged world neither shows through
+/// it nor blends into it.
+#[track_caller]
+fn assert_hud_over_cube(scaled: &[u8], auto: &[u8], case: &str) {
+    let at = pixel_of(HUD_OVER_CUBE.0, HUD_OVER_CUBE.1);
+    let got = rgb(pixel(scaled, at));
+    assert_eq!(got, HUD, "{case}: the HUD over the cube is {got:?}");
+    assert_eq!(
+        pixel(scaled, at),
+        pixel(auto, at),
+        "{case}: the HUD over the cube differs from Auto's"
+    );
 }
 
 /// The world solid's top row's pixels from column 8 to 12, around its
@@ -128,10 +160,45 @@ fn the_hud_is_drawn_at_full_resolution_whatever_the_render_scale() {
     assert_near(&auto, (12.0, 16.0), HUD, "the HUD");
     for percent in [25, 50] {
         let scaled = drawn(Upscaler::Native, RenderScale::percent(percent)).expect("an adapter");
+        assert_hud_over_cube(&scaled, &auto, &format!("{percent}%"));
         assert!(
             hud_pixels(&scaled) == hud_pixels(&auto),
             "the HUD changed at {percent}%"
         );
+    }
+}
+
+#[test]
+fn the_hud_window_holds_the_hud_and_its_stretch_over_the_cube() {
+    let Some(auto) = drawn(Upscaler::Native, RenderScale::Auto) else {
+        return;
+    };
+    let window = hud_window();
+    let over_cube = pixel_of(HUD_OVER_CUBE.0, HUD_OVER_CUBE.1);
+    assert!(window.contains(&over_cube), "the window misses the cube");
+    // The cube is under the HUD there: its lit face shows just above.
+    assert_near(
+        &auto,
+        (HUD_OVER_CUBE.0, HUD_AREA.min.y - 1.0),
+        lit_face(),
+        "the cube above the HUD",
+    );
+    // Every window pixel inside the HUD solid is the HUD, and they are
+    // more than half the window; the rest, left of its edge, is black.
+    let hud = pixels_inside((
+        HUD_AREA.min.x,
+        HUD_AREA.min.y,
+        HUD_AREA.max.x,
+        HUD_AREA.max.y,
+    ));
+    let (inside, outside): (Vec<_>, Vec<_>) = window.into_iter().partition(|at| hud.contains(at));
+    assert!(inside.len() > outside.len(), "{inside:?} {outside:?}");
+    assert!(inside.contains(&over_cube));
+    for &at in &inside {
+        assert_eq!(rgb(pixel(&auto, at)), HUD, "the HUD at {at:?}");
+    }
+    for &at in &outside {
+        assert_eq!(rgb(pixel(&auto, at)), BLACK, "left of the HUD at {at:?}");
     }
 }
 
@@ -178,6 +245,7 @@ fn a_render_scale_is_enlarged_by_the_chosen_upscaler() {
                 "{case}: the cube is {cube:?}, not {:?}",
                 lit_face()
             );
+            assert_hud_over_cube(&scaled, &auto, &case);
             assert!(
                 hud_pixels(&scaled) == hud_pixels(&auto),
                 "{case}: the HUD changed"
