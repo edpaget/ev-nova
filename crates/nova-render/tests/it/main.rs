@@ -12,6 +12,7 @@ mod floater_text;
 mod frame_cost;
 mod fsr1;
 mod fsr1_reference;
+mod generated_planets;
 mod livery_paint;
 mod message_line;
 mod metal_fx;
