@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use super::*;
-use crate::ai::{Behaviour, CommCall, Decision, Goal, Peaceful, Surroundings, Warship};
+use crate::ai::{Behaviour, CommCall, Decision, Goal, Peaceful, Surroundings};
 use crate::catalog::{
     CommCatalog, FleetId, FleetRecord, GovtRecord, MissionRecord, OutfitId, Penalties, ShipId,
     SystemReinforcements, SystemTraffic,
@@ -209,7 +209,7 @@ fn a_think_at_stale_odds_calls_nothing_and_its_think_after_the_refresh_calls() {
     assert_eq!(timer(&session), 0.0, "-1 at its think");
     assert_eq!(
         session.space.npc(warship).map(|npc| npc.odds),
-        Some(1.5),
+        Some(odds_now(&session, warship)),
         "refreshed after it"
     );
     step(&mut session, &catalog, &calls);
@@ -267,26 +267,33 @@ fn by_the_other_reading_a_call_works_its_odds_out_at_the_answer() {
         crate::rulebook::Rulebook::default().with_override(RuleKey::OddsCache, RuleSource::Bible);
     let warship = fight(&mut session, FED, 150.0);
     session.space.traffic.cache_odds(warship, STALE);
+    let expected = timer_at(&session, odds_now(&session, warship), false);
     session.call_for_reinforcements(warship, false, Some(STALE));
-    assert_eq!(timer(&session), f32::from(TIME), "1.5 now, stale or not");
+    assert_eq!(timer(&session), expected, "the odds now, stale or not");
     let mut calm = flying(&catalog);
     calm.setup.rules =
         crate::rulebook::Rulebook::default().with_override(RuleKey::OddsCache, RuleSource::Bible);
     let warship = fight(&mut calm, FED, 50.0);
     calm.space.traffic.cache_odds(warship, 0.0);
+    let expected = timer_at(&calm, odds_now(&calm, warship), true);
     calm.call_for_reinforcements(warship, true, None);
     assert_eq!(
         timer(&calm),
-        f32::from(TIME),
-        "forced at 0.5 now, cached at 0"
+        expected,
+        "forced at the odds now, cached at 0"
     );
     let mut alone = flying(&catalog);
     alone.setup.rules =
         crate::rulebook::Rulebook::default().with_override(RuleKey::OddsCache, RuleSource::Bible);
     let lone = add(&mut alone, FED, 100.0, Goal::Idle);
     alone.space.traffic.cache_odds(lone, 1.5);
+    let expected = timer_at(&alone, odds_now(&alone, lone), true);
     alone.call_for_reinforcements(lone, true, Some(1.5));
-    assert_eq!(timer(&alone), 0.0, "no odds now, though cached and thought");
+    assert_eq!(
+        timer(&alone),
+        expected,
+        "the odds now, though cached and thought"
+    );
 }
 
 /// NPC `id` of `session`, to change.
@@ -364,6 +371,35 @@ fn step(session: &mut Session, catalog: &FakePilotCatalog, calls: &Calling) {
         Rules::default(),
         &mut NeverFires,
     );
+}
+
+/// The odds against NPC `id` that nova-sim-ai's `odds_against` works out
+/// in `session`'s world now.
+fn odds_now(session: &Session, id: NpcId) -> f32 {
+    let world = session.world();
+    let around = world.around(session.npcs());
+    crate::ai::odds::odds_against(around.npc(id).expect("in"), &around)
+}
+
+/// The player's system's timer after nova-sim-ai's `reinforcements::call`
+/// at `odds`, forced by `force`, of a Federation ship calling its own fleet
+/// with no inhibitor aboard, on `session`'s clock and fleet. The gates and
+/// their share are that crate's (`ai::reinforcements`'s tests pin them);
+/// these tests pin the odds and the force the session passes.
+fn timer_at(session: &Session, odds: f32, force: bool) -> f32 {
+    let facts = ReinforcementFacts {
+        has_govt: true,
+        fleet: session.space.traffic.reinforcement_fleet(),
+        clock: session.clock_here(),
+        odds,
+        allied: true,
+        fleet_max_odds: session.statics.govts.max_odds(Some(FED)),
+        force,
+        inhibitors: Inhibitors::default(),
+    };
+    let mut clock = facts.clock;
+    clock.answer(reinforcements::call(&facts));
+    clock.timer
 }
 
 /// The player's system's countdown.
@@ -530,15 +566,21 @@ fn an_outnumbered_allied_warships_fleet_is_announced_at_three_quarters_and_arriv
 fn a_ship_not_outnumbered_calls_nothing_unless_forced_as_battle_help_forces_it() {
     let catalog = reinforced();
     let mut session = flying(&catalog);
+    // `fight`'s cached odds: a pirate of 50 against a warship of 100.
+    let odds = 50.0 / 100.0;
     let warship = fight(&mut session, FED, 50.0);
+    let expected = timer_at(&session, odds, false);
     session.call_for_reinforcements(warship, false, None);
-    assert_eq!(timer(&session), 0.0, "odds of 0.5, not above half of 1");
+    assert_eq!(timer(&session), expected, "unforced at the cached odds");
+    let expected = timer_at(&session, odds, true);
     session.call_for_reinforcements(warship, true, None);
-    assert_eq!(timer(&session), f32::from(TIME), "forced (@0x9636d)");
+    assert_eq!(timer(&session), expected, "forced (@0x9636d)");
     let mut alone = flying(&catalog);
     let lone = add(&mut alone, FED, 100.0, Goal::Idle);
+    let cached = alone.space.npc(lone).expect("added").odds;
+    let expected = timer_at(&alone, cached, true);
     alone.call_for_reinforcements(lone, true, None);
-    assert_eq!(timer(&alone), 0.0, "no odds at all: not even forced");
+    assert_eq!(timer(&alone), expected, "forced at its cached odds");
     alone.call_for_reinforcements(NpcId(999), true, None);
     assert_eq!(timer(&alone), 0.0, "a ship not here");
 }
@@ -674,7 +716,11 @@ fn a_fleet_government_without_a_medium_name_comes_unannounced() {
     let mut session = flying(&catalog);
     let warship = fight(&mut session, FED, 100.0);
     session.call_for_reinforcements(warship, false, None);
-    assert_eq!(heard(&mut session, &catalog, 31), [], "no line (@0x3914d)");
+    assert_eq!(
+        heard(&mut session, &catalog, announcing().0),
+        [],
+        "no line (@0x3914d)"
+    );
     assert_eq!(countdown(&session), 2, "but the countdown set");
 }
 
@@ -685,7 +731,7 @@ fn a_missing_entry_of_the_line_reads_as_empty() {
     let warship = fight(&mut session, FED, 100.0);
     session.call_for_reinforcements(warship, false, None);
     assert_eq!(
-        heard(&mut session, &catalog, 31),
+        heard(&mut session, &catalog, announcing().0),
         [SimMessage::ReinforcementsApproaching(
             " Federation ".to_owned()
         )]
@@ -935,33 +981,25 @@ fn the_escape_pods_reset_cancels_the_timer_and_clears_the_countdown_here() {
     );
 }
 
+/// The fleet a warship's think reads in `session`'s world. How the coming
+/// fleet holds a warship's odds retreat is nova-sim-ai's `Warship` and
+/// `reinforcements::odds_factor` (their tests pin it); the session's part
+/// is to put the coming fleet into the `Surroundings` the think reads.
+fn coming_around(session: &Session) -> Option<Coming> {
+    session.world().around(session.npcs()).reinforcements
+}
+
 #[test]
-fn a_warship_holds_at_odds_below_twice_max_odds_while_its_fleet_comes() {
+fn a_call_puts_its_coming_fleet_into_the_surroundings_the_warships_odds_read() {
     let catalog = reinforced();
     let mut session = flying(&catalog);
     let warship = fight(&mut session, FED, 150.0);
-    if let Some(npc) = npc_mut(&mut session, warship) {
-        npc.reserves.shield.now = npc.reserves.shield.max * 0.4;
-        npc.aggression = 3;
-    }
-    let decide = |session: &Session| {
-        let world = session.world();
-        let around = world.around(session.npcs());
-        let npc = around.npc(warship).expect("in");
-        Warship::default().decide(npc, &around, &mut NeverFires)
-    };
-    assert!(matches!(decide(&session), Goal::Flee(_)), "odds 1.5 over 1");
+    assert_eq!(coming_around(&session), None);
     assert_eq!(session.reinforcements_coming(), None);
     session.call_for_reinforcements(warship, false, None);
-    assert_eq!(
-        session.reinforcements_coming(),
-        Some(Coming { govt: Some(FED) })
-    );
-    let goal = decide(&session);
-    assert!(
-        !matches!(goal, Goal::Flee(_)),
-        "no retreat below twice 1 while the fleet comes: {goal:?}"
-    );
+    let coming = Some(Coming { govt: Some(FED) });
+    assert_eq!(coming_around(&session), coming, "in the world it thinks in");
+    assert_eq!(session.reinforcements_coming(), coming);
 }
 
 // The clock held behind the frame's calls held behind a scan (see the
