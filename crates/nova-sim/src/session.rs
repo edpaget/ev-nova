@@ -603,6 +603,8 @@ mod mission_screens;
 mod mission_ships;
 mod missions;
 mod mode;
+#[cfg(test)]
+mod mounted_muzzles;
 mod murk;
 mod nav;
 mod nebulae;
