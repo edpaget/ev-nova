@@ -1,6 +1,8 @@
 //! The widgets' ports over `nova_data`: dialog templates from the
 //! interface file ([`InterfaceData`]) or, for the new game without one,
-//! from its placeholder dialogs ([`DefaultDialogs`]), and descriptions,
+//! from its placeholder dialogs ([`DefaultDialogs`]), which come backed
+//! with the new game's panel style as it has no backdrop art, and
+//! descriptions,
 //! their graphics, the button style and picture sizes from the game data
 //! ([`GameData`]). Thin mappings; the decisions are the core's.
 
@@ -16,6 +18,7 @@ use nova_sim::DescMovie;
 use super::button::ButtonStyle;
 use super::catalog::{DescriptionGraphics, DescriptionSource, DialogResources, PictureSizes};
 use super::dialog::{DialogTemplate, ItemSpec, ItemTemplate, Placement};
+use super::panel::PanelBacking;
 use crate::color::Color;
 use crate::font::Font;
 use crate::galaxy::find::{self, FIND_DIALOG};
@@ -51,17 +54,23 @@ const BUILT_IN: [(i16, fn() -> DialogTemplate); 10] = [
 /// doesn't author: each placeholder record mapped as the file's are, with
 /// no art, so a picture item is [`ItemSpec::MissingPicture`]; else the
 /// screen's own built-in layout (`BUILT_IN`); else an error naming the
-/// missing default. No screen can tell these from the file's.
+/// missing default. Each comes backed with [`PanelBacking::NEW_GAME`],
+/// standing in for the backdrop picture the new game lacks; otherwise no
+/// screen can tell these from the file's.
 impl DialogResources for DefaultDialogs {
     fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
-        if let Some(dialog) = self.get(id) {
-            return Ok(template(id, &dialog.dlog, dialog.items.clone(), |_| false));
-        }
-        BUILT_IN
-            .iter()
-            .find(|(each, _)| *each == id)
-            .map(|(_, layout)| layout())
-            .ok_or_else(|| format!("no default DLOG {id}"))
+        let template = match self.get(id) {
+            Some(dialog) => template(id, &dialog.dlog, dialog.items.clone(), |_| false),
+            None => BUILT_IN
+                .iter()
+                .find(|(each, _)| *each == id)
+                .map(|(_, layout)| layout())
+                .ok_or_else(|| format!("no default DLOG {id}"))?,
+        };
+        Ok(DialogTemplate {
+            backing: Some(PanelBacking::NEW_GAME),
+            ..template
+        })
     }
 }
 
@@ -194,9 +203,13 @@ mod tests {
 
     use nova_data::new_game::interface::DefaultDialog;
 
+    use std::rc::Rc;
+
     use super::*;
+    use crate::draw::{DrawCommand, DrawList, fill_command};
     use crate::geometry::Point;
-    use crate::ui::dialog::ItemSpec;
+    use crate::text::fixture::MonoMetrics;
+    use crate::ui::dialog::{Dialog, ItemSpec};
 
     fn fork(resources: &[(ResType, i16, Vec<u8>)]) -> Vec<u8> {
         resources
@@ -416,11 +429,85 @@ mod tests {
         [(id, DefaultDialog { dlog, items })].into_iter().collect()
     }
 
+    /// `template` backed in the new game's panel style, as the defaults
+    /// serve it.
+    fn backed(template: DialogTemplate) -> DialogTemplate {
+        DialogTemplate {
+            backing: Some(PanelBacking::NEW_GAME),
+            ..template
+        }
+    }
+
     #[test]
-    fn a_default_record_is_the_template_the_file_would_give() {
+    fn a_default_record_is_the_template_the_file_would_give_backed() {
         let ui = interface(&desc_dialog());
         let defaults = defaults_from(&ui, 3003);
-        assert_eq!(defaults.dialog_template(3003), ui.dialog_template(3003));
+        assert_eq!(
+            defaults.dialog_template(3003),
+            ui.dialog_template(3003).map(backed)
+        );
+    }
+
+    #[test]
+    fn an_interface_file_template_is_unbacked_and_draws_only_its_items() {
+        let ui = interface(&desc_dialog());
+        let template = ui.dialog_template(3003).expect("converts");
+        assert_eq!(template.backing, None);
+        let dialog = Dialog::new(&template, &[], Rc::new(MonoMetrics));
+        assert_eq!(
+            drawn(|list| dialog.draw(list)),
+            drawn(|list| dialog.draw_items(list))
+        );
+    }
+
+    fn drawn(draw: impl FnOnce(&mut DrawList)) -> Vec<DrawCommand> {
+        let mut list = DrawList::new();
+        draw(&mut list);
+        list.iter().cloned().collect()
+    }
+
+    /// `template`'s dialog, with no roles, draws its backing over its
+    /// whole window first and every item after it.
+    fn assert_backed_before_its_items(template: &DialogTemplate, id: i16) {
+        assert_eq!(template.backing, Some(PanelBacking::NEW_GAME), "{id}");
+        let dialog = Dialog::new(template, &[], Rc::new(MonoMetrics));
+        let all = drawn(|list| dialog.draw(list));
+        assert_eq!(
+            all.first(),
+            Some(&fill_command(dialog.bounds(), Color::BLACK)),
+            "{id}: the fill covers the window first"
+        );
+        let items = drawn(|list| dialog.draw_items(list));
+        assert!(all.ends_with(&items), "{id}: every item after it");
+        assert_eq!(all.len(), items.len() + 5, "{id}: a fill and four rules");
+    }
+
+    #[test]
+    fn every_placeholder_dialog_is_backed_before_its_first_item() {
+        let defaults = nova_data::new_game::interface::default_dialogs();
+        let mut count = 0;
+        for (id, _) in defaults.iter() {
+            let template = defaults.dialog_template(id).expect("converts");
+            assert_backed_before_its_items(&template, id);
+            count += 1;
+        }
+        assert!(count > 0, "the new game has placeholders");
+    }
+
+    #[test]
+    fn every_built_in_layout_is_served_backed_before_its_first_item() {
+        let defaults = DefaultDialogs::default();
+        for (id, _) in BUILT_IN {
+            let template = defaults.dialog_template(id).expect("built in");
+            assert_backed_before_its_items(&template, id);
+        }
+    }
+
+    #[test]
+    fn a_built_in_layout_called_directly_is_unbacked() {
+        for (id, layout) in BUILT_IN {
+            assert_eq!(layout().backing, None, "{id}");
+        }
     }
 
     #[test]
@@ -456,7 +543,7 @@ mod tests {
             (ESCORT_DIALOG, escort_dialog::escort_template()),
         ];
         for (id, template) in expected {
-            assert_eq!(defaults.dialog_template(id), Ok(template), "{id}");
+            assert_eq!(defaults.dialog_template(id), Ok(backed(template)), "{id}");
         }
     }
 
@@ -464,7 +551,10 @@ mod tests {
     fn a_default_record_wins_over_a_built_in_layout() {
         let ui = interface(&centred(3001, 200, 100));
         let defaults = defaults_from(&ui, 3001);
-        assert_eq!(defaults.dialog_template(3001), ui.dialog_template(3001));
+        assert_eq!(
+            defaults.dialog_template(3001),
+            ui.dialog_template(3001).map(backed)
+        );
     }
 
     #[test]
