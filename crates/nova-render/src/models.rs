@@ -12,14 +12,24 @@
 //! Consecutive models share one [`Batch::Models`], lit by
 //! [`Light::STANDARD`]. Once a frame's batches are settled, each models
 //! batch's instances get their depth bands ([`camera::band`]).
+//!
+//! A part ([`nova_view::DrawCommand::Mounted`]) mounts on the model drawn
+//! just before it ([`Models::draw_model`], [`Models::draw_part`]): while
+//! nothing else has been drawn since, each part joins that model's
+//! instances in its batch, and the model and its parts are placed again
+//! over the furthest any of them reaches ([`camera::reach`]), sharing one
+//! band. Any other command ([`Models::end_group`]), a model that draws
+//! nothing, a new layer's run or a new frame, each starting with no
+//! batch, leaves the next part nothing to mount on.
 
 use std::collections::{HashMap, HashSet};
 
-use nova_view::ModelKey;
+use nova_view::{ModelKey, ModelPose, Mounting};
 
 use crate::camera::{self, Light};
 use crate::gpu::{Batch, Gpu, ModelInstance};
 use crate::model::{Mesh, MeshId};
+use crate::viewport::LogicalSize;
 
 /// A mesh the renderer was given, and whether the GPU holds it as it is.
 #[derive(Debug)]
@@ -37,9 +47,102 @@ pub(crate) struct Models {
     next: u32,
     /// The keys with no mesh already reported.
     reported: HashSet<ModelKey>,
+    /// The model the parts drawn next mount on, while nothing else has
+    /// been drawn since it.
+    group: Option<Group>,
+}
+
+/// A model drawn, and the parts mounted on it so far.
+#[derive(Debug)]
+struct Group {
+    pose: ModelPose,
+    /// The model's mesh and its radius.
+    hull: (MeshId, f32),
+    /// Each part's mesh, its radius and where it sits.
+    parts: Vec<(MeshId, f32, Mounting)>,
+    /// Where its model's instance is in the last batch, its parts' after
+    /// it.
+    start: usize,
 }
 
 impl Models {
+    /// Draws model `key` at `pose` onto `batches` in the `logical` space:
+    /// its instance, uploaded first through `gpu` if need be, and a key
+    /// with no mesh pushed onto `missing` once. It is the model the
+    /// parts drawn next mount on, or, drawing nothing, leaves them
+    /// nothing to mount on.
+    pub(crate) fn draw_model(
+        &mut self,
+        key: ModelKey,
+        pose: &ModelPose,
+        logical: LogicalSize,
+        batches: &mut Vec<Batch>,
+        gpu: &mut impl Gpu,
+        missing: &mut Vec<ModelKey>,
+    ) {
+        self.group = None;
+        let Some((mesh, radius)) = self.resident(key, gpu, missing) else {
+            return;
+        };
+        let Some(instance) = camera::instance(logical, pose, mesh, radius) else {
+            return;
+        };
+        push(batches, instance);
+        if let Some(Batch::Models { models, .. }) = batches.last() {
+            self.group = Some(Group {
+                pose: *pose,
+                hull: (mesh, radius),
+                parts: Vec::new(),
+                start: models.len() - 1,
+            });
+        }
+    }
+
+    /// Draws part `key` mounted as `mounting` says on the model drawn
+    /// last ([`nova_view::DrawCommand::Mounted`]): the model and every
+    /// part on it so far placed again over their new reach
+    /// ([`camera::reach`]), the part after them, sharing their band. A key
+    /// with no mesh is pushed onto `missing` once, whether or not there
+    /// is a model to mount on. It draws nothing with no model to mount
+    /// on, when its mesh is empty, or when `mounting` isn't finite.
+    pub(crate) fn draw_part(
+        &mut self,
+        key: ModelKey,
+        mounting: &Mounting,
+        logical: LogicalSize,
+        batches: &mut [Batch],
+        gpu: &mut impl Gpu,
+        missing: &mut Vec<ModelKey>,
+    ) {
+        let resident = self.resident(key, gpu, missing);
+        // A group outlives no other command (`end_group`), and a new
+        // layer's run starts with no batch, so a group's instances are the
+        // last of the last batch.
+        let (Some(group), Some((mesh, radius)), Some(Batch::Models { models, .. })) =
+            (self.group.as_mut(), resident, batches.last_mut())
+        else {
+            return;
+        };
+        let parts = || (group.parts.iter().copied()).chain([(mesh, radius, *mounting)]);
+        let reach = camera::reach(group.hull.1, parts().map(|(_, r, m)| (m, r)));
+        let hull = camera::instance(logical, &group.pose, group.hull.0, reach);
+        let placed: Option<Vec<ModelInstance>> = std::iter::once(hull)
+            .chain(parts().map(|(mesh, _, m)| camera::part(logical, &group.pose, &m, mesh, reach)))
+            .collect();
+        let Some(placed) = placed else {
+            return;
+        };
+        models.truncate(group.start);
+        models.extend(placed);
+        group.parts.push((mesh, radius, *mounting));
+    }
+
+    /// Leaves the parts drawn next nothing to mount on: something other
+    /// than a model or a part was drawn. (A new frame starts with no batch,
+    /// so a part first in it has nothing to mount on either.)
+    pub(crate) fn end_group(&mut self) {
+        self.group = None;
+    }
     /// Gives `key` `mesh`, replacing any mesh it had: the replacement
     /// keeps the old one's number and is uploaded at its next draw.
     pub(crate) fn add(&mut self, key: ModelKey, mesh: Mesh) {
@@ -117,7 +220,7 @@ mod tests {
     use nova_data::graphics::Image;
     use nova_view::geometry::Bounds;
     use nova_view::{
-        Color, DrawCommand, DrawList, ImageKey, ImageKind, ModelPose, Orientation, Point,
+        Color, DrawCommand, DrawList, ImageKey, ImageKind, ModelPose, Mounting, Orientation, Point,
     };
 
     use super::*;
@@ -470,6 +573,249 @@ mod tests {
         );
         assert_eq!(uploads(&gpu), [MeshId(0)], "the mesh stays");
         assert_eq!(frame.batches[1].kind(), "models");
+    }
+
+    const PART: ModelKey = ModelKey(3);
+
+    /// A renderer whose [`CUBE`] is the cube, mesh 0, and whose [`PART`]
+    /// is the cube too, mesh 1.
+    fn with_part() -> Renderer<OneSprite> {
+        let mut renderer = renderer();
+        renderer.add_model(PART, cube());
+        renderer
+    }
+
+    fn on(at: [f32; 3], turn: f32) -> Mounting {
+        Mounting { at, turn }
+    }
+
+    /// The hull at `pose` and `parts` on it, as the camera places them:
+    /// all over their group's reach, in the order drawn.
+    fn group(pose: &ModelPose, parts: &[Mounting]) -> Vec<ModelInstance> {
+        let radius = cube().radius();
+        let reach = camera::reach(radius, parts.iter().map(|&m| (m, radius)));
+        let hull = camera::instance(LOGICAL, pose, MeshId(0), reach).expect("drawable");
+        let parts = parts
+            .iter()
+            .map(|m| camera::part(LOGICAL, pose, m, MeshId(1), reach).expect("drawable"));
+        std::iter::once(hull).chain(parts).collect()
+    }
+
+    fn models_of(frame: &Frame) -> Vec<ModelInstance> {
+        match frame.batches.as_slice() {
+            [Batch::Models { models, .. }] => models.clone(),
+            other => panic!("one models batch: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_hull_and_its_parts_take_one_band_over_their_reach_and_the_next_hull_another() {
+        let low = on([0.0, 0.0, 0.5], 0.0);
+        // Its turret stands high: past the cube's own radius.
+        let high = on([0.2, -0.3, 1.5], 1.0);
+        let mut list = DrawList::new();
+        list.model(CUBE, pose(12.0, 12.0))
+            .mounted(PART, low)
+            .mounted(PART, high)
+            .model(CUBE, pose(30.0, 20.0));
+        let frame = frame_of(&mut with_part(), &list, &mut RecordingGpu::new());
+        let mut expected = group(&pose(12.0, 12.0), &[low, high]);
+        expected.push(instance(&pose(30.0, 20.0)));
+        assert_eq!(models_of(&frame), banded(expected.clone()));
+        // The hull's depth is rescaled for its high part.
+        assert_ne!(expected[0], instance(&pose(12.0, 12.0)));
+    }
+
+    #[test]
+    fn each_part_follows_the_model_not_the_part_before_it() {
+        let a = on([1.0, 0.0, 0.0], 0.5);
+        let b = on([0.0, 1.0, 0.0], -0.5);
+        let mut list = DrawList::new();
+        list.model(CUBE, pose(12.0, 12.0))
+            .mounted(PART, a)
+            .mounted(PART, b);
+        let frame = frame_of(&mut with_part(), &list, &mut RecordingGpu::new());
+        assert_eq!(models_of(&frame), banded(group(&pose(12.0, 12.0), &[a, b])));
+    }
+
+    /// The batches `list` draws, with `renderer`.
+    fn batches(mut renderer: Renderer<OneSprite>, list: &DrawList) -> Vec<Batch> {
+        frame_of(&mut renderer, list, &mut RecordingGpu::new()).batches
+    }
+
+    #[test]
+    fn a_part_with_no_model_just_before_it_draws_nothing() {
+        let part = on([0.0, 0.0, 0.5], 0.0);
+        // First in the list.
+        let mut first = DrawList::new();
+        first.mounted(PART, part);
+        assert_eq!(batches(with_part(), &first), []);
+        // After a sprite after its model.
+        let mut after_sprite = DrawList::new();
+        after_sprite
+            .model(CUBE, pose(12.0, 12.0))
+            .sprite(ImageKey::sprite(1, 0), Point::new(4.0, 4.0), Color::WHITE)
+            .mounted(PART, part);
+        let kinds: Vec<&str> = batches(with_part(), &after_sprite)
+            .iter()
+            .map(Batch::kind)
+            .collect();
+        assert_eq!(kinds, ["models", "sprites"]);
+        // After a command that draws nothing at all: an empty text.
+        let mut after_nothing = DrawList::new();
+        after_nothing
+            .model(CUBE, pose(12.0, 12.0))
+            .text("", Point::new(1.0, 1.0), 9.0, None, Color::WHITE)
+            .mounted(PART, part);
+        let mut alone = DrawList::new();
+        alone.model(CUBE, pose(12.0, 12.0));
+        assert_eq!(
+            batches(with_part(), &after_nothing),
+            batches(with_part(), &alone)
+        );
+    }
+
+    #[test]
+    fn a_part_after_a_model_that_draws_nothing_draws_nothing() {
+        let part = on([0.0, 0.0, 0.5], 0.0);
+        let mut renderer = with_part();
+        let empty = Mesh::new(cube().vertices().to_vec(), Vec::new()).expect("empty");
+        renderer.add_model(ModelKey(2), empty);
+        let mut list = DrawList::new();
+        list.model(ModelKey(9), pose(12.0, 12.0))
+            .mounted(PART, part)
+            .model(ModelKey(2), pose(12.0, 12.0))
+            .mounted(PART, part)
+            .model(
+                CUBE,
+                ModelPose {
+                    scale: f32::NAN,
+                    ..pose(1.0, 1.0)
+                },
+            )
+            .mounted(PART, part);
+        let report = renderer.render(&list, &viewport(), &mut RecordingGpu::new());
+        assert_eq!(report.missing_models, [ModelKey(9)]);
+        assert_eq!(batches(renderer, &list), []);
+    }
+
+    #[test]
+    fn a_part_whose_own_key_has_no_mesh_draws_nothing_and_is_reported_once() {
+        let mut renderer = renderer();
+        let mut gpu = RecordingGpu::new();
+        let mut list = DrawList::new();
+        list.model(CUBE, pose(12.0, 12.0))
+            .mounted(ModelKey(9), on([0.0; 3], 0.0))
+            .mounted(ModelKey(9), on([0.0; 3], 0.0));
+        let first = renderer.render(&list, &viewport(), &mut gpu);
+        let second = renderer.render(&list, &viewport(), &mut gpu);
+        assert_eq!(first.missing_models, [ModelKey(9)]);
+        assert_eq!(second.missing_models, []);
+        assert_eq!(
+            gpu.submits()[0].batches,
+            [Batch::Models {
+                light: Light::STANDARD,
+                models: banded(vec![instance(&pose(12.0, 12.0))]),
+            }]
+        );
+        // With no model before it, it is still reported.
+        let mut alone = DrawList::new();
+        alone.mounted(ModelKey(8), on([0.0; 3], 0.0));
+        let report = renderer.render(&alone, &viewport(), &mut gpu);
+        assert_eq!(report.missing_models, [ModelKey(8)]);
+    }
+
+    #[test]
+    fn a_part_placed_or_turned_by_what_is_not_finite_draws_nothing() {
+        let mut list = DrawList::new();
+        list.model(CUBE, pose(12.0, 12.0))
+            .mounted(PART, on([f32::NAN, 0.0, 0.0], 0.0))
+            .mounted(PART, on([0.0, 0.0, f32::INFINITY], 0.0))
+            .mounted(PART, on([0.0; 3], f32::NAN));
+        let mut alone = DrawList::new();
+        alone.model(CUBE, pose(12.0, 12.0));
+        assert_eq!(batches(with_part(), &list), batches(with_part(), &alone));
+        // A good part after them still mounts.
+        let good = on([0.0, 0.0, 0.5], 0.0);
+        list.mounted(PART, good);
+        let frame = frame_of(&mut with_part(), &list, &mut RecordingGpu::new());
+        assert_eq!(models_of(&frame), banded(group(&pose(12.0, 12.0), &[good])));
+    }
+
+    #[test]
+    fn a_part_with_an_empty_mesh_draws_nothing() {
+        let mut renderer = renderer();
+        let empty = Mesh::new(cube().vertices().to_vec(), Vec::new()).expect("empty");
+        renderer.add_model(PART, empty);
+        let mut list = DrawList::new();
+        list.model(CUBE, pose(12.0, 12.0))
+            .mounted(PART, on([0.0, 0.0, 3.0], 0.0));
+        let mut alone = DrawList::new();
+        alone.model(CUBE, pose(12.0, 12.0));
+        assert_eq!(batches(renderer, &list), batches(self::renderer(), &alone));
+    }
+
+    #[test]
+    fn a_clipped_hull_and_its_clipped_part_draw_as_unclipped() {
+        let clip = Bounds {
+            min: Point::new(0.0, 0.0),
+            max: Point::new(13.0, 13.0),
+        };
+        let part = on([0.3, 0.0, 0.5], 0.4);
+        let mut clipped = DrawList::new();
+        clipped
+            .clipped(
+                clip,
+                DrawCommand::Model {
+                    model: CUBE,
+                    pose: pose(12.0, 12.0),
+                },
+            )
+            .clipped(
+                clip,
+                DrawCommand::Mounted {
+                    model: PART,
+                    mounting: part,
+                },
+            );
+        let mut plain = DrawList::new();
+        plain.model(CUBE, pose(12.0, 12.0)).mounted(PART, part);
+        assert_eq!(batches(with_part(), &clipped), batches(with_part(), &plain));
+        assert_eq!(
+            models_of(&frame_of(
+                &mut with_part(),
+                &plain,
+                &mut RecordingGpu::new()
+            ))
+            .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn a_part_in_a_layer_other_than_its_model_s_draws_nothing() {
+        let mut list = DrawList::new();
+        list.world(|list| {
+            list.model(CUBE, pose(12.0, 12.0));
+        })
+        .mounted(PART, on([0.0, 0.0, 0.5], 0.0));
+        let mut alone = DrawList::new();
+        alone.world(|list| {
+            list.model(CUBE, pose(12.0, 12.0));
+        });
+        assert_eq!(batches(with_part(), &list), batches(with_part(), &alone));
+    }
+
+    #[test]
+    fn a_new_frame_starts_with_no_model_to_mount_on() {
+        let mut renderer = with_part();
+        let mut gpu = RecordingGpu::new();
+        let mut hull = DrawList::new();
+        hull.model(CUBE, pose(12.0, 12.0));
+        renderer.render(&hull, &viewport(), &mut gpu);
+        let mut part = DrawList::new();
+        part.mounted(PART, on([0.0; 3], 0.0));
+        assert_eq!(frame_of(&mut renderer, &part, &mut gpu).batches, []);
     }
 
     #[test]

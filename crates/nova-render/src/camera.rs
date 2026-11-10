@@ -20,13 +20,21 @@
 //! layer in the draw list's order, as sprites do, and the depth test
 //! hides only a model's own far faces.
 //!
+//! A part mounted on a model ([`nova_view::DrawCommand::Mounted`], an
+//! outfit on its hull) is the exception: it lands at the model's pose
+//! composed with its own place and turn ([`part`]), and shares the
+//! model's band, so the two hide each other by their 3D positions. The
+//! model and its parts take their depth over the furthest any of them
+//! reaches from the model's origin ([`reach`]), so no part reaches out of
+//! the band.
+//!
 //! # The light
 //!
 //! One directional light and an ambient term, Lambert's, in the gamma
 //! space every canvas blends in ([`shade`]). The shader computes the same
 //! formula per fragment from the interpolated normal.
 
-use nova_view::ModelPose;
+use nova_view::{ModelPose, Mounting};
 
 use crate::gpu::ModelInstance;
 use crate::model::MeshId;
@@ -85,50 +93,127 @@ pub fn instance(
     mesh: MeshId,
     radius: f32,
 ) -> Option<ModelInstance> {
+    let still = Mounting {
+        at: [0.0; 3],
+        turn: 0.0,
+    };
+    placed(logical, pose, &still, mesh, radius, false)
+}
+
+/// The instance that draws `mesh` as a part mounted on a model at `pose`
+/// ([`nova_view::DrawCommand::Mounted`]): its point `p` lands where the
+/// model's point `mounting.at + R_z(mounting.turn) · p` does, its depth
+/// spanning 0 to [`FAR`] over `reach` model units from the model's origin
+/// (the group's [`reach`]), and it shares the model's band ([`band`]).
+/// `None` when it draws nothing: a pose [`instance`] refuses, a reach
+/// that is not a positive, finite number, or an `at` or a turn that is
+/// not finite.
+///
+/// The model drawn with its parts takes the same reach: its
+/// [`instance`] with `reach` as its radius.
+#[must_use]
+pub fn part(
+    logical: LogicalSize,
+    pose: &ModelPose,
+    mounting: &Mounting,
+    mesh: MeshId,
+    reach: f32,
+) -> Option<ModelInstance> {
+    placed(logical, pose, mounting, mesh, reach, true)
+}
+
+/// How far from a model's origin it and the parts mounted on it reach,
+/// in its units: its own `radius`, or a part's `at`'s distance plus that
+/// part's radius, whichever is furthest. Their depths are scaled over it,
+/// so no part reaches out of the range ([`part`]).
+#[must_use]
+pub fn reach(radius: f32, parts: impl IntoIterator<Item = (Mounting, f32)>) -> f32 {
+    parts.into_iter().fold(radius, |reach, (mounting, part)| {
+        reach.max(dot(mounting.at, mounting.at).sqrt() + part)
+    })
+}
+
+/// [`instance`] and [`part`]: `mesh` placed on the model at `pose` as
+/// `mounting` says, its depth over `reach`, sharing the band before it
+/// when `shares_band`.
+fn placed(
+    logical: LogicalSize,
+    pose: &ModelPose,
+    mounting: &Mounting,
+    mesh: MeshId,
+    reach: f32,
+    shares_band: bool,
+) -> Option<ModelInstance> {
     let positive = |v: f32| v.is_finite() && v > 0.0;
     if !positive(pose.scale)
-        || !positive(radius)
+        || !positive(reach)
         || !pose.center.x.is_finite()
         || !pose.center.y.is_finite()
+        || !mounting.turn.is_finite()
+        || !mounting.at.iter().all(|c| c.is_finite())
     {
         return None;
     }
-    let r = pose.orientation.matrix()?;
+    let hull = pose.orientation.matrix()?;
+    // The part's turn about z, then the hull's: R · R_z.
+    let (sin, cos) = mounting.turn.sin_cos();
+    let about_z = [[cos, -sin, 0.0], [sin, cos, 0.0], [0.0, 0.0, 1.0]];
+    let r = hull.map(|row| [0, 1, 2].map(|col| dot(row, about_z.map(|turn| turn[col]))));
+    // Where the part's origin lands from the hull's, on the view's axes.
+    let shift: [f32; 3] = hull.map(|row| dot(row, mounting.at));
     let (w, h) = (logical.w as f32, logical.h as f32);
     let (sx, sy) = (2.0 * pose.scale / w, -2.0 * pose.scale / h);
-    let k = -FAR / (2.0 * radius);
+    let k = -FAR / (2.0 * reach);
     let rows = [
         [
             sx * r[0][0],
             sx * r[0][1],
             sx * r[0][2],
-            2.0 * pose.center.x / w - 1.0,
+            2.0 * pose.center.x / w - 1.0 + sx * shift[0],
         ],
         [
             sy * r[1][0],
             sy * r[1][1],
             sy * r[1][2],
-            1.0 - 2.0 * pose.center.y / h,
+            1.0 - 2.0 * pose.center.y / h + sy * shift[1],
         ],
-        [k * r[2][0], k * r[2][1], k * r[2][2], FAR / 2.0],
+        [
+            k * r[2][0],
+            k * r[2][1],
+            k * r[2][2],
+            FAR / 2.0 + k * shift[2],
+        ],
         [0.0, 0.0, 0.0, 1.0],
     ];
     Some(ModelInstance {
         mesh,
         clip_from_model: [0, 1, 2, 3].map(|col| rows.map(|row| row[col])),
         normal_from_model: [0, 1, 2].map(|col| r.map(|row| row[col])),
+        shares_band,
     })
 }
 
 /// Gives each of `models`, one batch's in draw order, its band of the
-/// depth range: the i-th of n takes `[FAR · (n − i − 1) / n, FAR · (n − i)
-/// / n]`, so each later model is nearer than every point of every earlier
-/// one. Each instance's depth is taken to span 0 to [`FAR`], as
-/// [`instance`] makes it.
+/// depth range: the i-th of n bands takes `[FAR · (n − i − 1) / n,
+/// FAR · (n − i) / n]`, so each later band is nearer than every point of
+/// every earlier one. A model takes a band of its own, and each part
+/// after it ([`ModelInstance::shares_band`]) takes the same band, so a
+/// model and its parts depth-test against each other (one that shares
+/// with nothing before it, first in the batch, takes its own). Each
+/// instance's depth is taken to span 0 to [`FAR`], as [`instance`] and
+/// [`part`] make it.
 pub fn band(models: &mut [ModelInstance]) {
-    let n = models.len() as f32;
-    for (i, model) in models.iter_mut().enumerate() {
-        let i = i as f32;
+    let starts = |i: usize, model: &ModelInstance| i == 0 || !model.shares_band;
+    let n = models
+        .iter()
+        .enumerate()
+        .filter(|&(i, model)| starts(i, model))
+        .count() as f32;
+    let mut i = -1.0;
+    for (at, model) in models.iter_mut().enumerate() {
+        if starts(at, model) {
+            i += 1.0;
+        }
         let near = FAR * (n - i - 1.0) / n;
         let width = FAR / n;
         let m = &mut model.clip_from_model;
@@ -157,7 +242,7 @@ fn unit(v: [f32; 3]) -> [f32; 3] {
 mod tests {
     use std::f32::consts::{FRAC_PI_2, PI};
 
-    use nova_view::{Orientation, Point};
+    use nova_view::{Mounting, Orientation, Point};
 
     use super::*;
 
@@ -453,6 +538,155 @@ mod tests {
         {
             assert_near(*x, *y);
         }
+    }
+
+    /// A turn of `turn` about z by Orientation's own rule, knowing nothing
+    /// of the camera.
+    fn about_z(turn: f32, p: [f32; 3]) -> [f32; 3] {
+        Orientation::about([0.0, 0.0, 1.0], turn)
+            .rotate(p)
+            .expect("a unit turn")
+    }
+
+    fn mounting(at: [f32; 3], turn: f32) -> Mounting {
+        Mounting { at, turn }
+    }
+
+    #[test]
+    fn a_part_lands_where_its_model_s_pose_puts_at_plus_its_turned_point() {
+        let orientation = Orientation::about([0.3, -1.0, 0.7], 2.1);
+        let hull = pose(12.0, 6.0, orientation, 5.0);
+        let on = mounting([1.0, -2.0, 0.5], 0.7);
+        let reach = 4.0;
+        let at = part(LOGICAL, &hull, &on, MESH, reach).expect("drawable");
+        assert_eq!(at.mesh, MESH);
+        for p in [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.4, -0.7, 0.9],
+        ] {
+            let local = about_z(0.7, p);
+            let on_hull = [0, 1, 2].map(|k| on.at[k] + local[k]);
+            let turned = orientation.rotate(on_hull).expect("a unit turn");
+            let (x, y) = logical_of(LOGICAL, clip(&at, p));
+            assert!((x - (12.0 + 5.0 * turned[0])).abs() < 1e-4, "{p:?}: {x}");
+            assert!((y - (6.0 + 5.0 * turned[1])).abs() < 1e-4, "{p:?}: {y}");
+            // Depth over the group's reach, from the hull's middle.
+            let depth = clip(&at, p)[2];
+            assert!((depth - FAR * (0.5 - turned[2] / (2.0 * reach))).abs() < 1e-5);
+            // Normals turn by the part's turn, then the hull's.
+            let n = normal(&at, p);
+            let want = orientation.rotate(local).expect("a unit turn");
+            for (got, want) in n.iter().zip(want) {
+                assert_near(*got, want);
+            }
+        }
+    }
+
+    #[test]
+    fn a_hull_s_own_instance_at_a_reach_is_its_instance_with_that_radius() {
+        let hull = pose(12.0, 6.0, Orientation::about([1.0, 2.0, 3.0], 1.0), 5.0);
+        let still = mounting([0.0; 3], 0.0);
+        let mut alone = instance(LOGICAL, &hull, MESH, 3.0).expect("drawable");
+        alone.shares_band = true;
+        assert_eq!(part(LOGICAL, &hull, &still, MESH, 3.0), Some(alone));
+        assert!(!instance(LOGICAL, &hull, MESH, 3.0).unwrap().shares_band);
+    }
+
+    #[test]
+    fn a_part_shares_its_model_s_band() {
+        let hull = pose(12.0, 6.0, Orientation::IDENTITY, 5.0);
+        let at = part(LOGICAL, &hull, &mounting([0.0; 3], 0.0), MESH, 1.0);
+        assert!(at.expect("drawable").shares_band);
+    }
+
+    #[test]
+    fn a_part_at_or_turned_by_what_is_not_finite_or_on_a_bad_pose_has_no_instance() {
+        let good = pose(12.0, 6.0, Orientation::IDENTITY, 5.0);
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            for at in [[bad, 0.0, 0.0], [0.0, bad, 0.0], [0.0, 0.0, bad]] {
+                assert_eq!(part(LOGICAL, &good, &mounting(at, 0.0), MESH, 2.0), None);
+            }
+            assert_eq!(
+                part(LOGICAL, &good, &mounting([0.0; 3], bad), MESH, 2.0),
+                None
+            );
+        }
+        let still = mounting([0.0; 3], 0.0);
+        for reach in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(part(LOGICAL, &good, &still, MESH, reach), None);
+        }
+        let flat = ModelPose { scale: 0.0, ..good };
+        assert_eq!(part(LOGICAL, &flat, &still, MESH, 2.0), None);
+    }
+
+    #[test]
+    fn a_group_reaches_as_far_as_its_hull_or_its_furthest_part() {
+        assert_eq!(reach(2.0, []), 2.0);
+        // |(3, 4, 0)| = 5, and the part reaches 0.5 past it.
+        let far = (mounting([3.0, 4.0, 0.0], 1.0), 0.5);
+        let near = (mounting([0.0, 0.0, 1.0], 0.0), 0.25);
+        assert_eq!(reach(2.0, [near]), 2.0);
+        assert_eq!(reach(2.0, [near, far]), 5.5);
+        assert_eq!(reach(9.0, [near, far]), 9.0);
+    }
+
+    #[test]
+    fn a_part_reaching_past_its_hull_keeps_every_point_of_both_inside_the_range() {
+        let orientation = Orientation::about([1.0, 0.3, -0.2], 0.9);
+        let hull = pose(12.0, 6.0, orientation, 5.0);
+        let on = mounting([0.0, 0.0, 1.5], 0.4);
+        // A unit cube hull, radius √3/2, and a cube part of the same size
+        // standing high on it.
+        let radius = 3.0_f32.sqrt() / 2.0;
+        let r = reach(radius, [(on, radius)]);
+        assert!(r > radius);
+        let corners: Vec<[f32; 3]> = (0..8)
+            .map(|bits| [0, 1, 2].map(|axis| if bits >> axis & 1 == 1 { 0.5 } else { -0.5 }))
+            .collect();
+        let hull_at = instance(LOGICAL, &hull, MESH, r).expect("drawable");
+        let part_at = part(LOGICAL, &hull, &on, MESH, r).expect("drawable");
+        let mut banded = vec![hull_at, part_at];
+        band(&mut banded);
+        for model in [&hull_at, &part_at, &banded[0], &banded[1]] {
+            for &corner in &corners {
+                let depth = clip(model, corner)[2];
+                assert!((-1e-6..=FAR + 1e-6).contains(&depth), "{depth}");
+            }
+        }
+        // Out of range at the hull's own radius: why the hull is rescaled.
+        let unscaled = part(LOGICAL, &hull, &on, MESH, radius).expect("drawable");
+        assert!(
+            corners
+                .iter()
+                .any(|&c| !(0.0..=FAR).contains(&clip(&unscaled, c)[2]))
+        );
+    }
+
+    #[test]
+    fn a_hull_and_its_parts_take_one_band_and_the_next_hull_another() {
+        let hull = pose(12.0, 6.0, Orientation::IDENTITY, 5.0);
+        let a = instance(LOGICAL, &hull, MESH, 1.0).expect("drawable");
+        let on = part(LOGICAL, &hull, &mounting([0.0; 3], 0.0), MESH, 1.0).expect("drawable");
+        let mut models = vec![a, on, on, a];
+        band(&mut models);
+        let spans: Vec<(f32, f32)> = models.iter().map(depth_span).collect();
+        assert_eq!(spans[0], spans[1]);
+        assert_eq!(spans[1], spans[2]);
+        assert_near(spans[0].1, FAR);
+        assert_near(spans[0].0, FAR / 2.0);
+        assert_near(spans[3].1, FAR / 2.0);
+        assert_near(spans[3].0, 0.0);
+    }
+
+    #[test]
+    fn a_part_first_in_a_batch_still_takes_a_band_of_its_own() {
+        let hull = pose(12.0, 6.0, Orientation::IDENTITY, 5.0);
+        let on = part(LOGICAL, &hull, &mounting([0.0; 3], 0.0), MESH, 1.0).expect("drawable");
+        let mut models = vec![on];
+        band(&mut models);
+        assert_eq!(depth_span(&models[0]), depth_span(&on));
     }
 
     const RED: [f32; 4] = [1.0, 0.5, 0.25, 0.75];

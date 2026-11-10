@@ -2324,6 +2324,7 @@ mod tests {
             mesh: MeshId(n),
             clip_from_model: [[f; 4]; 4],
             normal_from_model: [[f; 3]; 3],
+            shares_band: false,
         }
     }
 

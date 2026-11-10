@@ -2876,6 +2876,7 @@ mod tests {
             DrawCommand::Clipped { .. } => "clipped",
             DrawCommand::MovieFrame { .. } => "movie",
             DrawCommand::Model { .. } => "model",
+            DrawCommand::Mounted { .. } => "mounted",
         }
     }
 

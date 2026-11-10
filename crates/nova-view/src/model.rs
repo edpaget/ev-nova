@@ -1,6 +1,7 @@
 //! 3D models in the draw list: which model a [`DrawCommand::Model`]
 //! draws ([`ModelKey`]) and where and how it is turned ([`ModelPose`],
-//! [`Orientation`]).
+//! [`Orientation`]), and where a part mounted on it sits
+//! ([`DrawCommand::Mounted`], [`Mounting`]).
 //!
 //! # Axes
 //!
@@ -18,6 +19,7 @@
 //! logical units.
 //!
 //! [`DrawCommand::Model`]: crate::DrawCommand::Model
+//! [`DrawCommand::Mounted`]: crate::DrawCommand::Mounted
 
 use crate::geometry::Point;
 
@@ -159,6 +161,24 @@ pub struct ModelPose {
     /// Logical units per model unit, along every axis. One that is not a
     /// positive, finite number draws nothing.
     pub scale: f32,
+}
+
+/// Where a part mounted on a model sits on it
+/// ([`DrawCommand::Mounted`](crate::DrawCommand::Mounted)): at `at` on the
+/// model's own axes, turned `turn` about the model's z, so a point `p` of
+/// the part is drawn where the model's point `at + R_z(turn) · p` is.
+///
+/// The part's mesh is in the model's units: a ship's model and its
+/// outfits' are both in metres. An `at` or `turn` that isn't finite draws
+/// nothing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Mounting {
+    /// Where the part's origin sits, on the model's axes in its units.
+    pub at: [f32; 3],
+    /// How far the part is turned about the model's z axis, in radians,
+    /// positive as the [module docs](self) say: clockwise on screen, as
+    /// headings turn.
+    pub turn: f32,
 }
 
 /// The ship-space vector `[starboard, nose, up]` on the view's model axes:

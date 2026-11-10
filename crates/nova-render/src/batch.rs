@@ -11,7 +11,6 @@ use nova_view::{
 };
 
 use crate::atlas::{Atlas, AtlasEntry, PAGE_SIZE, PackError, Uv};
-use crate::camera;
 use crate::enlarge::{Enlarger, NativeDetail};
 use crate::gpu::{
     Batch, Frame, Gpu, MAX_TEXTURE_SIDE, NO_COLORIZE, QuadInstance, Rect, SolidQuad, TextRun,
@@ -182,6 +181,8 @@ impl<S: ImageSource> Renderer<S> {
     /// [`Batch::Models`], each given its depth band once the frame's
     /// batches are settled ([`crate::camera::band`]). A key with no mesh
     /// draws nothing and is reported once ([`RenderReport::missing_models`]).
+    /// A part ([`DrawCommand::Mounted`]) joins the model just before it,
+    /// in its band ([`crate::models`]).
     ///
     /// A frame drawn after [`Renderer::set_enlarger`] first starts the
     /// atlas afresh, the stream pages with it; a zero-area viewport leaves
@@ -258,6 +259,13 @@ impl<S: ImageSource> Renderer<S> {
             scale,
             logical,
         } = target;
+        // A part mounts only on the model drawn just before it.
+        if !matches!(
+            command,
+            DrawCommand::Model { .. } | DrawCommand::Mounted { .. } | DrawCommand::Clipped { .. }
+        ) {
+            self.models.end_group();
+        }
         match *command {
             DrawCommand::Sprite {
                 image,
@@ -423,12 +431,15 @@ impl<S: ImageSource> Renderer<S> {
             }
             // Drawn uncut by a clip, as a line or a triangle is.
             DrawCommand::Model { model, ref pose } => {
-                if let Some((mesh, radius)) =
-                    self.models.resident(model, gpu, &mut report.missing_models)
-                    && let Some(instance) = camera::instance(logical, pose, mesh, radius)
-                {
-                    models::push(batches, instance);
-                }
+                let missing = &mut report.missing_models;
+                (self.models).draw_model(model, pose, logical, batches, gpu, missing);
+            }
+            DrawCommand::Mounted {
+                model,
+                ref mounting,
+            } => {
+                let missing = &mut report.missing_models;
+                (self.models).draw_part(model, mounting, logical, batches, gpu, missing);
             }
             DrawCommand::Clipped {
                 clip: inner,

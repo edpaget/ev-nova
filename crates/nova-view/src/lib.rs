@@ -138,7 +138,7 @@ pub use keymap::{
     SharedBindings,
 };
 pub use menu_command::MenuCommand;
-pub use model::{ModelKey, ModelPose, Orientation, view_axes};
+pub use model::{ModelKey, ModelPose, Mounting, Orientation, view_axes};
 pub use movie_frame::{MovieFrame, MovieScreen, StreamId};
 pub use navigator::Navigator;
 pub use preferences::{LaunchPrefs, Prefs};

@@ -7,7 +7,7 @@ use crate::colorize::Colorize;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
-use crate::model::{ModelKey, ModelPose};
+use crate::model::{ModelKey, ModelPose, Mounting};
 use crate::movie_frame::MovieFrame;
 use crate::text_entry::EntryAsk;
 
@@ -318,7 +318,8 @@ pub enum DrawCommand {
     /// Models keep the list's order, as every other command does: a later
     /// model or sprite draws over an earlier model. Depth resolves each
     /// model against itself alone, so its near faces hide its far ones,
-    /// and two models never intersect by their 3D positions.
+    /// and two models never intersect by their 3D positions; the parts
+    /// mounted on it ([`DrawCommand::Mounted`]) are the exception.
     ///
     /// A model whose scale is not a positive, finite number, whose
     /// orientation is zero or not finite, whose mesh has no triangles, or
@@ -329,6 +330,25 @@ pub enum DrawCommand {
         model: ModelKey,
         /// Where it goes, how it is turned and how big it is.
         pose: ModelPose,
+    },
+    /// A 3D part drawn on the [`DrawCommand::Model`] just before it: at
+    /// that model's pose, placed on it as `mounting` says, and in that
+    /// model's depth, so the two hide each other by their 3D positions
+    /// (a turret on a ship's deck, its outfits on their hardpoints).
+    /// Several parts may follow one model; each follows that model, not
+    /// the part before it.
+    ///
+    /// With no model just before it (the list's first command, or one
+    /// after any command other than a model or a part), or after a model
+    /// that draws nothing, it draws nothing: a part is never drawn without
+    /// its model. Its own key with no mesh draws nothing, reported once as
+    /// a model's is. Its place moves with its model's, so
+    /// [`DrawCommand::translated`] leaves it as it is.
+    Mounted {
+        /// Which model the part is.
+        model: ModelKey,
+        /// Where it sits on the model before it, and how it is turned.
+        mounting: Mounting,
     },
     /// `command` drawn only inside `clip`: a text run cut to it, a
     /// sprite's, picture's or movie frame's quad cropped to it with its
@@ -374,6 +394,8 @@ impl DrawCommand {
             }
             Self::Triangle { corners, .. } => *corners = corners.map(moved),
             Self::Model { pose, .. } => pose.center = moved(pose.center),
+            // It sits on the model before it, which moves.
+            Self::Mounted { .. } => {}
             Self::Clipped { clip, command } => {
                 *clip = moved_bounds(*clip);
                 **command = command.translated(by);
@@ -806,6 +828,12 @@ impl DrawList {
         self.push(DrawCommand::Model { model, pose })
     }
 
+    /// Appends a [`DrawCommand::Mounted`]: `model` drawn on the model just
+    /// before it, as `mounting` places it.
+    pub fn mounted(&mut self, model: ModelKey, mounting: Mounting) -> &mut Self {
+        self.push(DrawCommand::Mounted { model, mounting })
+    }
+
     /// Appends a [`DrawCommand::MovieFrame`]: `frame` stretched into `area`.
     pub fn movie_frame(&mut self, frame: MovieFrame, area: Bounds) -> &mut Self {
         self.push(DrawCommand::MovieFrame { frame, area })
@@ -1090,6 +1118,41 @@ mod tests {
             model_at(1.0, 2.0).translated(at(10.0, -4.0)),
             model_at(11.0, -2.0)
         );
+    }
+
+    fn mounting() -> Mounting {
+        Mounting {
+            at: [0.5, -1.0, 2.0],
+            turn: 0.25,
+        }
+    }
+
+    #[test]
+    fn mounted_pushes_a_part_on_the_model_before_it() {
+        let mut list = DrawList::new();
+        let DrawCommand::Model { model, pose } = model_at(1.0, 2.0) else {
+            unreachable!()
+        };
+        list.model(model, pose).mounted(ModelKey(8), mounting());
+        assert_eq!(
+            list.iter().collect::<Vec<_>>(),
+            [
+                &model_at(1.0, 2.0),
+                &DrawCommand::Mounted {
+                    model: ModelKey(8),
+                    mounting: mounting(),
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn a_translated_part_is_unmoved_since_it_follows_its_model() {
+        let part = DrawCommand::Mounted {
+            model: ModelKey(8),
+            mounting: mounting(),
+        };
+        assert_eq!(part.translated(at(10.0, -4.0)), part);
     }
 
     #[test]

@@ -27,8 +27,8 @@ use crate::geometry::{Bounds, Point, intersection, lerp, span_in};
 ///   draws none);
 /// - each text, sprite, picture (blended or not), movie frame and OR fill
 ///   wrapped in [`DrawCommand::Clipped`] with `area`, which the renderer
-///   crops, and each model wrapped so too (the renderer draws a clipped
-///   model uncut);
+///   crops, and each model and each part mounted on one wrapped so too
+///   (the renderer draws a clipped model or part uncut);
 /// - each command already clipped re-clipped to the two clips' overlap,
 ///   and dropped when they share none.
 pub fn clip_opaque(map: &DrawList, area: Bounds, out: &mut DrawList) {
@@ -97,7 +97,8 @@ pub fn clip_opaque(map: &DrawList, area: Bounds, out: &mut DrawList) {
             | DrawCommand::TiledPicture { .. }
             | DrawCommand::MovieFrame { .. }
             | DrawCommand::OrFill { .. }
-            | DrawCommand::Model { .. } => {
+            | DrawCommand::Model { .. }
+            | DrawCommand::Mounted { .. } => {
                 out.clipped(area, command.clone());
             }
         }
@@ -283,6 +284,33 @@ mod tests {
                 command: Box::new(model),
             }]
         );
+    }
+
+    #[test]
+    fn a_part_clipped_to_the_map_area_is_wrapped_in_a_clip_as_its_model_is() {
+        let model = DrawCommand::Model {
+            model: crate::ModelKey(3),
+            pose: crate::ModelPose {
+                center: at(225.0, 140.0),
+                orientation: crate::Orientation::IDENTITY,
+                scale: 20.0,
+            },
+        };
+        let part = DrawCommand::Mounted {
+            model: crate::ModelKey(4),
+            mounting: crate::Mounting {
+                at: [0.0, 1.0, 0.5],
+                turn: 1.0,
+            },
+        };
+        let drawn = clipped(|map| {
+            map.push(model.clone()).push(part.clone());
+        });
+        let wrap = |command| DrawCommand::Clipped {
+            clip: area(),
+            command: Box::new(command),
+        };
+        assert_eq!(drawn, [wrap(model), wrap(part)]);
     }
 
     #[test]

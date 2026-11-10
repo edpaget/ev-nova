@@ -123,6 +123,10 @@ pub struct ModelInstance {
     /// Takes a normal on the model's axes to the view's (x right, y down,
     /// z toward the camera), by columns, which the light is given on.
     pub normal_from_model: [[f32; 3]; 3],
+    /// Whether it is a part mounted on the instance before it, drawn in
+    /// that instance's depth band ([`crate::camera::band`]). The core
+    /// reads it when it settles the bands; the adapter needn't.
+    pub shares_band: bool,
 }
 
 /// One run of text: placed and clipped in physical pixels, sized and
@@ -807,6 +811,7 @@ mod tests {
             mesh: MeshId(0),
             clip_from_model: [[0.0; 4]; 4],
             normal_from_model: [[0.0; 3]; 3],
+            shares_band: false,
         };
         let batches = [
             Batch::Sprites {
