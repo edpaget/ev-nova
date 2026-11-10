@@ -21,6 +21,16 @@
 //!   and turns a draw list into batches in draw order, keeping flight's
 //!   world layer ([`nova_view::DrawLayer`]) apart from the overlay: no
 //!   batch holds both.
+//! - [`model`]: the [`Mesh`]es 3D models ([`nova_view::DrawCommand::Model`])
+//!   are drawn with, checked when they are made, and [`Mesh::cube`].
+//! - [`camera`]: the models' orthographic camera, which puts a model where
+//!   a sprite at its centre goes at the 2D view's scale, their depth
+//!   bands, each later model of a batch nearer, and the [`Light`] they are
+//!   shaded by ([`camera::shade`]).
+//! - `models`: the [`Renderer`]'s meshes by [`nova_view::ModelKey`]
+//!   ([`Renderer::add_model`]), uploaded the first frame that draws them
+//!   ([`Gpu::upload_mesh`]), and the [`Batch::Models`] a list's models
+//!   become.
 //! - [`streams`]: the movie frames ([`nova_view::DrawCommand::MovieFrame`])
 //!   the [`Renderer`] streams onto pages of their own, numbered down from
 //!   the top so they never take an atlas page's id, and uploads again only
@@ -57,7 +67,11 @@
 //! the work to [`wgpu::WgpuRenderer`], which draws each frame into an
 //! offscreen scene and blits it to the target; an OR batch reads a backdrop
 //! copy of the rectangle the core says it covers, in the pixels of the
-//! canvas it draws into ([`Frame::pixels_covered`]). The renderer draws the
+//! canvas it draws into ([`Frame::pixels_covered`]), and a models batch
+//! draws in a pass of its own with a depth attachment, multiplying by the
+//! transforms the core worked out and lighting each fragment as
+//! [`camera::shade`] does, so sprites, placeholders and models mix in one
+//! frame in the list's order. The renderer draws the
 //! world with an upscaler ([`wgpu::Upscale`]): native draws it straight
 //! into the scene in the frame's order, as before there were layers, and
 //! [`wgpu::SharpBilinear`] draws it into a texture of the logical size

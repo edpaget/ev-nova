@@ -111,7 +111,7 @@ impl<S: ImageSource> Renderer<S> {
     /// Draws model `key` ([`DrawCommand::Model`]) with `mesh` from the
     /// next frame on, replacing any mesh it had. The mesh is uploaded
     /// ([`Gpu::upload_mesh`]) the first frame that draws it, and again
-    /// after it is replaced ([`crate::models`]).
+    /// after it is replaced, under the same [`MeshId`](crate::MeshId).
     pub fn add_model(&mut self, key: ModelKey, mesh: Mesh) {
         self.models.add(key, mesh);
     }
@@ -177,9 +177,15 @@ impl<S: ImageSource> Renderer<S> {
     /// runs ([`ImageKind::RledClippedSolid`]), are placed on such a page
     /// too, never in the atlas ([`Renderer::clipped_entry`]).
     ///
+    /// A model ([`DrawCommand::Model`]) uploads its mesh the first frame
+    /// that draws it ([`Renderer::add_model`]); consecutive models share a
+    /// [`Batch::Models`], each given its depth band once the frame's
+    /// batches are settled ([`crate::camera::band`]). A key with no mesh
+    /// draws nothing and is reported once ([`RenderReport::missing_models`]).
+    ///
     /// A frame drawn after [`Renderer::set_enlarger`] first starts the
     /// atlas afresh, the stream pages with it; a zero-area viewport leaves
-    /// that to the next frame.
+    /// that to the next frame. Meshes stay where they are.
     pub fn render(
         &mut self,
         list: &DrawList,

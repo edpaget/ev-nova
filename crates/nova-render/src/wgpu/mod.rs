@@ -61,7 +61,17 @@
 //! [`glyph_raster`](crate::glyph_raster) rather than by glyphon's own
 //! rasteriser, whose hinting ignores TrueType instructions in X.
 //!
-//! Every render pipeline, glyphon's included, is built when the renderer
+//! A models batch ([`Batch::Models`](crate::Batch::Models)) draws in a
+//! render pass of its own, its canvas's depth texture attached and
+//! cleared, and the batch after it opens a fresh pass without one, so no
+//! other pipeline meets a depth attachment. Each canvas, the scene or the
+//! world's, makes its depth texture the first frame that draws models into
+//! it. The model pipeline (`models.wgsl`) multiplies each vertex by the
+//! core's transforms and lights each fragment by
+//! [`camera::shade`](crate::camera::shade)'s formula; each mesh's buffers
+//! are made when it is uploaded ([`Gpu::upload_mesh`](crate::Gpu::upload_mesh)).
+//!
+//! Every render pipeline, glyphon's included, the model pipeline too, is built when the renderer
 //! is made or its upscaler is set, never on a frame: building one compiles
 //! its shader, which takes tens of milliseconds when macOS's Metal shader
 //! cache is cold. MetalFX's scaler, which is no wgpu pipeline, is made on
