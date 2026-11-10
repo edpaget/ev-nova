@@ -221,6 +221,7 @@ pub(super) mod tests {
             on_radar: false,
             iff: ShipIff::Other,
             mass: hull.mass,
+            turret_facing: session.ship.turret_facing.heading(),
         }
     }
 
@@ -251,6 +252,7 @@ pub(super) mod tests {
             on_radar: session.on_radar(npc),
             iff: session.ship_iff(npc),
             mass: npc.hull.mass,
+            turret_facing: npc.turret_facing.heading(),
         }
     }
 
@@ -270,6 +272,7 @@ pub(super) mod tests {
             on_radar: true,
             iff: ShipIff::Threat,
             mass: 999.0,
+            turret_facing: Some(999.0),
             paint: Some(crate::outfit_effects::Rgb15 { r: 9, g: 9, b: 9 }),
             ..FrameShip::default()
         }

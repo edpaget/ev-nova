@@ -1040,6 +1040,9 @@ impl Session {
         // drawn, crosses no boundary (see the `stray_words` module). None
         // is left when nothing stepped one since the ship loop.
         self.step_stray_words(chance);
+        // Each ship's turret facing, from the pass's turret aims: once a
+        // pass, here alone (see the `turret_facings` module).
+        self.keep_turret_facings();
         self.space.sync_fleet(&mut self.pilot);
         // Each phase lost the escorts its hits downed; what is left is
         // those whose ship is gone.

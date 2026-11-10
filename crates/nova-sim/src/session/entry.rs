@@ -755,6 +755,7 @@ impl Session {
         // A move's entry still owed comes first, so no entry straddles
         // another (see the `operator_moves` module).
         self.settle_pending_move(stellars, catalog, chance);
+        self.ship.clear_turret_facing();
         let Arrival {
             system: asked,
             sites,

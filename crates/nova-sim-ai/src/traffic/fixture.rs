@@ -94,6 +94,7 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         close_form: false,
         mine_order: crate::ai::mine_orders::MineOrder::Stop,
         stopping: false,
+        turret_facing: crate::combat::turret_aim::TurretFacing::default(),
         fleet_slot: None,
         form_parent: None,
         slot_place: None,

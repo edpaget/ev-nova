@@ -2032,6 +2032,12 @@ pub struct FrameShip {
     pub iff: ShipIff,
     /// Its class's `Mass`, which a density scanner squares it by.
     pub mass: f32,
+    /// The world heading its turrets face, in degrees, as its last turret
+    /// shot aimed; none to face the nose: before it has fired one, or once
+    /// it has fired none for a while (the session's `turret_facings`
+    /// module). A readout for the view's mounted outfits that nothing in
+    /// the simulation reads.
+    pub turret_facing: Option<f32>,
 }
 
 impl Default for FrameShip {
@@ -2062,6 +2068,7 @@ impl Default for FrameShip {
             on_radar: false,
             iff: ShipIff::Other,
             mass: 0.0,
+            turret_facing: None,
         }
     }
 }

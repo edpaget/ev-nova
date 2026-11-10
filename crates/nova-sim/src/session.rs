@@ -731,6 +731,7 @@ mod time_adjustment;
 mod tractor_hold;
 mod trade_dialog;
 mod trip_days;
+mod turret_facings;
 mod tutorial;
 mod uncounted_slots;
 #[cfg(test)]
@@ -4162,6 +4163,7 @@ impl Session {
         self.ship.player_speed = 0.0;
         self.mode = Mode::Landed(stellar);
         self.ship.clear_tractor();
+        self.ship.clear_turret_facing();
         self.space.reset_comm_line();
         // A warp-up or warp-out still playing is taken as over (see
         // `warp::WarpUps`, `warp::WarpOut`).

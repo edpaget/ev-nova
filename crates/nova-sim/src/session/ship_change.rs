@@ -429,6 +429,7 @@ impl Session {
         // 0 (`_HandlePlayer` @0x6ef1b-0x6ef3f), 0 for a hull of one set,
         // by either reading (see the `ship_display` module).
         self.ship.last_set_fold();
+        self.ship.clear_turret_facing();
         // The fighters out reach the new sprite (see the `fighter_homes`
         // module).
         self.space

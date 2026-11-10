@@ -51,6 +51,13 @@ impl Combat {
             &leaving,
         ));
     }
+
+    /// Records `aim` as a turret shot does, for the session's tests of
+    /// the facings it keeps.
+    #[cfg(any(test, feature = "fixture"))]
+    pub fn raise_turret_aim(&mut self, aim: TurretAim) {
+        self.turret_aims.push(aim);
+    }
 }
 
 /// One ship's turret aim: the world heading, in degrees, its turret shot
@@ -61,6 +68,42 @@ pub struct TurretAim {
     pub ship: ShipRef,
     /// The heading it was aimed along, in degrees, before its inaccuracy.
     pub heading: f32,
+}
+
+/// One ship's turret facing as the session keeps it from the aims: the
+/// last aim's heading, held for so many passes with no aim after it, then
+/// none, so its turrets face the nose again. The session picks the hold
+/// and steps it once a pass (`nova_sim::Session`'s `turret_facings`
+/// module). A new ship, or one just entering a system, has none.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TurretFacing {
+    heading: Option<f32>,
+    passes_left: u32,
+}
+
+impl TurretFacing {
+    /// The heading its turrets face, in degrees; none to face the nose.
+    #[must_use]
+    pub fn heading(self) -> Option<f32> {
+        self.heading
+    }
+
+    /// Faces `heading`, for `hold` more steps with no aim after it.
+    pub fn aim(&mut self, heading: f32, hold: u32) {
+        *self = Self {
+            heading: Some(heading),
+            passes_left: hold,
+        };
+    }
+
+    /// One pass with no aim: a step of the hold, back to the nose at its
+    /// end.
+    pub fn step(&mut self) {
+        self.passes_left = self.passes_left.saturating_sub(1);
+        if self.passes_left == 0 {
+            self.heading = None;
+        }
+    }
 }
 
 /// Whether a weapon of `guidance` records its aim (see the module docs).
@@ -98,6 +141,27 @@ mod tests {
             assert!(!records(Guidance::decode(raw)), "{raw}");
         }
         assert!(!records(Guidance::FighterBay));
+    }
+
+    #[test]
+    fn a_facing_holds_its_aim_for_its_hold_then_faces_the_nose() {
+        let mut facing = TurretFacing::default();
+        assert_eq!(facing.heading(), None, "none to start with");
+        facing.aim(30.0, 3);
+        for step in 1..3 {
+            facing.step();
+            assert_eq!(facing.heading(), Some(30.0), "step {step}");
+        }
+        facing.step();
+        assert_eq!(facing.heading(), None, "the hold ran out");
+        facing.step();
+        assert_eq!(facing.heading(), None);
+        // A new aim takes over, its hold anew.
+        facing.aim(10.0, 2);
+        facing.step();
+        facing.aim(20.0, 2);
+        facing.step();
+        assert_eq!(facing.heading(), Some(20.0));
     }
 
     #[test]

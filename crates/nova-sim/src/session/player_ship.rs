@@ -114,6 +114,10 @@ pub(super) struct PlayerShip {
     /// The gate autopilot while it is engaged (see the `gate_pilot`
     /// module). Never saved: a load flies with none.
     pub(super) gate_pilot: Option<super::gate_pilot::GatePilot>,
+    /// Where the ship's turrets face, a readout for the view that nothing
+    /// in the simulation reads (see the `turret_facings` module). Never
+    /// saved.
+    pub(super) turret_facing: crate::combat::turret_aim::TurretFacing,
 }
 
 /// What the player's ship's class and outfits give it, rewritten only by
@@ -324,6 +328,7 @@ impl PlayerShip {
             cloak: super::player_cloak::PlayerCloak::default(),
             held_stock: BTreeMap::new(),
             gate_pilot: None,
+            turret_facing: crate::combat::turret_aim::TurretFacing::default(),
         }
     }
 

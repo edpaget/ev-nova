@@ -50,6 +50,7 @@ impl Session {
             on_radar: false,
             iff: ShipIff::Other,
             mass: hull.mass,
+            turret_facing: self.ship.turret_facing.heading(),
         }
     }
 
@@ -83,6 +84,7 @@ impl Session {
             on_radar: self.on_radar(npc),
             iff: self.ship_iff(npc),
             mass: npc.hull.mass,
+            turret_facing: npc.turret_facing.heading(),
         }
     }
 
@@ -172,5 +174,32 @@ impl Chart {
             .filter(|listed| !self.sites.iter().any(|site| site.id == listed.id))
             .map(|site| (site.id, false));
         shown.chain(others)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::stale;
+    use crate::session::tests::{armed, facing_an_npc};
+
+    #[test]
+    fn each_ships_turret_facing_is_filled_over_a_stale_frame() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.ship.turret_facing.aim(30.0, 9);
+        session.space.traffic.npcs_mut()[0]
+            .turret_facing
+            .aim(250.0, 9);
+        let mut frame = stale();
+        frame.ships[0].turret_facing = Some(999.0);
+        session.fill_frame(&mut frame);
+        let facings: Vec<_> = frame.ships.iter().map(|ship| ship.turret_facing).collect();
+        assert_eq!(facings, [Some(30.0), Some(250.0)]);
+        // And none, over a stale facing, for a ship with none.
+        let unfaced = facing_an_npc(&catalog, 180);
+        let mut frame = stale();
+        frame.ships[0].turret_facing = Some(999.0);
+        unfaced.fill_frame(&mut frame);
+        assert!(frame.ships.iter().all(|ship| ship.turret_facing.is_none()));
     }
 }

@@ -675,6 +675,7 @@ impl Space {
 /// [`RuleKey::FighterCapacity`] (`_LaunchFighter` @0x3d9e7, @0x3d9f7,
 /// [`Npc::take_carrier`]), carrying its class's stock weapons and
 /// rounds, its AI type its `InherentAI`, idle.
+#[allow(clippy::too_many_lines)] // a line for each of the record's fields
 fn fighter(
     kind: &ShipKind,
     ship: crate::catalog::ShipId,
@@ -756,6 +757,7 @@ fn fighter(
         // The spawn zeroes the sub-goal +0xc8ca: order 1.
         mine_order: crate::ai::mine_orders::MineOrder::Stop,
         stopping: false,
+        turret_facing: crate::combat::turret_aim::TurretFacing::default(),
         fleet_slot: None,
         form_parent: None,
         slot_place: None,

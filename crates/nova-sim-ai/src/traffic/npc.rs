@@ -871,6 +871,12 @@ pub struct Npc {
     /// reset (@0x8ff0a) store sub 0, which clears it. An NPC held still
     /// keeps it. It starts `false`. Never saved.
     pub stopping: bool,
+    /// Where its turrets face, as its last turret shot aimed: a readout
+    /// for the view that nothing in the simulation reads, kept by the
+    /// session (`nova_sim::Session`'s `turret_facings` module). None, to
+    /// face the nose, at every spawn ([`Traffic::add_npc_at`](crate::traffic::Traffic::add_npc_at)).
+    /// Never saved.
+    pub turret_facing: crate::combat::turret_aim::TurretFacing,
 }
 
 /// The commodities 0-5 the original's ship records count.

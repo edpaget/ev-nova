@@ -2627,6 +2627,9 @@ impl Traffic {
             id,
             berth,
             pick,
+            // A ship placed anew faces its turrets to the nose, whatever
+            // record it was built from.
+            turret_facing: crate::combat::turret_aim::TurretFacing::default(),
             ..npc
         };
         // Nor the exit cursors (+0xc8fe-+0xc905) or the blink timer
@@ -3250,6 +3253,7 @@ impl Traffic {
                 // The spawn zeroes the sub-goal +0xc8ca: order 1's reading.
                 mine_order: crate::ai::mine_orders::MineOrder::Stop,
                 stopping: false,
+                turret_facing: crate::combat::turret_aim::TurretFacing::default(),
                 fleet_slot: None,
                 form_parent: None,
                 slot_place: None,
