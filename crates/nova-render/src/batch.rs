@@ -22,6 +22,7 @@ use crate::models::{self, Models};
 use crate::planet_source::LoadedPlanet;
 use crate::planets::Planets;
 use crate::quickdraw_stretch;
+use crate::render_scale::RenderScale;
 use crate::streams::{Owner, Streams};
 use crate::upscale::world_space;
 use crate::viewport::{LogicalSize, PixelRect, Viewport};
@@ -252,7 +253,7 @@ impl<S: ImageSource> Renderer<S> {
             viewport: rect,
             logical: viewport.logical(),
             clear: Color::BLACK,
-            world_space: world_space(gpu.world_resolution(), viewport),
+            world_space: world_space(gpu.world_resolution(), RenderScale::Auto, viewport),
             batches,
             world,
             world_clip: list.world_clip().map(|clip| Rect {

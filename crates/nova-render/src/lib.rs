@@ -188,7 +188,7 @@ pub use render_scale::{RenderScale, scaled_size};
 pub use source::GameImages;
 pub use super_xbr::SuperXbr;
 pub use upscale::{
-    Abilities, RejectedSizes, Upscaler, UpscalerProbe, WorldResolution, effective, listed,
-    metal_fx_takes, offered, resolution_of, world_space,
+    Abilities, RejectedSizes, Upscaler, UpscalerProbe, WorldResolution, effective, enlarging,
+    listed, metal_fx_takes, offered, resolution_of, world_space,
 };
 pub use viewport::{LOGICAL, Letterbox, LogicalSize, PixelRect, Viewport};

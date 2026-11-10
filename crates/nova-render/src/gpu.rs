@@ -299,7 +299,10 @@ pub enum WorldSpace {
     /// frame's order, whatever its layer.
     Target,
     /// Into a texture of its own, `size` pixels, the logical space filling
-    /// it at one texel a unit, for an upscaler to enlarge onto the
+    /// the whole texture (at the logical size under
+    /// [`RenderScale::Auto`](crate::RenderScale::Auto), or a share of the
+    /// viewport under a [`RenderScale::Percent`](crate::RenderScale::Percent),
+    /// [`world_space`](crate::world_space)), for an upscaler to enlarge onto the
     /// viewport (each axis by its own scale in a widened view, and a
     /// shrink in a window smaller than the logical space), with the
     /// overlay drawn over it. The world's tail ([`Frame::world_tail`]) is
@@ -308,7 +311,7 @@ pub enum WorldSpace {
     /// world batches projected onto the viewport as [`WorldSpace::Target`]
     /// projects them ([`Frame::space_of`]).
     Texture {
-        /// The texture's width and height in texels: the logical size.
+        /// The texture's width and height in texels.
         size: (u32, u32),
     },
 }

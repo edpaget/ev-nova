@@ -23,6 +23,7 @@
 //! sharp-bilinear and logged once ([`RejectedSizes`]).
 
 use crate::gpu::WorldSpace;
+use crate::render_scale::{RenderScale, scaled_size};
 use crate::viewport::Viewport;
 
 pub use nova_view::Upscaler;
@@ -146,11 +147,35 @@ impl RejectedSizes {
     }
 }
 
-/// Where a frame drawn into `viewport` draws its world, at `resolution`:
-/// straight into the target at the native resolution, and into a texture
-/// of the logical size at the logical one.
+/// Where a frame drawn into `viewport` draws its world, at `resolution`
+/// and `scale`.
+///
+/// At [`RenderScale::Auto`] the resolution alone decides: straight into
+/// the target at the native resolution, and into a texture of the logical
+/// size at the logical one. At [`RenderScale::Percent`] (clamped as
+/// [`RenderScale::percent`] clamps) the world is drawn into a texture of
+/// that share of the viewport's content ([`scaled_size`]), whatever the
+/// resolution, except a native world at 100%, which is the target itself.
+/// A zero-area viewport has no content to take a share of, so it draws
+/// where [`RenderScale::Auto`] would.
 #[must_use]
-pub fn world_space(resolution: WorldResolution, viewport: &Viewport) -> WorldSpace {
+pub fn world_space(
+    resolution: WorldResolution,
+    scale: RenderScale,
+    viewport: &Viewport,
+) -> WorldSpace {
+    let percent = match scale {
+        RenderScale::Auto => None,
+        RenderScale::Percent(p) => Some(p.clamp(RenderScale::MIN, RenderScale::MAX)),
+    };
+    let native_whole = |&p: &u8| resolution == WorldResolution::Native && p == RenderScale::MAX;
+    let percent = percent.filter(|p| !native_whole(p));
+    let content = viewport.content().map(|(rect, _)| (rect.w, rect.h));
+    if let (Some(percent), Some(backing)) = (percent, content) {
+        return WorldSpace::Texture {
+            size: scaled_size(backing, percent),
+        };
+    }
     match resolution {
         WorldResolution::Native => WorldSpace::Target,
         WorldResolution::Logical => {
@@ -159,6 +184,18 @@ pub fn world_space(resolution: WorldResolution, viewport: &Viewport) -> WorldSpa
                 size: (logical.w, logical.h),
             }
         }
+    }
+}
+
+/// The upscaler that enlarges a texture world when `upscaler` is the one
+/// chosen: native has no enlarging pass of its own, so a native world
+/// drawn below 100% ([`world_space`]) is enlarged with sharp-bilinear;
+/// every other upscaler enlarges with itself.
+#[must_use]
+pub fn enlarging(upscaler: Upscaler) -> Upscaler {
+    match upscaler {
+        Upscaler::Native => Upscaler::SharpBilinear,
+        Upscaler::SharpBilinear | Upscaler::Fsr1 | Upscaler::MetalFxSpatial => upscaler,
     }
 }
 
@@ -300,7 +337,7 @@ mod tests {
     fn a_native_world_is_drawn_into_the_target() {
         let viewport = Viewport::new(LOGICAL, (2048, 1536), 2.0);
         assert_eq!(
-            world_space(WorldResolution::Native, &viewport),
+            world_space(WorldResolution::Native, RenderScale::Auto, &viewport),
             WorldSpace::Target
         );
         assert_eq!(Upscaler::default(), Upscaler::Native);
@@ -311,16 +348,129 @@ mod tests {
     fn a_logical_world_is_drawn_into_a_texture_of_the_logical_size() {
         let classic = Viewport::new(LOGICAL, (2048, 1536), 2.0);
         assert_eq!(
-            world_space(WorldResolution::Logical, &classic),
+            world_space(WorldResolution::Logical, RenderScale::Auto, &classic),
             WorldSpace::Texture { size: (1024, 768) }
         );
         let widened = Viewport::for_shape(ViewShape::Widened, (1920, 1080), 1.0);
         let logical = widened.logical();
         assert_eq!((logical.w, logical.h), (1365, 768));
         assert_eq!(
-            world_space(WorldResolution::Logical, &widened),
+            world_space(WorldResolution::Logical, RenderScale::Auto, &widened),
             WorldSpace::Texture { size: (1365, 768) }
         );
+    }
+
+    #[test]
+    fn auto_draws_the_world_where_each_resolution_did() {
+        let widened = Viewport::for_shape(ViewShape::Widened, (1920, 1080), 1.0);
+        for viewport in [Viewport::new(LOGICAL, (2048, 1536), 2.0), widened] {
+            let logical = viewport.logical();
+            assert_eq!(
+                world_space(WorldResolution::Native, RenderScale::Auto, &viewport),
+                WorldSpace::Target
+            );
+            assert_eq!(
+                world_space(WorldResolution::Logical, RenderScale::Auto, &viewport),
+                WorldSpace::Texture {
+                    size: (logical.w, logical.h)
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn a_native_world_at_a_hundred_percent_stays_in_the_target() {
+        let viewport = Viewport::new(LOGICAL, (2048, 1536), 2.0);
+        assert_eq!(
+            world_space(
+                WorldResolution::Native,
+                RenderScale::percent(100),
+                &viewport
+            ),
+            WorldSpace::Target
+        );
+    }
+
+    #[test]
+    fn a_native_world_below_a_hundred_percent_is_a_texture_of_that_share_of_the_viewport() {
+        let viewport = Viewport::new(LOGICAL, (2048, 1536), 2.0);
+        assert_eq!(
+            world_space(WorldResolution::Native, RenderScale::percent(50), &viewport),
+            WorldSpace::Texture { size: (1024, 768) }
+        );
+        assert_eq!(
+            world_space(WorldResolution::Native, RenderScale::percent(99), &viewport),
+            WorldSpace::Texture { size: (2028, 1521) }
+        );
+    }
+
+    #[test]
+    fn an_enlarging_upscalers_world_at_a_percent_is_sized_from_the_backing_not_the_logical_size() {
+        let widened = Viewport::for_shape(ViewShape::Widened, (1920, 1080), 1.0);
+        assert_eq!(
+            world_space(WorldResolution::Logical, RenderScale::percent(50), &widened),
+            WorldSpace::Texture { size: (960, 540) }
+        );
+        let retina = Viewport::new(LOGICAL, (2048, 1536), 2.0);
+        assert_eq!(
+            world_space(WorldResolution::Logical, RenderScale::percent(100), &retina),
+            WorldSpace::Texture { size: (2048, 1536) },
+            "the backing size, enlarged 1x"
+        );
+    }
+
+    #[test]
+    fn a_letterboxed_viewport_scales_its_content_not_the_window() {
+        // 2560 wide fits 1024 at 2x, 2048 wide, with bars either side.
+        let viewport = Viewport::new(LOGICAL, (2560, 1536), 2.0);
+        for resolution in [WorldResolution::Native, WorldResolution::Logical] {
+            assert_eq!(
+                world_space(resolution, RenderScale::percent(50), &viewport),
+                WorldSpace::Texture { size: (1024, 768) },
+                "{resolution:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_percent_built_out_of_range_is_drawn_clamped() {
+        let viewport = Viewport::new(LOGICAL, (2048, 1536), 2.0);
+        assert_eq!(
+            world_space(
+                WorldResolution::Native,
+                RenderScale::Percent(200),
+                &viewport
+            ),
+            WorldSpace::Target
+        );
+        assert_eq!(
+            world_space(WorldResolution::Logical, RenderScale::Percent(0), &viewport),
+            WorldSpace::Texture { size: (512, 384) }
+        );
+    }
+
+    #[test]
+    fn a_zero_area_viewport_at_a_percent_draws_where_auto_would() {
+        let viewport = Viewport::new(LOGICAL, (0, 0), 1.0);
+        for resolution in [WorldResolution::Native, WorldResolution::Logical] {
+            assert_eq!(
+                world_space(resolution, RenderScale::percent(50), &viewport),
+                world_space(resolution, RenderScale::Auto, &viewport),
+                "{resolution:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn native_is_enlarged_with_sharp_bilinear_and_every_other_upscaler_with_itself() {
+        assert_eq!(enlarging(Upscaler::Native), Upscaler::SharpBilinear);
+        for upscaler in [
+            Upscaler::SharpBilinear,
+            Upscaler::Fsr1,
+            Upscaler::MetalFxSpatial,
+        ] {
+            assert_eq!(enlarging(upscaler), upscaler);
+        }
     }
 
     /// Answers what it is given.
