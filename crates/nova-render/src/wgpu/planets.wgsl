@@ -193,11 +193,13 @@ fn planet_fs(in: PlanetOut) -> @location(0) vec4<f32> {
     let edge = max(fwidth(d), 1e-6);
     let coverage = clamp((1.0 - d) / edge + 0.5, 0.0, 1.0);
 
-    // `planet::fragment`, layer by layer in its order.
+    // `planet::fragment`, layer by layer in its order. The globe is
+    // skipped where it covers nothing and the rings where they are clear,
+    // to spare their texture reads: a layer at alpha 0 changes nothing.
     var acc = vec4<f32>(0.0);
 
     // The halo, off the disc.
-    if (!on_disc && d > 0.0) {
+    if (!on_disc) {
         let glow = halo(x, y, in.atmosphere, light);
         acc = over(acc, glow.rgb, glow.a);
     }

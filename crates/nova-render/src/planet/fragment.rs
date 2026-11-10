@@ -80,30 +80,27 @@ pub fn fragment(fragment: &Fragment, opacity: impl Fn(f32) -> f32) -> Option<[f3
     let d = (x * x + y * y).sqrt();
     let on_disc = globe(x, y).is_some();
     let mut acc = [0.0; 4];
-    if !on_disc && d > 0.0 {
+    if !on_disc {
         let glow = halo(x, y, atmosphere, light);
         acc = over(acc, rgb(glow), glow[3]);
     }
-    if coverage > 0.0 {
-        // The globe's normal, clamped onto the limb off the disc, where
-        // only its anti-aliased edge shows.
-        let n = [x, y, (1.0 - x * x - y * y).max(0.0).sqrt()];
-        let shadow = ring_shadow(n, &frame, light).map_or(0.0, &opacity);
+    // The globe, as much of it as covers the fragment. Its normal is
+    // clamped onto the limb off the disc, where only its anti-aliased edge
+    // shows. (The shader skips it where it covers nothing, and the rings
+    // where they are clear: a layer at alpha 0 changes nothing.)
+    let n = [x, y, (1.0 - x * x - y * y).max(0.0).sqrt()];
+    let shadow = ring_shadow(n, &frame, light).map_or(0.0, &opacity);
+    acc = over(
+        acc,
+        globe_color(n, d, ground, cloud, shadow, atmosphere, light),
+        coverage,
+    );
+    if let Some(hit) = ring_hit(x, y, &frame).filter(|hit| hit.in_front) {
         acc = over(
             acc,
-            globe_color(n, d, ground, cloud, shadow, atmosphere, light),
-            coverage,
+            ring_color(rings, in_planet_shadow(hit.point, light), light),
+            opacity(hit.radius),
         );
-    }
-    if let Some(hit) = ring_hit(x, y, &frame) {
-        let opacity = opacity(hit.radius);
-        if hit.in_front && opacity > 0.0 {
-            acc = over(
-                acc,
-                ring_color(rings, in_planet_shadow(hit.point, light), light),
-                opacity,
-            );
-        }
     }
     let alpha = acc[3];
     (alpha > 0.0).then(|| {
@@ -397,6 +394,16 @@ mod tests {
         };
         assert_eq!(fragment(&beyond, no_rings), None);
         assert_eq!(fragment(&at(1.05, 0.0), no_rings), None);
+        // None on the disc, even where the globe only partly covers it:
+        // the globe's edge there shows over nothing.
+        let edge = Fragment {
+            atmosphere,
+            coverage: 0.5,
+            ..at(0.999, 0.0)
+        };
+        assert!(globe(0.999, 0.0).is_some());
+        assert!(rim(0.999, 0.1) > 0.0);
+        assert_eq!(fragment(&edge, no_rings).map(|c| c[3]), Some(0.5));
     }
 
     #[test]
