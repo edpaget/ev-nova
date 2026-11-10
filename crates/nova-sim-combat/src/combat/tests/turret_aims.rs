@@ -106,6 +106,55 @@ fn a_turreted_beam_records_its_bearing_as_launched() {
 }
 
 #[test]
+fn a_turret_off_the_centre_aims_from_its_exit() {
+    // A turret exit 30 to starboard, at the turret exits (`ExitType` 1).
+    let mut raw = ShipExits {
+        up_compress: (100, 100),
+        down_compress: (100, 100),
+        frames: 36,
+        ..ShipExits::default()
+    };
+    raw.points[1] = [(30, 0); 4];
+    let record = WeaponRecord {
+        exit_type: 1,
+        ..turret(4)
+    };
+    let mut combat = Combat::default();
+    let mut ships = [
+        Ship::at(1, 0.0, 0.0)
+            .armed(record)
+            .facing(0.0)
+            .drawn_at(0.0)
+            .targeting(B)
+            .of(hull_of(raw)),
+        Ship::at(2, 60.0, -90.0),
+    ];
+    phase::fire(&mut combat, &mut ships, A, &NovaDisable);
+    let shot = *combat.shots().last().expect("a shot");
+    let from_centre = f32::from(trig::intercept_angle(Vec2::ZERO, Vec2::new(60.0, -90.0)));
+    let aims = combat.take_turret_aims();
+    assert_eq!(aims.len(), 1, "{aims:?}");
+    // The true turret's shot flies along the aim from its exit.
+    assert_eq!(aims[0].heading, shot.heading);
+    assert!(
+        (aims[0].heading - from_centre).abs() >= 1.0,
+        "{} is the centre's {from_centre}",
+        aims[0].heading
+    );
+}
+
+#[test]
+fn a_raised_aim_is_taken_as_a_recorded_one() {
+    let mut combat = Combat::default();
+    let aim = TurretAim {
+        ship: A,
+        heading: 77.0,
+    };
+    combat.raise_turret_aim(aim);
+    assert_eq!(combat.take_turret_aims(), vec![aim]);
+}
+
+#[test]
 fn taking_the_aims_empties_them() {
     let mut combat = Combat::default();
     let mut ships = shooters(turret(4));
