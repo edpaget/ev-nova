@@ -4,13 +4,15 @@
 //! fetched except through the caller.
 //!
 //! Ported from game-bible's `galaxy` tool (`media.rs` `model`, and
-//! `check/art.rs` `model_of`).
+//! `check/art.rs` `model_of`). It walks the glTF file as
+//! [`read_scene`](crate::scene::read_scene) does, through the same code,
+//! and keeps only the triangles' corners and colours.
 
-use gltf::Gltf;
-use gltf::mesh::Mode;
 use nova_galaxy_format::asset::{Asset, Front};
 use nova_galaxy_format::media::is_lfs_pointer;
 use nova_galaxy_format::source::Source;
+
+use crate::scene;
 
 /// The box a model fills, in its own units, after its nodes' transforms.
 /// glTF axes: +Y is up, +Z is the front, +X is the model's left.
@@ -73,95 +75,34 @@ pub fn model(
     bytes: &[u8],
     read: impl Fn(&str) -> Option<Vec<u8>>,
 ) -> Result<Model, String> {
-    let gltf = Gltf::from_slice(bytes).map_err(|e| format!("not a readable glTF model: {e}"))?;
-    let folder = path.rsplit_once('/').map_or("", |(dir, _)| dir);
-    let mut external = Vec::new();
-    let mut buffers = Vec::new();
-    for buffer in gltf.buffers() {
-        match buffer.source() {
-            gltf::buffer::Source::Bin => {
-                buffers.push(gltf.blob.clone().ok_or("the GLB has no binary chunk")?);
-            }
-            gltf::buffer::Source::Uri(uri) => {
-                let file = beside(folder, uri)?;
-                let data = read(&file).ok_or(format!("names `{file}`, which does not exist"))?;
-                external.push(file);
-                buffers.push(data);
-            }
-        }
-    }
-    for image in gltf.images() {
-        if let gltf::image::Source::Uri { uri, .. } = image.source() {
-            external.push(beside(folder, uri)?);
-        }
-    }
-
+    let opened = scene::open(path, bytes, &read)?;
+    let primitives = scene::walk(&opened)?;
+    let bounds = scene::bounds_of(&primitives).ok_or("the model draws no triangles")?;
+    let materials: Vec<_> = opened.gltf.materials().collect();
     let mut faces = Vec::new();
-    let scenes: Vec<_> = gltf.default_scene().into_iter().collect();
-    let scenes = if scenes.is_empty() {
-        gltf.scenes().collect()
-    } else {
-        scenes
-    };
-    let mut stack: Vec<_> = scenes
-        .iter()
-        .flat_map(gltf::Scene::nodes)
-        .map(|n| (n, IDENTITY))
-        .collect();
-    while let Some((node, parent)) = stack.pop() {
-        let matrix = multiply(&parent, &node.transform().matrix());
-        if let Some(mesh) = node.mesh() {
-            for primitive in mesh.primitives().filter(|p| p.mode() == Mode::Triangles) {
-                let material = primitive.material();
-                let color = material.pbr_metallic_roughness().base_color_factor();
-                let material = material.index();
-                let reader = primitive.reader(|b| buffers.get(b.index()).map(Vec::as_slice));
-                let positions: Vec<[f32; 3]> = reader
-                    .read_positions()
-                    .ok_or("a mesh has no vertex positions")?
-                    .map(|p| apply(&matrix, p))
-                    .collect();
-                let indices: Vec<u32> = match reader.read_indices() {
-                    Some(indices) => indices.into_u32().collect(),
-                    None => (0..u32::try_from(positions.len()).unwrap_or(u32::MAX)).collect(),
-                };
-                for tri in indices.as_chunks::<3>().0 {
-                    let corner = |i: u32| positions.get(i as usize).copied();
-                    match (corner(tri[0]), corner(tri[1]), corner(tri[2])) {
-                        (Some(a), Some(b), Some(c)) => faces.push(Face {
-                            points: [a, b, c],
-                            color,
-                            material,
-                        }),
-                        _ => return Err("a triangle names a vertex that does not exist".into()),
-                    }
-                }
-            }
+    for p in &primitives {
+        // Without a material, glTF's default: white.
+        let color = p
+            .material
+            .and_then(|m| materials.get(m))
+            .map_or([1.0; 4], |m| m.pbr_metallic_roughness().base_color_factor());
+        for tri in p.indices.as_chunks::<3>().0 {
+            faces.push(Face {
+                points: [0, 1, 2].map(|k| p.positions[tri[k] as usize]),
+                color,
+                material: p.material,
+            });
         }
-        stack.extend(node.children().map(|child| (child, matrix)));
-    }
-    let mut bounds = Bounds {
-        min: [f32::MAX; 3],
-        max: [f32::MIN; 3],
-    };
-    for point in faces.iter().flat_map(|f| &f.points) {
-        for (i, value) in point.iter().enumerate() {
-            bounds.min[i] = bounds.min[i].min(*value);
-            bounds.max[i] = bounds.max[i].max(*value);
-        }
-    }
-    if faces.is_empty() {
-        return Err("the model draws no triangles".into());
     }
     Ok(Model {
-        triangles: u32::try_from(faces.len()).unwrap_or(u32::MAX),
+        triangles: scene::triangles_of(&primitives),
         bounds,
         faces,
-        materials: gltf
-            .materials()
+        materials: materials
+            .iter()
             .map(|m| m.name().map(String::from))
             .collect(),
-        external,
+        external: opened.external,
     })
 }
 
@@ -186,22 +127,34 @@ pub enum NoModel {
 /// Without one, why: the first model file's failure, or
 /// [`NoModel::None`] when it names no model file.
 pub fn read_model(source: &impl Source, asset: &Asset) -> Result<(Model, Front), NoModel> {
+    first_model(source, asset, |path, bytes, read| model(path, bytes, read))
+}
+
+/// What `decode` makes of the first of `asset`'s `.glb` and `.gltf` files
+/// that reads through `source`, and which way it faces; without one, the
+/// first model file's failure, or [`NoModel::None`] when it names none.
+pub(crate) fn first_model<T>(
+    source: &impl Source,
+    asset: &Asset,
+    decode: impl Fn(&str, &[u8], &dyn Fn(&str) -> Option<Vec<u8>>) -> Result<T, String>,
+) -> Result<(T, Front), NoModel> {
     let mut why = NoModel::None;
+    let read = |p: &str| source.bytes(p).ok().flatten();
     for file in asset
         .files
         .iter()
         .filter(|f| matches!(f.extension().as_str(), "glb" | "gltf"))
     {
         let path = file.as_str();
-        let read = match source.bytes(path) {
+        let decoded = match source.bytes(path) {
             Ok(Some(bytes)) if is_lfs_pointer(&bytes) => Err(NoModel::Pointer),
-            Ok(Some(bytes)) => model(path, &bytes, |p| source.bytes(p).ok().flatten())
+            Ok(Some(bytes)) => decode(path, &bytes, &read)
                 .map_err(|e| NoModel::Unreadable(format!("`{path}`: {e}"))),
             Ok(None) => Err(NoModel::Missing(path.to_owned())),
             Err(e) => Err(NoModel::Unreadable(format!("`{path}`: {e}"))),
         };
-        match read {
-            Ok(model) => return Ok((model, asset.front)),
+        match decoded {
+            Ok(decoded) => return Ok((decoded, asset.front)),
             Err(failed) if why == NoModel::None => why = failed,
             Err(_) => {}
         }
@@ -210,7 +163,7 @@ pub fn read_model(source: &impl Source, asset: &Asset) -> Result<(Model, Front),
 }
 
 /// The data-folder path of `uri`, a file named from a model in `folder`.
-fn beside(folder: &str, uri: &str) -> Result<String, String> {
+pub(crate) fn beside(folder: &str, uri: &str) -> Result<String, String> {
     let plain = !uri.is_empty()
         && !uri.contains(':')
         && !uri.contains('%')
@@ -229,31 +182,6 @@ fn beside(folder: &str, uri: &str) -> Result<String, String> {
     } else {
         format!("{folder}/{uri}")
     })
-}
-
-type Matrix = [[f32; 4]; 4];
-
-const IDENTITY: Matrix = [
-    [1.0, 0.0, 0.0, 0.0],
-    [0.0, 1.0, 0.0, 0.0],
-    [0.0, 0.0, 1.0, 0.0],
-    [0.0, 0.0, 0.0, 1.0],
-];
-
-/// `a * b` for column-major matrices.
-fn multiply(a: &Matrix, b: &Matrix) -> Matrix {
-    let mut m = [[0.0; 4]; 4];
-    for (col, out) in m.iter_mut().enumerate() {
-        for (row, cell) in out.iter_mut().enumerate() {
-            *cell = (0..4).map(|k| a[k][row] * b[col][k]).sum();
-        }
-    }
-    m
-}
-
-/// The point `p` moved by the column-major matrix `m`.
-fn apply(m: &Matrix, p: [f32; 3]) -> [f32; 3] {
-    [0, 1, 2].map(|row| m[0][row] * p[0] + m[1][row] * p[1] + m[2][row] * p[2] + m[3][row])
 }
 
 #[cfg(test)]

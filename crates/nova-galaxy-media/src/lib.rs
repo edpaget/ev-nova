@@ -31,6 +31,7 @@ pub mod fixture;
 pub mod model;
 pub mod outline;
 pub mod placement;
+pub mod scene;
 
 pub use model::{Bounds, Face, Model, NoModel, model, read_model};
 pub use outline::{BARE, Outline, Triangle, painted, rgb, silhouette, size_box, top_down};

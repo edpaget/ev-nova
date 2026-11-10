@@ -72,7 +72,8 @@ schemars = "1.2.3"
 serde-saphyr = { version = "2.0.0", default-features = false, features = ["deserialize"] }
 # Reads the new game's glTF models (nova-galaxy-media), as game-bible's
 # `galaxy` tool pins it: only the data, no image decoding or URI fetching.
-gltf = { version = "1.4.1", default-features = false, features = ["utils", "names"] }
+# `KHR_materials_unlit` reads a material's unlit flag for the 3D models.
+gltf = { version = "1.4.1", default-features = false, features = ["utils", "names", "KHR_materials_unlit"] }
 thiserror = "2"
 # The Ink runtime that plays the new game's compiled dialog (nova-ink only,
 # as `deny.toml` bans it elsewhere). Pinned exactly: the dialog port's
