@@ -29,7 +29,8 @@ pub(super) struct PlanetData {
     pub north: [f32; 4],
     /// The equator's point facing the camera, then the clouds' turn.
     pub facing: [f32; 4],
-    /// East, then 0.
+    /// East, then the atmosphere's strength at the limb
+    /// ([`crate::planet::RIM`]).
     pub east: [f32; 4],
     /// The rings' inner and outer radii, the reach, then 0.
     pub rings: [f32; 4],
@@ -52,7 +53,7 @@ impl PlanetData {
             dest: [dest.x, dest.y, dest.w, dest.h],
             north: with(planet.frame.north, surface_turn),
             facing: with(planet.frame.facing, cloud_turn),
-            east: with(planet.frame.east, 0.0),
+            east: with(planet.frame.east, crate::planet::RIM),
             rings: [inner, outer, planet.reach, 0.0],
             ring_color: with(planet.ring_color, 0.0),
             atmosphere: planet.atmosphere,
@@ -318,11 +319,13 @@ mod tests {
         };
         let data = PlanetData::new(&planet, light);
         let floats: &[f32] = bytemuck::cast_slice(std::slice::from_ref(&data));
+        // East's spare lane carries the core's rim strength.
+        let rim = crate::planet::RIM;
         assert_eq!(
             floats,
             [
                 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 0.25, 8.0, 9.0, 10.0, 0.5, 11.0, 12.0, 13.0,
-                0.0, 1.4, 2.3, 2.5, 0.0, 0.1, 0.2, 0.3, 0.0, 0.4, 0.5, 0.6, 0.04, 14.0, 15.0, 16.0,
+                rim, 1.4, 2.3, 2.5, 0.0, 0.1, 0.2, 0.3, 0.0, 0.4, 0.5, 0.6, 0.04, 14.0, 15.0, 16.0,
                 0.75,
             ]
         );

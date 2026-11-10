@@ -24,8 +24,6 @@ struct Globals {
 
 const PI: f32 = 3.14159265358979;
 const TAU: f32 = 6.28318530717959;
-// `planet::RIM`.
-const RIM: f32 = 0.6;
 
 // Logical units (y down) to clip space (y up).
 fn to_clip(p: vec2<f32>) -> vec4<f32> {
@@ -41,7 +39,7 @@ struct PlanetOut {
     @location(1) @interpolate(flat) north: vec4<f32>,
     // The equator's point facing the camera, then the clouds' turn.
     @location(2) @interpolate(flat) facing: vec4<f32>,
-    // East.
+    // East, then the atmosphere's strength at the limb (`planet::RIM`).
     @location(3) @interpolate(flat) east: vec4<f32>,
     // The rings' inner and outer radii.
     @location(4) @interpolate(flat) rings: vec4<f32>,
@@ -88,17 +86,17 @@ fn lit(n: vec3<f32>, light: vec4<f32>) -> f32 {
     return light.w + (1.0 - light.w) * max(dot(normalize(n), light.xyz), 0.0);
 }
 
-// `planet::rim`.
-fn rim(d: f32, thickness: f32) -> f32 {
+// `planet::rim`, its strength at the limb `strength` (`planet::RIM`).
+fn rim(d: f32, thickness: f32, strength: f32) -> f32 {
     if (thickness <= 0.0 || d >= 1.0 + thickness) {
         return 0.0;
     }
     if (d <= 1.0) {
         let d2 = d * d;
-        return RIM * d2 * d2;
+        return strength * d2 * d2;
     }
     let fade = 1.0 - (d - 1.0) / thickness;
-    return RIM * fade * fade;
+    return strength * fade * fade;
 }
 
 // `RingBand::opacity`: the profile read linearly between its texels, the
@@ -126,10 +124,10 @@ fn over(under: vec4<f32>, color: vec3<f32>, alpha: f32) -> vec4<f32> {
 
 // `planet::halo`: the atmosphere's colour lit as the limb under it is,
 // then its opacity.
-fn halo(x: f32, y: f32, atmosphere: vec4<f32>, light: vec4<f32>) -> vec4<f32> {
+fn halo(x: f32, y: f32, atmosphere: vec4<f32>, strength: f32, light: vec4<f32>) -> vec4<f32> {
     let d = length(vec2<f32>(x, y));
     let shade = lit(vec3<f32>(x / d, y / d, 0.0), light);
-    return vec4<f32>(atmosphere.rgb * shade, rim(d, atmosphere.w));
+    return vec4<f32>(atmosphere.rgb * shade, rim(d, atmosphere.w, strength));
 }
 
 // `planet::globe_color`: the ground lit, the rings' shadow taking the
@@ -142,12 +140,13 @@ fn globe_color(
     cloud: vec4<f32>,
     shadow: f32,
     atmosphere: vec4<f32>,
+    strength: f32,
     light: vec4<f32>,
 ) -> vec3<f32> {
     let shade = light.w + (lit(n, light) - light.w) * (1.0 - shadow);
     let surface = mix(ground.rgb * shade, ground.rgb, ground.a);
     let clouded = mix(surface, vec3<f32>(shade), cloud.a);
-    return mix(clouded, atmosphere.rgb * shade, rim(min(d, 1.0), atmosphere.w));
+    return mix(clouded, atmosphere.rgb * shade, rim(min(d, 1.0), atmosphere.w, strength));
 }
 
 // `planet::ring_color`: lit fully, or at the ambient in the globe's
@@ -200,7 +199,7 @@ fn planet_fs(in: PlanetOut) -> @location(0) vec4<f32> {
 
     // The halo, off the disc.
     if (!on_disc) {
-        let glow = halo(x, y, in.atmosphere, light);
+        let glow = halo(x, y, in.atmosphere, in.east.w, light);
         acc = over(acc, glow.rgb, glow.a);
     }
 
@@ -216,7 +215,7 @@ fn planet_fs(in: PlanetOut) -> @location(0) vec4<f32> {
                 shadow = ring_opacity(length(n + t * l), in.rings);
             }
         }
-        acc = over(acc, globe_color(n, d, ground, cloud, shadow, in.atmosphere, light), coverage);
+        acc = over(acc, globe_color(n, d, ground, cloud, shadow, in.atmosphere, in.east.w, light), coverage);
     }
 
     // `planet::ring_hit`: the rings where they are in front of the globe.
