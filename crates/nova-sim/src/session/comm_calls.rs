@@ -466,6 +466,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
+    use crate::ai::plunder_contents::{ClassMarines, ODDS_JITTER, Side, credits_taken, odds};
     use crate::ai::{Behaviour, Decision, Goal, Reaction, Surroundings};
     use crate::catalog::{
         CommCatalog, GovtId, GovtRecord, MissionRecord, MissionShip, Penalties, ShipId, ShipRecord,
@@ -1323,22 +1324,30 @@ mod tests {
         )
     }
 
-    /// Adds a pirate that plunders the player as `calls` has it, the
-    /// player holding no cargo and 10,000 credits, so a plunder at the
-    /// odds' floor of 10 takes 300 credits.
+    /// Adds a pirate of no strength or marines that plunders the player as
+    /// `calls` has it, the player holding no cargo and 10,000 credits, so
+    /// the plunder takes [`stolen`]'s credits.
     fn plunderer(session: &mut Session, calls: &mut Calling) -> NpcId {
         let pirate = add(session, None, ShipId(128));
+        session.space.npc_mut(pirate).expect("added").marines = ClassMarines::default();
         calls.1.insert(pirate);
         session.pilot.cargo.clear();
         session.pilot.cash = 10_000;
         pirate
     }
 
-    /// The pirate's line: no tons and 300 credits stolen.
+    /// The pirate's line: no tons, and the credits `plunder_contents` takes
+    /// from [`plunderer`]'s 10,000 at the odds of a side of nothing against
+    /// a side of nothing (the pirate as `plunderer` sets it, the player of
+    /// the catalog's `ship` builder, `Strength` 0, owning no marines), the
+    /// jitter the first draw of `&[0, 0]`. The odds and the share are
+    /// nova-sim-ai's (`ai::plunder_contents`'s tests pin them); these tests
+    /// pin the line's place in the pass.
     fn stolen() -> SimMessage {
+        let nobody = Side::default();
         SimMessage::CargoStolen {
             tons: 0,
-            credits: 300,
+            credits: credits_taken(10_000, odds(nobody, nobody, 0)),
         }
     }
 
@@ -1360,7 +1369,11 @@ mod tests {
         let (messages, sounds, asked) = stepped(&mut session, &catalog, &calls, &[0, 0]);
         assert_eq!(messages, [stolen()], "no call for help");
         assert_eq!(sounds, [SimSound::CargoStolen]);
-        assert_eq!(asked, [21], "the odds' jitter, no distress line drawn");
+        assert_eq!(
+            asked,
+            [u32::from(ODDS_JITTER)],
+            "the odds' jitter, no distress line drawn"
+        );
     }
 
     #[test]
@@ -1381,7 +1394,7 @@ mod tests {
         let (messages, sounds, asked) = stepped(&mut session, &catalog, &calls, &[0, 0]);
         assert_eq!(messages, [stolen()], "no hail");
         assert_eq!(sounds, [SimSound::CargoStolen], "no snd 154");
-        assert_eq!(asked, [21]);
+        assert_eq!(asked, [u32::from(ODDS_JITTER)]);
     }
 
     #[test]
@@ -1396,7 +1409,7 @@ mod tests {
             [help("Ship 129:  Help 1"), vec![stolen()]].concat()
         );
         assert_eq!(sounds, [SimSound::CallForHelp, SimSound::CargoStolen]);
-        assert_eq!(asked, [DISTRESS_LINE_COUNT, 21]);
+        assert_eq!(asked, [DISTRESS_LINE_COUNT, u32::from(ODDS_JITTER)]);
         assert_eq!(session.comm_line(), showing(&stolen()), "the stolen line's");
     }
 
