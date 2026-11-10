@@ -13,8 +13,9 @@
 //! the same map, so only normals need it.
 //!
 //! Each [`Part`] is one primitive of the model as one node draws it,
-//! keeping its material, so a livery can repaint parts by material name
-//! and merge them again ([`LoadedModel::mesh`]). Its vertex colours are
+//! keeping its material, so a livery can repaint the parts drawn in a
+//! material its source put in a [`PaintSlot`] ([`crate::livery`]) and
+//! merge them again ([`LoadedModel::mesh`]). Its vertex colours are
 //! its material's base colour, made sRGB ([`vertex_color`]), as the
 //! models target is not sRGB and the shader writes vertex colour
 //! straight. Metallic, roughness, `unlit` and the textures are carried,
@@ -29,9 +30,13 @@
 //! - Something more read from the model: a field of [`Part`],
 //!   [`Material`] or [`Texture`], filled by the adapter
 //!   ([`crate::galaxy_models`]) from the media crate's reading.
+//! - A new livery slot: a [`PaintSlot`] variant and a field of
+//!   [`Livery`](crate::livery::Livery), and the adapter's reading of the
+//!   media crate's slot (see [`crate::livery`]).
 //!
 //! The decisions an adapter forwards to live in core functions here
-//! ([`view_axes`], [`vertex_color`], [`part`]) or in `nova_galaxy_media`,
+//! ([`view_axes`], [`vertex_color`], [`linear`], [`part`]) or in
+//! `nova_galaxy_media`,
 //! and are pinned by their own tests. `FakeModels` is the hand-written
 //! fake (with this crate's tests, or the `recording` feature), and
 //! `check_contract` the contract every source meets: the fake runs it in
