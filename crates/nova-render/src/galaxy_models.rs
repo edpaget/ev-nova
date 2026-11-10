@@ -158,6 +158,7 @@ fn loaded(scene: &Scene, placement: &Placement) -> Result<LoadedModel, MeshError
             .iter()
             .map(|m| Material {
                 name: m.name.clone(),
+                paint: None,
                 base_color: m.base_color,
                 metallic: m.metallic,
                 roughness: m.roughness,
@@ -414,6 +415,7 @@ mod tests {
             model.materials,
             [Material {
                 name: Some("hull".into()),
+                paint: None,
                 base_color: [1.0; 4],
                 metallic: 0.25,
                 roughness: 0.5,

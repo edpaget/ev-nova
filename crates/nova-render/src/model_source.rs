@@ -41,6 +41,7 @@
 use std::fmt;
 use std::rc::Rc;
 
+pub use crate::livery::PaintSlot;
 use crate::model::{Mesh, MeshError, Vertex};
 
 /// A model wanted: the asset (`assets/<id>.md`), and how long to make it.
@@ -83,6 +84,11 @@ pub struct Part {
 pub struct Material {
     /// Its name, if it has one: what a livery's `paint` names.
     pub name: Option<String>,
+    /// The livery slot that paints it ([`crate::livery`]), if any: filled
+    /// by the source from the model's `paint` (the galaxy adapter reads
+    /// it through `nova_galaxy_media::slot_of`). A material with no name
+    /// has none.
+    pub paint: Option<PaintSlot>,
     /// Its base colour, linear RGBA from 0 to 1, as glTF writes it.
     pub base_color: [f32; 4],
     /// Its metallic factor.
@@ -417,6 +423,7 @@ mod fake {
     /// - each part's material, each material's texture, is in range, and
     ///   each part's texture coordinates, when it has them, are one per
     ///   vertex;
+    /// - a material with no name has no paint slot;
     /// - asking again gives an equal answer;
     /// - `absent` is [`ModelError::NoAsset`].
     pub fn check_contract(source: &impl ModelSource, request: &ModelRequest, absent: &str) {
@@ -470,6 +477,11 @@ mod fake {
                     .is_none_or(|t| t < model.textures.len()),
                 "`{asset}` material {at}'s texture is in range"
             );
+            assert!(
+                material.name.is_some() || material.paint.is_none(),
+                "`{asset}` material {at} has no name, so no paint slot: {:?}",
+                material.paint
+            );
         }
         assert_eq!(
             source.model(request).as_ref(),
@@ -517,6 +529,7 @@ mod tests {
     fn material(name: &str) -> Material {
         Material {
             name: Some(name.to_owned()),
+            paint: None,
             base_color: [1.0; 4],
             metallic: 1.0,
             roughness: 1.0,
@@ -698,6 +711,36 @@ mod tests {
         check_contract(
             &IgnoresLength,
             &ModelRequest::new("cube", Some(8.0)),
+            "nothing",
+        );
+    }
+
+    /// A source whose cube has an unnamed material in a paint slot.
+    struct PaintsTheUnnamed;
+
+    impl ModelSource for PaintsTheUnnamed {
+        fn model(&self, request: &ModelRequest) -> Result<LoadedModel, ModelError> {
+            match request.asset.as_str() {
+                "cube" => {
+                    let mut model = cube_model();
+                    model.materials[1] = Material {
+                        name: None,
+                        paint: Some(PaintSlot::Trim),
+                        ..material("dark")
+                    };
+                    Ok(model)
+                }
+                other => Err(ModelError::NoAsset(other.into())),
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "`cube` material 1 has no name, so no paint slot")]
+    fn the_contract_fails_a_source_that_paints_an_unnamed_material() {
+        check_contract(
+            &PaintsTheUnnamed,
+            &ModelRequest::new("cube", None),
             "nothing",
         );
     }

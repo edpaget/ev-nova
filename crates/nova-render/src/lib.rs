@@ -127,6 +127,7 @@ pub mod galaxy_models;
 pub mod glyph_raster;
 pub mod gpu;
 pub mod images;
+pub mod livery;
 pub mod model;
 pub mod model_source;
 mod models;
