@@ -107,8 +107,10 @@ fn push(batches: &mut Vec<Batch>, planet: PlanetInstance) {
 mod tests {
     use nova_data::graphics::Image;
     use nova_galaxy_media::planet::{Image as Layer, Surface};
+    use nova_view::geometry::Bounds;
     use nova_view::{
-        Color, DrawList, ImageKey, ImageKind, ModelKey, ModelPose, Mounting, Orientation, Point,
+        Color, DrawCommand, DrawList, ImageKey, ImageKind, ModelKey, ModelPose, Mounting,
+        Orientation, Point,
     };
 
     use super::*;
@@ -386,5 +388,34 @@ mod tests {
         let frame = frame_of(&mut renderer(), &list, &mut RecordingGpu::new());
         assert_eq!(frame.world, [1]);
         assert_eq!(frame.batches[1].kind(), "planets");
+    }
+
+    #[test]
+    fn a_clipped_planet_draws_uncut() {
+        // A clip far smaller than the planet's square.
+        let clip = Bounds {
+            min: Point::new(0.0, 0.0),
+            max: Point::new(13.0, 13.0),
+        };
+        let mut clipped = DrawList::new();
+        clipped.clipped(
+            clip,
+            DrawCommand::Planet {
+                planet: GLOBE,
+                pose: pose(12.0, 12.0),
+            },
+        );
+        let mut plain = DrawList::new();
+        plain.planet(GLOBE, pose(12.0, 12.0));
+        let a = frame_of(&mut renderer(), &clipped, &mut RecordingGpu::new());
+        let b = frame_of(&mut renderer(), &plain, &mut RecordingGpu::new());
+        assert_eq!(a.batches, b.batches);
+        assert_eq!(
+            a.batches,
+            [Batch::Planets {
+                light: PLANET_LIGHT,
+                planets: vec![instance(&pose(12.0, 12.0))],
+            }]
+        );
     }
 }
