@@ -398,6 +398,8 @@ pub mod tractor_hold;
 mod tractor_live_tests;
 #[cfg(test)]
 mod trader_hit_target_tests;
+#[cfg(test)]
+mod turret_facing_tests;
 pub mod vacated;
 #[cfg(test)]
 mod voice_cue_tests;
