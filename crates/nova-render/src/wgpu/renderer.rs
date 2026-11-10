@@ -17,6 +17,7 @@ use super::fonts::{Families, font_system};
 use super::frame_commands::{DeviceEncoders, WgpuCommands};
 use super::hinted_text::{GlyphRun, HintedGlyphs};
 use super::layout::lay_out_text;
+use super::models::{ModelData, Models, depth_view};
 use super::upscale::{Upscale, abilities, upscale_for};
 use crate::fonts::FontFaces;
 use crate::gpu::{Batch, Frame, PageId, TextRun, WorldSpace};
@@ -38,6 +39,9 @@ struct Canvas {
     view: wgpu::TextureView,
     backdrop: wgpu::Texture,
     backdrop_group: wgpu::BindGroup,
+    /// The depth attachment of its models passes, made the first frame
+    /// that draws models into it ([`WgpuRenderer::ensure_depth`]).
+    depth: Option<wgpu::TextureView>,
 }
 
 /// The offscreen canvas a frame is drawn into before one blit copies it
@@ -84,6 +88,11 @@ enum Draw {
     },
     Text {
         renderer: usize,
+    },
+    /// Models: the instances, and the mesh of each, in order.
+    Models {
+        instances: Range<u32>,
+        meshes: Vec<MeshId>,
     },
 }
 
@@ -135,6 +144,8 @@ pub struct WgpuRenderer {
     max_pipeline: wgpu::RenderPipeline,
     solid_pipeline: wgpu::RenderPipeline,
     blit_pipeline: wgpu::RenderPipeline,
+    /// The model pipeline and the meshes it draws ([`Batch::Models`]).
+    models: Models,
     page_layout: wgpu::BindGroupLayout,
     texture_layout: wgpu::BindGroupLayout,
     scene: Option<Scene>,
@@ -283,6 +294,7 @@ impl WgpuRenderer {
             max_pipeline,
             solid_pipeline,
             blit_pipeline,
+            models: Models::new(device),
             page_layout,
             texture_layout,
             scene: None,
@@ -398,7 +410,9 @@ impl WgpuRenderer {
     }
 
     /// Holds `data` as mesh `mesh`, replacing any mesh of that id.
-    pub fn upload_mesh(&mut self, _mesh: MeshId, _data: &Mesh) {}
+    pub fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh) {
+        self.models.upload(&self.device, mesh, data);
+    }
 
     /// Copies `image` onto page `page` at `at`.
     pub fn upload(&mut self, page: PageId, at: PixelRect, image: &Image) {
@@ -454,12 +468,27 @@ impl WgpuRenderer {
         {
             self.ensure_world(size);
         }
+        if layout.world.iter().any(|pass| layout.has_depth(pass))
+            && let Some(world) = self.world.as_mut()
+        {
+            Self::ensure_depth(&self.device, world);
+        }
+        if layout.passes.iter().any(|pass| layout.has_depth(pass))
+            && let Some(scene) = self.scene.as_mut()
+        {
+            Self::ensure_depth(&self.device, &mut scene.canvas);
+        }
         self.prepare_text(frame.target, &layout.text);
         let instance_buffer = self.vertex_buffer("nova sprite instances", &layout.instances);
         let vertex_buffer = self.vertex_buffer("nova solid vertices", &layout.vertices);
+        let model_buffer = self.vertex_buffer("nova model instances", &layout.models);
 
         let scene = self.scene.as_ref().expect("ensured above");
-        let buffers = (&instance_buffer, &vertex_buffer);
+        let buffers = Buffers {
+            instances: &instance_buffer,
+            vertices: &vertex_buffer,
+            models: &model_buffer,
+        };
         let mut commands = WgpuCommands::new(DeviceEncoders(&self.device));
         let world = if layout.world.is_empty() {
             None
@@ -519,15 +548,16 @@ impl WgpuRenderer {
     }
 
     /// Encodes `passes` of `layout` into `target`, each OR pass's backdrop
-    /// copied from the canvas first, reading sprite instances and solid
-    /// vertices from `buffers`.
+    /// copied from the canvas first and each models pass given the
+    /// canvas's depth attachment, cleared, reading instances and vertices
+    /// from `buffers`.
     fn encode_passes(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         frame: &Frame,
         layout: &Layout<'_>,
         passes: &[Pass],
-        buffers: (&wgpu::Buffer, &wgpu::Buffer),
+        buffers: Buffers<'_>,
         target: &PassTarget<'_>,
     ) {
         for (index, pass) in passes.iter().enumerate() {
@@ -538,7 +568,12 @@ impl WgpuRenderer {
                 Some(color) if index == 0 => wgpu::LoadOp::Clear(clear_color(color)),
                 _ => wgpu::LoadOp::Load,
             };
-            let mut render = begin_pass(encoder, &target.canvas.view, load);
+            let depth = if layout.has_depth(pass) {
+                target.canvas.depth.as_ref()
+            } else {
+                None
+            };
+            let mut render = begin_pass(encoder, &target.canvas.view, load, depth);
             let draws = &layout.draws[pass.draws.clone()];
             let scissors = &layout.scissors[pass.draws.clone()];
             self.encode(&mut render, frame, (draws, scissors), buffers, target);
@@ -555,9 +590,14 @@ impl WgpuRenderer {
         pass: &mut wgpu::RenderPass<'_>,
         frame: &Frame,
         (draws, scissors): (&[Draw], &[PixelRect]),
-        (instance_buffer, vertex_buffer): (&wgpu::Buffer, &wgpu::Buffer),
+        buffers: Buffers<'_>,
         target: &PassTarget<'_>,
     ) {
+        let Buffers {
+            instances: instance_buffer,
+            vertices: vertex_buffer,
+            models: model_buffer,
+        } = buffers;
         let content = target.content;
         let full = PixelRect {
             x: 0,
@@ -618,6 +658,11 @@ impl WgpuRenderer {
                         pass,
                     );
                 }
+                Draw::Models { instances, meshes } => {
+                    set_viewport(pass, content);
+                    self.models
+                        .encode(pass, model_buffer, instances.clone(), meshes);
+                }
             }
         }
     }
@@ -645,6 +690,15 @@ impl WgpuRenderer {
         self.world = Some(canvas);
     }
 
+    /// Makes sure `canvas` has its depth attachment, of its own size: made
+    /// the first frame that draws models into it, and made again with the
+    /// canvas, which starts without one.
+    fn ensure_depth(device: &wgpu::Device, canvas: &mut Canvas) {
+        if canvas.depth.is_none() {
+            canvas.depth = Some(depth_view(device, canvas.size));
+        }
+    }
+
     /// A `size` canvas, and a bind group that reads its texture with
     /// `textureLoad` (the blit's, for the scene).
     fn canvas(&self, label: &str, size: (u32, u32)) -> (Canvas, wgpu::BindGroup) {
@@ -669,6 +723,7 @@ impl WgpuRenderer {
             view,
             backdrop,
             backdrop_group,
+            depth: None,
         };
         (canvas, group)
     }
@@ -911,11 +966,14 @@ fn blit_pipeline(
     )
 }
 
-/// Begins a render pass over `view`, loading it as `load` says.
+/// Begins a render pass over `view`, loading it as `load` says, with
+/// `depth` as its depth attachment, cleared to 1 (behind everything) and
+/// discarded after, when given.
 fn begin_pass<'e>(
     encoder: &'e mut wgpu::CommandEncoder,
     view: &wgpu::TextureView,
     load: wgpu::LoadOp<wgpu::Color>,
+    depth: Option<&wgpu::TextureView>,
 ) -> wgpu::RenderPass<'e> {
     encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("nova frame"),
@@ -928,7 +986,14 @@ fn begin_pass<'e>(
                 store: wgpu::StoreOp::Store,
             },
         })],
-        depth_stencil_attachment: None,
+        depth_stencil_attachment: depth.map(|view| wgpu::RenderPassDepthStencilAttachment {
+            view,
+            depth_ops: Some(wgpu::Operations {
+                load: wgpu::LoadOp::Clear(1.0),
+                store: wgpu::StoreOp::Discard,
+            }),
+            stencil_ops: None,
+        }),
         timestamp_writes: None,
         occlusion_query_set: None,
         multiview_mask: None,
@@ -937,7 +1002,7 @@ fn begin_pass<'e>(
 
 /// Clears `view` to `color` with an empty pass.
 fn clear(encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, color: Color) {
-    begin_pass(encoder, view, wgpu::LoadOp::Clear(clear_color(color)));
+    begin_pass(encoder, view, wgpu::LoadOp::Clear(clear_color(color)), None);
 }
 
 /// Copies `rect` of the canvas to the same place in its backdrop.
@@ -1019,6 +1084,8 @@ struct Layout<'a> {
     instances: Vec<SpriteInstance>,
     /// Every solid batch's vertices, in one buffer.
     vertices: Vec<SolidVertex>,
+    /// Every models batch's instances, in one buffer.
+    models: Vec<ModelData>,
     /// The text batches, one glyphon renderer each.
     text: Vec<&'a [TextRun]>,
     /// What to draw for each batch, in order.
@@ -1065,6 +1132,12 @@ impl<'a> Layout<'a> {
                 backdrop: Some(rect),
                 draws: self.draws.len()..self.draws.len(),
             });
+        } else if matches!(batch, Batch::Models { .. })
+            || passes.last().is_some_and(|pass| self.has_depth(pass))
+        {
+            // A models batch draws in a pass of its own, with depth, and
+            // the batch after it in a fresh one, without.
+            passes.push(self.fresh_pass());
         }
         let draw = match batch {
             Batch::Sprites { page, blend, quads } => {
@@ -1098,7 +1171,15 @@ impl<'a> Layout<'a> {
                     renderer: self.text.len() - 1,
                 }
             }
-            Batch::Models { .. } => return,
+            Batch::Models { light, models } => {
+                let start = self.models.len() as u32;
+                self.models
+                    .extend(models.iter().map(|model| ModelData::new(model, *light)));
+                Draw::Models {
+                    instances: start..self.models.len() as u32,
+                    meshes: models.iter().map(|model| model.mesh).collect(),
+                }
+            }
         };
         self.draws.push(draw);
         self.scissors.push(scissor);
@@ -1114,6 +1195,24 @@ impl<'a> Layout<'a> {
             draws: self.draws.len()..self.draws.len(),
         }
     }
+
+    /// Whether `pass` is a models pass, which has a depth attachment: one
+    /// whose draws are a models batch's ([`Layout::push`] gives a models
+    /// batch a pass of its own).
+    fn has_depth(&self, pass: &Pass) -> bool {
+        self.draws[pass.draws.clone()]
+            .iter()
+            .any(|draw| matches!(draw, Draw::Models { .. }))
+    }
+}
+
+/// The buffers a frame's draws read: sprite and OR-fill instances, solid
+/// vertices and model instances.
+#[derive(Clone, Copy)]
+struct Buffers<'a> {
+    instances: &'a wgpu::Buffer,
+    vertices: &'a wgpu::Buffer,
+    models: &'a wgpu::Buffer,
 }
 
 /// The scissors a frame's draws are encoded with, in their canvas's
@@ -1375,7 +1474,8 @@ mod tests {
     use nova_view::{Blend, Color, DrawLayer, Point};
 
     use super::*;
-    use crate::gpu::{QuadInstance, Rect, SolidQuad, WorldSpace};
+    use crate::camera::Light;
+    use crate::gpu::{ModelInstance, QuadInstance, Rect, SolidQuad, WorldSpace};
     use crate::viewport::LogicalSize;
     use crate::{PageId, Uv};
 
@@ -2217,6 +2317,168 @@ mod tests {
         assert_same_layout(&lay_out(&textured(frame.clone())), &lay_out(&frame));
     }
 
+    /// A model of mesh `n`, its transforms told apart by `n`.
+    fn model(n: u32) -> ModelInstance {
+        let f = n as f32;
+        ModelInstance {
+            mesh: MeshId(n),
+            clip_from_model: [[f; 4]; 4],
+            normal_from_model: [[f; 3]; 3],
+        }
+    }
+
+    /// A models batch of a model of each of `meshes`.
+    fn models(meshes: &[u32]) -> Batch {
+        Batch::Models {
+            light: Light::STANDARD,
+            models: meshes.iter().copied().map(model).collect(),
+        }
+    }
+
+    /// Whether each of `passes` is a models pass, with a depth attachment.
+    fn depths(layout: &Layout<'_>, passes: &[Pass]) -> Vec<bool> {
+        passes.iter().map(|pass| layout.has_depth(pass)).collect()
+    }
+
+    #[test]
+    fn a_models_batch_opens_a_depth_pass_and_the_next_batch_a_fresh_one() {
+        let frame = frame_of(vec![
+            Batch::Solid(vec![solid(4.0)]),
+            models(&[3, 5]),
+            sprites(Blend::Normal, vec![quad(1.0)]),
+            models(&[7]),
+            Batch::Text(vec![run("a")]),
+        ]);
+
+        let layout = lay_out(&frame);
+
+        let pass = |draws| Pass {
+            backdrop: None,
+            draws,
+        };
+        assert_eq!(
+            layout.passes,
+            [pass(0..1), pass(1..2), pass(2..3), pass(3..4), pass(4..5)]
+        );
+        assert_eq!(
+            depths(&layout, &layout.passes),
+            [false, true, false, true, false]
+        );
+        assert_eq!(
+            layout.draws[1],
+            Draw::Models {
+                instances: 0..2,
+                meshes: vec![MeshId(3), MeshId(5)],
+            }
+        );
+        assert_eq!(
+            layout.draws[3],
+            Draw::Models {
+                instances: 2..3,
+                meshes: vec![MeshId(7)],
+            }
+        );
+        let data: Vec<ModelData> = [3, 5, 7]
+            .map(|n| ModelData::new(&model(n), Light::STANDARD))
+            .to_vec();
+        assert_eq!(layout.models, data);
+        assert_eq!(layout.instances, [SpriteInstance::from(&quad(1.0))]);
+    }
+
+    #[test]
+    fn an_or_batch_after_models_opens_its_own_pass_alone() {
+        let frame = frame_of(vec![models(&[1]), sprites(Blend::Or, vec![quad(2.0)])]);
+        let layout = lay_out(&frame);
+        assert_eq!(layout.passes.len(), 3);
+        assert_eq!(depths(&layout, &layout.passes), [false, true, false]);
+        assert!(layout.passes[2].backdrop.is_some());
+        assert_eq!(layout.passes[2].draws, 1..2);
+    }
+
+    #[test]
+    fn a_frame_opening_with_models_clears_first() {
+        let frame = frame_of(vec![models(&[1])]);
+        let layout = lay_out(&frame);
+        assert_eq!(
+            layout.passes,
+            [
+                Pass {
+                    backdrop: None,
+                    draws: 0..0
+                },
+                Pass {
+                    backdrop: None,
+                    draws: 0..1
+                },
+            ]
+        );
+        assert_eq!(depths(&layout, &layout.passes), [false, true]);
+    }
+
+    #[test]
+    fn a_frame_with_no_models_has_no_depth_pass() {
+        for frame in layered_frames() {
+            for frame in [frame.clone(), textured(frame)] {
+                let layout = lay_out(&frame);
+                assert!(!depths(&layout, &layout.passes).contains(&true));
+                assert!(!depths(&layout, &layout.world).contains(&true));
+                assert_eq!(layout.models, []);
+            }
+        }
+    }
+
+    #[test]
+    fn models_in_a_textured_world_lay_out_in_the_world_passes() {
+        let frame = textured(Frame {
+            world: vec![0],
+            ..frame_of(vec![models(&[2]), Batch::Text(vec![run("a")])])
+        });
+        let layout = lay_out(&frame);
+        assert_eq!(depths(&layout, &layout.world), [false, true]);
+        assert_eq!(
+            drawn(&layout, &layout.world),
+            [&Draw::Models {
+                instances: 0..1,
+                meshes: vec![MeshId(2)],
+            }]
+        );
+        assert_eq!(depths(&layout, &layout.passes), [false]);
+        assert_eq!(
+            drawn(&layout, &layout.passes),
+            [&Draw::Text { renderer: 0 }]
+        );
+    }
+
+    #[test]
+    fn a_clipped_worlds_model_draw_is_scissored_like_any_world_draw() {
+        let native = clipped_to(
+            Frame {
+                world: vec![0],
+                ..frame_of(vec![models(&[2]), Batch::Text(vec![run("a")])])
+            },
+            0.0,
+            24.0,
+        );
+        let layout = lay_out(&native);
+        assert_eq!(layout.scissors, [native.world_scissor(), WHOLE_TARGET]);
+        let texture = textured(native);
+        let layout = lay_out(&texture);
+        assert_eq!(scissored(&layout, &layout.world), [texture.world_scissor()]);
+        // Clipped to nothing, it is left out with its pass.
+        let nowhere = Frame {
+            world_clip: Some(Rect {
+                x: 40.0,
+                y: 0.0,
+                w: 8.0,
+                h: 32.0,
+            }),
+            ..texture
+        };
+        let layout = lay_out(&nowhere);
+        assert_eq!(layout.world.len(), 1);
+        assert_eq!(layout.models, []);
+    }
+
     #[test]
     fn lay_out_keeps_each_batchs_blend() {
         let frame = frame_of(vec![
@@ -2412,6 +2674,9 @@ mod tests {
         gpu.create_page(PageId(0), 16);
         let blends = every_blend_frame();
         assert_builds_no_pipeline(&mut gpu, made, &blends, "a frame of every blend");
+        gpu.upload_mesh(MeshId(0), &Mesh::cube([Color::WHITE; 6]));
+        let with_models = models_frame();
+        assert_builds_no_pipeline(&mut gpu, made, &with_models, "a frame of models");
         // Setting an upscaler is a set-up step, which may build its own.
         gpu.set_upscaler(Upscaler::SharpBilinear);
         let made = gpu.render_pipelines();
@@ -2420,5 +2685,53 @@ mod tests {
             ..textured(blends)
         };
         assert_builds_no_pipeline(&mut gpu, made, &world, "a sharp-bilinear world");
+        let models_world = Frame {
+            world: vec![0, 1, 2],
+            world_tail: Some(3),
+            ..textured(with_models)
+        };
+        assert_builds_no_pipeline(
+            &mut gpu,
+            made,
+            &models_world,
+            "a sharp-bilinear world of models, and models in its tail",
+        );
+    }
+
+    /// A 64 x 64 frame of a solid, a cube (mesh 0), a sprite on page 0,
+    /// two cubes, an OR sprite and a cube.
+    fn models_frame() -> Frame {
+        let cube = |x: f32| {
+            let pose = nova_view::ModelPose {
+                center: Point::new(x, 10.0),
+                orientation: nova_view::Orientation::about([1.0, 1.0, 0.0], 0.5),
+                scale: 6.0,
+            };
+            crate::camera::instance(LogicalSize { w: 32, h: 32 }, &pose, MeshId(0), 0.9)
+                .expect("drawable")
+        };
+        let mut batches = vec![
+            Batch::Solid(vec![solid(2.0)]),
+            Batch::Models {
+                light: Light::STANDARD,
+                models: vec![cube(8.0)],
+            },
+            sprites(Blend::Normal, vec![quad(1.0)]),
+            Batch::Models {
+                light: Light::STANDARD,
+                models: vec![cube(12.0), cube(20.0)],
+            },
+            sprites(Blend::Or, vec![quad(3.0)]),
+            Batch::Models {
+                light: Light::STANDARD,
+                models: vec![cube(24.0)],
+            },
+        ];
+        for batch in &mut batches {
+            if let Batch::Models { models, .. } = batch {
+                crate::camera::band(models);
+            }
+        }
+        frame_of(batches)
     }
 }
