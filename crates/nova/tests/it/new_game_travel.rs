@@ -455,7 +455,8 @@ fn under_the_new_game_the_traffic_uses_every_open_gate_and_no_closed_one() {
 }
 
 /// Over as many passes as the new game's run of `hearth` takes to use every
-/// gate, the stock rulebook's traffic there never uses its gates past 999.
+/// open gate, the stock rulebook's traffic there never uses its gates past
+/// 999. A closed gate is never used, so waiting on it would run every pass.
 #[test]
 fn under_the_stock_rulebook_the_traffic_never_uses_a_gate_past_999() {
     let game = fixture();
@@ -467,7 +468,7 @@ fn under_the_stock_rulebook_the_traffic_never_uses_a_gate_past_999() {
         .map(|gate| gate.stellar)
         .collect();
     assert_eq!(far.len(), 2, "precondition: hearth's +x and +y roads");
-    let wanted = of_system(&gates, hearth);
+    let wanted = open_of_system(&gates, hearth);
     let pilot = pilot_for(&game);
     let new_game = watch_traffic(
         &game.data,
@@ -477,6 +478,10 @@ fn under_the_stock_rulebook_the_traffic_never_uses_a_gate_past_999() {
         &wanted,
         TRAFFIC_TICKS,
         7,
+    );
+    assert!(
+        new_game.ticks < TRAFFIC_TICKS,
+        "precondition: the new game's traffic uses every open gate"
     );
     let stock = Rulebook::default();
     let seen = watch_traffic(
