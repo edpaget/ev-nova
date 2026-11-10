@@ -36,9 +36,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Scatters the stars afresh about the frame's ship and places them
     /// once, on the effects' chance, when the flight draws the original's
     /// starfield (see the `stars` module): never for a flight that failed,
-    /// whose looks hold no stars' sheet.
+    /// whose looks hold no stars' sheet, nor under the layered sky.
     pub(super) fn reset_stars(&mut self) {
-        if stars::original(self.presentation.starfield, &self.looks) {
+        let starfield = self.presentation.starfield.stars();
+        if starfield.is_some_and(|source| stars::original(source, &self.looks)) {
             let at = stars::surroundings(&self.frame, self.view, self.anchor(), &self.looks);
             stars::reset(
                 &mut self.stars,

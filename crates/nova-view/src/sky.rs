@@ -10,7 +10,7 @@
 //! pose always draws the same sky.
 //!
 //! Flight draws one under [`RuleKey::LayeredStarfield`]'s other reading
-//! (see `flight::sky`).
+//! (see [`crate::flight::sky`]).
 //!
 //! [`DrawCommand::Sky`]: crate::DrawCommand::Sky
 //! [`RuleKey::LayeredStarfield`]: nova_sim::RuleKey::LayeredStarfield

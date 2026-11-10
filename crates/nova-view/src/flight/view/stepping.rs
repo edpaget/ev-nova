@@ -88,6 +88,7 @@ use crate::system::camera::Anchor;
 use crate::system::catalog::SystemCatalog;
 
 use super::between_passes::{self, BetweenPasses};
+use super::sky::StarfieldKind;
 use super::{
     FlightView, dying, glow_decay, play_area, point, show_combat, show_stellars, stars,
     window_width,
@@ -98,7 +99,8 @@ use super::{
 /// built with (`FlightView::scripted`, `FlightView::with_rules` and the
 /// concrete constructors): [`RuleKey::ShipDebris`],
 /// [`RuleKey::CombatCaps`], [`RuleKey::LoopedSoundWait`],
-/// [`RuleKey::FlightStarfield`], and the world's
+/// [`RuleKey::FlightStarfield`] with [`RuleKey::LayeredStarfield`], and
+/// the world's
 /// [`RuleKey::TranslucentShotFade`], [`RuleKey::FlightAnchor`],
 /// [`RuleKey::LightningZigZag`] and [`RuleKey::IonTintMurkColour`]
 /// (rdm:phase/view-sim-seam/phase-7-world-frame, which pulled these four
@@ -115,8 +117,9 @@ pub(super) struct Presentation {
     pub(super) caps: RuleSource,
     /// [`RuleKey::LoopedSoundWait`]'s reading.
     pub(super) looped: RuleSource,
-    /// [`RuleKey::FlightStarfield`]'s reading.
-    pub(super) starfield: RuleSource,
+    /// The starfield [`RuleKey::FlightStarfield`]'s and
+    /// [`RuleKey::LayeredStarfield`]'s readings pick.
+    pub(super) starfield: StarfieldKind,
     /// [`RuleKey::TranslucentShotFade`]'s reading.
     pub(super) shot_fade: RuleSource,
     /// [`RuleKey::FlightAnchor`]'s reading.
@@ -142,7 +145,10 @@ impl Presentation {
             debris: rules.source_for(RuleKey::ShipDebris),
             caps: rules.source_for(RuleKey::CombatCaps),
             looped: rules.source_for(RuleKey::LoopedSoundWait),
-            starfield: rules.source_for(RuleKey::FlightStarfield),
+            starfield: StarfieldKind::of(
+                rules.source_for(RuleKey::FlightStarfield),
+                rules.source_for(RuleKey::LayeredStarfield),
+            ),
             shot_fade: rules.source_for(RuleKey::TranslucentShotFade),
             anchor: rules.source_for(RuleKey::FlightAnchor),
             zig_zag: rules.source_for(RuleKey::LightningZigZag),
@@ -308,6 +314,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.effects.carry(wrap);
         self.shot_looks.carry(wrap);
         self.stars.mark_jumped();
+        self.sky_shift.carry(wrap);
     }
 
     /// Steps the view's effects, flashes, glows, shot looks and stars
@@ -366,15 +373,17 @@ impl<C, S: FlightSim> FlightView<C, S> {
         let trails = self.smoke_trails;
         self.shot_looks
             .step(pass, &self.looks, effects, trails, chance);
-        let starfield = (self.presentation.starfield, &self.looks);
-        stars::step(
-            &mut self.stars,
-            pass,
-            starfield,
-            (self.view, anchor),
-            first,
-            chance,
-        );
+        // The layered sky steps no star.
+        if let Some(source) = self.presentation.starfield.stars() {
+            stars::step(
+                &mut self.stars,
+                pass,
+                (source, &self.looks),
+                (self.view, anchor),
+                first,
+                chance,
+            );
+        }
         if first.is_some() {
             self.scroll.drawn(point(pass.player_position));
         }

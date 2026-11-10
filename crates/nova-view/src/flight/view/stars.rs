@@ -1,7 +1,11 @@
 //! The flight view's starfield: the original's ([`Starfield`]) by the
 //! engine's reading of
 //! [`RuleKey::FlightStarfield`](nova_sim::RuleKey::FlightStarfield),
-//! the port's procedural dots ([`starfield::draw`]) by the other.
+//! the port's procedural dots ([`starfield::draw`]) by the other. The
+//! third kind, the layered sky by
+//! [`RuleKey::LayeredStarfield`](nova_sim::RuleKey::LayeredStarfield)'s
+//! other reading, is the `sky` module's: under it this module handles no
+//! star (the view's `StarfieldKind` picks among the three).
 //!
 //! The view drives the original's as `_PlayGame` does:
 //!

@@ -773,6 +773,7 @@ mod screen;
 mod ship_looks;
 mod shops;
 mod shots;
+mod sky;
 mod slot_block;
 mod sprites;
 mod stars;
@@ -1503,6 +1504,9 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// the flight is built, play entered or a game begun, when its chance
     /// and view are set.
     stars_due: bool,
+    /// The player's wraps taken back from the layered sky's eye (see the
+    /// `sky` module).
+    sky_shift: sky::SkyShift,
     /// Each ship's shield flash while its timer runs.
     flashes: BTreeMap<ShipRef, ShieldFlash>,
     /// Each ship's alt layer as last drawn, which a disabled 0x0020 ship

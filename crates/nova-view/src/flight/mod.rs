@@ -49,6 +49,9 @@
 //!   events to drain.
 //! - [`ship_model`]: [`ship_orientation`], how a ship's 3D model is
 //!   turned for its heading, by its hull's angle.
+//! - [`sky`]: [`sky_pose`](sky::sky_pose), where the layered sky drawn in
+//!   place of the stars under `layered_starfield`'s other reading is seen
+//!   from, and how bright the system's murk lets it be.
 //! - [`smoke`]: the puffs a smoking shot leaves.
 //! - [`sprite`]: [`rotation_frame`], which frame of the ship's sheet shows
 //!   its heading.
@@ -102,6 +105,7 @@ pub mod ship_model;
 pub mod shot_fade;
 pub mod sim_adapter;
 pub mod sim_port;
+pub mod sky;
 pub mod smoke;
 pub mod solid_runs;
 pub mod sprite;

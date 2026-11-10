@@ -140,6 +140,7 @@ mod ship_drawing;
 mod ship_looks;
 mod ship_outlines;
 mod shots;
+mod sky;
 mod stars;
 mod stellar_looks;
 mod stellars;

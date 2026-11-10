@@ -717,6 +717,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             words_chance: opening.words_chance,
             stars: crate::flight::stars::Starfield::new(),
             stars_due: true,
+            sky_shift: super::sky::SkyShift::default(),
             flashes: BTreeMap::new(),
             held_alts: std::cell::RefCell::default(),
             glows: crate::flight::weapon_glow::WeaponGlows::default(),

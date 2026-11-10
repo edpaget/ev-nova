@@ -44,8 +44,7 @@ use crate::system::camera::Camera;
 use crate::system::scene::{self, SystemScene};
 use crate::{Color, DrawList, Point};
 
-use super::stars;
-use super::{FlightView, HELP_AT, OVERLAY_SIZE, TITLE, TITLE_SIZE, point};
+use super::{FlightView, HELP_AT, OVERLAY_SIZE, TITLE, TITLE_SIZE, point, sky, stars};
 
 impl<C, S: FlightSim> FlightView<C, S> {
     /// Draws the sprite world over the scene laid out
@@ -258,13 +257,21 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// Draws the stars, by the flight's reading of
     /// [`RuleKey::FlightStarfield`](nova_sim::RuleKey::FlightStarfield),
-    /// then the message line's box over them, erased in the system's
-    /// background ([`message_background`]), as `_DisplayComm` erases the
-    /// background frame's message rect. Its text is drawn with the
-    /// floaters ([`FlightView::draw_floaters`]).
+    /// or the layered sky in their place by
+    /// [`RuleKey::LayeredStarfield`](nova_sim::RuleKey::LayeredStarfield)'s
+    /// other reading (see the `sky` module), then the message line's box
+    /// over them, erased in the system's background
+    /// ([`message_background`]), as `_DisplayComm` erases the background
+    /// frame's message rect. Its text is drawn with the floaters
+    /// ([`FlightView::draw_floaters`]).
     fn draw_stars_and_message(&self, list: &mut DrawList, camera: &Camera) {
-        let source = self.presentation.starfield;
-        stars::draw(list, (&self.stars, &self.looks), source, camera, self.alpha);
+        match self.presentation.starfield.stars() {
+            Some(source) => {
+                let starfield = (&self.stars, &self.looks);
+                stars::draw(list, starfield, source, camera, self.alpha);
+            }
+            None => sky::draw(list, self.drawn(), camera, self.sky_shift),
+        }
         if self.message().is_some() {
             let background = message_background(self.drawn().system_background);
             hud::draw_message_box(list, self.view, background);

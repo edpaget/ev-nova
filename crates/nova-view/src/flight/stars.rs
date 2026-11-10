@@ -42,7 +42,10 @@
 //!   OR fill of its side, centred where the frame would be and snapped to
 //!   whole pixels, in its colour dimmed to the level the way the OR at a
 //!   level dims a frame ([`dimmed`]). Not the original's: it has no
-//!   stand-in.
+//!   stand-in. The new game's ruleset draws the layered sky instead
+//!   ([`crate::flight::sky`], by `layered_starfield`'s other reading), so
+//!   the dots remain the engine reading's stand-in for data without a
+//!   star sheet.
 //!
 //! The draws are made on the flight's effects chance, never the
 //! simulation's: the stars are view-only. Their ranges and conditions are
