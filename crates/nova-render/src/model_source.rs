@@ -278,6 +278,17 @@ pub fn srgb(c: f32) -> f32 {
     }
 }
 
+/// The sRGB channel `c` (0 to 1) decoded to linear: the inverse of
+/// [`srgb`].
+#[must_use]
+pub fn linear(c: f32) -> f32 {
+    if c <= 0.040_45 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
 /// The vertex colour for the linear base colour `base`: its red, green and
 /// blue encoded as sRGB, its alpha kept.
 #[must_use]
@@ -569,6 +580,22 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn linear_undoes_srgb() {
+        for byte in 0..=255_u8 {
+            let c = f32::from(byte) / 255.0;
+            let back = srgb(linear(c));
+            assert!((back - c).abs() < 1e-5, "{byte}: {back}");
+        }
+        // Each segment on its own, either side of the break at 0.04045.
+        assert_eq!(linear(0.04), 0.04 / 12.92);
+        assert_eq!(linear(0.04045), 0.04045 / 12.92);
+        assert_eq!(linear(0.5), (0.555_f32 / 1.055).powf(2.4));
+        assert!((linear(0.040_46) - 0.003_131_1).abs() < 1e-6);
+        assert_eq!(linear(0.0), 0.0);
+        assert!((linear(1.0) - 1.0).abs() < 1e-6);
     }
 
     #[test]
