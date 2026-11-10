@@ -1069,6 +1069,7 @@ impl Screen for BarScreen {
         match &self.laid {
             Ok(laid) => {
                 let origin = laid.dialog.bounds().min;
+                laid.dialog.draw_backing(list);
                 match laid.picture {
                     Some(id) => {
                         list.picture(PICTURE_BACKGROUND, origin);
@@ -1078,7 +1079,7 @@ impl Screen for BarScreen {
                         list.picture(BACKGROUND, origin);
                     }
                 }
-                laid.dialog.draw(list);
+                laid.dialog.draw_items(list);
             }
             Err(reason) => {
                 list.text(
@@ -3176,5 +3177,19 @@ mod tests {
                 .with_looping_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>),
         );
         assert_eq!(reel.calls(), [Call::Start("Ship.mov".to_owned())]);
+    }
+
+    fn backed(template: DialogTemplate) -> DialogTemplate {
+        DialogTemplate {
+            backing: Some(crate::ui::panel::PanelBacking::NEW_GAME),
+            ..template
+        }
+    }
+
+    #[test]
+    fn a_backed_bar_draws_its_backing_under_its_background_and_items() {
+        let screen = bar_over(backed(template()));
+        let bounds = screen.dialog().expect("laid out").bounds();
+        crate::ui::panel::testing::assert_backed_first(&drawn(&screen), bounds);
     }
 }

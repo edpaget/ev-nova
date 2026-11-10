@@ -552,8 +552,9 @@ impl Screen for DescDialog {
             self.dialog.draw(list);
             return;
         };
+        self.dialog.draw_backing(list);
         self.dialog.draw_stretched_over(list, PICTURE_FRAME);
-        self.dialog.draw(list);
+        self.dialog.draw_items(list);
         self.dialog
             .draw_picture_in(list, DESC_PICTURE_ITEM, graphic);
     }
@@ -1845,5 +1846,24 @@ mod tests {
         off.input(&key(Key::Space));
         assert!(!off.closed());
         assert_eq!(off.dialog().focus(), None);
+    }
+
+    fn backed(template: DialogTemplate) -> DialogTemplate {
+        DialogTemplate {
+            backing: Some(crate::ui::panel::PanelBacking::NEW_GAME),
+            ..template
+        }
+    }
+
+    #[test]
+    fn a_backed_description_draws_its_backing_under_its_frame_and_items() {
+        let templates = DescTemplates {
+            plain: Ok(backed(template())),
+            picture: Ok(backed(picture_template())),
+        };
+        for graphic in [None, Some(5008)] {
+            let desc = shown(&templates, graphic).expect("shown");
+            crate::ui::panel::testing::assert_backed_first(&drawn(&desc), desc.dialog().bounds());
+        }
     }
 }

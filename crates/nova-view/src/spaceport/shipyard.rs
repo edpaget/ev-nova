@@ -892,6 +892,7 @@ impl Panel {
     /// (@0x50fd0-0x51043).
     pub(super) fn draw(&self, list: &mut DrawList, metrics: &dyn TextMetrics) {
         let bounds = self.dialog.bounds();
+        self.dialog.draw_backing(list);
         if self.variant == InfoVariant::MissingPicture {
             self.dialog
                 .draw_stretched_over(list, self.variant.background());
@@ -913,7 +914,7 @@ impl Panel {
                 &self.title,
             );
         }
-        self.dialog.draw(list);
+        self.dialog.draw_items(list);
         // The original clips to item 5 (`ClipRect` @0x4fb39); with no
         // clip here, a text whose top is at or below its bottom is not
         // drawn.
@@ -1878,6 +1879,7 @@ impl Screen for ShipyardScreen {
                 return;
             }
         };
+        laid.dialog.draw_backing(list);
         list.picture(BACKGROUND, laid.dialog.bounds().min);
         self.draw_grid(laid, list);
         self.draw_selected(laid, list);
@@ -1888,7 +1890,7 @@ impl Screen for ShipyardScreen {
             laid.dialog.item_bounds(SCROLL_DOWN_ITEM),
             self.grid.cells().can_scroll(count),
         );
-        laid.dialog.draw(list);
+        laid.dialog.draw_items(list);
         self.draw_panel(laid, list);
         self.naming.draw(list);
         if let Some(offering) = &self.offering {
@@ -5173,5 +5175,53 @@ mod tests {
             assert_eq!(panel.focus_ring(), ring);
             assert_eq!(panel.focus(), focus, "{ring:?}");
         }
+    }
+
+    fn backed(template: DialogTemplate) -> DialogTemplate {
+        DialogTemplate {
+            backing: Some(crate::ui::panel::PanelBacking::NEW_GAME),
+            ..template
+        }
+    }
+
+    fn backed_screen(info: InfoTemplates) -> ShipyardScreen {
+        let catalog: Rc<dyn ShipyardCatalog> = art();
+        ShipyardScreen::new(
+            Ok((backed(template()), Rc::new(MonoMetrics))),
+            info,
+            Ok(text_input_template()),
+            shipyard(),
+            catalog,
+            ButtonStyle::STOCK,
+        )
+    }
+
+    #[test]
+    fn a_backed_shipyard_draws_its_backing_under_its_background_and_items() {
+        let screen = backed_screen(info_templates());
+        let bounds = screen.dialog().expect("laid out").bounds();
+        crate::ui::panel::testing::assert_backed_first(&drawn(&screen), bounds);
+    }
+
+    #[test]
+    fn a_backed_info_panel_draws_its_backing_under_its_background() {
+        let mut screen = backed_screen(InfoTemplates {
+            plain: Ok(backed(info_template())),
+            picture: Ok(backed(picture_info_template())),
+        });
+        press(&mut screen, Key::ArrowRight);
+        click_item(&mut screen, INFO_ITEM);
+        let bounds = screen.info_panel().expect("open").bounds();
+        let commands = drawn(&screen);
+        let at = crate::ui::panel::testing::backed_at(&commands, bounds);
+        let background = &commands[at + 5];
+        assert!(
+            matches!(
+                background,
+                DrawCommand::Picture { top_left, .. } | DrawCommand::StretchedPicture { top_left, .. }
+                    if *top_left == bounds.min
+            ),
+            "the background over the backing: {background:?}"
+        );
     }
 }

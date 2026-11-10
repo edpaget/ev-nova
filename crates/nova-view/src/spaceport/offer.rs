@@ -794,8 +794,9 @@ impl Screen for OfferDialog {
                     dialog.draw(list);
                     return;
                 };
+                dialog.draw_backing(list);
                 dialog.draw_stretched_over(list, PICTURE_FRAME);
-                dialog.draw(list);
+                dialog.draw_items(list);
                 dialog.draw_picture_in(list, OFFER_PICTURE_ITEM, graphic);
             }
             Err(reason) => {
@@ -3000,5 +3001,28 @@ mod tests {
         off.input(&key(Key::Space), &mut Vec::new());
         assert_eq!(off.take_choice(), None);
         assert!(off.dialog().is_some(), "still open");
+    }
+
+    fn backed(template: DialogTemplate) -> DialogTemplate {
+        DialogTemplate {
+            backing: Some(crate::ui::panel::PanelBacking::NEW_GAME),
+            ..template
+        }
+    }
+
+    #[test]
+    fn a_backed_offer_draws_its_backing_under_its_frame_and_items() {
+        for (template, prompt) in [
+            (template(), prompt("I'm in", Some("No thanks"))),
+            (picture_template(), pictured(5008, Some("No thanks"))),
+        ] {
+            let dialog = OfferDialog::new(
+                Ok((backed(template), Rc::new(MonoMetrics))),
+                prompt,
+                ButtonStyle::STOCK,
+            );
+            let bounds = dialog.dialog().expect("laid out").bounds();
+            crate::ui::panel::testing::assert_backed_first(&drawn(&dialog), bounds);
+        }
     }
 }

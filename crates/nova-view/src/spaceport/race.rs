@@ -461,7 +461,10 @@ impl Screen for RaceScreen {
         match &self.laid {
             Ok(laid) => {
                 let bounds = laid.dialog.bounds();
-                fill_rect(list, bounds, Color::BLACK);
+                if laid.dialog.backing().is_none() {
+                    fill_rect(list, bounds, Color::BLACK);
+                }
+                laid.dialog.draw_backing(list);
                 list.picture(BACKGROUND, bounds.min);
                 for racer in 0..RACERS {
                     let item = FIRST_RACER_ITEM + usize::from(racer);
@@ -470,7 +473,7 @@ impl Screen for RaceScreen {
                         list.picture(ImageKey::picture(picture), area.min);
                     }
                 }
-                laid.dialog.draw(list);
+                laid.dialog.draw_items(list);
             }
             Err(reason) => {
                 list.text(
@@ -1247,5 +1250,28 @@ mod tests {
             texts(&screen),
             ["Cannot show the race: no DLOG 1023. Press South or East to leave it."]
         );
+    }
+
+    fn backed(template: DialogTemplate) -> DialogTemplate {
+        DialogTemplate {
+            backing: Some(crate::ui::panel::PanelBacking::NEW_GAME),
+            ..template
+        }
+    }
+
+    /// The template's backing stands in for the black the race fills.
+    #[test]
+    fn a_backed_race_draws_its_backing_in_place_of_its_black() {
+        let screen = RaceScreen::new(
+            Ok((backed(template()), Rc::new(MonoMetrics))),
+            Some(quantity_template()),
+            ButtonStyle::STOCK,
+            5_000,
+        );
+        let bounds = screen.dialog().expect("laid out").bounds();
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        let commands: Vec<DrawCommand> = list.iter().cloned().collect();
+        crate::ui::panel::testing::assert_backed_first(&commands, bounds);
     }
 }

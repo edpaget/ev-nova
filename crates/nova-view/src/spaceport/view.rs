@@ -2692,6 +2692,7 @@ impl SpaceportView {
             }
         };
         let dialog = &port.dialog;
+        dialog.draw_backing(list);
         list.picture(BACKGROUND, dialog.bounds().min);
         if let Some(area) = dialog.item_bounds(LANDSCAPE_ITEM) {
             port.landscape.draw(list, area);
@@ -2704,7 +2705,7 @@ impl SpaceportView {
             let origin = Point::new(centre.x - width / 2.0, centre.y - height / 2.0);
             list.text_in(NAME_FONT, &port.name, origin, NAME_SIZE, None, Color::WHITE);
         }
-        dialog.draw(list);
+        dialog.draw_items(list);
         match &self.open {
             Some(Open::Trade(screen)) => screen.draw(list),
             Some(Open::Outfitter(screen)) => screen.draw(list),
@@ -2719,6 +2720,7 @@ impl SpaceportView {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 pub(in crate::spaceport) mod tests {
+    mod backing;
     mod bar_story;
     mod close_keys;
     mod covered_aids;

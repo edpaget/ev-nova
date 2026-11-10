@@ -937,11 +937,12 @@ impl Screen for TradeScreen {
             }
         };
         let dialog = &laid.dialog;
+        dialog.draw_backing(list);
         list.picture(BACKGROUND, dialog.bounds().min);
         self.draw_header(laid, list);
         self.draw_slots(laid, list);
         self.draw_boxes(laid, list);
-        dialog.draw(list);
+        dialog.draw_items(list);
         self.quantity.draw(list);
         if let Some(offering) = &self.offering {
             offering.draw(list);
@@ -3143,5 +3144,24 @@ mod tests {
                 "{ring:?}"
             );
         }
+    }
+
+    fn backed(template: DialogTemplate) -> DialogTemplate {
+        DialogTemplate {
+            backing: Some(crate::ui::panel::PanelBacking::NEW_GAME),
+            ..template
+        }
+    }
+
+    #[test]
+    fn a_backed_trade_center_draws_its_backing_under_its_background_and_items() {
+        let screen = TradeScreen::new(
+            Ok((backed(template()), Rc::new(MonoMetrics))),
+            Ok(quantity()),
+            market(),
+            ButtonStyle::STOCK,
+        );
+        let bounds = screen.dialog().expect("laid out").bounds();
+        crate::ui::panel::testing::assert_backed_first(&drawn(&screen), bounds);
     }
 }

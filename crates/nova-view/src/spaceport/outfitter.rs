@@ -1449,11 +1449,12 @@ impl Screen for OutfitterScreen {
                 return;
             }
         };
+        laid.dialog.draw_backing(list);
         list.picture(BACKGROUND, laid.dialog.bounds().min);
         self.draw_grid(laid, list);
         self.draw_selected(laid, list);
         self.draw_arrows(laid, list);
-        laid.dialog.draw(list);
+        laid.dialog.draw_items(list);
         self.quantity.draw(list);
         self.alert.draw(list);
         if let Some(offering) = &self.offering {
@@ -5432,5 +5433,27 @@ mod tests {
         screen.set_outfitter(outfitter());
         assert!(draws_buy(&screen));
         assert_eq!(drawn(&screen), drawn(&super::tests::screen()));
+    }
+
+    fn backed(template: DialogTemplate) -> DialogTemplate {
+        DialogTemplate {
+            backing: Some(crate::ui::panel::PanelBacking::NEW_GAME),
+            ..template
+        }
+    }
+
+    #[test]
+    fn a_backed_outfitter_draws_its_backing_under_its_background_and_items() {
+        let catalog: Rc<dyn OutfitterCatalog> = art();
+        let screen = OutfitterScreen::new(
+            Ok((backed(template()), Rc::new(MonoMetrics))),
+            Ok(quantity()),
+            Ok(desc_template()),
+            outfitter(),
+            catalog,
+            ButtonStyle::STOCK,
+        );
+        let bounds = screen.dialog().expect("laid out").bounds();
+        crate::ui::panel::testing::assert_backed_first(&drawn(&screen), bounds);
     }
 }

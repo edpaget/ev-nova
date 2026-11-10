@@ -801,8 +801,9 @@ impl Screen for MissionComputerScreen {
     fn draw(&self, list: &mut DrawList) {
         match &self.laid {
             Ok(laid) => {
+                laid.dialog.draw_backing(list);
                 list.picture(COMPUTER_BACKGROUND, laid.dialog.bounds().min);
-                laid.dialog.draw(list);
+                laid.dialog.draw_items(list);
                 laid.rows.draw(list);
             }
             Err(reason) => {
@@ -1376,8 +1377,9 @@ impl Screen for MissionInfoScreen {
     fn draw(&self, list: &mut DrawList) {
         match &self.laid {
             Ok(laid) => {
+                laid.dialog.draw_backing(list);
                 list.picture(INFO_BACKGROUND, laid.dialog.bounds().min);
-                laid.dialog.draw(list);
+                laid.dialog.draw_items(list);
                 laid.rows.draw(list);
             }
             Err(reason) => {
@@ -3947,5 +3949,37 @@ pub(super) mod tests {
         info.input(&button(false, corner));
         assert_eq!(info.rows().and_then(RowList::selected), Some(0));
         assert_eq!(info.take_text_request(), Some(0));
+    }
+
+    fn backed(template: DialogTemplate) -> DialogTemplate {
+        DialogTemplate {
+            backing: Some(crate::ui::panel::PanelBacking::NEW_GAME),
+            ..template
+        }
+    }
+
+    #[test]
+    fn a_backed_mission_computer_draws_its_backing_under_its_background_and_items() {
+        let screen = MissionComputerScreen::new(
+            Ok((backed(template()), Rc::new(MonoMetrics))),
+            computer(),
+            ButtonStyle::STOCK,
+        );
+        let bounds = screen.dialog().expect("laid out").bounds();
+        crate::ui::panel::testing::assert_backed_first(&drawn(&screen), bounds);
+    }
+
+    #[test]
+    fn a_backed_mission_info_screen_draws_its_backing_under_its_background_and_items() {
+        let screen = MissionInfoScreen::new(
+            Ok((backed(info_template()), Rc::new(MonoMetrics))),
+            info(),
+            ButtonStyle::STOCK,
+        );
+        let bounds = screen.dialog().expect("laid out").bounds();
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        let commands: Vec<DrawCommand> = list.iter().cloned().collect();
+        crate::ui::panel::testing::assert_backed_first(&commands, bounds);
     }
 }

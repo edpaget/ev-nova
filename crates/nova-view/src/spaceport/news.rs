@@ -5,7 +5,9 @@
 //! The stock dialog is 300 x 230, centred, and its `DITL` has no items:
 //! `_NewsDialogUpdate` (0x47c57) draws everything, in this order:
 //!
-//! 1. Black over the whole dialog (`PaintRect` @0x47caf).
+//! 1. Black over the whole dialog (`PaintRect` @0x47caf), or, over a
+//!    backed template (the new game's), the template's backing in its
+//!    place.
 //! 2. The docked stellar's government's news picture, stretched to the
 //!    dialog (`DrawPicHandle` @0x47cd2): the one asked for, else 9000,
 //!    else none ([`shown_news_picture`], `_DoNewsDialog` @0x47f68-0x47f9d).
@@ -54,6 +56,7 @@ use crate::text::TextMetrics;
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE};
 use crate::ui::dialog::DialogTemplate;
 use crate::ui::pad_focus::{FocusState, PadRead, Target, draw_highlight, from_pad};
+use crate::ui::panel::PanelBacking;
 use crate::ui::text_box::TextBox;
 
 /// The news dialog's `DLOG` ID.
@@ -86,6 +89,9 @@ pub fn shown_news_picture(asked: i16, exists: impl Fn(i16) -> bool) -> Option<i1
 #[derive(Clone, Debug)]
 struct Laid {
     bounds: Bounds,
+    /// The template's backing, drawn in place of the black under the
+    /// picture.
+    backing: Option<PanelBacking>,
     picture: Option<i16>,
     commercial: TextBox,
     story: TextBox,
@@ -135,6 +141,7 @@ impl NewsScreen {
             };
             Laid {
                 bounds,
+                backing: template.backing,
                 picture,
                 commercial: boxed(
                     &news.commercial,
@@ -277,7 +284,10 @@ impl Screen for NewsScreen {
     fn draw(&self, list: &mut DrawList) {
         match &self.laid {
             Ok(laid) => {
-                fill_rect(list, laid.bounds, Color::BLACK);
+                match laid.backing {
+                    Some(backing) => backing.draw(list, laid.bounds),
+                    None => fill_rect(list, laid.bounds, Color::BLACK),
+                }
                 if let Some(id) = laid.picture {
                     list.stretched_picture(
                         ImageKey::picture(id),
@@ -783,5 +793,29 @@ mod tests {
             );
             assert!(screen.closed());
         }
+    }
+
+    fn backed(template: DialogTemplate) -> DialogTemplate {
+        DialogTemplate {
+            backing: Some(crate::ui::panel::PanelBacking::NEW_GAME),
+            ..template
+        }
+    }
+
+    /// The template's backing stands in for the black the news fills.
+    #[test]
+    fn a_backed_news_draws_its_backing_in_place_of_its_black() {
+        let screen = NewsScreen::new(
+            Ok((backed(template()), Rc::new(MonoMetrics))),
+            &news(),
+            None,
+        );
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        let commands: Vec<DrawCommand> = list.iter().cloned().collect();
+        crate::ui::panel::testing::assert_backed_first(
+            &commands,
+            screen.bounds().expect("laid out"),
+        );
     }
 }

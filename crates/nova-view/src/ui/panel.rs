@@ -53,14 +53,23 @@ pub(crate) mod testing {
     /// covering `bounds`, such as a host's own backdrop.
     #[track_caller]
     pub(crate) fn assert_backed_first(drawn: &[DrawCommand], bounds: Bounds) {
+        assert_eq!(backed_at(drawn, bounds), 0, "the backing comes first");
+    }
+
+    /// Where in `drawn` [`PanelBacking::NEW_GAME`] over `bounds` begins,
+    /// asserting that it is there and that no other fill covers `bounds`.
+    /// What follows it is its host's, drawn over the backing.
+    #[track_caller]
+    pub(crate) fn backed_at(drawn: &[DrawCommand], bounds: Bounds) -> usize {
         let mut backing = DrawList::new();
         PanelBacking::NEW_GAME.draw(&mut backing, bounds);
         let backing: Vec<_> = backing.iter().cloned().collect();
-        assert!(
-            drawn.starts_with(&backing),
-            "the backing over {bounds:?} comes first: {:?}",
-            &drawn[..drawn.len().min(backing.len() + 1)]
-        );
+        let at = drawn
+            .windows(backing.len())
+            .position(|window| window == backing.as_slice());
+        let Some(at) = at else {
+            panic!("no backing over {bounds:?} in {drawn:?}");
+        };
         assert_eq!(
             drawn
                 .iter()
@@ -69,6 +78,7 @@ pub(crate) mod testing {
             1,
             "one fill covers the window"
         );
+        at
     }
 }
 
