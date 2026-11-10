@@ -1037,6 +1037,23 @@ fn a_hull_sold_nowhere_is_never_offered_but_keeps_its_price_for_the_trade_in() {
 }
 
 #[test]
+fn a_variant_of_a_sold_hull_is_sold_only_where_its_own_sold_at_says() {
+    // `sold_at` is the one field a variant doesn't inherit (the format's
+    // `Ship` docs): the armed skiff leaves it out, so it's sold nowhere.
+    let game = loaded(&skiff_for_sale("40000", Some("alpha-prime")));
+    assert_eq!(problems(&game), Vec::<String>::new());
+    let variant = ship_of(&game, "armed-skiff");
+    assert_eq!(
+        (variant.tech_level, variant.buy_random),
+        (OUTFIT_TECH_NEVER, 0)
+    );
+    assert_eq!(ship_of(&game, "skiff").tech_level, 3);
+    let prime = stellar(&game, game.ids.stellars[&id("alpha-prime")]);
+    assert_eq!(prime.special_tech1_3, [3, -1, -1]);
+    assert_eq!(prime.special_tech4_8, [-1; 5]);
+}
+
+#[test]
 fn a_ship_with_no_price_costs_nothing() {
     assert_eq!(skiff(&skiff_with_stats()).cost, 0);
 }
