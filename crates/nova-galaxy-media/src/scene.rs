@@ -317,19 +317,29 @@ fn read_primitive(
             indices,
             material,
         },
-        None => flat(&positions, uvs.as_deref(), &indices, material),
+        None => flat(
+            &positions,
+            uvs.as_deref(),
+            &indices,
+            material,
+            mirrors(matrix),
+        ),
     })
 }
 
 /// A primitive of `indices` into `positions` (and `uvs`) with each
 /// triangle's own normal, its corners unwelded. A triangle with no area
-/// faces up (+Y).
+/// faces up (+Y). The normal follows the winding's cross product, or
+/// opposes it when `mirrored`: `positions` were moved by a mirroring
+/// matrix, which turned the winding over.
 fn flat(
     positions: &[[f32; 3]],
     uvs: Option<&[[f32; 2]]>,
     indices: &[u32],
     material: Option<usize>,
+    mirrored: bool,
 ) -> Primitive {
+    let side = if mirrored { -1.0 } else { 1.0 };
     let mut out = Primitive {
         positions: Vec::with_capacity(indices.len()),
         normals: Vec::with_capacity(indices.len()),
@@ -351,7 +361,7 @@ fn flat(
         let normal = if cross.iter().all(|c| *c == 0.0) {
             [0.0, 1.0, 0.0]
         } else {
-            unit(cross)
+            unit(cross.map(|c| side * c))
         };
         for &i in tri {
             out.positions.push(positions[i as usize]);
@@ -411,9 +421,19 @@ fn turn_normal(m: &Matrix, n: [f32; 3]) -> [f32; 3] {
         let (c0, c1) = ((col + 1) % 3, (col + 2) % 3);
         a(r0, c0) * a(r1, c1) - a(r0, c1) * a(r1, c0)
     };
-    let det: f32 = (0..3).map(|col| a(0, col) * cofactor(0, col)).sum();
-    let sign = if det < 0.0 { -1.0 } else { 1.0 };
+    let sign = if mirrors(m) { -1.0 } else { 1.0 };
     [0, 1, 2].map(|row| sign * (0..3).map(|col| cofactor(row, col) * n[col]).sum::<f32>())
+}
+
+/// Whether the column-major matrix `m` mirrors what it moves: its linear
+/// part's determinant is negative, which turns each triangle's winding
+/// over.
+fn mirrors(m: &Matrix) -> bool {
+    let a = |row: usize, col: usize| m[col][row];
+    let det = a(0, 0) * (a(1, 1) * a(2, 2) - a(1, 2) * a(2, 1))
+        - a(0, 1) * (a(1, 0) * a(2, 2) - a(1, 2) * a(2, 0))
+        + a(0, 2) * (a(1, 0) * a(2, 1) - a(1, 1) * a(2, 0));
+    det < 0.0
 }
 
 #[cfg(test)]
@@ -497,6 +517,27 @@ mod tests {
             assert!(dot(cross, normal) > 0.0);
         }
         assert_eq!(flat.uvs, None);
+    }
+
+    #[test]
+    fn a_mirrored_node_keeps_its_flat_normals_pointing_out_of_the_surface() {
+        // The box as drawn, and mirrored across x (the other wing of a
+        // symmetric ship), both centred on (3, 0, 0).
+        let mut mirrored = Node::at([3.0, 0.0, 0.0]);
+        mirrored.scale = [-1.0, 1.0, 1.0];
+        for node in [Node::at([3.0, 0.0, 0.0]), mirrored] {
+            let scale = node.scale;
+            let scene = scene(&Builder::new([2.0, 1.0, 4.0]).nodes(vec![node]));
+            let p = &scene.primitives[0];
+            for tri in p.indices.as_chunks::<3>().0 {
+                let corners = tri.map(|i| p.positions[i as usize]);
+                let middle = [0, 1, 2].map(|k| corners.iter().map(|c| c[k]).sum::<f32>() / 3.0);
+                let out = [middle[0] - 3.0, middle[1], middle[2]];
+                let normal = p.normals[tri[0] as usize];
+                let dot: f32 = (0..3).map(|k| out[k] * normal[k]).sum();
+                assert!(dot > 0.0, "scale {scale:?}: {normal:?} at {middle:?}");
+            }
+        }
     }
 
     #[test]
