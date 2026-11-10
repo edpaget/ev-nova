@@ -390,6 +390,13 @@ impl ShipBuilder {
         self
     }
 
+    /// Sets [`Ship::movie_file`] (offset 0x6AE, 32 bytes).
+    #[must_use]
+    pub fn movie_file(mut self, name: &str) -> Self {
+        self.0.text(0x6AE, 32, name);
+        self
+    }
+
     /// Sets [`Ship::subtitle`] (offset 0x6E6, 64 bytes).
     #[must_use]
     pub fn subtitle(mut self, text: &str) -> Self {
@@ -641,7 +648,8 @@ mod tests {
                 .availability("b422")
                 .appear_on("!b17")
                 .on_capture("^b301")
-                .on_retire("!b30"),
+                .on_retire("!b30")
+                .movie_file("shuttle.mov"),
         );
         assert_eq!(decoded.short_name.as_str(), "Shuttle");
         assert_eq!(decoded.comm_name.as_str(), "Shuttle Kestrel");
@@ -652,6 +660,7 @@ mod tests {
         assert_eq!(decoded.appear_on.as_str(), "!b17");
         assert_eq!(decoded.on_capture.as_str(), "^b301");
         assert_eq!(decoded.on_retire.as_str(), "!b30");
+        assert_eq!(decoded.movie_file.as_str(), "shuttle.mov");
     }
 
     #[test]
