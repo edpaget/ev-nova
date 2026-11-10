@@ -161,6 +161,20 @@ pub struct ModelPose {
     pub scale: f32,
 }
 
+/// The ship-space vector `[starboard, nose, up]` on the view's model axes:
+/// starboard is +x (right), the nose −y (up the screen at heading 0) and
+/// up +z (toward the camera).
+///
+/// Ship space is where a ship's model is placed
+/// (`nova_galaxy_media::Placement::ship_point_3d`): the renderer maps a
+/// loaded model's vertices by it (`nova_render::model_source`), so
+/// anything placed on a ship takes this one map. It is a reflection, as
+/// these axes are left-handed.
+#[must_use]
+pub fn view_axes([starboard, nose, up]: [f32; 3]) -> [f32; 3] {
+    [starboard, -nose, up]
+}
+
 #[cfg(test)]
 mod tests {
     use std::f32::consts::FRAC_PI_2;
@@ -200,6 +214,15 @@ mod tests {
     }
 
     const POINTS: [[f32; 3]; 4] = [X, Y, Z, [0.4, -1.3, 2.2]];
+
+    #[test]
+    #[allow(clippy::float_cmp, reason = "the map moves no bits but a sign")]
+    fn ship_space_maps_nose_to_minus_y_and_up_to_plus_z() {
+        assert_eq!(view_axes([1.0, 0.0, 0.0]), [1.0, 0.0, 0.0]);
+        assert_eq!(view_axes([0.0, 2.0, 0.0]), [0.0, -2.0, 0.0]);
+        assert_eq!(view_axes([0.0, 0.0, 3.0]), [0.0, 0.0, 3.0]);
+        assert_eq!(view_axes([1.0, 2.0, 3.0]), [1.0, -2.0, 3.0]);
+    }
 
     #[test]
     fn a_turn_about_any_axis_turns_points_as_rodrigues_formula_does() {

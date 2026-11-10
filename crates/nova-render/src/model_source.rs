@@ -35,8 +35,8 @@
 //!   media crate's slot (see [`crate::livery`]).
 //!
 //! The decisions an adapter forwards to live in core functions here
-//! ([`view_axes`], [`vertex_color`], [`linear`], [`part`]) or in
-//! `nova_galaxy_media`,
+//! ([`vertex_color`], [`linear`], [`part`]), in the view
+//! ([`view_axes`], forwarded from `nova_view`) or in `nova_galaxy_media`,
 //! and are pinned by their own tests. `FakeModels` is the hand-written
 //! fake (with this crate's tests, or the `recording` feature), and
 //! `check_contract` the contract every source meets: the fake runs it in
@@ -45,6 +45,11 @@
 
 use std::fmt;
 use std::rc::Rc;
+
+/// The ship-to-view axes map is the view's
+/// ([`nova_view::view_axes`]): forwarded here, so the mesh's vertices and
+/// what the view places on a ship take one map.
+pub use nova_view::view_axes;
 
 pub use crate::livery::PaintSlot;
 use crate::model::{Mesh, MeshError, Vertex};
@@ -269,14 +274,6 @@ impl<S: ModelSource + ?Sized> ModelSource for Rc<S> {
     fn model(&self, request: &ModelRequest) -> Result<LoadedModel, ModelError> {
         (**self).model(request)
     }
-}
-
-/// The ship-space vector `[starboard, nose, up]` on the view's model axes:
-/// starboard is +x (right), the nose −y (up the screen at heading 0) and
-/// up +z (toward the camera).
-#[must_use]
-pub fn view_axes([starboard, nose, up]: [f32; 3]) -> [f32; 3] {
-    [starboard, -nose, up]
 }
 
 /// The linear channel `c` (0 to 1) encoded as sRGB.
@@ -551,14 +548,6 @@ mod tests {
         // The second part's indices are offset past the first's vertices.
         assert_eq!(model.parts[1].mesh.indices()[0], 0);
         assert_eq!(merged.indices()[12], 8);
-    }
-
-    #[test]
-    fn ship_space_maps_nose_to_minus_y_and_up_to_plus_z() {
-        assert_eq!(view_axes([1.0, 0.0, 0.0]), [1.0, 0.0, 0.0]);
-        assert_eq!(view_axes([0.0, 2.0, 0.0]), [0.0, -2.0, 0.0]);
-        assert_eq!(view_axes([0.0, 0.0, 3.0]), [0.0, 0.0, 3.0]);
-        assert_eq!(view_axes([1.0, 2.0, 3.0]), [1.0, -2.0, 3.0]);
     }
 
     #[test]
