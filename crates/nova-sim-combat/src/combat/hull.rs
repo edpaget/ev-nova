@@ -267,6 +267,14 @@ pub struct HullSpec {
     /// `BaseYSize`), in pixels; none without either. Whether it is on screen reads it with the width
     /// (see [`cloak::on_screen`](crate::cloak::on_screen)).
     pub sprite_height: Option<f32>,
+    /// The radius, in pixels, of the disc its catalog data says it
+    /// collides as: its record's
+    /// [`collision_radius`](HullRecord::collision_radius) when above none;
+    /// none in stock data, or for a radius of none or less. The fight
+    /// strikes it by this disc only under the rulebook's `data_collision`
+    /// reading; the sprite
+    /// measures above are untouched by it.
+    pub collision_radius: Option<f32>,
     /// Whether it is a planet-type ship, its `Flags` [`PLANET_TYPE`]: it
     /// dies with no shockwave, and no hit, shockwave or tractor beam
     /// pushes or holds it; only shots and beams of its planet type hit it,
@@ -395,6 +403,7 @@ impl Default for HullSpec {
             ),
             sprite_size: None,
             sprite_height: None,
+            collision_radius: None,
             planet_type: false,
             pd_target: false,
             retreats_dry: false,
@@ -459,6 +468,10 @@ impl HullSpec {
             board_reach,
             sprite_size: size,
             sprite_height: height,
+            collision_radius: record
+                .collision_radius
+                .filter(|&radius| radius > 0)
+                .map(f32::from),
             planet_type: record.flags & PLANET_TYPE != 0,
             pd_target: record.flags2 & PD_TARGET != 0,
             retreats_dry: record.flags2 & RETREATS_DRY != 0,
@@ -1015,6 +1028,57 @@ mod tests {
         assert!(disabled(9.999, 100.0, true));
         assert!(!disabled(14.99, 45.0, true), "a third does not disable it");
         assert_eq!((DISABLE_PERCENT, TOUGH_DISABLE_PERCENT), (33.333, 10.0));
+    }
+
+    #[test]
+    fn a_hull_carries_a_positive_record_collision_radius_in_pixels() {
+        let sized = HullSpec::new(&HullRecord {
+            collision_radius: Some(20),
+            ..hull(140)
+        });
+        assert_eq!(sized.collision_radius, Some(20.0));
+        assert_eq!(
+            HullSpec::new(&HullRecord {
+                collision_radius: Some(1),
+                ..hull(140)
+            })
+            .collision_radius,
+            Some(1.0),
+            "the smallest whole pixel"
+        );
+        for radius in [None, Some(0), Some(-3), Some(i16::MIN)] {
+            let spec = HullSpec::new(&HullRecord {
+                collision_radius: radius,
+                ..hull(140)
+            });
+            assert_eq!(spec.collision_radius, None, "{radius:?}");
+        }
+        assert_eq!(HullSpec::default().collision_radius, None);
+    }
+
+    #[test]
+    fn a_collision_radius_leaves_the_sprite_measures_alone() {
+        let sprite = HullRecord {
+            size: Some(26),
+            height: Some(40),
+            ..hull(140)
+        };
+        let stock = HullSpec::new(&sprite);
+        let sized = HullSpec::new(&HullRecord {
+            collision_radius: Some(20),
+            ..sprite
+        });
+        assert_eq!(
+            HullSpec {
+                collision_radius: None,
+                ..sized
+            },
+            stock
+        );
+        assert_eq!(
+            (sized.hit_radius, sized.sprite_size, sized.sprite_height),
+            (stock.hit_radius, Some(26.0), Some(40.0))
+        );
     }
 
     #[test]
