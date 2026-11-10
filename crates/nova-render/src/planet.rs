@@ -604,6 +604,12 @@ mod tests {
             in_planet_shadow(aside, long),
             in_planet_shadow(aside, PLANET_LIGHT)
         );
+        // Off to the side, behind the globe from the light but clear of its
+        // shadow, whatever the light's length.
+        let across = unit([l[1], -l[0], 0.0]);
+        let clear = [0, 1, 2].map(|i| -0.5 * l[i] + 1.5 * across[i]);
+        assert!(!in_planet_shadow(clear, long));
+        assert!(!in_planet_shadow(clear, PLANET_LIGHT));
         let south = globe(0.0, 0.6).unwrap();
         let (short, far) = (
             ring_shadow(south, &f, PLANET_LIGHT),

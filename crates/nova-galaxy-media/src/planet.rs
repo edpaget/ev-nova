@@ -492,16 +492,20 @@ fn craters(field: &mut [f64], seed: u32, width: u32) {
         .collect();
     for ((u, v), height) in texels(width).zip(field.iter_mut()) {
         for (cu, cv, radius) in &pits {
-            let du = (u - cu).abs();
-            let du = du.min(1.0 - du);
+            let du = around(u, *cu);
             // A degree of latitude is twice a degree of longitude's share.
             let dv = (v - cv) * 0.5;
             let near = (du * du + dv * dv) / (radius * radius);
-            if near < 1.0 {
-                *height -= 0.25 * (1.0 - near);
-            }
+            *height -= 0.25 * (1.0 - near).max(0.0);
         }
     }
+}
+
+/// How far apart longitudes `a` and `b` (0 to 1 around) are, the short
+/// way round: across the date line if that is shorter.
+fn around(a: f64, b: f64) -> f64 {
+    let apart = (a - b).abs();
+    apart.min(1.0 - apart)
 }
 
 /// The white of polar caps starting `from` the equator (0) toward the
@@ -611,8 +615,9 @@ fn bands(palette: &[Rgb], clouds: f64, seed: u32, width: u32) -> Vec<(Rgb, f64)>
     }
     // The last is the south pole, with no band beyond it.
     edges.pop();
-    // 0, 1, 0, 2, 0, 1, 0, 3, …: the first colour the most.
-    let color_of = |band: usize| stops[((band + 1).trailing_zeros() as usize).min(stops.len() - 1)];
+    // 0, 1, 0, 2, 0, 1, 0, 3, …: the first colour the most. Fewer than
+    // 16 bands, so the ruler never passes the fourth stop.
+    let color_of = |band: usize| stops[((band + 1).trailing_zeros() as usize).min(3)];
     let turbulence = Noise {
         stream: Stream::new(seed, Use::Clouds),
         octaves: 4,
@@ -1228,6 +1233,17 @@ mod tests {
             }
         );
         assert_eq!(TEXTURE_DAY, 360.0);
+    }
+
+    #[test]
+    fn longitudes_are_apart_the_short_way_round() {
+        assert!(
+            (around(0.02, 0.98) - 0.04).abs() < 1e-12,
+            "across the date line"
+        );
+        assert!((around(0.98, 0.02) - 0.04).abs() < 1e-12);
+        assert!((around(0.25, 0.5) - 0.25).abs() < 1e-12);
+        assert!((around(0.0, 0.5) - 0.5).abs() < 1e-12);
     }
 
     #[test]
