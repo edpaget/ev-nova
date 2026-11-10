@@ -75,6 +75,9 @@
 //!   ([`RejectedSizes`]), and the [`WorldSpace`] a frame's world layer is
 //!   drawn in, from the [`WorldResolution`] the [`Gpu`] draws it at
 //!   ([`world_space`]).
+//! - [`render_scale`]: the [`RenderScale`] the world layer is drawn at
+//!   and the share of the backing size a percentage sizes the world
+//!   texture to ([`scaled_size`]).
 //! - [`source`]: [`ImageSource`] for `nova_data`'s `GameData`, a thin
 //!   adapter over the picture and sprite decoders (and the mask that gives
 //!   a masked picture its alpha) that needs no GPU.
@@ -156,6 +159,7 @@ pub mod present;
 pub mod quickdraw_stretch;
 #[cfg(any(test, feature = "recording"))]
 pub mod recording;
+pub mod render_scale;
 pub mod source;
 pub mod streams;
 pub mod super_xbr;
@@ -180,6 +184,7 @@ pub use model::{Mesh, MeshError, MeshId, Vertex};
 pub use model_source::{LoadedModel, ModelError, ModelRequest, ModelSource};
 pub use planet_source::{LoadedPlanet, PlanetError, PlanetRequest, PlanetSource};
 pub use present::{AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action};
+pub use render_scale::{RenderScale, scaled_size};
 pub use source::GameImages;
 pub use super_xbr::SuperXbr;
 pub use upscale::{
