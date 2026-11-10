@@ -22,15 +22,18 @@
 //!
 //! | depth | parallax | stars per 1024×768 | drawn radius | brightness |
 //! |---|---|---|---|---|
-//! | 19000 | 0.05 | 160 | 0.5–1.0 | 0.35–0.6 |
-//! | 9000 | 0.1 | 110 | 0.6–1.3 | 0.4–0.7 |
-//! | 4555.6 | 0.18 | 70 | 0.8–1.6 | 0.45–0.8 |
-//! | 2333.3 | 0.3 | 40 | 1.0–2.0 | 0.5–0.9 |
-//! | 1000 | 0.5 | 20 | 1.2–2.5 | 0.55–1.0 |
+//! | 19000 | 0.05 | 160 | 1.0–1.5 | 0.45–0.7 |
+//! | 9000 | 0.1 | 110 | 1.1–1.8 | 0.5–0.75 |
+//! | 4555.6 | 0.18 | 70 | 1.3–2.2 | 0.55–0.85 |
+//! | 2333.3 | 0.3 | 40 | 1.5–2.6 | 0.6–0.95 |
+//! | 1000 | 0.5 | 20 | 1.8–3.2 | 0.65–1.0 |
 //!
 //! About 400 stars in a 1024×768 view, against the original's 20. A
 //! layer's radius range is the radius its stars are drawn at, in logical
 //! units; a star's size in the world is that over its layer's parallax.
+//! The falloff ([`coverage`]) is steep, so even the far layer's least
+//! star is a unit in radius, enough to light the pixel it sits on at the
+//! native scale.
 //! Each star's tint is drawn from a weighted palette of star temperatures
 //! ([`TINTS`]): mostly white, then blue-white and pale yellow, a few
 //! orange and red.
@@ -89,32 +92,32 @@ pub const LAYERS: [SkyLayer; 5] = [
     SkyLayer {
         depth: 19000.0,
         density: 160.0,
-        radius: (0.5, 1.0),
-        brightness: (0.35, 0.6),
+        radius: (1.0, 1.5),
+        brightness: (0.45, 0.7),
     },
     SkyLayer {
         depth: 9000.0,
         density: 110.0,
-        radius: (0.6, 1.3),
-        brightness: (0.4, 0.7),
+        radius: (1.1, 1.8),
+        brightness: (0.5, 0.75),
     },
     SkyLayer {
         depth: 4555.6,
         density: 70.0,
-        radius: (0.8, 1.6),
-        brightness: (0.45, 0.8),
+        radius: (1.3, 2.2),
+        brightness: (0.55, 0.85),
     },
     SkyLayer {
         depth: 2333.3,
         density: 40.0,
-        radius: (1.0, 2.0),
-        brightness: (0.5, 0.9),
+        radius: (1.5, 2.6),
+        brightness: (0.6, 0.95),
     },
     SkyLayer {
         depth: 1000.0,
         density: 20.0,
-        radius: (1.2, 2.5),
-        brightness: (0.55, 1.0),
+        radius: (1.8, 3.2),
+        brightness: (0.65, 1.0),
     },
 ];
 
