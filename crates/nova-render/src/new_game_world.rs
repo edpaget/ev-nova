@@ -127,7 +127,9 @@ pub fn world_assets_from(
                 continue;
             };
             let reach = match game.data.stand_in(StandInOf::Stellar(stellar)) {
-                Some(StandIn::Outline(outline)) if outline.reach() > 0.0 => outline.reach(),
+                // An outline that reaches nowhere scales the model to
+                // nothing, so it draws nothing, as the outline would.
+                Some(StandIn::Outline(outline)) => outline.reach(),
                 _ => continue,
             };
             let request = ModelRequest::new(asset.as_str(), None);
@@ -496,6 +498,56 @@ mod tests {
     }
 
     /// The 3D sample with a ship on each kind of model that doesn't load.
+    /// A folder of this test's own under the system's temporary folder,
+    /// removed when dropped.
+    struct Folder(std::path::PathBuf);
+
+    impl Drop for Folder {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Copies every file under `from` into `to`.
+    fn copy_tree(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).expect("a folder");
+        for entry in std::fs::read_dir(from).expect("lists") {
+            let path = entry.expect("an entry").path();
+            let into = to.join(path.file_name().expect("a name"));
+            if path.is_dir() {
+                copy_tree(&path, &into);
+            } else {
+                std::fs::copy(&path, &into).expect("copies");
+            }
+        }
+    }
+
+    #[test]
+    fn the_world_of_a_folder_on_disk_is_read_from_its_files() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("after 1970")
+            .as_nanos();
+        let folder = Folder(
+            std::env::temp_dir().join(format!("nova-render-world-{}-{nanos}", std::process::id())),
+        );
+        copy_tree(&nova_data::new_game::fixture::sample_folder(), &folder.0);
+        std::fs::write(
+            folder.0.join("stellars").join("kestrel-reach.md"),
+            "---\nname: Kestrel Reach\nkind: planet\nsystem: luyten-crossing\n\
+             position: [700, -500]\nvisual:\n  generated:\n    type: gas-giant\n\
+             \x20   palette: [\"#c9a36b\"]\n    seed: 4417\n---\n",
+        )
+        .expect("writes");
+        let game = nova_data::new_game::open(&folder.0).expect("lists");
+        let assets = world_assets_in(&game, &folder.0);
+        assert_eq!(
+            assets.models.stellar(stellar(&game, "kestrel-reach")),
+            Some(StellarModel::Planet { key: PlanetKey(1) })
+        );
+        assert_eq!(assets.planets.len(), 1);
+    }
+
     fn with_broken_models() -> MemSource {
         let ship = |name: &str, asset: &str| {
             format!(
