@@ -58,6 +58,7 @@ mod new_game_routes;
 mod new_game_saved_ids;
 mod new_game_screens;
 mod new_game_shipyard;
+mod new_game_sky;
 mod new_game_trade;
 mod new_game_travel;
 mod new_game_turning;

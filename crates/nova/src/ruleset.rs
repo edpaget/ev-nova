@@ -10,9 +10,10 @@
 //! each defaulting to the original's reading.
 //!
 //! The stock game pins nothing. The new game pins the other reading of
-//! fifteen keys: twelve as a jump point's gate is the only way in or out
+//! eighteen keys: twelve as a jump point's gate is the only way in or out
 //! of a system, one as its story lives in port, one as its exchange
-//! lists every good a port prices, and one as its ships are 3D models:
+//! lists every good a port prices, three as its ships are 3D models, and
+//! one as its sky is drawn in 3D:
 //!
 //! - the three its traffic needs: [`RuleKey::DestinationReach`] (its
 //!   jump points sit past the original's 999 bound),
@@ -68,7 +69,13 @@
 //!   [`RuleKey::MountedMuzzles`] (a shot starts at the muzzle of the
 //!   outfit model mounted on its hardpoint, its weapon's reach ahead of
 //!   the exit, `nova_data::new_game`'s `mounts`, rather than at the bare
-//!   exit; `nova_sim::combat::muzzle`).
+//!   exit; `nova_sim::combat::muzzle`);
+//! - its sky's one: [`RuleKey::LayeredStarfield`] (flight draws a sky of
+//!   generated stars in layers at depth in the 3D world layer, busier
+//!   than the original's 20 stars, drifting by their depth's parallax
+//!   and dimmed by the system's murk, in place of the stand-in dots the
+//!   new game's data draws for want of a star sheet; `nova_view::flight::sky`
+//!   and `nova_render::sky`).
 //!
 //! It leaves [`RuleKey::MapPlotting`] at the original's Shift-click, a
 //! hop at a time, so a course is plotted a lane at a time and J flies it.
@@ -110,8 +117,8 @@ const STOCK: Profile = Profile {
 
 /// The new game's profile: its traffic's three gate readings, its map
 /// and courses' four, J's two, its mission ships' three, its port's one,
-/// its exchange's one and its hulls' three (see the module docs), and
-/// pilots of its own.
+/// its exchange's one, its hulls' three and its sky's one (see the module
+/// docs), and pilots of its own.
 const NEW_GAME: Profile = Profile {
     readings: &[
         (RuleKey::DestinationReach, RuleSource::Bible),
@@ -131,6 +138,7 @@ const NEW_GAME: Profile = Profile {
         (RuleKey::ContinuousHeadings, RuleSource::Bible),
         (RuleKey::DataCollision, RuleSource::Bible),
         (RuleKey::MountedMuzzles, RuleSource::Bible),
+        (RuleKey::LayeredStarfield, RuleSource::Bible),
     ],
     pilots: "New Game Pilots",
 };
@@ -197,7 +205,7 @@ mod tests {
     }
 
     #[test]
-    fn the_new_game_pins_the_other_reading_of_its_seventeen_gate_lane_map_autopilot_mission_ship_bar_exchange_and_hull_keys()
+    fn the_new_game_pins_the_other_reading_of_its_eighteen_gate_lane_map_autopilot_mission_ship_bar_exchange_hull_and_sky_keys()
      {
         assert_eq!(
             Ruleset::NewGame.profile().readings,
@@ -219,6 +227,7 @@ mod tests {
                 (RuleKey::ContinuousHeadings, RuleSource::Bible),
                 (RuleKey::DataCollision, RuleSource::Bible),
                 (RuleKey::MountedMuzzles, RuleSource::Bible),
+                (RuleKey::LayeredStarfield, RuleSource::Bible),
             ]
         );
     }
