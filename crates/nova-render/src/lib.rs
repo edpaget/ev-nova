@@ -104,6 +104,7 @@ pub mod glyph_raster;
 pub mod gpu;
 pub mod images;
 pub mod model;
+mod models;
 pub mod present;
 pub mod quickdraw_stretch;
 #[cfg(any(test, feature = "recording"))]

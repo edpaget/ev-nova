@@ -6,19 +6,24 @@ use std::collections::{HashMap, HashSet};
 use nova_data::graphics::Image;
 use nova_view::geometry::Bounds;
 use nova_view::text::LINE_HEIGHT;
-use nova_view::{Blend, Color, DrawCommand, DrawLayer, DrawList, ImageKey, ImageKind, Point};
+use nova_view::{
+    Blend, Color, DrawCommand, DrawLayer, DrawList, ImageKey, ImageKind, ModelKey, Point,
+};
 
 use crate::atlas::{Atlas, AtlasEntry, PAGE_SIZE, PackError, Uv};
+use crate::camera;
 use crate::enlarge::{Enlarger, NativeDetail};
 use crate::gpu::{
     Batch, Frame, Gpu, MAX_TEXTURE_SIDE, NO_COLORIZE, QuadInstance, Rect, SolidQuad, TextRun,
     colorize_instance,
 };
 use crate::images::{ImageError, ImageSource};
+use crate::model::Mesh;
+use crate::models::{self, Models};
 use crate::quickdraw_stretch;
 use crate::streams::{Owner, Streams};
 use crate::upscale::world_space;
-use crate::viewport::{PixelRect, Viewport};
+use crate::viewport::{LogicalSize, PixelRect, Viewport};
 
 /// What went wrong while rendering one frame.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -29,6 +34,10 @@ pub struct RenderReport {
     /// range or too large) is listed once per key. Later frames skip them
     /// silently.
     pub new_failures: Vec<(ImageKey, ImageError)>,
+    /// Model keys drawn this frame with no mesh given for them
+    /// ([`Renderer::add_model`]), each listed the first time it is drawn.
+    /// They draw nothing.
+    pub missing_models: Vec<ModelKey>,
 }
 
 /// A frame's place in the atlas and the size it is drawn at.
@@ -70,6 +79,8 @@ pub struct Renderer<S> {
     /// size, or `None` when it couldn't be placed
     /// ([`Renderer::push_stretched`]).
     stretches: HashMap<(ImageKey, (u32, u32)), Option<Placed>>,
+    /// The meshes models are drawn with ([`Renderer::add_model`]).
+    models: Models,
 }
 
 impl<S: ImageSource> Renderer<S> {
@@ -93,7 +104,16 @@ impl<S: ImageSource> Renderer<S> {
             rebuild: false,
             streams: Streams::default(),
             stretches: HashMap::new(),
+            models: Models::default(),
         }
+    }
+
+    /// Draws model `key` ([`DrawCommand::Model`]) with `mesh` from the
+    /// next frame on, replacing any mesh it had. The mesh is uploaded
+    /// ([`Gpu::upload_mesh`]) the first frame that draws it, and again
+    /// after it is replaced ([`crate::models`]).
+    pub fn add_model(&mut self, key: ModelKey, mesh: Mesh) {
+        self.models.add(key, mesh);
     }
 
     /// The image source.
@@ -171,7 +191,11 @@ impl<S: ImageSource> Renderer<S> {
             return report;
         };
         self.rebuild(gpu);
-        let target = Target { rect, scale };
+        let target = Target {
+            rect,
+            scale,
+            logical: viewport.logical(),
+        };
         let mut layers = Layers::default();
         let tail = list.world_tail();
         for (index, (layer, command)) in list.layered().enumerate() {
@@ -186,11 +210,12 @@ impl<S: ImageSource> Renderer<S> {
         }
         self.streams.end_frame();
         let Layers {
-            batches,
+            mut batches,
             world,
             tail,
             ..
         } = layers.settled();
+        models::settle_bands(&mut batches);
         gpu.submit(&Frame {
             target: viewport.window_px(),
             viewport: rect,
@@ -222,7 +247,11 @@ impl<S: ImageSource> Renderer<S> {
         gpu: &mut impl Gpu,
         report: &mut RenderReport,
     ) {
-        let Target { rect, scale } = target;
+        let Target {
+            rect,
+            scale,
+            logical,
+        } = target;
         match *command {
             DrawCommand::Sprite {
                 image,
@@ -386,7 +415,15 @@ impl<S: ImageSource> Renderer<S> {
                     push_or_fill(batches, area, color);
                 }
             }
-            DrawCommand::Model { .. } => {}
+            // Drawn uncut by a clip, as a line or a triangle is.
+            DrawCommand::Model { model, ref pose } => {
+                if let Some((mesh, radius)) =
+                    self.models.resident(model, gpu, &mut report.missing_models)
+                    && let Some(instance) = camera::instance(logical, pose, mesh, radius)
+                {
+                    models::push(batches, instance);
+                }
+            }
             DrawCommand::Clipped {
                 clip: inner,
                 ref command,
@@ -692,13 +729,15 @@ impl<S: ImageSource> Renderer<S> {
     }
 }
 
-/// Where a frame draws: the viewport's content rect in window pixels, and
-/// how many pixels a logical unit is across and down
-/// ([`Viewport::axis_scales`]).
+/// Where a frame draws: the viewport's content rect in window pixels, how
+/// many pixels a logical unit is across and down
+/// ([`Viewport::axis_scales`]), and the logical space, which models are
+/// projected from.
 #[derive(Clone, Copy, Debug)]
 struct Target {
     rect: PixelRect,
     scale: (f32, f32),
+    logical: LogicalSize,
 }
 
 /// A frame's batches as they are made, in draw order, each run of one
@@ -2927,12 +2966,7 @@ mod tests {
         let shape: Vec<(&str, usize)> = frame
             .batches
             .iter()
-            .map(|batch| match batch {
-                Batch::Sprites { quads, .. } => ("sprites", quads.len()),
-                Batch::OrFill(quads) => ("or-fill", quads.len()),
-                Batch::Solid(quads) => ("solid", quads.len()),
-                Batch::Text(runs) => ("text", runs.len()),
-            })
+            .map(|batch| (batch.kind(), batch.draws()))
             .collect();
         assert_eq!(
             shape,
@@ -2957,15 +2991,7 @@ mod tests {
             .batches
             .iter()
             .enumerate()
-            .map(|(at, batch)| {
-                let (kind, size) = match batch {
-                    Batch::Sprites { quads, .. } => ("sprites", quads.len()),
-                    Batch::OrFill(quads) => ("or-fill", quads.len()),
-                    Batch::Solid(quads) => ("solid", quads.len()),
-                    Batch::Text(runs) => ("text", runs.len()),
-                };
-                (kind, size, frame.layer(at))
-            })
+            .map(|(at, batch)| (batch.kind(), batch.draws(), frame.layer(at)))
             .collect()
     }
 

@@ -13,6 +13,7 @@ use nova_data::graphics::Image;
 use nova_view::{Blend, Color, DrawLayer, Font, Point};
 
 pub use crate::atlas::{PageId, Uv};
+use crate::camera::Light;
 use crate::model::Mesh;
 pub use crate::model::MeshId;
 use crate::upscale::{Upscaler, WorldResolution};
@@ -179,6 +180,43 @@ pub enum Batch {
     Solid(Vec<SolidQuad>),
     /// Text runs.
     Text(Vec<TextRun>),
+    /// 3D models ([`nova_view::DrawCommand::Model`]), drawn in order with
+    /// depth and `light` (see [`crate::camera`]): each model's depth is in
+    /// its own band, every later one nearer, and the depth buffer is
+    /// cleared at the batch's start.
+    Models {
+        /// The light they are lit by.
+        light: Light,
+        /// The models, in draw order.
+        models: Vec<ModelInstance>,
+    },
+}
+
+impl Batch {
+    /// A short name for its kind: `"sprites"`, `"or-fill"`, `"solid"`,
+    /// `"text"` or `"models"`. Other crates' tests describe a frame's
+    /// shape by it without matching every kind.
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Sprites { .. } => "sprites",
+            Self::OrFill(_) => "or-fill",
+            Self::Solid(_) => "solid",
+            Self::Text(_) => "text",
+            Self::Models { .. } => "models",
+        }
+    }
+
+    /// How many draws it holds: quads, text runs or models.
+    #[must_use]
+    pub fn draws(&self) -> usize {
+        match self {
+            Self::Sprites { quads, .. } | Self::OrFill(quads) => quads.len(),
+            Self::Solid(quads) => quads.len(),
+            Self::Text(runs) => runs.len(),
+            Self::Models { models, .. } => models.len(),
+        }
+    }
 }
 
 /// Where a frame's world layer ([`DrawLayer::World`]) is drawn.
@@ -751,6 +789,59 @@ mod tests {
         );
         assert_eq!(frame.world_scissor(), rect(2, 3, 10, 5));
         assert_eq!(textured().world_scissor_in(TARGET), rect(0, 8, 64, 48));
+    }
+
+    #[test]
+    fn a_batch_names_its_kind_and_counts_its_draws() {
+        let run = TextRun {
+            text: "a".to_owned(),
+            font: Font::Geneva,
+            origin_px: (0.0, 0.0),
+            size: 8.0,
+            wrap: None,
+            scale: 1.0,
+            color: Color::WHITE,
+            clip: rect(0, 0, 1, 1),
+        };
+        let model = ModelInstance {
+            mesh: MeshId(0),
+            clip_from_model: [[0.0; 4]; 4],
+            normal_from_model: [[0.0; 3]; 3],
+        };
+        let batches = [
+            Batch::Sprites {
+                page: PageId(0),
+                blend: Blend::Normal,
+                quads: vec![quad(0.0, 0.0, 1.0, 1.0); 2],
+            },
+            Batch::OrFill(vec![quad(0.0, 0.0, 1.0, 1.0); 3]),
+            Batch::Solid(vec![
+                SolidQuad {
+                    corners: [Point::new(0.0, 0.0); 4],
+                    color: [1.0; 4],
+                };
+                4
+            ]),
+            Batch::Text(vec![run; 5]),
+            Batch::Models {
+                light: Light::STANDARD,
+                models: vec![model; 6],
+            },
+        ];
+        let shape: Vec<(&str, usize)> = batches
+            .iter()
+            .map(|batch| (batch.kind(), batch.draws()))
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                ("sprites", 2),
+                ("or-fill", 3),
+                ("solid", 4),
+                ("text", 5),
+                ("models", 6)
+            ]
+        );
     }
 
     #[test]

@@ -1098,6 +1098,7 @@ impl<'a> Layout<'a> {
                     renderer: self.text.len() - 1,
                 }
             }
+            Batch::Models { .. } => return,
         };
         self.draws.push(draw);
         self.scissors.push(scissor);
