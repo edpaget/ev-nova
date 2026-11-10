@@ -30,6 +30,8 @@
 //! - [`hud`]: the HUD, the `ïntf` status bar with its radar, shield,
 //!   armour and fuel bars and the system's name.
 //! - [`lightning`]: a lightning beam's zig-zag.
+//! - [`mounted_outfits`](mod@mounted_outfits): [`mounted_outfits()`], a ship's 3D model and
+//!   its outfits drawn on its hardpoints, turrets turned on it.
 //! - [`murk`]: how murky a sprite is far from the player's ship in a murky
 //!   system, and the colorize that mixes it toward its background.
 //! - `pen`: the `Pen` the HUD's panels set their text with, and
@@ -84,6 +86,7 @@ pub mod hud;
 pub mod ion_tint;
 pub mod jump;
 pub mod lightning;
+pub mod mounted_outfits;
 pub mod murk;
 pub mod paint;
 pub mod particle;
@@ -120,6 +123,7 @@ pub use edge::test_flight;
 pub use edge::{EdgeCatalog, FlightStart, begin_game, enter_game, open_flight};
 pub use escorts::{EscortMenu, EscortMenuColors, EscortMenuLooks};
 pub use jump::{JumpEffect, JumpPhase};
+pub use mounted_outfits::mounted_outfits;
 pub use ship_model::ship_orientation;
 pub use sim_adapter::{Collaborators, SessionFlight};
 pub use sim_port::FlightSim;

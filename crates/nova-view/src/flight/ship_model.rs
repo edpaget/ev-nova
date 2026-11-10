@@ -11,8 +11,10 @@
 //! clockwise on screen, as headings turn (see [`model`](crate::model)), so
 //! the model's nose, up the screen (−y) at heading 0, faces the heading.
 //!
-//! This is the pose a screen draws a ship's [`DrawCommand::Model`] at; no
-//! screen draws one yet (rdm engine-3d phase 10 does).
+//! This is the pose a screen draws a ship's [`DrawCommand::Model`] at,
+//! and its outfits on their hardpoints with it
+//! ([`mounted_outfits`](super::mounted_outfits())); no screen draws either
+//! yet.
 //!
 //! [`DrawCommand::Model`]: crate::DrawCommand::Model
 
