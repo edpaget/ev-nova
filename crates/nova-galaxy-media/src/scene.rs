@@ -680,4 +680,79 @@ mod tests {
     fn asset_missing() -> Asset {
         asset(&["media/export/p/a.glb"], "+z")
     }
+
+    /// A column-major matrix with the linear part `rows` and a translation.
+    fn matrix(rows: [[f32; 3]; 3]) -> Matrix {
+        let mut m = IDENTITY;
+        for (col, column) in m.iter_mut().take(3).enumerate() {
+            for (row, cell) in column.iter_mut().take(3).enumerate() {
+                *cell = rows[row][col];
+            }
+        }
+        m[3] = [5.0, 6.0, 7.0, 1.0];
+        m
+    }
+
+    #[test]
+    fn a_normal_turns_by_the_inverse_transpose_keeping_its_side() {
+        // [[2, 1, 0], [0, 1, 0], [1, 0, −1]] has determinant −2 and
+        // inverse transpose [[½, 0, ½], [−½, 1, −½], [0, 0, −1]], which
+        // takes (1, 2, 3) to (2, 0, −3).
+        let m = matrix([[2.0, 1.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, -1.0]]);
+        let turned = unit(turn_normal(&m, [1.0, 2.0, 3.0]));
+        let expected = unit([2.0, 0.0, -3.0]);
+        assert!(close(turned, expected), "{turned:?}");
+        // A mirror keeps a normal pointing out of its surface.
+        let mirror = matrix([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]);
+        assert!(close(
+            turn_normal(&mirror, [1.0, 0.0, 0.0]),
+            [-1.0, 0.0, 0.0]
+        ));
+        // A node flattened to nothing along x leaves an x normal as it was.
+        let flat = matrix([[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]);
+        assert!(close(turn_normal(&flat, [1.0, 0.0, 0.0]), [1.0, 0.0, 0.0]));
+    }
+
+    /// A `.gltf` whose buffer `t.bin` holds `positions`, drawn without
+    /// indices.
+    fn unindexed(positions: &[[f32; 3]]) -> (String, Vec<u8>) {
+        let bin: Vec<u8> = positions
+            .iter()
+            .flatten()
+            .flat_map(|c| c.to_le_bytes())
+            .collect();
+        let min = (0..3).map(|i| positions.iter().map(|p| p[i]).fold(f32::MAX, f32::min));
+        let max = (0..3).map(|i| positions.iter().map(|p| p[i]).fold(f32::MIN, f32::max));
+        let json = serde_json::json!({
+            "asset": { "version": "2.0" },
+            "scene": 0,
+            "scenes": [{ "nodes": [0] }],
+            "nodes": [{ "mesh": 0 }],
+            "meshes": [{ "primitives": [{ "attributes": { "POSITION": 0 } }] }],
+            "buffers": [{ "uri": "t.bin", "byteLength": bin.len() }],
+            "bufferViews": [{ "buffer": 0, "byteLength": bin.len() }],
+            "accessors": [{ "bufferView": 0, "componentType": 5126, "count": positions.len(),
+                            "type": "VEC3", "min": min.collect::<Vec<_>>(),
+                            "max": max.collect::<Vec<_>>() }]
+        });
+        (json.to_string(), bin)
+    }
+
+    #[test]
+    fn a_stray_vertex_is_dropped_and_a_triangle_with_no_area_faces_up() {
+        // Four vertices without indices: one triangle, on a line, and one
+        // vertex over.
+        let (json, bin) = unindexed(&[
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]);
+        let read = |path: &str| (path == "t.bin").then(|| bin.clone());
+        let scene = read_scene("t.gltf", json.as_bytes(), read).unwrap();
+        let p = &scene.primitives[0];
+        assert_eq!(p.indices, [0, 1, 2]);
+        assert_eq!(scene.triangles, 1);
+        assert_eq!(p.normals, [[0.0, 1.0, 0.0]; 3]);
+    }
 }

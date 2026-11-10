@@ -461,6 +461,7 @@ pub fn gltf_with_bin(size: [f32; 3], bin_uri: &str) -> (String, Vec<u8>) {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
 
@@ -508,5 +509,36 @@ mod tests {
         assert_eq!(parsed.images().count(), 1);
         let (json, _) = builder.image(ImageAt::Uri("skin.png".into())).gltf("a.bin");
         assert!(gltf::Gltf::from_slice(json.as_bytes()).is_ok());
+    }
+
+    /// The `NORMAL`s and `TEXCOORD_0`s a box `size` big writes, as stored.
+    fn attributes(size: [f32; 3]) -> (Vec<[f32; 3]>, Vec<[f32; 2]>) {
+        let glb = Builder::new(size).normals().texcoords().glb();
+        let parsed = gltf::Gltf::from_slice(&glb).unwrap();
+        let blob = parsed.blob.clone().unwrap();
+        let primitive = parsed.meshes().next().unwrap().primitives().next().unwrap();
+        let reader = primitive.reader(|_| Some(blob.as_slice()));
+        let normals = reader.read_normals().unwrap().collect();
+        let uvs = reader.read_tex_coords(0).unwrap().into_f32().collect();
+        (normals, uvs)
+    }
+
+    #[test]
+    fn a_builder_writes_unit_normals_from_the_middle_and_side_texcoords() {
+        let (normals, uvs) = attributes([2.0, 0.0, 4.0]);
+        // Corner 5 is (+1, 0, +2).
+        let root5 = 5.0_f32.sqrt();
+        let expected = [1.0 / root5, 0.0, 2.0 / root5];
+        assert!(
+            (0..3).all(|k| (normals[5][k] - expected[k]).abs() < 1e-6),
+            "{:?}",
+            normals[5]
+        );
+        assert_eq!(uvs[5], [1.0, 1.0]);
+        assert_eq!(uvs[0], [0.0, 0.0]);
+        // On neither side, a texcoord is 0.
+        let (normals, uvs) = attributes([0.0, 2.0, 0.0]);
+        assert_eq!(normals[2], [0.0, 1.0, 0.0]);
+        assert!(uvs.iter().all(|uv| *uv == [0.0, 0.0]), "{uvs:?}");
     }
 }

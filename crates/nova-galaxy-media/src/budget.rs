@@ -309,6 +309,29 @@ mod tests {
     }
 
     #[test]
+    fn of_two_budgets_with_the_same_limit_the_first_use_names_it() {
+        // `hull`'s uses: the armed skiff and the skiff (small craft), then
+        // the blaster (the default), whose limits are the same.
+        let source = galaxy()
+            .with(
+                "budgets/small-craft.md",
+                "---\nroles: [shuttle]\nmodel: {triangles: 20000, kib: 4096}\n---\n",
+            )
+            .with(
+                "outfits/blaster.md",
+                "---\nname: Blaster\nmount: fixed\ndamage: 5\nrange: 300\nreload: 0.5\n\
+                 price: 100\nmodel: hull\n---\n",
+            );
+        assert_eq!(
+            limits_in(&source, "hull"),
+            Limits {
+                triangles: limit(20000, "small-craft"),
+                kib: limit(4096, "small-craft"),
+            }
+        );
+    }
+
+    #[test]
     fn an_unused_model_takes_the_default() {
         let source = galaxy().with(
             "assets/spare.md",

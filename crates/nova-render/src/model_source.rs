@@ -601,6 +601,43 @@ mod tests {
         }
     }
 
+    /// One triangle at `positions`, as a model.
+    fn triangle(positions: [[f32; 3]; 3]) -> LoadedModel {
+        let vertices = positions
+            .iter()
+            .map(|p| Vertex {
+                position: *p,
+                normal: [0.0, 0.0, 1.0],
+                color: [1.0; 4],
+            })
+            .collect();
+        LoadedModel {
+            parts: vec![Part {
+                mesh: Mesh::new(vertices, vec![0, 1, 2]).unwrap(),
+                material: None,
+                uv: None,
+            }],
+            materials: Vec::new(),
+            textures: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_fake_scales_by_the_length_over_the_model_s_own() {
+        // 4 units along y, asked for 8: twice the size.
+        let tall = triangle([[0.0, -2.0, 0.0], [1.0, 2.0, 0.0], [-1.0, 2.0, 0.0]]);
+        let fake = FakeModels::default().with("tall", tall);
+        let mesh = fake
+            .model(&ModelRequest::new("tall", Some(8.0)))
+            .unwrap()
+            .mesh();
+        assert_eq!(mesh.vertices()[0].position, [0.0, -4.0, 0.0]);
+        // A model with no length along y can't be scaled to one, and isn't.
+        let flat = triangle([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]);
+        let fake = FakeModels::default().with("flat", flat.clone());
+        assert_eq!(fake.model(&ModelRequest::new("flat", Some(8.0))), Ok(flat));
+    }
+
     #[test]
     fn the_fake_meets_the_contract() {
         let fake = FakeModels::default().with("cube", cube_model());
