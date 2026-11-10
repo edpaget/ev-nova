@@ -27,14 +27,14 @@
 //! - A new way a model can't be had: a [`ModelError`] variant, its
 //!   message naming the asset (and the file).
 //! - Something more read from the model: a field of [`Part`],
-//!   [`Material`] or [`Texture`], filled by the adapter from the media
-//!   crate's reading.
+//!   [`Material`] or [`Texture`], filled by the adapter
+//!   ([`crate::galaxy_models`]) from the media crate's reading.
 //!
 //! The decisions an adapter forwards to live in core functions here
 //! ([`view_axes`], [`vertex_color`], [`part`]) or in `nova_galaxy_media`,
-//! and are pinned by their own tests. [`FakeModels`] is the hand-written
+//! and are pinned by their own tests. `FakeModels` is the hand-written
 //! fake (with this crate's tests, or the `recording` feature), and
-//! [`check_contract`] the contract every source meets: the fake runs it in
+//! `check_contract` the contract every source meets: the fake runs it in
 //! this module's tests, and the galaxy adapter runs it on every model of
 //! the sample.
 

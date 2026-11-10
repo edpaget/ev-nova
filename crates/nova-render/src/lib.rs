@@ -64,6 +64,10 @@
 //! - [`source`]: [`ImageSource`] for `nova_data`'s `GameData`, a thin
 //!   adapter over the picture and sprite decoders (and the mask that gives
 //!   a masked picture its alpha) that needs no GPU.
+//! - [`galaxy_models`]: [`ModelSource`] for the new game's data,
+//!   [`GalaxyModels`], a thin adapter over `nova_galaxy_media`'s glTF
+//!   reading, placement and art budgets, read through the format's
+//!   `Source` port; it needs no GPU, and `gltf` is never named here.
 //! - [`present`]: what a window surface does before each frame.
 //!
 //! The adapter, [`wgpu`], is the only module that names `wgpu` or

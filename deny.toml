@@ -100,7 +100,8 @@ deny = [
     # Compiled Ink is played only by nova-ink, the dialog port's adapter.
     { crate = "bladeink", wrappers = ["nova-ink"], reason = "only nova-ink plays the new game's compiled Ink" },
     # glTF models are decoded only by nova-galaxy-media, which turns them
-    # into silhouettes as data.
+    # into silhouettes and 3D scenes as data; nova-render's model adapter
+    # reaches them through it, never naming gltf.
     { crate = "gltf", wrappers = ["nova-galaxy-media"], reason = "only nova-galaxy-media decodes the new game's models" },
     # FFmpeg's unsafe bindings are reached only through ffmpeg-next's safe
     # API, and that only by the movie decoder.

@@ -11,6 +11,16 @@
 //! hardpoints. `galaxy` may switch to this crate once it reads the format
 //! from `nova-galaxy-format`.
 //!
+//! For drawing models in 3D (the renderer's model adapter,
+//! `nova_render::GalaxyModels`), it also reads a model whole
+//! ([`scene`]: each primitive each node draws, with normals, texture
+//! coordinates and materials, and the images as stored), places it in 3D
+//! ship space by its front and length
+//! ([`Placement::ship_point_3d`]), and works out which art budget
+//! covers it and each limit it breaks ([`budget`], a port of `galaxy`'s
+//! `check/art.rs` budget rule, for models; texture limits come with the
+//! first texture the engine loads).
+//!
 //! # What it holds, and why here
 //!
 //! The format crate keeps media decoding out, so the format's
@@ -37,3 +47,4 @@ pub mod scene;
 pub use model::{Bounds, Face, Model, NoModel, model, read_model};
 pub use outline::{BARE, Outline, Triangle, painted, rgb, silhouette, size_box, top_down};
 pub use placement::Placement;
+pub use scene::{Scene, read_asset_scene, read_scene};
