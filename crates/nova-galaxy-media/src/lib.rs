@@ -9,9 +9,15 @@
 //! (`nova-data` builds them at load), and game-bible's `galaxy` tool draws
 //! the same silhouettes on its contact sheet: the code is a port of its
 //! `media.rs` `model`, `placement.rs` and `sheet.rs` (`top_down`,
-//! `draw_model`, `draw_box`, `painted`), without the SVG and the
-//! hardpoints. `galaxy` may switch to this crate once it reads the format
-//! from `nova-galaxy-format`.
+//! `draw_model`, `draw_box`, `painted`), without the SVG and the contact
+//! sheet's hardpoint marks. `galaxy` may switch to this crate once it
+//! reads the format from `nova-galaxy-format`.
+//!
+//! Where a hardpoint's outfit stands on its hull, and how an outfit's
+//! model sits on its mount, is [`mount`](mod@mount): a ray cast straight
+//! down onto the hull's model, placed as it is drawn, and the outfit's
+//! lift, pivot and muzzle. The loader (`nova-data`) keeps the result for
+//! the view and the simulation.
 //!
 //! For drawing models in 3D (the renderer's model adapter,
 //! `nova_render::GalaxyModels`), it also reads a model whole
@@ -42,6 +48,7 @@ pub mod budget;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod model;
+pub mod mount;
 pub mod outline;
 pub mod paint;
 pub mod placement;
