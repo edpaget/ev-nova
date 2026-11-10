@@ -63,8 +63,17 @@
 //! ([`pins`](super::pins)), pinning every record it maps at the ID it had
 //! before tables existed. After adding a record to either folder, run
 //! `nova-dump --pin-ids` over it and commit the table with the record.
+//!
+//! # `modelled_sample()`
+//!
+//! The sample folder read into memory with its light freighter's model
+//! and its mass driver's turret built in code, so its hardpoints stand on
+//! a hull and show a turret: [`modelled_sample`]'s docs say what each is.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use nova_galaxy_format::source::MemSource;
+use nova_galaxy_media::fixture::{Builder, Mat, Node};
 
 /// The fixture folder's path.
 #[must_use]
@@ -130,4 +139,131 @@ pub fn sample_folder() -> PathBuf {
         .join("tests")
         .join("fixtures")
         .join("sample")
+}
+
+/// The light freighter's model file in the modelled sample.
+pub const LIGHT_FREIGHTER_GLB: &str = "media/export/kenney-space-kit/craft_cargoA.glb";
+
+/// The turret's model file in the modelled sample.
+pub const TURRET_MOUNT_GLB: &str = "media/export/kenney-space-kit/turret_single.glb";
+
+/// The light freighter's model in the modelled sample: 2.6 wide, 1.2
+/// tall and 4 long (model x, y, z), as the Kenney kit's `craft_cargoA` is.
+pub const LIGHT_FREIGHTER: [f32; 3] = [2.6, 1.2, 4.0];
+
+/// The Kenney space kit's materials, each unlit, in the kit's colours.
+pub const KENNEY: [(&str, [f32; 4]); 4] = [
+    ("metal", [0.8, 0.8, 0.82, 1.0]),
+    ("metalRed", [0.7, 0.15, 0.1, 1.0]),
+    ("metalDark", [0.35, 0.35, 0.4, 1.0]),
+    ("dark", [0.1, 0.1, 0.12, 1.0]),
+];
+
+/// The provenance every Kenney model carries.
+const KENNEY_CC0: &str = "licence: CC0-1.0\nlicence_file: media/export/kenney-space-kit/License.txt\n\
+                          author: Kenney (www.kenney.nl)\n\
+                          source_url: https://opengameart.org/content/space-kit-remade\n\
+                          retrieved: 2026-10-30\n";
+
+/// The sample fixture folder ([`sample_folder`]) read into memory, with
+/// its two models made real, as game-bible's manifest gives them, so the
+/// hardpoints have a hull to stand on and a turret to show:
+///
+/// - the `light-freighter` asset is a model facing −z, painted as the
+///   sample's ships are (`primary: [metal]`, `secondary: [metalRed]`,
+///   `trim: [metalDark]`), its file ([`LIGHT_FREIGHTER_GLB`]) a
+///   [`LIGHT_FREIGHTER`] box in the kit's four unlit materials
+///   ([`KENNEY`], its top in `metalDark`);
+/// - the `mass-driver` shows the new `turret-mount` asset
+///   ([`TURRET_MOUNT_GLB`]), a model facing −z: one 0.4 by 0.3 by 0.4 box
+///   drawn by four nodes of one group, at (0, 0, 0), (0, 0.3, 0),
+///   (0, 0.3, −0.4) and (0, 0.3, −0.8), as the kit's turret is a tree of
+///   nodes, so it is 0.4 wide, 0.6 tall and 1.2 long. It is all in the
+///   kit's `metalRed`, so it shows against the hull's deck.
+///
+/// The boxes are built in code (`nova_galaxy_media::fixture`); no art is
+/// checked in.
+///
+/// # Panics
+///
+/// When the sample folder can't be read.
+#[must_use]
+pub fn modelled_sample() -> MemSource {
+    let kenney = KENNEY.iter().fold(
+        Builder::new(LIGHT_FREIGHTER).normals().texcoords(),
+        |b, (name, color)| {
+            b.material(Mat {
+                unlit: true,
+                ..Mat::new(name, *color)
+            })
+        },
+    );
+    let (red, red_color) = KENNEY[1];
+    let turret = Builder::new([0.4, 0.3, 0.4])
+        .normals()
+        .texcoords()
+        .material(Mat {
+            unlit: true,
+            ..Mat::new(red, red_color)
+        })
+        .nodes(vec![
+            Node::group(&[1, 2, 3, 4]),
+            Node::at([0.0, 0.0, 0.0]),
+            Node::at([0.0, 0.3, 0.0]),
+            Node::at([0.0, 0.3, -0.4]),
+            Node::at([0.0, 0.3, -0.8]),
+        ]);
+    read_into_memory(&sample_folder())
+        .with(
+            "assets/light-freighter.md",
+            &format!(
+                "---\nkind: model\nplaceholder: false\nfront: \"-z\"\n\
+                 paint: {{primary: [metal], secondary: [metalRed], trim: [metalDark]}}\n\
+                 files: [{LIGHT_FREIGHTER_GLB}]\n{KENNEY_CC0}---\n"
+            ),
+        )
+        .with_bytes(LIGHT_FREIGHTER_GLB, &kenney.glb())
+        .with(
+            "assets/turret-mount.md",
+            &format!(
+                "---\nkind: model\nplaceholder: false\nfront: \"-z\"\n\
+                 files: [{TURRET_MOUNT_GLB}]\n{KENNEY_CC0}---\n"
+            ),
+        )
+        .with_bytes(TURRET_MOUNT_GLB, &turret.glb())
+        .with(
+            "outfits/mass-driver.md",
+            "---\nname: Mass driver\nmount: turret\ndamage: 12\nrange: 600\nreload: 0.5\n\
+             price: 2500\nmodel: turret-mount\n---\n",
+        )
+}
+
+/// Every file under `dir`, by its path from `dir` with `/` between its
+/// parts.
+fn read_into_memory(dir: &Path) -> MemSource {
+    fn walk(dir: &Path, prefix: &str, mut into: MemSource) -> MemSource {
+        let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
+            .expect("the fixture folder lists")
+            .map(|entry| entry.expect("a fixture entry").path())
+            .collect();
+        entries.sort();
+        for path in entries {
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .expect("a fixture name");
+            let at = if prefix.is_empty() {
+                name.to_owned()
+            } else {
+                format!("{prefix}/{name}")
+            };
+            into = if path.is_dir() {
+                walk(&path, &at, into)
+            } else {
+                into.with_bytes(&at, &std::fs::read(&path).expect("a fixture file"))
+            };
+        }
+        into
+    }
+    walk(dir, "", MemSource::default())
 }

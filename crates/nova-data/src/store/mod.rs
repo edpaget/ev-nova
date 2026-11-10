@@ -217,6 +217,7 @@ mod fittings;
 pub mod fixture;
 pub mod fs;
 mod interface;
+mod mounts;
 pub mod order;
 mod pict_pair;
 mod ship_desc;
@@ -238,6 +239,7 @@ pub use self::fittings::{Fittings, Kit, Spot, SpotKind};
 pub use self::interface::{
     InterfaceData, NoInterfaceFile, interface_path_candidates, load_interface, open_interface,
 };
+pub use self::mounts::{Footing, Mount, Mounts, Shown};
 pub use self::pict_pair::SheetKind;
 pub use self::ship_desc::ship_desc_id;
 pub use self::ship_line::ShipLine;
@@ -416,6 +418,12 @@ pub struct GameData {
     /// Each new-game ship's collision radius in whole pixels
     /// ([`GameData::with_collision_radii`]); none in a stock store.
     collision_radii: BTreeMap<crate::wire::id::ShipId, i16>,
+    /// Where each new-game hardpoint's outfit stands and what it shows
+    /// ([`GameData::with_mounts`]); none in a stock store.
+    mounts: Mounts,
+    /// Each new-game weapon's muzzle reach in whole pixels
+    /// ([`GameData::with_muzzle_reaches`]); none in a stock store.
+    muzzle_reaches: BTreeMap<crate::wire::id::WeaponId, i16>,
 }
 
 /// A test expression parsed once and shared: its tree, or why it did not
@@ -473,6 +481,8 @@ impl GameData {
             fittings: Fittings::default(),
             ship_lines: BTreeMap::new(),
             collision_radii: BTreeMap::new(),
+            mounts: Mounts::default(),
+            muzzle_reaches: BTreeMap::new(),
         })
     }
 

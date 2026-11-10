@@ -32,11 +32,13 @@
 //! | a `take_point` objective | a hidden blockade `mïsn` ([`blockades`]) | its point's system as `ShipSyst`, its gate's nav slot as `ShipStart`, the holder's guards as `ShipDude`, [`blockades::BLOCKADE_SHIPS`] of them (a placeholder), chase off as `ShipGoal`, attacking the player; never offered, never completed by a landing; the store's objective names it |
 //! | (placeholder) | `ïntf` 128 ([`records::default_interface`]) | "Default status bar": a radar over the shield, armour and fuel gauges and the nav, weapon, target and cargo readouts, no background picture |
 //! | (placeholder) | the dialogs ([`interface::default_dialogs`]) | a `DLOG` and its items, titled "Default spaceport" and so on, for each dialog the view has no built-in layout for: the spaceport and every screen it opens, the text, note and question dialogs, the player info and the preferences; each fits the 640 x 480 view, with no art; the app reads them when the folder has no interface file (`nova::interface`) |
-//! | `outfits/` | `oütf` ([`outfits`]) | its `name`, and `Cost` from `price`; massless, with no `Max`; its `mount`'s bit as `Require`, with `Flags` `HIDE_UNLESS_REQUIRED`, so it is listed only for a ship with a hardpoint of that mount; sold at the stellars its `sold_at` names, as a `TechLevel` from [`yards::SOLD_TECH_FIRST`] that only their `SpecialTech` slots hold and `BuyRandom` 100 ([`yards`]); with no `sold_at`, never for sale (`TechLevel` 0x7fff, `BuyRandom` 0); a weapon (`damage` above 0, not a `bay`) a `ModType` 1 naming its `wëap`, `Flags` gun or turret; any other doing nothing; `model` isn't read |
+//! | `outfits/` | `oütf` ([`outfits`]) | its `name`, and `Cost` from `price`; massless, with no `Max`; its `mount`'s bit as `Require`, with `Flags` `HIDE_UNLESS_REQUIRED`, so it is listed only for a ship with a hardpoint of that mount; sold at the stellars its `sold_at` names, as a `TechLevel` from [`yards::SOLD_TECH_FIRST`] that only their `SpecialTech` slots hold and `BuyRandom` 100 ([`yards`]); with no `sold_at`, never for sale (`TechLevel` 0x7fff, `BuyRandom` 0); a weapon (`damage` above 0, not a `bay`) a `ModType` 1 naming its `wëap`, `Flags` gun or turret; any other doing nothing; `model` goes to the mounts, below |
 //! | a weapon outfit | `wëap` ([`outfits`]) | pinned by, and numbered in, outfit id order; `damage`, `range` and `reload` as damage, life and `Reload` at a placeholder speed; unguided, turreted for a turret; its mount's `ExitType`; drawn as the placeholder box, with no sound or explosion |
 //! | `mods/` | `oütf` ([`kits`]) | unpinned, numbered after the unpinned outfits; `Cost` from `price`; `Max` 1, `BuyRandom` 100, hidden unless it fits; its effects in the four `ModType` slots; its `fits` as a `Require` bit; its hardpoints' mount bits as `Contribute`; `fitted_at` as `TechLevel` and, lawless, `ScanMask`; its hardpoints' outfits given by `OnPurchase` and taken back by `OnSell` |
 //! | a ship's chain hardpoints, a kit's hardpoints and `attention` | the store's fittings ([`GameData::fittings`], [`fleet`], [`kits`]) | each `shïp`'s own exit spots and each kit `oütf`'s, and each kit's attention, which `nova_sim::dock_scan` reads |
 //! | a ship's `size`'s `collision_radius` | its collision radius on the store ([`GameData::collision_radius`], [`fleet::collision_radius`]) | through the `base` chain, the nearest `size`'s, in whole pixels at [`fleet::PX_PER_METRE`]; none when it isn't finite or rounds to no positive pixel; the fight reads it under `data_collision` |
+//! | each hardpoint's `position` on its hull's `model`, and its outfit's `model` | its mount on the store ([`GameData::mounts`], [`mounts`]) | a ray cast down at the hardpoint onto the hull's model at its `size`'s length, standing on the highest surface, on the plane for a placeholder; every class's chain hardpoints, and every kit's on every class; the outfit model it shows, lifted to rest on it; the view draws them (`nova_view::flight::mounted_outfits`) |
+//! | a weapon outfit's `model` | its muzzle reach on the store ([`GameData::muzzle_reach`], [`mounts`]) | half the model's length at a metre a unit, in whole pixels at [`fleet::PX_PER_METRE`]; none with no model that reads; the fight starts its shots that far ahead of the exit under `mounted_muzzles` |
 //! | `starts/` | `chär` ([`fleet`]) | its hull, its system in `system[0]`, its cash, and a placeholder date |
 //! | a hull's `model`, `livery` and `size` | a ship stand-in ([`looks`]) | its model seen from above, painted by its livery, in pixels at [`fleet::PX_PER_METRE`]; else its size box in its livery's primary, or bare |
 //! | a stellar's `visual` | a stellar stand-in ([`looks`]) | a station's or outpost's model seen from above; else a disc in its look's first colour, its owner's, or bare grey |
@@ -136,6 +138,10 @@
 //!   `model` or a stellar's `visual` that isn't in `assets/` draws as its
 //!   box or its disc; an asset whose model file doesn't decode is reported
 //!   once, against the asset ([`looks`]).
+//! - A hardpoint over no surface of its hull's model stands on the plane,
+//!   reported against the file that adds it, naming the hardpoint and the
+//!   model; an outfit's `model` that isn't in `assets/` shows nothing
+//!   ([`mounts`]).
 //!
 //! A reference to a file that failed to load, or to a record left out for
 //! its ID, isn't reported again; a stellar in such a system is left out
@@ -158,7 +164,7 @@
 //! - Variants in traffic: the civilian traffic flies hulls alone.
 //! - Hiring escorts: a ship's `HireRandom` is 0, never for hire, until the
 //!   format has a word for it.
-//! - A livery's `decals` aren't drawn, nor are mounted outfits' models.
+//! - A livery's `decals` aren't drawn.
 //! - Traffic: the bible authors none, so the civilian `düde` and each
 //!   system's traffic are placeholders ([`fleet`]), as are a hull's
 //!   acceleration, turn rate, fuel and crew and a start's date. A
@@ -195,6 +201,7 @@ pub mod kits;
 pub mod looks;
 mod map;
 pub mod missions;
+pub mod mounts;
 pub mod outfits;
 pub mod pins;
 pub mod records;
@@ -258,8 +265,8 @@ pub fn open(dir: &Path) -> Result<NewGame, ListError> {
 /// Loads the new game's data from `source`, read from the folder `dir`:
 /// the format's loader, the ID table ([`pins`]), the LFS check over its
 /// media, the mapping under the table's pins, then the stand-ins
-/// ([`looks`]), whose models are read from `source` too. It never writes
-/// the table.
+/// ([`looks`]) and the mounts ([`mounts`]), whose models are read from
+/// `source` too, each once. It never writes the table.
 pub fn load(source: &impl Source, dir: &Path) -> NewGame {
     let (galaxy, mut problems) = nova_galaxy_format::load::load(source);
     let pins = pins::read(source, &mut problems);
@@ -275,7 +282,9 @@ pub fn load(source: &impl Source, dir: &Path) -> NewGame {
     } = map_pinned(&galaxy, pins.as_ref().unwrap_or(&IdTable::default()));
     problems.extend(mapping);
     problems.extend(pins.and_then(|pins| pins::unpinned(&pins, &ids, dir)));
-    let stand_ins = looks::stand_ins(&galaxy, &ids, source, &mut problems);
+    let mut models = looks::Models::new(source);
+    let stand_ins = looks::stand_ins(&galaxy, &ids, &mut models, &mut problems);
+    let mounted = mounts::mounted(&galaxy, &ids, &mut models, &mut problems);
     let ship_lines = looks::ship_lines(&galaxy, &ids);
     let collision_radii = fleet::collision_radii(&galaxy, &ids);
     let compiled = dialogs::compiled(&galaxy, source, &mut problems);
@@ -289,7 +298,9 @@ pub fn load(source: &impl Source, dir: &Path) -> NewGame {
             .with_dialogs(dialogs)
             .with_storylines(storylines)
             .with_fittings(fittings)
-            .with_collision_radii(collision_radii),
+            .with_collision_radii(collision_radii)
+            .with_mounts(mounted.mounts)
+            .with_muzzle_reaches(mounted.muzzle_reaches),
         ids,
         problems,
         lfs_pointers,

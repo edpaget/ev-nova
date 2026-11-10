@@ -81,16 +81,15 @@ pub const STAR_DOTS: &[StarDot] = &[
 ];
 
 /// The stand-in of each hull, stellar and gate of `galaxy` that has a
-/// record in `ids`, by its record, reading the models through `source`
+/// record in `ids`, by its record, reading the models through `models`
 /// (see the module docs). What can't be drawn as written is added to
 /// `problems`.
-pub fn stand_ins(
-    galaxy: &Galaxy,
+pub fn stand_ins<'a, S: Source>(
+    galaxy: &'a Galaxy,
     ids: &IdTable,
-    source: &impl Source,
+    models: &mut Models<'a, S>,
     problems: &mut Vec<Problem>,
 ) -> BTreeMap<StandInOf, StandIn> {
-    let mut models = Models::new(source);
     let mut stand_ins = BTreeMap::new();
     for (id, &nova) in &ids.ships {
         let doc = &galaxy.ships[id];
@@ -176,7 +175,7 @@ fn disc(galaxy: &Galaxy, stellar: &BibleStellar) -> StandIn {
 
 /// The asset `id`, named as `what` in `file`; none, reported (it draws as
 /// `instead`), when it isn't in `assets/`.
-fn asset<'a>(
+pub(super) fn asset<'a>(
     galaxy: &'a Galaxy,
     id: &'a Id,
     file: &str,
@@ -194,14 +193,18 @@ fn asset<'a>(
     found.map(|asset| (id, asset))
 }
 
-/// Each asset's model, read once.
-struct Models<'a, S> {
+/// Each asset's model, read once through a [`Source`], whoever asks: the
+/// stand-ins ([`stand_ins`]) and the mounts (`super::mounts`) share one,
+/// so a model is read once and one that doesn't read is reported once.
+pub struct Models<'a, S> {
     source: &'a S,
     read: BTreeMap<&'a Id, Result<(Model, Front), NoModel>>,
 }
 
 impl<'a, S: Source> Models<'a, S> {
-    fn new(source: &'a S) -> Self {
+    /// None read yet, to be read through `source`.
+    #[must_use]
+    pub fn new(source: &'a S) -> Self {
         Self {
             source,
             read: BTreeMap::new(),
@@ -210,7 +213,7 @@ impl<'a, S: Source> Models<'a, S> {
 
     /// The model of the asset `id`, read the first time it is asked for,
     /// when that reports why a file that should be a model isn't one.
-    fn read(
+    pub fn read(
         &mut self,
         id: &'a Id,
         asset: &'a Doc<Asset>,

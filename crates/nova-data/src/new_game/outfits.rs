@@ -48,7 +48,9 @@
 //!
 //! A launcher's homing and ammunition and a bay's fighters aren't mapped:
 //! a `bay` outfit, like one doing no damage, stays an `oütf` that does
-//! nothing. The outfit's `model` isn't read.
+//! nothing. The outfit's `model` isn't part of its records: it is the
+//! model its hardpoints show and the weapon's muzzle reach, kept on the
+//! store ([`super::mounts`]).
 //!
 //! A weapon past the last `wëap` ID is reported and stays an `oütf` that
 //! does nothing.

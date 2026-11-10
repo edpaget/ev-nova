@@ -43,7 +43,10 @@
 //!   Its hardpoints, its chain's and then its kits', are its exit points:
 //!   a `fixed` one a gun point, a `turret` one a turret point, a
 //!   `launcher` one a guided point, a `bay` none, at its `position` in
-//!   whole pixels ([`spot`]). Each kind's four points cycle through that
+//!   whole pixels ([`spot`]), at height 0: the simulation is flat. Where
+//!   each stands on the hull's model in 3D, and the muzzle its outfit's
+//!   model gives a weapon, are the mounts' ([`super::mounts`]). Each kind's
+//!   four points cycle through that
 //!   kind's hardpoints in order ([`Spot::exit_points`], the one rule the
 //!   player's points are rebuilt by too); a kind with none keeps the
 //!   centre. It names no sprite: the view draws the ship's stand-in,
@@ -204,7 +207,7 @@ fn count(n: usize) -> i16 {
 
 /// How many of `ship`'s hardpoints are its chain's: those before its
 /// kits'.
-fn chain_len(galaxy: &Galaxy, ship: &Resolved) -> usize {
+pub(super) fn chain_len(galaxy: &Galaxy, ship: &Resolved) -> usize {
     let kits: usize = (ship.mods.iter())
         .filter_map(|kit| galaxy.mods.get(kit))
         .map(|kit| kit.data.hardpoints.len())
@@ -393,8 +396,10 @@ fn stock_weapons(
     keep_slots(weapons, &doc.path, "weapons", problems)
 }
 
-/// `metres` in whole pixels at [`PX_PER_METRE`], held within `i16`.
-fn pixels(metres: f64) -> i16 {
+/// `metres` in whole pixels at [`PX_PER_METRE`], held within `i16`: the
+/// one conversion a hardpoint's place, a collision radius and a muzzle's
+/// reach share.
+pub(super) fn pixels(metres: f64) -> i16 {
     let px = (metres * PX_PER_METRE).round();
     // Held within `i16` first, so the cast can't truncate.
     #[allow(clippy::cast_possible_truncation)]
