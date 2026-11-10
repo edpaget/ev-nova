@@ -232,3 +232,22 @@ mod tests {
         assert_eq!(read(Rc::new(Fake)), (Ok("7".to_owned()), Color::BLACK));
     }
 }
+
+/// Test support for the widgets' ports, for this crate's tests and,
+/// through the `fixture` feature, other crates' tests.
+#[cfg(any(test, feature = "fixture"))]
+pub mod fixture {
+    use super::DialogResources;
+    use crate::ui::dialog::DialogTemplate;
+
+    /// No dialogs at all: every [`DialogResources::dialog_template`] is
+    /// `Err("no DLOG <id>")`.
+    #[derive(Clone, Copy, Debug, Default)]
+    pub struct NoDialogs;
+
+    impl DialogResources for NoDialogs {
+        fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
+            Err(format!("no DLOG {id}"))
+        }
+    }
+}
