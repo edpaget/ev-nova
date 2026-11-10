@@ -41,7 +41,7 @@ use crate::flight::sim_port::FlightSim;
 use crate::flight::weapons;
 use crate::geometry::Bounds;
 use crate::system::camera::Camera;
-use crate::system::scene::{self, SystemScene};
+use crate::system::scene::SystemScene;
 use crate::{Color, DrawList, Point};
 
 use super::{FlightView, HELP_AT, OVERLAY_SIZE, TITLE, TITLE_SIZE, point, sky, stars};
@@ -142,7 +142,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             match pass {
                 WorldPass::Layer(SpriteLayer::Stars) => self.draw_stars_and_message(list, camera),
                 WorldPass::Layer(SpriteLayer::Stellars) => {
-                    scene::draw_stellars(list, scene, camera, Some(self.seen_murk()));
+                    self.draw_stellar_layer(list, scene, camera);
                 }
                 WorldPass::BeamsUnderShips => {
                     weapons::draw_beams(list, &beams, &self.looks, true, lightning);

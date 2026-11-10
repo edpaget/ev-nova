@@ -144,6 +144,7 @@ mod shots;
 mod sky;
 mod stars;
 mod stellar_looks;
+mod stellar_models;
 mod stellars;
 mod stepping;
 mod touch_flight;

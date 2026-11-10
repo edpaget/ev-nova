@@ -488,6 +488,24 @@ pub fn draw_stellars(
     camera: &Camera,
     seen: Option<SeenMurk>,
 ) {
+    draw_stellars_instead(list, scene, camera, seen, |_, _, _| false);
+}
+
+/// Draws `scene`'s stellars as [`draw_stellars`] does, but asks `instead`
+/// first of each stellar that would draw its stand-in, with where the
+/// stand-in is centred: when `instead` draws the stellar itself into the
+/// list (the flight's 3D models), it says so and the stand-in is not
+/// drawn. The stellar keeps its place in the order, and its name is placed
+/// as the stand-in's. What `instead` draws should reach as far as the
+/// stand-in does, [`UNKNOWN_STELLAR_RADIUS`] from its centre, so the two
+/// agree in size.
+pub fn draw_stellars_instead(
+    list: &mut DrawList,
+    scene: &SystemScene,
+    camera: &Camera,
+    seen: Option<SeenMurk>,
+    mut instead: impl FnMut(&mut DrawList, &SceneStellar, Point) -> bool,
+) {
     let mut by_id: Vec<&SceneStellar> = scene.stellars().iter().collect();
     by_id.sort_by_key(|stellar| stellar.id);
     let mut labels = Vec::new();
@@ -523,7 +541,9 @@ pub fn draw_stellars(
             (Some(Err(_)), None) if let Some(stand_in) = &stellar.stand_in => {
                 // Placed as a sprite as wide as the stellar's landing reach.
                 let centre = camera.sprite_centre(stellar.position, STAND_IN_FRAME);
-                outline::draw_stellar(list, stand_in, centre, UNKNOWN_STELLAR_RADIUS);
+                if !instead(list, stellar, centre) {
+                    outline::draw_stellar(list, stand_in, centre, UNKNOWN_STELLAR_RADIUS);
+                }
                 (centre, (STAND_IN_SIDE, STAND_IN_SIDE))
             }
             (Some(Err(message)), None) => {
