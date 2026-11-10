@@ -1,7 +1,7 @@
 //! The flight's ships drawn as 3D models (rdm:phase/engine-3d/phase-10-sample-in-3d):
 //! a ship class the edge registered a hull model for
 //! ([`FlightView::with_world_models`], [`WorldModels`]) draws it with its
-//! outfits on their hardpoints ([`mounted_outfits`]) in place of its
+//! outfits on their hardpoints ([`mounted_outfits()`]) in place of its
 //! stand-in outline.
 //!
 //! A ship's look is tried in this order:
