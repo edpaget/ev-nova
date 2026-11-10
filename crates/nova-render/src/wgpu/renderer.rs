@@ -18,9 +18,10 @@ use super::frame_commands::{DeviceEncoders, WgpuCommands};
 use super::hinted_text::{GlyphRun, HintedGlyphs};
 use super::layout::lay_out_text;
 use super::models::{ModelData, Models, depth_view};
+use super::planets::{PlanetData, Planets};
 use super::upscale::{Upscale, abilities, upscale_for};
 use crate::fonts::FontFaces;
-use crate::gpu::{Batch, Frame, PageId, TextRun, WorldSpace};
+use crate::gpu::{Batch, Frame, PageId, PlanetId, PlanetTextures, TextRun, WorldSpace};
 use crate::model::{Mesh, MeshId};
 use crate::upscale::{Abilities, Upscaler, WorldResolution, offered};
 use crate::viewport::PixelRect;
@@ -94,6 +95,11 @@ enum Draw {
         instances: Range<u32>,
         meshes: Vec<MeshId>,
     },
+    /// Planets: the instances, and the textures of each, in order.
+    Planets {
+        instances: Range<u32>,
+        planets: Vec<PlanetId>,
+    },
 }
 
 /// A render pass over a canvas (the scene, or the world's texture) and the
@@ -146,6 +152,8 @@ pub struct WgpuRenderer {
     blit_pipeline: wgpu::RenderPipeline,
     /// The model pipeline and the meshes it draws ([`Batch::Models`]).
     models: Models,
+    /// The planet pipeline and the planets' textures ([`Batch::Planets`]).
+    planets: Planets,
     page_layout: wgpu::BindGroupLayout,
     texture_layout: wgpu::BindGroupLayout,
     scene: Option<Scene>,
@@ -268,12 +276,7 @@ impl WgpuRenderer {
             (SCENE_FORMAT, blend_state(Blend::Normal)),
         );
         let blit_pipeline = blit_pipeline(device, &texture_layout, format);
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("nova nearest"),
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
-            ..Default::default()
-        });
+        let sampler = nearest_sampler(device);
         let cache = Cache::new(device);
         let mut text_atlas = text_atlas(device, queue, &cache);
         let first_text = text_renderer(&mut text_atlas, device);
@@ -295,6 +298,7 @@ impl WgpuRenderer {
             solid_pipeline,
             blit_pipeline,
             models: Models::new(device),
+            planets: Planets::new(device, &globals_layout),
             page_layout,
             texture_layout,
             scene: None,
@@ -414,6 +418,11 @@ impl WgpuRenderer {
         self.models.upload(&self.device, mesh, data);
     }
 
+    /// Holds `textures` as planet `planet`'s, replacing any it had.
+    pub fn upload_planet(&mut self, planet: PlanetId, textures: &PlanetTextures) {
+        (self.planets).upload(&self.device, &self.queue, planet, textures);
+    }
+
     /// Copies `image` onto page `page` at `at`.
     pub fn upload(&mut self, page: PageId, at: PixelRect, image: &Image) {
         let Some(page) = self.pages.get(&page) else {
@@ -482,12 +491,14 @@ impl WgpuRenderer {
         let instance_buffer = self.vertex_buffer("nova sprite instances", &layout.instances);
         let vertex_buffer = self.vertex_buffer("nova solid vertices", &layout.vertices);
         let model_buffer = self.vertex_buffer("nova model instances", &layout.models);
+        let planet_buffer = self.vertex_buffer("nova planet instances", &layout.planets);
 
         let scene = self.scene.as_ref().expect("ensured above");
         let buffers = Buffers {
             instances: &instance_buffer,
             vertices: &vertex_buffer,
             models: &model_buffer,
+            planets: &planet_buffer,
         };
         let mut commands = WgpuCommands::new(DeviceEncoders(&self.device));
         let world = if layout.world.is_empty() {
@@ -597,6 +608,7 @@ impl WgpuRenderer {
             instances: instance_buffer,
             vertices: vertex_buffer,
             models: model_buffer,
+            planets: planet_buffer,
         } = buffers;
         let content = target.content;
         let full = PixelRect {
@@ -662,6 +674,11 @@ impl WgpuRenderer {
                     set_viewport(pass, content);
                     self.models
                         .encode(pass, model_buffer, instances.clone(), meshes);
+                }
+                Draw::Planets { instances, planets } => {
+                    set_viewport(pass, content);
+                    let globals = &self.globals_group;
+                    (self.planets).encode(pass, globals, planet_buffer, instances.clone(), planets);
                 }
             }
         }
@@ -887,6 +904,17 @@ fn text_atlas(device: &wgpu::Device, queue: &wgpu::Queue, cache: &Cache) -> Text
     TextAtlas::with_color_mode(device, queue, cache, SCENE_FORMAT, ColorMode::Web)
 }
 
+/// The sampler sprites read their pages through: nearest, as the
+/// original's blits are.
+fn nearest_sampler(device: &wgpu::Device) -> wgpu::Sampler {
+    device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("nova nearest"),
+        mag_filter: wgpu::FilterMode::Nearest,
+        min_filter: wgpu::FilterMode::Nearest,
+        ..Default::default()
+    })
+}
+
 /// The projection uniform's layout.
 fn globals_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -1086,6 +1114,8 @@ struct Layout<'a> {
     vertices: Vec<SolidVertex>,
     /// Every models batch's instances, in one buffer.
     models: Vec<ModelData>,
+    /// Every planets batch's instances, in one buffer.
+    planets: Vec<PlanetData>,
     /// The text batches, one glyphon renderer each.
     text: Vec<&'a [TextRun]>,
     /// What to draw for each batch, in order.
@@ -1180,6 +1210,15 @@ impl<'a> Layout<'a> {
                     meshes: models.iter().map(|model| model.mesh).collect(),
                 }
             }
+            Batch::Planets { light, planets } => {
+                let start = self.planets.len() as u32;
+                self.planets
+                    .extend(planets.iter().map(|planet| PlanetData::new(planet, *light)));
+                Draw::Planets {
+                    instances: start..self.planets.len() as u32,
+                    planets: planets.iter().map(|planet| planet.planet).collect(),
+                }
+            }
         };
         self.draws.push(draw);
         self.scissors.push(scissor);
@@ -1207,12 +1246,13 @@ impl<'a> Layout<'a> {
 }
 
 /// The buffers a frame's draws read: sprite and OR-fill instances, solid
-/// vertices and model instances.
+/// vertices, model instances and planet instances.
 #[derive(Clone, Copy)]
 struct Buffers<'a> {
     instances: &'a wgpu::Buffer,
     vertices: &'a wgpu::Buffer,
     models: &'a wgpu::Buffer,
+    planets: &'a wgpu::Buffer,
 }
 
 /// The scissors a frame's draws are encoded with, in their canvas's

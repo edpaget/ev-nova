@@ -7,7 +7,7 @@ use nova_data::graphics::Image;
 use nova_view::geometry::Bounds;
 use nova_view::text::LINE_HEIGHT;
 use nova_view::{
-    Blend, Color, DrawCommand, DrawLayer, DrawList, ImageKey, ImageKind, ModelKey, Point,
+    Blend, Color, DrawCommand, DrawLayer, DrawList, ImageKey, ImageKind, ModelKey, PlanetKey, Point,
 };
 
 use crate::atlas::{Atlas, AtlasEntry, PAGE_SIZE, PackError, Uv};
@@ -19,6 +19,8 @@ use crate::gpu::{
 use crate::images::{ImageError, ImageSource};
 use crate::model::Mesh;
 use crate::models::{self, Models};
+use crate::planet_source::LoadedPlanet;
+use crate::planets::Planets;
 use crate::quickdraw_stretch;
 use crate::streams::{Owner, Streams};
 use crate::upscale::world_space;
@@ -37,6 +39,10 @@ pub struct RenderReport {
     /// ([`Renderer::add_model`]), each listed the first time it is drawn.
     /// They draw nothing.
     pub missing_models: Vec<ModelKey>,
+    /// Planet keys drawn this frame with no planet given for them
+    /// ([`Renderer::add_planet`]), each listed the first time it is drawn.
+    /// They draw nothing.
+    pub missing_planets: Vec<PlanetKey>,
 }
 
 /// A frame's place in the atlas and the size it is drawn at.
@@ -80,6 +86,8 @@ pub struct Renderer<S> {
     stretches: HashMap<(ImageKey, (u32, u32)), Option<Placed>>,
     /// The meshes models are drawn with ([`Renderer::add_model`]).
     models: Models,
+    /// The planets planets are drawn as ([`Renderer::add_planet`]).
+    planets: Planets,
 }
 
 impl<S: ImageSource> Renderer<S> {
@@ -104,6 +112,7 @@ impl<S: ImageSource> Renderer<S> {
             streams: Streams::default(),
             stretches: HashMap::new(),
             models: Models::default(),
+            planets: Planets::default(),
         }
     }
 
@@ -113,6 +122,15 @@ impl<S: ImageSource> Renderer<S> {
     /// after it is replaced, under the same [`MeshId`](crate::MeshId).
     pub fn add_model(&mut self, key: ModelKey, mesh: Mesh) {
         self.models.add(key, mesh);
+    }
+
+    /// Draws planet `key` ([`DrawCommand::Planet`]) as `planet` from the
+    /// next frame on, replacing any planet it had. Its textures are
+    /// uploaded ([`Gpu::upload_planet`]) the first frame that draws it,
+    /// and again after it is replaced, under the same
+    /// [`PlanetId`](crate::gpu::PlanetId).
+    pub fn add_planet(&mut self, key: PlanetKey, planet: LoadedPlanet) {
+        self.planets.add(key, planet);
     }
 
     /// The image source.
@@ -183,6 +201,12 @@ impl<S: ImageSource> Renderer<S> {
     /// draws nothing and is reported once ([`RenderReport::missing_models`]).
     /// A part ([`DrawCommand::Mounted`]) joins the model just before it,
     /// in its band ([`crate::models`]).
+    ///
+    /// A planet ([`DrawCommand::Planet`]) uploads its textures the first
+    /// frame that draws it ([`Renderer::add_planet`]); consecutive planets
+    /// share a [`Batch::Planets`] ([`crate::planets`]). A key with no
+    /// planet draws nothing and is reported once
+    /// ([`RenderReport::missing_planets`]).
     ///
     /// A frame drawn after [`Renderer::set_enlarger`] first starts the
     /// atlas afresh, the stream pages with it; a zero-area viewport leaves
@@ -434,8 +458,11 @@ impl<S: ImageSource> Renderer<S> {
                 let missing = &mut report.missing_models;
                 (self.models).draw_model(model, pose, logical, batches, gpu, missing);
             }
-            // Planets come with their pipeline.
-            DrawCommand::Planet { .. } => {}
+            // Drawn uncut by a clip, as a model is.
+            DrawCommand::Planet { planet, ref pose } => {
+                let missing = &mut report.missing_planets;
+                (self.planets).draw(planet, pose, batches, gpu, missing);
+            }
             DrawCommand::Mounted {
                 model,
                 ref mounting,

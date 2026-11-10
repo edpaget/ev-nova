@@ -71,6 +71,12 @@
 //! [`camera::shade`](crate::camera::shade)'s formula; each mesh's buffers
 //! are made when it is uploaded ([`Gpu::upload_mesh`](crate::Gpu::upload_mesh)).
 //!
+//! A planets batch ([`Batch::Planets`](crate::Batch::Planets)) draws in
+//! an ordinary pass, with no depth: one square per planet, its fragments
+//! mirroring [`crate::planet`]'s functions (`planets.wgsl`), sampling the
+//! textures each planet uploads ([`Gpu::upload_planet`](crate::Gpu::upload_planet))
+//! with explicit gradients so no mip seam shows where the surface wraps.
+//!
 //! Every render pipeline, glyphon's included, the model pipeline too, is built when the renderer
 //! is made or its upscaler is set, never on a frame: building one compiles
 //! its shader, which takes tens of milliseconds when macOS's Metal shader
@@ -98,6 +104,7 @@ mod metrics;
 mod models;
 mod offscreen;
 mod overlay;
+mod planets;
 mod renderer;
 mod sharp_bilinear;
 mod surface;

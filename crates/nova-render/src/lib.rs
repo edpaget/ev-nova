@@ -28,6 +28,10 @@
 //!   on the view's model axes, with their materials and textures, or why
 //!   not ([`ModelError`]); its fake and contract check behind the
 //!   `recording` feature.
+//! - `planets`: the [`Renderer`]'s planets by [`nova_view::PlanetKey`]
+//!   ([`Renderer::add_planet`]), their textures uploaded the first frame
+//!   that draws them ([`Gpu::upload_planet`]), and the [`Batch::Planets`]
+//!   a list's planets become.
 //! - [`planet_source`]: the [`PlanetSource`] port, the new game's planets
 //!   and moons by stellar ([`PlanetRequest`]) as [`LoadedPlanet`]s, a
 //!   generated look baked or a texture asset read, in one shape, or why
@@ -147,6 +151,7 @@ pub mod model_source;
 mod models;
 pub mod planet;
 pub mod planet_source;
+mod planets;
 pub mod present;
 pub mod quickdraw_stretch;
 #[cfg(any(test, feature = "recording"))]
@@ -166,8 +171,8 @@ pub use fonts::{FALLBACK_FONT, Face, FontFaces, Loaded, SERIF_FONT, face_for};
 pub use galaxy_models::{GalaxyModels, ship_livery, ship_request};
 pub use galaxy_planets::GalaxyPlanets;
 pub use gpu::{
-    Batch, Frame, Gpu, MAX_TEXTURE_SIDE, ModelInstance, QuadInstance, Rect, SolidQuad, TextRun,
-    WorldSpace,
+    Batch, Frame, Gpu, MAX_TEXTURE_SIDE, ModelInstance, PlanetId, PlanetImage, PlanetInstance,
+    PlanetTextures, QuadInstance, Rect, SolidQuad, TextRun, WorldSpace,
 };
 pub use images::{ImageError, ImageSource};
 pub use livery::{Livery, PaintSlot, painted};

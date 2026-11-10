@@ -5,7 +5,7 @@
 
 use nova_data::graphics::Image;
 
-use crate::gpu::{Frame, Gpu, PageId};
+use crate::gpu::{Frame, Gpu, PageId, PlanetId, PlanetTextures};
 use crate::model::{Mesh, MeshId};
 use crate::upscale::{Upscaler, WorldResolution};
 use crate::viewport::PixelRect;
@@ -66,6 +66,10 @@ impl<G: OverlayGpu + ?Sized> Gpu for WithOverlay<'_, G> {
         self.gpu.upload_mesh(mesh, data);
     }
 
+    fn upload_planet(&mut self, planet: PlanetId, textures: &PlanetTextures) {
+        self.gpu.upload_planet(planet, textures);
+    }
+
     fn submit(&mut self, frame: &Frame) {
         self.gpu.submit_with(frame, self.painter);
     }
@@ -99,6 +103,7 @@ mod tests {
         Upload(PageId, PixelRect, Image),
         ClearPages,
         UploadMesh(MeshId, Mesh),
+        UploadPlanet(PlanetId, PlanetTextures),
         Submit(Frame),
         SubmitWith(Frame, *const ()),
         SetUpscaler(Upscaler),
@@ -128,6 +133,11 @@ mod tests {
 
         fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh) {
             self.calls.push(Call::UploadMesh(mesh, data.clone()));
+        }
+
+        fn upload_planet(&mut self, planet: PlanetId, textures: &PlanetTextures) {
+            self.calls
+                .push(Call::UploadPlanet(planet, textures.clone()));
         }
 
         fn submit(&mut self, frame: &Frame) {
@@ -268,6 +278,30 @@ mod tests {
             with.upload_mesh(MeshId(5), &cube);
         }
         assert_eq!(gpu.calls, [Call::UploadMesh(MeshId(5), cube)]);
+    }
+
+    #[test]
+    fn with_overlay_forwards_planet_uploads() {
+        let mut gpu = FakeGpu::default();
+        let mut painter = NoPainter;
+        let layer = crate::gpu::PlanetImage {
+            width: 2,
+            height: 1,
+            rgba: vec![1; 8],
+        };
+        let textures = PlanetTextures {
+            surface: vec![layer.clone()],
+            clouds: vec![layer.clone()],
+            rings: layer,
+        };
+        {
+            let mut with = WithOverlay {
+                gpu: &mut gpu,
+                painter: &mut painter,
+            };
+            with.upload_planet(PlanetId(4), &textures);
+        }
+        assert_eq!(gpu.calls, [Call::UploadPlanet(PlanetId(4), textures)]);
     }
 
     #[test]

@@ -42,6 +42,12 @@ pub trait Gpu {
     /// ([`crate::Renderer::add_model`]); it never hands over one with no
     /// triangles. Meshes are not pages: [`Gpu::clear_pages`] keeps them.
     fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh);
+    /// Holds `textures` as planet `planet`'s, replacing any it had, for
+    /// [`Batch::Planets`] to draw. The renderer uploads a planet's textures
+    /// the first frame that draws it, and again after it is replaced
+    /// ([`crate::Renderer::add_planet`]). Planets are not pages:
+    /// [`Gpu::clear_pages`] keeps them.
+    fn upload_planet(&mut self, planet: PlanetId, textures: &PlanetTextures);
     /// Draws `frame` to the window or target.
     fn submit(&mut self, frame: &Frame);
     /// The resolution it draws the world layer at, which decides each
@@ -129,6 +135,56 @@ pub struct ModelInstance {
     pub shares_band: bool,
 }
 
+/// Which planet's textures a [`PlanetInstance`] draws with: numbered by
+/// the renderer, as a [`MeshId`] is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PlanetId(pub u32);
+
+/// A planet's textures, as the GPU holds them ([`Gpu::upload_planet`]):
+/// each layer 8-bit RGBA, row by row from the top. The adapter uploads
+/// them as they are and decides nothing (see [`crate::planet`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlanetTextures {
+    /// The surface's mip chain, the whole surface first
+    /// ([`crate::planet::mips`]): equirectangular, its alpha the glow.
+    pub surface: Vec<PlanetImage>,
+    /// The cloud layer's mip chain, laid out as the surface, its alpha the
+    /// cover: wholly clear when the planet has no clouds.
+    pub clouds: Vec<PlanetImage>,
+    /// The rings' opacity, inner edge to outer, in every channel of a row
+    /// one texel high: all 0 when the planet has no rings.
+    pub rings: PlanetImage,
+}
+
+pub use nova_galaxy_media::planet::Image as PlanetImage;
+
+/// One planet as the planet shader draws it: everything per planet the
+/// core worked out ([`crate::planet`]). The adapter only draws its square
+/// and mirrors the core's functions per fragment.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlanetInstance {
+    /// Its textures.
+    pub planet: PlanetId,
+    /// The square it covers, in logical units ([`crate::planet::quad`]).
+    pub dest: Rect,
+    /// How far from its centre the square's edge is, in planet radii
+    /// ([`crate::planet::reach`]).
+    pub reach: f32,
+    /// Its axes on the view's ([`crate::planet::Frame`]).
+    pub frame: crate::planet::Frame,
+    /// The surface's turn and the clouds', each 0 to 1
+    /// ([`crate::planet::turns`]).
+    pub turns: [f32; 2],
+    /// Its rings' inner and outer radii, in planet radii; both 0 when it
+    /// has none.
+    pub rings: [f32; 2],
+    /// Its rings' colour, RGB 0 to 1.
+    pub ring_color: [f32; 3],
+    /// Its atmosphere's colour, RGB 0 to 1, then its thickness in planet
+    /// radii: 0 when it has none.
+    pub atmosphere: [f32; 4],
+}
+
 /// One run of text: placed and clipped in physical pixels, sized and
 /// wrapped in logical units. The renderer shapes it at its logical size,
 /// so every glyph advances a whole logical unit, and draws it at `scale`:
@@ -194,11 +250,20 @@ pub enum Batch {
         /// The models, in draw order.
         models: Vec<ModelInstance>,
     },
+    /// Planets ([`nova_view::DrawCommand::Planet`]), drawn in order lit by
+    /// `light` (see [`crate::planet`]), blended as sprites are. They test
+    /// no depth and write none.
+    Planets {
+        /// The light they are lit by.
+        light: Light,
+        /// The planets, in draw order.
+        planets: Vec<PlanetInstance>,
+    },
 }
 
 impl Batch {
     /// A short name for its kind: `"sprites"`, `"or-fill"`, `"solid"`,
-    /// `"text"` or `"models"`. Other crates' tests describe a frame's
+    /// `"text"`, `"models"` or `"planets"`. Other crates' tests describe a frame's
     /// shape by it without matching every kind.
     #[must_use]
     pub fn kind(&self) -> &'static str {
@@ -208,10 +273,11 @@ impl Batch {
             Self::Solid(_) => "solid",
             Self::Text(_) => "text",
             Self::Models { .. } => "models",
+            Self::Planets { .. } => "planets",
         }
     }
 
-    /// How many draws it holds: quads, text runs or models.
+    /// How many draws it holds: quads, text runs, models or planets.
     #[must_use]
     pub fn draws(&self) -> usize {
         match self {
@@ -219,6 +285,7 @@ impl Batch {
             Self::Solid(quads) => quads.len(),
             Self::Text(runs) => runs.len(),
             Self::Models { models, .. } => models.len(),
+            Self::Planets { planets, .. } => planets.len(),
         }
     }
 }
@@ -813,6 +880,16 @@ mod tests {
             normal_from_model: [[0.0; 3]; 3],
             shares_band: false,
         };
+        let planet = PlanetInstance {
+            planet: PlanetId(0),
+            dest: Rect::default(),
+            reach: 1.0,
+            frame: crate::planet::Frame::new(0.0, 0.0),
+            turns: [0.0; 2],
+            rings: [0.0; 2],
+            ring_color: [0.0; 3],
+            atmosphere: [0.0; 4],
+        };
         let batches = [
             Batch::Sprites {
                 page: PageId(0),
@@ -832,6 +909,10 @@ mod tests {
                 light: Light::STANDARD,
                 models: vec![model; 6],
             },
+            Batch::Planets {
+                light: Light::STANDARD,
+                planets: vec![planet; 7],
+            },
         ];
         let shape: Vec<(&str, usize)> = batches
             .iter()
@@ -844,7 +925,8 @@ mod tests {
                 ("or-fill", 3),
                 ("solid", 4),
                 ("text", 5),
-                ("models", 6)
+                ("models", 6),
+                ("planets", 7)
             ]
         );
     }

@@ -10,7 +10,7 @@ use std::hash::{Hash, Hasher};
 use nova_data::graphics::Image;
 use nova_view::ImageKind;
 
-use crate::gpu::{Frame, Gpu, PageId};
+use crate::gpu::{Frame, Gpu, PageId, PlanetId, PlanetTextures};
 use crate::images::{ImageError, ImageSource};
 use crate::model::{Mesh, MeshId};
 use crate::upscale::{Upscaler, UpscalerProbe, WorldResolution, resolution_of};
@@ -59,6 +59,13 @@ pub enum GpuCall {
         mesh: MeshId,
         /// The mesh.
         data: Mesh,
+    },
+    /// [`Gpu::upload_planet`].
+    UploadPlanet {
+        /// The planet's id.
+        planet: PlanetId,
+        /// Its textures.
+        textures: PlanetTextures,
     },
     /// [`Gpu::submit`].
     Submit(Frame),
@@ -181,6 +188,13 @@ impl Gpu for RecordingGpu {
         self.calls.push(GpuCall::UploadMesh {
             mesh,
             data: data.clone(),
+        });
+    }
+
+    fn upload_planet(&mut self, planet: PlanetId, textures: &PlanetTextures) {
+        self.calls.push(GpuCall::UploadPlanet {
+            planet,
+            textures: textures.clone(),
         });
     }
 

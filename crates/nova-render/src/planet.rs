@@ -34,11 +34,12 @@
 //! theirs onto it ([`ring_shadow`]); the atmosphere is a rim glow
 //! ([`rim`]) lit as the limb under it is.
 
-use nova_galaxy_media::planet::Image;
+use nova_galaxy_media::planet::{Image, Surface};
 use nova_view::PlanetPose;
 use nova_view::geometry::{Bounds, Point};
 
 use crate::camera::Light;
+use crate::gpu::{PlanetId, PlanetInstance, PlanetTextures, Rect};
 
 /// How far a planet's spin axis leans from screen-up toward the camera,
 /// in radians (20°).
@@ -254,6 +255,69 @@ pub fn turns(time: f64, day: f64) -> (f32, f32) {
     (turn(time / day), turn(time * CLOUD_SPIN / day))
 }
 
+/// The textures `surface` is drawn with ([`crate::Gpu::upload_planet`]):
+/// its surface's and clouds' mip chains ([`mips`]), a wholly clear 2 by 1
+/// layer for a planet with no clouds, and its rings' profile as a row (a
+/// clear pair of texels with no rings).
+#[must_use]
+pub fn textures(surface: &Surface) -> PlanetTextures {
+    let clear = Image {
+        width: 2,
+        height: 1,
+        rgba: vec![0; 8],
+    };
+    let profile = surface
+        .rings
+        .as_ref()
+        .map_or(&[0, 0][..], |rings| &rings.profile);
+    PlanetTextures {
+        surface: mips(&surface.surface),
+        clouds: mips(surface.clouds.as_ref().unwrap_or(&clear)),
+        rings: Image {
+            width: profile.len() as u32,
+            height: 1,
+            rgba: profile.iter().flat_map(|o| [*o; 4]).collect(),
+        },
+    }
+}
+
+/// The instance that draws `surface`, held as `planet`, at `pose`: its
+/// square ([`quad`] over its [`reach`]), its [`Frame`] leaned by
+/// [`VIEW_LEAN`] and rolled by its tilt, its [`turns`] at the pose's time,
+/// and its rings' and atmosphere's sizes and colours. `None` when it draws
+/// nothing ([`quad`]).
+#[must_use]
+pub fn instance(planet: PlanetId, surface: &Surface, pose: &PlanetPose) -> Option<PlanetInstance> {
+    let thickness = surface.atmosphere.as_ref().map(|a| a.thickness as f32);
+    let outer = surface.rings.as_ref().map(|r| r.outer as f32);
+    let reach = reach(thickness, outer);
+    let square = quad(pose, reach)?;
+    let color = |c: [u8; 3]| c.map(|c| f32::from(c) / 255.0);
+    let ring_color = surface.rings.as_ref().map_or([0.0; 3], |r| color(r.color));
+    let [r, g, b] = surface
+        .atmosphere
+        .as_ref()
+        .map_or([0.0; 3], |a| color(a.color));
+    Some(PlanetInstance {
+        planet,
+        dest: Rect {
+            x: square.min.x,
+            y: square.min.y,
+            w: square.max.x - square.min.x,
+            h: square.max.y - square.min.y,
+        },
+        reach,
+        frame: Frame::new(surface.tilt as f32, VIEW_LEAN),
+        turns: turns(pose.time, surface.day).into(),
+        rings: surface
+            .rings
+            .as_ref()
+            .map_or([0.0; 2], |r| [r.inner as f32, r.outer as f32]),
+        ring_color,
+        atmosphere: [r, g, b, thickness.unwrap_or(0.0)],
+    })
+}
+
 /// `image`'s mip chain, itself first: each level half the one before on
 /// each side (to 1 at least) down to 1 by 1, each texel the average of
 /// the texels above it, rounded. Every channel, alpha too, is averaged on
@@ -307,6 +371,8 @@ fn unit(v: [f32; 3]) -> [f32; 3] {
 #[allow(clippy::float_cmp)]
 mod tests {
     use std::f32::consts::FRAC_PI_2;
+
+    use nova_galaxy_media::planet::{Glow, RingBand};
 
     use super::*;
 
@@ -542,6 +608,88 @@ mod tests {
             assert_eq!(turns(5.0, day), (0.0, 0.0), "{day}");
         }
         assert_eq!(turns(f64::NAN, 10.0), (0.0, 0.0));
+    }
+
+    /// A 4 by 2 surface with rings and an atmosphere, a 300 s day and a
+    /// small tilt.
+    fn surface() -> Surface {
+        Surface {
+            surface: image(4, 2, vec![9; 32]),
+            clouds: Some(image(4, 2, vec![255; 32])),
+            rings: Some(RingBand {
+                inner: 1.4,
+                outer: 2.3,
+                color: [255, 0, 51],
+                profile: vec![0, 200, 100, 0],
+            }),
+            atmosphere: Some(Glow {
+                color: [0, 255, 0],
+                thickness: 0.25,
+            }),
+            day: 300.0,
+            tilt: 0.2,
+        }
+    }
+
+    #[test]
+    fn a_planet_s_textures_are_its_layers_mip_chains_and_its_ring_row() {
+        let made = textures(&surface());
+        assert_eq!(made.surface, mips(&surface().surface));
+        assert_eq!(made.clouds, mips(&image(4, 2, vec![255; 32])));
+        assert_eq!(
+            made.rings,
+            image(
+                4,
+                1,
+                [0, 200, 100, 0].iter().flat_map(|o| [*o; 4]).collect()
+            )
+        );
+        let bare = Surface {
+            clouds: None,
+            rings: None,
+            ..surface()
+        };
+        let made = textures(&bare);
+        assert_eq!(made.clouds, mips(&image(2, 1, vec![0; 8])), "clear");
+        assert_eq!(made.rings, image(2, 1, vec![0; 8]), "clear");
+    }
+
+    #[test]
+    fn a_planet_s_instance_holds_what_the_core_works_out_for_it() {
+        let pose = PlanetPose {
+            center: Point::new(100.0, 80.0),
+            radius: 10.0,
+            time: 75.0,
+        };
+        let made = instance(PlanetId(3), &surface(), &pose).expect("drawable");
+        assert_eq!(made.planet, PlanetId(3));
+        assert_eq!(made.reach, 2.3);
+        assert_near(made.dest.x, 77.0);
+        assert_near(made.dest.y, 57.0);
+        assert_near(made.dest.w, 46.0);
+        assert_near(made.dest.h, 46.0);
+        assert_eq!(made.frame, Frame::new(0.2, VIEW_LEAN));
+        let (surface_turn, cloud_turn) = turns(75.0, 300.0);
+        assert_eq!(made.turns, [surface_turn, cloud_turn]);
+        assert_eq!(made.rings, [1.4, 2.3]);
+        assert_eq!(made.ring_color, [1.0, 0.0, 0.2]);
+        assert_eq!(made.atmosphere, [0.0, 1.0, 0.0, 0.25]);
+        let bare = Surface {
+            rings: None,
+            atmosphere: None,
+            ..surface()
+        };
+        let made = instance(PlanetId(3), &bare, &pose).unwrap();
+        assert_eq!(
+            (made.reach, made.rings, made.atmosphere),
+            (1.0, [0.0; 2], [0.0; 4])
+        );
+        assert_eq!(made.ring_color, [0.0; 3]);
+        let bad = PlanetPose {
+            radius: 0.0,
+            ..pose
+        };
+        assert_eq!(instance(PlanetId(3), &surface(), &bad), None);
     }
 
     fn image(width: u32, height: u32, rgba: Vec<u8>) -> Image {

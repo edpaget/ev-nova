@@ -6,7 +6,7 @@ use super::data::surface_format;
 use super::overlay::{OverlayGpu, OverlayPainter, PaintTarget};
 use super::{InitError, WgpuRenderer, acquire};
 use crate::fonts::FontFaces;
-use crate::gpu::{Frame, Gpu, PageId};
+use crate::gpu::{Frame, Gpu, PageId, PlanetId, PlanetTextures};
 use crate::model::{Mesh, MeshId};
 use crate::present::{
     AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action,
@@ -87,6 +87,10 @@ impl Gpu for SurfaceGpu {
 
     fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh) {
         self.renderer.upload_mesh(mesh, data);
+    }
+
+    fn upload_planet(&mut self, planet: PlanetId, textures: &PlanetTextures) {
+        self.renderer.upload_planet(planet, textures);
     }
 
     fn submit(&mut self, frame: &Frame) {
