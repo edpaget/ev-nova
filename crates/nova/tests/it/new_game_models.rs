@@ -9,7 +9,10 @@
 //! frame draws its class's hull, the traffic's included; and a pilot
 //! carrying the gun mount draws its turret on its hull, facing the nose
 //! until its first turret shot and then as the view's `mounted_outfits`
-//! turns it for the frame's turret facing.
+//! turns it for the frame's turret facing. Flown under the stock ruleset's
+//! readings over the same data, the player's hull, the station hub and
+//! the planet still draw as their models: the data picks a model, not a
+//! rulebook key.
 //!
 //! Wiring only: which ship, station or planet draws a model, where and
 //! turned how, is nova-view's (its flight view's `ship_models` and
@@ -62,8 +65,19 @@ fn nova_id<K: std::fmt::Display>(table: &std::collections::BTreeMap<K, i16>, nam
 /// The app flying the sample's start under the new game's readings, wired
 /// with `assets` as `main` wires them.
 fn flying(game: NewGame, assets: &WorldAssets, pilots: &MemoryPilots) -> Harness {
+    flying_under(Ruleset::NewGame, game, assets, pilots)
+}
+
+/// The app flying the sample's start under `ruleset`'s readings, wired
+/// with `assets` as `main` wires them.
+fn flying_under(
+    ruleset: Ruleset,
+    game: NewGame,
+    assets: &WorldAssets,
+    pilots: &MemoryPilots,
+) -> Harness {
     let data = Rc::new(game.data);
-    let rules = ruleset_rulebook(None, Ruleset::NewGame.profile().readings).0;
+    let rules = ruleset_rulebook(None, ruleset.profile().readings).0;
     let (keeper, warning) = nova::settings::SettingsKeeper::open(
         Box::new(MemorySettings::new()) as Box<dyn SettingsStore>
     );
@@ -182,6 +196,37 @@ fn the_ships_the_station_and_the_planet_draw_as_their_models() {
             .iter()
             .any(|call| matches!(call, GpuCall::UploadPlanet { .. })),
         "the planet uploaded"
+    );
+}
+
+#[test]
+fn the_data_not_the_ruleset_picks_the_models() {
+    let (game, assets) = sample();
+    let exchange = StellarId(nova_id(&game.ids.stellars, "luyten-exchange"));
+    let reach = StellarId(nova_id(&game.ids.stellars, "kestrel-reach"));
+    let pilots = MemoryPilots::new();
+    let mut harness = flying_under(Ruleset::Stock, game, &assets, &pilots);
+    draw(&mut harness);
+    let world = world(&harness);
+    let player = assets
+        .models
+        .ship(frame(&harness).ships[0].class)
+        .expect("a model")
+        .key;
+    let drawn = hulls(&world);
+    assert!(drawn.contains(&player), "the player's hull: {drawn:?}");
+    let Some(StellarModel::Model { key: hub, .. }) = assets.models.stellar(exchange) else {
+        panic!("the exchange's model");
+    };
+    assert!(drawn.contains(&hub), "the station hub: {drawn:?}");
+    let Some(StellarModel::Planet { key: giant }) = assets.models.stellar(reach) else {
+        panic!("Kestrel Reach's planet");
+    };
+    assert!(
+        world
+            .iter()
+            .any(|c| matches!(c, DrawCommand::Planet { planet, .. } if *planet == giant)),
+        "Kestrel Reach"
     );
 }
 
