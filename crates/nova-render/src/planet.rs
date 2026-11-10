@@ -33,6 +33,16 @@
 //! The rings take the globe's shadow ([`in_planet_shadow`]) and cast
 //! theirs onto it ([`ring_shadow`]); the atmosphere is a rim glow
 //! ([`rim`]) lit as the limb under it is.
+//!
+//! # The fragment
+//!
+//! How those pieces make one fragment's colour (the layers, their order
+//! and how each is lit and mixed) is [`fragment()`]'s, in its own module,
+//! which the shader mirrors function for function.
+
+mod fragment;
+
+pub use fragment::{Fragment, fragment, globe_color, halo, ring_color};
 
 use nova_galaxy_media::planet::{Image, Surface};
 use nova_view::PlanetPose;

@@ -1,7 +1,10 @@
 // Planets: one square per planet, each fragment mirroring
 // `nova_render::planet`: where the view ray meets the globe, the ring
-// plane and the atmosphere, which surface texel it shows, and the
-// shadows. It decides nothing the core hasn't defined.
+// plane and the atmosphere, which surface texel it shows, the shadows,
+// and how its layers are lit, mixed and composited (`planet::fragment`,
+// function for function: `halo`, `globe_color`, `ring_color`, `over`).
+// It decides nothing the core hasn't defined; only the globe's
+// anti-aliased edge and the texture sampling are its own.
 
 struct Globals {
     // The logical space's width and height.
@@ -80,9 +83,9 @@ fn planet_vs(
     return out;
 }
 
-// `planet::lit`.
+// `planet::lit`: `n` normalised; the light already is.
 fn lit(n: vec3<f32>, light: vec4<f32>) -> f32 {
-    return light.w + (1.0 - light.w) * max(dot(n, light.xyz), 0.0);
+    return light.w + (1.0 - light.w) * max(dot(normalize(n), light.xyz), 0.0);
 }
 
 // `planet::rim`.
@@ -115,9 +118,42 @@ fn in_planet_shadow(p: vec3<f32>, l: vec3<f32>) -> bool {
     return along < 0.0 && along * along - (dot(p, p) - 1.0) >= 0.0;
 }
 
-// `a` over `under`, premultiplied.
+// `planet::fragment`'s `over`: `color` at `alpha` over `under`,
+// premultiplied.
 fn over(under: vec4<f32>, color: vec3<f32>, alpha: f32) -> vec4<f32> {
     return vec4<f32>(color * alpha + under.rgb * (1.0 - alpha), alpha + under.a * (1.0 - alpha));
+}
+
+// `planet::halo`: the atmosphere's colour lit as the limb under it is,
+// then its opacity.
+fn halo(x: f32, y: f32, atmosphere: vec4<f32>, light: vec4<f32>) -> vec4<f32> {
+    let d = length(vec2<f32>(x, y));
+    let shade = lit(vec3<f32>(x / d, y / d, 0.0), light);
+    return vec4<f32>(atmosphere.rgb * shade, rim(d, atmosphere.w));
+}
+
+// `planet::globe_color`: the ground lit, the rings' shadow taking the
+// light back toward the ambient, the glow unlit, the clouds white in the
+// same light over it, the atmosphere's colour over all by the rim.
+fn globe_color(
+    n: vec3<f32>,
+    d: f32,
+    ground: vec4<f32>,
+    cloud: vec4<f32>,
+    shadow: f32,
+    atmosphere: vec4<f32>,
+    light: vec4<f32>,
+) -> vec3<f32> {
+    let shade = light.w + (lit(n, light) - light.w) * (1.0 - shadow);
+    let surface = mix(ground.rgb * shade, ground.rgb, ground.a);
+    let clouded = mix(surface, vec3<f32>(shade), cloud.a);
+    return mix(clouded, atmosphere.rgb * shade, rim(min(d, 1.0), atmosphere.w));
+}
+
+// `planet::ring_color`: lit fully, or at the ambient in the globe's
+// shadow.
+fn ring_color(color: vec3<f32>, shadowed: bool, light: vec4<f32>) -> vec3<f32> {
+    return color * select(1.0, light.w, shadowed);
 }
 
 @fragment
@@ -151,35 +187,34 @@ fn planet_fs(in: PlanetOut) -> @location(0) vec4<f32> {
     let ddy = vec2<f32>(du.y, dv.y);
     let ground = textureSampleGrad(surface_tex, wrap, vec2<f32>(u, v), ddx, ddy);
     let cloud = textureSampleGrad(clouds_tex, wrap, vec2<f32>(cloud_u, v), ddx, ddy);
+    // How much of the pixel the globe covers: its anti-aliased edge, a
+    // matter of rasterisation the core takes as given
+    // (`planet::Fragment::coverage`).
     let edge = max(fwidth(d), 1e-6);
+    let coverage = clamp((1.0 - d) / edge + 0.5, 0.0, 1.0);
 
+    // `planet::fragment`, layer by layer in its order.
     var acc = vec4<f32>(0.0);
 
-    // The halo, outside the limb, lit as the limb under it is.
-    let thickness = in.atmosphere.w;
+    // The halo, off the disc.
     if (!on_disc && d > 0.0) {
-        let limb = vec3<f32>(x / d, y / d, 0.0);
-        acc = over(acc, in.atmosphere.rgb * lit(limb, light), rim(d, thickness));
+        let glow = halo(x, y, in.atmosphere, light);
+        acc = over(acc, glow.rgb, glow.a);
     }
 
-    // The globe: lit, its glow unlit, its clouds over it, its rim tinted.
-    if (on_disc || d < 1.0 + edge) {
-        var shade = lit(n, light);
-        // `planet::ring_shadow`: the rings shade where its sunward ray
+    // The globe, as much of it as covers the fragment.
+    if (coverage > 0.0) {
+        // `planet::ring_shadow`: the rings' opacity where its sunward ray
         // crosses them.
+        var shadow = 0.0;
         let toward = dot(l, north);
         if (abs(toward) > 1e-6) {
             let t = -dot(n, north) / toward;
             if (t > 0.0) {
-                let q = n + t * l;
-                shade = light.w + (shade - light.w) * (1.0 - ring_opacity(length(q), in.rings));
+                shadow = ring_opacity(length(n + t * l), in.rings);
             }
         }
-        let surface = mix(ground.rgb * shade, ground.rgb, ground.a);
-        let clouded = mix(surface, vec3<f32>(shade), cloud.a);
-        let tinted = mix(clouded, in.atmosphere.rgb * shade, rim(min(d, 1.0), thickness));
-        let coverage = clamp((1.0 - d) / edge + 0.5, 0.0, 1.0);
-        acc = over(acc, tinted, coverage);
+        acc = over(acc, globe_color(n, d, ground, cloud, shadow, in.atmosphere, light), coverage);
     }
 
     // `planet::ring_hit`: the rings where they are in front of the globe.
@@ -189,8 +224,7 @@ fn planet_fs(in: PlanetOut) -> @location(0) vec4<f32> {
         let in_front = !on_disc || z > n.z;
         let opacity = ring_opacity(length(p), in.rings);
         if (in_front && opacity > 0.0) {
-            let shade = select(1.0, light.w, in_planet_shadow(p, l));
-            acc = over(acc, in.ring_color.rgb * shade, opacity);
+            acc = over(acc, ring_color(in.ring_color.rgb, in_planet_shadow(p, l), light), opacity);
         }
     }
 

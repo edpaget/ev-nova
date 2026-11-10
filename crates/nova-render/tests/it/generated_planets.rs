@@ -20,7 +20,9 @@ use nova_galaxy_media::fixture::png;
 use nova_galaxy_media::planet::{Image, Sizes, Surface};
 use nova_render::camera::shade;
 use nova_render::fonts::FontFaces;
-use nova_render::planet::{Frame, PLANET_LIGHT, VIEW_LEAN, globe, lit, rim, surface_uv, turns};
+use nova_render::planet::{
+    Fragment, Frame, PLANET_LIGHT, VIEW_LEAN, fragment, globe, lit, surface_uv, turns,
+};
 use nova_render::{
     GalaxyPlanets, Light, LoadedPlanet, LogicalSize, Mesh, PlanetError, PlanetRequest,
     PlanetSource, RenderReport, Renderer, Viewport,
@@ -202,29 +204,44 @@ fn bytes(c: [f32; 3]) -> [u8; 3] {
     c.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8)
 }
 
-fn mix(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
-    [0, 1, 2].map(|i| a[i] + (b[i] - a[i]) * t)
-}
-
-/// The colour the core says a globe point at `local` shows, on a planet
-/// with no clouds whose rings cast no shadow there: its surface lit, its
-/// glow unlit, its rim tinted.
-fn globe_color(surface: &Surface, local: (f32, f32)) -> [u8; 3] {
-    let normal = globe(local.0, local.1).expect("on the disc");
+/// The colour the core ([`fragment`]) says the pixel centred at `local`
+/// shows over the clear colour, on `surface` at [`TIME`]: its surface and
+/// cloud texels sampled as the planet sampler reads their largest levels,
+/// its rings' profile read by `RingBand::opacity`, and the globe covering
+/// it wholly on the disc and not at all off it.
+fn core_color(surface: &Surface, local: (f32, f32)) -> [u8; 3] {
     let frame = Frame::new(surface.tilt as f32, VIEW_LEAN);
-    let (turn, _) = turns(TIME, surface.day);
-    let [red, green, blue, glow] = sample_at(&surface.surface, surface_uv(normal, &frame, turn));
-    let shade = lit(normal, PLANET_LIGHT);
-    let color = mix(
-        [red * shade, green * shade, blue * shade],
-        [red, green, blue],
-        glow,
-    );
-    let d = (local.0 * local.0 + local.1 * local.1).sqrt();
-    let (atmosphere, thickness) = surface.atmosphere.as_ref().map_or(([0.0; 3], 0.0), |a| {
-        (a.color.map(|c| f32::from(c) / 255.0), a.thickness as f32)
+    let (turn, cloud_turn) = turns(TIME, surface.day);
+    let normal = globe(local.0, local.1);
+    let texel = |image: &Image, turn| {
+        normal.map_or([0.0; 4], |n| sample_at(image, surface_uv(n, &frame, turn)))
+    };
+    let unit = |c: [u8; 3]| c.map(|c| f32::from(c) / 255.0);
+    let atmosphere = surface.atmosphere.as_ref().map_or([0.0; 4], |a| {
+        let [r, g, b] = unit(a.color);
+        [r, g, b, a.thickness as f32]
     });
-    bytes(mix(color, atmosphere.map(|c| c * shade), rim(d, thickness)))
+    let inputs = Fragment {
+        x: local.0,
+        y: local.1,
+        frame,
+        light: PLANET_LIGHT,
+        ground: texel(&surface.surface, turn),
+        cloud: surface
+            .clouds
+            .as_ref()
+            .map_or([0.0; 4], |clouds| texel(clouds, cloud_turn)),
+        ring_color: surface.rings.as_ref().map_or([0.0; 3], |r| unit(r.color)),
+        atmosphere,
+        coverage: if normal.is_some() { 1.0 } else { 0.0 },
+    };
+    let opacity = |r: f32| {
+        surface
+            .rings
+            .as_ref()
+            .map_or(0.0, |rings| rings.opacity(f64::from(r)) as f32)
+    };
+    fragment(&inputs, opacity).map_or([0; 3], |[r, g, b, a]| bytes([r * a, g * a, b * a]))
 }
 
 #[test]
@@ -241,7 +258,7 @@ fn kestrel_reach_draws_lit_with_its_halo_and_rings() {
     for at in [(-0.2, -0.3), (-0.1, -0.2), (0.0, -0.35)] {
         let pixel = pixel_at(CENTRE, at);
         let local = local_of(CENTRE, pixel);
-        let expected = globe_color(surface, local);
+        let expected = core_color(surface, local);
         let got = rgb(&pixels, pixel);
         assert!(
             near(got, expected, 8),
@@ -293,10 +310,10 @@ fn kestrel_reach_draws_lit_with_its_halo_and_rings() {
         hit.point,
         PLANET_LIGHT
     ));
-    let opacity = rings.opacity(f64::from(hit.radius)) as f32;
-    let color = rings.color.map(|c| f32::from(c) / 255.0 * opacity);
+    assert!(rings.opacity(f64::from(hit.radius)) > 0.0);
+    let color = core_color(surface, local);
     let got = rgb(&pixels, pixel);
-    assert!(near(got, bytes(color), 8), "ring {got:?}, not {color:?}");
+    assert!(near(got, color, 8), "ring {got:?}, not {color:?}");
 
     // The same ring radius behind the globe is hidden by it: the globe
     // shows there as it does with no rings at all.
@@ -380,7 +397,7 @@ fn the_textured_planets_draw_their_textures_with_no_halo_or_rings() {
         for at in [(-0.2, -0.2), (0.1, -0.3), (-0.3, 0.1)] {
             let pixel = pixel_at(CENTRE, at);
             let local = local_of(CENTRE, pixel);
-            let expected = globe_color(&planet.surface, local);
+            let expected = core_color(&planet.surface, local);
             let got = rgb(&pixels, pixel);
             assert!(
                 near(got, expected, 6),
@@ -509,7 +526,7 @@ fn a_model_drawn_after_a_planet_covers_it() {
     let beside = pixel_at(CENTRE, (-0.5, -0.5));
     assert!(near(
         rgb(&pixels, beside),
-        globe_color(&planet.surface, local_of(CENTRE, beside)),
+        core_color(&planet.surface, local_of(CENTRE, beside)),
         6
     ));
 }
