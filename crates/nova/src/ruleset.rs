@@ -10,9 +10,9 @@
 //! each defaulting to the original's reading.
 //!
 //! The stock game pins nothing. The new game pins the other reading of
-//! fourteen keys: twelve as a jump point's gate is the only way in or out
-//! of a system, one as its story lives in port, and one as its exchange
-//! lists every good a port prices:
+//! fifteen keys: twelve as a jump point's gate is the only way in or out
+//! of a system, one as its story lives in port, one as its exchange
+//! lists every good a port prices, and one as its ships are 3D models:
 //!
 //! - the three its traffic needs: [`RuleKey::DestinationReach`] (its
 //!   jump points sit past the original's 999 bound),
@@ -55,7 +55,12 @@
 //!   exchange lists every special good the port prices, where the
 //!   original lists only the highest-ID one, so two of the new game's
 //!   goods past the six standard slots, priced at one level at one port,
-//!   both trade there; `nova_data::new_game`'s `goods` maps them).
+//!   both trade there; `nova_data::new_game`'s `goods` maps them);
+//! - its hulls' one: [`RuleKey::ContinuousHeadings`] (a ship's hull, and
+//!   the weapon exit points and fixed beams that turn with it, stands at
+//!   its heading itself rather than its sprite frame's angle, so a model
+//!   hull turns smoothly; `nova_view::flight::ship_orientation` turns the
+//!   model by it, and sprites are still drawn on their frame).
 //!
 //! It leaves [`RuleKey::MapPlotting`] at the original's Shift-click, a
 //! hop at a time, so a course is plotted a lane at a time and J flies it.
@@ -96,8 +101,9 @@ const STOCK: Profile = Profile {
 };
 
 /// The new game's profile: its traffic's three gate readings, its map
-/// and courses' four, J's two, its mission ships' three, its port's one
-/// and its exchange's one (see the module docs), and pilots of its own.
+/// and courses' four, J's two, its mission ships' three, its port's one,
+/// its exchange's one and its hulls' one (see the module docs), and
+/// pilots of its own.
 const NEW_GAME: Profile = Profile {
     readings: &[
         (RuleKey::DestinationReach, RuleSource::Bible),
@@ -114,6 +120,7 @@ const NEW_GAME: Profile = Profile {
         (RuleKey::GateExitCounts, RuleSource::Bible),
         (RuleKey::BarStory, RuleSource::Bible),
         (RuleKey::JunkListing, RuleSource::Bible),
+        (RuleKey::ContinuousHeadings, RuleSource::Bible),
     ],
     pilots: "New Game Pilots",
 };
@@ -180,7 +187,7 @@ mod tests {
     }
 
     #[test]
-    fn the_new_game_pins_the_other_reading_of_its_fourteen_gate_lane_map_autopilot_mission_ship_bar_and_exchange_keys()
+    fn the_new_game_pins_the_other_reading_of_its_fifteen_gate_lane_map_autopilot_mission_ship_bar_exchange_and_hull_keys()
      {
         assert_eq!(
             Ruleset::NewGame.profile().readings,
@@ -199,6 +206,7 @@ mod tests {
                 (RuleKey::GateExitCounts, RuleSource::Bible),
                 (RuleKey::BarStory, RuleSource::Bible),
                 (RuleKey::JunkListing, RuleSource::Bible),
+                (RuleKey::ContinuousHeadings, RuleSource::Bible),
             ]
         );
     }
