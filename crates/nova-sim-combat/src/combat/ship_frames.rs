@@ -103,6 +103,7 @@ use nova_sim_base::blink::Blink;
 
 use super::armament::Fold;
 use super::exits::{DEFAULT_FRAMES, compression, drawn_frame};
+use super::hull_turn::{HullTurn, hull_angle};
 use super::ship_lights::ShipLights;
 use crate::catalog::{ShipDisplay, ShipExits};
 use crate::geometry::Vec2;
@@ -327,6 +328,14 @@ impl FrameSpec {
     #[must_use]
     pub fn rotation(&self, heading: f32) -> u16 {
         drawn_frame(heading, self.frames, self.table.as_ref())
+    }
+
+    /// The angle its hull stands at facing `heading`, as `turn` says: by
+    /// frame its [`rotation`](Self::rotation)'s angle, continuously the
+    /// heading itself ([`hull_angle`]).
+    #[must_use]
+    pub fn hull_angle(&self, heading: f32, turn: HullTurn) -> f32 {
+        hull_angle(heading, self.frames, self.table.as_ref(), turn)
     }
 
     /// The frame of set `set` a ship facing `heading` is drawn on: set ×
@@ -639,6 +648,39 @@ mod tests {
         (0..n)
             .map(|_| frames.step(spec, fold, MOMENT).set)
             .collect()
+    }
+
+    #[test]
+    fn a_specs_hull_angle_follows_its_table_by_frame_and_the_heading_continuously() {
+        let table = FrameTable::new(frames(8), Vec2::new(1.0, 1.0), Vec2::new(1.0, 0.5));
+        let tabled = FrameSpec {
+            frames: frames(8),
+            table: Some(table),
+            ..FrameSpec::NONE
+        };
+        let plain = FrameSpec {
+            frames: frames(64),
+            ..FrameSpec::NONE
+        };
+        for heading in [0.0, 7.5, 125.0, 359.9] {
+            for turn in [HullTurn::ByFrame, HullTurn::Continuous] {
+                assert_eq!(
+                    tabled.hull_angle(heading, turn),
+                    hull_angle(heading, frames(8), Some(&table), turn),
+                    "{heading} {turn:?}"
+                );
+                assert_eq!(
+                    plain.hull_angle(heading, turn),
+                    hull_angle(heading, frames(64), None, turn),
+                    "{heading} {turn:?}"
+                );
+            }
+        }
+        assert_ne!(
+            tabled.hull_angle(125.0, HullTurn::ByFrame),
+            hull_angle(125.0, frames(8), None, HullTurn::ByFrame),
+            "the table picks the frame"
+        );
     }
 
     #[test]

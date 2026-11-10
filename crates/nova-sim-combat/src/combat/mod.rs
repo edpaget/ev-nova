@@ -18,7 +18,11 @@
 //!   [`PointDefenceRule`](defence::PointDefenceRule) port says, and what
 //!   its hits do to them.
 //! - [`exits`]: the weapon exit points a ship's shots and beams leave
-//!   from, turning with the frame it is drawn on.
+//!   from, turning with its hull ([`hull_turn`]).
+//! - [`hull_turn`]: the angle a ship's hull stands at, which its exits
+//!   turn with: by the engine its drawn frame's, by
+//!   [`RuleKey::ContinuousHeadings`](crate::RuleKey::ContinuousHeadings)'
+//!   other reading its heading's.
 //! - [`spots`]: the new game's exit points, from the hardpoints a ship's
 //!   class and its mod kits place.
 //! - [`flags`]: what the simulation does with each documented weapon flag,
@@ -425,6 +429,7 @@ pub mod flags;
 pub mod hidden;
 pub mod hit_turns;
 pub mod hull;
+pub mod hull_turn;
 pub mod impact;
 pub mod ion;
 pub mod ion_tint;
