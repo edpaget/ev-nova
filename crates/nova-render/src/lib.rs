@@ -76,7 +76,7 @@
 //!   drawn in, from the [`WorldResolution`] the [`Gpu`] draws it at
 //!   ([`world_space`]).
 //! - [`render_scale`]: the [`RenderScale`] the world layer is drawn at
-//!   and the share of the backing size a percentage sizes the world
+//!   ([`Renderer::set_render_scale`]) and the share of the backing size a percentage sizes the world
 //!   texture to ([`scaled_size`]).
 //! - [`source`]: [`ImageSource`] for `nova_data`'s `GameData`, a thin
 //!   adapter over the picture and sprite decoders (and the mask that gives

@@ -89,6 +89,9 @@ pub struct Renderer<S> {
     models: Models,
     /// The planets planets are drawn as ([`Renderer::add_planet`]).
     planets: Planets,
+    /// The size the world layer is drawn at
+    /// ([`Renderer::set_render_scale`]).
+    render_scale: RenderScale,
 }
 
 impl<S: ImageSource> Renderer<S> {
@@ -114,6 +117,7 @@ impl<S: ImageSource> Renderer<S> {
             stretches: HashMap::new(),
             models: Models::default(),
             planets: Planets::default(),
+            render_scale: RenderScale::Auto,
         }
     }
 
@@ -151,6 +155,14 @@ impl<S: ImageSource> Renderer<S> {
         self.rebuild = true;
     }
 
+    /// Draws the world layer at `scale` from the next frame drawn on
+    /// ([`world_space`]). Unlike a new enlarger it keeps the atlas and the
+    /// meshes, and it calls nothing on the GPU, so it can be called before
+    /// the first frame.
+    pub fn set_render_scale(&mut self, scale: RenderScale) {
+        self.render_scale = scale;
+    }
+
     /// Starts the atlas afresh, if a new enlarger asks it to.
     fn rebuild(&mut self, gpu: &mut impl Gpu) {
         if !std::mem::take(&mut self.rebuild) {
@@ -176,7 +188,8 @@ impl<S: ImageSource> Renderer<S> {
     /// world commands ([`DrawList::world`]) is batched apart from the
     /// overlay's around it, so no batch holds both, and its batches are
     /// marked world ([`Frame::world`]). The world is drawn where `gpu`'s
-    /// resolution for it says ([`world_space`]). Text is never world, so
+    /// resolution for it and the render scale
+    /// ([`Renderer::set_render_scale`]) say ([`world_space`]). Text is never world, so
     /// every text run is in target pixels. The list's world clip
     /// ([`DrawList::world_in`]) is the frame's ([`Frame::world_clip`]): the
     /// batches are the same with it or without, and the GPU cuts the
@@ -253,7 +266,7 @@ impl<S: ImageSource> Renderer<S> {
             viewport: rect,
             logical: viewport.logical(),
             clear: Color::BLACK,
-            world_space: world_space(gpu.world_resolution(), RenderScale::Auto, viewport),
+            world_space: world_space(gpu.world_resolution(), self.render_scale, viewport),
             batches,
             world,
             world_clip: list.world_clip().map(|clip| Rect {
@@ -3386,6 +3399,137 @@ mod tests {
                 (WORLD, Some(rect(15, 14, 10, 12))),
                 (OVERLAY, Some(rect(15, 14, 10, 12))),
             ]
+        );
+    }
+
+    // The render scale. The 64x48 logical space fills a 128x96 viewport.
+
+    const CUBE: nova_view::ModelKey = nova_view::ModelKey(7);
+
+    /// A sprite and a cube in the world, an OR sprite in the overlay.
+    fn world_with_a_model() -> DrawList {
+        let mut list = DrawList::new();
+        list.world(|list| {
+            list.sprite(sprite(0), at(10.0, 10.0), Color::WHITE);
+            list.model(
+                CUBE,
+                nova_view::ModelPose {
+                    center: at(30.0, 20.0),
+                    orientation: nova_view::Orientation::about([1.0, 0.0, 0.0], 0.5),
+                    scale: 10.0,
+                },
+            );
+        });
+        list.or_sprite(sprite(0), at(10.0, 10.0), Color::WHITE);
+        list
+    }
+
+    fn scaled_renderer(scale: RenderScale) -> Renderer<FakeImages> {
+        let mut renderer = renderer(images());
+        renderer.add_model(CUBE, Mesh::cube([Color::WHITE; 6]));
+        renderer.set_render_scale(scale);
+        renderer
+    }
+
+    /// The frame `renderer` submits for `list` through `gpu`.
+    fn scaled_frame(
+        renderer: &mut Renderer<FakeImages>,
+        list: &DrawList,
+        gpu: &mut RecordingGpu,
+    ) -> Frame {
+        let report = renderer.render(list, &viewport(), gpu);
+        assert_eq!(report, RenderReport::default());
+        gpu.submits().last().copied().cloned().expect("a frame")
+    }
+
+    #[test]
+    fn a_render_scale_draws_the_world_into_a_texture_of_that_share_of_the_viewport() {
+        let mut renderer = scaled_renderer(RenderScale::percent(25));
+        let frame = scaled_frame(
+            &mut renderer,
+            &world_with_a_model(),
+            &mut RecordingGpu::new(),
+        );
+        assert_eq!(frame.world_space, WorldSpace::Texture { size: (32, 24) });
+    }
+
+    #[test]
+    fn a_render_scale_under_an_enlarging_upscaler_sizes_the_world_from_the_viewport() {
+        let mut renderer = scaled_renderer(RenderScale::percent(75));
+        let mut gpu = RecordingGpu::answering(WorldResolution::Logical);
+        let frame = scaled_frame(&mut renderer, &world_with_a_model(), &mut gpu);
+        // 75% of the 128x96 viewport, not of the 64x48 logical space.
+        assert_eq!(frame.world_space, WorldSpace::Texture { size: (96, 72) });
+    }
+
+    #[test]
+    fn the_default_render_scale_submits_the_world_space_of_the_resolution_alone() {
+        for (resolution, space) in [
+            (WorldResolution::Native, WorldSpace::Target),
+            (
+                WorldResolution::Logical,
+                WorldSpace::Texture { size: (64, 48) },
+            ),
+        ] {
+            let mut renderer = renderer(images());
+            renderer.add_model(CUBE, Mesh::cube([Color::WHITE; 6]));
+            let mut gpu = RecordingGpu::answering(resolution);
+            let frame = scaled_frame(&mut renderer, &world_with_a_model(), &mut gpu);
+            assert_eq!(frame.world_space, space, "{resolution:?}");
+        }
+    }
+
+    #[test]
+    fn setting_a_render_scale_keeps_the_atlas_and_the_meshes() {
+        let mut renderer = scaled_renderer(RenderScale::Auto);
+        let mut gpu = RecordingGpu::new();
+        scaled_frame(&mut renderer, &world_with_a_model(), &mut gpu);
+        gpu.take();
+        renderer.set_render_scale(RenderScale::percent(50));
+        scaled_frame(&mut renderer, &world_with_a_model(), &mut gpu);
+        let calls = gpu.take();
+        assert!(
+            calls.iter().all(|call| matches!(call, GpuCall::Submit(_))),
+            "no clear_pages, upload or upload_mesh: {calls:?}"
+        );
+        assert_eq!(calls.len(), 1);
+    }
+
+    #[test]
+    fn a_render_scale_takes_effect_from_the_next_frame() {
+        let mut renderer = scaled_renderer(RenderScale::Auto);
+        let mut gpu = RecordingGpu::new();
+        let before = scaled_frame(&mut renderer, &world_with_a_model(), &mut gpu);
+        assert_eq!(before.world_space, WorldSpace::Target);
+        renderer.set_render_scale(RenderScale::percent(25));
+        let after = scaled_frame(&mut renderer, &world_with_a_model(), &mut gpu);
+        assert_eq!(after.world_space, WorldSpace::Texture { size: (32, 24) });
+        renderer.set_render_scale(RenderScale::Auto);
+        let back = scaled_frame(&mut renderer, &world_with_a_model(), &mut gpu);
+        assert_eq!(back.world_space, WorldSpace::Target);
+    }
+
+    #[test]
+    fn a_render_scale_changes_no_batch() {
+        let list = world_with_a_model();
+        let auto = scaled_frame(
+            &mut scaled_renderer(RenderScale::Auto),
+            &list,
+            &mut RecordingGpu::new(),
+        );
+        let half = scaled_frame(
+            &mut scaled_renderer(RenderScale::percent(50)),
+            &list,
+            &mut RecordingGpu::new(),
+        );
+        assert_ne!(auto.world_space, half.world_space);
+        assert_eq!(
+            Frame {
+                world_space: auto.world_space,
+                ..half
+            },
+            auto,
+            "only the world space differs"
         );
     }
 
