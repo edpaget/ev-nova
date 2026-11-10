@@ -27,3 +27,4 @@ mod text_hinting;
 mod text_layout;
 mod wgpu_offscreen;
 mod world_layer;
+mod world_models;
