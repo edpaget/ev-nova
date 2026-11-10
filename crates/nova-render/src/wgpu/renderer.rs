@@ -2711,6 +2711,16 @@ mod tests {
         gpu.upload_mesh(MeshId(0), &Mesh::cube([Color::WHITE; 6]));
         let with_models = models_frame();
         assert_builds_no_pipeline(&mut gpu, made, &with_models, "a frame of models");
+        // A native world drawn below 100% is a texture, enlarged with
+        // sharp-bilinear: neither the first such frame nor a later one
+        // builds it.
+        let native_world = Frame {
+            world: (0..blends.batches.len()).collect(),
+            ..textured(blends.clone())
+        };
+        for what in ["a native texture world", "a later native texture world"] {
+            assert_builds_no_pipeline(&mut gpu, made, &native_world, what);
+        }
         // Setting an upscaler is a set-up step, which may build its own.
         gpu.set_upscaler(Upscaler::SharpBilinear);
         let made = gpu.render_pipelines();
@@ -2798,6 +2808,51 @@ mod tests {
             assert_eq!(pixel_at(&pixels, 2, 30), [0, 0, 0, 255], "{upscaler:?}");
             assert_eq!(pixel_at(&pixels, 32, 2), [0, 0, 0, 255], "{upscaler:?}");
         }
+    }
+
+    #[test]
+    fn the_native_upscaler_enlarges_a_texture_world_with_sharp_bilinear() {
+        use crate::gpu::Gpu;
+        // A white-faced cube a little off centre, in a world texture half
+        // the 64 x 48 content's size, so its edges fall between texels.
+        let logical = LogicalSize { w: 32, h: 24 };
+        let pose = nova_view::ModelPose {
+            center: Point::new(15.3, 11.7),
+            orientation: nova_view::Orientation::about([1.0, 1.0, 0.0], 0.5),
+            scale: 9.0,
+        };
+        let instance = crate::camera::instance(logical, &pose, MeshId(3), 0.9).expect("drawable");
+        let frame = Frame {
+            viewport: PixelRect {
+                x: 0,
+                y: 8,
+                w: 64,
+                h: 48,
+            },
+            logical,
+            world: vec![0],
+            world_space: WorldSpace::Texture { size: (32, 24) },
+            ..frame_of(vec![Batch::Models {
+                light: Light::STANDARD,
+                models: vec![instance],
+            }])
+        };
+        let drawn = |upscaler| {
+            let mut gpu = crate::wgpu::OffscreenGpu::new(64, 64, &FontFaces::bundled()).ok()?;
+            gpu.set_upscaler(upscaler);
+            gpu.upload_mesh(MeshId(3), &Mesh::cube([Color::WHITE; 6]));
+            gpu.submit(&frame);
+            Some(gpu.read_pixels().expect("read back"))
+        };
+        let (Some(native), Some(sharp)) = (drawn(Upscaler::Native), drawn(Upscaler::SharpBilinear))
+        else {
+            return;
+        };
+        assert_ne!(pixel_at(&native, 32, 32), [0, 0, 0, 255], "a black scene");
+        assert!(
+            native == sharp,
+            "native's enlarged world is not sharp-bilinear's"
+        );
     }
 
     /// A 64 x 64 frame of a solid, a cube (mesh 0), a sprite on page 0,

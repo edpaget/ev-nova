@@ -7,12 +7,12 @@ use nova_data::graphics::Image;
 
 use super::data::{padded_bytes_per_row, strip_padding};
 use super::overlay::{OverlayGpu, OverlayPainter, PaintTarget};
-use super::upscale::{Native, Upscale};
+use super::upscale::{Upscale, upscale_for};
 use super::{InitError, WgpuRenderer, acquire};
 use crate::fonts::FontFaces;
 use crate::gpu::{Frame, Gpu, PageId, PlanetId, PlanetTextures};
 use crate::model::{Mesh, MeshId};
-use crate::upscale::{Upscaler, UpscalerProbe, WorldResolution};
+use crate::upscale::{Abilities, Upscaler, UpscalerProbe, WorldResolution};
 use crate::viewport::PixelRect;
 
 /// The offscreen target's format: plain RGBA8, not sRGB.
@@ -49,7 +49,9 @@ impl OffscreenGpu {
     /// A `width` x `height` target on the default GPU adapter, drawing
     /// text in `faces` and the world natively ([`Upscaler::Native`]).
     pub fn new(width: u32, height: u32, faces: &FontFaces) -> Result<Self, InitError> {
-        Self::with_upscale(width, height, faces, |_, _| Box::new(Native))
+        Self::with_upscale(width, height, faces, |device, queue| {
+            upscale_for(Upscaler::Native, device, queue, Abilities::default())
+        })
     }
 
     /// [`OffscreenGpu::new`], its world drawn with the upscaler `upscale`

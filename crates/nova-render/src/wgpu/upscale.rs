@@ -1,5 +1,6 @@
 //! The upscaler port in the renderer's terms: enlarge a world texture onto
-//! the target. [`Native`] never has one to enlarge; [`SharpBilinear`]
+//! the target. [`Native`] has one to enlarge only under a render scale
+//! below 100%, and hands it to sharp-bilinear ([`enlarging`]); [`SharpBilinear`]
 //! does, in the frame's own encoder, as [`Fsr1`] does in two passes
 //! (EASU, then RCAS), and so does MetalFX on macOS
 //! (`metal_fx::MetalFxSpatial`), in a command buffer of its own put
@@ -13,7 +14,7 @@
 use super::frame_commands::WgpuCommands;
 use super::fsr1::Fsr1;
 use super::sharp_bilinear::SharpBilinear;
-use crate::upscale::{Abilities, Upscaler, WorldResolution, effective, resolution_of};
+use crate::upscale::{Abilities, Upscaler, WorldResolution, effective, enlarging, resolution_of};
 use crate::viewport::PixelRect;
 
 /// Draws flight's world layer onto the target for the
@@ -22,8 +23,9 @@ use crate::viewport::PixelRect;
 /// An upscaler that draws the world at the logical resolution
 /// ([`WorldResolution::Logical`]) is handed the world's texture, once it
 /// is drawn, to enlarge onto the viewport, before the overlay is drawn
-/// over it. One that draws it at the native resolution is never asked to
-/// enlarge anything: the world is drawn straight into the target.
+/// over it. One that draws it at the native resolution is asked only when
+/// a render scale below 100% drew the world into a texture all the same;
+/// otherwise the world is drawn straight into the target.
 pub trait Upscale {
     /// The resolution the world layer is drawn at.
     fn resolution(&self) -> WorldResolution;
@@ -45,23 +47,40 @@ pub trait Upscale {
 
 /// No upscaler: the world is drawn into the target at its own resolution,
 /// in the frame's order, as the overlay is.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Native;
+///
+/// A render scale below 100% draws even a native world into a texture
+/// (`world_space`), and native has no enlarging pass of its own, so it
+/// enlarges that texture with the upscaler [`enlarging`] names for it,
+/// made with it rather than per frame.
+pub struct Native {
+    /// Enlarges a texture world.
+    enlarger: Box<dyn Upscale>,
+}
+
+impl Native {
+    /// Native, enlarging a texture world with `enlarger`.
+    fn new(enlarger: Box<dyn Upscale>) -> Self {
+        Self { enlarger }
+    }
+}
 
 impl Upscale for Native {
     fn resolution(&self) -> WorldResolution {
         resolution_of(Upscaler::Native)
     }
 
-    /// Never asked: a native world has no texture of its own.
+    /// Hands a texture world, which only a render scale below 100% gives
+    /// it, to its enlarger.
     fn enlarge(
         &mut self,
-        _commands: &mut WgpuCommands<'_>,
-        _world: &wgpu::TextureView,
-        _target: &wgpu::TextureView,
-        _onto: PixelRect,
-        _warnings: &mut Vec<String>,
+        commands: &mut WgpuCommands<'_>,
+        world: &wgpu::TextureView,
+        target: &wgpu::TextureView,
+        onto: PixelRect,
+        warnings: &mut Vec<String>,
     ) {
+        self.enlarger
+            .enlarge(commands, world, target, onto, warnings);
     }
 }
 
@@ -95,8 +114,18 @@ pub(super) fn upscale_for(
     queue: &wgpu::Queue,
     abilities: Abilities,
 ) -> Box<dyn Upscale> {
-    match effective(choice, abilities) {
-        Upscaler::Native => Box::new(Native),
+    made(effective(choice, abilities), device, queue)
+}
+
+/// `upscaler`, made on `device` and writing through `queue`: native with
+/// the upscaler [`enlarging`] names for it (never native itself) beside
+/// it.
+fn made(upscaler: Upscaler, device: &wgpu::Device, queue: &wgpu::Queue) -> Box<dyn Upscale> {
+    match upscaler {
+        Upscaler::Native => {
+            let enlarger = made(enlarging(Upscaler::Native), device, queue);
+            Box::new(Native::new(enlarger))
+        }
         Upscaler::SharpBilinear => Box::new(SharpBilinear::new(device, queue)),
         Upscaler::Fsr1 => Box::new(Fsr1::new(device, queue)),
         Upscaler::MetalFxSpatial => metal_fx(device, queue),
@@ -122,8 +151,29 @@ fn metal_fx(device: &wgpu::Device, queue: &wgpu::Queue) -> Box<dyn Upscale> {
 mod tests {
     use super::*;
 
+    /// An enlarger that draws at the logical resolution and enlarges
+    /// nothing, standing in for one made on a device.
+    struct Unused;
+
+    impl Upscale for Unused {
+        fn resolution(&self) -> WorldResolution {
+            WorldResolution::Logical
+        }
+
+        fn enlarge(
+            &mut self,
+            _commands: &mut WgpuCommands<'_>,
+            _world: &wgpu::TextureView,
+            _target: &wgpu::TextureView,
+            _onto: PixelRect,
+            _warnings: &mut Vec<String>,
+        ) {
+        }
+    }
+
     #[test]
     fn the_native_upscaler_draws_the_world_at_the_native_resolution() {
-        assert_eq!(Native.resolution(), WorldResolution::Native);
+        let native = Native::new(Box::new(Unused));
+        assert_eq!(native.resolution(), WorldResolution::Native);
     }
 }

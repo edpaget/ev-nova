@@ -28,7 +28,9 @@
 //! [`Native`] draws the world
 //! ([`WorldSpace::Target`](crate::WorldSpace::Target)) straight into the
 //! scene, every batch in the frame's order whatever its layer, so nothing
-//! changes on screen. [`SharpBilinear`] has the world drawn into a texture
+//! changes on screen; under a render scale below 100% its world is a
+//! texture all the same, which it enlarges with sharp-bilinear
+//! ([`enlarging`](crate::enlarging)). [`SharpBilinear`] has the world drawn into a texture
 //! of its own ([`WorldSpace::Texture`](crate::WorldSpace::Texture)) first,
 //! enlarges it onto the viewport ([`Upscale::enlarge`]), and the whole
 //! overlay is drawn over it, in the frame's order: an overlay drawn before
