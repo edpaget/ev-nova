@@ -859,6 +859,45 @@ mod batch_tests {
     }
 
     #[test]
+    fn a_sky_on_a_widened_target_takes_the_smaller_axiss_texels() {
+        // A widened view of a 305x200 window is 1171x768 logical: 305/1171
+        // across, more than the 200/768 down. Of a 301x200 window it is
+        // 1156x768: 301/1156 across, less than 200/768 down.
+        for (window, across_is_larger) in [((305, 200), true), ((301, 200), false)] {
+            let viewport = Viewport::for_shape(nova_view::ViewShape::Widened, window, 1.0);
+            let logical = viewport.logical();
+            let (across, down) = viewport.axis_scales().expect("a content area");
+            assert_eq!(
+                across > down,
+                across_is_larger,
+                "{across} across, {down} down"
+            );
+            let (smaller, larger) = if across_is_larger {
+                (down, across)
+            } else {
+                (across, down)
+            };
+            let expected = stars(&sky(), logical, smaller);
+            assert!(!expected.is_empty());
+            assert_ne!(expected, stars(&sky(), logical, larger));
+            let mut list = DrawList::new();
+            list.sky(sky());
+            list.world(|list| {
+                list.start_world_tail();
+                list.sky(sky());
+            });
+            let mut gpu = RecordingGpu::answering(WorldResolution::Logical);
+            Renderer::new(NoImages).render(&list, &viewport, &mut gpu);
+            let frame = gpu.submits().last().map(|frame| (*frame).clone());
+            assert_eq!(
+                frame.expect("a frame").batches,
+                [Batch::Sky(expected.clone()), Batch::Sky(expected)],
+                "in a {window:?} window"
+            );
+        }
+    }
+
+    #[test]
     fn a_sky_splits_from_its_neighbours_in_list_order() {
         let mut renderer = Renderer::new(NoImages);
         renderer.add_model(ModelKey(1), Mesh::cube([Color::WHITE; 6]));
