@@ -245,10 +245,14 @@ impl ExitPoints {
     /// ([`drawn_frame`], by its table when it has one).
     #[must_use]
     pub fn drawn_frame(&self, heading: f32) -> u16 {
-        let table = self
-            .angle_table
-            .then(|| FrameTable::new(self.frames, self.up, self.down));
-        drawn_frame(heading, self.frames, table.as_ref())
+        drawn_frame(heading, self.frames, self.table().as_ref())
+    }
+
+    /// Its frame-angle table, when it has one: the one place
+    /// [`ExitPoints::drawn_frame`] and [`ExitPoints::hull_angle`] take it from.
+    fn table(&self) -> Option<FrameTable> {
+        self.angle_table
+            .then(|| FrameTable::new(self.frames, self.up, self.down))
     }
 
     /// The angle, in whole degrees, its exit points stand at for its ship
@@ -264,10 +268,7 @@ impl ExitPoints {
     /// ([`hull_angle`]).
     #[must_use]
     pub fn hull_angle(&self, heading: f32, turn: HullTurn) -> f32 {
-        let table = self
-            .angle_table
-            .then(|| FrameTable::new(self.frames, self.up, self.down));
-        hull_angle(heading, self.frames, table.as_ref(), turn)
+        hull_angle(heading, self.frames, self.table().as_ref(), turn)
     }
 
     /// Where exit `index` of `kind` stands off the ship's centre with the
@@ -606,6 +607,17 @@ mod tests {
         let tabled = gun.with_angle_table(true);
         assert_eq!(tabled.drawn_frame(125.0), 3);
         assert_eq!(tabled.drawn_angle(125.0), 135.0, "frame 3's own angle");
+        assert_eq!(gun.hull_angle(125.0, HullTurn::ByFrame), 90.0, "no table");
+        assert_eq!(
+            tabled.hull_angle(125.0, HullTurn::ByFrame),
+            135.0,
+            "the hull stands at the tabled frame's angle"
+        );
+        assert_eq!(
+            tabled.hull_angle(125.0, HullTurn::Continuous),
+            125.0,
+            "continuously the heading itself, table or not"
+        );
     }
 
     #[test]
