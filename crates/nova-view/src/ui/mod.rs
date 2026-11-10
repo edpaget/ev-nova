@@ -60,6 +60,9 @@
 //! - `pad_focus`: the pad's focus: the directional picker over a
 //!   screen's controls, the one focus a screen keeps for the pad and the
 //!   keyboard, and the pad's highlight.
+//! - [`panel`]: the new game's panel style
+//!   ([`PanelBacking`](panel::PanelBacking)), the opaque backing behind
+//!   the story log, the conversation and the new game's dialogs.
 //! - [`mission_info`]: the key that asks for the mission info screen,
 //!   the shared play keys' Mission Info, as a key wait waits on it.
 //! - [`mission_dialogs`]: the mission texts and the mission info screen
@@ -105,6 +108,7 @@ pub mod new_pilot;
 pub mod note;
 mod own_keys;
 pub(crate) mod pad_focus;
+pub mod panel;
 pub mod picker;
 pub mod picture_variant;
 pub mod planet_comm;

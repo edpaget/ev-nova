@@ -42,7 +42,7 @@ use nova_sim::storylines::news::HeardNews;
 use nova_sim::{StellarId, SystemId};
 
 use crate::color::Color;
-use crate::draw::{DrawList, fill_rect, frame_rect};
+use crate::draw::DrawList;
 use crate::geometry::Point;
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
@@ -50,6 +50,7 @@ use crate::sound::Sound;
 use crate::spaceport::conversation::{CHOICE_COLOR, CLOSE_HINT, FONT, GAP, INSET, PANEL, SIZE};
 use crate::spaceport::credits::{TON, TONS};
 use crate::text::{TextMetrics, wrap};
+use crate::ui::panel::PanelBacking;
 
 /// The news log's heading.
 pub const NEWS_HEADING: &str = "News";
@@ -353,8 +354,7 @@ impl Screen for StoryLogScreen {
     fn tick(&mut self, _dt: Duration) {}
 
     fn draw(&self, list: &mut DrawList) {
-        fill_rect(list, PANEL, Color::BLACK);
-        frame_rect(list, PANEL, Color::DIM);
+        PanelBacking::NEW_GAME.draw(list, PANEL);
         for line in self.layout() {
             list.text_in(FONT, line.text, line.origin, SIZE, None, line.color);
         }

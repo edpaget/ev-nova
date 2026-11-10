@@ -35,13 +35,14 @@ use nova_sim::ConversationPage;
 use nova_sim::flight_frame::RoomRefusal;
 
 use crate::color::Color;
-use crate::draw::{DrawList, fill_rect, frame_rect};
+use crate::draw::DrawList;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key, key_letter};
 use crate::screen::{Screen, ScreenAction};
 use crate::spaceport::credits::{TON, TONS};
 use crate::text::{TextMetrics, wrap};
+use crate::ui::panel::PanelBacking;
 
 /// The panel, centred in the 1024 by 768 screen.
 pub const PANEL: Bounds = Bounds {
@@ -265,8 +266,7 @@ impl Screen for ConversationScreen {
     fn tick(&mut self, _dt: Duration) {}
 
     fn draw(&self, list: &mut DrawList) {
-        fill_rect(list, PANEL, Color::BLACK);
-        frame_rect(list, PANEL, Color::DIM);
+        PanelBacking::NEW_GAME.draw(list, PANEL);
         for line in self.layout().lines {
             list.text_in(FONT, line.text, line.origin, SIZE, None, line.color);
         }
@@ -276,7 +276,7 @@ impl Screen for ConversationScreen {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::draw::DrawCommand;
+    use crate::draw::{DrawCommand, fill_rect, frame_rect};
     use crate::input::{MouseButton, letter_key};
     use crate::text::fixture::MonoMetrics;
 

@@ -1,5 +1,5 @@
 use super::*;
-use crate::draw::DrawCommand;
+use crate::draw::{DrawCommand, fill_rect, frame_rect};
 use crate::input::{MouseButton, letter_key};
 use crate::text::fixture::MonoMetrics;
 
