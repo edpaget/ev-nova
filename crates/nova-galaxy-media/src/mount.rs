@@ -183,17 +183,12 @@ pub fn fitting(model: &Model, front: Front) -> Fitting {
 
 /// The largest `along` gives at a corner of `bounds`.
 fn farthest(bounds: &Bounds, along: impl Fn([f32; 3]) -> f64) -> f64 {
-    (0..8)
-        .map(|i| {
-            let pick = |k: usize, bit: usize| {
-                if i & bit == 0 {
-                    bounds.min[k]
-                } else {
-                    bounds.max[k]
-                }
-            };
-            along([pick(0, 4), pick(1, 2), pick(2, 1)])
-        })
+    let ends = |k: usize| [bounds.min[k], bounds.max[k]];
+    ends(0)
+        .into_iter()
+        .flat_map(|x| ends(1).into_iter().map(move |y| (x, y)))
+        .flat_map(|(x, y)| ends(2).map(|z| [x, y, z]))
+        .map(along)
         .fold(f64::NEG_INFINITY, f64::max)
 }
 
@@ -320,14 +315,61 @@ mod tests {
         let sliver = [[0.1, 0.0, 0.1], [0.3, 0.0, 0.7], [0.7, 2.0, 1.9]];
         faces.push(face(sliver));
         let hull = of(faces);
-        let placement = Placement::new(&hull, Front::PlusZ, 7.0);
-        let floor = placement.ship_point_3d([0.0, 0.0, 0.0])[2];
-        let [a, _, c] = sliver.map(|p| placement.ship_point_3d(p));
-        for t in [0.25, 0.5, 0.75] {
-            // On its edge from its foot to its top, seen from above.
-            let on = [a[0] + t * (c[0] - a[0]), a[1] + t * (c[1] - a[1])];
-            assert_eq!(surface(&hull, &placement, on), Some(floor), "{t}");
+        // Small, and scaled up a thousandfold: the least area is a share
+        // of the face's own size, not a fixed one.
+        for length in [7.0, 7000.0] {
+            let placement = Placement::new(&hull, Front::PlusZ, length);
+            let floor = placement.ship_point_3d([0.0, 0.0, 0.0])[2];
+            let [a, _, c] = sliver.map(|p| placement.ship_point_3d(p));
+            for t in [0.25, 0.5, 0.75] {
+                // On its edge from its foot to its top, seen from above.
+                let on = [a[0] + t * (c[0] - a[0]), a[1] + t * (c[1] - a[1])];
+                let found = surface(&hull, &placement, on);
+                assert_eq!(found, Some(floor), "{length} {t}");
+            }
         }
+    }
+
+    #[test]
+    fn a_long_sliver_along_either_axis_is_measured_by_its_own_sides() {
+        // Two slivers raised over a floor 6 km across, a metre a unit, each
+        // a kilometre long and seen from above an eighth of a square metre
+        // in area: far under the least share of its longest side squared.
+        let d = 2.0_f32.powi(-12);
+        let along_x = [
+            [1024.0, 2.0, 1.0],
+            [1536.0, 2.0, 1.0],
+            [2048.0, 5.0, 1.0 + d],
+        ];
+        let along_z = along_x.map(|[x, y, z]| [z, y, x]);
+        for sliver in [along_x, along_z] {
+            let mut faces = cuboid([-3000.0, -1.0, -3000.0], [3000.0, 0.0, 3000.0]);
+            faces.push(face(sliver));
+            let hull = of(faces);
+            let placement = Placement::new(&hull, Front::PlusZ, 6000.0);
+            let floor = placement.ship_point_3d([0.0, 0.0, 0.0])[2];
+            let corners = sliver.map(|p| placement.ship_point_3d(p));
+            let middle = [0, 1].map(|k| corners.iter().map(|c| c[k]).sum::<f64>() / 3.0);
+            assert_eq!(
+                surface(&hull, &placement, middle),
+                Some(floor),
+                "{sliver:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_small_face_far_from_the_middle_is_stood_on() {
+        // A pad a tenth of a metre across, 50 m out on a 200 m floor, a
+        // metre a unit: its own size, not its distance, sets its least
+        // area.
+        let mut faces = cuboid([-100.0, -1.0, -100.0], [100.0, 0.0, 100.0]);
+        let pad = [[50.0, 1.0, 50.0], [50.1, 1.0, 50.0], [50.0, 1.0, 50.1]];
+        faces.push(face(pad));
+        let hull = of(faces);
+        let placement = Placement::new(&hull, Front::PlusZ, 200.0);
+        let on = placement.ship_point_3d([50.02, 1.0, 50.02]);
+        assert_eq!(surface(&hull, &placement, [on[0], on[1]]), Some(on[2]));
     }
 
     #[test]

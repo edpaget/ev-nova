@@ -151,7 +151,7 @@ pub const TURRET_MOUNT_GLB: &str = "media/export/kenney-space-kit/turret_single.
 /// tall and 4 long (model x, y, z), as the Kenney kit's `craft_cargoA` is.
 pub const LIGHT_FREIGHTER: [f32; 3] = [2.6, 1.2, 4.0];
 
-/// The Kenney space kit's materials, each unlit, in the kit's colours.
+/// The Kenney space kit's materials, in the kit's colours.
 pub const KENNEY: [(&str, [f32; 4]); 4] = [
     ("metal", [0.8, 0.8, 0.82, 1.0]),
     ("metalRed", [0.7, 0.15, 0.1, 1.0]),
@@ -172,7 +172,7 @@ const KENNEY_CC0: &str = "licence: CC0-1.0\nlicence_file: media/export/kenney-sp
 /// - the `light-freighter` asset is a model facing −z, painted as the
 ///   sample's ships are (`primary: [metal]`, `secondary: [metalRed]`,
 ///   `trim: [metalDark]`), its file ([`LIGHT_FREIGHTER_GLB`]) a
-///   [`LIGHT_FREIGHTER`] box in the kit's four unlit materials
+///   [`LIGHT_FREIGHTER`] box in the kit's four materials
 ///   ([`KENNEY`], its top in `metalDark`);
 /// - the `mass-driver` shows the new `turret-mount` asset
 ///   ([`TURRET_MOUNT_GLB`]), a model facing −z: one 0.4 by 0.3 by 0.4 box
@@ -193,17 +193,11 @@ pub fn modelled_sample() -> MemSource {
     let kenney = KENNEY
         .iter()
         .fold(Builder::new(LIGHT_FREIGHTER), |b, (name, color)| {
-            b.material(Mat {
-                unlit: true,
-                ..Mat::new(name, *color)
-            })
+            b.material(Mat::new(name, *color))
         });
     let (red, red_color) = KENNEY[1];
     let turret = Builder::new([0.4, 0.3, 0.4])
-        .material(Mat {
-            unlit: true,
-            ..Mat::new(red, red_color)
-        })
+        .material(Mat::new(red, red_color))
         .nodes(vec![
             Node::group(&[1, 2, 3, 4]),
             Node::at([0.0, 0.0, 0.0]),
