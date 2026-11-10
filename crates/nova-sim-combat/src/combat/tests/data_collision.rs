@@ -18,6 +18,7 @@ use crate::combat::data_collision::CollisionShape;
 use crate::combat::lineup::Lineup;
 use crate::combat::projectile::FUSE_SPRITE_SHARE;
 use crate::combat::stellar_hazards::{DeadlyDisc, DeadlySprite, StellarHazards};
+use crate::rulebook::{RuleKey, Rulebook};
 use crate::sprite_mask::{MaskRect, PlacedMask};
 use crate::sprite_place::{Placement, radius_touch};
 use nova_sim_catalog::fixture::hull;
@@ -426,6 +427,23 @@ fn a_ship_lending_a_mask_goes_by_its_disc_under_the_data_reading() {
         [],
         "no data radius: the masks"
     );
+}
+
+#[test]
+fn the_hull_rules_set_the_hull_turn_and_the_collision_shape_from_the_rulebook() {
+    for headings in READINGS {
+        for collision in READINGS {
+            let rules = Rulebook::default()
+                .with_override(RuleKey::ContinuousHeadings, headings)
+                .with_override(RuleKey::DataCollision, collision);
+            let mut set = Combat::default();
+            set.set_hull_rules(&rules);
+            let mut each = Combat::default();
+            each.set_continuous_headings(headings);
+            each.set_data_collision(collision);
+            assert_eq!(set, each, "{headings:?} {collision:?}");
+        }
+    }
 }
 
 #[test]

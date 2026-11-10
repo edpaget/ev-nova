@@ -482,6 +482,8 @@ mod control;
 mod conversation;
 mod course;
 mod crons;
+#[cfg(test)]
+mod data_collision;
 mod deadly_masks;
 mod deadly_stellars;
 mod derelicts;
@@ -1619,9 +1621,7 @@ impl Session {
         self.space
             .combat
             .set_exit_compression(rules.source_for(RuleKey::ExitCompression));
-        self.space
-            .combat
-            .set_continuous_headings(rules.source_for(RuleKey::ContinuousHeadings));
+        self.space.combat.set_hull_rules(&rules);
         self.space
             .combat
             .set_pd_exit_step(rules.source_for(RuleKey::PdExitStep));

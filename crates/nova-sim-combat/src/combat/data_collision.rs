@@ -49,7 +49,7 @@
 //! and stellar contacts, which no ship body is in. None of this plays a
 //! sound.
 
-use crate::rulebook::RuleSource;
+use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 
 use super::beam;
 use super::defence::Candidate;
@@ -122,6 +122,17 @@ impl CollisionShape {
 }
 
 impl Combat {
+    /// Has the fight read its hulls' two rules as `rules` says: how a
+    /// hull turns,
+    /// [`RuleKey::ContinuousHeadings`](crate::RuleKey::ContinuousHeadings)
+    /// ([`Combat::set_continuous_headings`]), and the shape a ship is
+    /// struck by, [`RuleKey::DataCollision`](crate::RuleKey::DataCollision)
+    /// ([`Combat::set_data_collision`]).
+    pub fn set_hull_rules(&mut self, rules: &Rulebook) {
+        self.set_continuous_headings(rules.source_for(RuleKey::ContinuousHeadings));
+        self.set_data_collision(rules.source_for(RuleKey::DataCollision));
+    }
+
     /// `fighters` as shots, beams and aims see them, each by the shape the
     /// fight strikes it as ([`Fighter::as_target`]): every list of the
     /// fight's targets is read through this, or through the lineup, which
