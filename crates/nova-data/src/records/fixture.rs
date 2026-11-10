@@ -217,16 +217,30 @@ impl ShipBuilder {
         fuel @ 0x0A,
         free_mass @ 0x0C,
         armor @ 0x0E,
+        shield_rech @ 0x10,
+        max_gun @ 0x2A,
+        max_tur @ 0x2C,
         tech_level @ 0x2E,
         death_delay @ 0x34,
+        armor_rech @ 0x36,
         explode1 @ 0x38,
         explode2 @ 0x3A,
+        disp_weight @ 0x3C,
         mass @ 0x3E,
+        length @ 0x40,
         inherent_ai @ 0x42,
         crew @ 0x44,
+        strength @ 0x46,
+        inherent_govt @ 0x48,
+        pod_count @ 0x4C,
         fuel_regen @ 0x5E,
+        skill_var @ 0x60,
+        deionize @ 0x36A,
+        ionize_max @ 0x36C,
+        key_carried @ 0x36E,
         buy_random @ 0x388,
         hire_random @ 0x38A,
+        upgrade_to @ 0x728,
         escort_type @ 0x732,
     }
 
@@ -241,6 +255,41 @@ impl ShipBuilder {
     #[must_use]
     pub fn flags(mut self, value: u16) -> Self {
         self.0.put(0x4A, &value.to_be_bytes());
+        self
+    }
+
+    /// Sets [`Ship::flags2`] (offset 0x62, u16).
+    #[must_use]
+    pub fn flags2(mut self, value: u16) -> Self {
+        self.0.put(0x62, &value.to_be_bytes());
+        self
+    }
+
+    /// Sets [`Ship::contribute`] (offset 0x64, u64).
+    #[must_use]
+    pub fn contribute(mut self, value: u64) -> Self {
+        self.0.put(0x64, &value.to_be_bytes());
+        self
+    }
+
+    /// Sets [`Ship::flags3`] (offset 0x726, u16).
+    #[must_use]
+    pub fn flags3(mut self, value: u16) -> Self {
+        self.0.put(0x726, &value.to_be_bytes());
+        self
+    }
+
+    /// Sets [`Ship::esc_upgrd_cost`] (offset 0x72A, i32).
+    #[must_use]
+    pub fn esc_upgrd_cost(mut self, value: i32) -> Self {
+        self.0.put(0x72A, &value.to_be_bytes());
+        self
+    }
+
+    /// Sets [`Ship::esc_sell_value`] (offset 0x72E, i32).
+    #[must_use]
+    pub fn esc_sell_value(mut self, value: i32) -> Self {
+        self.0.put(0x72E, &value.to_be_bytes());
         self
     }
 
@@ -289,6 +338,34 @@ impl ShipBuilder {
     #[must_use]
     pub fn item_counts(mut self, counts: &[i16]) -> Self {
         self.0.slots(0x56, 0x378, counts);
+        self
+    }
+
+    /// Sets [`Ship::availability`] (offset 0x6C, 255 bytes).
+    #[must_use]
+    pub fn availability(mut self, test: &str) -> Self {
+        self.0.text(0x6C, 255, test);
+        self
+    }
+
+    /// Sets [`Ship::appear_on`] (offset 0x16B, 255 bytes).
+    #[must_use]
+    pub fn appear_on(mut self, test: &str) -> Self {
+        self.0.text(0x16B, 255, test);
+        self
+    }
+
+    /// Sets [`Ship::on_capture`] (offset 0x3D0, 255 bytes).
+    #[must_use]
+    pub fn on_capture(mut self, script: &str) -> Self {
+        self.0.text(0x3D0, 255, script);
+        self
+    }
+
+    /// Sets [`Ship::on_retire`] (offset 0x4CF, 255 bytes).
+    #[must_use]
+    pub fn on_retire(mut self, script: &str) -> Self {
+        self.0.text(0x4CF, 255, script);
         self
     }
 
@@ -424,7 +501,7 @@ mod tests {
 
     #[test]
     fn every_i16_ship_setter_writes_its_field() {
-        let cases: [ShipCase; 19] = [
+        let cases: [ShipCase; 33] = [
             ("holds", ShipBuilder::holds, |s| s.holds),
             ("shield", ShipBuilder::shield, |s| s.shield),
             ("accel", ShipBuilder::accel, |s| s.accel),
@@ -444,6 +521,26 @@ mod tests {
             ("buy_random", ShipBuilder::buy_random, |s| s.buy_random),
             ("hire_random", ShipBuilder::hire_random, |s| s.hire_random),
             ("escort_type", ShipBuilder::escort_type, |s| s.escort_type),
+            ("shield_rech", ShipBuilder::shield_rech, |s| s.shield_rech),
+            ("max_gun", ShipBuilder::max_gun, |s| s.max_gun),
+            ("max_tur", ShipBuilder::max_tur, |s| s.max_tur),
+            ("armor_rech", ShipBuilder::armor_rech, |s| s.armor_rech),
+            ("disp_weight", ShipBuilder::disp_weight, |s| s.disp_weight),
+            ("length", ShipBuilder::length, |s| s.length),
+            ("strength", ShipBuilder::strength, |s| s.strength),
+            ("inherent_govt", ShipBuilder::inherent_govt, |s| {
+                s.inherent_govt
+            }),
+            ("pod_count", ShipBuilder::pod_count, |s| s.pod_count),
+            ("skill_var", ShipBuilder::skill_var, |s| s.skill_var),
+            ("deionize", ShipBuilder::deionize, |s| s.deionize),
+            ("ionize_max", ShipBuilder::ionize_max, |s| s.ionize_max),
+            ("key_carried", ShipBuilder::key_carried, |s| {
+                s.key_carried.map_or(0, |id| id.0)
+            }),
+            ("upgrade_to", ShipBuilder::upgrade_to, |s| {
+                s.upgrade_to.map_or(0, |id| id.0)
+            }),
         ];
         for (name, set, get) in cases {
             assert_eq!(
@@ -460,11 +557,21 @@ mod tests {
             ShipBuilder::new()
                 .cost(0x0123_4567)
                 .flags(0x8001)
-                .require(0x0102_0304_0506_0708),
+                .require(0x0102_0304_0506_0708)
+                .flags2(0x8002)
+                .flags3(0x8003)
+                .contribute(0x0807_0605_0403_0201)
+                .esc_upgrd_cost(0x0234_5678)
+                .esc_sell_value(-0x0345_6789),
         );
         assert_eq!(decoded.cost, 0x0123_4567);
         assert_eq!(decoded.flags.bits(), 0x8001);
         assert_eq!(decoded.require.bits(), 0x0102_0304_0506_0708);
+        assert_eq!(decoded.flags2.bits(), 0x8002);
+        assert_eq!(decoded.flags3.bits(), 0x8003);
+        assert_eq!(decoded.contribute.bits(), 0x0807_0605_0403_0201);
+        assert_eq!(decoded.esc_upgrd_cost, 0x0234_5678);
+        assert_eq!(decoded.esc_sell_value, -0x0345_6789);
     }
 
     #[test]
@@ -530,13 +637,21 @@ mod tests {
                 .comm_name("Shuttle Kestrel")
                 .long_name("A long shuttle name")
                 .subtitle("Light courier")
-                .on_purchase("b12 !b13"),
+                .on_purchase("b12 !b13")
+                .availability("b422")
+                .appear_on("!b17")
+                .on_capture("^b301")
+                .on_retire("!b30"),
         );
         assert_eq!(decoded.short_name.as_str(), "Shuttle");
         assert_eq!(decoded.comm_name.as_str(), "Shuttle Kestrel");
         assert_eq!(decoded.long_name.as_str(), "A long shuttle name");
         assert_eq!(decoded.subtitle.as_str(), "Light courier");
         assert_eq!(decoded.on_purchase.as_str(), "b12 !b13");
+        assert_eq!(decoded.availability.as_str(), "b422");
+        assert_eq!(decoded.appear_on.as_str(), "!b17");
+        assert_eq!(decoded.on_capture.as_str(), "^b301");
+        assert_eq!(decoded.on_retire.as_str(), "!b30");
     }
 
     #[test]
