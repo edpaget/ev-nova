@@ -45,7 +45,7 @@ mod tests {
     use nova_data::Record;
     use nova_data::graphics::fixture::{RledBuilder, rgb888_pict};
     use nova_data::graphics::{PICT, RLED};
-    use nova_data::records::fixture::ShipAnimBuilder;
+    use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
     use nova_data::records::ship::Ship;
     use nova_data::records::ship_anim::ShipAnim;
     use nova_rsrc::ResType;
@@ -59,7 +59,7 @@ mod tests {
 
     /// A `shïp` `id`.
     fn ship(id: i16) -> (ResType, i16, Vec<u8>) {
-        (Ship::TYPE, id, vec![0; Ship::SIZE.expect("fixed")])
+        (Ship::TYPE, id, ShipBuilder::new().build())
     }
 
     /// A `shän` `id` with base image `image`, `width` x `height`.

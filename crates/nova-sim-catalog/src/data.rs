@@ -1616,7 +1616,9 @@ mod tests {
     use nova_data::graphics::RLED;
     use nova_data::graphics::fixture::RledBuilder;
     use nova_data::records::disaster::Disaster;
-    use nova_data::records::fixture::ShipAnimBuilder;
+    use nova_data::records::fixture::{
+        CharacterBuilder, ShipAnimBuilder, ShipBuilder, SpinBuilder,
+    };
     use nova_data::records::junk::Junk;
     use nova_data::records::roid::Roid;
     use nova_data::records::ship_anim::ShipAnim;
@@ -1649,27 +1651,37 @@ mod tests {
     /// A `chär` starting in `ship` in these systems, with no cash and no
     /// legal records.
     fn character(ship: i16, systems: [i16; 4]) -> Vec<u8> {
-        let mut bytes = vec![0; Character::SIZE.expect("fixed")];
-        put_i16s(&mut bytes, 0x04, &[ship]);
-        put_i16s(&mut bytes, 0x06, &systems);
-        put_i16s(&mut bytes, 0x0E, &[-1; 4]);
-        bytes
+        starting(ship, systems).build()
+    }
+
+    /// [`character`]'s builder, to set more of its fields.
+    fn starting(ship: i16, systems: [i16; 4]) -> CharacterBuilder {
+        CharacterBuilder::new()
+            .ship_type(ship)
+            .system(&systems)
+            .govt(&[-1; 4])
     }
 
     /// A `shïp` with this `Accel`, `Speed` and `Maneuver`.
     fn ship(accel: i16, speed: i16, maneuver: i16) -> Vec<u8> {
-        let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-        put_i16s(&mut bytes, 0x04, &[accel, speed, maneuver]);
-        bytes
+        handling(accel, speed, maneuver).build()
+    }
+
+    /// [`ship`]'s builder, to set more of its fields.
+    fn handling(accel: i16, speed: i16, maneuver: i16) -> ShipBuilder {
+        ShipBuilder::new()
+            .accel(accel)
+            .speed(speed)
+            .maneuver(maneuver)
     }
 
     /// A `shïp` with this `Shield`, `Fuel` and `Armor`, and no handling.
     fn reserves(shield: i16, fuel: i16, armor: i16) -> Vec<u8> {
-        let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-        put_i16s(&mut bytes, 0x02, &[shield]);
-        put_i16s(&mut bytes, 0x0A, &[fuel]);
-        put_i16s(&mut bytes, 0x0E, &[armor]);
-        bytes
+        ShipBuilder::new()
+            .shield(shield)
+            .fuel(fuel)
+            .armor(armor)
+            .build()
     }
 
     fn system() -> Vec<u8> {
@@ -1705,8 +1717,7 @@ mod tests {
 
     #[test]
     fn the_start_carries_the_chärs_on_start_parsed() {
-        let mut bytes = character(128, [130, -1, -1, -1]);
-        bytes[0x32..0x38].copy_from_slice(b"b5 !b6");
+        let bytes = starting(128, [130, -1, -1, -1]).on_start("b5 !b6").build();
         let data = store(&[(Character::TYPE, 128, bytes)]);
         assert_eq!(
             data.first_character().map(|c| c.on_start),
@@ -1719,8 +1730,11 @@ mod tests {
 
     #[test]
     fn the_start_date_is_the_chärs_day_month_and_year() {
-        let mut bytes = character(128, [130, -1, -1, -1]);
-        put_i16s(&mut bytes, 0x134, &[23, 6, 1177]);
+        let bytes = starting(128, [130, -1, -1, -1])
+            .unknown_0x134(23)
+            .unknown_0x136(6)
+            .start_year(1177)
+            .build();
         let data = store(&[(Character::TYPE, 128, bytes)]);
         assert_eq!(
             data.first_character().map(|c| c.start),
@@ -1734,18 +1748,18 @@ mod tests {
 
     /// A `chär` whose `DatePrefix` (0x13A) and `DateSuffix` (0x14A) are
     /// `prefix` and `suffix`.
-    fn dated(prefix: &[u8], suffix: &[u8]) -> Vec<u8> {
-        let mut bytes = character(128, [130, -1, -1, -1]);
-        bytes[0x13A..0x13A + prefix.len()].copy_from_slice(prefix);
-        bytes[0x14A..0x14A + suffix.len()].copy_from_slice(suffix);
-        bytes
+    fn dated(prefix: &str, suffix: &str) -> Vec<u8> {
+        starting(128, [130, -1, -1, -1])
+            .date_prefix(prefix)
+            .date_suffix(suffix)
+            .build()
     }
 
     #[test]
     fn the_date_affixes_are_the_first_chärs_prefix_and_suffix() {
         let data = store(&[
-            (Character::TYPE, 129, dated(b"Era \0", b" AD\0")),
-            (Character::TYPE, 128, dated(b"Year \0", b" NC\0")),
+            (Character::TYPE, 129, dated("Era ", " AD")),
+            (Character::TYPE, 128, dated("Year ", " NC")),
         ]);
         assert_eq!(
             data.date_affixes(),
@@ -1760,18 +1774,19 @@ mod tests {
     fn no_chär_or_an_undecodable_one_has_no_date_affixes() {
         assert_eq!(store(&[]).date_affixes(), DateAffixes::default());
         let data = store(&[
-            (Character::TYPE, 128, short(dated(b"Year \0", b" NC\0"))),
-            (Character::TYPE, 129, dated(b"Era \0", b" AD\0")),
+            (Character::TYPE, 128, short(dated("Year ", " NC"))),
+            (Character::TYPE, 129, dated("Era ", " AD")),
         ]);
         assert_eq!(data.date_affixes(), DateAffixes::default());
     }
 
     #[test]
     fn the_start_carries_the_chärs_cash_and_legal_records() {
-        let mut bytes = character(128, [130, -1, -1, -1]);
-        bytes[0x00..0x04].copy_from_slice(&(-7_000_i32).to_be_bytes());
-        put_i16s(&mut bytes, 0x0E, &[129, -1, 131, 140]);
-        put_i16s(&mut bytes, 0x16, &[50, 99, -20, 0]);
+        let bytes = starting(128, [130, -1, -1, -1])
+            .cash(-7_000)
+            .govt(&[129, -1, 131, 140])
+            .status(&[50, 99, -20, 0])
+            .build();
         let data = store(&[(Character::TYPE, 128, bytes)]);
         let start = data.first_character().expect("decodes");
         assert_eq!(start.cash, -7_000);
@@ -1789,8 +1804,7 @@ mod tests {
     #[test]
     fn the_start_carries_the_chärs_kills_raw() {
         for kills in [100, -3] {
-            let mut bytes = character(128, [130, -1, -1, -1]);
-            put_i16s(&mut bytes, 0x1E, &[kills]);
+            let bytes = starting(128, [130, -1, -1, -1]).kills(kills).build();
             let data = store(&[(Character::TYPE, 128, bytes)]);
             assert_eq!(data.first_character().map(|c| c.kills), Ok(kills));
         }
@@ -1847,25 +1861,21 @@ mod tests {
 
     #[test]
     fn a_ships_fields_include_its_holds() {
-        let mut bytes = ship(1, 2, 3);
-        put_i16s(&mut bytes, 0x00, &[-10]);
+        let bytes = handling(1, 2, 3).holds(-10).build();
         let data = store(&[(Ship::TYPE, 128, bytes)]);
         assert_eq!(data.ship_fields(ShipId(128)).map(|f| f.holds), Ok(-10));
     }
 
     #[test]
     fn a_ships_fields_include_its_fuel_regeneration() {
-        let mut bytes = ship(1, 2, 3);
-        put_i16s(&mut bytes, 0x5E, &[8]);
+        let bytes = handling(1, 2, 3).fuel_regen(8).build();
         let data = store(&[(Ship::TYPE, 128, bytes)]);
         assert_eq!(data.ship_fields(ShipId(128)).map(|f| f.fuel_regen), Ok(8));
     }
 
     #[test]
     fn a_ships_fields_include_its_shield_and_armour_recharge() {
-        let mut bytes = ship(1, 2, 3);
-        put_i16s(&mut bytes, 0x10, &[125]);
-        put_i16s(&mut bytes, 0x36, &[-20]);
+        let bytes = handling(1, 2, 3).shield_rech(125).armor_rech(-20).build();
         let data = store(&[(Ship::TYPE, 128, bytes)]);
         let fields = data.ship_fields(ShipId(128)).expect("decodes");
         assert_eq!((fields.shield_rech, fields.armor_rech), (125, -20));
@@ -1873,24 +1883,21 @@ mod tests {
 
     #[test]
     fn a_ships_fields_include_its_flags() {
-        let mut bytes = ship(1, 2, 3);
-        put_i16s(&mut bytes, 0x4A, &[0x0018]);
+        let bytes = handling(1, 2, 3).flags(0x0018).build();
         let data = store(&[(Ship::TYPE, 128, bytes)]);
         assert_eq!(data.ship_fields(ShipId(128)).map(|f| f.flags), Ok(0x0018));
     }
 
     #[test]
     fn a_ships_fields_include_its_flags2() {
-        let mut bytes = ship(1, 2, 3);
-        put_i16s(&mut bytes, 0x62, &[0x4021]);
+        let bytes = handling(1, 2, 3).flags2(0x4021).build();
         let data = store(&[(Ship::TYPE, 128, bytes)]);
         assert_eq!(data.ship_fields(ShipId(128)).map(|f| f.flags2), Ok(0x4021));
     }
 
     #[test]
     fn a_ships_fields_include_its_deionize_and_ionize_max() {
-        let mut bytes = ship(1, 2, 3);
-        put_i16s(&mut bytes, 0x36A, &[-5, 400]);
+        let bytes = handling(1, 2, 3).deionize(-5).ionize_max(400).build();
         let data = store(&[(Ship::TYPE, 128, bytes)]);
         let fields = data.ship_fields(ShipId(128)).expect("decodes");
         assert_eq!((fields.deionize, fields.ionize_max), (-5, 400));
@@ -1899,23 +1906,29 @@ mod tests {
     /// A `shïp` carrying `items` in its `DefaultItems` 1-4 and `more` in
     /// 5-8, each an `oütf` ID and a count; every other slot -1.
     fn outfitted(items: &[(i16, i16)], more: &[(i16, i16)]) -> Vec<u8> {
-        let mut bytes = ship(1, 2, 3);
-        for (ids_at, counts_at, slots) in [(0x4E, 0x56, items), (0x370, 0x378, more)] {
-            put_i16s(&mut bytes, ids_at, &[-1; 4]);
+        outfitting(items, more).build()
+    }
+
+    /// [`outfitted`]'s builder, to set more of its fields.
+    fn outfitting(items: &[(i16, i16)], more: &[(i16, i16)]) -> ShipBuilder {
+        let mut ids = [-1; 8];
+        let mut counts = [0; 8];
+        for (first, slots) in [(0, items), (4, more)] {
             for (i, &(id, count)) in slots.iter().enumerate() {
-                put_i16s(&mut bytes, ids_at + 2 * i, &[id]);
-                put_i16s(&mut bytes, counts_at + 2 * i, &[count]);
+                ids[first + i] = id;
+                counts[first + i] = count;
             }
         }
-        bytes
+        handling(1, 2, 3).default_items(&ids).item_counts(&counts)
     }
 
     #[test]
     fn a_ships_fields_include_its_mass_free_mass_and_contribute() {
-        let mut bytes = ship(1, 2, 3);
-        put_i16s(&mut bytes, 0x0C, &[8]);
-        put_i16s(&mut bytes, 0x3E, &[15]);
-        bytes[0x64..0x6C].copy_from_slice(&0x0000_0008_0000_0001_u64.to_be_bytes());
+        let bytes = handling(1, 2, 3)
+            .free_mass(8)
+            .mass(15)
+            .contribute(0x0000_0008_0000_0001)
+            .build();
         let data = store(&[(Ship::TYPE, 128, bytes)]);
         let fields = data.ship_fields(ShipId(128)).expect("decodes");
         assert_eq!(
@@ -1958,33 +1971,44 @@ mod tests {
     /// A `shïp` sold in the shipyard: every field the shipyard reads set to
     /// something of its own, with two default items.
     fn for_sale() -> Vec<u8> {
-        let mut bytes = outfitted(&[(200, 2), (201, -1)], &[(202, 1)]);
-        put_i16s(&mut bytes, 0x00, &[-15]);
-        put_i16s(&mut bytes, 0x0C, &[12]);
-        put_i16s(&mut bytes, 0x2A, &[4, 2, 6]);
-        bytes[0x30..0x34].copy_from_slice(&17_500_i32.to_be_bytes());
-        put_i16s(&mut bytes, 0x3C, &[25, 30, 41, 2, 3]);
-        bytes[0x64..0x6C].copy_from_slice(&0x10_u64.to_be_bytes());
-        bytes[0x6C..0x70].copy_from_slice(b"b422");
-        bytes[0x16B..0x16F].copy_from_slice(b"!b17");
-        bytes[0x380..0x388].copy_from_slice(&0x0000_0002_0000_0001_u64.to_be_bytes());
-        put_i16s(&mut bytes, 0x388, &[45, 40]);
-        bytes[0x5CE..0x5DD].copy_from_slice(b"Heavy\\nShuttle!");
-        bytes[0x62E..0x63D].copy_from_slice(b"A Heavy Shuttle");
-        bytes[0x726..0x728].copy_from_slice(&0x4100_u16.to_be_bytes());
-        put_i16s(&mut bytes, 0x46, &[-7]);
-        put_i16s(&mut bytes, 0x48, &[1129]);
-        bytes[0x4A..0x4C].copy_from_slice(&0x8012_u16.to_be_bytes());
-        bytes[0x60E..0x61D].copy_from_slice(b"heavy shuttle\0\0");
-        put_i16s(&mut bytes, 0x732, &[2]);
-        put_i16s(&mut bytes, 0x60, &[15]);
-        bytes[0x26A..0x26E].copy_from_slice(b"b300");
-        bytes[0x3D0..0x3D5].copy_from_slice(b"^b301");
-        bytes[0x4CF..0x4D3].copy_from_slice(b"!b30");
-        bytes[0x6E6..0x6F5].copy_from_slice(b"Light Freighter");
-        put_i16s(&mut bytes, 0x728, &[129]);
-        bytes[0x72A..0x72E].copy_from_slice(&6_000_i32.to_be_bytes());
-        bytes
+        selling().build()
+    }
+
+    /// [`for_sale`]'s builder, to set more of its fields.
+    fn selling() -> ShipBuilder {
+        outfitting(&[(200, 2), (201, -1)], &[(202, 1)])
+            .holds(-15)
+            .free_mass(12)
+            .max_gun(4)
+            .max_tur(2)
+            .tech_level(6)
+            .cost(17_500)
+            .disp_weight(25)
+            .mass(30)
+            .length(41)
+            .inherent_ai(2)
+            .crew(3)
+            .contribute(0x10)
+            .availability("b422")
+            .appear_on("!b17")
+            .require(0x0000_0002_0000_0001)
+            .buy_random(45)
+            .hire_random(40)
+            .short_name("Heavy\\nShuttle!")
+            .long_name("A Heavy Shuttle")
+            .flags3(0x4100)
+            .strength(-7)
+            .inherent_govt(1129)
+            .flags(0x8012)
+            .comm_name("heavy shuttle")
+            .escort_type(2)
+            .skill_var(15)
+            .on_purchase("b300")
+            .on_capture("^b301")
+            .on_retire("!b30")
+            .subtitle("Light Freighter")
+            .upgrade_to(129)
+            .esc_upgrd_cost(6_000)
     }
 
     #[test]
@@ -2090,11 +2114,7 @@ mod tests {
 
     #[test]
     fn a_shïps_inherent_government_is_its_gövt_attributes_or_none() {
-        let inheriting = |raw: i16| {
-            let mut bytes = for_sale();
-            put_i16s(&mut bytes, 0x48, &[raw]);
-            bytes
-        };
+        let inheriting = |raw: i16| selling().inherent_govt(raw).build();
         for (raw, govt) in [
             (-1, None),
             (128, Some(128)),
@@ -2116,11 +2136,12 @@ mod tests {
     #[test]
     fn a_shïps_escort_upgrade_and_sale_read_as_load_object_data_reads_them() {
         let escort = |upgrade_to: i16, cost: i32, sell: i32, price: i32| {
-            let mut bytes = for_sale();
-            bytes[0x30..0x34].copy_from_slice(&price.to_be_bytes());
-            put_i16s(&mut bytes, 0x728, &[upgrade_to]);
-            bytes[0x72A..0x72E].copy_from_slice(&cost.to_be_bytes());
-            bytes[0x72E..0x732].copy_from_slice(&sell.to_be_bytes());
+            let bytes = selling()
+                .cost(price)
+                .upgrade_to(upgrade_to)
+                .esc_upgrd_cost(cost)
+                .esc_sell_value(sell)
+                .build();
             let ship = store(&[(Ship::TYPE, 128, bytes)]).ships().remove(0);
             (ship.upgrade_to, ship.esc_upgrd_cost, ship.esc_sell_value)
         };
@@ -2140,11 +2161,7 @@ mod tests {
 
     #[test]
     fn a_shïps_combat_government_is_its_gövt_its_combat_only_one_or_none() {
-        let inheriting = |raw: i16| {
-            let mut bytes = for_sale();
-            put_i16s(&mut bytes, 0x48, &[raw]);
-            bytes
-        };
+        let inheriting = |raw: i16| selling().inherent_govt(raw).build();
         for (raw, govt) in [
             (-1, None),
             (128, Some(128)),
@@ -2517,9 +2534,12 @@ mod tests {
 
     /// A `spïn` naming `rlëD` `image`, one frame across.
     fn spin(image: i16) -> Vec<u8> {
-        let mut bytes = vec![0; Spin::SIZE.expect("fixed")];
-        put_i16s(&mut bytes, 0x00, &[image, -1, 0, 0, 1, 1]);
-        bytes
+        SpinBuilder::new()
+            .sprites_id(image)
+            .masks_id(-1)
+            .x_tiles(1)
+            .y_tiles(1)
+            .build()
     }
 
     /// One `width` x `height` frame.
@@ -4422,23 +4442,21 @@ mod tests {
     /// stock weapons in slots 1-4 (an unused and a 0 slot among them) and
     /// one in slots 5-8.
     fn armed() -> Vec<u8> {
-        let mut bytes = ship(1, 2, 3);
-        put_i16s(&mut bytes, 0x12, &[128, -1, 0, 130]);
-        put_i16s(&mut bytes, 0x1A, &[2, 5, 6, 1]);
-        put_i16s(&mut bytes, 0x22, &[0, 0, 0, 40]);
-        put_i16s(&mut bytes, 0x34, &[60]);
-        put_i16s(&mut bytes, 0x38, &[4, 1005]);
-        put_i16s(&mut bytes, 0x3E, &[120]);
-        put_i16s(&mut bytes, 0x46, &[325]);
-        bytes[0x4A..0x4C].copy_from_slice(&0x0130_u16.to_be_bytes());
-        put_i16s(&mut bytes, 0x4C, &[3]);
-        bytes[0x726..0x728].copy_from_slice(&0x0040_u16.to_be_bytes());
-        put_i16s(&mut bytes, 0x6CE, &[-1, 138, -1, -1]);
-        put_i16s(&mut bytes, 0x6D6, &[0, 3, 0, 0]);
-        put_i16s(&mut bytes, 0x6DE, &[0, 20, 0, 0]);
-        put_i16s(&mut bytes, 0x36E, &[140]);
-        bytes[0x30..0x34].copy_from_slice(&(-1_i32).to_be_bytes());
-        bytes
+        handling(1, 2, 3)
+            .weap_types(&[128, -1, 0, 130, -1, 138, -1, -1])
+            .weap_counts(&[2, 5, 6, 1, 0, 3, 0, 0])
+            .ammo_loads(&[0, 0, 0, 40, 0, 20, 0, 0])
+            .death_delay(60)
+            .explode1(4)
+            .explode2(1005)
+            .mass(120)
+            .strength(325)
+            .flags(0x0130)
+            .pod_count(3)
+            .flags3(0x0040)
+            .key_carried(140)
+            .cost(-1)
+            .build()
     }
 
     /// A `shän` whose `BaseXSize` is `size`.
@@ -4646,8 +4664,7 @@ mod tests {
     #[test]
     fn a_hull_carries_its_shïps_flags2() {
         let flagged = |flags2: u16| {
-            let mut bytes = ship(1, 2, 3);
-            bytes[0x62..0x64].copy_from_slice(&flags2.to_be_bytes());
+            let bytes = handling(1, 2, 3).flags2(flags2).build();
             store(&[(Ship::TYPE, 128, bytes)]).hulls()[0].flags2
         };
         assert_eq!(flagged(0x0008), 0x0008);
@@ -4658,10 +4675,11 @@ mod tests {
     /// The hull of a `shïp` of `EscortType` `escort_type`, `InherentAI`
     /// `inherent_ai` and `Mass` `mass`, as the combat catalog reads it.
     fn classed(escort_type: i16, inherent_ai: i16, mass: i16) -> HullRecord {
-        let mut bytes = ship(1, 2, 3);
-        put_i16s(&mut bytes, 0x3E, &[mass]);
-        put_i16s(&mut bytes, 0x42, &[inherent_ai]);
-        put_i16s(&mut bytes, 0x732, &[escort_type]);
+        let bytes = handling(1, 2, 3)
+            .mass(mass)
+            .inherent_ai(inherent_ai)
+            .escort_type(escort_type)
+            .build();
         let mut hulls = store(&[(Ship::TYPE, 128, bytes)]).hulls();
         hulls.remove(0)
     }

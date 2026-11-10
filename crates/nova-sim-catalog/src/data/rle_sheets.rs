@@ -66,7 +66,7 @@ mod tests {
     use nova_data::Record;
     use nova_data::graphics::fixture::{RledBuilder, rgb888_pict};
     use nova_data::graphics::{PICT, RLED};
-    use nova_data::records::fixture::ShipAnimBuilder;
+    use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder, SpinBuilder};
     use nova_data::records::ship::Ship;
     use nova_data::records::ship_anim::ShipAnim;
     use nova_data::records::spin::Spin;
@@ -75,7 +75,7 @@ mod tests {
     use super::*;
     use crate::catalog::{PilotCatalog, ShipId};
     use crate::fixture::rle_sheets::check_contract;
-    use crate::test_store::{put_i16s, store};
+    use crate::test_store::store;
 
     const SHIP: MaskSheet = MaskSheet::Ship(ShipId(128));
     const RLED_TYPE: MaskSheet = MaskSheet::Stellar(3);
@@ -90,13 +90,14 @@ mod tests {
     /// A `spïn` naming sprites `sprites` and masks `masks`, frames
     /// `width` x `height`, `x_tiles` across.
     fn spin(sprites: i16, masks: i16, width: i16, height: i16, x_tiles: i16) -> Vec<u8> {
-        let mut bytes = vec![0; Spin::SIZE.expect("fixed")];
-        put_i16s(
-            &mut bytes,
-            0x00,
-            &[sprites, masks, width, height, x_tiles, 1],
-        );
-        bytes
+        SpinBuilder::new()
+            .sprites_id(sprites)
+            .masks_id(masks)
+            .x_size(width)
+            .y_size(height)
+            .x_tiles(x_tiles)
+            .y_tiles(1)
+            .build()
     }
 
     /// Ship 128 (base image 1000, a 2x1 sheet of one frame), graphic type
@@ -107,7 +108,7 @@ mod tests {
         let white = [0xFF; 3];
         let black = [0; 3];
         store(&[
-            (Ship::TYPE, 128, vec![0; Ship::SIZE.expect("fixed")]),
+            (Ship::TYPE, 128, ShipBuilder::new().build()),
             (
                 ShipAnim::TYPE,
                 128,
@@ -228,7 +229,7 @@ mod tests {
             .frames_per(2)
             .build();
         let data = store(&[
-            (Ship::TYPE, 129, vec![0; Ship::SIZE.expect("fixed")]),
+            (Ship::TYPE, 129, ShipBuilder::new().build()),
             (ShipAnim::TYPE, 129, anim),
             (PICT, 2004, rgb888_pict(4, 1, &[[0x80; 3]; 4])),
             (
