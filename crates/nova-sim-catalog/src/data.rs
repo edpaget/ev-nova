@@ -3068,9 +3068,10 @@ mod tests {
 
     /// A `spïn` naming `rlëD` 1000, `x_tiles` across and `y_tiles` down.
     fn tiled(x_tiles: i16, y_tiles: i16) -> Vec<u8> {
-        let mut bytes = spin(1000);
-        put_i16s(&mut bytes, 0x08, &[x_tiles, y_tiles]);
-        bytes
+        SpinBuilder::from_bytes(spin(1000))
+            .x_tiles(x_tiles)
+            .y_tiles(y_tiles)
+            .build()
     }
 
     #[test]
@@ -3147,9 +3148,10 @@ mod tests {
 
     /// A `spïn` naming `rlëD` `image`, `x_tiles` across and `y_tiles` down.
     fn spin_tiled(image: i16, x_tiles: i16, y_tiles: i16) -> Vec<u8> {
-        let mut bytes = spin(image);
-        put_i16s(&mut bytes, 0x08, &[x_tiles, y_tiles]);
-        bytes
+        SpinBuilder::from_bytes(spin(image))
+            .x_tiles(x_tiles)
+            .y_tiles(y_tiles)
+            .build()
     }
 
     #[test]
@@ -3280,9 +3282,10 @@ mod tests {
         put_i16s(&mut gate, 0x18, &[17]);
         put_i16s(&mut gate, 0x22, &[-1, 4]);
         let tiles = |image, x: i16, y: i16| {
-            let mut bytes = spin(image);
-            put_i16s(&mut bytes, 0x08, &[x, y]);
-            bytes
+            SpinBuilder::from_bytes(spin(image))
+                .x_tiles(x)
+                .y_tiles(y)
+                .build()
         };
         let data = store(&[
             (System::TYPE, 130, system_with(&[128, 129, 130])),
