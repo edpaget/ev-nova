@@ -5,8 +5,8 @@
 //! its textures made by the fixture's PNG encoder, so nothing here reads
 //! game-bible; each planet is loaded through [`GalaxyPlanets`], registered
 //! with the renderer and drawn by a [`DrawCommand::Planet`]. Every pixel
-//! checked is placed, and its colour worked out, by `nova_render::planet`'s
-//! functions and the pose, never retyped.
+//! checked is placed by `nova_render::planet`'s functions and the pose,
+//! and its colour worked out by its `fragment`, never retyped.
 //!
 //! `the_bible_s_sample_planets_draw` loads the real sample through
 //! [`DirSource`] when `GAME_DATA` names it, and skips, passing, when it is
@@ -17,11 +17,12 @@ use nova_galaxy_format::fixture::{CC0, galaxy};
 use nova_galaxy_format::load::load;
 use nova_galaxy_format::source::{DirSource, MemSource, Source};
 use nova_galaxy_media::fixture::png;
-use nova_galaxy_media::planet::{Image, Sizes, Surface};
+use nova_galaxy_media::planet::{Image, RingBand, Sizes, Surface};
 use nova_render::camera::shade;
 use nova_render::fonts::FontFaces;
 use nova_render::planet::{
-    Fragment, Frame, PLANET_LIGHT, VIEW_LEAN, fragment, globe, lit, surface_uv, turns,
+    Fragment, Frame, PLANET_LIGHT, VIEW_LEAN, fragment, globe, in_planet_shadow, lit, ring_hit,
+    ring_shadow, surface_uv, turns,
 };
 use nova_render::{
     GalaxyPlanets, Light, LoadedPlanet, LogicalSize, Mesh, PlanetError, PlanetRequest,
@@ -419,6 +420,225 @@ fn the_textured_planets_draw_their_textures_with_no_halo_or_rings() {
         );
         assert_eq!(rgb(&pixels, pixel_at(CENTRE, (1.8, 0.1))), [0, 0, 0]);
     }
+}
+
+/// A generated garden world wholly clouded, in the fixture's `alpha`.
+fn verdance() -> LoadedPlanet {
+    let source = galaxy().with(
+        "stellars/verdance.md",
+        "---\nname: Verdance\nkind: planet\nsystem: alpha\nposition: [200, -150]\n\
+         visual:\n  generated:\n    type: garden\n\
+         \x20   palette: [\"#2f6b3a\", \"#c8b27a\", \"#1d3f7a\"]\n    clouds: 1.0\n\
+         \x20   seed: 77\n---\n",
+    );
+    loaded(&source, "verdance")
+}
+
+fn brightness(c: [u8; 3]) -> u32 {
+    c.iter().map(|c| u32::from(*c)).sum()
+}
+
+#[test]
+fn a_clouded_garden_shows_white_cloud_in_the_light() {
+    let planet = verdance();
+    let surface = &planet.surface;
+    assert!(surface.clouds.is_some(), "a garden has a cloud layer");
+    let Some(pixels) = alone(&planet, pose(CENTRE.0, CENTRE.1)) else {
+        return;
+    };
+    let clear = Surface {
+        clouds: None,
+        ..surface.clone()
+    };
+    for at in [(-0.2, -0.2), (0.1, -0.3), (-0.3, 0.1)] {
+        let pixel = pixel_at(CENTRE, at);
+        let local = local_of(CENTRE, pixel);
+        let expected = core_color(surface, local);
+        let got = rgb(&pixels, pixel);
+        assert!(
+            near(got, expected, 6),
+            "at {local:?}: {got:?}, not {expected:?}"
+        );
+        // Near white times the light: the clouds' cover over the ground.
+        let shade = lit(globe(local.0, local.1).unwrap(), PLANET_LIGHT);
+        let floor = (0.8 * shade * 255.0) as u8;
+        assert!(got.iter().all(|c| *c >= floor), "{got:?} under {floor}");
+        assert!(
+            brightness(core_color(&clear, local)) + 60 < brightness(expected),
+            "the clouds show at {local:?}"
+        );
+    }
+}
+
+/// A 32 by 16 cloud layer, white, its cover a ramp up and down across
+/// its columns, so where it shows depends on its turn.
+fn ramped_clouds() -> Image {
+    let rgba = (0..16_u32)
+        .flat_map(|_| {
+            (0..32_u32).flat_map(|x| {
+                let cover = (x.abs_diff(16) * 15) as u8;
+                [255, 255, 255, cover]
+            })
+        })
+        .collect();
+    Image {
+        width: 32,
+        height: 16,
+        rgba,
+    }
+}
+
+#[test]
+fn the_clouds_turn_on_their_own() {
+    // A 32 s day: at `TIME` the surface has turned a quarter and the
+    // clouds a half, so a cloud layer read at the surface's turn would
+    // show a quarter turn out.
+    let mut surface = verdance().surface;
+    surface.day = 32.0;
+    surface.clouds = Some(ramped_clouds());
+    let (turn, cloud_turn) = turns(TIME, surface.day);
+    assert!((cloud_turn - turn - 0.25).abs() < 1e-4);
+    let planet = LoadedPlanet { surface };
+    let Some(pixels) = alone(&planet, pose(CENTRE.0, CENTRE.1)) else {
+        return;
+    };
+    for at in [
+        (-0.4, -0.2),
+        (-0.2, 0.0),
+        (0.0, -0.3),
+        (0.2, 0.1),
+        (0.4, -0.1),
+    ] {
+        let pixel = pixel_at(CENTRE, at);
+        let local = local_of(CENTRE, pixel);
+        let expected = core_color(&planet.surface, local);
+        let got = rgb(&pixels, pixel);
+        assert!(
+            near(got, expected, 8),
+            "at {local:?}: {got:?}, not {expected:?}"
+        );
+    }
+}
+
+/// The globe pixel of a planet drawn at `CENTRE`, clear of its rim,
+/// and not behind its rings, that their shadow darkens most: its ray
+/// toward the light crosses them densely where the light, not the
+/// ambient, lights it.
+fn under_the_rings(surface: &Surface) -> (u32, u32) {
+    let frame = Frame::new(surface.tilt as f32, VIEW_LEAN);
+    let rings = surface.rings.as_ref().expect("ringed");
+    let darkening = |pixel: (u32, u32)| {
+        let local = local_of(CENTRE, pixel);
+        let n = globe(local.0, local.1)?;
+        let d = (local.0 * local.0 + local.1 * local.1).sqrt();
+        let r = ring_shadow(n, &frame, PLANET_LIGHT)?;
+        let sunlight = f64::from(lit(n, PLANET_LIGHT) - PLANET_LIGHT.ambient);
+        // Where the rings themselves don't cover it, with a margin.
+        let hit = ring_hit(local.0, local.1, &frame)?;
+        let clear = !hit.in_front || f64::from(hit.radius) > rings.outer + 0.05;
+        (d < 0.9 && clear).then(|| rings.opacity(f64::from(r)) * sunlight)
+    };
+    let (cx, cy) = (CENTRE.0 as u32, CENTRE.1 as u32);
+    (cy - 96..cy + 96)
+        .flat_map(|y| (cx - 96..cx + 96).map(move |x| (x, y)))
+        .filter_map(|pixel| darkening(pixel).map(|o| (pixel, o)))
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .filter(|(_, by)| *by > 0.25)
+        .expect("a sunlit globe pixel under dense rings")
+        .0
+}
+
+#[test]
+fn the_rings_shadow_the_globe_where_its_ray_toward_the_light_crosses_them() {
+    // Kestrel Reach's rings cast their faint inner edge on the globe only
+    // by its southern limb, and cover what they shade; these, narrow,
+    // close in and dense throughout, shade the sunlit globe beyond them.
+    let kestrel = loaded(&sample(4417), "kestrel-reach").surface;
+    let planet = LoadedPlanet {
+        surface: Surface {
+            rings: Some(RingBand {
+                inner: 1.05,
+                outer: 1.5,
+                profile: vec![220; 64],
+                ..kestrel.rings.clone().expect("ringed")
+            }),
+            ..kestrel
+        },
+    };
+    let surface = &planet.surface;
+    let pixel = under_the_rings(surface);
+    let local = local_of(CENTRE, pixel);
+    let ringless = Surface {
+        rings: None,
+        ..surface.clone()
+    };
+    let Some(pixels) = alone(&planet, pose(CENTRE.0, CENTRE.1)) else {
+        return;
+    };
+    let Some(bare) = alone(
+        &LoadedPlanet {
+            surface: ringless.clone(),
+        },
+        pose(CENTRE.0, CENTRE.1),
+    ) else {
+        return;
+    };
+    let expected = core_color(surface, local);
+    let (got, unshaded) = (rgb(&pixels, pixel), rgb(&bare, pixel));
+    assert!(
+        near(got, expected, 8),
+        "at {local:?}: {got:?}, not {expected:?}"
+    );
+    assert!(near(unshaded, core_color(&ringless, local), 8));
+    assert!(
+        brightness(got) + 60 < brightness(unshaded),
+        "shaded {got:?}, ringless {unshaded:?}"
+    );
+}
+
+#[test]
+fn the_globe_shadows_the_rings_behind_it_from_the_light() {
+    // Tilted further than a generated gas giant ever is, so the globe's
+    // shadow on the rings shows beside it, off the disc.
+    let tilted = Surface {
+        tilt: 0.4,
+        ..loaded(&sample(4417), "kestrel-reach").surface
+    };
+    let frame = Frame::new(0.4, VIEW_LEAN);
+    let rings = tilted.rings.clone().expect("ringed");
+    let thickness = tilted.atmosphere.as_ref().map_or(0.0, |a| a.thickness) as f32;
+    let shadowed = |pixel: (u32, u32)| {
+        let local = local_of(CENTRE, pixel);
+        let d = (local.0 * local.0 + local.1 * local.1).sqrt();
+        let hit = ring_hit(local.0, local.1, &frame)?;
+        (d > 1.0 + thickness + 2.0 / RADIUS
+            && hit.in_front
+            && in_planet_shadow(hit.point, PLANET_LIGHT))
+        .then(|| rings.opacity(f64::from(hit.radius)))
+    };
+    let side = 2.3 * RADIUS;
+    let (cx, cy) = (CENTRE.0, CENTRE.1);
+    let (pixel, opacity) = ((cy - side) as u32..(cy + side) as u32)
+        .flat_map(|y| ((cx - side) as u32..(cx + side) as u32).map(move |x| (x, y)))
+        .filter_map(|pixel| shadowed(pixel).map(|o| (pixel, o)))
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .expect("the globe's shadow falls on the rings off the disc");
+    assert!(opacity > 0.4, "{opacity}");
+    let planet = LoadedPlanet { surface: tilted };
+    let Some(pixels) = alone(&planet, pose(CENTRE.0, CENTRE.1)) else {
+        return;
+    };
+    let local = local_of(CENTRE, pixel);
+    let expected = core_color(&planet.surface, local);
+    let ring = rings.color.map(|c| f32::from(c) / 255.0 * opacity as f32);
+    let ambient = bytes(ring.map(|c| c * PLANET_LIGHT.ambient));
+    assert!(near(expected, ambient, 1), "{expected:?} is the ambient's");
+    let got = rgb(&pixels, pixel);
+    assert!(
+        near(got, expected, 4),
+        "at {local:?}: {got:?}, not {expected:?}, lit {:?}",
+        bytes(ring)
+    );
 }
 
 /// A 64 by 32 surface that glows wholly (so it shows unlit, as it is):
