@@ -265,4 +265,16 @@ mod tests {
         assert_eq!(gpu.world_resolution(), WorldResolution::Native);
         assert_eq!(RecordingGpu::probing(&[]).upscalers(), []);
     }
+
+    #[test]
+    fn no_images_has_every_image_missing() {
+        assert_eq!(
+            NoImages.frames(ImageKind::Pict, 128),
+            Err(ImageError::Missing)
+        );
+        assert_eq!(
+            NoImages.deep_frames(ImageKind::Pict, 128),
+            Err(ImageError::Missing)
+        );
+    }
 }
