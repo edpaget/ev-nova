@@ -26,10 +26,11 @@
 //! 9. The window closed, which saves the pilot, and the pilot opened
 //!    again in a new app over the same store.
 //!
-//! The pilot saved after the delivery, and the pilot loaded from it, are
-//! the pilot just before saving, field by field. A load leaves the
-//! course's start to `RuleKey::LoadedCourse`; the course itself is flown,
-//! so there is none to keep.
+//! The pilot saved after the delivery is the pilot just before saving,
+//! field by field. The pilot loaded from it is too, but for the course's
+//! start: the side road's exit leaves it at the Verge, as the original's
+//! hypergate exit does, and the load clears it by `RuleKey::LoadedCourse`'s
+//! engine reading, as the original's open does.
 //!
 //! What it pins is the seams between the phases that each pin their own
 //! piece in `new_game_port`, `new_game_trade`, `new_game_outfits`,
@@ -392,9 +393,10 @@ fn deliver_the_plate(game: &mut Harness) {
     assert_eq!(delivered.cash, before.cash, "the job pays nothing");
 }
 
-/// Step 9: saved as the window closes, the pilot loads equal, field by
-/// field, in a new app over the same store, holding the bought hull, its
-/// kits and outfits, the grain, its cash and the completed job.
+/// Step 9: saved as the window closes, the pilot is the pilot before
+/// saving, field by field, and loads so in a new app over the same store
+/// but for the course's start the load clears, holding the bought hull,
+/// its kits and outfits, the grain, its cash and the completed job.
 fn save_and_load(mut game: Harness, store: &MemoryPilots) {
     let before = pilot(&game);
     assert_eq!(before.ship, ship("racked-hauler"), "the bought hull");
@@ -406,17 +408,22 @@ fn save_and_load(mut game: Harness, store: &MemoryPilots) {
     let mut resumed = resumed_in(app_over(opened_from(&folder()), store));
     resumed.frame();
     let loaded = pilot(&resumed);
-    // The course is flown, so there is none to keep; whether a load keeps
-    // the start the gate's exit left is `RuleKey::LoadedCourse`'s.
+    // The side road's exit restarts the course at the Verge, as the
+    // original's hypergate exit leaves slot 0 at the system entered and
+    // the hops at -1 (@0x63e0e-0x63e3c); nothing before the save clears
+    // it. The load then clears it by `RuleKey::LoadedCourse`'s engine
+    // reading, as `_OpenPilotFile`'s `_ResetPlayer` sets all 32 slots to
+    // -1 (@0x1d6bb-0x1d6cd).
     assert_eq!(
-        (before.course.as_slice(), loaded.course.as_slice()),
-        ([].as_slice(), [].as_slice())
+        (before.course.as_slice(), before.course_start),
+        ([].as_slice(), Some(system("verge"))),
+        "the gate's exit restarted the course at the Verge"
     );
-    let kept = Pilot {
-        course_start: loaded.course_start,
+    let cleared = Pilot {
+        course_start: None,
         ..before
     };
-    assert_same(&loaded, &kept, "loaded");
+    assert_same(&loaded, &cleared, "loaded");
 }
 
 /// Asserts that `got` is `want`, field by field, then whole: each field
