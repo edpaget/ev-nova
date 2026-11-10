@@ -5,7 +5,9 @@
 //! It only chains decisions made elsewhere: which file is the model and
 //! how it is read (`nova_galaxy_media::scene`), which budget covers it and
 //! what it breaks (`nova_galaxy_media::budget`), how it sits on a ship
-//! (`nova_galaxy_media::Placement`), and how a placed primitive becomes a
+//! (`nova_galaxy_media::Placement`), which livery slot the asset's `paint`
+//! puts each material in ([`nova_galaxy_media::slot_of`], the rule the
+//! top-down silhouettes use too), and how a placed primitive becomes a
 //! [`Part`](crate::model_source::Part) ([`model_source::part`]). Those are
 //! pinned by their own tests; this module's tests check what it does with
 //! them. It caches nothing: the caller decides when to load and which
@@ -13,18 +15,19 @@
 //! ([`Renderer::add_model`](crate::Renderer::add_model) with
 //! [`LoadedModel::mesh`]).
 
-use nova_galaxy_format::asset::AssetKind;
+use nova_galaxy_format::asset::{AssetKind, Paint};
 use nova_galaxy_format::fleet::resolve;
 use nova_galaxy_format::id::Id;
 use nova_galaxy_format::load::Galaxy;
 use nova_galaxy_format::source::Source;
 use nova_galaxy_media::budget::{self, limits, measure, over_budget};
 use nova_galaxy_media::scene::{Scene, read_asset_scene};
-use nova_galaxy_media::{NoModel, Placement};
+use nova_galaxy_media::{NoModel, Placement, Slot, slot_of};
 
 use crate::model::MeshError;
 use crate::model_source::{
-    self, LoadedModel, Material, Measure, ModelError, ModelRequest, ModelSource, Overrun, Texture,
+    self, LoadedModel, Material, Measure, ModelError, ModelRequest, ModelSource, Overrun,
+    PaintSlot, Texture,
 };
 
 /// The new game's models: the asset manifest and budgets of `galaxy`, the
@@ -70,7 +73,7 @@ impl<S: Source> ModelSource for GalaxyModels<'_, S> {
                 .ok_or_else(|| ModelError::NoDepth(name.clone()))?,
             None => Placement::unscaled_bounds(scene.bounds, front),
         };
-        loaded(&scene, &placement).map_err(|error| ModelError::Mesh {
+        loaded(&scene, &placement, asset.paint.as_ref()).map_err(|error| ModelError::Mesh {
             asset: name.clone(),
             error,
         })
@@ -102,6 +105,16 @@ fn no_model(asset: &str, why: NoModel) -> ModelError {
     }
 }
 
+/// A livery slot, as the port says it. It matches every variant: each
+/// slot the media crate decides has to reach the port as its own.
+fn paint_slot(slot: Slot) -> PaintSlot {
+    match slot {
+        Slot::Primary => PaintSlot::Primary,
+        Slot::Secondary => PaintSlot::Secondary,
+        Slot::Trim => PaintSlot::Trim,
+    }
+}
+
 /// A budget overrun, as the port says it.
 fn overrun(over: &budget::Overrun) -> Overrun {
     Overrun {
@@ -115,8 +128,13 @@ fn overrun(over: &budget::Overrun) -> Overrun {
     }
 }
 
-/// `scene` placed by `placement`, as the port hands it over.
-fn loaded(scene: &Scene, placement: &Placement) -> Result<LoadedModel, MeshError> {
+/// `scene` placed by `placement`, its materials in the slots `paint`
+/// puts them in, as the port hands it over.
+fn loaded(
+    scene: &Scene,
+    placement: &Placement,
+    paint: Option<&Paint>,
+) -> Result<LoadedModel, MeshError> {
     #[allow(
         clippy::cast_possible_truncation,
         reason = "a placed model's metres are well inside f32"
@@ -158,7 +176,10 @@ fn loaded(scene: &Scene, placement: &Placement) -> Result<LoadedModel, MeshError
             .iter()
             .map(|m| Material {
                 name: m.name.clone(),
-                paint: None,
+                paint: paint
+                    .zip(m.name.as_deref())
+                    .and_then(|(paint, name)| slot_of(paint, name))
+                    .map(paint_slot),
                 base_color: m.base_color,
                 metallic: m.metallic,
                 roughness: m.roughness,
@@ -187,7 +208,7 @@ mod tests {
     use nova_galaxy_media::fixture::{Builder, ImageAt, Mat, PNG, glb};
 
     use super::*;
-    use crate::model_source::{check_contract, vertex_color};
+    use crate::model_source::{PaintSlot, check_contract, vertex_color};
 
     /// The format's test galaxy (the skiff, 8 m long, on model `hull` at
     /// `media/export/pack/hull.glb`; the `spire` placeholder; the `surface`
@@ -476,6 +497,99 @@ mod tests {
         }
         let starboard = mesh.vertices().iter().map(|v| v.position[0]);
         assert_eq!(starboard.fold(f32::MIN, f32::max), 1.0);
+    }
+
+    /// The test galaxy with `hull` a box drawn in a material for each of
+    /// `names` (`""` writes one with no name), its asset painted by the
+    /// YAML map `paint`, or not painted.
+    fn painted_hull(names: &[&str], paint: Option<&str>) -> MemSource {
+        let builder = names.iter().fold(Builder::new([2.0, 1.0, 4.0]), |b, name| {
+            b.material(Mat::new(name, [0.5; 4]))
+        });
+        let paint = paint.map_or(String::new(), |p| format!("paint: {p}\n"));
+        with_hull(&builder.glb()).with(
+            "assets/hull.md",
+            &format!(
+                "---\nkind: model\nplaceholder: false\nfiles: [media/export/pack/hull.glb]\n\
+                 {paint}{CC0}---\n"
+            ),
+        )
+    }
+
+    /// Each of `source`'s `hull` materials' names and slots, in order.
+    fn slots(source: &MemSource) -> Vec<(Option<String>, Option<PaintSlot>)> {
+        let model = ask(source, "hull", Some(8.0)).unwrap();
+        model
+            .materials
+            .into_iter()
+            .map(|m| (m.name, m.paint))
+            .collect()
+    }
+
+    fn named(name: &str, slot: Option<PaintSlot>) -> (Option<String>, Option<PaintSlot>) {
+        (Some(name.to_owned()), slot)
+    }
+
+    #[test]
+    fn a_painted_model_s_materials_carry_their_slots() {
+        let source = painted_hull(
+            &["metal", "metalRed", "metalDark", "dark"],
+            Some("{primary: [metal], secondary: [metalRed], trim: [metalDark]}"),
+        );
+        assert_eq!(
+            slots(&source),
+            [
+                named("metal", Some(PaintSlot::Primary)),
+                named("metalRed", Some(PaintSlot::Secondary)),
+                named("metalDark", Some(PaintSlot::Trim)),
+                named("dark", None),
+            ]
+        );
+    }
+
+    #[test]
+    fn paint_names_a_model_lacks_paint_nothing() {
+        let source = painted_hull(&["metal", "dark"], Some("{primary: [ghost, metal]}"));
+        assert_eq!(
+            slots(&source),
+            [
+                named("metal", Some(PaintSlot::Primary)),
+                named("dark", None)
+            ]
+        );
+        let source = painted_hull(&["metal", "dark"], Some("{trim: [ghost]}"));
+        assert_eq!(slots(&source), [named("metal", None), named("dark", None)]);
+    }
+
+    #[test]
+    fn a_material_in_two_slots_takes_the_later() {
+        let source = painted_hull(&["metal"], Some("{primary: [metal], trim: [metal]}"));
+        assert_eq!(slots(&source), [named("metal", Some(PaintSlot::Trim))]);
+    }
+
+    #[test]
+    fn an_unnamed_material_is_never_painted() {
+        let source = painted_hull(&["", "metal"], Some("{primary: [metal]}"));
+        assert_eq!(
+            slots(&source),
+            [(None, None), named("metal", Some(PaintSlot::Primary))]
+        );
+        let (galaxy, _) = load(&source);
+        let models = GalaxyModels::new(&galaxy, &source);
+        check_contract(&models, &ModelRequest::new("hull", None), "nothing");
+    }
+
+    #[test]
+    fn a_model_without_paint_has_no_slots() {
+        let source = painted_hull(&["metal", "dark"], None);
+        assert_eq!(slots(&source), [named("metal", None), named("dark", None)]);
+    }
+
+    #[test]
+    fn each_media_slot_is_the_port_s_slot_of_the_same_name() {
+        assert_eq!(paint_slot(Slot::Primary), PaintSlot::Primary);
+        assert_eq!(paint_slot(Slot::Secondary), PaintSlot::Secondary);
+        assert_eq!(paint_slot(Slot::Trim), PaintSlot::Trim);
     }
 
     #[test]

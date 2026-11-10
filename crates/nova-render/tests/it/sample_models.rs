@@ -22,7 +22,7 @@ use nova_galaxy_format::id::Id;
 use nova_galaxy_format::load::{Galaxy, load};
 use nova_galaxy_format::source::{DirSource, MemSource, Source};
 use nova_galaxy_media::fixture::{Builder, Mat, Node};
-use nova_render::model_source::check_contract;
+use nova_render::model_source::{PaintSlot, check_contract};
 use nova_render::recording::{GpuCall, NoImages, RecordingGpu};
 use nova_render::{
     GalaxyModels, LogicalSize, ModelError, ModelRequest, ModelSource, Renderer, Viewport,
@@ -356,6 +356,31 @@ fn the_sample_s_six_models_load_through_the_adapter_and_meet_the_contract() {
         ]
     );
     assert!(turret.materials.iter().all(|m| m.unlit));
+
+    // The painted models put the kit's metals in the livery's three slots
+    // and leave `dark` as drawn; the station and the turret paint nothing.
+    for sample in &MODELS {
+        let asset = Id::try_from(sample.asset.to_owned()).unwrap();
+        let model = models.model(&request_for(&galaxy, &asset)).unwrap();
+        let slots: Vec<_> = model
+            .materials
+            .iter()
+            .map(|m| (m.name.as_deref(), m.paint))
+            .collect();
+        let expected = if sample.painted {
+            [
+                Some(PaintSlot::Primary),
+                Some(PaintSlot::Secondary),
+                Some(PaintSlot::Trim),
+                None,
+            ]
+        } else {
+            [None; 4]
+        };
+        let names = ["metal", "metalRed", "metalDark", "dark"].map(Some);
+        let expected: Vec<_> = names.into_iter().zip(expected).collect();
+        assert_eq!(slots, expected, "{}", sample.asset);
+    }
 }
 
 #[test]
