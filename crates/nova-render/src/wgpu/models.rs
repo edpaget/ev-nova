@@ -194,10 +194,8 @@ fn pipeline(device: &wgpu::Device) -> wgpu::RenderPipeline {
                 }),
             ],
         },
-        primitive: wgpu::PrimitiveState {
-            cull_mode: None,
-            ..wgpu::PrimitiveState::default()
-        },
+        // The default culls nothing: the depth test hides the far faces.
+        primitive: wgpu::PrimitiveState::default(),
         depth_stencil: Some(wgpu::DepthStencilState {
             format: DEPTH_FORMAT,
             depth_write_enabled: Some(true),

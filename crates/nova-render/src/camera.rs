@@ -65,10 +65,7 @@ impl Light {
 /// ambient alone.
 #[must_use]
 pub fn shade(normal: [f32; 3], base: [f32; 4], light: Light) -> [f32; 4] {
-    let facing = match (unit(normal), unit(light.direction)) {
-        (Some(normal), Some(toward)) => dot(normal, toward).max(0.0),
-        _ => 0.0,
-    };
+    let facing = dot(unit(normal), unit(light.direction)).max(0.0);
     let lit = light.ambient + (1.0 - light.ambient) * facing;
     let [red, green, blue, alpha] = base;
     [red * lit, green * lit, blue * lit, alpha]
@@ -146,11 +143,13 @@ fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
-/// `v` scaled to a unit vector, or `None` when it has no length (or no
-/// finite one).
-fn unit(v: [f32; 3]) -> Option<[f32; 3]> {
+/// `v` scaled to a unit vector. One with no length, or no finite one,
+/// gives NaNs, which [`shade`]'s `max(0.0)` takes as facing away
+/// (`f32::max` returns the other operand of a NaN), as the shader's
+/// `select` does for a zero normal.
+fn unit(v: [f32; 3]) -> [f32; 3] {
     let length = dot(v, v).sqrt();
-    (length.is_finite() && length > 0.0).then(|| v.map(|c| c / length))
+    v.map(|c| c / length)
 }
 
 #[cfg(test)]
@@ -276,6 +275,29 @@ mod tests {
         // The normals ignore the scale and the place.
         let elsewhere = made(LOGICAL, &pose(1.0, 2.0, quarter, 9.0));
         assert_eq!(elsewhere.normal_from_model, at.normal_from_model);
+    }
+
+    #[test]
+    fn a_turned_point_lands_at_the_centre_plus_scale_times_its_turn() {
+        let orientation = Orientation::about([0.3, -1.0, 0.7], 2.1);
+        let at = made(LOGICAL, &pose(12.0, 6.0, orientation, 5.0));
+        for p in [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.4, -0.7, 0.9],
+        ] {
+            let turned = orientation.rotate(p).expect("a unit turn");
+            let (x, y) = logical_of(LOGICAL, clip(&at, p));
+            assert_near(x, 12.0 + 5.0 * turned[0]);
+            assert_near(y, 6.0 + 5.0 * turned[1]);
+            // Depth from the turned point's third axis alone.
+            assert_near(clip(&at, p)[2], FAR * (0.5 - turned[2] / 2.0));
+            let n = normal(&at, p);
+            for (got, want) in n.iter().zip(turned) {
+                assert_near(*got, want);
+            }
+        }
     }
 
     #[test]
@@ -459,6 +481,28 @@ mod tests {
         assert_near(shade(sixty, RED, light)[0], 0.2 + 0.8 * 0.5);
         // A zero normal is lit by the ambient alone.
         assert_near(shade([0.0; 3], RED, light)[0], 0.2);
+    }
+
+    #[test]
+    fn shade_lights_a_surface_facing_the_light_along_each_axis_fully() {
+        for axis in 0..3 {
+            let mut toward = [0.0; 3];
+            toward[axis] = 2.0;
+            let light = Light {
+                direction: toward,
+                ambient: 0.5,
+            };
+            assert_eq!(shade(toward, RED, light), RED, "axis {axis}");
+            let away = toward.map(|c| -c);
+            assert_eq!(shade(away, RED, light), [0.5, 0.25, 0.125, 0.75]);
+        }
+        // Not finite, a normal faces no way.
+        let light = Light {
+            direction: [0.0, 0.0, 1.0],
+            ambient: 0.5,
+        };
+        assert_eq!(shade([0.0, 0.0, f32::INFINITY], RED, light)[0], 0.5);
+        assert_eq!(shade([f32::NAN, 0.0, 1.0], RED, light)[0], 0.5);
     }
 
     #[test]

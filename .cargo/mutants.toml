@@ -451,13 +451,13 @@ exclude_re = [
     # builds the same empty list, so it cannot be observed.
     "replace WindowPort::video_modes -> Vec<MonitorMode> with vec!\\[\\]",
     # The surface adapter's raw calls, as whole bodies only: pages,
-    # uploads and clearing the pages delegate to `WgpuRenderer` (tested
-    # offscreen), and `submit`
+    # uploads, clearing the pages and mesh uploads delegate to
+    # `WgpuRenderer` (tested offscreen), and `submit`
     # is the raw configure / get_current_texture / present calls on a
     # window surface, which needs a display. Its decisions are the tested
     # `surface_action` and `acquire_outcome`; any other mutant inside these
     # bodies is still run.
-    "replace <impl Gpu for SurfaceGpu>::(create_page|upload|clear_pages|submit) with \\(\\)$",
+    "replace <impl Gpu for SurfaceGpu>::(create_page|upload|clear_pages|upload_mesh|submit) with \\(\\)$",
     # The same raw surface calls, now in `SurfaceGpu::present`, which
     # `submit` and the overlay's `submit_with` call (with a painter or
     # without): replacing either body is observable only on a window

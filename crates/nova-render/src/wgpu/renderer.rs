@@ -2698,6 +2698,74 @@ mod tests {
         );
     }
 
+    /// The 64 x 64 target's pixel (`x`, `y`) of `pixels`.
+    fn pixel_at(pixels: &[u8], x: usize, y: usize) -> [u8; 4] {
+        let at = (y * 64 + x) * 4;
+        pixels[at..at + 4].try_into().expect("four bytes")
+    }
+
+    #[test]
+    fn a_cube_uploaded_and_drawn_shows_its_lit_face_over_a_cleared_scene() {
+        use crate::gpu::Gpu;
+        let red = Color::rgba(200, 60, 30, 255);
+        let mut faces = [Color::WHITE; 6];
+        faces[4] = red;
+        // Logical 32 x 24 at 2x in the 64 x 64 target: content rows 8 to 56.
+        let logical = LogicalSize { w: 32, h: 24 };
+        let pose = nova_view::ModelPose {
+            center: Point::new(16.0, 12.0),
+            orientation: nova_view::Orientation::IDENTITY,
+            scale: 12.0,
+        };
+        let instance = crate::camera::instance(logical, &pose, MeshId(3), 0.9).expect("drawable");
+        let frame = Frame {
+            viewport: PixelRect {
+                x: 0,
+                y: 8,
+                w: 64,
+                h: 48,
+            },
+            logical,
+            world: vec![0],
+            ..frame_of(vec![Batch::Models {
+                light: Light::STANDARD,
+                models: vec![instance],
+            }])
+        };
+        // Straight on, only +z shows.
+        let lit =
+            crate::camera::shade([0.0, 0.0, 1.0], [200.0, 60.0, 30.0, 255.0], Light::STANDARD);
+        let expected = lit.map(|c| c.round() as u8);
+        for (upscaler, world_space) in [
+            (Upscaler::Native, WorldSpace::Target),
+            (
+                Upscaler::SharpBilinear,
+                WorldSpace::Texture { size: (32, 24) },
+            ),
+        ] {
+            let Ok(mut gpu) = crate::wgpu::OffscreenGpu::new(64, 64, &FontFaces::bundled()) else {
+                return;
+            };
+            gpu.set_upscaler(upscaler);
+            gpu.upload_mesh(MeshId(3), &Mesh::cube(faces));
+            gpu.submit(&Frame {
+                world_space,
+                ..frame.clone()
+            });
+            let pixels = gpu.read_pixels().expect("read back");
+            let middle = pixel_at(&pixels, 32, 32);
+            for c in 0..3 {
+                assert!(
+                    middle[c].abs_diff(expected[c]) <= 2,
+                    "{middle:?} is not {expected:?} under {upscaler:?}"
+                );
+            }
+            // Outside the cube, and in the letterbox's bar, the clear.
+            assert_eq!(pixel_at(&pixels, 2, 30), [0, 0, 0, 255], "{upscaler:?}");
+            assert_eq!(pixel_at(&pixels, 32, 2), [0, 0, 0, 255], "{upscaler:?}");
+        }
+    }
+
     /// A 64 x 64 frame of a solid, a cube (mesh 0), a sprite on page 0,
     /// two cubes, an OR sprite and a cube.
     fn models_frame() -> Frame {

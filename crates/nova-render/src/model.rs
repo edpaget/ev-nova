@@ -88,7 +88,8 @@ impl Mesh {
     /// on each axis, each face in its own colour: `faces` in the order
     /// +x, −x, +y, −y, +z, −z (−z, the face away from the camera, last).
     /// Each face has four vertices of its own, carrying its outward
-    /// normal and colour, and two triangles.
+    /// normal and colour, and two triangles, each wound so that
+    /// `(b − a) × (c − a)` points along the normal.
     #[must_use]
     pub fn cube(faces: [Color; 6]) -> Self {
         // Each face's normal and two edges along it, `u × v = normal`.
@@ -290,6 +291,23 @@ mod tests {
             for corner in face(&cube, at) {
                 assert_eq!(corner.color, expected, "face {at}");
             }
+        }
+    }
+
+    #[test]
+    fn each_cube_triangle_winds_about_its_faces_normal() {
+        let cube = cube();
+        for triangle in cube.indices().chunks(3) {
+            let [first, second, third] = [0, 1, 2].map(|i| cube.vertices()[triangle[i] as usize]);
+            let edge = |to: Vertex| [0, 1, 2].map(|i| to.position[i] - first.position[i]);
+            let (ab, ac) = (edge(second), edge(third));
+            let cross = [
+                ab[1] * ac[2] - ab[2] * ac[1],
+                ab[2] * ac[0] - ab[0] * ac[2],
+                ab[0] * ac[1] - ab[1] * ac[0],
+            ];
+            let along: f32 = (0..3).map(|i| cross[i] * first.normal[i]).sum();
+            assert!(along > 0.0, "{triangle:?} winds the wrong way");
         }
     }
 
