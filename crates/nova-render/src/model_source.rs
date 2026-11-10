@@ -214,6 +214,13 @@ pub enum ModelError {
         /// Every limit it breaks.
         over: Vec<Overrun>,
     },
+    /// The model has no depth along its `front` (a flat panel facing
+    /// that way), so it can't be scaled to the length asked for.
+    #[error(
+        "asset `{0}`'s model has no depth along its `front`, so it can't be scaled to a \
+         length: check its `front`"
+    )]
+    NoDepth(String),
     /// The model's triangles don't make a mesh.
     #[error("asset `{asset}`'s model makes no mesh: {error}")]
     Mesh {
@@ -705,6 +712,7 @@ mod tests {
             ModelError::NotAModel("hub".into()),
             ModelError::NoFile("hub".into()),
             ModelError::LfsPointer("hub".into()),
+            ModelError::NoDepth("hub".into()),
             ModelError::Unreadable {
                 asset: "hub".into(),
                 why: "`a.glb`: broken".into(),

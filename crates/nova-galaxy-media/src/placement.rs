@@ -43,6 +43,21 @@ impl Placement {
     /// metres long: [`new`](Self::new) for a model read some other way.
     #[must_use]
     pub fn from_bounds(bounds: Bounds, front: Front, length: f64) -> Self {
+        Self::scaled(bounds, front, |depth| length / depth)
+    }
+
+    /// [`from_bounds`](Self::from_bounds), or `None` when the model can't
+    /// be scaled to `length`: it has no depth along `front` (a flat panel
+    /// facing that way), or the scale that would take isn't finite. Every
+    /// point it places is then finite.
+    #[must_use]
+    pub fn try_from_bounds(bounds: Bounds, front: Front, length: f64) -> Option<Self> {
+        Some(Self::from_bounds(bounds, front, length)).filter(|p| p.scale.is_finite())
+    }
+
+    /// A model filling `bounds`, facing `front`, at the scale `scale`
+    /// gives for its depth along `front` in model units.
+    fn scaled(bounds: Bounds, front: Front, scale: impl FnOnce(f64) -> f64) -> Self {
         let [cx, cy, cz] = bounds.center().map(f64::from);
         let [sx, _, sz] = bounds.size().map(f64::from);
         let (forward, right) = (front.forward(), front.right());
@@ -52,7 +67,7 @@ impl Placement {
             center_y: cy,
             forward,
             right,
-            scale: length / along(forward),
+            scale: scale(along(forward)),
             width: along(right),
         }
     }
@@ -66,11 +81,11 @@ impl Placement {
 
     /// A model filling `bounds`, facing `front`, a metre to each model
     /// unit: [`unscaled`](Self::unscaled) for a model read some other way.
+    /// It divides by nothing, so a model with no depth along `front` still
+    /// places, every point finite.
     #[must_use]
     pub fn unscaled_bounds(bounds: Bounds, front: Front) -> Self {
-        // At 1 m long, a metre is the model's whole length in units.
-        let length = Self::from_bounds(bounds, front, 1.0).scale.recip();
-        Self::from_bounds(bounds, front, length)
+        Self::scaled(bounds, front, |_| 1.0)
     }
 
     /// Where the model point `p` falls in 3D ship space: `[starboard,
@@ -278,6 +293,38 @@ mod tests {
             Placement::unscaled_bounds(model.bounds, Front::PlusX),
             Placement::unscaled(&model, Front::PlusX)
         );
+    }
+
+    #[test]
+    fn a_model_flat_along_its_front_has_no_length_to_scale_to() {
+        // A flat panel in the XY plane: no depth along z.
+        let flat = boxed([2.0, 1.0, 0.0], [0.0; 3]).bounds;
+        assert_eq!(Placement::try_from_bounds(flat, Front::PlusZ, 8.0), None);
+        assert_eq!(Placement::try_from_bounds(flat, Front::MinusZ, 0.0), None);
+        // Along x it has depth, and places as it would unchecked.
+        assert_eq!(
+            Placement::try_from_bounds(flat, Front::PlusX, 8.0),
+            Some(Placement::from_bounds(flat, Front::PlusX, 8.0))
+        );
+        let deep = boxed([2.0, 1.0, 4.0], [0.0; 3]).bounds;
+        assert_eq!(
+            Placement::try_from_bounds(deep, Front::PlusZ, f64::INFINITY),
+            None
+        );
+    }
+
+    #[test]
+    fn a_model_flat_along_its_front_still_places_unscaled() {
+        let size = [2.0, 1.0, 0.0];
+        let p = Placement::unscaled_bounds(boxed(size, [0.0; 3]).bounds, Front::PlusZ);
+        let points: Vec<_> = corners(size, [0.0; 3])
+            .into_iter()
+            .map(|c| p.ship_point_3d(c))
+            .collect();
+        assert!(points.iter().flatten().all(|c| c.is_finite()), "{points:?}");
+        assert_eq!(spans(&points), [2.0, 0.0, 1.0]);
+        assert_eq!(p.ship_point_3d([1.0, 0.5, 0.0]), [-1.0, 0.0, 0.5]);
+        assert_eq!(p.beam(), 2.0);
     }
 
     #[test]

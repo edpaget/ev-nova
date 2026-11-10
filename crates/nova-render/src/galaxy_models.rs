@@ -66,7 +66,8 @@ impl<S: Source> ModelSource for GalaxyModels<'_, S> {
             });
         }
         let placement = match request.length {
-            Some(length) => Placement::from_bounds(scene.bounds, front, f64::from(length)),
+            Some(length) => Placement::try_from_bounds(scene.bounds, front, f64::from(length))
+                .ok_or_else(|| ModelError::NoDepth(name.clone()))?,
             None => Placement::unscaled_bounds(scene.bounds, front),
         };
         loaded(&scene, &placement).map_err(|error| ModelError::Mesh {
@@ -437,6 +438,42 @@ mod tests {
             model.parts[0].mesh.vertices()[0].color,
             vertex_color([1.0; 4])
         );
+    }
+
+    /// The test galaxy with `hull` a flat 2 by 1 panel in the XY plane,
+    /// facing +z: no depth along its front.
+    fn flat_hull() -> MemSource {
+        with_hull(&glb([2.0, 1.0, 0.0], [0.0; 3])).with(
+            "assets/hull.md",
+            &format!(
+                "---\nkind: model\nplaceholder: false\nfiles: [media/export/pack/hull.glb]\n\
+                 front: +z\n{CC0}---\n"
+            ),
+        )
+    }
+
+    #[test]
+    fn a_model_with_no_depth_along_its_front_has_no_length_to_scale_to() {
+        let error = ask(&flat_hull(), "hull", Some(8.0));
+        assert_eq!(error, Err(ModelError::NoDepth("hull".into())));
+        let message = error.unwrap_err().to_string();
+        assert!(
+            message.contains("`hull`") && message.contains("`front`"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_model_with_no_depth_along_its_front_loads_as_modelled() {
+        let model = ask(&flat_hull(), "hull", None).expect("loads a metre a unit");
+        let mesh = model.mesh();
+        assert!(!mesh.is_empty());
+        for v in mesh.vertices() {
+            assert!(v.position.iter().all(|c| c.is_finite()), "{v:?}");
+            assert_eq!(v.position[1], 0.0, "flat along the nose: {v:?}");
+        }
+        let starboard = mesh.vertices().iter().map(|v| v.position[0]);
+        assert_eq!(starboard.fold(f32::MIN, f32::max), 1.0);
     }
 
     #[test]
