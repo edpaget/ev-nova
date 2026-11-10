@@ -27,10 +27,12 @@
 //! Each (asset, length) is read once and each livery painted once; keys
 //! count up from 1 in a stable order (bible id order: ships, then
 //! outfits, then stations; planets on their own count). A model or planet
-//! that fails keeps its stand-in, with no key. A failure that is news is
-//! a problem, once: over its budget, unreadable, no depth, no mesh, not a
-//! model; for a planet, a texture that fails its budget or its shape. A
-//! placeholder, a missing file or a Git LFS pointer is not: the loader's
+//! that fails keeps its stand-in, with no key. A failure only this
+//! builder finds is a problem, once: over its budget, no depth, no mesh,
+//! not a model; for a planet, a texture that doesn't read or fails its
+//! budget or its shape. A model that doesn't read is not: the loader read
+//! it first and reported it in [`NewGame::problems`]. Nor is a
+//! placeholder, a missing file or a Git LFS pointer: the loader's
 //! stand-ins fall back unreported the same way, and the LFS list names the
 //! pointers. Stock data is never a new game, so it has none of this.
 
@@ -262,7 +264,9 @@ impl<'a, M: ModelSource> Keyring<'a, M> {
     }
 }
 
-/// Whether `error` is news to report (see the module docs).
+/// Whether `error` is news to report (see the module docs). A model that
+/// doesn't read the loader reports already (`nova_data::new_game::load`
+/// reads every model a ship, a mount or a station shows), so it isn't.
 fn model_news(error: &ModelError) -> bool {
     !matches!(
         error,
@@ -270,6 +274,7 @@ fn model_news(error: &ModelError) -> bool {
             | ModelError::NoFile(_)
             | ModelError::LfsPointer(_)
             | ModelError::Missing { .. }
+            | ModelError::Unreadable { .. }
     )
 }
 
@@ -582,18 +587,32 @@ mod tests {
     }
 
     #[test]
-    fn an_unreadable_model_is_a_problem_and_a_placeholder_missing_file_or_pointer_none() {
+    fn an_unreadable_placeholder_missing_or_pointer_model_gets_no_key_and_is_no_world_problem() {
         let (game, assets) = built(&with_broken_models());
         for name in ["broken", "ghost", "lost", "pointer"] {
             assert_eq!(assets.models.ship(ship(&game, name)), None, "{name}");
         }
-        assert_eq!(assets.problems.len(), 1, "{:?}", assets.problems);
-        assert!(
-            assets.problems[0].contains("`broken`"),
-            "{:?}",
-            assets.problems
-        );
+        // The loader reports the unreadable one.
+        assert_eq!(assets.problems, Vec::<String>::new());
         assert!(assets.models.ship(ship(&game, "light-freighter")).is_some());
+    }
+
+    #[test]
+    fn the_loader_s_and_the_world_s_problems_together_name_each_broken_model_once() {
+        let source = with_broken_models()
+            .with_bytes(TURRET_MOUNT_GLB, b"glTF nonsense")
+            .with_bytes(STATION_HUB_GLB, b"glTF nonsense");
+        let (game, assets) = built(&source);
+        let lines: Vec<String> = game
+            .problems
+            .iter()
+            .map(ToString::to_string)
+            .chain(assets.problems.iter().cloned())
+            .collect();
+        for file in ["media/export/broken.glb", TURRET_MOUNT_GLB, STATION_HUB_GLB] {
+            let naming = lines.iter().filter(|line| line.contains(file)).count();
+            assert_eq!(naming, 1, "{file}: {lines:?}");
+        }
     }
 
     #[test]
