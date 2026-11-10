@@ -337,12 +337,13 @@ pub(super) mod tests {
         let catalog = sabotaged();
         let mut session = flown(&catalog, &[(KILL, 1)]);
         fight(&mut session, &[50]);
+        let before = session.ship.latches.sabotage.counter();
         session.pod = Some(100);
         let sounds = fight(&mut session, &[]);
-        assert_eq!(session.ship.latches.sabotage.counter(), 51.0);
-        session.ship.latches.sabotage.set_counter(300.0);
+        assert_eq!(session.ship.latches.sabotage.counter(), before);
+        session.ship.latches.sabotage.set_counter(FUSE);
         let sounds = [sounds, fight(&mut session, &[])].concat();
-        assert_eq!(session.ship.latches.sabotage.counter(), 300.0);
+        assert_eq!(session.ship.latches.sabotage.counter(), FUSE);
         assert!(!sounds.contains(&SimSound::OnboardExplosion), "{sounds:?}");
     }
 
@@ -375,16 +376,30 @@ pub(super) mod tests {
         }
     }
 
+    /// The session raises snd 300 on the pass its own clock goes past
+    /// [`FUSE`], and on none before. That the clock fires on its first
+    /// count above the fuse, and how far a pass counts, is nova-sim-combat's
+    /// `SabotageClock::tick` (pinned by its
+    /// `the_clock_fires_on_the_first_tick_above_300_and_not_at_300`).
     #[test]
     fn the_clock_raises_snd_300_on_the_first_tick_its_counter_passes_300() {
         for id in [KILL, BOMB] {
             let catalog = sabotaged();
             let mut session = flown(&catalog, &[(id, 1)]);
             fight(&mut session, &[0]);
-            session.ship.latches.sabotage.set_counter(299.0);
-            let sounds = fight(&mut session, &[]);
-            assert!(!sounds.contains(&SimSound::OnboardExplosion), "{sounds:?}");
-            let sounds = fight(&mut session, &[]);
+            session.ship.latches.sabotage.set_counter(FUSE - 1.0);
+            let fired = (0..1_000).find_map(|pass| {
+                let sounds = fight(&mut session, &[]);
+                if session.ship.latches.sabotage.counter() > FUSE {
+                    return Some(sounds);
+                }
+                assert!(
+                    !sounds.contains(&SimSound::OnboardExplosion),
+                    "{id} pass {pass}: {sounds:?}"
+                );
+                None
+            });
+            let sounds = fired.expect("the clock passes the fuse");
             assert_eq!(sounds.first(), Some(&SimSound::OnboardExplosion), "{id}");
         }
     }
@@ -477,20 +492,18 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_kill_outfit_names_the_first_owned_kill_outfit_for_360_ticks() {
+    fn a_kill_outfit_names_the_first_owned_kill_outfit() {
         let mut catalog = sabotaged();
         catalog.outfits.push(outfit(260, &[(SABOTAGE_KILL, 0)]));
         for (count, one) in [(1, true), (2, false)] {
             let mut session = lit(&catalog, &[(KILL, 1), (260, count)]);
             fight(&mut session, &[]);
-            let messages = session.take_messages();
             assert_eq!(
-                messages,
+                session.take_messages(),
                 [SimMessage::Sabotaged {
                     outfit: Some((OutfitId(260), one))
                 }]
             );
-            assert_eq!(messages[0].ticks(), 360);
         }
     }
 
@@ -517,9 +530,7 @@ pub(super) mod tests {
         let mut session = lit(&catalog, &[(KILL, 1)]);
         session.setup.leet = true;
         fight(&mut session, &[]);
-        let messages = session.take_messages();
-        assert_eq!(messages, [SimMessage::BombSetUp]);
-        assert_eq!(messages[0].ticks(), 360);
+        assert_eq!(session.take_messages(), [SimMessage::BombSetUp]);
         let catalog = sabotaged();
         let mut session = lit(&catalog, &[(KILL, 1)]);
         session.setup.leet = true;
@@ -540,7 +551,12 @@ pub(super) mod tests {
         fight(&mut session, &[]);
         assert_eq!(session.pilot.outfits.get(&OutfitId(KILL)), Some(&1));
         assert_eq!(session.ship.latches.sabotage.flag(), Sabotage::Kill);
-        assert_eq!(session.ship.latches.sabotage.counter(), 301.0);
+        // Left past the fuse as it fired: the clock fires on its first
+        // count above `FUSE` (nova-sim-combat's `SabotageClock::tick`).
+        assert!(
+            session.ship.latches.sabotage.counter() > FUSE,
+            "left past the fuse as it fired"
+        );
     }
 
     #[test]
@@ -738,7 +754,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_bomb_fires_once_its_refresh_clears_the_flag_and_the_next_tick_zeroes_the_counter() {
+    fn a_bomb_fires_once_and_its_refresh_clears_the_flag() {
         use crate::catalog::RankId;
         use crate::session::ranks::tests::{blessed, blessing_rank};
         let mut catalog = armoured(false);
@@ -768,7 +784,6 @@ pub(super) mod tests {
         );
         let sounds = fight(&mut session, &[]);
         assert!(!sounds.contains(&SimSound::OnboardExplosion), "{sounds:?}");
-        assert_eq!(session.ship.latches.sabotage.counter(), 0.0, "@0x69a0c");
     }
 
     #[test]

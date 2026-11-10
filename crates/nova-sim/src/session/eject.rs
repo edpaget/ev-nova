@@ -1277,7 +1277,8 @@ pub(super) mod tests {
         let extra = fill(&mut session);
         let (_, sounds) = to_the_first_check(&mut session, &catalog, false);
         assert!(!sounds.contains(&SimSound::Ejected), "no slot");
-        let three = u32::try_from(death_delay).expect("positive") * 3;
+        let three = u32::try_from(death_delay).expect("positive")
+            * crate::combat::hull::PLAYER_BREAKUP_FACTOR;
         assert_eq!(
             session.ship.condition,
             Condition::Dying {
@@ -2813,7 +2814,8 @@ pub(super) mod tests {
         // finds the armour gone and sets its timer.
         use crate::sabotage::{FUSE, SABOTAGE_KILL};
         const KILLER: i16 = 303;
-        let mut catalog = ejecting(100);
+        const DELAY: i16 = 100;
+        let mut catalog = ejecting(DELAY);
         catalog.outfits.push(outfit(KILLER, &[(SABOTAGE_KILL, 0)]));
         let mut session = flying(&catalog, &[KILLER]);
         session.reset_precalced();
@@ -2823,7 +2825,8 @@ pub(super) mod tests {
         assert_eq!(
             session.ship.condition,
             Condition::Dying {
-                ticks_left: 300,
+                ticks_left: u32::try_from(DELAY).expect("positive")
+                    * crate::combat::hull::PLAYER_BREAKUP_FACTOR,
                 starting: true
             }
         );
