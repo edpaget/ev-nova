@@ -21,6 +21,22 @@
 //! [`effective`] says. A world and output size MetalFX won't scale
 //! between ([`metal_fx_takes`], or MetalFX's own refusal) is drawn with
 //! sharp-bilinear and logged once ([`RejectedSizes`]).
+//!
+//! The render scale ([`RenderScale`]) sizes the world texture on top of
+//! the Scaling. At [`RenderScale::Auto`], the default, each Scaling draws
+//! the world where it did before there was a render scale: Native and
+//! Super-xBR (whose upscaler is native) into the target, sharp-bilinear,
+//! FSR 1 and MetalFX into a texture of the logical size. At a
+//! [`RenderScale::Percent`] every Scaling draws it into a texture that
+//! share of the backing size, the viewport's content in target pixels
+//! ([`world_space`]), which its upscaler enlarges onto the viewport; a
+//! percentage of the backing size, not of the logical one, so a 5K
+//! display under FSR 1 or MetalFX can draw the world at, say, 67% where
+//! the logical size would be about 27%. Native has no enlarging pass of
+//! its own, so below 100% it enlarges with sharp-bilinear
+//! ([`enlarging`]); at 100% it draws into the target, as at `Auto`. The
+//! overlay is drawn over the enlarged world at the target's resolution
+//! whatever the scale, so the HUD stays sharp.
 
 use crate::gpu::WorldSpace;
 use crate::render_scale::{RenderScale, scaled_size};
