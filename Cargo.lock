@@ -1992,6 +1992,8 @@ dependencies = [
  "bytemuck",
  "glyphon",
  "nova-data",
+ "nova-galaxy-format",
+ "nova-galaxy-media",
  "nova-metalfx",
  "nova-render",
  "nova-rsrc",

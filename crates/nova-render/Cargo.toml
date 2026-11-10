@@ -11,6 +11,10 @@ publish.workspace = true
 bytemuck.workspace = true
 glyphon.workspace = true
 nova-data.workspace = true
+# The new game's asset manifest, budgets and media, and its glTF models
+# read as data, for the `ModelSource` adapter (`galaxy_models`).
+nova-galaxy-format.workspace = true
+nova-galaxy-media.workspace = true
 nova-view.workspace = true
 pollster.workspace = true
 skrifa.workspace = true
@@ -26,6 +30,10 @@ nova-metalfx.workspace = true
 # Synthetic pictures and sprites for the GameData source tests, and the
 # block font for the text tests.
 nova-data = { workspace = true, features = ["fixture"] }
+# The format's test galaxy and test models built in code, for the model
+# adapter's tests.
+nova-galaxy-format = { workspace = true, features = ["fixture"] }
+nova-galaxy-media = { workspace = true, features = ["fixture"] }
 # Synthetic resource forks for in-memory stores.
 nova-rsrc = { workspace = true, features = ["fixture"] }
 # The text-metrics port's contract, for the glyphon adapter's tests.
@@ -35,7 +43,9 @@ nova-render = { workspace = true, features = ["recording"] }
 
 [features]
 # Exposes the test support in `recording` (the recording Gpu mock and the
-# empty `NoImages` source) to other crates' tests.
+# empty `NoImages` source), and the model source port's fake and contract
+# check (`model_source::{FakeModels, check_contract}`), to other crates'
+# tests.
 recording = []
 
 [lints]

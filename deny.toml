@@ -52,7 +52,8 @@ deny = [
     # - nova-ink (on nova-sim-story; the dialog adapter, wired by nova);
     # - nova-sim (the facade);
     # - nova-view;
-    # - nova-render, nova-audio and nova-movie;
+    # - nova-render (also on nova-galaxy-format and nova-galaxy-media, for
+    #   the new game's 3D models), nova-audio and nova-movie;
     # - nova.
     #
     # The platform shims are each reached only by their owner: nova-metalfx
@@ -71,8 +72,8 @@ deny = [
     # (`mise run deny` makes an unused wrapper an error). A new crate gets
     # its own entry and is added to the `wrappers` of every crate it uses.
     { crate = "nova-rsrc", wrappers = ["nova", "nova-audio", "nova-data", "nova-dump", "nova-render", "nova-rsrc", "nova-sim", "nova-sim-catalog", "nova-view"], reason = "the resource-fork reader sits at the bottom and is reached only by the crates that read the game's files" },
-    { crate = "nova-galaxy-format", wrappers = ["nova-data", "nova-galaxy-media"], reason = "the new game's data format sits at the bottom, below the game data store; game-bible's galaxy tool reaches it by git" },
-    { crate = "nova-galaxy-media", wrappers = ["nova-data"], reason = "the new game's media reading sits on the format, below the game data store; game-bible's galaxy tool may reach it by git" },
+    { crate = "nova-galaxy-format", wrappers = ["nova-data", "nova-galaxy-media", "nova-render"], reason = "the new game's data format sits at the bottom, below the game data store and the renderer's model adapter; game-bible's galaxy tool reaches it by git" },
+    { crate = "nova-galaxy-media", wrappers = ["nova-data", "nova-render"], reason = "the new game's media reading sits on the format, below the game data store and the renderer's model adapter; game-bible's galaxy tool may reach it by git" },
     { crate = "nova-data", wrappers = ["nova", "nova-audio", "nova-data", "nova-dump", "nova-render", "nova-sim", "nova-sim-catalog", "nova-sim-state", "nova-view"], reason = "the game data sits on nova-rsrc, below the nova-sim layers and everything above them" },
     { crate = "nova-view", wrappers = ["nova", "nova-audio", "nova-movie", "nova-render", "nova-view"], reason = "the view sits on the nova-sim facade, below the renderer, the audio and the game" },
     { crate = "nova-render", wrappers = ["nova", "nova-render"], reason = "only the game draws through the renderer" },
