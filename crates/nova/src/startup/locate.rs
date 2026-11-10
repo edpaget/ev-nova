@@ -76,14 +76,14 @@ impl DataSource for DiskData {
     /// Opens the new game's folder, then checks each stellar's
     /// conversation and each mission's offer and completion against the
     /// Ink runtime ([`InkCheck`]), so a knot the story lacks is reported
-    /// against the stellar's or the mission's file.
+    /// against the stellar's or the mission's file. Its world models are
+    /// built from the folder as it loads (`nova_render::world_assets_in`).
     fn open_new_game(&self, dir: &Path) -> NewGameOpened<GameData> {
-        nova_data::new_game::open(dir)
-            .map(|mut game| {
-                game.check_dialogs(&InkCheck);
-                game
-            })
-            .into()
+        let opened = nova_data::new_game::open(dir).map(|mut game| {
+            game.check_dialogs(&InkCheck);
+            game
+        });
+        NewGameOpened::with_world(opened, |game| nova_render::world_assets_in(game, dir))
     }
 }
 

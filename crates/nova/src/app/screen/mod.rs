@@ -703,6 +703,10 @@ pub struct AppScreen {
     /// The stock ship look each flight consults for a hull with no sheet
     /// ([`AppScreen::with_ship_looks`]): none unless `main` gives it.
     ship_looks: Option<Rc<nova_view::flight::StockShipLooks>>,
+    /// The 3D models each flight draws in place of the new game's
+    /// stand-ins ([`AppScreen::with_world_models`]): empty unless `main`
+    /// gives them.
+    world_models: Rc<nova_view::flight::WorldModels>,
     /// The fee and wage of a hire in each flight.
     hire_terms: Rc<dyn HireTerms>,
     /// How persons appear in each flight.

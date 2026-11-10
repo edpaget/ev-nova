@@ -49,6 +49,7 @@ mod new_game_conversation;
 mod new_game_galaxy_viewer;
 mod new_game_looks;
 mod new_game_missions;
+mod new_game_models;
 mod new_game_muzzles;
 mod new_game_outfits;
 mod new_game_play;

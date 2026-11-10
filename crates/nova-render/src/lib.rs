@@ -192,7 +192,7 @@ pub use images::{ImageError, ImageSource};
 pub use livery::{Livery, PaintSlot, painted};
 pub use model::{Mesh, MeshError, MeshId, Vertex};
 pub use model_source::{LoadedModel, ModelError, ModelRequest, ModelSource};
-pub use new_game_world::{WorldAssets, world_assets, world_assets_from};
+pub use new_game_world::{WorldAssets, world_assets, world_assets_from, world_assets_in};
 pub use planet_source::{LoadedPlanet, PlanetError, PlanetRequest, PlanetSource};
 pub use present::{AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action};
 pub use render_scale::{RenderScale, scaled_size};

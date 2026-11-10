@@ -277,6 +277,22 @@ pub fn fly_new_pilot_wired(
     fly_from_the_menu(game)
 }
 
+/// [`fly_new_pilot_wired`], the app's renderer given the meshes and
+/// planets of `assets`, as `main` gives the runner the new game's world
+/// models.
+pub fn fly_new_pilot_modelled(
+    data: &Rc<GameData>,
+    store: &MemoryPilots,
+    keeper: nova::settings::GameKeeper,
+    wire: impl FnOnce(nova::app::screen::AppScreen) -> nova::app::screen::AppScreen,
+    assets: nova_render::WorldAssets,
+) -> Harness {
+    let game = Harness::built_wired(Rc::clone(data), store, wire)
+        .with_settings(keeper)
+        .with_world_assets(assets.meshes, assets.planets);
+    fly_from_the_menu(game)
+}
+
 /// `game`, on the main menu, flown into flight as [`fly_new_pilot`] says.
 fn fly_from_the_menu(mut game: Harness) -> Harness {
     draw(&mut game);

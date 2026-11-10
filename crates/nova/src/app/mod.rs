@@ -185,6 +185,7 @@ pub mod text_entry;
 mod touch;
 mod updates;
 mod wheel;
+mod world_assets;
 
 pub use keyboard_access::{KeyboardAccess, NoKeyboardAccessSetting};
 pub use loop_event::LoopEvent;

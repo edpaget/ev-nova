@@ -795,6 +795,24 @@ impl Harness {
         (*self.gpu.submits().last().expect("a frame")).clone()
     }
 
+    /// The harness with `meshes` and `planets` registered with the app's
+    /// renderer, as `main` gives the runner the new game's world models.
+    pub(crate) fn with_world_assets(
+        self,
+        meshes: Vec<(nova_view::ModelKey, nova_render::Mesh)>,
+        planets: Vec<(nova_view::PlanetKey, nova_render::LoadedPlanet)>,
+    ) -> Self {
+        Self {
+            app: self.app.with_world_assets(meshes, planets),
+            ..self
+        }
+    }
+
+    /// Every call the app's frames made of the GPU, in order.
+    pub(crate) fn gpu_calls(&self) -> &[nova_render::recording::GpuCall] {
+        &self.gpu.calls
+    }
+
     /// Draws a frame `skipped` frames' time after the last, as one comes
     /// after the app was in the background, asking for none meanwhile.
     fn frame_after(&mut self, skipped: u64) -> Frame {

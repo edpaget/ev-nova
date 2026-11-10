@@ -69,6 +69,7 @@ fn loaded(data: PathBuf) -> NewGameLoaded<PathBuf> {
         problems: Vec::new(),
         lfs_pointers: Vec::new(),
         systems: 1,
+        world: nova_render::WorldAssets::default(),
     }
 }
 

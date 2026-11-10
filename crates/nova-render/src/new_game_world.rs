@@ -56,7 +56,7 @@ use crate::planet_source::{LoadedPlanet, PlanetError, PlanetRequest, PlanetSourc
 
 /// The table the flight draws by, and what its keys name (see the module
 /// docs).
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct WorldAssets {
     /// The flight's table.
     pub models: WorldModels,
@@ -76,6 +76,13 @@ pub fn world_assets(game: &NewGame, source: &impl Source) -> WorldAssets {
         &GalaxyModels::new(&game.galaxy, source),
         &GalaxyPlanets::new(&game.galaxy, source),
     )
+}
+
+/// [`world_assets`] over the folder `dir` that `game` was opened from,
+/// read as the format's directory adapter reads it, so the app names no
+/// source.
+pub fn world_assets_in(game: &NewGame, dir: &std::path::Path) -> WorldAssets {
+    world_assets(game, &nova_galaxy_format::source::DirSource::new(dir))
 }
 
 /// [`world_assets`] with its models and planets from `models` and

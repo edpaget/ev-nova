@@ -97,6 +97,10 @@ pub struct Started<E, D> {
     /// [`DataSource::open`], for the new game's stock ship look: only when
     /// the look is on under the new game and it loaded.
     pub stock_art: Option<D>,
+    /// The new game's world models, built as its folder loaded
+    /// ([`NewGameLoaded::world`]), their problems reported among the
+    /// data's: none for the stock game, whose data has no models.
+    pub world: nova_render::WorldAssets,
 }
 
 /// Starts the game, in order:
@@ -201,6 +205,7 @@ where
             data: loaded.data,
             stock_look: look,
             stock_art,
+            world: loaded.world,
         });
     }
     let named = match cli::data_dir(&args, nova_data) {
@@ -233,6 +238,7 @@ where
             data: found.data,
             stock_look: StockLook::default(),
             stock_art: None,
+            world: nova_render::WorldAssets::default(),
         }),
         Err(not) => Err(report.fail(&Fatal::from(not), alert)),
     }

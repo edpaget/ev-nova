@@ -369,6 +369,8 @@ fn player_bindings(saved: nova_view::Bindings) -> SharedBindings {
     SharedBindings::new(saved).with_key_names(system_key_names())
 }
 
+// Wiring alone: a line or two for each collaborator it hands on.
+#[allow(clippy::too_many_lines)]
 fn main() -> ExitCode {
     // First: on Windows nothing reaches a console before it is attached.
     let terminal = stderr_terminal();
@@ -404,6 +406,7 @@ fn main() -> ExitCode {
         data,
         stock_look,
         stock_art,
+        world,
     } = match started {
         Ok(started) => started,
         Err(code) => return ExitCode::from(code),
@@ -447,6 +450,9 @@ fn main() -> ExitCode {
     if let Some(looks) = ship_looks {
         screen = screen.with_ship_looks(Rc::new(looks));
     }
+    // The new game's models: the table to the flights, the meshes and
+    // planets its keys name to the renderer.
+    screen = screen.with_world_models(Rc::new(world.models));
     screen = with_platform(screen);
     // The interface file beside the data, or the new game's placeholders.
     let interface = nova::interface::wire(ruleset, open_interface(&dir));
@@ -464,7 +470,8 @@ fn main() -> ExitCode {
     let images = nova::stock_look::images(&data, &rulebook, interface.file, stock_art);
     let runner = with_gamepads(Runner::new(images, screen, fonts), &report)
         .with_diagnostics(Box::new(std::io::stderr()))
-        .with_report(Rc::clone(&report));
+        .with_report(Rc::clone(&report))
+        .with_world_assets(world.meshes, world.planets);
     let runner = match audio {
         Some(core) => runner.with_audio(core.with_settings(settings.audio)),
         None => runner,

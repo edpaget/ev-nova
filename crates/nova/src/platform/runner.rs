@@ -160,7 +160,16 @@ pub struct Runner<S: ImageSource> {
     report: Option<Rc<RefCell<Report>>>,
     /// The gamepads, until the app takes them.
     gamepads: Option<Box<dyn Gamepads>>,
+    /// The new game's world models' meshes and planets, until the app
+    /// takes them.
+    world: Option<WorldMeshes>,
 }
+
+/// The meshes and planets the new game's world models' keys name.
+type WorldMeshes = (
+    Vec<(nova_view::ModelKey, nova_render::Mesh)>,
+    Vec<(nova_view::PlanetKey, nova_render::LoadedPlanet)>,
+);
 
 impl<S: ImageSource> Runner<S> {
     /// A runner that will open a window showing `screen` with images from
@@ -182,6 +191,7 @@ impl<S: ImageSource> Runner<S> {
             updates: None,
             report: None,
             gamepads: None,
+            world: None,
         }
     }
 
@@ -258,6 +268,18 @@ impl<S: ImageSource> Runner<S> {
     #[must_use]
     pub fn with_diagnostics(mut self, out: Box<dyn Write>) -> Self {
         self.diagnostics = Some(out);
+        self
+    }
+
+    /// The runner with the new game's world models' `meshes` and `planets`
+    /// for the app it opens to register ([`App::with_world_assets`]).
+    #[must_use]
+    pub fn with_world_assets(
+        mut self,
+        meshes: Vec<(nova_view::ModelKey, nova_render::Mesh)>,
+        planets: Vec<(nova_view::PlanetKey, nova_render::LoadedPlanet)>,
+    ) -> Self {
+        self.world = Some((meshes, planets));
         self
     }
 
@@ -392,6 +414,10 @@ impl<S: ImageSource + 'static> ApplicationHandler for Runner<S> {
                 };
                 let app = match self.gamepads.take() {
                     Some(pads) => app.with_gamepads(pads),
+                    None => app,
+                };
+                let app = match self.world.take() {
+                    Some((meshes, planets)) => app.with_world_assets(meshes, planets),
                     None => app,
                 };
                 let app = app.with_text_entry(Box::new(WinitTextEntry::new(window.0.clone())));

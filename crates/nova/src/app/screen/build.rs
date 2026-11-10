@@ -106,6 +106,7 @@ impl AppScreen {
             rules: Rulebook::default(),
             flight_overlays: FlightOverlays::default(),
             ship_looks: None,
+            world_models: Rc::default(),
             hire_terms: Rc::new(NovaHire::default()),
             control_bits: Rc::new(NovaBits),
             person_rules: Rc::new(NovaPersons::default()),
@@ -348,6 +349,19 @@ impl AppScreen {
         }
     }
 
+    /// The router with each flight drawing the new game's ships, stations
+    /// and planets as the 3D models `models` names
+    /// ([`FlightView::with_world_models`]): an empty table, the default,
+    /// until it is given. `main` gives the renderer the meshes and planets
+    /// its keys name (`App::with_world_assets`).
+    #[must_use]
+    pub fn with_world_models(self, models: Rc<nova_view::flight::WorldModels>) -> Self {
+        Self {
+            world_models: models,
+            ..self
+        }
+    }
+
     /// The router with Nova's rules, each disputed one as `rulebook`
     /// chooses: the strategies each flight decides by (the NPCs'
     /// behaviour, disabling, point defence, the law, boarding, hailing,
@@ -533,6 +547,7 @@ impl AppScreen {
             Some(looks) => flight.with_ship_looks(Rc::clone(looks) as Rc<dyn ShipSprites>),
             None => flight,
         };
+        let flight = flight.with_world_models(Rc::clone(&self.world_models));
         match self.metrics() {
             Some(metrics) => flight.with_metrics(metrics),
             None => flight,
