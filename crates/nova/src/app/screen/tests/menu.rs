@@ -2277,10 +2277,13 @@ fn flickering_data() -> Rc<GameData> {
             sheet.frame(|f| f.line().pixels(&[0x7C00]))
         })
         .build();
-    let mut spin = vec![0; Spin::SIZE.expect("fixed")];
-    for (at, value) in [(0x00, 1000_i16), (0x04, 1), (0x06, 1), (0x08, 2), (0x0A, 2)] {
-        spin[at..at + 2].copy_from_slice(&value.to_be_bytes());
-    }
+    let spin = SpinBuilder::new()
+        .sprites_id(1000)
+        .x_size(1)
+        .y_size(1)
+        .x_tiles(2)
+        .y_tiles(2)
+        .build();
     let mut stellar = vec![0; Stellar::SIZE.expect("fixed")];
     stellar[0x20..0x22].copy_from_slice(&0x0002_u16.to_be_bytes());
     stellar[0x22..0x24].copy_from_slice(&1_i16.to_be_bytes());

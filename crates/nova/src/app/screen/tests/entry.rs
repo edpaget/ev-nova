@@ -66,22 +66,13 @@ fn blank() -> Vec<u8> {
 /// is `PICT` 8200 for 2 s, then (past an unused slot) 8201 for 3 s, then
 /// the text `text`.
 fn intro_character(text: i16) -> Vec<u8> {
-    let mut bytes = vec![0; Character::SIZE.expect("fixed")];
-    let mut put = |at: usize, value: i16| bytes[at..at + 2].copy_from_slice(&value.to_be_bytes());
-    put(0x04, 128);
-    put(0x06, 128);
-    for slot in 1..4 {
-        put(0x06 + 2 * slot, -1);
-    }
-    for (slot, (picture, delay)) in [(8200, 2), (-1, 0), (8201, 3), (0, 0)]
-        .into_iter()
-        .enumerate()
-    {
-        put(0x20 + 2 * slot, picture);
-        put(0x28 + 2 * slot, delay);
-    }
-    put(0x30, text);
-    bytes
+    CharacterBuilder::new()
+        .ship_type(128)
+        .system(&[128, -1, -1, -1])
+        .intro_pict(&[8200, -1, 8201, 0])
+        .pict_delay(&[2, 0, 3, 0])
+        .intro_text_id(text)
+        .build()
 }
 
 /// [`data`], whose first `chär` has an intro ([`intro_character`]) whose

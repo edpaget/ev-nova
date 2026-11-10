@@ -34,7 +34,7 @@ use nova_data::records::character::Character;
 use nova_data::records::desc::Desc;
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
-use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
+use nova_data::records::fixture::{CharacterBuilder, ShipAnimBuilder, ShipBuilder, SpinBuilder};
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
@@ -92,9 +92,10 @@ fn pict(width: i16, height: i16, rgb: [u8; 3]) -> Vec<u8> {
 
 /// A `chär` starting in ship 128 in system 128.
 fn character() -> Vec<u8> {
-    let mut bytes = vec![0; Character::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x04, &[128, 128, -1, -1, -1]);
-    bytes
+    CharacterBuilder::new()
+        .ship_type(128)
+        .system(&[128, -1, -1, -1])
+        .build()
 }
 
 /// An average `shïp`: 3 pixels a tick at most, 0.1 more a tick, 3° a tick.
@@ -155,16 +156,24 @@ fn stellar(y: i16) -> Vec<u8> {
 
 /// A `spïn` naming `rlëD` 1000, one frame across.
 fn spin() -> Vec<u8> {
-    let mut bytes = vec![0; Spin::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[1000, -1, 0, 0, 1, 1]);
-    bytes
+    SpinBuilder::new()
+        .sprites_id(1000)
+        .masks_id(-1)
+        .x_tiles(1)
+        .y_tiles(1)
+        .build()
 }
 
 /// The hover cursor's `spïn` 650, naming `rlëD` 651, eight frames across.
 fn cursor_spin() -> Vec<u8> {
-    let mut bytes = vec![0; Spin::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[651, -1, 1, 1, 8, 1]);
-    bytes
+    SpinBuilder::new()
+        .sprites_id(651)
+        .masks_id(-1)
+        .x_size(1)
+        .y_size(1)
+        .x_tiles(8)
+        .y_tiles(1)
+        .build()
 }
 
 /// The planet's description.

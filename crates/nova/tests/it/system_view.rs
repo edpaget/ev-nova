@@ -18,6 +18,7 @@ use std::time::Duration;
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_data::graphics::RLED;
 use nova_data::graphics::fixture::RledBuilder;
+use nova_data::records::fixture::SpinBuilder;
 use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
@@ -72,9 +73,12 @@ fn stellar(x: i16, y: i16, graphic_type: i16, delay: i16) -> Vec<u8> {
 
 /// A `spïn` naming `rlëD` `image`, one frame across.
 fn spin(image: i16) -> Vec<u8> {
-    let mut bytes = vec![0; Spin::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[image, -1, 0, 0, 1, 1]);
-    bytes
+    SpinBuilder::new()
+        .sprites_id(image)
+        .masks_id(-1)
+        .x_tiles(1)
+        .y_tiles(1)
+        .build()
 }
 
 /// An `rlëD` of `frames` frames of `size` x `size`, each a different

@@ -29,7 +29,7 @@ use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
-use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
+use nova_data::records::fixture::{CharacterBuilder, ShipAnimBuilder, ShipBuilder, SpinBuilder};
 use nova_data::records::outfit::Outfit;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
@@ -109,12 +109,15 @@ const CASH: i32 = 10_000;
 /// The `chär`: 10,000 credits, ship 128 in Alpha (`sÿst` 128) on 23 June
 /// 1177, and no legal records.
 fn character() -> Vec<u8> {
-    let mut bytes = vec![0; Character::SIZE.expect("fixed")];
-    bytes[0x00..0x04].copy_from_slice(&CASH.to_be_bytes());
-    put_i16s(&mut bytes, 0x04, &[128, 128, -1, -1, -1]);
-    put_i16s(&mut bytes, 0x0E, &[-1; 4]);
-    put_i16s(&mut bytes, 0x134, &[23, 6, 1177]);
-    bytes
+    CharacterBuilder::new()
+        .cash(CASH)
+        .ship_type(128)
+        .system(&[128, -1, -1, -1])
+        .govt(&[-1; 4])
+        .unknown_0x134(23)
+        .unknown_0x136(6)
+        .start_year(1177)
+        .build()
 }
 
 /// A `shïp` of tech level 1 with `holds` tons of cargo space, shield 30,
@@ -210,9 +213,12 @@ const BETA_PRIME_X: i16 = -960;
 
 /// A `spïn` naming `rlëD` `image`, one frame across.
 fn spin(image: i16) -> Vec<u8> {
-    let mut bytes = vec![0; Spin::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[image, -1, 0, 0, 1, 1]);
-    bytes
+    SpinBuilder::new()
+        .sprites_id(image)
+        .masks_id(-1)
+        .x_tiles(1)
+        .y_tiles(1)
+        .build()
 }
 
 /// A `STR#` of `strings`.

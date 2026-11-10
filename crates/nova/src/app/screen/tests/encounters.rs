@@ -129,10 +129,12 @@ fn boarding_data_with(cash: i32) -> Rc<GameData> {
             sheet.frame(|f| f.line().pixels(&[0x7C00]))
         })
         .build();
-    let mut character = vec![0; Character::SIZE.expect("fixed")];
-    character[0x00..0x04].copy_from_slice(&cash.to_be_bytes());
-    put(&mut character, 0x04, &[128, 128, -1, -1, -1]);
-    put(&mut character, 0x0E, &[-1; 4]);
+    let character = CharacterBuilder::new()
+        .cash(cash)
+        .ship_type(128)
+        .system(&[128, -1, -1, -1])
+        .govt(&[-1; 4])
+        .build();
     let mut system = vec![0; System::SIZE.expect("fixed")];
     put(&mut system, 0x04, &[-1; 32]);
     put(&mut system, 0x44, &[128, -1, -1, -1, -1, -1, -1, -1]);
