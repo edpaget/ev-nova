@@ -13,6 +13,7 @@ use nova_data::graphics::Image;
 use nova_view::{Blend, Color, DrawLayer, Font, Point};
 
 pub use crate::atlas::{PageId, Uv};
+pub use crate::model::MeshId;
 use crate::upscale::{Upscaler, WorldResolution};
 use crate::viewport::{LogicalSize, PixelRect};
 
@@ -97,6 +98,23 @@ pub struct SolidQuad {
     pub corners: [Point; 4],
     /// RGBA, 0 to 1.
     pub color: [f32; 4],
+}
+
+/// One model to draw: a mesh the GPU holds ([`Gpu::upload_mesh`]) and the
+/// transforms the core worked out for it ([`crate::camera`]). The adapter
+/// only multiplies by them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ModelInstance {
+    /// The mesh.
+    pub mesh: MeshId,
+    /// Takes a point in model units to clip space, by columns (as WGSL's
+    /// `mat4x4` is built): x and y as the sprites' projection puts the
+    /// logical space onto the viewport, and the depth, 0 (nearest) to 1,
+    /// in the model's own band of its batch.
+    pub clip_from_model: [[f32; 4]; 4],
+    /// Takes a normal on the model's axes to the view's (x right, y down,
+    /// z toward the camera), by columns, which the light is given on.
+    pub normal_from_model: [[f32; 3]; 3],
 }
 
 /// One run of text: placed and clipped in physical pixels, sized and

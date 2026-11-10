@@ -97,11 +97,13 @@
 pub mod atlas;
 pub mod batch;
 mod box_filter;
+pub mod camera;
 pub mod enlarge;
 pub mod fonts;
 pub mod glyph_raster;
 pub mod gpu;
 pub mod images;
+pub mod model;
 pub mod present;
 pub mod quickdraw_stretch;
 #[cfg(any(test, feature = "recording"))]

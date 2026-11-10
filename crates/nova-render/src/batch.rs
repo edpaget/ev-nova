@@ -386,6 +386,7 @@ impl<S: ImageSource> Renderer<S> {
                     push_or_fill(batches, area, color);
                 }
             }
+            DrawCommand::Model { .. } => {}
             DrawCommand::Clipped {
                 clip: inner,
                 ref command,
