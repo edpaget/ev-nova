@@ -1,7 +1,9 @@
 //! The new game's media, read as data: a glTF model's triangles,
 //! materials and footprint ([`model`](mod@model)), how a model sits on a
 //! ship ([`placement`]), and the model seen from above as painted, shaded
-//! triangles, or a ship's size box when it has no model ([`outline`]).
+//! triangles, or a ship's size box when it has no model ([`outline`]),
+//! and which livery slot paints a material ([`paint`](mod@paint)), the rule
+//! the silhouettes and the renderer's 3D models share.
 //!
 //! The engine draws these silhouettes where the new game has no sprite
 //! (`nova-data` builds them at load), and game-bible's `galaxy` tool draws
@@ -41,10 +43,12 @@ pub mod budget;
 pub mod fixture;
 pub mod model;
 pub mod outline;
+pub mod paint;
 pub mod placement;
 pub mod scene;
 
 pub use model::{Bounds, Face, Model, NoModel, model, read_model};
 pub use outline::{BARE, Outline, Triangle, painted, rgb, silhouette, size_box, top_down};
+pub use paint::{Slot, slot_of};
 pub use placement::Placement;
 pub use scene::{Scene, read_asset_scene, read_scene};

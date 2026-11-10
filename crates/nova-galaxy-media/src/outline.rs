@@ -12,8 +12,9 @@
 //!   area;
 //! - a face is shaded by `0.6 + 0.4 × up`, so a flat face keeps its
 //!   colour;
-//! - a material a [`Paint`] slot names takes that slot's livery colour,
-//!   and every other its own base colour;
+//! - a material a [`Paint`] slot names takes that slot's livery colour
+//!   (the later slot when two name it, as [`slot_of`] decides), and every
+//!   other its own base colour;
 //! - faces are drawn lowest first, by each face's highest point;
 //! - a ship with no model is its size box in its livery's primary, or
 //!   [`BARE`] without a livery. The contact sheet fills the box at 35%;
@@ -26,6 +27,7 @@ use nova_galaxy_format::fleet::{Palette, Size};
 use nova_galaxy_format::id::Color;
 
 use crate::model::Model;
+use crate::paint::slot_of;
 use crate::placement::Placement;
 
 /// The colour of a ship that wears no livery, `#b8bcc4`, as the contact
@@ -111,23 +113,19 @@ pub fn top_down(
 }
 
 /// The colour `livery` gives each of `model`'s materials that `paint`
-/// names, red, green and blue from 0 to 1, by material index.
+/// names, red, green and blue from 0 to 1, by material index: each named
+/// material's slot as [`slot_of`] decides it.
 #[must_use]
 pub fn painted(model: &Model, paint: &Paint, livery: &Palette) -> BTreeMap<usize, [f64; 3]> {
-    let slot = |name: &str| match name {
-        "primary" => &livery.primary,
-        "secondary" => &livery.secondary,
-        _ => &livery.trim,
-    };
-    let mut colors = BTreeMap::new();
-    for (name, names) in paint.slots() {
-        for (index, material) in model.materials.iter().enumerate() {
-            if material.as_ref().is_some_and(|m| names.contains(m)) {
-                colors.insert(index, unit_rgb(slot(name)));
-            }
-        }
-    }
-    colors
+    model
+        .materials
+        .iter()
+        .enumerate()
+        .filter_map(|(index, material)| {
+            let slot = slot_of(paint, material.as_deref()?)?;
+            Some((index, unit_rgb(slot.color(livery))))
+        })
+        .collect()
 }
 
 /// `model` seen from above, as `placement` sets it on the ship: each face
@@ -400,6 +398,19 @@ mod tests {
         );
         let colors = painted(&model, &paint("{primary: [glass]}"), &livery());
         assert_eq!(colors.keys().collect::<Vec<_>>(), [&1]);
+    }
+
+    #[test]
+    fn a_material_in_two_slots_takes_the_later_and_an_unnamed_one_none() {
+        let glb = fixture::glb_with_materials(
+            [2.0, 1.0, 4.0],
+            [0.0; 3],
+            &[("hull", [1.0; 4]), ("", [1.0; 4])],
+        );
+        let model = model("m.glb", &glb, |_| None).unwrap();
+        assert_eq!(model.materials, [Some("hull".to_owned()), None]);
+        let colors = painted(&model, &paint("{primary: [hull], trim: [hull]}"), &livery());
+        assert_eq!(colors, BTreeMap::from([(0, [34.0 / 255.0; 3])]));
     }
 
     #[test]
