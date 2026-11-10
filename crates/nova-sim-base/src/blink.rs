@@ -284,42 +284,8 @@ fn random(blink: &Blink, tick: u64, chance: &(impl BlinkChance + ?Sized)) -> f32
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-
     use super::*;
-
-    /// Answers each change from a script (the last answer repeats past its
-    /// end) and records every `(change, sides)` it is asked.
-    #[derive(Default)]
-    struct ScriptedRolls {
-        answers: Vec<u16>,
-        asked: RefCell<Vec<(u64, u16)>>,
-    }
-
-    impl ScriptedRolls {
-        fn new(answers: &[u16]) -> Self {
-            Self {
-                answers: answers.to_vec(),
-                asked: RefCell::default(),
-            }
-        }
-
-        fn asked(&self) -> Vec<(u64, u16)> {
-            self.asked.borrow().clone()
-        }
-    }
-
-    impl BlinkChance for ScriptedRolls {
-        fn roll(&self, change: u64, sides: u16) -> u16 {
-            self.asked.borrow_mut().push((change, sides));
-            let at = usize::try_from(change).unwrap_or(usize::MAX);
-            self.answers
-                .get(at)
-                .or(self.answers.last())
-                .copied()
-                .unwrap_or(0)
-        }
-    }
+    use crate::fixture::blink::ScriptedRolls;
 
     fn blink(mode: i16, a: i16, b: i16, c: i16, d: i16) -> Blink {
         Blink { mode, a, b, c, d }
