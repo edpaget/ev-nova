@@ -46,6 +46,11 @@
 //!   covers, where a fragment meets its globe, rings and atmosphere,
 //!   which surface texel it shows at its turn, the shadows, and the
 //!   surface's mip chain.
+//! - [`sky`]: the layered sky ([`nova_view::DrawCommand::Sky`]): its
+//!   layers at depth, the perspective that gives them parallax, the stars
+//!   generated in the cells the view overlaps, their murk and the least
+//!   size a texel lets them be drawn at, and the falloff the sky shader
+//!   mirrors.
 //! - `models`: the [`Renderer`]'s meshes by [`nova_view::ModelKey`]
 //!   ([`Renderer::add_model`]), uploaded the first frame that draws them
 //!   ([`Gpu::upload_mesh`]), and the [`Batch::Models`] a list's models
@@ -160,6 +165,7 @@ pub mod quickdraw_stretch;
 #[cfg(any(test, feature = "recording"))]
 pub mod recording;
 pub mod render_scale;
+pub mod sky;
 pub mod source;
 pub mod streams;
 pub mod super_xbr;
