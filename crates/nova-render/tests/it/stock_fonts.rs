@@ -11,23 +11,11 @@ use std::sync::Arc;
 use nova_data::fonts::{DeviceWidths, charcoal_path, open_charcoal};
 use nova_render::fonts::FontFaces;
 use nova_render::glyph_raster::{HintedFace, Hinter};
+use nova_render::recording::NoImages;
 use nova_render::wgpu::{GlyphonMetrics, InitError, OffscreenGpu};
-use nova_render::{ImageError, ImageSource, LogicalSize, Renderer, Viewport};
+use nova_render::{LogicalSize, Renderer, Viewport};
 use nova_view::text::TextMetrics;
-use nova_view::{Color, DrawList, Font, ImageKind, Point};
-
-/// No images: the frames here are text alone.
-struct NoImages;
-
-impl ImageSource for NoImages {
-    fn frames(
-        &self,
-        _kind: ImageKind,
-        _id: i16,
-    ) -> Result<Vec<nova_data::graphics::Image>, ImageError> {
-        Err(ImageError::Missing)
-    }
-}
+use nova_view::{Color, DrawList, Font, Point};
 
 /// One line of text.
 const LINE: LogicalSize = LogicalSize { w: 128, h: 32 };

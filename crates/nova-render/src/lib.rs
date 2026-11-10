@@ -91,7 +91,8 @@
 //! unchanged.
 //!
 //! `recording::RecordingGpu` (this crate's tests, or the `recording`
-//! feature) is a [`Gpu`] that records its calls.
+//! feature) is a [`Gpu`] that records its calls, and `recording::NoImages`
+//! an [`ImageSource`] with no images.
 
 pub mod atlas;
 pub mod batch;
