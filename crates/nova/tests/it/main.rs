@@ -51,6 +51,7 @@ mod new_game_missions;
 mod new_game_outfits;
 mod new_game_play;
 mod new_game_port;
+mod new_game_port_loop;
 mod new_game_routes;
 mod new_game_saved_ids;
 mod new_game_screens;
