@@ -4,9 +4,10 @@
 //! [`read_texture`] checks what a texture may cost before it decodes it:
 //! the bytes on disk and the longest side, read from the PNG's header
 //! alone ([`budget`](crate::budget)'s limits, from the default budget's
-//! `texture`). Then it checks the shape the engine draws, whatever the
-//! budgets say: twice as wide as tall, each side a power of two (so its
-//! mip chain halves exactly). Only then is the image decoded, whatever
+//! `texture`), and the longest side the caller can draw (its GPU's
+//! largest texture). Then it checks the shape the engine draws, whatever
+//! the budgets say: twice as wide as tall, each side a power of two (so
+//! its mip chain halves exactly). Only then is the image decoded, whatever
 //! its colour type or bit depth, to RGBA8.
 
 use std::io::Cursor;
@@ -56,6 +57,16 @@ pub enum NoTexture {
     /// It is over its art budget: every limit it breaks, found from the
     /// file's size and its header.
     OverBudget(Vec<Overrun>),
+    /// Its longest side is over the most the caller can draw (the GPU's
+    /// largest texture), found from its header.
+    TooLarge {
+        /// The file.
+        file: String,
+        /// Its longest side in pixels.
+        side: u32,
+        /// The most the caller can draw.
+        most: u32,
+    },
     /// It isn't twice as wide as tall, or a side isn't a power of two.
     Shape {
         /// The file.
@@ -76,13 +87,15 @@ pub fn is_surface_shape(width: u32, height: u32) -> bool {
 }
 
 /// The texture `asset` names, read through `source` and held to `limits`
-/// (`budget::limits` of the asset): its first `.png`, whatever its
-/// `placeholder` flag. The budget and the shape are checked from the
-/// file's size and its header, before the image is decoded.
+/// (`budget::limits` of the asset) and to `max_side`, the longest side
+/// the caller can draw: its first `.png`, whatever its `placeholder`
+/// flag. The budget, the side and the shape are checked from the file's
+/// size and its header, before the image is decoded.
 pub fn read_texture(
     source: &impl Source,
     asset: &Asset,
     limits: &Limits,
+    max_side: u32,
 ) -> Result<Texture, NoTexture> {
     let file = asset
         .files
@@ -105,6 +118,13 @@ pub fn read_texture(
     let over = over_budget(limits, Cost::texture(disk_bytes, width.max(height)));
     if !over.is_empty() {
         return Err(NoTexture::OverBudget(over));
+    }
+    if width.max(height) > max_side {
+        return Err(NoTexture::TooLarge {
+            file: path.to_owned(),
+            side: width.max(height),
+            most: max_side,
+        });
     }
     if !is_surface_shape(width, height) {
         return Err(NoTexture::Shape {
@@ -201,7 +221,7 @@ mod tests {
     /// `limits`.
     fn read(bytes: &[u8], limits: &Limits) -> Result<Texture, NoTexture> {
         let source = MemSource::default().with_bytes(FILE, bytes);
-        read_texture(&source, &asset(&[FILE]), limits)
+        read_texture(&source, &asset(&[FILE]), limits, u32::MAX)
     }
 
     /// A PNG `width` by `height` of colour type `color` at `depth`, its
@@ -303,7 +323,7 @@ mod tests {
     fn a_placeholder_or_an_asset_with_no_png_has_no_file() {
         let source = MemSource::default();
         assert_eq!(
-            read_texture(&source, &asset(&[]), &Limits::default()),
+            read_texture(&source, &asset(&[]), &Limits::default(), u32::MAX),
             Err(NoTexture::None)
         );
         let placeholder = nova_galaxy_format::frontmatter::parse::<Asset>(
@@ -312,7 +332,7 @@ mod tests {
         .unwrap()
         .0;
         assert_eq!(
-            read_texture(&source, &placeholder, &Limits::default()),
+            read_texture(&source, &placeholder, &Limits::default(), u32::MAX),
             Err(NoTexture::None)
         );
         let source = source.with_bytes("media/export/p/a.glb", &rgba_png(2, 1, &RGBA));
@@ -320,7 +340,8 @@ mod tests {
             read_texture(
                 &source,
                 &asset(&["media/export/p/a.glb"]),
-                &Limits::default()
+                &Limits::default(),
+                u32::MAX,
             ),
             Err(NoTexture::None)
         );
@@ -336,7 +357,7 @@ mod tests {
             "media/export/p/a.png",
             "media/export/p/b.png",
         ]);
-        let texture = read_texture(&source, &asset, &Limits::default()).unwrap();
+        let texture = read_texture(&source, &asset, &Limits::default(), u32::MAX).unwrap();
         assert_eq!(texture.file, "media/export/p/a.png");
     }
 
@@ -350,7 +371,7 @@ mod tests {
     fn a_missing_file_or_one_that_isn_t_a_png_names_the_file() {
         let source = MemSource::default();
         assert_eq!(
-            read_texture(&source, &asset(&[FILE]), &Limits::default()),
+            read_texture(&source, &asset(&[FILE]), &Limits::default(), u32::MAX),
             Err(NoTexture::Missing(FILE.into()))
         );
         let Err(NoTexture::Unreadable(why)) = read(b"GIF89a nonsense", &Limits::default()) else {
@@ -446,6 +467,41 @@ mod tests {
             ..Limits::default()
         };
         assert!(read(&rgba_png(64, 32, &vec![0; 64 * 32 * 4]), &at).is_ok());
+    }
+
+    /// A PNG's header alone, declaring `width` by `height`.
+    fn header_only(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = rgba_png(2, 1, &RGBA)[..33].to_vec();
+        bytes[16..20].copy_from_slice(&width.to_be_bytes());
+        bytes[20..24].copy_from_slice(&height.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn a_texture_wider_than_the_gpu_draws_is_refused_before_decoding() {
+        // No budget limits it, and it is a surface's shape: only the
+        // caller's most side stops it, before the missing pixels decode.
+        let within = |bytes: &[u8]| {
+            read_texture(
+                &MemSource::default().with_bytes(FILE, bytes),
+                &asset(&[FILE]),
+                &Limits::default(),
+                8_192,
+            )
+        };
+        assert_eq!(
+            within(&header_only(16_384, 8_192)),
+            Err(NoTexture::TooLarge {
+                file: FILE.into(),
+                side: 16_384,
+                most: 8_192,
+            })
+        );
+        // At the most is within it: it fails only when it decodes.
+        assert!(matches!(
+            within(&header_only(8_192, 4_096)),
+            Err(NoTexture::Unreadable(_))
+        ));
     }
 
     #[test]

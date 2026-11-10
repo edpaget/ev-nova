@@ -22,6 +22,7 @@ use nova_galaxy_media::planet::{Sizes, Surface, bake};
 use nova_galaxy_media::{NoTexture, read_texture};
 
 use crate::galaxy_models::overrun;
+use crate::gpu::MAX_TEXTURE_SIDE;
 use crate::planet_source::{LoadedPlanet, PlanetError, PlanetRequest, PlanetSource};
 
 /// The new game's planets: the stellars, asset manifest and budgets of
@@ -86,7 +87,8 @@ impl<S: Source> GalaxyPlanets<'_, S> {
                 asset: name,
             });
         }
-        read_texture(self.source, &doc.data, &limits(self.galaxy, asset))
+        let limits = limits(self.galaxy, asset);
+        read_texture(self.source, &doc.data, &limits, MAX_TEXTURE_SIDE)
             .map(Surface::from_texture)
             .map_err(|why| no_texture(stellar, name, why))
     }
@@ -117,6 +119,13 @@ fn no_texture(stellar: String, asset: String, why: NoTexture) -> PlanetError {
             file,
             width,
             height,
+        },
+        NoTexture::TooLarge { file, side, most } => PlanetError::TooLarge {
+            stellar,
+            asset,
+            file,
+            side,
+            most,
         },
         NoTexture::OverBudget(over) => PlanetError::OverBudget {
             stellar,
@@ -350,6 +359,39 @@ mod tests {
         };
         assert_eq!(over[0].measure, Measure::Kib);
         assert!(ask(&sample().without("budgets/default.md"), "alpha-prime").is_ok());
+    }
+
+    #[test]
+    fn a_texture_wider_than_the_gpu_draws_is_refused_not_uploaded() {
+        // A surface's shape, no budget to stop it, and only a header: the
+        // GPU's limit refuses it before its pixels would decode.
+        let mut header = png(2, 1, &[0; 8])[..33].to_vec();
+        let wide = MAX_TEXTURE_SIDE * 2;
+        header[16..20].copy_from_slice(&wide.to_be_bytes());
+        header[20..24].copy_from_slice(&MAX_TEXTURE_SIDE.to_be_bytes());
+        let huge = sample()
+            .without("budgets/default.md")
+            .with_bytes("media/export/pack/surface.png", &header);
+        assert_eq!(
+            ask(&huge, "alpha-prime"),
+            Err(PlanetError::TooLarge {
+                stellar: "alpha-prime".into(),
+                asset: "surface".into(),
+                file: "media/export/pack/surface.png".into(),
+                side: wide,
+                most: MAX_TEXTURE_SIDE,
+            })
+        );
+    }
+
+    #[test]
+    fn the_engine_bakes_no_image_wider_than_the_gpu_draws() {
+        let Sizes {
+            surface,
+            clouds,
+            ring,
+        } = Sizes::ENGINE;
+        assert!(surface.max(clouds).max(ring) <= MAX_TEXTURE_SIDE);
     }
 
     #[test]

@@ -136,6 +136,24 @@ pub enum PlanetError {
         /// Its height in pixels.
         height: u32,
     },
+    /// Its texture is wider or taller than the GPU's largest texture
+    /// (`MAX_TEXTURE_SIDE`), so it can't be uploaded.
+    #[error(
+        "stellar `{stellar}`'s texture `{asset}` file `{file}` is {side} pixels on its \
+         longest side, over the {most} pixel limit of the GPU's textures"
+    )]
+    TooLarge {
+        /// The stellar.
+        stellar: String,
+        /// The asset.
+        asset: String,
+        /// The file.
+        file: String,
+        /// Its longest side in pixels.
+        side: u32,
+        /// The most a GPU texture may be.
+        most: u32,
+    },
     /// Its texture is over its art budget.
     #[error(
         "stellar `{stellar}`'s texture `{asset}` is over its art budget: {}",
@@ -491,6 +509,13 @@ mod tests {
                 stellar: stellar(),
                 asset: asset(),
                 why: "`f.png`: bad".into(),
+            },
+            PlanetError::TooLarge {
+                stellar: stellar(),
+                asset: asset(),
+                file: "f.png".into(),
+                side: 16_384,
+                most: 8_192,
             },
         ] {
             let message = error.to_string();
