@@ -182,26 +182,24 @@ const KENNEY_CC0: &str = "licence: CC0-1.0\nlicence_file: media/export/kenney-sp
 ///   kit's `metalRed`, so it shows against the hull's deck.
 ///
 /// The boxes are built in code (`nova_galaxy_media::fixture`); no art is
-/// checked in.
+/// checked in. They carry no normals, so a reader gives each triangle its
+/// flat one, and every face seen from above is lit evenly.
 ///
 /// # Panics
 ///
 /// When the sample folder can't be read.
 #[must_use]
 pub fn modelled_sample() -> MemSource {
-    let kenney = KENNEY.iter().fold(
-        Builder::new(LIGHT_FREIGHTER).normals().texcoords(),
-        |b, (name, color)| {
+    let kenney = KENNEY
+        .iter()
+        .fold(Builder::new(LIGHT_FREIGHTER), |b, (name, color)| {
             b.material(Mat {
                 unlit: true,
                 ..Mat::new(name, *color)
             })
-        },
-    );
+        });
     let (red, red_color) = KENNEY[1];
     let turret = Builder::new([0.4, 0.3, 0.4])
-        .normals()
-        .texcoords()
         .material(Mat {
             unlit: true,
             ..Mat::new(red, red_color)

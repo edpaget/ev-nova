@@ -15,6 +15,7 @@ mod fsr1_reference;
 mod livery_paint;
 mod message_line;
 mod metal_fx;
+mod mounted_outfits;
 mod prefs_labels;
 mod sample_models;
 mod sharp_bilinear;
