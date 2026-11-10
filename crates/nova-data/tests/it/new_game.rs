@@ -46,8 +46,9 @@ use nova_galaxy_media::BARE;
 /// hauler with cargo racks and a turret mass driver, sold at
 /// `hearth-dock` with no price of its own; the outfits
 /// `dock-pass` and `mass-driver`, a turret sold at `hearth-dock`; the mod
-/// kits `cargo-racks` (legal) and `gun-mount` (lawless, adding a turret
-/// hardpoint); the start `dock-hand`, in the hauler in `hearth`; the
+/// kits `cargo-racks` (legal), `gun-mount` (lawless, adding a turret
+/// hardpoint) and `turret-ring` (legal, adding a turret hardpoint); the
+/// start `dock-hand`, in the hauler in `hearth`; the
 /// storyline `dock-work`,
 /// whose four missions and two news items run over the conversations of
 /// `dialog/dock-job.ink`, compiled, whose greeting `verge-camp` names.
@@ -201,8 +202,8 @@ fn the_fixture_folder_holds_a_record_for_each_thing_it_maps() {
     assert_eq!(data.ids(Character::TYPE), [128], "the start");
     assert_eq!(
         data.ids(Outfit::TYPE),
-        [128, 129, 130, 131],
-        "the dock pass, the cargo racks kit, the mass driver, then the gun mount kit"
+        [128, 129, 130, 131, 132],
+        "the dock pass, the cargo racks kit, the mass driver, the gun mount kit, then the turret ring kit"
     );
     assert_eq!(data.ids(Weapon::TYPE), [128], "the mass driver");
     assert_eq!(
@@ -322,6 +323,29 @@ fn the_mass_driver_is_sold_at_hearth_dock_alone_and_verge_workshop_is_a_lawless_
     assert_eq!(spob("verge-workshop").tech_level, YARD_TECH_LAWLESS);
     let (_, mount) = named::<Outfit>(&game.data, game.ids.kits[&id("gun-mount")]);
     assert_eq!(mount.contribute.bits(), FitBits::mount_bit(Mount::Turret));
+}
+
+/// The turret ring is a legal kit, so a law-keeping yard like Hearth Dock
+/// fits it, that trades cargo for a turret hardpoint with no gun: the one
+/// kit the racked hauler, which already holds its racks, can still take.
+#[test]
+fn the_turret_ring_is_a_legal_kit_adding_an_empty_turret_hardpoint() {
+    use nova_data::new_game::kits::{FitBits, KIT_TECH_LEGAL, mod_type};
+    use nova_galaxy_format::fleet::Mount;
+
+    let game = new_game::open(&fixture()).expect("lists");
+    let (name, ring) = named::<Outfit>(&game.data, game.ids.kits[&id("turret-ring")]);
+    assert_eq!(name, "Turret ring");
+    assert_eq!((ring.tech_level, ring.cost), (KIT_TECH_LEGAL, 1000));
+    assert_eq!(ring.contribute.bits(), FitBits::mount_bit(Mount::Turret));
+    assert_eq!(
+        [
+            (ring.mod_type, ring.mod_val),
+            (ring.mod_type2, ring.mod_val2)
+        ],
+        [(mod_type::MORE_CARGO, -4), (mod_type::MORE_TURRETS, 1)]
+    );
+    assert_eq!(ring.on_purchase.as_str(), "", "no gun comes with it");
 }
 
 #[test]

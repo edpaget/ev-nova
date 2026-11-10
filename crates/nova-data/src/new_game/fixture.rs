@@ -22,9 +22,12 @@
 //! sold at `hearth-dock` alone (`sold_at`), so it is listed there only
 //! for a ship with a turret hardpoint; the legal mod kit `cargo-racks`,
 //! fitting freighters, so Hearth Dock's outfitter lists it for the
-//! hauler, and the lawless kit `gun-mount`, fitting freighters, which
+//! hauler, the lawless kit `gun-mount`, fitting freighters, which
 //! adds a turret hardpoint with no gun on it (the bare hauler has none),
-//! so only Verge Workshop fits it; the start `dock-hand`, in the hauler
+//! so only Verge Workshop fits it, and the legal kit `turret-ring`
+//! (1000), fitting freighters, which adds an empty turret hardpoint for
+//! four tons of cargo, so Hearth Dock fits it to the racked hauler and
+//! sells a second mass driver onto it; the start `dock-hand`, in the hauler
 //! in `hearth`; seven goods, the six standard ones `alloys` (400 a ton),
 //! `fuel-cells` (150), `grain` (100), `machinery` (600), `medicine` (800)
 //! and `textiles` (250), in slots 0 to 5, and the special good
