@@ -432,6 +432,11 @@ impl DrawCommand {
 /// Everything else (the HUD, every text, the course map, the dialogs and
 /// the fades) is overlay, and so is all of every other screen's drawing.
 ///
+/// A 3D model ([`DrawCommand::Model`]) is a command like any other: in
+/// the world when drawn inside [`DrawList::world`], so the overlay draws
+/// over it, and in the overlay otherwise. Sprites, placeholders and models
+/// mix in one frame in the list's order.
+///
 /// The world may be clipped ([`DrawList::world_in`]): flight clips it to
 /// the play area, the window less the status bar's column, as the
 /// original's sprite world ends there. The overlay is never clipped by it.
@@ -488,7 +493,8 @@ impl DrawList {
     }
 
     /// Has `draw` append the world's commands: each one it appends is in
-    /// [`DrawLayer::World`], except text, which stays in the overlay. Text
+    /// [`DrawLayer::World`], models ([`DrawCommand::Model`]) included,
+    /// except text, which stays in the overlay. Text
     /// is drawn at the window's own resolution, so a world drawn at the
     /// logical resolution never holds it, even text drawn among the world's
     /// sprites (flight's floaters' text, the message line's included, and a
