@@ -29,6 +29,11 @@
 //! turret facing belongs on the frame the sim port fills
 //! ([`super::sim_port`]), as a field.
 //!
+//! A ship's mounts are its class's and its kits' hardpoints, each showing
+//! the outfit the data puts on it, the ship as built. A weapon the player
+//! buys loose sits on no hardpoint, since nothing in the data assigns it
+//! one, so nothing draws it.
+//!
 //! [`ship_orientation`]: super::ship_model::ship_orientation
 
 use nova_data::store::Mount;
