@@ -9,18 +9,15 @@ use std::f32::consts::FRAC_PI_6;
 
 use nova_render::camera::shade;
 use nova_render::fonts::FontFaces;
-use nova_render::{Gpu, Light, LogicalSize, Mesh, RenderReport, Renderer, Upscaler, Viewport};
+use nova_render::{Gpu, Light, Mesh, RenderReport, Renderer, Upscaler, Viewport};
 use nova_view::geometry::Bounds;
 use nova_view::{Color, DrawList, ImageKey, ModelKey, ModelPose, Orientation, Point};
 
 use super::common::fill;
+use super::common::pixels::{
+    LOGICAL, SIZE, TOP, assert_near, color_at, near, pixel, pixels_inside,
+};
 use super::wgpu_offscreen::{Images, gpu_with};
-
-/// Logical 32x24 in a 64x64 target at scale 2: content (0, 8)-(64, 56).
-const LOGICAL: LogicalSize = LogicalSize { w: 32, h: 24 };
-const SIZE: u32 = 64;
-/// The content's top row.
-const TOP: f32 = 8.0;
 
 const CUBE: ModelKey = ModelKey(1);
 
@@ -56,10 +53,6 @@ const LIT: [u8; 3] = [132, 82, 41];
 /// The HUD's opaque block's colour.
 const HUD: [u8; 3] = [200, 40, 90];
 const BACKGROUND: [u8; 3] = [0, 0, 0];
-
-/// How far a lit face's channel may be from the core's shade: the GPU
-/// interpolates the normal and rounds to 8 bits.
-const TOLERANCE: u8 = 2;
 
 fn at(x: f32, y: f32) -> Point {
     Point::new(x, y)
@@ -138,56 +131,12 @@ fn drawn(list: &DrawList, upscaler: Upscaler) -> Option<Vec<u8>> {
     Some(gpu.read_pixels().expect("read back"))
 }
 
-/// The target pixel holding logical (`x`, `y`).
-fn pixel_of(x: f32, y: f32) -> (u32, u32) {
-    ((x * 2.0) as u32, (TOP + y * 2.0) as u32)
-}
-
-fn pixel(pixels: &[u8], (x, y): (u32, u32)) -> [u8; 4] {
-    let at = ((y * SIZE + x) * 4) as usize;
-    pixels[at..at + 4].try_into().expect("four bytes")
-}
-
-/// The colour at logical (`x`, `y`).
-fn color_at(pixels: &[u8], x: f32, y: f32) -> [u8; 3] {
-    rgb(pixel(pixels, pixel_of(x, y)))
-}
-
-/// A pixel's colour, its alpha dropped.
-fn rgb([red, green, blue, _]: [u8; 4]) -> [u8; 3] {
-    [red, green, blue]
-}
-
 /// Face `face` as the core shades it under the standard light, turned.
 fn shaded(face: usize) -> [u8; 3] {
     let normal = turn().rotate(NORMALS[face]).expect("a unit turn");
     let [r, g, b] = FACES[face].map(|c| f32::from(c) / 255.0);
     let [r, g, b, _] = shade(normal, [r, g, b, 1.0], Light::STANDARD);
     [r, g, b].map(|c| (c * 255.0).round() as u8)
-}
-
-fn near(a: [u8; 3], b: [u8; 3]) -> bool {
-    a.iter().zip(&b).all(|(p, q)| p.abs_diff(*q) <= TOLERANCE)
-}
-
-#[track_caller]
-fn assert_near(pixels: &[u8], (x, y): (f32, f32), expected: [u8; 3], what: &str) {
-    let got = color_at(pixels, x, y);
-    assert!(
-        near(got, expected),
-        "{what} at ({x}, {y}): {got:?}, not {expected:?}"
-    );
-}
-
-/// Every target pixel whose logical area lies inside `area`.
-fn pixels_inside((x0, y0, x1, y1): (f32, f32, f32, f32)) -> Vec<(u32, u32)> {
-    (0..SIZE)
-        .flat_map(|py| (0..SIZE).map(move |px| (px, py)))
-        .filter(|&(px, py)| {
-            let (x, y) = (px as f32 / 2.0, (py as f32 - TOP) / 2.0);
-            x >= x0 && x + 0.5 <= x1 && y >= y0 && y + 0.5 <= y1
-        })
-        .collect()
 }
 
 /// The upscalers drawn, and how far an edge may spread under each, in

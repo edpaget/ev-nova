@@ -6,6 +6,10 @@
 //! [`nova_data`] for the `Nova Files` directory and skips, passing, when it
 //! is unset. The new game's sample lives in another repository, so its
 //! test asks [`game_data`] for its `data` folder the same way.
+//!
+//! [`pixels`] reads back the small frame the model tests draw.
+
+pub mod pixels;
 
 use std::path::PathBuf;
 
