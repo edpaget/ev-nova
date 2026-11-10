@@ -212,22 +212,19 @@ mod tests {
         );
         assert_eq!(session.player_condition(), Condition::Intact);
         assert!(!session.player_boarded());
-        assert_eq!(
-            session.take_comm(),
-            [CommNote {
-                from: helper,
-                comm_name: "Shuttle".to_owned(),
-                ship_name: "Kestrel".to_owned(),
-                done: Help::Repair,
-            }]
-        );
+        let note = CommNote {
+            from: helper,
+            comm_name: "Shuttle".to_owned(),
+            ship_name: "Kestrel".to_owned(),
+            done: Help::Repair,
+        };
+        assert_eq!(session.take_comm(), std::slice::from_ref(&note));
         assert_eq!(session.take_sounds(), [SimSound::RepairsComplete]);
-        for tick in 1..240 {
-            session.space.count_down_comm_line();
-            assert!(!session.comm_line().free_for_calls(), "{tick}");
-        }
-        session.space.count_down_comm_line();
-        assert!(session.comm_line().free_for_calls(), "240 ticks");
+        // How long a note shows is nova-sim-ai's `NOTE_TICKS`, and how a
+        // shown line counts down to free is nova-sim-combat's `CommLine`.
+        let mut line = crate::comm_line::CommLine::default();
+        line.show(note.ticks());
+        assert_eq!(session.comm_line(), line, "held for the note's ticks");
     }
 
     #[test]

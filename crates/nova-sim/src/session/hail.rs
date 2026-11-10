@@ -2914,13 +2914,23 @@ pub(super) mod tests {
     fn a_warship_asks_its_price_to_fight_an_enemy_threat_and_paid_attacks_it_with_no_call() {
         // `_DoCommDialog` @0x96465-0x964ee.
         let (catalog, mut session, pirate) = unranked();
+        // The conversation the session must open: `request_help`'s `hail`
+        // opens on `opening(0)`, and `reinforced()`'s government isn't
+        // greedy. The price itself is nova-sim-ai's `hail::deal`.
+        let cash = session.pilot().cash;
+        let expected = Conversation::open(
+            cash,
+            false,
+            session.npcs()[0].info_types,
+            &mut Draws::of(&opening(0)),
+        );
         let view = request_help(&mut session, &catalog, 99);
         assert_eq!(view.reply, "You'll have to pay me first.");
-        assert_eq!(view.asking, Some(3000));
+        assert_eq!(view.asking, Some(expected.price));
         assert_eq!(session.npcs()[0].goal, Goal::Idle, "nothing until paid");
         let view = haggle(&mut session, &catalog, Haggle::Accept);
         assert_eq!(view.reply, "Okay, I'm on my way.");
-        assert_eq!(session.pilot().cash, 97_000);
+        assert_eq!(session.pilot().cash, cash - expected.price);
         let helper = &session.npcs()[0];
         assert_eq!(helper.goal, Goal::Attack(ShipRef::Npc(pirate)));
         assert_eq!(helper.target, Some(ShipRef::Npc(pirate)));
@@ -2930,7 +2940,12 @@ pub(super) mod tests {
     #[test]
     fn a_warships_price_declined_is_laughed_off_and_short_is_no_money() {
         let (catalog, mut session, _) = unranked();
-        request_help(&mut session, &catalog, 36);
+        // A lost haggle roll: `hail::deal` wins at most `HAGGLE_WINS_AT_MOST`.
+        request_help(
+            &mut session,
+            &catalog,
+            crate::hail::deal::HAGGLE_WINS_AT_MOST + 1,
+        );
         let view = haggle(&mut session, &catalog, Haggle::LowerPrice);
         assert_eq!(view.reply, "Ha ha ha. What a comedian.");
         assert_eq!(session.npcs()[0].goal, Goal::Idle);
