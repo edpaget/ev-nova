@@ -153,6 +153,55 @@ fn a_station_with_a_model_draws_it_unturned_at_its_stand_ins_centre_and_reach() 
     );
 }
 
+/// The table with the hub reaching `reach`.
+fn reaching(reach: f32) -> WorldModels {
+    let mut models = table();
+    models
+        .stellars
+        .insert(StellarId(STATION), StellarModel::Model { key: HUB, reach });
+    models
+}
+
+#[test]
+fn a_station_whose_model_would_scale_past_finite_draws_its_stand_in() {
+    // Reaching nowhere, or so little the scale overflows, or no number.
+    for reach in [0.0, -0.0, 1e-40, f32::NAN] {
+        let view = view_of(reaching(reach));
+        let list = commands(&world_list(&view));
+        assert!(
+            !list
+                .iter()
+                .any(|c| matches!(c, DrawCommand::Model { model: HUB, .. })),
+            "{reach}: no model"
+        );
+        let outline = stand_in_at(
+            &StellarStandIn::Outline(hub_from_above()),
+            stand_in_centre(&view, STATION),
+        );
+        let at = list
+            .iter()
+            .position(|c| *c == outline[0])
+            .unwrap_or_else(|| panic!("{reach}: the stand-in"));
+        assert_eq!(list[at..at + outline.len()], outline[..], "{reach}");
+    }
+}
+
+#[test]
+fn a_station_whose_model_reaches_a_little_draws_it_scaled_up() {
+    let reach = 1e-30;
+    let view = view_of(reaching(reach));
+    let list = commands(&world_list(&view));
+    let model = DrawCommand::Model {
+        model: HUB,
+        pose: ModelPose {
+            center: stand_in_centre(&view, STATION),
+            orientation: Orientation::IDENTITY,
+            scale: UNKNOWN_STELLAR_RADIUS / reach,
+        },
+    };
+    assert_eq!(list.iter().filter(|c| **c == model).count(), 1, "{list:?}");
+}
+
 #[test]
 fn a_planet_draws_at_the_stand_in_disc_s_radius_on_the_flight_clock() {
     let planet = |view: &Faked| {

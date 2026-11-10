@@ -19,7 +19,8 @@
 //! - **Stations and outposts**: each whose `visual` is a model, keyed as
 //!   an outfit is, with the reach of its stand-in outline (the model seen
 //!   from above, in its own units), so the view scales it to the
-//!   stand-in's size. One whose stand-in isn't its outline (the model
+//!   stand-in's size (one whose reach can't size it, the view draws as
+//!   its stand-in). One whose stand-in isn't its outline (the model
 //!   didn't read for the loader) has none.
 //! - **Planets and moons**: each [`GalaxyPlanets`] answers with a planet,
 //!   one key each.
@@ -129,8 +130,9 @@ pub fn world_assets_from(
                 continue;
             };
             let reach = match game.data.stand_in(StandInOf::Stellar(stellar)) {
-                // An outline that reaches nowhere scales the model to
-                // nothing, so it draws nothing, as the outline would.
+                // Any reach is handed on, nothing included: the flight
+                // view scales the model by the stand-in's radius over it,
+                // and draws the stand-in for a scale that isn't finite.
                 Some(StandIn::Outline(outline)) => outline.reach(),
                 _ => continue,
             };

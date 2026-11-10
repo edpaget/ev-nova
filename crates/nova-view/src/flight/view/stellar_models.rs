@@ -8,7 +8,9 @@
 //! - **A model** (a station's or an outpost's): a [`DrawCommand::Model`]
 //!   at the stand-in's centre, unturned, scaled so its footprint reaches
 //!   as far as the stand-in's ([`UNKNOWN_STELLAR_RADIUS`] over the table's
-//!   reach), in its own colours.
+//!   reach), in its own colours. One that scale can't size (a reach of
+//!   nothing, so little the scale overflows, or no number) draws its
+//!   stand-in instead, so no infinite scale reaches the draw list.
 //! - **A planet**: a [`DrawCommand::Planet`] at the stand-in's centre, its
 //!   globe the stand-in disc's radius, turned by the view's flight clock.
 //!
@@ -49,28 +51,33 @@ impl<C, S: FlightSim> FlightView<C, S> {
             scene,
             camera,
             Some(self.seen_murk()),
-            |list, stellar, centre| match self.world_models.stellar(stellar.id) {
-                Some(model) => {
-                    draw_stellar_model(list, model, centre, time);
-                    true
-                }
-                None => false,
+            |list, stellar, centre| {
+                self.world_models
+                    .stellar(stellar.id)
+                    .is_some_and(|model| draw_stellar_model(list, model, centre, time))
             },
         );
     }
 }
 
 /// Draws `model` round `centre`, reaching the stand-in's radius, a planet
-/// at the flight clock's `time` (see the module docs).
-fn draw_stellar_model(list: &mut DrawList, model: StellarModel, centre: Point, time: f64) {
+/// at the flight clock's `time` (see the module docs), and says whether
+/// it drew. A model whose scale to that radius isn't finite (it reaches
+/// nowhere, or too little, or its reach is no number) draws nothing, so
+/// the stand-in draws in its place.
+fn draw_stellar_model(list: &mut DrawList, model: StellarModel, centre: Point, time: f64) -> bool {
     match model {
         StellarModel::Model { key, reach } => {
+            let scale = UNKNOWN_STELLAR_RADIUS / reach;
+            if !scale.is_finite() {
+                return false;
+            }
             list.model(
                 key,
                 ModelPose {
                     center: centre,
                     orientation: Orientation::IDENTITY,
-                    scale: UNKNOWN_STELLAR_RADIUS / reach,
+                    scale,
                 },
             );
         }
@@ -85,4 +92,5 @@ fn draw_stellar_model(list: &mut DrawList, model: StellarModel, centre: Point, t
             );
         }
     }
+    true
 }
