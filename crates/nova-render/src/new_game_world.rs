@@ -127,11 +127,11 @@ pub fn world_assets_from(
                 continue;
             };
             let reach = match game.data.stand_in(StandInOf::Stellar(stellar)) {
-                Some(StandIn::Outline(outline)) => outline.reach(),
+                Some(StandIn::Outline(outline)) if outline.reach() > 0.0 => outline.reach(),
                 _ => continue,
             };
             let request = ModelRequest::new(asset.as_str(), None);
-            if let Some(key) = keys.key(&request, None).filter(|_| reach > 0.0) {
+            if let Some(key) = keys.key(&request, None) {
                 #[allow(clippy::cast_possible_truncation, reason = "a model's units")]
                 let reach = reach as f32;
                 table
@@ -542,6 +542,80 @@ mod tests {
             assets.problems
         );
         assert!(assets.models.ship(ship(&game, "light-freighter")).is_some());
+    }
+
+    #[test]
+    fn a_planet_that_fails_with_news_is_one_problem_and_otherwise_none() {
+        let source = modelled_sample_3d();
+        let game = load(&source, Path::new("sample"));
+        let named = || ("kestrel-reach".to_owned(), "surface".to_owned());
+        let news = [
+            PlanetError::NotATexture {
+                stellar: named().0,
+                asset: named().1,
+            },
+            PlanetError::Unreadable {
+                stellar: named().0,
+                asset: named().1,
+                why: "bad".into(),
+            },
+            PlanetError::OverBudget {
+                stellar: named().0,
+                asset: named().1,
+                over: Vec::new(),
+            },
+        ];
+        let quiet = [
+            PlanetError::NoStellar(named().0),
+            PlanetError::NotAPlanet(named().0),
+            PlanetError::NoAsset {
+                stellar: named().0,
+                asset: named().1,
+            },
+            PlanetError::NoFile {
+                stellar: named().0,
+                asset: named().1,
+            },
+            PlanetError::LfsPointer {
+                stellar: named().0,
+                asset: named().1,
+            },
+            PlanetError::Missing {
+                stellar: named().0,
+                asset: named().1,
+                file: "f.png".into(),
+            },
+        ];
+        let failing = |error: PlanetError| {
+            let planets =
+                crate::planet_source::FakePlanets::default().with_error("kestrel-reach", error);
+            world_assets_from(&game, &GalaxyModels::new(&game.galaxy, &source), &planets)
+        };
+        for error in news {
+            let said = error.to_string();
+            let assets = failing(error);
+            assert_eq!(assets.problems, [format!("{said}; it draws its disc")]);
+            assert!(assets.planets.is_empty());
+        }
+        for error in quiet {
+            let said = error.to_string();
+            let assets = failing(error);
+            assert_eq!(assets.problems, Vec::<String>::new(), "{said}");
+            assert!(assets.planets.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_station_whose_model_did_not_read_for_its_stand_in_has_none() {
+        let source = modelled_sample_3d().with_bytes(STATION_HUB_GLB, b"glTF nonsense");
+        let (game, assets) = built(&source);
+        for name in ["luyten-exchange", "marrow-yard"] {
+            assert_eq!(assets.models.stellar(stellar(&game, name)), None, "{name}");
+        }
+        assert!(
+            assets.meshes.len() >= 2,
+            "the ships' and the turret's still"
+        );
     }
 
     #[test]
