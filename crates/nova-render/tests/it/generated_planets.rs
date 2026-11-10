@@ -404,6 +404,71 @@ fn the_textured_planets_draw_their_textures_with_no_halo_or_rings() {
     }
 }
 
+/// A 64 by 32 surface that glows wholly (so it shows unlit, as it is):
+/// white in its northern twelve rows, black south of them, so its 1 by 1
+/// mip is a grey that no texel of its polar cap has. No tilt, clouds,
+/// rings or atmosphere.
+fn capped() -> LoadedPlanet {
+    let rgba = (0..32_u32)
+        .flat_map(|y| {
+            let c = if y < 12 { 255 } else { 0 };
+            (0..64).flat_map(move |_| [c, c, c, 255])
+        })
+        .collect();
+    LoadedPlanet {
+        surface: Surface {
+            surface: Image {
+                width: 64,
+                height: 32,
+                rgba,
+            },
+            clouds: None,
+            rings: None,
+            atmosphere: None,
+            day: 300.0,
+            tilt: 0.0,
+        },
+    }
+}
+
+#[test]
+fn no_mip_seam_crosses_the_polar_cap() {
+    // Untilted, the meridian opposite the one facing the camera runs up
+    // the screen from the north pole to the top limb, at x = 0. Centred
+    // on a pixel edge one pixel left of `CENTRE`, that meridian splits the
+    // 2 by 2 quad of columns 254 and 255, where a longitude's gradient
+    // taken across its wrap would pick the coarsest mip.
+    let centre = (CENTRE.0 - 1.0, CENTRE.1);
+    let planet = capped();
+    let Some(pixels) = alone(&planet, pose(centre.0, centre.1)) else {
+        return;
+    };
+    let frame = Frame::new(0.0, VIEW_LEAN);
+    for py in 161..=164 {
+        for px in 252..=257 {
+            let local = local_of(centre, (px, py));
+            let n = globe(local.0, local.1).expect("on the disc");
+            assert!(
+                nova_render::planet::latitude(n, &frame) > 1.3,
+                "inside the cap at {local:?}"
+            );
+            let got = rgb(&pixels, (px, py));
+            assert!(
+                near(got, [255; 3], 16),
+                "the cap at ({px}, {py}) is {got:?}, not white"
+            );
+        }
+    }
+    // Nor down the meridian facing the camera, on the black south of the
+    // cap.
+    for py in 270..=280 {
+        for px in 252..=257 {
+            let got = rgb(&pixels, (px, py));
+            assert!(near(got, [0; 3], 16), "at ({px}, {py}): {got:?}");
+        }
+    }
+}
+
 /// The cube's faces' colours, in `Mesh::cube`'s order: +x, −x, +y, −y,
 /// +z, −z.
 const CUBE_FACES: [[u8; 3]; 6] = [

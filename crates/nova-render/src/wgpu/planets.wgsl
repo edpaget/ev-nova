@@ -132,14 +132,17 @@ fn planet_fs(in: PlanetOut) -> @location(0) vec4<f32> {
     // `planet::globe`, clamped so its derivatives exist everywhere.
     let n = vec3<f32>(x, y, sqrt(max(1.0 - x * x - y * y, 0.0)));
     let on_disc = 1.0 - x * x - y * y >= 0.0;
-    // `planet::surface_uv`, with gradients taken from the continuous
-    // longitude, so no mip seam shows where u wraps.
+    // `planet::surface_uv`, with gradients taken from a continuous
+    // longitude, so no mip seam shows where u wraps. `turned` (in
+    // [-0.5, 0.5]) jumps on the meridian opposite `facing`, `wrapped` (in
+    // [0, 1)) on `facing`'s own, half a turn away; in each 2 by 2 quad the
+    // smaller gradient of the two is the one that doesn't cross a jump.
     let latitude = asin(clamp(dot(n, north), -1.0, 1.0));
     let turned = atan2(dot(n, in.east.xyz), dot(n, in.facing.xyz)) / TAU;
     let v = 0.5 - latitude / PI;
     let u = fract(turned - in.north.w);
     let cloud_u = fract(turned - in.facing.w);
-    let wrapped = fract(turned + 0.5) - 0.5;
+    let wrapped = fract(turned);
     let du_plain = vec2<f32>(dpdx(turned), dpdy(turned));
     let du_wrapped = vec2<f32>(dpdx(wrapped), dpdy(wrapped));
     let du = select(du_plain, du_wrapped, abs(du_wrapped) < abs(du_plain));
