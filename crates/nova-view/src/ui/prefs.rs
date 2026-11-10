@@ -1217,9 +1217,11 @@ impl Screen for PrefsDialog {
     /// The focused part is outlined. The keys screen, while it is open,
     /// is drawn over it all.
     fn draw(&self, list: &mut DrawList) {
-        let bounds = self.dialog.bounds();
-        fill_rect(list, bounds, BACKDROP);
-        outline(list, bounds, BORDER);
+        if self.dialog.backing().is_none() {
+            let bounds = self.dialog.bounds();
+            fill_rect(list, bounds, BACKDROP);
+            outline(list, bounds, BORDER);
+        }
         self.dialog.draw(list);
         for toggle in &self.inert {
             toggle.draw(false, &self.metrics, list);
@@ -1441,6 +1443,20 @@ mod tests {
             Rc::new(MonoMetrics),
         )
         .expect("builds")
+    }
+
+    #[test]
+    fn a_backed_prefs_dialog_draws_its_backing_in_place_of_the_backdrop() {
+        let backed = DialogTemplate {
+            backing: Some(crate::ui::panel::PanelBacking::NEW_GAME),
+            ..template()
+        };
+        let dialog = PrefsDialog::new(&backed, start(), ButtonStyle::STOCK, Rc::new(MonoMetrics))
+            .expect("builds");
+        let mut list = DrawList::new();
+        dialog.draw(&mut list);
+        let drawn: Vec<DrawCommand> = list.iter().cloned().collect();
+        crate::ui::panel::testing::assert_backed_first(&drawn, dialog.dialog().bounds());
     }
 
     pub(super) fn key(key: Key) -> Input {

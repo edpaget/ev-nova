@@ -468,7 +468,7 @@ impl Screen for EscortDialog {
     /// The picture (or the backdrop), the class's picture, the buttons,
     /// then the title and the info.
     fn draw(&self, list: &mut DrawList) {
-        backdrop(list, self.dialog.bounds(), self.picture);
+        backdrop(list, &self.dialog, self.picture);
         if let Some(at) = self.dialog.item_bounds(PICTURE_ITEM) {
             list.stretched_picture(
                 ship_picture(self.view.ship),
@@ -477,7 +477,7 @@ impl Screen for EscortDialog {
                 at.height(),
             );
         }
-        self.dialog.draw(list);
+        self.dialog.draw_items(list);
         self.draw_lines(list, TITLE_ITEM, &title_lines(&self.view), TITLE_BASELINES);
         self.draw_lines(list, INFO_ITEM, &info_lines(&self.view), INFO_BASELINES);
     }
@@ -969,5 +969,18 @@ mod tests {
         off.input(&key(Key::Space, false));
         assert_eq!(off.take_press(), None, "kept over set_view");
         assert_eq!(off.dialog().focus(), None);
+    }
+
+    /// The new game builds the escort dialog with `new`, over the comm
+    /// picture it lacks: the backing stands in for it.
+    #[test]
+    fn a_backed_escort_dialog_draws_its_backing_under_its_items() {
+        let backed = DialogTemplate {
+            backing: Some(crate::ui::panel::PanelBacking::NEW_GAME),
+            ..stock()
+        };
+        let dialog = EscortDialog::new(&backed, &hired(), ButtonStyle::STOCK, Rc::new(MonoMetrics))
+            .expect("builds");
+        crate::ui::panel::testing::assert_backed_first(&drawn(&dialog), dialog.dialog().bounds());
     }
 }

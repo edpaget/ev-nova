@@ -147,11 +147,14 @@ impl Screen for NoteDialog {
     /// Nothing moves on its own.
     fn tick(&mut self, _dt: Duration) {}
 
-    /// The backdrop and its outline, then the dialog.
+    /// The backdrop and its outline, unless the dialog brings its own
+    /// backing, then the dialog.
     fn draw(&self, list: &mut DrawList) {
-        let bounds = self.dialog.bounds();
-        fill_rect(list, bounds, BACKDROP);
-        outline(list, bounds, BORDER);
+        if self.dialog.backing().is_none() {
+            let bounds = self.dialog.bounds();
+            fill_rect(list, bounds, BACKDROP);
+            outline(list, bounds, BORDER);
+        }
         self.dialog.draw(list);
     }
 
@@ -171,6 +174,8 @@ mod tests {
     use crate::input::{Key, MouseButton};
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
+    use crate::ui::panel::PanelBacking;
+    use crate::ui::panel::testing::assert_backed_first;
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds {
         Bounds::at(Point::new(x, y), w, h)
@@ -360,6 +365,19 @@ mod tests {
             )),
             "no picture frame"
         );
+    }
+
+    #[test]
+    fn a_backed_note_draws_its_backing_in_place_of_the_backdrop() {
+        let backed = DialogTemplate {
+            backing: Some(PanelBacking::NEW_GAME),
+            ..template()
+        };
+        let note = note(&backed);
+        let mut list = DrawList::new();
+        note.draw(&mut list);
+        let commands: Vec<DrawCommand> = list.iter().cloned().collect();
+        assert_backed_first(&commands, note.dialog().bounds());
     }
 
     /// `_TrackOkButton` @0x26d7a plays nothing under the pointer, and

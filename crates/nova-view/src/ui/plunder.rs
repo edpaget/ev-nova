@@ -44,7 +44,7 @@ use std::time::Duration;
 use nova_sim::{Assignment, PlunderView, Take};
 
 use crate::color::Color;
-use crate::draw::{DrawList, fill_rect};
+use crate::draw::DrawList;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
@@ -57,11 +57,11 @@ use crate::spaceport::trade::LIGHT_GREY;
 use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
+use super::comm::backdrop;
 use super::dialog::{
     Dialog, DialogEvent, DialogTemplate, FocusRing, ItemSpec, ItemTemplate, Placement, Role,
-    STOCK_WORD, TextBacking, outline,
+    STOCK_WORD, TextBacking,
 };
-use super::prefs::{BACKDROP, BORDER};
 use super::scroll_text::{TextRow, TextRun};
 
 /// The plunder dialog's `DLOG` (and `DITL`) ID.
@@ -232,17 +232,6 @@ fn plunder_rows(shown: &PlunderShown) -> Vec<TextRow> {
             ],
         ),
     ]
-}
-
-/// Draws `picture` over `bounds`, or without one a dark backdrop with an
-/// outline.
-fn backdrop(list: &mut DrawList, bounds: Bounds, picture: Option<ImageKey>) {
-    if let Some(image) = picture {
-        list.stretched_picture(image, bounds.min, bounds.width(), bounds.height());
-    } else {
-        fill_rect(list, bounds, BACKDROP);
-        outline(list, bounds, BORDER);
-    }
 }
 
 /// `template` with each of `items` enabled, so a click activates it.
@@ -458,8 +447,8 @@ impl Screen for PlunderDialog {
 
     /// The picture (or the backdrop), then the dialog.
     fn draw(&self, list: &mut DrawList) {
-        backdrop(list, self.dialog.bounds(), self.picture);
-        self.dialog.draw(list);
+        backdrop(list, &self.dialog, self.picture);
+        self.dialog.draw_items(list);
     }
 
     fn cancel_pointer(&mut self) {
@@ -628,8 +617,8 @@ impl Screen for AssignmentDialog {
 
     /// The picture (or the backdrop), then the dialog.
     fn draw(&self, list: &mut DrawList) {
-        backdrop(list, self.dialog.bounds(), self.picture);
-        self.dialog.draw(list);
+        backdrop(list, &self.dialog, self.picture);
+        self.dialog.draw_items(list);
     }
 
     fn cancel_pointer(&mut self) {
@@ -652,6 +641,7 @@ mod tests {
     use crate::text::fixture::MonoMetrics;
     use crate::ui::ScrollText;
     use crate::ui::panel::PanelBacking;
+    use crate::ui::prefs::BACKDROP;
 
     /// A trader with 13 tons of food, 2 rounds of rockets, credits and
     /// energy, at odds of 43.
@@ -1608,6 +1598,34 @@ mod tests {
         assert_eq!(
             enabling(&backed, [1, 2]).backing,
             Some(PanelBacking::NEW_GAME)
+        );
+    }
+
+    /// The new game builds plunder and assignment with `new`, over the
+    /// pictures it lacks: the backing stands in for them.
+    #[test]
+    fn a_backed_plunder_or_assignment_dialog_draws_its_backing_under_its_items() {
+        let backed = |template| DialogTemplate {
+            backing: Some(PanelBacking::NEW_GAME),
+            ..template
+        };
+        let plunder = PlunderDialog::new(
+            &backed(stock()),
+            &shown(loaded()),
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+        .expect("builds");
+        crate::ui::panel::testing::assert_backed_first(&drawn(&plunder), plunder.dialog().bounds());
+        let assignment = AssignmentDialog::new(
+            &backed(stock_assignment()),
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+        .expect("builds");
+        crate::ui::panel::testing::assert_backed_first(
+            &drawn(&assignment),
+            assignment.dialog().bounds(),
         );
     }
 }

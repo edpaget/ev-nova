@@ -241,12 +241,15 @@ impl<P: Confirm> Screen for EditDialog<P> {
     /// Nothing moves on its own.
     fn tick(&mut self, _dt: Duration) {}
 
-    /// The backdrop and its outline, the dialog, and the field; then the
-    /// on-screen keyboard, or the ask for the system's entry.
+    /// The backdrop and its outline (unless the dialog brings its own
+    /// backing), the dialog, and the field; then the on-screen keyboard,
+    /// or the ask for the system's entry.
     fn draw(&self, list: &mut DrawList) {
-        let bounds = self.dialog.bounds();
-        fill_rect(list, bounds, BACKDROP);
-        outline(list, bounds, BORDER);
+        if self.dialog.backing().is_none() {
+            let bounds = self.dialog.bounds();
+            fill_rect(list, bounds, BACKDROP);
+            outline(list, bounds, BORDER);
+        }
         self.dialog.draw(list);
         self.field.draw(&*self.metrics, list);
         entry_keyboard::draw(self, list);
@@ -556,6 +559,29 @@ mod tests {
 
     fn dialog() -> EditDialog<Scripted> {
         dialog_with(Scripted::default())
+    }
+
+    #[test]
+    fn a_backed_edit_dialog_draws_its_backing_in_place_of_the_backdrop() {
+        let backed = DialogTemplate {
+            backing: Some(crate::ui::panel::PanelBacking::NEW_GAME),
+            ..template()
+        };
+        let dialog = EditDialog::laid_out(
+            &backed,
+            ITEMS,
+            &[],
+            "Asked:",
+            "abc",
+            Scripted::default(),
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+        .expect("builds");
+        let mut list = DrawList::new();
+        dialog.draw(&mut list);
+        let drawn: Vec<_> = list.iter().cloned().collect();
+        crate::ui::panel::testing::assert_backed_first(&drawn, dialog.dialog().bounds());
     }
 
     fn key(key: Key) -> Input {

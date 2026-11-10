@@ -150,9 +150,11 @@ impl Screen for YesNoDialog {
     fn tick(&mut self, _dt: Duration) {}
 
     /// The dialog over black, as the player info screen draws its
-    /// question.
+    /// question, or over its own backing if it brings one.
     fn draw(&self, list: &mut DrawList) {
-        fill_rect(list, self.dialog.bounds(), Color::BLACK);
+        if self.dialog.backing().is_none() {
+            fill_rect(list, self.dialog.bounds(), Color::BLACK);
+        }
         self.dialog.draw(list);
     }
 
@@ -212,6 +214,24 @@ mod tests {
             ButtonStyle::STOCK,
             Rc::new(MonoMetrics),
         )
+    }
+
+    #[test]
+    fn a_backed_question_draws_its_backing_in_place_of_the_black() {
+        let backed = DialogTemplate {
+            backing: Some(crate::ui::panel::PanelBacking::NEW_GAME),
+            ..template()
+        };
+        let dialog = YesNoDialog::new(
+            &backed,
+            QUIT_QUESTION,
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        );
+        let mut list = DrawList::new();
+        dialog.draw(&mut list);
+        let drawn: Vec<DrawCommand> = list.iter().cloned().collect();
+        crate::ui::panel::testing::assert_backed_first(&drawn, dialog.dialog().bounds());
     }
 
     struct Probe(YesNoDialog);

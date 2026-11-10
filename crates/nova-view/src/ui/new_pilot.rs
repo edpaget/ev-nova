@@ -594,14 +594,17 @@ impl Screen for NewPilotDialog {
     /// Nothing moves on its own.
     fn tick(&mut self, _dt: Duration) {}
 
-    /// The backdrop and its outline, the dialog, the Strict Play check
-    /// box, the name and nickname fields (only the focused one with its
-    /// caret or selection), the gender control, and the refusal under the
-    /// name in the error colour.
+    /// The backdrop and its outline (unless the dialog brings its own
+    /// backing), the dialog, the Strict Play check box, the name and
+    /// nickname fields (only the focused one with its caret or
+    /// selection), the gender control, and the refusal under the name in
+    /// the error colour.
     fn draw(&self, list: &mut DrawList) {
-        let bounds = self.dialog.bounds();
-        fill_rect(list, bounds, BACKDROP);
-        outline(list, bounds, BORDER);
+        if self.dialog.backing().is_none() {
+            let bounds = self.dialog.bounds();
+            fill_rect(list, bounds, BACKDROP);
+            outline(list, bounds, BORDER);
+        }
         self.dialog.draw(list);
         if let Some(toggle) = &self.strict_play {
             toggle.draw(false, &self.metrics, list);
@@ -728,6 +731,17 @@ mod tests {
 
     fn dialog() -> NewPilotDialog {
         NewPilotDialog::new(&stock(), ButtonStyle::STOCK, Rc::new(MonoMetrics)).expect("builds")
+    }
+
+    #[test]
+    fn a_backed_new_pilot_dialog_draws_its_backing_in_place_of_the_backdrop() {
+        let backed = DialogTemplate {
+            backing: Some(crate::ui::panel::PanelBacking::NEW_GAME),
+            ..stock()
+        };
+        let dialog =
+            NewPilotDialog::new(&backed, ButtonStyle::STOCK, Rc::new(MonoMetrics)).expect("builds");
+        crate::ui::panel::testing::assert_backed_first(&drawn(&dialog), dialog.dialog().bounds());
     }
 
     fn created(name: &str, gender: Gender) -> NewPilotOutcome {

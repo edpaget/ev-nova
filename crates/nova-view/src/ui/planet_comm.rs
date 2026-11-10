@@ -479,9 +479,9 @@ impl Screen for PlanetCommDialog {
     /// The picture (or the backdrop), the stellar's sprite, the buttons and
     /// the reply, then the text.
     fn draw(&self, list: &mut DrawList) {
-        backdrop(list, self.dialog.bounds(), self.picture);
+        backdrop(list, &self.dialog, self.picture);
         self.draw_sprite(list);
-        self.dialog.draw(list);
+        self.dialog.draw_items(list);
         self.draw_text(list);
     }
 
@@ -1178,5 +1178,24 @@ mod tests {
             shown.set_view(&greeting());
             assert_eq!(shown.dialog().focus_ring(), ring, "laid out again");
         }
+    }
+
+    /// The new game builds planet comm with `new`, over the comm picture
+    /// it lacks: the backing stands in for it.
+    #[test]
+    fn a_backed_planet_comm_dialog_draws_its_backing_under_its_items() {
+        let backed = DialogTemplate {
+            backing: Some(crate::ui::panel::PanelBacking::NEW_GAME),
+            ..stock()
+        };
+        let dialog = PlanetCommDialog::new(
+            &backed,
+            &greeting(),
+            Some(SPRITE),
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+        .expect("builds");
+        crate::ui::panel::testing::assert_backed_first(&drawn(&dialog), dialog.dialog().bounds());
     }
 }

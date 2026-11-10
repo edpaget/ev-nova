@@ -301,14 +301,21 @@ pub fn ship_picture(ship: ShipId) -> ImageKey {
     ImageKey::picture(FIRST_SHIP_PICTURE.saturating_add(ship.0.saturating_sub(FIRST_SHIP)))
 }
 
-/// Draws `picture` over `bounds`, or without one a dark backdrop with an
-/// outline.
-pub(super) fn backdrop(list: &mut DrawList, bounds: Bounds, picture: Option<ImageKey>) {
-    if let Some(image) = picture {
-        list.stretched_picture(image, bounds.min, bounds.width(), bounds.height());
-    } else {
-        fill_rect(list, bounds, BACKDROP);
-        outline(list, bounds, BORDER);
+/// Draws what goes under `dialog`'s items: its backing, standing in for
+/// the art a backed template's source lacks; else `picture` stretched
+/// over its window; else a dark backdrop with an outline. The caller
+/// draws the items after it with [`Dialog::draw_items`].
+pub(super) fn backdrop(list: &mut DrawList, dialog: &Dialog, picture: Option<ImageKey>) {
+    let bounds = dialog.bounds();
+    match (dialog.backing(), picture) {
+        (Some(_), _) => dialog.draw_backing(list),
+        (None, Some(image)) => {
+            list.stretched_picture(image, bounds.min, bounds.width(), bounds.height());
+        }
+        (None, None) => {
+            fill_rect(list, bounds, BACKDROP);
+            outline(list, bounds, BORDER);
+        }
     }
 }
 
@@ -742,7 +749,7 @@ impl Screen for CommDialog {
     /// ([`CommDialog::draw_class`]) and its status line
     /// ([`CommDialog::draw_status`]).
     fn draw(&self, list: &mut DrawList) {
-        backdrop(list, self.dialog.bounds(), self.picture);
+        backdrop(list, &self.dialog, self.picture);
         if let Some(at) = self.dialog.item_bounds(PICTURE_ITEM) {
             let picture = self
                 .view
@@ -750,7 +757,7 @@ impl Screen for CommDialog {
                 .map_or_else(|| ship_picture(self.view.ship), ImageKey::picture);
             list.stretched_picture(picture, at.min, at.width(), at.height());
         }
-        self.dialog.draw(list);
+        self.dialog.draw_items(list);
         if let Some(at) = self.dialog.item_bounds(CLASS_ITEM) {
             self.draw_class(list, at);
             self.draw_status(list, at);
@@ -961,8 +968,8 @@ impl Screen for HaggleDialog {
     /// The picture (or the backdrop), the dialog, then the price
     /// ([`HaggleDialog::draw_price`]).
     fn draw(&self, list: &mut DrawList) {
-        backdrop(list, self.dialog.bounds(), self.picture);
-        self.dialog.draw(list);
+        backdrop(list, &self.dialog, self.picture);
+        self.dialog.draw_items(list);
         if let Some(at) = self.dialog.item_bounds(PRICE_ITEM) {
             self.draw_price(list, at);
         }
@@ -988,6 +995,7 @@ mod tests {
     use crate::sound::Sound;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::panel::PanelBacking;
+    use crate::ui::panel::testing::assert_backed_first;
 
     fn button(label: &str, key: Option<char>) -> HailButton {
         HailButton {
@@ -2300,6 +2308,65 @@ mod tests {
         off.input(&key(Key::Space));
         assert_eq!(off.take_choice(), None);
         assert_eq!(off.dialog().focus(), None);
+    }
+
+    fn backed(template: DialogTemplate) -> DialogTemplate {
+        DialogTemplate {
+            backing: Some(PanelBacking::NEW_GAME),
+            ..template
+        }
+    }
+
+    /// The new game builds comm with `new`, over the comm picture it
+    /// lacks: the backing stands in for it.
+    #[test]
+    fn a_backed_comm_dialog_draws_its_backing_under_its_picture_and_items() {
+        let dialog = CommDialog::new(
+            &backed(stock()),
+            &view(),
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+        .expect("builds");
+        assert_backed_first(&drawn(&dialog), dialog.dialog().bounds());
+        let fallback = CommDialog::fallback(&view(), ButtonStyle::STOCK, Rc::new(MonoMetrics));
+        assert_eq!(fallback.dialog().backing(), None);
+    }
+
+    #[test]
+    fn a_backed_haggle_dialog_draws_its_backing_under_its_items() {
+        let template = DialogTemplate {
+            placement: Placement::Fixed,
+            ..backed(haggle_template())
+        };
+        let dialog = HaggleDialog::new(
+            &template,
+            3000,
+            true,
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+        .expect("builds");
+        assert_backed_first(&drawn(&dialog), dialog.dialog().bounds());
+    }
+
+    /// A backed dialog with no picture draws its backing alone, not the
+    /// dark backdrop as well.
+    #[test]
+    fn a_backed_dialog_with_no_picture_skips_the_dark_backdrop() {
+        let dialog = Dialog::new(&backed(stock()), &[], Rc::new(MonoMetrics));
+        let mut list = DrawList::new();
+        backdrop(&mut list, &dialog, None);
+        dialog.draw_items(&mut list);
+        let drawn: Vec<_> = list.iter().cloned().collect();
+        assert_backed_first(&drawn, dialog.bounds());
+        let unbacked = Dialog::new(&stock(), &[], Rc::new(MonoMetrics));
+        let mut list = DrawList::new();
+        backdrop(&mut list, &unbacked, None);
+        let mut dark = DrawList::new();
+        fill_rect(&mut dark, unbacked.bounds(), BACKDROP);
+        outline(&mut dark, unbacked.bounds(), BORDER);
+        assert_eq!(list, dark);
     }
 
     #[test]

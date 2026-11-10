@@ -34,6 +34,44 @@ impl PanelBacking {
     }
 }
 
+/// The check every host of a backed dialog runs on what it draws.
+#[cfg(test)]
+pub(crate) mod testing {
+    use super::*;
+    use crate::draw::{DrawCommand, fill_command};
+
+    /// Whether `command` is a fill of any colour covering `bounds`.
+    fn fills(command: &DrawCommand, bounds: Bounds) -> bool {
+        match command {
+            DrawCommand::Line { color, .. } => *command == fill_command(bounds, *color),
+            _ => false,
+        }
+    }
+
+    /// Asserts that `drawn` begins with [`PanelBacking::NEW_GAME`] over
+    /// `bounds`, before anything the host draws, and holds no other fill
+    /// covering `bounds`, such as a host's own backdrop.
+    #[track_caller]
+    pub(crate) fn assert_backed_first(drawn: &[DrawCommand], bounds: Bounds) {
+        let mut backing = DrawList::new();
+        PanelBacking::NEW_GAME.draw(&mut backing, bounds);
+        let backing: Vec<_> = backing.iter().cloned().collect();
+        assert!(
+            drawn.starts_with(&backing),
+            "the backing over {bounds:?} comes first: {:?}",
+            &drawn[..drawn.len().min(backing.len() + 1)]
+        );
+        assert_eq!(
+            drawn
+                .iter()
+                .filter(|command| fills(command, bounds))
+                .count(),
+            1,
+            "one fill covers the window"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
