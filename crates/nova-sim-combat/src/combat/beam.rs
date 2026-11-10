@@ -355,7 +355,7 @@ impl Beam {
         let (Some(exits), Some(kind), Some(exit)) = (exits, self.kind, self.exit) else {
             return Vec2::ZERO;
         };
-        exits.offset(self.frame, kind, exit, compression)
+        exits.offset(self.frame, kind, exit, compression.into())
     }
 
     /// Whether it can hit `target`, among the fight's `sides`

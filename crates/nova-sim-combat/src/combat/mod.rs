@@ -2118,7 +2118,7 @@ impl Combat {
                 from.position,
                 from.heading,
                 toward,
-                self.compression,
+                self.compression.into(),
             );
             if muzzle.exits.is_some() {
                 beam.kind = Some(kind);
@@ -2161,7 +2161,7 @@ impl Combat {
                     from.position,
                     muzzle.angle,
                     None,
-                    self.compression,
+                    self.compression.into(),
                 );
             }
             defended.filter(|_| launch.weapon.nearest_exit)
@@ -2174,7 +2174,7 @@ impl Combat {
             from.position,
             muzzle.angle,
             toward,
-            self.compression,
+            self.compression.into(),
         );
         let side = points.map_or(0.0, |points| points.side(kind, index));
         (start, side)

@@ -8,11 +8,16 @@
 //!   ship facing up: +x to its right and +y ahead
 //!   ([`ExitPoints::offset`]). A weapon of `ExitType` 0-3 fires from that
 //!   set; any other, -1 included, from the centre.
-//! - An exit point turns with the frame the ship was drawn on, not its
-//!   heading: the frame's angle, `trunc(frame × 360 / FramesPer)` in whole
-//!   degrees (@0x739e-0x73f5; [`drawn_frame`], [`frame_angle`]). The turn
+//! - An exit point turns with its ship's hull ([`ExitPoints::hull_angle`],
+//!   [`hull_turn`](super::hull_turn)). By the engine reading of the
+//!   rulebook's
+//!   [`RuleKey::ContinuousHeadings`](crate::RuleKey::ContinuousHeadings),
+//!   that is the frame the ship was drawn on, not its heading: the frame's
+//!   angle, `trunc(frame × 360 / FramesPer)` in whole degrees
+//!   (@0x739e-0x73f5; [`drawn_frame`], [`frame_angle`]), and the turn
 //!   reads the original's sine table (`_BuildTrigTable` @0x25828), so a
-//!   point turned to 180 lands where the original puts it.
+//!   point turned to 180 lands where the original puts it. By the other
+//!   reading it is the heading itself, turned by the exact sine.
 //! - The turned point is then squashed by the `shän`'s up or down
 //!   compression, each its percent over 100, any at or below 0 counting as
 //!   100 (`_LoadExtendedShipSprites` @0x23d45-0x23e07). By the engine,
@@ -31,8 +36,8 @@
 //! - A beam takes its exit as `_SpawnBeam` does (@0x450e4-0x4523d,
 //!   [`ExitCursors::beam_exit`]): the nearest by the ship's heading, not
 //!   its drawn frame, with the cursor moved on from where it was, not from
-//!   the nearest. It then starts at that exit on every tick's drawn frame
-//!   ([`Beam`](super::beam::Beam)).
+//!   the nearest. It then starts at that exit on every tick's hull angle,
+//!   by the engine its drawn frame's ([`Beam`](super::beam::Beam)).
 //!
 //! The cursors start at 0, as the ship table is fresh zeroed memory
 //! (`_InitArrays` @0x1b7a8), and stay 0-3, so the original's `Rand(4)` for
@@ -72,6 +77,7 @@ use crate::flight::normalized;
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
 
+use super::hull_turn::{HullTurn, hull_angle};
 use super::ship_frames::FrameTable;
 
 /// The frames in a turn of a `shän` whose `FramesPer` is 0
@@ -138,6 +144,29 @@ impl From<RuleSource> for Compression {
         match source {
             RuleSource::Engine => Self::ByOffset,
             RuleSource::Bible => Self::ByHeading,
+        }
+    }
+}
+
+/// The rulebook's readings an exit point is placed by: which compression
+/// it takes ([`Compression`]) and what its hull turns with ([`HullTurn`]).
+/// The default is the engine's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ExitRules {
+    /// Which compression it takes, as
+    /// [`RuleKey::ExitCompression`](crate::RuleKey::ExitCompression) says.
+    pub compression: Compression,
+    /// What its hull turns with, as
+    /// [`RuleKey::ContinuousHeadings`](crate::RuleKey::ContinuousHeadings)
+    /// says.
+    pub turn: HullTurn,
+}
+
+impl From<Compression> for ExitRules {
+    fn from(compression: Compression) -> Self {
+        Self {
+            compression,
+            ..Self::default()
         }
     }
 }
@@ -229,18 +258,26 @@ impl ExitPoints {
         frame_angle(self.drawn_frame(heading), self.frames)
     }
 
-    /// Where exit `index` of `kind` stands off the ship's centre with the
-    /// ship drawn at `angle`, a whole degree, its compression chosen as
-    /// `compression` says: `_ModifyShotStartPosition2`. An `index` past 3
-    /// stands at the centre (@0x70b6-0x70c5).
+    /// The angle its exit points stand at for its ship facing `heading`,
+    /// as `turn` says: by frame its drawn frame's
+    /// ([`ExitPoints::drawn_angle`]), continuously the heading itself
+    /// ([`hull_angle`]).
     #[must_use]
-    pub fn offset(
-        &self,
-        angle: f32,
-        kind: ExitKind,
-        index: usize,
-        compression: Compression,
-    ) -> Vec2 {
+    pub fn hull_angle(&self, heading: f32, turn: HullTurn) -> f32 {
+        let table = self
+            .angle_table
+            .then(|| FrameTable::new(self.frames, self.up, self.down));
+        hull_angle(heading, self.frames, table.as_ref(), turn)
+    }
+
+    /// Where exit `index` of `kind` stands off the ship's centre with the
+    /// ship's hull at `angle`, placed as `rules` say:
+    /// `_ModifyShotStartPosition2`. By frame `angle` is a whole degree and
+    /// the point turns by the original's sine table; continuously it
+    /// turns exactly. An `index` past 3 stands at the centre
+    /// (@0x70b6-0x70c5).
+    #[must_use]
+    pub fn offset(&self, angle: f32, kind: ExitKind, index: usize, rules: ExitRules) -> Vec2 {
         let (Some(&(x, y)), Some(&z)) = (
             self.points[kind.index()].get(index),
             self.z[kind.index()].get(index),
@@ -250,13 +287,20 @@ impl ExitPoints {
         let point = Vec2::new(f32::from(x), f32::from(y));
         // `_Accel(angle, Y)` then `_Accel((angle + 90) mod 360, X)`, each
         // `v.x += m·sin`, `v.y −= m·cos` from the table (@0x7124, @0x7178).
-        let (sin, cos) = table_trig(angle);
-        let (sin_right, cos_right) = table_trig(angle + 90.0);
+        // Continuously, the same turn by the exact sine: sin(a + 90) is
+        // cos a and cos(a + 90) is −sin a.
+        let ((sin, cos), (sin_right, cos_right)) = match rules.turn {
+            HullTurn::ByFrame => (table_trig(angle), table_trig(angle + 90.0)),
+            HullTurn::Continuous => {
+                let (sin, cos) = angle.to_radians().sin_cos();
+                ((sin, cos), (cos, -sin))
+            }
+        };
         let turned = Vec2::new(
             point.y * sin + point.x * sin_right,
             -(point.y * cos) - point.x * cos_right,
         );
-        let up = match compression {
+        let up = match rules.compression {
             Compression::ByOffset => turned.y < 0.0,
             Compression::ByHeading => angle <= 90.0 || angle >= 270.0,
         };
@@ -264,8 +308,8 @@ impl ExitPoints {
         Vec2::new(turned.x * factor.x, turned.y * factor.y - f32::from(z))
     }
 
-    /// Which of `kind`'s exits, with the ship at `from` drawn at `angle`,
-    /// is nearest `toward`, the first of equals:
+    /// Which of `kind`'s exits, with the ship at `from` and its hull at
+    /// `angle`, is nearest `toward`, the first of equals:
     /// `_SelectClosestShotStartPosition`.
     #[must_use]
     pub fn nearest(
@@ -274,12 +318,12 @@ impl ExitPoints {
         angle: f32,
         kind: ExitKind,
         toward: Vec2,
-        compression: Compression,
+        rules: ExitRules,
     ) -> usize {
         let mut nearest = 0;
         let mut best = f32::INFINITY;
         for index in 0..EXITS {
-            let off = from + self.offset(angle, kind, index, compression) - toward;
+            let off = from + self.offset(angle, kind, index, rules) - toward;
             let distance = off.x * off.x + off.y * off.y;
             if distance < best {
                 best = distance;
@@ -371,8 +415,9 @@ impl ExitCursors {
         self.0[kind.index()] = ((index + 1) % EXITS) as u8;
     }
 
-    /// Where a shot of `kind` leaves from, of a ship at `from` drawn at
-    /// `angle` with `exits`, and the exit it takes: `_ModifyShotStartPosition`
+    /// Where a shot of `kind` leaves from, of a ship at `from` with its
+    /// hull at `angle` ([`ExitPoints::hull_angle`]) and `exits` placed as
+    /// `rules` say, and the exit it takes: `_ModifyShotStartPosition`
     /// (@0x739e-0x74c4). With `toward`, the target of a weapon of `Flags3`
     /// 0x0010, the exit nearest it; otherwise the cursor's. Either way the
     /// cursor moves on from the exit taken. With no `exits`, which the
@@ -386,26 +431,25 @@ impl ExitCursors {
         from: Vec2,
         angle: f32,
         toward: Option<Vec2>,
-        compression: Compression,
+        rules: ExitRules,
     ) -> (Vec2, usize) {
         let index = match toward {
-            Some(toward) => exits.map_or(0, |exits| {
-                exits.nearest(from, angle, kind, toward, compression)
-            }),
+            Some(toward) => {
+                exits.map_or(0, |exits| exits.nearest(from, angle, kind, toward, rules))
+            }
             None => self.next(kind),
         };
         self.step_from(kind, index);
-        let offset = exits.map_or(Vec2::ZERO, |exits| {
-            exits.offset(angle, kind, index, compression)
-        });
+        let offset = exits.map_or(Vec2::ZERO, |exits| exits.offset(angle, kind, index, rules));
         (from + offset, index)
     }
 
     /// The exit a beam of `kind` takes, of a ship at `from` facing
-    /// `heading`, with `exits`: `_SpawnBeam` (@0x450e4-0x4523d). With
-    /// `toward`, the target of a weapon of `Flags3` 0x0010 aimed at a ship,
-    /// the exit nearest it with the ship turned to its heading's whole
-    /// degree (@0x4519e); otherwise the cursor's. Either way the cursor
+    /// `heading`, with `exits` placed as `rules` say: `_SpawnBeam`
+    /// (@0x450e4-0x4523d). With `toward`, the target of a weapon of
+    /// `Flags3` 0x0010 aimed at a ship, the exit nearest it with the ship
+    /// turned to its heading's whole degree (@0x4519e), or continuously
+    /// to the heading itself; otherwise the cursor's. Either way the cursor
     /// moves on from where it was, not from a nearest exit. With no
     /// `exits`, the four stand at the centre, as for [`ExitCursors::shot_start`].
     pub fn beam_exit(
@@ -415,13 +459,15 @@ impl ExitCursors {
         from: Vec2,
         heading: f32,
         toward: Option<Vec2>,
-        compression: Compression,
+        rules: ExitRules,
     ) -> usize {
         let cursor = self.next(kind);
+        let angle = match rules.turn {
+            HullTurn::ByFrame => heading.trunc(),
+            HullTurn::Continuous => heading,
+        };
         let index = toward.map_or(cursor, |toward| {
-            exits.map_or(0, |exits| {
-                exits.nearest(from, heading.trunc(), kind, toward, compression)
-            })
+            exits.map_or(0, |exits| exits.nearest(from, angle, kind, toward, rules))
         });
         self.step_from(kind, cursor);
         index
@@ -489,6 +535,7 @@ pub fn step_stray(word: &mut u16, chance: &mut dyn Chance) {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::flight::facing;
     use nova_sim_base::fixture::Draws;
 
     fn frames(n: u16) -> NonZeroU16 {
@@ -573,11 +620,78 @@ mod tests {
     #[test]
     fn an_exit_point_turns_with_the_drawn_frame() {
         let gun = exits(&raw([(3, 10); 4]));
-        let at = |angle| gun.offset(angle, ExitKind::Gun, 0, Compression::ByOffset);
+        let at = |angle| gun.offset(angle, ExitKind::Gun, 0, Compression::ByOffset.into());
         assert!(close(at(0.0), Vec2::new(3.0, -10.0)), "{:?}", at(0.0));
         assert!(close(at(90.0), Vec2::new(10.0, 3.0)), "{:?}", at(90.0));
         assert!(close(at(180.0), Vec2::new(-3.0, 10.0)), "{:?}", at(180.0));
         assert!(close(at(270.0), Vec2::new(-10.0, -3.0)), "{:?}", at(270.0));
+    }
+
+    #[test]
+    fn continuously_an_exit_point_turns_with_the_heading_itself() {
+        let gun = exits(&raw([(0, 20); 4]));
+        let at = |heading, turn| {
+            let rules = ExitRules {
+                turn,
+                ..ExitRules::default()
+            };
+            gun.offset(gun.hull_angle(heading, turn), ExitKind::Gun, 0, rules)
+        };
+        let headings = [5.0, 12.5, 97.3];
+        for heading in headings {
+            let want = facing(heading) * 20.0;
+            let got = at(heading, HullTurn::Continuous);
+            assert!(close(got, want), "{heading}: {got:?} not {want:?}");
+        }
+        for (i, a) in headings.iter().enumerate() {
+            for b in &headings[i + 1..] {
+                assert!(!close(
+                    at(*a, HullTurn::Continuous),
+                    at(*b, HullTurn::Continuous)
+                ));
+            }
+        }
+        assert_eq!(
+            at(5.0, HullTurn::ByFrame),
+            at(9.9, HullTurn::ByFrame),
+            "by frame, one frame's point"
+        );
+        assert!(!close(
+            at(5.0, HullTurn::Continuous),
+            at(9.9, HullTurn::Continuous)
+        ));
+    }
+
+    #[test]
+    fn continuously_the_nearest_beam_exit_is_measured_at_the_heading() {
+        // Two beam exits either side of the nose; the target lies ahead
+        // at 44.3, so the right one is nearer at 44 and the left at 44.6.
+        let beams = exits(&ShipExits {
+            points: [
+                [(0, 0); 4],
+                [(0, 0); 4],
+                [(0, 0); 4],
+                [(1, 20), (-1, 20), (0, 0), (0, 0)],
+            ],
+            ..raw([(0, 0); 4])
+        });
+        let toward = facing(44.3) * 200.0;
+        let nearest = |turn| {
+            let rules = ExitRules {
+                turn,
+                ..ExitRules::default()
+            };
+            ExitCursors::default().beam_exit(
+                Some(&beams),
+                ExitKind::Beam,
+                Vec2::ZERO,
+                44.6,
+                Some(toward),
+                rules,
+            )
+        };
+        assert_eq!(nearest(HullTurn::ByFrame), 0, "at the whole degree, 44");
+        assert_eq!(nearest(HullTurn::Continuous), 1, "at 44.6 itself");
     }
 
     /// Guns ahead, behind and to the right; up compression (1, 0.5) and
@@ -592,8 +706,9 @@ mod tests {
 
     #[test]
     fn compression_follows_the_rotated_offset_up_or_down_the_screen() {
-        let at =
-            |angle, index| squashed().offset(angle, ExitKind::Gun, index, Compression::ByOffset);
+        let at = |angle, index| {
+            squashed().offset(angle, ExitKind::Gun, index, Compression::ByOffset.into())
+        };
         assert!(
             close(at(0.0, 0), Vec2::new(0.0, -5.0)),
             "ahead, up the screen"
@@ -614,7 +729,7 @@ mod tests {
         // In `_BuildTrigTable`'s table cos 90 is just above 0 and cos 270
         // just below, so a side exit facing up is just up the screen, and
         // one turned to 180 just down it.
-        let at = |angle| squashed().offset(angle, ExitKind::Gun, 2, Compression::ByOffset);
+        let at = |angle| squashed().offset(angle, ExitKind::Gun, 2, Compression::ByOffset.into());
         assert!(close(at(0.0), Vec2::new(10.0, 0.0)), "{:?}", at(0.0));
         assert!(at(0.0).y < 0.0);
         assert!(close(at(180.0), Vec2::new(-5.0, 0.0)), "{:?}", at(180.0));
@@ -625,14 +740,15 @@ mod tests {
     fn a_point_on_the_centre_takes_the_down_compression_and_its_z() {
         let mut raw = raw([(0, 0); 4]);
         raw.z[0] = [4, 0, 0, 0];
-        let at = exits(&raw).offset(0.0, ExitKind::Gun, 0, Compression::ByOffset);
+        let at = exits(&raw).offset(0.0, ExitKind::Gun, 0, Compression::ByOffset.into());
         assert_eq!(at, Vec2::new(0.0, -4.0));
     }
 
     #[test]
     fn by_the_bible_compression_follows_the_heading() {
-        let at =
-            |angle, index| squashed().offset(angle, ExitKind::Gun, index, Compression::ByHeading);
+        let at = |angle, index| {
+            squashed().offset(angle, ExitKind::Gun, index, Compression::ByHeading.into())
+        };
         assert!(close(at(0.0, 1), Vec2::new(0.0, 5.0)), "behind, facing up");
         assert!(close(at(90.0, 1), Vec2::new(-10.0, 0.0)), "90 is up");
         assert!(close(at(180.0, 0), Vec2::new(0.0, 10.0)), "180 is down");
@@ -654,7 +770,7 @@ mod tests {
         raw.up_compress = (100, 50);
         raw.z[0] = [2, -2, 0, 0];
         let gun = exits(&raw);
-        let at = |index| gun.offset(0.0, ExitKind::Gun, index, Compression::ByOffset);
+        let at = |index| gun.offset(0.0, ExitKind::Gun, index, Compression::ByOffset.into());
         assert!(close(at(0), Vec2::new(0.0, -7.0)), "{:?}", at(0));
         assert!(close(at(1), Vec2::new(0.0, -3.0)), "{:?}", at(1));
     }
@@ -665,12 +781,12 @@ mod tests {
         raw.points[3] = [(0, 0), (30, 0), (0, 0), (-30, 0)];
         raw.z[3] = [25, 0, -25, 0];
         let beam = exits(&raw);
-        let at = |index| beam.offset(0.0, ExitKind::Beam, index, Compression::ByOffset);
+        let at = |index| beam.offset(0.0, ExitKind::Beam, index, Compression::ByOffset.into());
         assert!(close(at(0), Vec2::new(0.0, -25.0)));
         assert!(close(at(1), Vec2::new(30.0, 0.0)));
         assert!(close(at(2), Vec2::new(0.0, 25.0)));
         assert!(close(at(3), Vec2::new(-30.0, 0.0)));
-        let gun = beam.offset(0.0, ExitKind::Gun, 1, Compression::ByOffset);
+        let gun = beam.offset(0.0, ExitKind::Gun, 1, Compression::ByOffset.into());
         assert_eq!(gun, Vec2::ZERO);
     }
 
@@ -681,7 +797,7 @@ mod tests {
                 up_compress: (pct, pct),
                 ..raw([(0, 10); 4])
             });
-            let at = gun.offset(0.0, ExitKind::Gun, 0, Compression::ByOffset);
+            let at = gun.offset(0.0, ExitKind::Gun, 0, Compression::ByOffset.into());
             assert!(close(at, Vec2::new(0.0, -10.0 * factor)), "{pct}: {at:?}");
         }
     }
@@ -722,7 +838,7 @@ mod tests {
                 from,
                 0.0,
                 None,
-                Compression::ByOffset,
+                Compression::ByOffset.into(),
             )
         };
         for (shot, x) in [(0, 101.0), (1, 102.0), (2, 103.0), (3, 104.0), (0, 101.0)] {
@@ -745,7 +861,7 @@ mod tests {
                 Vec2::ZERO,
                 0.0,
                 toward,
-                Compression::ByOffset,
+                Compression::ByOffset.into(),
             )
         };
         let (at, index) = start(&mut cursors, Some(Vec2::new(50.0, 0.0)));
@@ -767,7 +883,7 @@ mod tests {
                 0.0,
                 ExitKind::Gun,
                 Vec2::new(0.0, -50.0),
-                Compression::ByOffset
+                Compression::ByOffset.into()
             ),
             1
         );
@@ -782,7 +898,7 @@ mod tests {
                 0.0,
                 ExitKind::Gun,
                 Vec2::new(95.0, 0.0),
-                Compression::ByOffset
+                Compression::ByOffset.into()
             ),
             0
         );
@@ -792,7 +908,7 @@ mod tests {
                 180.0,
                 ExitKind::Gun,
                 Vec2::new(95.0, 0.0),
-                Compression::ByOffset
+                Compression::ByOffset.into()
             ),
             1,
             "turned"
@@ -814,7 +930,7 @@ mod tests {
                 Vec2::ZERO,
                 heading,
                 toward,
-                Compression::ByOffset,
+                Compression::ByOffset.into(),
             )
         };
         assert_eq!(
@@ -853,7 +969,7 @@ mod tests {
                 from,
                 0.0,
                 toward,
-                Compression::ByOffset,
+                Compression::ByOffset.into(),
             )
         };
         assert_eq!(start(None), (from, 0));
@@ -873,7 +989,7 @@ mod tests {
                 Vec2::ZERO,
                 0.0,
                 toward,
-                Compression::ByOffset,
+                Compression::ByOffset.into(),
             )
         };
         assert_eq!(exit(None), 0);
