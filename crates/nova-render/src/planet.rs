@@ -584,6 +584,63 @@ mod tests {
     }
 
     #[test]
+    fn the_light_need_not_be_a_unit_vector() {
+        let long = Light {
+            direction: PLANET_LIGHT.direction.map(|c| c * 3.0),
+            ..PLANET_LIGHT
+        };
+        let l = unit(PLANET_LIGHT.direction);
+        let near_behind = l.map(|c| -1.2 * c);
+        assert_eq!(
+            in_planet_shadow(near_behind, long),
+            in_planet_shadow(near_behind, PLANET_LIGHT)
+        );
+        assert!(in_planet_shadow(near_behind, long));
+        // Just past the globe's edge from the light: outside its shadow,
+        // however long the light's vector.
+        let f = upright();
+        let aside = [0, 1, 2].map(|i| -2.0 * l[i] + 1.01 * unit([f.east[0], f.east[1], 0.0])[i]);
+        assert_eq!(
+            in_planet_shadow(aside, long),
+            in_planet_shadow(aside, PLANET_LIGHT)
+        );
+        let south = globe(0.0, 0.6).unwrap();
+        let (short, far) = (
+            ring_shadow(south, &f, PLANET_LIGHT),
+            ring_shadow(south, &f, long),
+        );
+        assert_near(short.unwrap(), far.unwrap());
+    }
+
+    #[test]
+    fn the_ring_plane_is_met_unless_the_ray_runs_along_it() {
+        // At the threshold, still met.
+        let barely = Frame {
+            north: [0.0, -1.0, 1e-6],
+            facing: [0.0, 0.0, 1.0],
+            east: [1.0, 0.0, 0.0],
+        };
+        assert!(ring_hit(0.0, 0.5, &barely).is_some());
+        // A light along the equator's plane never crosses it.
+        let flat = Frame::new(0.0, 0.0);
+        let sideways = Light {
+            direction: [1.0, 0.0, 0.0],
+            ambient: 0.1,
+        };
+        assert_eq!(ring_shadow(globe(0.0, 0.5).unwrap(), &flat, sideways), None);
+        let grazing = Light {
+            direction: [0.0, -1e-6, 1.0],
+            ambient: 0.1,
+        };
+        let r = ring_shadow(globe(0.0, 0.5).unwrap(), &flat, grazing);
+        assert!(r.is_some_and(|r| r > 1000.0), "{r:?}");
+        // A point on the equator is in the plane: it crosses it nowhere
+        // further along.
+        let equator = [1.0, 0.0, 0.0];
+        assert_eq!(ring_shadow(equator, &flat, PLANET_LIGHT), None);
+    }
+
+    #[test]
     fn the_night_side_is_darker_than_the_day_side() {
         // The light is toward up-left.
         let day = lit(globe(-0.6, -0.6).unwrap(), PLANET_LIGHT);
@@ -716,6 +773,26 @@ mod tests {
         // A row of two: the average of both.
         assert_eq!(chain[2].rgba, [51, 2, 3, 132]);
         assert_eq!(mips(&image(1, 1, vec![1, 2, 3, 4])).len(), 1);
+        // A column halves only down, and a second row of output averages
+        // its own rows.
+        let tall = mips(&image(
+            1,
+            4,
+            vec![
+                10, 10, 10, 10, 20, 20, 20, 20, 30, 30, 30, 30, 40, 40, 40, 40,
+            ],
+        ));
+        let sizes: Vec<_> = tall.iter().map(|i| (i.width, i.height)).collect();
+        assert_eq!(sizes, [(1, 4), (1, 2), (1, 1)]);
+        assert_eq!(tall[1].rgba, [15, 15, 15, 15, 35, 35, 35, 35]);
+        let rows: Vec<u8> = (0..4_u8).flat_map(|y| [y * 10; 16]).collect();
+        let square = mips(&image(4, 4, rows));
+        assert_eq!(square[1].rgba[..4], [5; 4]);
+        assert_eq!(
+            square[1].rgba[8..12],
+            [25; 4],
+            "the second row from rows 2 and 3"
+        );
         let chain = mips(&image(64, 32, vec![7; 64 * 32 * 4]));
         assert_eq!(chain.len(), 7);
         assert!(chain.iter().all(|i| i.rgba.iter().all(|c| *c == 7)));

@@ -301,7 +301,7 @@ pub fn stops(given: &[[f64; 3]], n: usize) -> Vec<[f64; 3]> {
                 return given[k];
             }
             let round = (k - len) / len;
-            let base = given[(k - len) % len];
+            let base = given[k % len];
             let by = 0.3 + 0.2 * (round / 2) as f64;
             if round % 2 == 0 {
                 lighter(base, by)
@@ -344,7 +344,7 @@ impl Stream {
     }
 
     fn at(self, a: u32, b: u32, c: u32) -> u64 {
-        let ab = mix64(self.0 ^ (u64::from(a) | (u64::from(b) << 32)));
+        let ab = mix64(self.0 ^ (u64::from(a) + (u64::from(b) << 32)));
         mix64(ab ^ u64::from(c).wrapping_mul(0xD6E8_FEB8_6659_FD93))
     }
 
@@ -609,6 +609,8 @@ fn bands(palette: &[Rgb], clouds: f64, seed: u32, width: u32) -> Vec<(Rgb, f64)>
         at += 2.0 * w / total;
         edges.push(at);
     }
+    // The last is the south pole, with no band beyond it.
+    edges.pop();
     // 0, 1, 0, 2, 0, 1, 0, 3, …: the first colour the most.
     let color_of = |band: usize| stops[((band + 1).trailing_zeros() as usize).min(stops.len() - 1)];
     let turbulence = Noise {
@@ -622,7 +624,7 @@ fn bands(palette: &[Rgb], clouds: f64, seed: u32, width: u32) -> Vec<(Rgb, f64)>
         .map(|(u, v)| {
             let t = 2.0 * v - 1.0 + clouds * TURBULENCE * (turbulence.at(u, v) * 2.0 - 1.0);
             let mut color = color_of(0);
-            for (band, edge) in edges.iter().enumerate().take(edges.len() - 1) {
+            for (band, edge) in edges.iter().enumerate() {
                 color = mix(color, color_of(band + 1), smooth((t - edge + 0.02) / 0.04));
             }
             (color, 0.0)
@@ -788,6 +790,38 @@ mod tests {
         };
         assert_eq!(digest(&bake(&garden, SMALL)), GARDEN_DIGEST);
     }
+
+    #[test]
+    fn every_recipe_bakes_to_its_pinned_bytes() {
+        // Each type's recipe pinned whole, on two colours and on one: the
+        // cross-platform pin for the recipes Kestrel Reach doesn't use.
+        // Change these only with the recipe, on purpose.
+        let one = |kind| Look {
+            palette: vec![color("#807060")],
+            ..world(kind, 0.5, 21)
+        };
+        let digests: Vec<(u64, u64)> = KINDS
+            .iter()
+            .map(|kind| {
+                (
+                    digest(&bake(&world(*kind, 0.5, 21), SMALL)),
+                    digest(&bake(&one(*kind), SMALL)),
+                )
+            })
+            .collect();
+        assert_eq!(digests, RECIPE_DIGESTS);
+    }
+
+    /// Each of [`KINDS`]' digests: on two colours, then on one.
+    const RECIPE_DIGESTS: [(u64, u64); 7] = [
+        (713_488_192_459_519_259, 9_069_608_970_969_572_840),
+        (9_679_328_481_106_704_934, 11_924_516_771_713_578_787),
+        (16_129_146_744_288_997_291, 7_669_414_583_871_255_819),
+        (4_383_458_919_135_266_689, 18_213_604_435_124_018_700),
+        (9_151_000_713_496_490_951, 2_924_726_634_239_408_782),
+        (5_329_073_395_321_445_384, 10_743_859_949_348_778_288),
+        (10_110_556_181_328_462_472, 12_405_082_272_599_000_326),
+    ];
 
     const KESTREL_REACH_DIGEST: u64 = 14_843_289_236_354_615_152;
     const GARDEN_DIGEST: u64 = 6_254_386_249_019_385_006;
@@ -1075,15 +1109,20 @@ mod tests {
         // Read between texels linearly.
         let band = RingBand {
             inner: 1.0,
-            outer: 2.0,
+            outer: 3.0,
             color: [0; 3],
             profile: vec![0, 255, 51],
         };
         assert_eq!(band.opacity(1.0), 0.0);
-        assert_eq!(band.opacity(1.25), 0.5);
-        assert_eq!(band.opacity(1.5), 1.0);
-        assert!((band.opacity(2.0) - 0.2).abs() < 1e-12);
+        assert_eq!(band.opacity(1.5), 0.5);
+        assert_eq!(band.opacity(2.0), 1.0);
+        assert!(
+            (band.opacity(2.5) - 0.6).abs() < 1e-12,
+            "between the last two"
+        );
+        assert!((band.opacity(3.0) - 0.2).abs() < 1e-12);
         assert_eq!(band.opacity(0.5), 0.0);
+        assert_eq!(band.opacity(3.5), 0.0);
         assert_eq!(bake(&world(PlanetType::Rocky, 0.0, 1), SMALL).rings, None);
     }
 

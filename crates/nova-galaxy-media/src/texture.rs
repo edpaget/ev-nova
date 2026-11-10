@@ -357,6 +357,13 @@ mod tests {
             panic!("unreadable");
         };
         assert!(why.starts_with(&format!("`{FILE}`")), "{why}");
+        // A PNG's signature without its header chunk is no PNG.
+        let mut headless = rgba_png(2, 1, &RGBA);
+        headless[12..16].copy_from_slice(b"IDAT");
+        let Err(NoTexture::Unreadable(why)) = read(&headless, &Limits::default()) else {
+            panic!("unreadable");
+        };
+        assert!(why.contains("not a PNG"), "{why}");
         // A PNG's header with nothing after it reads no image.
         let header = &rgba_png(2, 1, &RGBA)[..33];
         let Err(NoTexture::Unreadable(why)) = read(header, &Limits::default()) else {

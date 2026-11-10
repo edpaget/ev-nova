@@ -451,13 +451,13 @@ exclude_re = [
     # builds the same empty list, so it cannot be observed.
     "replace WindowPort::video_modes -> Vec<MonitorMode> with vec!\\[\\]",
     # The surface adapter's raw calls, as whole bodies only: pages,
-    # uploads, clearing the pages and mesh uploads delegate to
+    # uploads, clearing the pages and mesh and planet uploads delegate to
     # `WgpuRenderer` (tested offscreen), and `submit`
     # is the raw configure / get_current_texture / present calls on a
     # window surface, which needs a display. Its decisions are the tested
     # `surface_action` and `acquire_outcome`; any other mutant inside these
     # bodies is still run.
-    "replace <impl Gpu for SurfaceGpu>::(create_page|upload|clear_pages|upload_mesh|submit) with \\(\\)$",
+    "replace <impl Gpu for SurfaceGpu>::(create_page|upload|clear_pages|upload_mesh|upload_planet|submit) with \\(\\)$",
     # The same raw surface calls, now in `SurfaceGpu::present`, which
     # `submit` and the overlay's `submit_with` call (with a painter or
     # without): replacing either body is observable only on a window
@@ -894,4 +894,23 @@ exclude_re = [
     # gun or turret bit (0x0001 or 0x0002) share no bit, so `^` makes the
     # same flags as `|`.
     "nova-data/src/new_game/outfits\\.rs:[0-9]+:[0-9]+: replace \\| with \\^ in outfit$",
+    # The sprites' nearest sampler: its label is a debug name, and
+    # nearest is wgpu's default filter, so deleting `mag_filter` or
+    # `min_filter` makes the same sampler.
+    "nova-render/src/wgpu/renderer\\.rs:[0-9]+:[0-9]+: delete field (label|mag_filter|min_filter) from struct wgpu::SamplerDescriptor expression in nearest_sampler$",
+    # A planet texture's usage flags are disjoint bits: `^` sets the same
+    # ones as `|`.
+    "nova-render/src/wgpu/planets\\.rs:[0-9]+:[0-9]+: replace \\| with \\^ in texture$",
+    # A planet's water ends at rank 0.7 (ocean) or 0.5 (garden): ranks are
+    # (k + 0.5) / n for a power-of-two n, which is never 0.7 and never
+    # exactly 0.5, so `<` and `<=` split the texels the same.
+    "nova-galaxy-media/src/planet\\.rs:[0-9]+:[0-9]+: replace < with <= in ground$",
+    # A ring point in front of the globe by `z > near`: equal only on the
+    # globe's surface, radius 1, inside every ring (they start beyond 1),
+    # so it is never drawn either way.
+    "nova-render/src/planet\\.rs:[0-9]+:[0-9]+: replace > with >= in ring_hit$",
+    # `in_planet_shadow` of a point outside the globe: with `along` 0 the
+    # sunward ray's discriminant is 1 − |p|², below 0, so `<=` shadows
+    # nothing more than `<`.
+    "nova-render/src/planet\\.rs:[0-9]+:[0-9]+: replace < with <= in in_planet_shadow$",
 ]
