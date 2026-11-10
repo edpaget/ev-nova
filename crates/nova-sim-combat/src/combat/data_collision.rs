@@ -122,15 +122,18 @@ impl CollisionShape {
 }
 
 impl Combat {
-    /// Has the fight read its hulls' two rules as `rules` says: how a
+    /// Has the fight read its hulls' three rules as `rules` says: how a
     /// hull turns,
     /// [`RuleKey::ContinuousHeadings`](crate::RuleKey::ContinuousHeadings)
-    /// ([`Combat::set_continuous_headings`]), and the shape a ship is
-    /// struck by, [`RuleKey::DataCollision`](crate::RuleKey::DataCollision)
-    /// ([`Combat::set_data_collision`]).
+    /// ([`Combat::set_continuous_headings`]); the shape a ship is struck
+    /// by, [`RuleKey::DataCollision`](crate::RuleKey::DataCollision)
+    /// ([`Combat::set_data_collision`]); and where its shots start,
+    /// [`RuleKey::MountedMuzzles`](crate::RuleKey::MountedMuzzles)
+    /// ([`Combat::set_mounted_muzzles`]).
     pub fn set_hull_rules(&mut self, rules: &Rulebook) {
         self.set_continuous_headings(rules.source_for(RuleKey::ContinuousHeadings));
         self.set_data_collision(rules.source_for(RuleKey::DataCollision));
+        self.set_mounted_muzzles(rules.source_for(RuleKey::MountedMuzzles));
     }
 
     /// `fighters` as shots, beams and aims see them, each by the shape the

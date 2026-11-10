@@ -364,6 +364,12 @@ pub struct WeaponSpec {
     /// ([`WeaponRecord::frame`]): the box point defence meets missiles by
     /// ([`defence`](super::defence)).
     pub frame: Option<FrameSize>,
+    /// How far ahead of its exit point its muzzle is, in pixels
+    /// ([`WeaponRecord::muzzle_reach`]): a new-game weapon's outfit model
+    /// on its hardpoint, which a shot starts from under the rulebook's
+    /// `mounted_muzzles` reading ([`muzzle`](super::muzzle)); none for a
+    /// reach of none or less, and in stock data.
+    pub muzzle_reach: Option<f32>,
     /// The particles its hit on a ship, an asteroid or a stellar throws
     /// off; none without a `HitParticles` above none.
     pub hit_particles: Option<HitParticles>,
@@ -598,6 +604,10 @@ impl WeaponSpec {
                 0
             },
             frame: record.frame,
+            muzzle_reach: record
+                .muzzle_reach
+                .filter(|&reach| reach > 0)
+                .map(f32::from),
             hit_particles: (record.hit_particles > 0).then(|| HitParticles {
                 count: count(record.hit_particles),
                 // A hundredth of an `i16`: well within an `f32`.
@@ -994,6 +1004,23 @@ mod tests {
             flags: 0x6100,
             ..weapon(128)
         }
+    }
+
+    #[test]
+    fn a_positive_muzzle_reach_is_carried_in_pixels_and_none_or_less_is_none() {
+        let reaching = |reach| {
+            WeaponSpec::new(&WeaponRecord {
+                muzzle_reach: reach,
+                ..weapon(128)
+            })
+            .muzzle_reach
+        };
+        assert_eq!(reaching(Some(3)), Some(3.0));
+        assert_eq!(reaching(Some(1)), Some(1.0));
+        assert_eq!(reaching(Some(0)), None);
+        assert_eq!(reaching(Some(-2)), None);
+        assert_eq!(reaching(None), None);
+        assert_eq!(WeaponSpec::new(&weapon(128)).muzzle_reach, None);
     }
 
     #[test]

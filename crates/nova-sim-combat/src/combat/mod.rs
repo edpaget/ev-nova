@@ -26,6 +26,9 @@
 //! - [`data_collision`]: the shape a ship is struck by: by the engine its
 //!   sprite, by [`RuleKey::DataCollision`](crate::RuleKey::DataCollision)'s
 //!   other reading its data's collision disc.
+//! - [`muzzle`]: where a shot starts: by the engine at its exit, by
+//!   [`RuleKey::MountedMuzzles`](crate::RuleKey::MountedMuzzles)' other
+//!   reading its weapon's muzzle reach ahead of it.
 //! - [`spots`]: the new game's exit points, from the hardpoints a ship's
 //!   class and its mod kits place.
 //! - [`flags`]: what the simulation does with each documented weapon flag,
@@ -441,6 +444,7 @@ pub mod ion_tint;
 pub mod jamming;
 mod lineup;
 pub mod locked_slot;
+pub mod muzzle;
 pub mod phases;
 pub mod planet_type;
 mod player_berths;
@@ -497,6 +501,7 @@ use ion::{Burst, Dose, Ion, IonLockout};
 use jamming::Jamming;
 use lineup::HitReadings;
 use locked_slot::LockedSlot;
+use muzzle::MuzzleReading;
 pub use phases::Arena;
 use planet_type::{BeamPlanetFlag, BlastKind, PlanetBlasts};
 use plunder::Plunderer;
@@ -1355,6 +1360,9 @@ pub struct Combat {
     /// The shape a ship is struck by
     /// ([`RuleKey::DataCollision`](crate::RuleKey::DataCollision)).
     collision_shape: CollisionShape,
+    /// Where a shot starts
+    /// ([`RuleKey::MountedMuzzles`](crate::RuleKey::MountedMuzzles)).
+    mounted_muzzles: MuzzleReading,
     /// How many exits a point-defence shot moves its cursor on
     /// ([`RuleKey::PdExitStep`](crate::RuleKey::PdExitStep)).
     pd_exit_step: RuleSource,
@@ -1740,6 +1748,13 @@ impl Combat {
         self.collision_shape = source.into();
     }
 
+    /// Has a shot start where `source` says ([`MuzzleReading`],
+    /// [`RuleKey::MountedMuzzles`](crate::RuleKey::MountedMuzzles)): by
+    /// default, the engine's, at its exit point.
+    pub fn set_mounted_muzzles(&mut self, source: RuleSource) {
+        self.mounted_muzzles = source.into();
+    }
+
     /// Has a point-defence shot move its cursor on as `source` says
     /// ([`RuleKey::PdExitStep`](crate::RuleKey::PdExitStep)): by default,
     /// the engine's, two exits a shot.
@@ -2078,6 +2093,7 @@ impl Combat {
                 ..from
             };
             let heading = launch.shot_heading(&leaving);
+            let placed = self.muzzle_start(launch, muzzle.angle, &leaving);
             let thrown = BombLaunch::of(ship != ShipRef::Player, self.bomb_launch);
             // A bomb flies along its whole-degree aim, its inaccuracy turning
             // only its facing, after its velocity is set (@0x3ef0a-0x3efed).
@@ -2098,7 +2114,7 @@ impl Combat {
                 layer: ShotLayer::spawned(weapon.guidance, true, muzzle.turret_over),
                 turret_over: muzzle.turret_over,
                 firer_slot: muzzle.firer_slot,
-                ..Shot::launch(weapon, ship, fleet, &leaving, heading)
+                ..Shot::launch(weapon, ship, fleet, &placed, heading)
             };
             shot.disable_only |= plunder::shot_disables(plunderer, aimed_at, targets);
             shot.roll_at_launch(self.field.interference, self.field.speed_mult, chance);
@@ -3748,6 +3764,7 @@ mod tests {
     mod ion_lockout_tick;
     mod lineup;
     mod locked_submunitions;
+    mod muzzles;
     mod npc_gain;
     mod npc_trigger;
     mod pd_parent;
