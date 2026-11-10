@@ -28,9 +28,13 @@
 //! covers it and each limit it breaks ([`budget`], a port of `galaxy`'s
 //! `check/art.rs` budget rule, for models and textures).
 //!
-//! For drawing planets, it reads a planet's or moon's texture asset
-//! ([`texture`]: its `.png` held to the default budget's `texture` limits
-//! from its header, then decoded to RGBA8).
+//! For drawing planets (the renderer's planet adapter,
+//! `nova_render::GalaxyPlanets`), it reads a planet's or moon's texture
+//! asset ([`texture`]: its `.png` held to the default budget's `texture`
+//! limits from its header, then decoded to RGBA8), and bakes a generated
+//! look into the same kind of surface, with its clouds, rings, spin and
+//! tilt ([`planet`]: deterministic from the seed, the same bytes on every
+//! platform).
 //!
 //! # What it holds, and why here
 //!
@@ -55,6 +59,7 @@ pub mod mount;
 pub mod outline;
 pub mod paint;
 pub mod placement;
+pub mod planet;
 pub mod scene;
 pub mod texture;
 

@@ -1,6 +1,6 @@
 [package]
 name = "nova-galaxy-media"
-description = "The new game's media as data: glTF models read and drawn from above as painted silhouettes, and planet textures read"
+description = "The new game's media as data: glTF models read and drawn from above as painted silhouettes, planet textures read, and generated planets baked"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
