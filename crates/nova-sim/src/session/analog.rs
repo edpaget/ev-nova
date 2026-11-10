@@ -11,7 +11,9 @@
 //! thrusts there as the key does.
 //!
 //! With keys only the amounts are [`Amounts::FULL`], the default, and the
-//! step is the controls' own.
+//! step is the controls' own. While the gate autopilot flies, its
+//! controls fly at [`Amounts::FULL`] whatever the frame holds, as it holds
+//! its keys fully (`Session::step_controls`, the `gate_pilot` module).
 //!
 //! [`StepInput`]: crate::flight_frame::StepInput
 
