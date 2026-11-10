@@ -44,6 +44,22 @@ pub struct Mounts {
     pub kits: BTreeMap<(ShipId, OutfitId), Vec<Mount>>,
 }
 
+impl Mounts {
+    /// The mounts of a ship of class `ship` carrying `kits`: the class's
+    /// own, then each kit's on that class, in the order given. A kit with
+    /// no mounts on the class adds none; an unknown class has none of its
+    /// own.
+    #[must_use]
+    pub fn of(&self, ship: ShipId, kits: &[OutfitId]) -> Vec<Mount> {
+        let own = self.hulls.get(&ship).into_iter().flatten();
+        let fitted = kits
+            .iter()
+            .filter_map(|&kit| self.kits.get(&(ship, kit)))
+            .flatten();
+        own.chain(fitted).cloned().collect()
+    }
+}
+
 /// Where a hardpoint's outfit stands on its hull, and what it shows.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Mount {
@@ -86,12 +102,15 @@ impl GameData {
     /// own. None in a stock store (see the module docs).
     #[must_use]
     pub fn mounts(&self, ship: ShipId, kits: &[OutfitId]) -> Vec<Mount> {
-        let own = self.mounts.hulls.get(&ship).into_iter().flatten();
-        let fitted = kits
-            .iter()
-            .filter_map(|&kit| self.mounts.kits.get(&(ship, kit)))
-            .flatten();
-        own.chain(fitted).cloned().collect()
+        self.mounts.of(ship, kits)
+    }
+
+    /// Every ship class's own mounts and every kit's on every class, for
+    /// the edge to hand the view whole (`nova_render`'s
+    /// `new_game_world`). None in a stock store.
+    #[must_use]
+    pub fn mount_table(&self) -> &Mounts {
+        &self.mounts
     }
 
     /// The store with `reaches` as its weapons' muzzle reaches, in whole
@@ -158,6 +177,21 @@ mod tests {
             assert_eq!(data.mounts(ShipId(128), &[OutfitId(140)]), Vec::new());
             assert_eq!(data.muzzle_reach(WeaponId(128)), None);
         }
+    }
+
+    #[test]
+    fn the_table_is_kept_whole_and_answers_as_the_store_does() {
+        let data = GameData::default().with_mounts(mounts());
+        assert_eq!(data.mount_table(), &mounts());
+        for (ship, kits) in [
+            (ShipId(128), vec![]),
+            (ShipId(128), vec![OutfitId(141), OutfitId(140)]),
+            (ShipId(129), vec![OutfitId(140), OutfitId(141)]),
+            (ShipId(130), vec![OutfitId(140)]),
+        ] {
+            assert_eq!(mounts().of(ship, &kits), data.mounts(ship, &kits));
+        }
+        assert_eq!(GameData::default().mount_table(), &Mounts::default());
     }
 
     #[test]
