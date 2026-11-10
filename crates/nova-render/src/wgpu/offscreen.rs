@@ -100,8 +100,19 @@ impl OffscreenGpu {
 
     /// How many render pipelines its device holds, from wgpu's counters:
     /// for tests that pin when pipelines are built.
+    ///
+    /// The counter is live: it falls when wgpu destroys a pipeline, and
+    /// wgpu destroys a dropped pipeline only once the submissions that
+    /// used it have finished and the device has been maintained. So it
+    /// first waits for the device to go idle: otherwise a pipeline
+    /// dropped by a set-up step (a new upscaler) could still be counted
+    /// here and freed by the next submit's maintenance, and that frame
+    /// would read one fewer.
     #[cfg(test)]
     pub(super) fn render_pipelines(&self) -> isize {
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("the device settles");
         self.device
             .get_internal_counters()
             .hal
