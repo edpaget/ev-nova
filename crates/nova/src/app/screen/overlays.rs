@@ -916,10 +916,10 @@ impl AppScreen {
 
     /// Opens flight's course map for `opener`, a mission dialog over
     /// flight ([`FlightView::open_dialog_map`]): the offer from a ship,
-    /// mission info or the accept's briefing, which stays open under it;
-    /// the keys held let go. Its input goes to the map before them
-    /// ([`AppScreen::flight_dialog_map_input`]).
-    fn open_flight_dialog_map(&mut self, opener: MapOpener) {
+    /// mission info, the accept's briefing or the story log, which stays
+    /// open under it; the keys held let go. Its input goes to the map
+    /// before them ([`AppScreen::flight_dialog_map_input`]).
+    pub(super) fn open_flight_dialog_map(&mut self, opener: MapOpener) {
         self.let_go_of_keys();
         if let Some(flight) = &mut self.flight {
             flight.open_dialog_map(opener);

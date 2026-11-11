@@ -473,7 +473,11 @@ impl AppScreen {
     /// the one in front, and whether it holds back keys for a held press
     /// ([`Screen::holds_back_keys`]). A mission dialog's map over flight is
     /// in front of the mission dialogs it opened from, and holds nothing:
-    /// flight places it.
+    /// flight places it. The story log is behind it too, as its map key
+    /// opens one over it, and in port it is no overlay while flight's map
+    /// is open over the spaceport, so the map, under the router's
+    /// spaceport input, takes the input in front of it (the `story_log`
+    /// module).
     fn overlays_open(&self) -> [OverlayRow; 19] {
         let row = |open: bool, overlay, holds_back_keys| OverlayRow {
             open,
@@ -516,8 +520,12 @@ impl AppScreen {
                 Overlay::PlanetComm,
                 holds(self.planet_comm.as_ref()),
             ),
-            row(self.story_log.is_some(), Overlay::StoryLog, false),
             row(self.flight_dialog_map_open(), Overlay::DialogMap, false),
+            row(
+                self.story_log.is_some() && !self.port_map_open(),
+                Overlay::StoryLog,
+                false,
+            ),
             row(
                 self.missions.is_some(),
                 Overlay::Missions,

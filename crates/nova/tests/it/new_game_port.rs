@@ -16,7 +16,8 @@
 //!   original's is (`nova_sim::landing::services`), so it has one too.
 //! - **Story.** Under the new game's rulebook the dock job's offer still
 //!   opens by itself at landing; deferred, it is listed in Hearth Dock's
-//!   bar by its title and opens from there, and once taken it leaves the
+//!   bar by its title and its giver's name and opens from there, and once
+//!   taken it leaves the
 //!   list. At Verge Camp the completion still opens first at the landing
 //!   that delivers, and the bar lists the camp's own greeting, which
 //!   opens again from it. The bar's Holovid lists the news heard in the
@@ -37,7 +38,9 @@
 //!   model's outline, that outline and no disc.
 //! - **Recharge.** A pilot short of fuel clicks Recharge: the tank fills,
 //!   at `nova_sim::FUEL_PRICE_PER_UNIT` a unit.
-//! - **Missions.** In port, I opens the missions log on the dock job.
+//! - **Missions.** In port, I opens the missions log on the dock job,
+//!   under its storyline's title, and M over it opens the course map
+//!   over the log, marked green on the system the job completes in.
 //! - **The walk.** The main menu, New Pilot, flight and the map, with
 //!   Find, warn of nothing (each frame asserts it).
 //! - **Every placeholder.** Each screen the walk above doesn't reach is
@@ -68,7 +71,7 @@ use nova_view::input::{Input, Key};
 use nova_view::menu::MenuChoice;
 use nova_view::spaceport::bar::{
     HOLOVID_ITEM as BAR_HOLOVID_ITEM, LEAVE_ITEM as BAR_LEAVE_ITEM, OWN_CONVERSATION_LABEL,
-    STORY_ITEMS,
+    STORY_ITEMS, offer_label,
 };
 use nova_view::spaceport::layout::{LANDSCAPE_ITEM, LEAVE_ITEM, RECHARGE_ITEM, service_item};
 use nova_view::spaceport::missions::{
@@ -315,11 +318,26 @@ pub(crate) fn click_bar_item(game: &mut Harness, item: usize) {
     game.click(at);
 }
 
+/// The dock job's bar label as the fixture words it: its title, then
+/// its giver's name ([`offer_label`]), each read from the opened data.
+fn dock_job_label() -> String {
+    let game = fixture();
+    let job = &game.data.storylines().missions["dock-job"];
+    let giver = job.offer.as_ref().and_then(|offer| offer.giver.clone());
+    let giver = giver.expect("the fixture names the dock job's giver");
+    let label = offer_label(&job.title, Some(&giver));
+    assert!(label.contains(&giver.name), "{label}");
+    label
+}
+
 /// Under the new game's rulebook the dock job's offer still opens by
 /// itself as the pilot lands; deferred, it is listed in the bar by its
-/// title, opens from there, and once taken leaves the bar's list.
+/// title and its giver's name, opens from there, and once taken leaves
+/// the bar's list. The label is centred on its slot, so its run starting
+/// inside the slot is the label fitting it.
 #[test]
 fn a_deferred_offer_is_listed_in_the_bar_and_opens_from_it() {
+    let label = dock_job_label();
     let store = MemoryPilots::new();
     let mut game = new_pilot_flying(app(&store));
     land_at(&mut game, "hearth-dock");
@@ -341,11 +359,7 @@ fn a_deferred_offer_is_listed_in_the_bar_and_opens_from_it() {
     let frame = game.frame();
     assert_eq!(open_over(&game), "bar");
     let bar = spaceport(&game).open_bar().expect("open");
-    assert_labelled(
-        &frame,
-        bar.dialog(),
-        &[(STORY_ITEMS[0], "Hull plate for Verge Camp")],
-    );
+    assert_labelled(&frame, bar.dialog(), &[(STORY_ITEMS[0], &label)]);
     click_bar_item(&mut game, STORY_ITEMS[0]);
     let page = drawn(&mut game);
     assert!(
@@ -362,7 +376,7 @@ fn a_deferred_offer_is_listed_in_the_bar_and_opens_from_it() {
     let page = drawn(&mut game);
     assert_eq!(open_over(&game), "bar", "closed back to the bar");
     assert!(
-        !page.contains(&"Hull plate for Verge Camp".to_owned()),
+        !page.contains(&label),
         "taken, it leaves the list: {page:?}"
     );
 }
@@ -715,6 +729,25 @@ fn recharge_fills_the_tank_at_the_price_of_a_unit() {
     assert_eq!(game.showing(), Showing::Spaceport);
 }
 
+/// The dock job's storyline's title and its own, read from the opened
+/// data.
+pub(crate) fn dock_job_titles() -> (String, String) {
+    let game = fixture();
+    let job = &game.data.storylines().missions["dock-job"];
+    let storyline = job.storyline.as_ref().expect("the dock job's storyline");
+    (storyline.title.clone(), job.title.clone())
+}
+
+/// Asserts `drawn` holds the storyline title `section`, then, after it,
+/// the mission title `mission`.
+pub(crate) fn assert_listed_under(drawn: &[String], section: &str, mission: &str) {
+    let at = |text: &str| drawn.iter().position(|line| line == text);
+    let (Some(section_at), Some(mission_at)) = (at(section), at(mission)) else {
+        panic!("{section:?} then {mission:?}: {drawn:?}");
+    };
+    assert!(section_at < mission_at, "{section:?} first: {drawn:?}");
+}
+
 #[test]
 fn i_in_port_opens_the_missions_log_and_it_closes_back_to_the_spaceport() {
     let mut game = at_hearth_dock();
@@ -723,12 +756,87 @@ fn i_in_port_opens_the_missions_log_and_it_closes_back_to_the_spaceport() {
     for line in ["Missions", "Hull plate for Verge Camp"] {
         assert!(drawn.contains(&line.to_owned()), "{line}: {drawn:?}");
     }
+    let (storyline, job) = dock_job_titles();
+    assert_listed_under(&drawn, &storyline, &job);
     game.press(KeyCode::Enter);
     let drawn = texts(&game.frame());
     assert!(
         !drawn.contains(&"Hull plate for Verge Camp".to_owned()),
         "closed: {drawn:?}"
     );
+    assert_eq!(game.showing(), Showing::Spaceport);
+}
+
+/// The system the opened fixture lists the dock job's completion
+/// stellar in.
+fn dock_job_completion_system() -> nova_sim::SystemId {
+    let game = fixture();
+    let job = &game.data.storylines().missions["dock-job"];
+    let at = job
+        .complete
+        .as_ref()
+        .and_then(|complete| complete.at)
+        .expect("the dock job completes at a stellar");
+    let listing: Vec<i16> = game
+        .ids
+        .systems
+        .values()
+        .copied()
+        .filter(|&system| {
+            game.data
+                .get::<nova_data::records::system::System>(system)
+                .and_then(Result::ok)
+                .is_some_and(|entry| entry.record.nav_def.contains(&Some(at)))
+        })
+        .collect();
+    assert_eq!(listing.len(), 1, "one system lists it: {listing:?}");
+    nova_sim::SystemId(listing[0])
+}
+
+/// The systems flight's course map marks green.
+fn green_systems(game: &Harness) -> Vec<nova_sim::SystemId> {
+    game.app
+        .screen()
+        .flight_view()
+        .expect("flying")
+        .course_map()
+        .picture()
+        .map(|picture| {
+            picture
+                .systems
+                .iter()
+                .filter(|system| system.green_arrow)
+                .map(|system| system.id)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn map_open(game: &Harness) -> bool {
+    game.app.screen().flight_view().expect("flying").map_open()
+}
+
+/// M over the missions log in port opens the course map over it, its
+/// green arrow on the system the dock job completes in; Escape closes
+/// the map back to the log, and Enter the log back to the spaceport.
+#[test]
+fn m_over_the_missions_log_marks_the_dock_job_s_completion_system() {
+    let mut game = at_hearth_dock();
+    game.press(KeyCode::KeyI);
+    let (_, job) = dock_job_titles();
+    assert!(texts(&game.frame()).contains(&job), "the log open");
+    assert!(!map_open(&game), "no map before M");
+    game.press(KeyCode::KeyM);
+    game.frame();
+    assert!(map_open(&game), "M over the log opens the map");
+    assert_eq!(green_systems(&game), [dock_job_completion_system()]);
+    game.press(KeyCode::Escape);
+    let drawn = texts(&game.frame());
+    assert!(!map_open(&game), "Escape closed the map");
+    assert!(drawn.contains(&job), "back to the log: {drawn:?}");
+    game.press(KeyCode::Enter);
+    let drawn = texts(&game.frame());
+    assert!(!drawn.contains(&job), "the log closed: {drawn:?}");
     assert_eq!(game.showing(), Showing::Spaceport);
 }
 

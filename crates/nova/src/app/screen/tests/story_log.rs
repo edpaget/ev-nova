@@ -450,3 +450,160 @@ fn an_accept_refused_for_room_says_so_on_its_page() {
         "gone with its page"
     );
 }
+
+// The map key over the missions log: the course map over the log, marked
+// for the selected mission.
+
+const SECOND_JOB: &str = "Plate back";
+
+/// [`story_data`] with two 0-ton jobs at the planet: [`JOB`], to stellar
+/// 129, and, after it by id, [`SECOND_JOB`], to stellar 128.
+fn two_jobs_data() -> Rc<GameData> {
+    story_data_with(Some(0), |storylines| {
+        let mut second = storylines.missions["job"].clone();
+        second.title = SECOND_JOB.to_owned();
+        second.objective = Some(MissionObjective::Deliver {
+            cargo: "Plate".to_owned(),
+            tons: 0,
+            to: nova_data::StellarId(128),
+        });
+        storylines.missions.insert("kob".to_owned(), second);
+    })
+}
+
+/// A router landed after taking both of [`two_jobs_data`]'s jobs, the
+/// news read.
+fn landed_on_two_jobs() -> AppScreen {
+    let mut screen = storied(two_jobs_data());
+    land(&mut screen);
+    for _ in 0..2 {
+        assert!(shows(&screen, "A job?"), "{:?}", texts(&screen));
+        tap(&mut screen, Key::Digit1);
+        assert!(shows(&screen, "Bay two."));
+        tap(&mut screen, Key::Enter);
+    }
+    if shows(&screen, HEADLINE) {
+        tap(&mut screen, Key::Enter);
+    }
+    assert_eq!(screen.showing(), Showing::Spaceport);
+    screen
+}
+
+/// [`landed_on_two_jobs`], then taken off with Escape.
+fn flying_on_two_jobs() -> AppScreen {
+    let mut screen = landed_on_two_jobs();
+    tap(&mut screen, Key::Escape);
+    assert_eq!(screen.showing(), Showing::Flight);
+    screen.tick(TICK * 30);
+    screen
+}
+
+/// The system the test data lists `stellar` in.
+fn listing(screen: &AppScreen, stellar: i16) -> nova_sim::SystemId {
+    let data = &screen.data;
+    (128..=133)
+        .find(|&id| {
+            data.get::<nova_data::records::system::System>(id)
+                .and_then(Result::ok)
+                .is_some_and(|entry| {
+                    entry
+                        .record
+                        .nav_def
+                        .contains(&Some(nova_data::StellarId(stellar)))
+                })
+        })
+        .map(nova_sim::SystemId)
+        .expect("a system lists it")
+}
+
+/// The systems the open map marks green.
+fn green_systems(screen: &AppScreen) -> Vec<nova_sim::SystemId> {
+    flight(screen)
+        .course_map()
+        .picture()
+        .map(|picture| {
+            picture
+                .systems
+                .iter()
+                .filter(|system| system.green_arrow)
+                .map(|system| system.id)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn m_over_the_missions_log_in_flight_opens_the_map_marked_with_the_log_under_it() {
+    let mut screen = flying_on_two_jobs();
+    tap(&mut screen, MISSION_INFO_KEY);
+    assert!(shows(&screen, MISSIONS_HEADING), "{:?}", texts(&screen));
+    assert!(!flight(&screen).map_open(), "precondition: no map");
+    tap(&mut screen, MAP);
+    assert!(flight(&screen).dialog_map_open(), "the log's M reached it");
+    assert!(
+        screen.story_log.is_some(),
+        "the log stays open under the map"
+    );
+    assert_eq!(green_systems(&screen), [listing(&screen, 129)], "the job's");
+    tap(&mut screen, Key::Escape);
+    assert!(!flight(&screen).map_open(), "Escape closed the map");
+    assert!(screen.story_log.is_some(), "and not the log");
+    assert!(shows(&screen, MISSIONS_HEADING));
+    tap(&mut screen, Key::Enter);
+    assert!(screen.story_log.is_none(), "the log's own close");
+    assert_eq!(screen.showing(), Showing::Flight);
+}
+
+#[test]
+fn tab_then_m_over_the_missions_log_marks_the_second_mission() {
+    let mut screen = flying_on_two_jobs();
+    tap(&mut screen, MISSION_INFO_KEY);
+    tap(&mut screen, Key::Tab);
+    tap(&mut screen, MAP);
+    assert!(flight(&screen).dialog_map_open());
+    assert_ne!(
+        listing(&screen, 128),
+        listing(&screen, 129),
+        "precondition: the jobs mark apart"
+    );
+    assert_eq!(green_systems(&screen), [listing(&screen, 128)]);
+}
+
+#[test]
+fn m_over_the_missions_log_in_port_opens_the_map_over_the_log() {
+    let mut screen = landed_on_two_jobs();
+    tap(&mut screen, MISSION_INFO_KEY);
+    assert!(shows(&screen, MISSIONS_HEADING), "{:?}", texts(&screen));
+    tap(&mut screen, MAP);
+    assert!(screen.port_map_open(), "the log's M reached it");
+    assert!(
+        screen.story_log.is_some(),
+        "the log stays open under the map"
+    );
+    assert_eq!(green_systems(&screen), [listing(&screen, 129)]);
+    let all: Vec<DrawCommand> = drawn(&screen).iter().cloned().collect();
+    let map: Vec<DrawCommand> = drawn(flight(&screen)).iter().cloned().collect();
+    let heading = all
+        .iter()
+        .position(
+            |command| matches!(command, DrawCommand::Text { text, .. } if text == MISSIONS_HEADING),
+        )
+        .expect("the log drawn");
+    let map_at = all
+        .windows(map.len())
+        .position(|window| window == map.as_slice())
+        .expect("the map drawn");
+    assert!(heading < map_at, "the log under the map");
+    assert!(
+        !all[map_at + map.len()..].iter().any(|command| {
+            matches!(command, DrawCommand::Text { text, .. } if text == MISSIONS_HEADING)
+        }),
+        "and not again over it"
+    );
+    tap(&mut screen, Key::Escape);
+    assert!(!screen.port_map_open(), "Escape closed the map");
+    assert!(screen.story_log.is_some(), "and not the log");
+    tap(&mut screen, Key::Enter);
+    assert!(screen.story_log.is_none());
+    assert_eq!(screen.showing(), Showing::Spaceport);
+}

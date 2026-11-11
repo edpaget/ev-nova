@@ -1203,7 +1203,7 @@ impl Screen for BarScreen {
 pub(crate) mod pad;
 pub mod story;
 
-pub use story::{OWN_CONVERSATION_LABEL, STORY_ITEMS};
+pub use story::{OWN_CONVERSATION_LABEL, STORY_ITEMS, offer_label};
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]

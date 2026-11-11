@@ -151,6 +151,8 @@ fn i_in_flight_lists_the_dock_job_its_objective_and_its_cargo() {
     ] {
         assert!(page.contains(&line.to_owned()), "{line}: {page:?}");
     }
+    let (storyline, job) = crate::new_game_port::dock_job_titles();
+    crate::new_game_port::assert_listed_under(&page, &storyline, &job);
     game.press(KeyCode::Enter);
     assert!(
         !drawn(&mut game).contains(&"Hull plate for Verge Camp".to_owned()),

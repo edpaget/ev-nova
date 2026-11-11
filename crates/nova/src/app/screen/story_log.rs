@@ -36,6 +36,21 @@
 //! flight tells flight, as the stock screen's does
 //! ([`FlightView::close_info_dialog`]).
 //!
+//! **The map.** The missions log's map key asks for its selected
+//! mission's map ([`StoryLogScreen::take_map_request`]), and the router
+//! opens flight's course map for it ([`MapOpener::StoryLog`], marked by the
+//! session for that row) with the log left open under it, as mission
+//! info stays open under its map. Over flight it opens as a mission
+//! dialog's map does there (`AppScreen::open_flight_dialog_map`): the
+//! dialog map is in front of the log among the overlays, and the log is
+//! drawn under it. In port it opens as the spaceport's dialogs open theirs
+//! (the spaceport's pointer cancelled and its keys released first): the
+//! log is no overlay while the map is open over the spaceport, so the
+//! map takes the input through the spaceport's, and the log is drawn
+//! between the spaceport and the map. Either way the map's close
+//! (Escape, Return, M) leaves the log in front again, and its own close
+//! runs as before.
+//!
 //! **The refusal.** After a conversation's first page and after each
 //! choice, an accept the flight refused for room
 //! ([`FlightView::take_room_refusals`]) is told on that page
@@ -57,12 +72,13 @@
 //! [`FlightView::take_room_refusals`]: nova_view::flight::FlightView::take_room_refusals
 
 use nova_sim::MissionInfo;
+use nova_view::flight::MapOpener;
 use nova_view::sound::{Sound, UiSound};
 use nova_view::spaceport::conversation::room_refusal_text;
 use nova_view::ui::story_log::{StoryLog, StoryLogScreen, missions_log, news_log};
 use nova_view::{Input, Screen, ScreenAction};
 
-use super::{AppScreen, ENTERED};
+use super::{AppScreen, ENTERED, Side};
 
 /// What comes after the open log closes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -158,6 +174,25 @@ impl AppScreen {
         self.open_story_log(log, then, Vec::new())
     }
 
+    /// Opens flight's course map for the missions log's row `row`, with
+    /// the log left open under it (see the module docs): over flight as
+    /// a mission dialog's map opens there, in port as the spaceport's
+    /// dialogs open theirs, its pointer and keys let go first.
+    fn open_story_map(&mut self, row: usize) {
+        let opener = MapOpener::StoryLog(row);
+        if self.side == Side::Spaceport {
+            if let Some(spaceport) = &mut self.spaceport {
+                spaceport.cancel_pointer();
+                spaceport.release_keys();
+            }
+            if let Some(flight) = &mut self.flight {
+                flight.open_dialog_map(opener);
+            }
+        } else {
+            self.open_flight_dialog_map(opener);
+        }
+    }
+
     /// Tells the open conversation's page the accept the flight last
     /// refused for room, if any.
     pub(super) fn tell_room_refusals(&mut self) {
@@ -178,6 +213,10 @@ impl AppScreen {
             return ScreenAction::None;
         };
         open.screen.input(input);
+        if let Some(row) = open.screen.take_map_request() {
+            self.open_story_map(row);
+            return ScreenAction::None;
+        }
         if !open.screen.take_closed() {
             return ScreenAction::None;
         }

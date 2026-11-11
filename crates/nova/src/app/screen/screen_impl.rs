@@ -251,7 +251,8 @@ impl Screen for AppScreen {
     /// cover its left edge (`_DoPortDialog` @0x5fbca). The bar's course
     /// map is drawn over them both, as the original's map dialog opens
     /// over the port window (`_DoBarDialog` @0x492a3), and so is a mission
-    /// dialog's. Over flight, a mission dialog's map is drawn in three
+    /// dialog's; a story log open under it is drawn between the spaceport
+    /// and the map. Over flight, a mission dialog's map is drawn in three
     /// layers: flight's paused scene and bar, the offer and the mission
     /// dialogs it opened from, then the map and flight's fades. `_gWind`
     /// keeps the world behind the dialogs and the map's window opens in
@@ -265,6 +266,14 @@ impl Screen for AppScreen {
             self.flight.as_ref().expect(ENTERED).draw_status_bar(list);
             if self.port_map_open() {
                 self.spaceport.as_ref().expect(LANDED).draw(list);
+                // The story log its map key opened the map from goes
+                // between the spaceport and the map (the `story_log`
+                // module).
+                if let Some(open) = &self.story_log {
+                    let mut log = DrawList::new();
+                    open.screen.draw(&mut log);
+                    list.extend_translated(&log, self.overlay_offset());
+                }
             }
         }
         // A mission dialog's map over flight goes over the dialogs it
@@ -318,6 +327,7 @@ impl Screen for AppScreen {
             self.haggle.as_ref().map(|dialog| dialog as &dyn Screen),
             self.story_log
                 .as_ref()
+                .filter(|_| !self.port_map_open())
                 .map(|open| &open.screen as &dyn Screen),
         ];
         for overlay in under_map.into_iter().flatten() {
