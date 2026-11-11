@@ -7,6 +7,7 @@
 //! destroying a ship directly;
 //! [`set_player_condition`], for downing or repairing the player directly;
 //! [`set_player_shield`], for putting the player's shields down directly;
+//! [`set_player_armor`], for putting the player's armour down directly;
 //! [`set_player_ion`] and [`set_player_tractor`], for ionizing or
 //! holding the player directly; [`put_player_over`], for bringing the player over a ship to board it;
 //! [`put_player_at`], for bringing the player to a place, a gate among them;
@@ -104,6 +105,13 @@ pub fn set_player_condition(session: &mut Session, to: Condition) {
 /// loaded pilot's being refilled as `_LoadPilotData` refills them.
 pub fn set_player_shield(session: &mut Session, now: f32) {
     session.set_player_shield(now);
+}
+
+/// Sets the player's armour points in `session` to `now`, its most kept,
+/// its condition left as it is: for a test that needs the player one hit
+/// from breaking up, so that a real hit's whole path runs.
+pub fn set_player_armor(session: &mut Session, now: f32) {
+    session.set_player_armor(now);
 }
 
 /// Sets the player's ionization in `session` to `ion`: for a test that

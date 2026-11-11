@@ -79,6 +79,13 @@ impl Session {
         self.pilot.reserves.shield.now = now;
     }
 
+    /// Sets the player's armour points to `now`, its most kept, for
+    /// [`fixture::set_player_armor`](crate::fixture::set_player_armor).
+    /// The gauge is the pilot's reserves, as the shield's is.
+    pub(crate) fn set_player_armor(&mut self, now: f32) {
+        self.pilot.reserves.armor.now = now;
+    }
+
     /// Makes the pilot play Strict Play when `strict`, or not.
     pub(crate) fn set_strict_play(&mut self, strict: bool) {
         self.pilot.strict_play = strict;
@@ -284,6 +291,17 @@ mod tests {
         assert!(!session.put_mission(2, carrying(201, 1)), "taken");
         assert!(!session.put_mission(16, carrying(201, 1)), "past the last");
         assert_eq!(format!("{session:?}"), before, "nothing changes");
+    }
+
+    #[test]
+    fn setting_the_players_armour_sets_its_points_and_keeps_its_most() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        let before = session.pilot().reserves();
+        assert!(before.armor.max > 1.0, "{before:?}");
+        crate::fixture::set_player_armor(&mut session, 1.0);
+        let after = session.pilot().reserves();
+        assert_eq!((after.armor.now, after.armor.max), (1.0, before.armor.max));
+        assert_eq!(after.shield, before.shield, "the shield untouched");
     }
 
     #[test]
