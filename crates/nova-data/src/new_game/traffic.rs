@@ -24,8 +24,23 @@
 //! # A system's slots
 //!
 //! A system that names `traffic` gets each fleet's `düde` in
-//! `DudeTypes1-8` and its weight, held within `i16`, in `Prob1-8`, in fleet
-//! id order; the engine scales the weights to sum to 100. Its `AvgShips`
+//! `DudeTypes1-8` and its weight as a whole percentage ([`percentages`])
+//! in `Prob1-8`, in fleet id order. The engine rescales a system's `düde`
+//! weights to sum to 100, rounding each down, and never picks one at 0, so
+//! raw weights of 1 and 150 would fly the first never. The mapper does the
+//! rescale itself instead: each weight comes out at least 1 and they sum
+//! to 100, so the engine's rescale leaves them as they are. The rounding:
+//!
+//! 1. A fleet whose share of what is left is under 1% is held at 1. Holding
+//!    some leaves the others less, so this repeats until none is under.
+//! 2. The others share what the held ones leave in proportion to their
+//!    weights, each rounded down.
+//! 3. What that leaves goes one each to the fleets with the largest
+//!    remainders, the earliest first on a tie.
+//!
+//! A system flies at most eight fleets, so the floor of 1 always fits in
+//! 100. The arithmetic is wide, so a weight past `i16` keeps its
+//! proportion. Its `AvgShips`
 //! is `average_ships`, held within `i16`, or [`TRAFFIC_SHIPS`] when it
 //! names none. A system whose `traffic` names no fleet that flies
 //! (`fleets: {}`, say) has no traffic: every `DudeTypes` -1 and `AvgShips`
@@ -203,7 +218,7 @@ fn fleet(
 pub struct Slots {
     /// `DudeTypes1-8`: a `düde` ID, or -1 for none.
     pub dude_types: [i16; SYSTEM_FLEETS],
-    /// `Prob1-8`: each `düde`'s weight.
+    /// `Prob1-8`: each `düde`'s weight, as a percentage.
     pub prob: [i16; SYSTEM_FLEETS],
     /// `AvgShips`.
     pub avg_ships: i16,
@@ -232,14 +247,12 @@ pub fn slots(
         }
         return slots;
     };
-    let mut filled = 0;
+    let mut flying = Vec::new();
     let mut over = Vec::new();
     for (fleet, weight) in &traffic.fleets {
         if let Some(&nova) = fleets.get(fleet) {
-            if filled < SYSTEM_FLEETS {
-                slots.dude_types[filled] = nova;
-                slots.prob[filled] = saturated(weight.get().into());
-                filled += 1;
+            if flying.len() < SYSTEM_FLEETS {
+                flying.push((nova, weight.get()));
             } else {
                 over.push(format!("`{fleet}`"));
             }
@@ -259,12 +272,65 @@ pub fn slots(
             ),
         ));
     }
-    if filled > 0 {
+    let weights: Vec<u32> = flying.iter().map(|&(_, weight)| weight).collect();
+    for (slot, (&(nova, _), percent)) in flying.iter().zip(percentages(&weights)).enumerate() {
+        slots.dude_types[slot] = nova;
+        slots.prob[slot] = percent;
+    }
+    if !flying.is_empty() {
         slots.avg_ships = traffic
             .average_ships
             .map_or(TRAFFIC_SHIPS, |ships| saturated(ships.into()));
     }
     slots
+}
+
+/// What a system's `Prob` sum to: the engine's rescale of a `düde`'s
+/// `% Prob` leaves weights summing to this as they are.
+const PERCENT: u64 = 100;
+
+/// `weights`, at most [`SYSTEM_FLEETS`] of them and each at least 1, as
+/// whole percentages, each at least 1 and summing to [`PERCENT`] (see the
+/// module docs' rounding rule). The arithmetic is in `u64`, so no weight is
+/// held within `i16` first.
+fn percentages(weights: &[u32]) -> Vec<i16> {
+    let weights: Vec<u64> = weights.iter().map(|&weight| u64::from(weight)).collect();
+    let mut held = vec![false; weights.len()];
+    // The fleets held at 1 leave the others less, so holding some can push
+    // another under 1.
+    let (pool, total) = loop {
+        let pool = PERCENT - held.iter().map(|&h| u64::from(h)).sum::<u64>();
+        let total: u64 = (weights.iter().zip(&held))
+            .filter(|&(_, &h)| !h)
+            .map(|(&weight, _)| weight)
+            .sum();
+        let mut more = false;
+        for (&weight, h) in weights.iter().zip(&mut held) {
+            if !*h && pool * weight < total {
+                *h = true;
+                more = true;
+            }
+        }
+        if !more {
+            break (pool, total);
+        }
+    };
+    let mut shares: Vec<u64> = (weights.iter().zip(&held))
+        .map(|(&weight, &h)| if h { 1 } else { pool * weight / total })
+        .collect();
+    let mut by_remainder: Vec<usize> = (0..weights.len()).filter(|&i| !held[i]).collect();
+    // Stable, so the earliest first on a tie.
+    by_remainder.sort_by_key(|&i| std::cmp::Reverse(pool * weights[i] % total));
+    // Each share is rounded down from its part of `pool`, so they leave
+    // fewer than one per fleet not held.
+    let left = PERCENT - shares.iter().sum::<u64>();
+    for &i in by_remainder.iter().take(usize::try_from(left).unwrap_or(0)) {
+        shares[i] += 1;
+    }
+    shares
+        .into_iter()
+        .map(|share| i16::try_from(share).unwrap_or(i16::MAX))
+        .collect()
 }
 
 #[cfg(test)]
@@ -527,21 +593,138 @@ mod tests {
         let game = loaded(&source);
         assert_eq!(problems(&game), Vec::<String>::new());
         let (a, b) = (CIVILIAN_DUDE + 1, CIVILIAN_DUDE + 2);
-        assert_eq!(slots_of(&game, "alpha"), holding(&[(a, 10), (b, 30)], 9));
+        assert_eq!(
+            slots_of(&game, "alpha"),
+            holding(&[(a, 25), (b, 75)], 9),
+            "its weights as percentages"
+        );
         assert_eq!(
             slots_of(&game, "beta"),
-            holding(&[(a, 5)], TRAFFIC_SHIPS),
+            holding(&[(a, 100)], TRAFFIC_SHIPS),
             "the usual number when it names none"
         );
     }
 
+    /// The `Prob` that `alpha`'s `traffic` naming the two fleets at
+    /// `a` and `b` maps to.
+    fn two_weights(a: u64, b: u64) -> [i16; 2] {
+        let game = loaded(&two_fleets(&format!(
+            "traffic: {{fleets: {{a-fleet: {a}, b-fleet: {b}}}}}\n"
+        )));
+        let prob = slots_of(&game, "alpha").prob;
+        assert_eq!(prob[2..], [0; 6]);
+        [prob[0], prob[1]]
+    }
+
     #[test]
-    fn a_system_s_weight_and_average_past_i16_are_held_at_the_most() {
+    fn a_fleet_under_a_percent_of_its_system_still_flies_at_one() {
+        assert_eq!(two_weights(1, 150), [1, 99]);
+    }
+
+    #[test]
+    fn an_even_split_stays_even() {
+        assert_eq!(two_weights(50, 50), [50, 50]);
+        assert_eq!(two_weights(7, 7), [50, 50]);
+    }
+
+    #[test]
+    fn the_remainder_goes_to_the_largest_remainders_earliest_first() {
+        assert_eq!(two_weights(2, 1), [67, 33], "66.7 and 33.3");
+        assert_eq!(two_weights(1, 2), [33, 67]);
+        assert_eq!(two_weights(1, 1), [50, 50]);
+        assert_eq!(two_weights(1, 7), [13, 87], "12.5 and 87.5: the first");
+    }
+
+    #[test]
+    fn weights_past_i16_keep_their_proportions() {
+        assert_eq!(two_weights(40_000, 120_000), [25, 75]);
+        assert_eq!(two_weights(40_000, 32_767), [55, 45], "not held even");
+        let most = u64::from(u32::MAX);
+        assert_eq!(two_weights(most, most), [50, 50], "without overflow");
+        assert_eq!(two_weights(1, most), [1, 99]);
+    }
+
+    #[test]
+    fn a_system_s_average_past_i16_is_held_at_the_most() {
         let game = loaded(&two_fleets(
             "traffic: {fleets: {a-fleet: 40000}, average_ships: 40000}\n",
         ));
         let slots = slots_of(&game, "alpha");
-        assert_eq!((slots.prob[0], slots.avg_ships), (i16::MAX, i16::MAX));
+        assert_eq!((slots.prob[0], slots.avg_ships), (100, i16::MAX));
+    }
+
+    /// The test galaxy with the fleets `f1` to `f{count}`, each flying a
+    /// skiff.
+    fn numbered_fleets(count: usize) -> MemSource {
+        (1..=count).fold(galaxy(), |source, n| {
+            with_fleet(
+                source,
+                &format!("f{n}"),
+                "name: F\nrole: trader\nships: {skiff: 1}\n",
+            )
+        })
+    }
+
+    #[test]
+    fn eight_fleets_one_far_heavier_each_keep_one_and_sum_to_100() {
+        let source = with_system(
+            numbered_fleets(8),
+            "alpha",
+            "traffic: {fleets: {f1: 1, f2: 1, f3: 1, f4: 1, f5: 1, f6: 1, f7: 1, f8: 10000}}\n",
+        );
+        let slots = slots_of(&loaded(&source), "alpha");
+        assert_eq!(slots.prob, [1, 1, 1, 1, 1, 1, 1, 93]);
+    }
+
+    #[test]
+    fn the_fleets_held_at_one_leave_the_rest_to_the_others_in_proportion() {
+        // Six fleets under a percent get 1 each; 3000 and 7000 share the
+        // other 94 as 28.2 and 65.8.
+        let source = with_system(
+            numbered_fleets(8),
+            "alpha",
+            "traffic: {fleets: {f1: 1, f2: 1, f3: 1, f4: 1, f5: 1, f6: 1, f7: 3000, f8: 7000}}\n",
+        );
+        let prob = slots_of(&loaded(&source), "alpha").prob;
+        assert_eq!(prob, [1, 1, 1, 1, 1, 1, 28, 66]);
+    }
+
+    #[test]
+    fn a_fleet_the_others_held_at_one_push_under_a_percent_is_held_at_one_too() {
+        // f4's 9 is 1.03% of 870, but 0.99% of what the five held at one
+        // leave (95 of 861): it is held too, and f5 and f8 share 94 as
+        // 7.503 and 86.497.
+        let source = with_system(
+            numbered_fleets(8),
+            "alpha",
+            "traffic: {fleets: {f1: 1, f2: 1, f3: 1, f4: 9, f5: 68, f6: 1, f7: 5, f8: 784}}\n",
+        );
+        let prob = slots_of(&loaded(&source), "alpha").prob;
+        assert_eq!(prob, [1, 1, 1, 1, 8, 1, 1, 86]);
+    }
+
+    #[test]
+    fn every_mapped_weight_is_at_least_one_and_they_sum_to_100() {
+        // So the engine's rescale to 100 leaves them as they are.
+        for weights in [
+            [1, 150, 3, 9_999, 2, 40_000, 7, 1],
+            [u32::MAX, 1, 1, 1, 1, 1, 1, 1],
+            [3, 3, 3, 3, 3, 3, 3, 3],
+            [1, 2, 3, 4, 5, 6, 7, 8],
+        ] {
+            let named = (weights.iter().enumerate()).fold(String::new(), |mut named, (n, w)| {
+                let _ = write!(named, "f{}: {w}, ", n + 1);
+                named
+            });
+            let source = with_system(
+                numbered_fleets(8),
+                "alpha",
+                &format!("traffic: {{fleets: {{{named}}}}}\n"),
+            );
+            let prob = slots_of(&loaded(&source), "alpha").prob;
+            assert!(prob.iter().all(|&p| p >= 1), "{weights:?}: {prob:?}");
+            assert_eq!(prob.iter().sum::<i16>(), 100, "{weights:?}: {prob:?}");
+        }
     }
 
     #[test]
@@ -591,7 +774,11 @@ mod tests {
         let slots = slots_of(&game, "alpha");
         let first: Vec<i16> = (1..=8).map(|n| CIVILIAN_DUDE + n).collect();
         assert_eq!(slots.dude_types.to_vec(), first, "f1 to f8");
-        assert_eq!(slots.prob, [1; 8]);
+        assert_eq!(
+            slots.prob,
+            [13, 13, 13, 13, 12, 12, 12, 12],
+            "eight at 12.5: the first four rounded up"
+        );
         assert_eq!(slots.avg_ships, TRAFFIC_SHIPS);
     }
 
