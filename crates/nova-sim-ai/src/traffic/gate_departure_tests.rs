@@ -2,7 +2,9 @@
 //! the traffic's tick: a ship with nowhere left to go enters a gate where
 //! the engine would jump it out (`ai::idle_block::leave_or_wait`), and as
 //! a lead it still releases its followers to that gate as it reaches the
-//! gate's box (`_HighLevelAIHandler` @0x8dc94-0x8dd58).
+//! gate's box (`_HighLevelAIHandler` @0x8dc94-0x8dd58). Under that reading,
+//! the world's reading of `RuleKey::GateFuel` reaches the ship's decision:
+//! short of its fare it jumps rather than enter the gate.
 
 use super::tests::populated;
 use super::{Outcome, World};
@@ -80,4 +82,68 @@ fn by_the_engine_the_same_lead_jumps_out() {
     let sites = [gate()];
     traffic.tick_in(&IdleLead, World::new(&sites), &[], &mut Draws::of(&[]));
     assert_eq!(traffic.npcs[0].goal, Goal::JumpOut);
+}
+
+// The traffic's `World` hands its reading of `RuleKey::GateFuel` on to the
+// `Surroundings` its NPCs decide with (`World::around`).
+
+/// How a lone ship out of the only gate, leaving through gates, with a hull
+/// whose gate fare is 150 and holding its fare less `short`, leaves over the
+/// neighbouring tests' 41 ticks as `gate_fuel` reads: its goal after the
+/// first tick, whether it ever entered the gate, and its departures.
+fn leaving_short_of_fare_by(
+    short: f32,
+    gate_fuel: RuleSource,
+) -> (Goal, bool, Vec<(NpcId, Outcome)>) {
+    let mut traffic = populated(1, 1);
+    let npc = &mut traffic.npcs[0];
+    npc.visited = Some(GATE);
+    npc.stats.gate_fuel = Some(150.0);
+    npc.reserves.fuel.now = crate::gate_fuel::fare(&npc.stats) - short;
+    let sites = [gate()];
+    let world = World {
+        departures_through_gates: RuleSource::Bible,
+        gate_fuel,
+        ..World::new(&sites)
+    };
+    let mut goal = None;
+    let mut entered = false;
+    let mut left = Vec::new();
+    for _ in 0..41 {
+        traffic.tick_in(&IdleLead, world, &[], &mut Draws::of(&[]));
+        if goal.is_none() {
+            goal = Some(traffic.npcs[0].goal);
+        }
+        entered |= traffic
+            .npcs
+            .iter()
+            .any(|npc| matches!(npc.mode, Mode::EnteringGate { .. }));
+        left.extend(traffic.departed().iter().copied());
+    }
+    (goal.expect("ticked"), entered, left)
+}
+
+#[test]
+fn by_the_worlds_spending_reading_a_ship_short_of_its_fare_jumps_rather_than_enter_the_gate() {
+    let (goal, entered, left) = leaving_short_of_fare_by(1.0, RuleSource::Bible);
+    assert_eq!(goal, Goal::JumpOut);
+    assert!(!entered, "never enters the gate");
+    assert!(
+        !left.contains(&(NpcId(0), Outcome::EnteredGate(GATE))),
+        "{left:?}"
+    );
+}
+
+#[test]
+fn with_its_fare_or_by_the_worlds_engine_reading_the_same_ship_enters_the_gate() {
+    for (short, gate_fuel) in [(0.0, RuleSource::Bible), (1.0, RuleSource::Engine)] {
+        let (goal, entered, left) = leaving_short_of_fare_by(short, gate_fuel);
+        assert_eq!(goal, Goal::EnterGate(GATE), "{short} by {gate_fuel:?}");
+        assert!(entered, "{short} by {gate_fuel:?}");
+        assert_eq!(
+            left,
+            [(NpcId(0), Outcome::EnteredGate(GATE))],
+            "{short} by {gate_fuel:?}"
+        );
+    }
 }
