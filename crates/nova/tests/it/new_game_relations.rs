@@ -82,11 +82,17 @@ fn worn(play: &Play, id: NpcId) -> Option<f32> {
 /// lifts. The fight's events its passes raised, in order: a step reports
 /// them, rather than leaving them to `Session::take_combat_events`.
 pub(crate) fn step(play: &mut Play, law: NovaLaw, fire: bool) -> Vec<CombatEvent> {
+    step_firing(play, law, (fire, false))
+}
+
+/// [`step`], with the player's primary and secondary triggers held as
+/// `fire` says.
+pub(crate) fn step_firing(play: &mut Play, law: NovaLaw, fire: (bool, bool)) -> Vec<CombatEvent> {
     let most = play.session.reserves().shield.max;
     set_player_shield(&mut play.session, most);
     let input = StepInput {
         window_width: 1024,
-        fire: (fire, false),
+        fire,
         ..StepInput::default()
     };
     let behaviour = NovaAi::from_rulebook(&new_game_rules());

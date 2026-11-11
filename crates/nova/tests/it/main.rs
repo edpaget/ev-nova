@@ -53,6 +53,7 @@ mod new_game_engine_strings;
 mod new_game_galaxy_viewer;
 mod new_game_hail_replies;
 mod new_game_hull_numbers;
+mod new_game_launchers;
 mod new_game_looks;
 mod new_game_missions;
 mod new_game_models;

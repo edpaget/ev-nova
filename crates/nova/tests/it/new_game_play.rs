@@ -163,8 +163,14 @@ impl Play {
     }
 
     pub(crate) fn converse(&mut self, converse: Converse) -> Answer {
+        self.command(FlightCommand::Converse(converse))
+    }
+
+    /// Sends the player's `command`, as the view sends it, under Nova's
+    /// law and boarding rules: what it answers.
+    pub(crate) fn command(&mut self, command: FlightCommand) -> Answer {
         self.session.apply(
-            FlightCommand::Converse(converse),
+            command,
             &mut ApplyCollaborators {
                 catalog: Some(&self.data),
                 chance: &mut self.chance,
