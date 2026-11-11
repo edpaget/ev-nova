@@ -10,7 +10,7 @@
 //! each defaulting to the original's reading.
 //!
 //! The stock game pins nothing. The new game pins the other reading of
-//! nineteen keys: twelve as a jump point's gate is the only way in or out
+//! twenty keys: thirteen as a jump point's gate is the only way in or out
 //! of a system, two as its story lives in port, one as its exchange
 //! lists every good a port prices, three as its ships are 3D models, and
 //! one as its sky is drawn in 3D:
@@ -34,6 +34,11 @@
 //!   [`RuleKey::NoGateRefusal`] (J with a system selected that no jump
 //!   point here serves says "No jump point leads there.", where the
 //!   original's J is silent, so the player learns why J did nothing);
+//! - its passages' one: [`RuleKey::GateFuel`] (each hypergate passage
+//!   costs the hull's gate fuel, one jump's worth when its data gives
+//!   none, so the gates are what spend fuel and a port's Recharge refills
+//!   it; a ship short of the fare is refused the gate, and an NPC short of
+//!   it finds none open to it; the original's hypergates spend none);
 //! - the three its mission ships need: [`RuleKey::MissionShipLinks`] (a
 //!   mission's ships sent to "a system adjacent" are drawn over the
 //!   gate lanes, not the Con slots), [`RuleKey::AuxShipLinks`] (a
@@ -120,7 +125,7 @@ const STOCK: Profile = Profile {
 };
 
 /// The new game's profile: its traffic's three gate readings, its map
-/// and courses' four, J's two, its mission ships' three, its port's two,
+/// and courses' four, J's two, its passages' one, its mission ships' three, its port's two,
 /// its exchange's one, its hulls' three and its sky's one (see the module
 /// docs), and pilots of its own.
 const NEW_GAME: Profile = Profile {
@@ -134,6 +139,7 @@ const NEW_GAME: Profile = Profile {
         (RuleKey::GateCourse, RuleSource::Bible),
         (RuleKey::GateAutopilot, RuleSource::Bible),
         (RuleKey::NoGateRefusal, RuleSource::Bible),
+        (RuleKey::GateFuel, RuleSource::Bible),
         (RuleKey::MissionShipLinks, RuleSource::Bible),
         (RuleKey::AuxShipLinks, RuleSource::Bible),
         (RuleKey::GateExitCounts, RuleSource::Bible),
@@ -210,7 +216,7 @@ mod tests {
     }
 
     #[test]
-    fn the_new_game_pins_the_other_reading_of_its_nineteen_gate_lane_map_autopilot_mission_ship_port_exchange_hull_and_sky_keys()
+    fn the_new_game_pins_the_other_reading_of_its_twenty_gate_lane_map_autopilot_fare_mission_ship_port_exchange_hull_and_sky_keys()
      {
         assert_eq!(
             Ruleset::NewGame.profile().readings,
@@ -224,6 +230,7 @@ mod tests {
                 (RuleKey::GateCourse, RuleSource::Bible),
                 (RuleKey::GateAutopilot, RuleSource::Bible),
                 (RuleKey::NoGateRefusal, RuleSource::Bible),
+                (RuleKey::GateFuel, RuleSource::Bible),
                 (RuleKey::MissionShipLinks, RuleSource::Bible),
                 (RuleKey::AuxShipLinks, RuleSource::Bible),
                 (RuleKey::GateExitCounts, RuleSource::Bible),

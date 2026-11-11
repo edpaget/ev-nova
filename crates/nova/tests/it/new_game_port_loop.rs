@@ -14,23 +14,29 @@
 //!    from the bar: the hull plate aboard and a Dock pass lent.
 //! 4. Grain bought and sold back at the Trade Center.
 //! 5. The racked hauler bought at the shipyard, the hauler traded in and
-//!    the plate kept aboard; the turret ring kit fitted to it at the
-//!    outfitter and a second mass driver bought onto its ring; grain
-//!    bought to hold.
-//! 6. Recharge, filling the tank.
-//! 7. Take-off, the stay's days passing, then the course to the Verge,
+//!    the plate kept aboard, its tank full; the turret ring kit fitted to
+//!    it at the outfitter and a second mass driver bought onto its ring;
+//!    grain bought to hold.
+//! 6. Take-off, the stay's days passing, then the course to the Verge,
 //!    clicked on the course map and flown on the gate autopilot with J
-//!    through the side road.
-//! 8. Verge Camp: the delivery's completion, then the camp's greeting
+//!    through the side road, the passage costing the hull's gate fuel.
+//! 7. Verge Camp: the delivery's completion, then the camp's greeting
 //!    and the news the success releases.
+//! 8. Take-off from the camp and a landing at Verge Workshop, the news
+//!    heard there closed, where Recharge refills what the passage spent.
 //! 9. The window closed, which saves the pilot, and the pilot opened
 //!    again in a new app over the same store.
 //!
-//! The pilot saved after the delivery is the pilot just before saving,
+//! The pilot saved after the Recharge is the pilot just before saving,
 //! field by field. The pilot loaded from it is too, but for the course's
 //! start: the side road's exit leaves it at the Verge, as the original's
 //! hypergate exit does, and the load clears it by `RuleKey::LoadedCourse`'s
 //! engine reading, as the original's open does.
+//!
+//! The passage's fare is `RuleKey::GateFuel`'s other reading, which the
+//! new game's profile pins (`nova::ruleset`): the racked hauler's gate
+//! fuel, read from the opened data, never retyped, so a fare the store
+//! dropped fails the loop.
 //!
 //! What it pins is the seams between the phases that each pin their own
 //! piece in `new_game_port`, `new_game_trade`, `new_game_outfits`,
@@ -38,19 +44,12 @@
 //! cash is worked from the start's, the listed prices and the records'
 //! costs, so a price in the fixture moves them together.
 //!
-//! Two states are put in rather than played, as every app test does:
-//!
-//! - **Approaching a stellar.** The ship is put over Hearth Dock and over
-//!   Verge Camp (`nova_sim::fixture::put_player_at`) before L, as the
-//!   engine has no autopilot to a stellar, and the original none. The
-//!   course between systems is flown.
-//! - **The fuel Recharge fills.** Nothing the new game does spends fuel
-//!   yet: it never jumps, a gate passage spends none, and the shipyard
-//!   fills the bought hull's tank, as the original's does. So before
-//!   Recharge the tank is drained by [`FUEL_SHORT`]
-//!   (`Session::set_reserve`). The task `new-game-gate-fuel` spends fuel
-//!   on a gate passage; once it lands, the loop drops the drain and
-//!   refuels what a passage spent.
+//! One state is put in rather than played, as every app test does:
+//! approaching a stellar. The ship is put over Hearth Dock, Verge Camp and
+//! Verge Workshop (`nova_sim::fixture::put_player_at`) before L, as the
+//! engine has no autopilot to a stellar, and the original none. The
+//! course between systems is flown, and the fuel Recharge fills is the
+//! fuel the flight spent.
 //!
 //! The lent Dock pass goes with the old hull at the purchase, as the
 //! original's shipyard sends every outfit not flagged persistent: the new
@@ -73,8 +72,8 @@ use nova_sim::navigation::NavMode;
 use nova_sim::story::day::Stay;
 use nova_sim::storylines::state::MissionState;
 use nova_sim::{
-    FUEL_PRICE_PER_UNIT, Gauge, OutfitId, Pilot, Reserve, Service, Session, ShipId, StellarId,
-    SystemId, Vec2,
+    FUEL_PRICE_PER_UNIT, Gauge, OutfitId, Pilot, Service, Session, ShipId, StellarId, SystemId,
+    Vec2,
 };
 use nova_view::galaxy::dialog::map_area;
 use nova_view::spaceport::bar::{LEAVE_ITEM as BAR_LEAVE_ITEM, STORY_ITEMS};
@@ -95,12 +94,6 @@ use crate::new_game_port::{
 use crate::new_game_trade::{good, market, open_exchange, row_of, trade};
 use crate::new_game_travel::{fixture, gates, nova_of, side_road_closing_day};
 use crate::pilots::{Harness, saved};
-
-/// The fuel short of a full tank that the loop stages before Recharge.
-const FUEL_SHORT: f32 = 100.0;
-
-/// [`FUEL_SHORT`] in the units Recharge charges for.
-const FUEL_UNITS: i64 = 100;
 
 /// The dock job's offer, its first line.
 const OFFER_OPENS: &str = "The dockmaster looks up from a slate.";
@@ -124,19 +117,13 @@ fn outfit(id: &str) -> OutfitId {
     OutfitId(nova_of(table, id))
 }
 
-/// Stages the one state no input reaches yet: the tank [`FUEL_SHORT`]
-/// short of full, as a gate passage will leave it once it spends fuel
-/// (see the module docs).
-fn drain_the_tank(game: &mut Harness) {
-    game.app
-        .screen_mut()
-        .flight_view_mut()
-        .expect("flying")
-        .change_sim(|sim| {
-            let session = sim.session_mut().expect("a session");
-            let max = session.pilot().reserves.fuel.max;
-            session.set_reserve(Reserve::Fuel, max - FUEL_SHORT);
-        });
+/// The fuel a gate passage costs the racked hauler, as the opened data
+/// gives it (see the module docs).
+fn racked_fare() -> f32 {
+    let fare = opened_from(&folder())
+        .gate_fuel(ship("racked-hauler"))
+        .expect("the racked hauler's gate fuel");
+    f32::from(fare)
 }
 
 #[test]
@@ -151,10 +138,10 @@ fn a_new_pilot_plays_the_port_loop_and_the_pilot_saved_after_it_loads_equal() {
     buy_the_racked_hauler(&mut game);
     fit_the_turret_ring_and_a_mass_driver(&mut game);
     buy_grain_to_hold(&mut game);
-    recharge(&mut game);
     take_off(&mut game, &start);
     fly_to_the_verge(&mut game);
     deliver_the_plate(&mut game);
+    recharge_at_verge_workshop(&mut game);
     save_and_load(game, &store);
 }
 
@@ -268,6 +255,8 @@ fn buy_the_racked_hauler(game: &mut Harness) {
         0,
         "not persistent, the lent pass goes with the old hull"
     );
+    let fuel = rehulled.reserves.fuel;
+    assert_eq!(fuel, Gauge::full(fuel.max), "the bought hull's tank full");
 }
 
 /// Step 5b and 5c: a kit fitted to the bought hull, the turret ring, adding
@@ -306,29 +295,7 @@ fn buy_grain_to_hold(game: &mut Harness) {
     close_exchange(game);
 }
 
-/// Step 6: Recharge fills the tank, drained first (see the module docs).
-fn recharge(game: &mut Harness) {
-    drain_the_tank(game);
-    let drained = pilot(game);
-    let fuel = drained.reserves.fuel;
-    assert_eq!(
-        fuel,
-        Gauge {
-            now: fuel.max - FUEL_SHORT,
-            ..fuel
-        },
-        "drained"
-    );
-    click_port_item(game, RECHARGE_ITEM);
-    let fuelled = pilot(game);
-    assert_eq!(fuelled.reserves.fuel, Gauge::full(fuel.max), "filled");
-    assert_eq!(
-        fuelled.cash,
-        drained.cash - FUEL_UNITS * FUEL_PRICE_PER_UNIT
-    );
-}
-
-/// Step 7a: take-off: the stay's days pass, a ship bought and outfits
+/// Step 6a: take-off: the stay's days pass, a ship bought and outfits
 /// traded, and the side road is still open.
 fn take_off(game: &mut Harness, start: &Pilot) {
     click_port_item(game, LEAVE_ITEM);
@@ -346,9 +313,9 @@ fn take_off(game: &mut Harness, start: &Pilot) {
     );
 }
 
-/// Step 7b: the course to the Verge, clicked on the map and flown on the
+/// Step 6b: the course to the Verge, clicked on the map and flown on the
 /// gate autopilot: it comes out at the side road's far gate, on the same
-/// day.
+/// day, its fuel down by the racked hauler's fare.
 fn fly_to_the_verge(game: &mut Harness) {
     let before = pilot(game);
     let verge = system("verge");
@@ -360,9 +327,17 @@ fn fly_to_the_verge(game: &mut Harness) {
     let exit = flight_session(game).player().position;
     assert_eq!(exit, side_road_exit(), "at the side road's far gate");
     assert_eq!(arrived.story.day, before.story.day, "a gate passes no day");
+    assert_eq!(
+        arrived.reserves.fuel,
+        Gauge {
+            now: before.reserves.fuel.now - racked_fare(),
+            ..before.reserves.fuel
+        },
+        "the passage's fare spent"
+    );
 }
 
-/// Step 8: Verge Camp: the delivery's completion, first; then the camp's
+/// Step 7: Verge Camp: the delivery's completion, first; then the camp's
 /// greeting and the news its success releases.
 fn deliver_the_plate(game: &mut Harness) {
     let before = pilot(game);
@@ -391,6 +366,39 @@ fn deliver_the_plate(game: &mut Harness) {
         "the plate dropped off, the grain kept"
     );
     assert_eq!(delivered.cash, before.cash, "the job pays nothing");
+}
+
+/// Step 8: off the camp and down at Verge Workshop, which sells fuel:
+/// Recharge refills what the side road's passage spent, at its price a
+/// unit.
+fn recharge_at_verge_workshop(game: &mut Harness) {
+    click_port_item(game, LEAVE_ITEM);
+    assert_eq!(game.showing(), Showing::Flight, "off the camp");
+    land_at(game, "verge-workshop");
+    let landed = pilot(game);
+    let fuel = landed.reserves.fuel;
+    assert_eq!(
+        fuel,
+        Gauge {
+            now: fuel.max - racked_fare(),
+            ..fuel
+        },
+        "short by the fare"
+    );
+    // The news the delivery released is heard here too, over the port.
+    let page = drawn(game);
+    assert!(
+        page.contains(&"Hull plate reaches Verge Camp".to_owned()),
+        "the news pop: {page:?}"
+    );
+    game.press(KeyCode::Enter);
+    click_port_item(game, RECHARGE_ITEM);
+    let fuelled = pilot(game);
+    assert_eq!(fuelled.reserves.fuel, Gauge::full(fuel.max), "filled");
+    // A whole number of units: the fare is a store `i16`.
+    #[allow(clippy::cast_possible_truncation)]
+    let units = racked_fare() as i64;
+    assert_eq!(fuelled.cash, landed.cash - units * FUEL_PRICE_PER_UNIT);
 }
 
 /// Step 9: saved as the window closes, the pilot is the pilot before
