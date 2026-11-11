@@ -18,6 +18,12 @@
 //! closes a road never crosses that road. What a system has heard is
 //! worked out from the release days and the reaches whenever it is asked
 //! ([`heard`]).
+//!
+//! What the pilot has read is the pilot's, not a system's
+//! ([`StoryState::read`]): an item becomes read when the player closes a
+//! news log listing it in a system that has heard it ([`mark_read`]), and
+//! each heard item says whether it is read, so the log opens at landing
+//! only when something unread is heard.
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -44,6 +50,9 @@ pub struct HeardNews {
     pub from: SystemId,
     /// How many days ago the system heard it.
     pub age: u32,
+    /// Whether the pilot has read it ([`StoryState::read`]), here or in
+    /// any other system.
+    pub read: bool,
 }
 
 /// How many lanes news from `from` crosses to reach each system it
@@ -101,13 +110,36 @@ pub fn heard(storylines: &Storylines, story: &StoryState, system: SystemId) -> V
                 text: item.text.clone(),
                 from: item.from,
                 age,
+                read: story.read.contains(id),
             })
         })
         .collect()
 }
 
+/// Marks read each of `ids` that `system` has [`heard`] and the pilot
+/// hasn't read yet, in [`StoryState::read`]: the player closed a news log
+/// listing them there. An id `system` hasn't heard (not released, not
+/// arrived yet, or not in the data) is left alone. Whether it marked any.
+pub fn mark_read(
+    storylines: &Storylines,
+    story: &mut StoryState,
+    system: SystemId,
+    ids: &[String],
+) -> bool {
+    let unread: Vec<String> = heard(storylines, story, system)
+        .into_iter()
+        .filter(|item| !item.read && ids.contains(&item.id))
+        .map(|item| item.id)
+        .collect();
+    let marked = !unread.is_empty();
+    story.read.extend(unread);
+    marked
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use nova_sim_catalog::storylines::NewsItem;
 
     use super::*;
@@ -286,6 +318,7 @@ mod tests {
                 text: "Plate, told.".to_owned(),
                 from: SystemId(VERGE),
                 age: 3,
+                read: false,
             }]
         );
     }
@@ -348,5 +381,73 @@ mod tests {
     #[test]
     fn a_lane_is_a_day() {
         assert_eq!(NEWS_DAYS_PER_LANE, 1);
+    }
+
+    /// What `system` has heard of `story`, as (id, read).
+    fn read_flags(story: &StoryState, system: i16) -> Vec<(String, bool)> {
+        heard(&storylines(), story, SystemId(system))
+            .into_iter()
+            .map(|news| (news.id, news.read))
+            .collect()
+    }
+
+    #[test]
+    fn heard_news_is_read_exactly_when_the_story_holds_it_read() {
+        let mut story = frozen(9, &[("closed", 3), ("plate", 4)]);
+        assert_eq!(
+            read_flags(&story, HEARTH),
+            [("closed".to_owned(), false), ("plate".to_owned(), false)]
+        );
+        story.read.insert("plate".to_owned());
+        assert_eq!(
+            read_flags(&story, HEARTH),
+            [("closed".to_owned(), false), ("plate".to_owned(), true)]
+        );
+    }
+
+    #[test]
+    fn marking_a_heard_item_reads_it_once() {
+        let mut story = frozen(9, &[("closed", 3)]);
+        let ids = ["closed".to_owned()];
+        assert!(mark_read(&storylines(), &mut story, SystemId(HEARTH), &ids));
+        assert_eq!(story.read, BTreeSet::from(["closed".to_owned()]));
+        assert!(
+            !mark_read(&storylines(), &mut story, SystemId(HEARTH), &ids),
+            "already read"
+        );
+        assert_eq!(story.read, BTreeSet::from(["closed".to_owned()]));
+    }
+
+    #[test]
+    fn marking_marks_only_what_the_system_has_heard() {
+        // closed breaks in hearth on day 3 and reaches verge on day 4;
+        // plate isn't released; gone isn't in the data.
+        let mut story = frozen(3, &[("closed", 3), ("gone", 1)]);
+        let ids = ["closed", "plate", "gone"].map(str::to_owned);
+        assert!(
+            !mark_read(&storylines(), &mut story, SystemId(VERGE), &ids),
+            "nothing has arrived in verge yet"
+        );
+        assert_eq!(story.read, BTreeSet::new());
+        assert!(mark_read(&storylines(), &mut story, SystemId(HEARTH), &ids));
+        assert_eq!(
+            story.read,
+            BTreeSet::from(["closed".to_owned()]),
+            "only the heard item is marked"
+        );
+    }
+
+    #[test]
+    fn an_item_read_in_one_system_is_read_when_heard_in_another() {
+        let mut story = frozen(3, &[("closed", 3)]);
+        assert_eq!(read_flags(&story, VERGE), [], "not in verge yet");
+        assert!(mark_read(
+            &storylines(),
+            &mut story,
+            SystemId(HEARTH),
+            &["closed".to_owned()]
+        ));
+        story.day = 4;
+        assert_eq!(read_flags(&story, VERGE), [("closed".to_owned(), true)]);
     }
 }

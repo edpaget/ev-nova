@@ -27,6 +27,7 @@ fn heard(headline: &str, text: &str, from: i16, age: u32) -> HeardNews {
         text: text.to_owned(),
         from: SystemId(from),
         age,
+        read: false,
     }
 }
 

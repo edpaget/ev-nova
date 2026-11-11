@@ -39,6 +39,7 @@ fn heard(id: &str, age: u32) -> HeardNews {
         text: format!("{id} text"),
         from: SystemId(130),
         age,
+        read: false,
     }
 }
 

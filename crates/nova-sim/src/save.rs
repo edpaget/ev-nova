@@ -186,6 +186,11 @@
 //!   each news item broke, which the original has no counterpart of (see
 //!   the `storylines` module). No older save kept it, so the upgrade gives
 //!   day 0 and three empty lists.
+//! - Version 41: adds the news items the pilot has read (`read`, in
+//!   `story`), which the original has no counterpart of (see the
+//!   `storylines` module). No older save kept it, so the upgrade gives
+//!   `[]`, and the pilot's next landing where anything is heard opens the
+//!   news log once.
 //!
 //! IDs are saved as their raw numbers, the nickname (`nickname`) as its
 //! text, the ship's name (`ship_name`) as
@@ -302,7 +307,7 @@ use story_state::{SavedDialogState, dialogs_of, flags_of, saved_dialogs, saved_f
 use storylines::{SavedStory, saved_story, story_of};
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
-pub const CURRENT: u64 = 40;
+pub const CURRENT: u64 = 41;
 
 /// Why a save cannot be read. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -1334,7 +1339,16 @@ const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] = [
     escort_berths,
     flags_and_dialogs,
     story_state_40,
+    news_read_41,
 ];
+
+/// Version 40 to 41: no news item read, as no older save kept which the
+/// pilot had read.
+fn news_read_41(save: &mut Value) {
+    if let Some(story) = save.get_mut("story").and_then(Value::as_object_mut) {
+        story.insert("read".to_owned(), Value::Array(Vec::new()));
+    }
+}
 
 /// Version 39 to 40: the new game's story empty, on day 0, as no older
 /// save kept it.
@@ -2189,7 +2203,7 @@ mod tests {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 40);
+        assert_eq!(CURRENT, 41);
         assert_eq!(value["nickname"], "");
         assert_eq!(value["seen_intro"], true);
         assert_eq!(value["course_start"], 131);
@@ -2278,7 +2292,7 @@ mod tests {
         );
         assert_eq!(value["strict_play"], false);
         assert_eq!(value["jumped_from"], 130);
-        assert!(text.contains("\n  \"version\": 40"), "{text}");
+        assert!(text.contains("\n  \"version\": 41"), "{text}");
     }
 
     #[test]
@@ -4877,12 +4891,12 @@ mod tests {
 
     #[test]
     fn a_save_from_a_newer_version_is_refused() {
-        let newer = encode(&seasoned()).replace("\"version\": 40", "\"version\": 41");
-        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 41 }));
+        let newer = encode(&seasoned()).replace("\"version\": 41", "\"version\": 42");
+        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 42 }));
         assert_eq!(
-            SaveError::Newer { version: 41 }.to_string(),
+            SaveError::Newer { version: 42 }.to_string(),
             "This pilot file was created with a different version of Nova, and can't be used \
-             (it is version 41, and this version of Nova reads up to 40)."
+             (it is version 42, and this version of Nova reads up to 41)."
         );
     }
 

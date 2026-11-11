@@ -1,7 +1,7 @@
 //! The new game's story state in a save, from version 40 (`story`): the
 //! day of the game, where each mission is, the jump points play has
-//! changed and the day each news item broke (see
-//! [`storylines`](crate::storylines)).
+//! changed and the day each news item broke, and from version 41 the news
+//! items the pilot has read (see [`storylines`](crate::storylines)).
 //!
 //! Everything is keyed by the data's ids, as text, each list ascending:
 //!
@@ -15,7 +15,8 @@
 //!   "points": [{"point": "hearth/side-road", "stability": "dead"}],
 //!   "news": [{"id": "side-road-closes", "released": 3, "reach": [
 //!     {"system": 129, "lanes": 0}, {"system": 130, "lanes": 1}
-//!   ]}]
+//!   ]}],
+//!   "read": ["side-road-closes"]
 //! }
 //! ```
 //!
@@ -26,8 +27,11 @@
 //! makes the save unusable. A news item keeps its `reach`, frozen at its
 //! release: the lanes it crosses to each system it reaches, by system ID,
 //! ascending. A save made before reaches were kept has none, and the load
-//! freezes each then (see the session's `gate_points` module). A stock
-//! pilot's story is empty.
+//! freezes each then (see the session's `gate_points` module). The news
+//! read (`read`) are their ids, ascending: the pilot's, not a system's.
+//! The current version requires the list; a version 40 save had none, so
+//! the upgrade gives `[]`, nothing read. An id the data no longer has
+//! stays as saved and matches nothing. A stock pilot's story is empty.
 
 use serde::{Deserialize, Serialize};
 
@@ -43,6 +47,7 @@ pub(super) struct SavedStory {
     missions: Vec<SavedMissionState>,
     points: Vec<SavedPointChange>,
     news: Vec<SavedNews>,
+    read: Vec<String>,
 }
 
 /// One mission's state.
@@ -131,6 +136,7 @@ pub(super) fn saved_story(story: &StoryState) -> SavedStory {
                     .collect(),
             })
             .collect(),
+        read: story.read.iter().cloned().collect(),
     }
 }
 
@@ -205,6 +211,7 @@ pub(super) fn story_of(saved: SavedStory) -> Result<StoryState, SaveError> {
             .map(|saved| (saved.id, saved.released))
             .collect(),
         reach,
+        read: saved.read.into_iter().collect(),
     })
 }
 
@@ -222,7 +229,7 @@ fn stability_of(text: &str) -> Option<PointStability> {
 #[cfg(test)]
 mod tests {
     use super::super::tests::seasoned;
-    use super::super::{CURRENT, decode, encode, story_state_40};
+    use super::super::{CURRENT, decode, encode, news_read_41, story_state_40};
     use super::*;
     use crate::pilot::Pilot;
 
@@ -275,11 +282,73 @@ mod tests {
         assert_eq!(decode(&encode(&pilot)), Ok(pilot));
     }
 
+    /// [`storied`] with both news items read, marked out of order.
+    fn read() -> Pilot {
+        let mut pilot = storied();
+        pilot.story.read.insert("plate".to_owned());
+        pilot.story.read.insert("closed".to_owned());
+        pilot
+    }
+
+    #[test]
+    fn the_news_read_survives_a_round_trip() {
+        let pilot = read();
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+    }
+
+    #[test]
+    fn the_news_read_is_saved_ascending() {
+        let value = json(&encode(&read()));
+        assert_eq!(
+            value["story"]["read"],
+            serde_json::json!(["closed", "plate"])
+        );
+    }
+
+    #[test]
+    fn a_version_40_save_loads_with_nothing_read() {
+        let mut value = json(&encode(&read()));
+        value["version"] = serde_json::Value::from(40);
+        value["story"]
+            .as_object_mut()
+            .expect("an object")
+            .remove("read");
+        let pilot = decode(&value.to_string()).expect("loads");
+        assert_eq!(pilot, storied());
+    }
+
+    #[test]
+    fn the_upgrade_from_40_reads_nothing() {
+        let mut value = serde_json::json!({
+            "name": "Ada",
+            "story": {"day": 2, "missions": [], "points": [], "news": []}
+        });
+        news_read_41(&mut value);
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "name": "Ada",
+                "story": {"day": 2, "missions": [], "points": [], "news": [], "read": []}
+            })
+        );
+    }
+
+    #[test]
+    fn a_current_save_without_its_news_read_is_unusable() {
+        let reason = unusable(|value| {
+            value["story"]
+                .as_object_mut()
+                .expect("an object")
+                .remove("read");
+        });
+        assert!(reason.contains("read"), "{reason}");
+    }
+
     #[test]
     fn the_story_is_saved_ascending_with_only_what_each_entry_holds() {
         let value = json(&encode(&storied()));
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 40);
+        assert_eq!(CURRENT, 41);
         assert_eq!(
             value["story"],
             serde_json::json!({
@@ -297,7 +366,8 @@ mod tests {
                 "news": [
                     {"id": "closed", "released": 3},
                     {"id": "plate", "released": 7}
-                ]
+                ],
+                "read": []
             })
         );
     }
@@ -354,7 +424,7 @@ mod tests {
         let value = json(&encode(&seasoned()));
         assert_eq!(
             value["story"],
-            serde_json::json!({"day": 0, "missions": [], "points": [], "news": []})
+            serde_json::json!({"day": 0, "missions": [], "points": [], "news": [], "read": []})
         );
     }
 

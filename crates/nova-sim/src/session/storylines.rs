@@ -878,6 +878,7 @@ pub(super) mod tests {
                 text: "It spreads.".to_owned(),
                 from: SystemId(130),
                 age: 2,
+                read: false,
             }]
         );
     }

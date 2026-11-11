@@ -1,15 +1,15 @@
 //! The pilot's story state: the day of the game, where each mission is,
-//! how play has changed each jump point, and when each news item broke.
-//! Everything is keyed by the data's own ids, as text (see the
-//! [module docs](super)).
+//! how play has changed each jump point, when each news item broke, and
+//! which the pilot has read. Everything is keyed by the data's own ids, as
+//! text (see the [module docs](super)).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::{StellarId, SystemId};
 use nova_sim_catalog::storylines::{PointAt, PointStability};
 
 /// The new game's story, as a pilot has played it. A new pilot's is
-/// empty: day 0, no mission seen, no point changed, no news.
+/// empty: day 0, no mission seen, no point changed, no news, nothing read.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StoryState {
     /// The day of the game: 0 for a new pilot, one more for each day
@@ -26,6 +26,11 @@ pub struct StoryState {
     /// ([`news::freeze`](super::news::freeze)): how many lanes it crosses
     /// to reach each system it reaches, by ID.
     pub reach: BTreeMap<String, BTreeMap<SystemId, u32>>,
+    /// Each news item the pilot has read, by id: one listed in a news log
+    /// the player closed ([`news::mark_read`](super::news::mark_read)).
+    /// It is the pilot's, not a system's, so an item read in one system
+    /// is read wherever it is heard.
+    pub read: BTreeSet<String>,
 }
 
 /// Where a mission is.
@@ -137,6 +142,7 @@ mod tests {
         assert_eq!(story.mission("job"), None);
         assert!(!story.is_done("job"));
         assert_eq!(story.cargo_aboard(), 0);
+        assert!(story.read.is_empty());
     }
 
     #[test]
