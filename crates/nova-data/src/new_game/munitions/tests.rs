@@ -424,6 +424,26 @@ fn a_launcher_whose_ammunition_is_missing_or_a_weapon_fires_without_ammunition()
 }
 
 #[test]
+fn a_launcher_whose_ammunition_is_a_bay_launching_a_hull_fires_without_ammunition() {
+    let game = loaded(&carrying().with(
+        "outfits/rocket.md",
+        &launcher("Rocket rack", "ammunition: {outfit: drone-bay, load: 3}\n"),
+    ));
+    assert_eq!(
+        against(&game, "outfits/rocket.md"),
+        ["outfits/rocket.md: its ammunition `drone-bay` is a weapon; it fires without ammunition"]
+    );
+    let rocket = weapon(&game, "rocket");
+    assert_eq!((rocket.ammo_type, rocket.flags), (-1, Flags16(0)));
+    let bay = outfit(&game, "drone-bay");
+    assert_eq!(
+        (bay.mod_type, bay.mod_val),
+        (MOD_WEAPON, weapon_id(&game, "drone-bay")),
+        "the bay's still a weapon"
+    );
+}
+
+#[test]
 fn ammunition_that_failed_to_load_is_not_reported_again() {
     let game = loaded(&racked().with("outfits/seekers.md", "---\nname: Seekers\n---\n"));
     assert_eq!(
