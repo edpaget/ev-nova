@@ -10,7 +10,8 @@ publish.workspace = true
 [dependencies]
 # Plays the commands: static sounds, the engine loop and the streamed music.
 kira.workspace = true
-# The `snd ` IDs the table names, and the `snd ` decoder the adapter uses.
+# The `snd ` IDs the table names, the `snd ` and WAV decoders the adapter
+# uses, and a new game's sound files.
 nova-data.workspace = true
 # The `snd ` resource type the game data's sound bank reads.
 nova-rsrc.workspace = true
@@ -18,7 +19,7 @@ nova-rsrc.workspace = true
 nova-view.workspace = true
 
 [dev-dependencies]
-# Synthetic `snd ` resources for the adapter's tests.
+# Synthetic `snd ` resources and WAV files for the adapter's tests.
 nova-data = { workspace = true, features = ["fixture"] }
 # Synthetic resource forks for the game data sound bank's tests.
 nova-rsrc = { workspace = true, features = ["fixture"] }
@@ -28,8 +29,9 @@ nova-audio = { workspace = true, features = ["recording"] }
 tempfile.workspace = true
 
 [features]
-# Exposes the recording Audio mock and the in-memory settings store to
-# other crates' tests.
+# Exposes the recording Audio mock, the in-memory settings store, and the
+# sound port's fake (`MemoryBank`) with its contract check
+# (`check_bank_contract`) to other crates' tests.
 recording = []
 
 [lints]
