@@ -10,10 +10,11 @@
 //! each defaulting to the original's reading.
 //!
 //! The stock game pins nothing. The new game pins the other reading of
-//! twenty keys: thirteen as a jump point's gate is the only way in or out
-//! of a system, two as its story lives in port, one as its exchange
-//! lists every good a port prices, three as its ships are 3D models, and
-//! one as its sky is drawn in 3D:
+//! twenty-one keys: thirteen as a jump point's gate is the only way in or
+//! out of a system, two as its story lives in port, one as its exchange
+//! lists every good a port prices, three as its ships are 3D models, one
+//! as its sky is drawn in 3D, and one as its ships carry their kits as
+//! default items:
 //!
 //! - the three its traffic needs: [`RuleKey::DestinationReach`] (its
 //!   jump points sit past the original's 999 bound),
@@ -84,7 +85,13 @@
 //!   than the original's 20 stars, drifting by their depth's parallax
 //!   and dimmed by the system's murk, in place of the stand-in dots the
 //!   new game's data draws for want of a star sheet; `nova_view::flight::sky`
-//!   and `nova_render::sky`).
+//!   and `nova_render::sky`);
+//! - its NPCs' one: [`RuleKey::NpcDefaultItems`] (an NPC's default items
+//!   count as they do on the player, so a variant's kits, which
+//!   `nova_data::new_game`'s `fleet` maps as its `DefaultItems`, give an
+//!   NPC flying it their armour, shields, speed, handling, recharges and
+//!   fuel; by the original's reading an NPC flies on its class's numbers
+//!   alone, and a kit variant would fly as its bare hull).
 //!
 //! It leaves [`RuleKey::MapPlotting`] at the original's Shift-click, a
 //! hop at a time, so a course is plotted a lane at a time and J flies it.
@@ -126,8 +133,8 @@ const STOCK: Profile = Profile {
 
 /// The new game's profile: its traffic's three gate readings, its map
 /// and courses' four, J's two, its passages' one, its mission ships' three, its port's two,
-/// its exchange's one, its hulls' three and its sky's one (see the module
-/// docs), and pilots of its own.
+/// its exchange's one, its hulls' three, its sky's one and its NPCs' one
+/// (see the module docs), and pilots of its own.
 const NEW_GAME: Profile = Profile {
     readings: &[
         (RuleKey::DestinationReach, RuleSource::Bible),
@@ -150,6 +157,7 @@ const NEW_GAME: Profile = Profile {
         (RuleKey::DataCollision, RuleSource::Bible),
         (RuleKey::MountedMuzzles, RuleSource::Bible),
         (RuleKey::LayeredStarfield, RuleSource::Bible),
+        (RuleKey::NpcDefaultItems, RuleSource::Bible),
     ],
     pilots: "New Game Pilots",
 };
@@ -216,7 +224,7 @@ mod tests {
     }
 
     #[test]
-    fn the_new_game_pins_the_other_reading_of_its_twenty_gate_lane_map_autopilot_fare_mission_ship_port_exchange_hull_and_sky_keys()
+    fn the_new_game_pins_the_other_reading_of_its_twenty_one_gate_lane_map_autopilot_fare_mission_ship_port_exchange_hull_sky_and_npc_keys()
      {
         assert_eq!(
             Ruleset::NewGame.profile().readings,
@@ -241,6 +249,7 @@ mod tests {
                 (RuleKey::DataCollision, RuleSource::Bible),
                 (RuleKey::MountedMuzzles, RuleSource::Bible),
                 (RuleKey::LayeredStarfield, RuleSource::Bible),
+                (RuleKey::NpcDefaultItems, RuleSource::Bible),
             ]
         );
     }
