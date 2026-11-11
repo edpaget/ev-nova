@@ -11,9 +11,9 @@
 //!
 //! - Preferences, a placeholder `DLOG` of the new game's sixteen, opened
 //!   by its menu command. It stands in for a note: the note alert opens
-//!   only over the main menu (a pilot that fails to load), and the About
-//!   text, the other text the menu opens over flight, has no `dësc` in
-//!   the fixture until `new-game-play` phase 3. Preferences draws a
+//!   only over the main menu (a pilot that fails to load). The About
+//!   text, the other text the menu opens over flight, is the fixture's
+//!   `game.md` (`new_game_descriptions` shows it). Preferences draws a
 //!   backdrop of its own under an unbacked dialog, so this also pins that
 //!   a backed one draws the backing in its place;
 //! - the comm dialog, opened by hailing a ship: Tab targets the nearest

@@ -17,7 +17,7 @@ use nova_sim::{Escort, Session, ShipId, StellarId, SystemId};
 use crate::new_game_travel::{new_game_rules, nova_of, pilot_for};
 
 /// Copies the folder `from` into `to`, recursively.
-fn copy(from: &Path, to: &Path) {
+pub(crate) fn copy(from: &Path, to: &Path) {
     fs::create_dir_all(to).expect("creates");
     for entry in fs::read_dir(from).expect("lists") {
         let entry = entry.expect("an entry");
