@@ -1,8 +1,10 @@
 //! The kira adapter: plays the core's commands on an audio device.
 //!
 //! [`KiraAudio`] is thin: each [`AudioCommand`] becomes one or two kira
-//! calls, with the `snd ` resources read through the [`SoundBank`] port
-//! and decoded once each by `nova_data`'s decoder. Its pure parts (PCM to
+//! calls, with each sound's clip (a `snd ` resource, a new game's WAV
+//! file, or silence) read through the [`SoundBank`] port
+//! ([`crate::bank`]) and decoded once each by `nova_data`'s decoders
+//! ([`crate::bank::pcm`]). Its pure parts (PCM to
 //! kira frames, volume to decibels, the sound cache) are tested on their
 //! own, and the adapter as a whole on kira's device-free `MockBackend`.
 //! Only [`KiraAudio::open`] opens a real device (through cpal).
@@ -18,12 +20,14 @@
 //!
 //! A sound that is missing or cannot be decoded is reported once, as a
 //! warning, and is silent from then on; so is music that cannot be
-//! decoded. Warnings go to stderr unless [`KiraAudio::with_warnings`] says
-//! otherwise.
+//! decoded. A sound the bank answers silent ([`crate::bank::Clip::Silent`])
+//! plays nothing and warns of nothing, and takes no voice. Warnings go to
+//! stderr unless [`KiraAudio::with_warnings`] says otherwise.
 
 use std::collections::HashMap;
 use std::io::{self, Cursor, Write};
 use std::num::NonZeroUsize;
+#[cfg(test)]
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -33,38 +37,23 @@ use ::kira::sound::static_sound::{StaticSoundData, StaticSoundHandle, StaticSoun
 use ::kira::sound::streaming::{StreamingSoundData, StreamingSoundHandle};
 use ::kira::sound::{FromFileError, PlaybackState};
 use ::kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Frame, Tween};
-use nova_data::sound::{Pcm, decode_snd};
-use nova_data::{GameData, SoundId};
+use nova_data::SoundId;
+use nova_data::sound::Pcm;
+#[cfg(test)]
+use nova_data::sound::decode_snd;
+#[cfg(test)]
 use nova_rsrc::ResType;
 
+#[cfg(test)]
+use crate::bank::SND;
+/// The sound port, [`crate::bank`]'s, named here as before.
+pub use crate::bank::SoundBank;
+use crate::bank::pcm;
 use crate::port::{Audio, AudioCommand, PlaybackRate, Priority, Volume};
 use crate::voices::{ORIGINAL_VOICES, Placement, Voice, VoiceList};
 
 /// Why the audio device could not be opened.
 pub use ::kira::backend::cpal::Error as OpenError;
-
-/// The `snd ` resource type.
-const SND: ResType = ResType::new(*b"snd ");
-
-/// Where the adapter reads sounds from.
-pub trait SoundBank {
-    /// The raw bytes of `snd ` `id`, if there is one.
-    fn snd(&self, id: SoundId) -> Option<Vec<u8>>;
-}
-
-/// The game data's `snd ` resources.
-impl SoundBank for GameData {
-    fn snd(&self, id: SoundId) -> Option<Vec<u8>> {
-        Some(self.resource(SND, id.0)?.resource.data().to_vec())
-    }
-}
-
-/// A shared bank is a bank.
-impl<T: SoundBank + ?Sized> SoundBank for Rc<T> {
-    fn snd(&self, id: SoundId) -> Option<Vec<u8>> {
-        (**self).snd(id)
-    }
-}
 
 /// `pcm`'s samples as kira frames, -1.0 to just under 1.0: a mono sample
 /// goes to both channels, and stereo samples stay in pairs.
@@ -116,10 +105,11 @@ pub struct SoundCache {
 }
 
 impl SoundCache {
-    /// `snd ` `id` from `bank`, decoded the first time it is asked for. A
-    /// sound that is missing, does not decode or has no samples (which
-    /// kira cannot loop) is reported to `warnings` the first time, and is
-    /// `None` every time.
+    /// `snd ` `id` from `bank` ([`SoundBank::clip`]), decoded the first
+    /// time it is asked for. A sound that is missing, does not decode or
+    /// has no samples (which kira cannot loop) is reported to `warnings`
+    /// the first time, and is `None` every time. A silent clip is `None`
+    /// with no warning: the data leaves it empty on purpose.
     pub fn get(
         &mut self,
         bank: &dyn SoundBank,
@@ -129,13 +119,14 @@ impl SoundCache {
         self.sounds
             .entry(id)
             .or_insert_with(|| {
-                let Some(bytes) = bank.snd(id) else {
+                let Some(clip) = bank.clip(id) else {
                     warn(warnings, &format!("no snd {} to play", id.0));
                     return None;
                 };
-                match decode_snd(&bytes).map(|pcm| sound_data(&pcm)) {
-                    Ok(data) if !data.frames.is_empty() => Some(data),
-                    Ok(_) => {
+                match pcm(&clip).map(|pcm| pcm.map(|pcm| sound_data(&pcm))) {
+                    Ok(None) => None,
+                    Ok(Some(data)) if !data.frames.is_empty() => Some(data),
+                    Ok(Some(_)) => {
                         warn(warnings, &format!("snd {} has no samples to play", id.0));
                         None
                     }
@@ -1004,6 +995,94 @@ mod tests {
         run(&mut audio, play(2, 1.0));
         assert_eq!(audio.effect_states(), []);
         assert_eq!(warnings.text().lines().count(), 2, "{}", warnings.text());
+    }
+
+    // A new game's clips: WAV files, and silence on purpose.
+
+    /// A 16-bit mono WAV at 8000 Hz: half a second of a quiet tone.
+    fn wav_clip() -> Vec<u8> {
+        let samples: Vec<i16> = (0..4000)
+            .map(|i| if i % 2 == 0 { 900 } else { -900 })
+            .collect();
+        nova_data::sound::fixture::wav(1, 8000, 16, &samples)
+    }
+
+    /// A new game's bank, as the published fake: 5 a WAV clip, 6 a broken
+    /// one, every other ID silent.
+    fn new_game_bank() -> crate::recording::MemoryBank {
+        use crate::bank::Clip;
+        crate::recording::MemoryBank::new()
+            .with(SoundId(5), Clip::Wav(wav_clip()))
+            .with(SoundId(6), Clip::Wav(b"RIFF\0\0\0\0WAVE".to_vec()))
+            .silent_otherwise()
+    }
+
+    /// An adapter over the mock backend at 48 kHz playing `bank`, its
+    /// warnings kept.
+    fn adapter_over(bank: impl SoundBank + 'static) -> (Adapter, Warnings) {
+        let settings = AudioManagerSettings {
+            backend_settings: MockBackendSettings {
+                sample_rate: 48_000,
+            },
+            ..AudioManagerSettings::default()
+        };
+        let manager = AudioManager::<MockBackend>::new(settings).expect("a mock never fails");
+        let warnings = Warnings::default();
+        let audio = KiraAudio::with_manager(manager, bank, None).with_warnings(warnings.clone());
+        (audio, warnings)
+    }
+
+    #[test]
+    fn the_cache_decodes_a_wav_clip_at_its_own_rate() {
+        let (bank, mut cache, mut warnings) =
+            (new_game_bank(), SoundCache::default(), Warnings::default());
+        let data = cache.get(&bank, SoundId(5), &mut warnings).expect("plays");
+        let pcm = nova_data::sound::decode_wav(&wav_clip()).expect("decodes");
+        assert_eq!(data, sound_data(&pcm));
+        assert_eq!(data.sample_rate, 8000);
+        assert_eq!(data.frames.len(), 4000);
+        assert_eq!(warnings.text(), "");
+    }
+
+    #[test]
+    fn a_silent_clip_is_nothing_and_warns_of_nothing() {
+        let (bank, mut cache, mut warnings) =
+            (new_game_bank(), SoundCache::default(), Warnings::default());
+        assert_eq!(cache.get(&bank, SoundId(153), &mut warnings), None);
+        assert_eq!(cache.get(&bank, SoundId(153), &mut warnings), None);
+        assert_eq!(warnings.text(), "", "silent on purpose");
+    }
+
+    #[test]
+    fn a_broken_wav_clip_warns_once_with_its_decoder_s_error() {
+        let (bank, mut cache, mut warnings) =
+            (new_game_bank(), SoundCache::default(), Warnings::default());
+        assert_eq!(cache.get(&bank, SoundId(6), &mut warnings), None);
+        assert_eq!(cache.get(&bank, SoundId(6), &mut warnings), None);
+        let error = nova_data::sound::decode_wav(b"RIFF\0\0\0\0WAVE").expect_err("broken");
+        assert_eq!(
+            warnings.text(),
+            format!("nova: cannot play snd 6: {error}\n")
+        );
+    }
+
+    #[test]
+    fn a_wav_clip_plays_as_an_effect_and_a_silent_one_takes_no_voice() {
+        let (audio, warnings) = adapter_over(new_game_bank());
+        let mut audio = audio.with_voices(NonZeroUsize::new(1));
+        run(&mut audio, play(153, 1.0));
+        assert_eq!(audio.effect_states(), [], "silent");
+        run(&mut audio, play(5, 1.0));
+        assert_eq!(audio.effect_states(), [PlaybackState::Playing]);
+        run(&mut audio, play_at(153, 1.0, 50));
+        assert_eq!(
+            audio.effect_states(),
+            [PlaybackState::Playing],
+            "the silent one, louder and higher, evicts nothing from the one voice"
+        );
+        assert_eq!(warnings.text(), "");
+        run(&mut audio, play(6, 1.0));
+        assert_eq!(warnings.text().lines().count(), 1, "{}", warnings.text());
     }
 
     fn start_loop(id: i16, volume: f32) -> AudioCommand {

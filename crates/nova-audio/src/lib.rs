@@ -23,15 +23,21 @@
 //! - [`core`](mod@core): the [`AudioCore`], which turns each frame's
 //!   sound events (`nova_view::Sound`, from the screens) and the screen
 //!   shown (`nova_view::Showing`) into commands on the port.
+//! - [`bank`]: the [`SoundBank`] port the adapter reads each sound's
+//!   [`Clip`] through (a `snd ` resource, a new game's WAV file, or
+//!   silence on purpose), the game data's and a new game's banks, and
+//!   [`bank::pcm`], which decodes a clip with `nova_data`'s decoders.
 //! - [`kira`](mod@kira): the adapter, [`KiraAudio`], which plays the
-//!   commands through kira: the `snd ` resources, read through the
-//!   [`SoundBank`] port and decoded by `nova_data`, and the MP3
-//!   soundtrack, streamed.
+//!   commands through kira: the sounds, read through the [`SoundBank`]
+//!   port and decoded by `nova_data`, and the MP3 soundtrack, streamed.
 //!
 //! With the `recording` feature (and in this crate's tests), `recording`
-//! holds the port mocks: `RecordingAudio`, which logs every command, and
-//! `MemorySettings`, a settings store in memory.
+//! holds the port mocks: `RecordingAudio`, which logs every command,
+//! `MemorySettings`, a settings store in memory, and `MemoryBank`, a sound
+//! bank in memory, with `check_bank_contract`, the check every
+//! [`SoundBank`] passes.
 
+pub mod bank;
 pub mod core;
 pub mod file;
 pub mod kira;
@@ -42,9 +48,10 @@ pub mod settings;
 pub mod table;
 pub mod voices;
 
+pub use crate::bank::{Clip, ClipError, SoundBank};
 pub use crate::core::{AudioCore, music_fade, music_fade_left, switched_out_music_fade};
 pub use crate::file::FileSettings;
-pub use crate::kira::{KiraAudio, OpenError, SoundBank};
+pub use crate::kira::{KiraAudio, OpenError};
 pub use port::{Audio, AudioCommand, Priority, Volume};
 pub use settings::{AudioSettings, SettingsStore};
 pub use table::SoundTable;
