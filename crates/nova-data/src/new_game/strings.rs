@@ -786,6 +786,17 @@ mod tests {
     }
 
     #[test]
+    fn a_comm_group_s_variants_sit_where_the_reader_locates_them() {
+        let at = |id: i16| -> Vec<u16> { list(id).entries.iter().map(|&(at, _)| at).collect() };
+        assert_eq!(at(3001), [1, 2, 3, 4, 5], "group 38 opens STR# 3001");
+        assert_eq!(entry(3001, 1), "Goodbye, captain.");
+        let ship = at(3000);
+        assert_eq!(&ship[..5], [1, 2, 3, 4, 5], "group 0");
+        assert!(ship.contains(&46) && ship.contains(&50), "group 9");
+        assert_eq!(ship.last(), Some(&160), "group 31's last variant");
+    }
+
+    #[test]
     fn a_line_a_name_follows_ends_ready_for_it() {
         for variant in 0..5 {
             for text in [entry(3002, 1 + variant), entry(3000, 41 + variant)] {
