@@ -4,6 +4,7 @@
 use nova_galaxy_format::id::Color;
 use nova_galaxy_format::model::{Service, StellarKind};
 
+use crate::records::boom::Boom;
 use crate::records::character::Character;
 use crate::records::desc::Desc;
 use crate::records::dude::Dude;
@@ -490,6 +491,19 @@ pub fn neutral_weapon() -> Weapon {
         li_amplitude: 0,
         ionize_color: 0,
         unknown_0x76: RawArray::default(),
+    }
+}
+
+/// A `bööm` heard and not seen: each frame for one game frame
+/// (`FrameAdvance` 100), playing explosion sound `sound_index` (`snd ` 300
+/// plus it), its `GraphicIndex` 0 naming `spïn` 400, which the new game
+/// never holds.
+#[must_use]
+pub fn unseen_boom(sound_index: i16) -> Boom {
+    Boom {
+        frame_advance: 100,
+        sound_index,
+        graphic_index: 0,
     }
 }
 

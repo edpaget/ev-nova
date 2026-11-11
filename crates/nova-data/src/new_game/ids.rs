@@ -5,8 +5,9 @@
 //! [`OUTFIT_IDS`] for outfits, kits and the bays' fighters,
 //! [`WEAPON_IDS`] for the outfits that are
 //! weapons, [`CHARACTER_IDS`] for starts, [`MISSION_IDS`] for the
-//! `take_point` missions' blockades ([`super::blockades`]), and
-//! [`COMMODITY_SLOTS`] then [`JUNK_IDS`] for goods ([`super::goods`]). The placeholder traffic
+//! `take_point` missions' blockades ([`super::blockades`]),
+//! [`COMMODITY_SLOTS`] then [`JUNK_IDS`] for goods ([`super::goods`]), and
+//! [`WEAPON_SOUND_IDS`] for the sounds weapons fire ([`super::sounds`]). The placeholder traffic
 //! `düde` is [`CIVILIAN_DUDE`] and the one `ïntf` [`DEFAULT_INTERFACE`];
 //! neither depends on the data.
 //!
@@ -80,6 +81,13 @@ pub const OUTFIT_IDS: RangeInclusive<i16> = 128..=639;
 /// The `wëap` IDs Nova gives data: 128 to 383.
 pub const WEAPON_IDS: RangeInclusive<i16> = 128..=383;
 
+/// The `snd ` IDs a weapon's sound takes: 200 to 299. A weapon fires
+/// `snd ` 200 plus its `wëap`'s `Sound` (nova-view's
+/// `flight::data::FIRST_WEAPON_SOUND`), and these are the weapon handles
+/// below the first explosion's, so no fixed cue shares one
+/// (`nova_sim::sound::WEAPON_SOUNDS` is the engine's own).
+pub const WEAPON_SOUND_IDS: RangeInclusive<i16> = 200..=299;
+
 /// The `chär` IDs the new game's starts take: 128 to 255.
 pub const CHARACTER_IDS: RangeInclusive<i16> = 128..=255;
 
@@ -149,6 +157,9 @@ pub struct IdTable {
     /// Each good's `jünk`, for the goods past the standard slots
     /// ([`JUNK_IDS`]).
     pub junk: BTreeMap<Id, i16>,
+    /// Each sound's `snd `, for the sounds a weapon fires
+    /// ([`WEAPON_SOUND_IDS`], [`super::sounds`]), by the sound's id.
+    pub sounds: BTreeMap<Id, i16>,
 }
 
 /// Numbers `ids`, in the order given, from the start of `range`: the
@@ -299,6 +310,7 @@ mod tests {
         assert_eq!(MISSION_IDS, 128..=1127);
         assert_eq!(COMMODITY_SLOTS, 0..=5);
         assert_eq!(JUNK_IDS, 128..=255);
+        assert_eq!(WEAPON_SOUND_IDS, 200..=299);
     }
 
     #[test]

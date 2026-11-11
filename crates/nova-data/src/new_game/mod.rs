@@ -45,7 +45,10 @@
 //! | (placeholder) | `STR#` 128, 134, 138, 1100, 2002, 3000, 3001, 3002 and 5003 ([`strings`]) | the engine's own strings, in plain English, at the IDs and indices the engine reads: comm replies, messages, prompts and labels, default names, legal statuses, combat ratings and the stellar type label; each only at an ID no mapped `STR#` holds |
 //! | (placeholder) | the dialogs ([`interface::default_dialogs`]) | a `DLOG` and its items, titled "Default spaceport" and so on, for each dialog the view has no built-in layout for: the spaceport and every screen it opens, the text, note and question dialogs, the player info and the preferences; each fits the 640 x 480 view, with no art; the app reads them when the folder has no interface file (`nova::interface`) |
 //! | `outfits/` | `oütf` ([`outfits`]) | its `name`, as `ShortName` and lower-cased as `LCName`, and `Cost` from `price`; massless, with no `Max`; its `mount`'s bit as `Require`, with `Flags` `HIDE_UNLESS_REQUIRED`, so it is listed only for a ship with a hardpoint of that mount; sold at the stellars its `sold_at` names, as a `TechLevel` from [`yards::SOLD_TECH_FIRST`] that only their `SpecialTech` slots hold and `BuyRandom` 100 ([`yards`]); with no `sold_at`, never for sale (`TechLevel` 0x7fff, `BuyRandom` 0); a weapon (`damage` above 0 on a `fixed`, `turret` or `launcher` mount, or a `bay` launching fighters) a `ModType` 1 naming its `wëap`, `Flags` gun, turret or (a bay) neither; a launcher's ammunition a `ModType` 3 naming its rounds' `wëap`; any other doing nothing; `stays_with_pilot: true` adds `Flags` 0x0004, persistent, so a ship purchase keeps it and the trade-in leaves it out; `model` goes to the mounts, below |
-//! | a weapon outfit | `wëap` ([`outfits`]) | pinned by, and numbered in, outfit id order; `damage`, `range` and `reload` as damage, life and `Reload` at a placeholder speed; unguided, turreted for a turret, a fighter bay (99) for a bay; its mount's `ExitType`, the centre for a bay; drawn as the placeholder box, with no sound or explosion |
+//! | a weapon outfit | `wëap` ([`outfits`]) | pinned by, and numbered in, outfit id order; `damage`, `range` and `reload` as damage, life and `Reload` at a placeholder speed; unguided, turreted for a turret, a fighter bay (99) for a bay; its mount's `ExitType`, the centre for a bay; drawn as the placeholder box, with no explosion |
+//! | `sounds/` | the store's sound files ([`sounds`], [`GameData::sound_files`]) | each clip a weapon or a role needs, read once and checked as a WAV file of at least one frame, its bytes at every `snd ` ID it fills; every other ID silent |
+//! | an outfit's `sound` | its `wëap` `Sound`, and a weapon sound ID ([`sounds`], [`ids::WEAPON_SOUND_IDS`]) | the sound numbered within 200 to 299, in sound id order, pinned by the sound's id (`sounds`); `Sound` that ID less 200, so the weapon fires its clip; left out, -1, silent; read only on a weapon |
+//! | `game.md`'s `sounds` | the store's sound files at the engine's cues, and `bööm` 128 and 129 ([`sounds`]) | `button_down` at `snd ` 600, `button_up` 601, `landing` 151 (the traffic controller's beep and the touchdown), `refused` 153 (the refusal beep), `gate_passage` 130 (an arrival), `explosion` 300, each event sharing a cue playing its clip; with an `explosion`, both explosions supplied as `bööm`s playing it, drawn as nothing; a role left out silent |
 //! | a launcher's `guidance` and `ammunition` | `wëap` `Guidance`, `GuidedTurn`, `AmmoType` and `Flags`, the ammunition's `oütf`, and each carrying `shïp`'s `AmmoLoad` ([`munitions`], [`outfits`]) | `homing` as `Guidance` 1 with `GuidedTurn` [`outfits::HOMING_TURN`] (a placeholder), `unguided` -1; an `ammunition` outfit with an `oütf` that is no weapon as the rounds of the lowest-ID launcher `wëap` naming it: each such launcher's `AmmoType` that `wëap` less 128 and `Flags` secondary, and the ammunition's first `ModType` 3 naming it; its `load` a hardpoint, times the slot's `WeapCount`, held within `i16`, as `AmmoLoad`, the chain's and the as-built kits' hardpoints alike |
 //! | a bay's `fighters` | a fighter bay `wëap`, a fighters `oütf`, each carrier's `AmmoLoad` and the hull's `EscortType` ([`munitions`]) | a `hull` that is a mapped ship carrying no bay with `fighters` makes the bay a weapon: `Guidance` 99, `AmmoType` the hull's `shïp`, `Flags` secondary; its fighters an `oütf` numbered after the kits, pinned by the bay's id, named for the hull, `ModType` 3 naming the bay's `wëap`, of no cost, never sold; its `load` a hardpoint, times the slot's `WeapCount`, as `AmmoLoad`; the hull `EscortType` 0, a fighter, every other -1 |
 //! | `mods/` | `oütf` ([`kits`]) | unpinned, numbered after the unpinned outfits; its `name` as `ShortName` and lower-cased as `LCName`; `Cost` from `price`; `Max` 1, `BuyRandom` 100, hidden unless it fits; its effects in the four `ModType` slots, `acceleration`, `fuel`, `shield_recharge` and `hull_recharge` among them; its `fits` as a `Require` bit; its hardpoints' mount bits as `Contribute`; `fitted_at` as `TechLevel` and, lawless, `ScanMask`; its hardpoints' outfits given by `OnPurchase` and taken back by `OnSell` |
@@ -183,6 +186,18 @@
 //!   reported against the file that adds it, naming the hardpoint and the
 //!   model; an outfit's `model` that isn't in `assets/` shows nothing
 //!   ([`mounts`]).
+//! - A weapon's `sound` that isn't in `sounds/` fires silently, reported
+//!   against the outfit; a non-weapon's `sound` is ignored. A sound past
+//!   the last weapon sound ID, 299, is reported against the sound, and the
+//!   weapons naming it fire silently ([`sounds`]).
+//! - A `game.md` role naming a sound that isn't in `sounds/` is silent,
+//!   reported against `game.md`. An unknown role, or one named twice, is
+//!   the loader's problem: `game.md` doesn't parse, so it is left out
+//!   whole, its About text with it.
+//! - A sound's file that isn't under `media/export/`, isn't there, can't
+//!   be read, doesn't decode as a WAV file or holds no samples is silent,
+//!   reported against the sound with the decoder's error; one that is an
+//!   LFS pointer is silent, and listed with the pointers ([`sounds`]).
 //!
 //! A reference to a file that failed to load, or to a record left out for
 //! its ID, isn't reported again; a stellar in such a system is left out
@@ -229,18 +244,24 @@
 //! - A kit bought loose granting its launcher's load: a kit's `OnPurchase`
 //!   grants one outfit per `G`, and a load as repeated `G`s can pass the
 //!   script's 255 bytes, so its rounds are bought.
-//! - A weapon's sound and look: every `wëap` keeps `Sound` -1, so a
-//!   launch or a bay's launch plays nothing, and draws as the placeholder
-//!   box (phase 16, sound effects).
+//! - A weapon's look: every `wëap` draws as the placeholder box.
 //! - Hiring escorts: a ship's `HireRandom` is 0, never for hire, until the
 //!   format has a word for it. The new game greys the bar's Hire Escort
 //!   while nothing is for hire, and the Mission BBS while the computer
 //!   lists nothing, as its only `mïsn` are hidden blockades
 //!   (`nova_sim::RuleKey::EmptyServices`, pinned by `nova::ruleset`).
-//! - An explosion's look and sound: no `bööm` is supplied, so a wreck's
-//!   explosions ([`wrecks`]) are neither seen nor heard until the view has
-//!   a look for them and the data an explosion sound. Its events and
-//!   timings run all the same.
+//! - An explosion's look: the `bööm`s `game.md`'s `explosion` brings
+//!   ([`sounds`]) name no sheet the new game holds, so a wreck's explosions
+//!   ([`wrecks`]) are heard but not seen until the view has a look for
+//!   them; with no `explosion`, no `bööm` is supplied and they are neither.
+//!   Their events and timings run all the same.
+//! - The engine's other sounds: the warp-ups (128 and 129), the beeps but
+//!   the landing's and the refusal's (150, 152 and 154), the explosions
+//!   past the first (301 to 363), the red alert, the klaxon, the escape
+//!   pod, the cloak, the airlock, the main screen's row slides (602 and
+//!   603), the voices, the intro picture's sound, a port's ambient sound
+//!   and a script's `P` sound have no role, so they are silent, as is a
+//!   weapon that names no sound.
 //! - A livery's `decals` aren't drawn.
 //! - Traffic: a system that names no `traffic` flies the placeholder
 //!   civilian `düde`, which flies hulls alone ([`fleet`]); a start's date
@@ -296,6 +317,7 @@ pub mod outfits;
 pub mod pins;
 pub mod records;
 pub mod relations;
+pub mod sounds;
 pub mod strings;
 #[cfg(test)]
 mod tests;
@@ -366,7 +388,8 @@ pub fn open(dir: &Path) -> Result<NewGame, ListError> {
 /// the format's loader, the ID table ([`pins`]), the LFS check over its
 /// media, the mapping under the table's pins, then the stand-ins
 /// ([`looks`]) and the mounts ([`mounts`]), whose models are read from
-/// `source` too, each once. It never writes the table.
+/// `source` too, each once, and the sounds' clips ([`sounds`]), each once.
+/// It never writes the table.
 pub fn load(source: &impl Source, dir: &Path) -> NewGame {
     let (galaxy, mut problems) = nova_galaxy_format::load::load(source);
     let pins = pins::read(source, &mut problems);
@@ -391,6 +414,7 @@ pub fn load(source: &impl Source, dir: &Path) -> NewGame {
     let compiled = dialogs::compiled(&galaxy, source, &mut problems);
     let dialogs = dialogs::read(&galaxy, &ids, &compiled, &mut problems);
     let storylines = missions::map(&galaxy, &ids, &compiled, &mut problems);
+    let sound_files = sounds::read(&galaxy, &ids, source, &mut problems);
     NewGame {
         data: GameData::from_decoded(dir.to_path_buf(), records)
             .with_stand_ins(stand_ins)
@@ -402,7 +426,8 @@ pub fn load(source: &impl Source, dir: &Path) -> NewGame {
             .with_collision_radii(collision_radii)
             .with_gate_fuels(gate_fuels)
             .with_mounts(mounted.mounts)
-            .with_muzzle_reaches(mounted.muzzle_reaches),
+            .with_muzzle_reaches(mounted.muzzle_reaches)
+            .with_sound_files(sound_files),
         ids,
         problems,
         lfs_pointers,

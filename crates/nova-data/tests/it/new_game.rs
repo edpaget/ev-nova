@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use nova_data::new_game::fleet::PX_PER_METRE;
 use nova_data::new_game::outfits::OUTFIT_PERSISTENT;
+use nova_data::records::boom::Boom;
 use nova_data::records::character::Character;
 use nova_data::records::desc::Desc;
 use nova_data::records::dude::Dude;
@@ -68,7 +69,12 @@ use nova_galaxy_media::BARE;
 /// kits `cargo-racks` (legal, slowing the hull's acceleration), `gun-mount` (lawless, adding a turret
 /// hardpoint), `turret-ring` (legal, adding a turret hardpoint),
 /// `welded-plate` (lawless, for a raider, adding 150 to its hull) and
-/// `false-floor` (lawless, hiding four tons from a scan); the
+/// `false-floor` (lawless, hiding four tons from a scan); six sounds, each
+/// a short sine tone of its own as a WAV clip under
+/// `media/export/sounds/`, the mass driver firing `slug-thump` and
+/// `game.md` naming `click-down`, `click-up`, `dock-chime`, `gate-hum` and
+/// `blast` as its button, landing, gate passage and explosion roles,
+/// leaving the refusal silent; the
 /// start `dock-hand`, in the hauler in `hearth`; the
 /// storyline `dock-work`,
 /// whose dock job the character `dockmaster` (Ode, the dockmaster) offers,
@@ -287,6 +293,11 @@ fn the_fixture_folder_holds_a_record_for_each_thing_it_maps() {
         "the engine's own lists around the standard goods' lists"
     );
     assert_eq!(data.ids(Junk::TYPE), [128], "the vintage wine");
+    assert_eq!(
+        data.ids(Boom::TYPE),
+        [128, 129],
+        "the large and the small explosion, heard as game.md's explosion"
+    );
     let [file] = data.files() else {
         panic!("one file: {:?}", data.files());
     };
@@ -1323,6 +1334,68 @@ fn the_drone_bay_launches_drones_and_the_tender_carries_two() {
             );
         }
     }
+}
+
+/// The bytes of the fixture's sound `sound`'s file, read from the folder
+/// at the path its entry names.
+fn clip_of(game: &new_game::NewGame, sound: &str) -> Vec<u8> {
+    let file = &game.galaxy.sounds[&id(sound)].data.file;
+    let path = file
+        .as_str()
+        .split('/')
+        .fold(fixture(), |path, part| path.join(part));
+    fs::read(path).expect("the clip is checked in")
+}
+
+#[test]
+fn the_mass_driver_fires_its_pinned_slug_thump() {
+    let game = new_game::open(&fixture()).expect("lists");
+    let sound = game.ids.sounds[&id("slug-thump")];
+    assert!(new_game::ids::WEAPON_SOUND_IDS.contains(&sound), "{sound}");
+    let (_, weapon) = named::<Weapon>(&game.data, game.ids.weapons[&id("mass-driver")]);
+    assert_eq!(weapon.sound, sound - 200, "snd {sound}");
+    for other in ["drone-bay", "seeker-launcher"] {
+        let (_, weapon) = named::<Weapon>(&game.data, game.ids.weapons[&id(other)]);
+        assert_eq!(weapon.sound, -1, "{other} names no sound");
+    }
+    let files = game.data.sound_files().expect("sound files");
+    assert_eq!(
+        files.get(nova_data::SoundId(sound)),
+        Some(&clip_of(&game, "slug-thump")[..])
+    );
+}
+
+#[test]
+fn each_role_game_md_names_holds_its_clip_at_its_cue_and_the_refusal_none() {
+    use nova_data::new_game::sounds::{
+        BUTTON_DOWN, BUTTON_UP, EXPLOSION, GATE_PASSAGE, LANDING, REFUSED,
+    };
+    let game = new_game::open(&fixture()).expect("lists");
+    let roles = &game.galaxy.game.as_ref().expect("game.md").data.sounds;
+    assert_eq!(roles.refused, None, "left empty on purpose");
+    let files = game.data.sound_files().expect("sound files");
+    let named = [
+        (BUTTON_DOWN, &roles.button_down),
+        (BUTTON_UP, &roles.button_up),
+        (LANDING, &roles.landing),
+        (GATE_PASSAGE, &roles.gate_passage),
+        (EXPLOSION, &roles.explosion),
+    ];
+    let mut clips = Vec::new();
+    for (cue, sound) in named {
+        let sound = sound.as_ref().expect("named");
+        let clip = clip_of(&game, sound.as_str());
+        assert_eq!(files.get(cue), Some(&clip[..]), "{sound} at snd {}", cue.0);
+        clips.push(clip);
+    }
+    clips.sort();
+    clips.dedup();
+    assert_eq!(clips.len(), 5, "each role's clip is its own");
+    assert_eq!(files.get(REFUSED), None);
+    let sound = nova_data::SoundId(game.ids.sounds[&id("slug-thump")]);
+    let mut filled: Vec<_> = named.iter().map(|(cue, _)| *cue).chain([sound]).collect();
+    filled.sort();
+    assert_eq!(files.ids().collect::<Vec<_>>(), filled, "nothing else");
 }
 
 #[test]

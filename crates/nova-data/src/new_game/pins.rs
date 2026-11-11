@@ -13,8 +13,12 @@
 //! each mapping a bible id (`system/point` for `gates`, the outfit's id
 //! for `weapons`, the bay outfit's id for `fighters`, the `take_point`
 //! mission's id for `blockades`, a good's
-//! id for `commodities` and `junk`) to its ID: for `commodities`, the
-//! good's standard slot, 0 to 5. A kind left out pins nothing. The writer
+//! id for `commodities` and `junk`, a sound's id for `sounds`) to its ID:
+//! for `commodities`, the good's standard slot, 0 to 5; for `sounds`, the
+//! `snd ` a weapon firing it plays. A kind left out pins nothing, so a
+//! table written before a kind existed still reads. No saved pilot holds
+//! a sound's ID, but it is pinned like any record, so a weapon keeps its
+//! sound as the data grows. The writer
 //! writes every kind, pretty-printed with sorted keys and a trailing
 //! newline, so a diff shows just the added lines.
 //!
@@ -60,7 +64,7 @@ use nova_galaxy_format::source::Source;
 
 use super::ids::{
     CHARACTER_IDS, COMMODITY_SLOTS, GOVT_IDS, IdTable, JUNK_IDS, MISSION_IDS, OUTFIT_IDS, SHIP_IDS,
-    STELLAR_IDS, SYSTEM_IDS, WEAPON_IDS,
+    STELLAR_IDS, SYSTEM_IDS, WEAPON_IDS, WEAPON_SOUND_IDS,
 };
 
 /// The table's path in the data folder.
@@ -69,8 +73,9 @@ pub const FILE: &str = "nova-ids.json";
 /// The table's kinds, in allocation order: the stellars before the gates,
 /// and the outfits before the kits before the bays' fighters, which share
 /// their ranges, and a good's standard slot (`commodities`) before its
-/// `jünk` (`junk`).
-pub const KINDS: [&str; 13] = [
+/// `jünk` (`junk`). The weapons' sounds (`sounds`) number in a range of
+/// their own.
+pub const KINDS: [&str; 14] = [
     "factions",
     "systems",
     "stellars",
@@ -84,6 +89,7 @@ pub const KINDS: [&str; 13] = [
     "blockades",
     "commodities",
     "junk",
+    "sounds",
 ];
 
 /// Why a whole table is ignored, and why the writer won't replace it.
@@ -154,6 +160,7 @@ pub fn parse(bytes: &[u8]) -> Result<Table, TableError> {
         blockades: keyed(take(10)),
         commodities: keyed(take(11)),
         junk: keyed(take(12)),
+        sounds: keyed(take(13)),
     };
     Ok(Table { pins, problems })
 }
@@ -208,7 +215,7 @@ impl Held {
 }
 
 /// The range of each of [`KINDS`].
-const RANGES: [RangeInclusive<i16>; 13] = [
+const RANGES: [RangeInclusive<i16>; 14] = [
     GOVT_IDS,
     SYSTEM_IDS,
     STELLAR_IDS,
@@ -222,12 +229,13 @@ const RANGES: [RangeInclusive<i16>; 13] = [
     MISSION_IDS,
     COMMODITY_SLOTS,
     JUNK_IDS,
+    WEAPON_SOUND_IDS,
 ];
 
 /// Which range each of [`KINDS`] numbers in, by the first kind of it: the
 /// gates share the stellars', and the kits and the bays' fighters the
 /// outfits'.
-const SHARED: [usize; 13] = [0, 1, 2, 2, 4, 5, 6, 6, 6, 9, 10, 11, 12];
+const SHARED: [usize; 14] = [0, 1, 2, 2, 4, 5, 6, 6, 6, 9, 10, 11, 12, 13];
 
 /// `kept`, whose keys are spelled right, as a kind's table.
 fn keyed<K: TryFrom<String> + Ord>(kept: Vec<(String, i16)>) -> BTreeMap<K, i16> {
@@ -259,6 +267,7 @@ fn entries(table: &IdTable) -> Vec<(&'static str, String, i16)> {
         .chain(of("blockades", &table.blockades))
         .chain(of("commodities", &table.commodities))
         .chain(of("junk", &table.junk))
+        .chain(of("sounds", &table.sounds))
         .collect()
 }
 
@@ -301,6 +310,7 @@ pub fn pin(previous: Option<&[u8]>, loaded: &IdTable) -> Result<Pinned, TableErr
     overlay(&mut table.blockades, &loaded.blockades);
     overlay(&mut table.commodities, &loaded.commodities);
     overlay(&mut table.junk, &loaded.junk);
+    overlay(&mut table.sounds, &loaded.sounds);
     let before = entries(&previous);
     let added = entries(loaded)
         .into_iter()

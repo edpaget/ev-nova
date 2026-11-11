@@ -54,9 +54,10 @@
 //!   launcher and bay is; any other weapon uses no ammunition (`AmmoType`
 //!   -1), on the first trigger;
 //! - `MaxAmmo` is 0, no limit of its own;
+//! - `Sound` is the `snd ` its `sound` fires less 200, so it plays that
+//!   clip ([`super::sounds`]), or -1, silent, when it names none;
 //! - it draws as the view's placeholder box (its `Graphic` 0 names a
-//!   `spïn` the new game never holds), plays no sound and explodes into
-//!   nothing.
+//!   `spïn` the new game never holds) and explodes into nothing.
 //!
 //! **Ammunition.** An outfit a launcher's `ammunition` names, whose
 //! rounds resolve ([`super::munitions`]), keeps its name, price, mount
@@ -92,6 +93,7 @@ use super::kits::{ALWAYS, FitBits, HIDE_UNLESS_REQUIRED};
 use super::map::number;
 use super::munitions::launched_hull;
 use super::records::{named_outfit, neutral_weapon};
+use super::sounds::weapon_sound;
 use crate::decode::Entry;
 use crate::records::outfit::Outfit;
 use crate::records::weapon::Weapon;
@@ -273,10 +275,16 @@ pub fn outfit(
 }
 
 /// The `wëap` of the weapon outfit `doc`, numbered `nova`, of the
-/// `AmmoType` `ammo` when it fires rounds ([`super::munitions`]; see the
-/// module docs).
+/// `AmmoType` `ammo` when it fires rounds ([`super::munitions`]), firing
+/// the weapon sound ID `sound` when its `sound` has one
+/// ([`super::sounds`]; see the module docs).
 #[must_use]
-pub fn weapon(nova: i16, doc: &Doc<BibleOutfit>, ammo: Option<i16>) -> Entry<AnyRecord> {
+pub fn weapon(
+    nova: i16,
+    doc: &Doc<BibleOutfit>,
+    ammo: Option<i16>,
+    sound: Option<i16>,
+) -> Entry<AnyRecord> {
     let data = &doc.data;
     let damage = word(data.damage);
     let (guidance, guided_turn) = match data.mount {
@@ -296,6 +304,7 @@ pub fn weapon(nova: i16, doc: &Doc<BibleOutfit>, ammo: Option<i16>) -> Entry<Any
         flags: Flags16(if ammo.is_some() { WEAPON_SECONDARY } else { 0 }),
         speed: SHOT_SPEED,
         exit_type: exit_type(data.mount).unwrap_or(-1),
+        sound: sound.map_or(-1, weapon_sound),
         ..neutral_weapon()
     };
     Entry {
@@ -603,10 +612,23 @@ mod tests {
             &galaxy().with("outfits/blaster.md", &gun("Bay", "bay", 30, 900, 2.0)),
         );
         let doc = &galaxy.outfits[&Id::try_from("blaster".to_owned()).unwrap()];
-        let AnyRecord::Weapon(weapon) = weapon(128, doc, None).record else {
+        let AnyRecord::Weapon(weapon) = weapon(128, doc, None, None).record else {
             panic!("a wëap");
         };
         assert_eq!(weapon.exit_type, -1);
+        assert_eq!(weapon.sound, -1, "no sound");
+    }
+
+    #[test]
+    fn a_weapon_firing_a_sound_plays_it_as_its_index_past_200() {
+        let (galaxy, _) = nova_galaxy_format::load::load(&galaxy());
+        let doc = &galaxy.outfits[&Id::try_from("blaster".to_owned()).unwrap()];
+        for (sound, index) in [(200, 0), (237, 37), (299, 99)] {
+            let AnyRecord::Weapon(weapon) = weapon(128, doc, None, Some(sound)).record else {
+                panic!("a wëap");
+            };
+            assert_eq!(weapon.sound, index, "snd {sound}");
+        }
     }
 
     #[test]

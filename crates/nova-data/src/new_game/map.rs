@@ -9,7 +9,8 @@
 //! the goods contraband for it in [`super::law`], which yards sell what
 //! in [`super::yards`], the `take_point`
 //! missions' guards and blockades in [`super::blockades`], goods and
-//! a stellar's prices in [`super::goods`], and the bodies read as
+//! a stellar's prices in [`super::goods`], the weapons' sound IDs and the
+//! explosions' `bööm`s in [`super::sounds`], and the bodies read as
 //! descriptions in [`super::descriptions`]. The module docs of
 //! [`super`] list what maps to what, and each problem.
 
@@ -35,7 +36,7 @@ use super::records::{
 };
 use super::relations::{self, Relations};
 use super::yards::{self, SPECIAL_TECH_SLOTS, Sales};
-use super::{blockades, descriptions, gates, goods, hazards, strings, traffic};
+use super::{blockades, descriptions, gates, goods, hazards, sounds, strings, traffic};
 use crate::decode::Entry;
 use crate::records::govt::Govt;
 use crate::records::stellar::Stellar;
@@ -122,6 +123,7 @@ pub fn map_pinned(galaxy: &Galaxy, pins: &IdTable) -> Mapped {
     let mut fittings = fittings(galaxy, &ids, &fit, &sales, &mut records, &mut problems);
     fittings.scan_rates = law::scan_rates(galaxy, &ids.factions);
     records.extend(civilian);
+    records.extend(sounds::booms(galaxy));
     for (faction, &nova) in &guards {
         records.push(blockades::guard(galaxy, &ids, faction, nova));
     }
@@ -196,6 +198,7 @@ fn number_all(galaxy: &Galaxy, pins: &IdTable, problems: &mut Vec<Problem>) -> (
     );
     let outfits = outfits::number_outfits(galaxy, &pins.outfits, &mut free, problems);
     let weapons = outfits::number_weapons(galaxy, &ships, &pins.weapons, problems);
+    let sounds = sounds::number(galaxy, &weapons, &pins.sounds, problems);
     let fit = FitBits::of(galaxy, problems);
     let kits = kits::number_kits(galaxy, &fit, &pins.kits, &mut free, problems);
     let fighters =
@@ -216,6 +219,7 @@ fn number_all(galaxy: &Galaxy, pins: &IdTable, problems: &mut Vec<Problem>) -> (
         blockades,
         commodities,
         junk,
+        sounds,
     };
     ids.starts = fleet::number_starts(galaxy, &ids, &pins.starts, problems);
     (ids, fit)
@@ -258,7 +262,8 @@ fn fittings(
         };
         records.push(outfits::outfit(nova, doc, fitted, sold));
         let ammo = munitions.ammo_types.get(id).copied();
-        records.extend(weapon.map(|weapon| outfits::weapon(weapon, doc, ammo)));
+        let sound = (doc.data.sound.as_ref()).and_then(|sound| ids.sounds.get(sound).copied());
+        records.extend(weapon.map(|weapon| outfits::weapon(weapon, doc, ammo, sound)));
     }
     for (bay, &nova) in &ids.fighters {
         records.push(munitions::fighters(galaxy, ids, bay, nova));

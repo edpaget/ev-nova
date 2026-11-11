@@ -59,6 +59,9 @@
     "tender": 135,
     "warden-picket": 130
   },
+  "sounds": {
+    "slug-thump": 200
+  },
   "starts": {
     "dock-hand": 128
   },

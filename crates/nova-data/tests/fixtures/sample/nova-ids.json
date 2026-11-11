@@ -30,6 +30,7 @@
     "harrow-gunship": 129,
     "light-freighter": 128
   },
+  "sounds": {},
   "starts": {
     "first-flight": 128
   },

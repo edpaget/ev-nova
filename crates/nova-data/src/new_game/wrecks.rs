@@ -19,8 +19,9 @@
 //! the small explosion and no pods.
 //!
 //! The engine reads an `Explode*` of 0-63 as `bööm` 128 + n, a record the
-//! new game doesn't author: its explosions are neither seen nor heard
-//! until the view has a look for them and the data a sound (see the
+//! new game doesn't author. When `game.md` names an `explosion` sound,
+//! [`super::sounds::booms`] supplies 128 and 129, so the explosions are
+//! heard; they aren't seen until the view has a look for them (see the
 //! module docs' "Not mapped yet").
 
 use nova_galaxy_format::fleet::{Explosion, Resolved};

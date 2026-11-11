@@ -488,7 +488,7 @@ fn parse_reads_every_kind() {
              "gates": {"s/g": 131}, "ships": {"h": 132}, "starts": {"c": 133},
              "outfits": {"o": 134}, "kits": {"k": 135}, "fighters": {"b": 138},
              "weapons": {"o": 136}, "blockades": {"m": 137}, "commodities": {"g": 5},
-             "junk": {"w": 255}}"#,
+             "junk": {"w": 255}, "sounds": {"t": 299}}"#,
     )
     .expect("parses");
     assert_eq!(table.problems, Vec::<String>::new());
@@ -509,7 +509,51 @@ fn parse_reads_every_kind() {
             blockades: one("m", 137),
             commodities: one("g", 5),
             junk: one("w", 255),
+            sounds: one("t", 299),
         }
+    );
+}
+
+#[test]
+fn a_sound_s_entry_is_a_weapon_sound_id_in_a_range_of_its_own() {
+    let table = parse(
+        br#"{"sounds": {"thump": 200, "hum": 300, "low": 199, "zap": 200},
+             "weapons": {"gun": 200}}"#,
+    )
+    .expect("parses");
+    assert_eq!(
+        table.problems,
+        [
+            "its sounds entry `hum` is 300, outside 200 to 299; it is ignored",
+            "its sounds entry `low` is 199, outside 200 to 299; it is ignored",
+            "its sounds entry `zap` is 200, which `sounds/thump` holds; it is ignored",
+        ]
+    );
+    assert_eq!(table.pins.sounds, BTreeMap::from([(id("thump"), 200)]));
+    assert_eq!(
+        table.pins.weapons,
+        BTreeMap::from([(id("gun"), 200)]),
+        "no clash"
+    );
+}
+
+#[test]
+fn a_table_written_before_the_sounds_still_reads_and_writes_them() {
+    let table = parse(br#"{"systems": {"alpha": 128}}"#).expect("parses");
+    assert!(table.problems.is_empty(), "{:?}", table.problems);
+    assert!(table.pins.sounds.is_empty());
+    let loaded = IdTable {
+        sounds: BTreeMap::from([(id("thump"), 200)]),
+        ..IdTable::default()
+    };
+    let pinned = pin(Some(br#"{"systems": {"alpha": 128}}"#), &loaded).expect("merges");
+    assert_eq!(pinned.table.sounds, loaded.sounds);
+    assert_eq!(pinned.added, 1);
+    let value: serde_json::Value = serde_json::from_str(&pinned.text).expect("JSON");
+    assert_eq!(value["sounds"]["thump"], 200);
+    assert_eq!(
+        parse(pinned.text.as_bytes()).expect("parses").pins.sounds,
+        loaded.sounds
     );
 }
 

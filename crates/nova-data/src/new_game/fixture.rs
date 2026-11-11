@@ -114,6 +114,18 @@
 //! `game.md` names the galaxy, "Hearth and Verge", with a body that is its
 //! About text.
 //!
+//! It holds six sounds (`sounds/`), each a WAV clip of its own under
+//! `media/export/sounds/`: a short sine tone of 120 frames of 16-bit mono
+//! at 8000 Hz, a different pitch for each, so no two decode alike. The
+//! mass driver fires `slug-thump`, pinned at `snd ` 200, and `game.md`
+//! names `click-down` and `click-up` as the button's two halves,
+//! `dock-chime` as the landing, `gate-hum` as the gate passage and
+//! `blast` as the explosion, which brings `bööm` 128 and 129; it leaves
+//! the refusal empty on purpose, so it is silent. Each `sounds/*.md` body
+//! says how its clip was made (Python's `wave` and `math` modules, once;
+//! no test makes them). The folder's `.gitattributes` keeps the clips
+//! binary.
+//!
 //! Each folder holds its ID table, `nova-ids.json`
 //! ([`pins`](super::pins)), pinning every record it maps at the ID it had
 //! before tables existed. After adding a record to either folder, run
