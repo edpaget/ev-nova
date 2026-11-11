@@ -188,6 +188,11 @@ pub struct Stats {
     /// day, 100 to 199 two, 200 and up three. Left out, 0.
     #[serde(default)]
     pub mass: Option<u32>,
+    /// The fuel a passage through a jump point's gate costs it, on
+    /// `fuel`'s scale: 100 is one jump. 0 is a free passage. Left out, one
+    /// jump's worth.
+    #[serde(default)]
+    pub gate_fuel: Option<u32>,
 }
 
 impl Stats {
@@ -206,6 +211,7 @@ impl Stats {
             shield_recharge: self.shield_recharge.or(base.shield_recharge),
             hull_recharge: self.hull_recharge.or(base.hull_recharge),
             mass: self.mass.or(base.mass),
+            gate_fuel: self.gate_fuel.or(base.gate_fuel),
         }
     }
 }
@@ -439,8 +445,8 @@ pub struct Placed<'a> {
 /// effects are added. That differs from what a game falls back to for a
 /// hull that leaves the word out (its `speed` for `acceleration`, 300 for
 /// `fuel`): `acceleration` and `fuel` here are the chain's own value plus
-/// the kits', not what the hull flies with. `turn`, `crew` and `mass` are
-/// left out, since no kit changes them.
+/// the kits', not what the hull flies with. `turn`, `crew`, `mass` and
+/// `gate_fuel` are left out, since no kit changes them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Totals {
     /// Hull.
@@ -752,6 +758,14 @@ mod tests {
     }
 
     #[test]
+    fn a_hull_reads_its_gate_fuel_and_has_none_when_it_leaves_it_out() {
+        let ship: Ship = read("name: Hauler\nstats: {fuel: 400, gate_fuel: 150}\n").unwrap();
+        assert_eq!(ship.stats.gate_fuel, Some(150));
+        let bare: Ship = read("name: Hauler\nstats: {fuel: 400}\n").unwrap();
+        assert_eq!(bare.stats.gate_fuel, None);
+    }
+
+    #[test]
     fn a_mod_kit_reads_its_acceleration_fuel_and_recharge_effects() {
         let kit: ModKit = read(
             "name: Tune\nfits: [shuttle]\nfitted_at: legal\nprice: 10\n\
@@ -891,6 +905,7 @@ mod tests {
                     shield_recharge: None,
                     hull_recharge: None,
                     mass: None,
+                    gate_fuel: None,
                 }
             );
         }
@@ -917,6 +932,28 @@ mod tests {
                 (s.shield_recharge, s.hull_recharge, s.mass),
                 (Some(300), Some(50), Some(150))
             );
+        }
+
+        #[test]
+        fn a_variant_inherits_its_base_s_gate_fuel_and_overrides_it_when_it_gives_one() {
+            let galaxy = galaxy_with(&[
+                (
+                    "ships/thirsty-skiff.md",
+                    "---\nname: Thirsty skiff\nbase: skiff\nstats: {gate_fuel: 150}\n---\n",
+                ),
+                (
+                    "ships/thirsty-skiff-mk2.md",
+                    "---\nname: Thirsty skiff Mk 2\nbase: thirsty-skiff\nstats: {speed: 300}\n---\n",
+                ),
+                (
+                    "ships/thrifty-skiff.md",
+                    "---\nname: Thrifty skiff\nbase: thirsty-skiff\nstats: {gate_fuel: 0}\n---\n",
+                ),
+            ]);
+            let gate_fuel = |ship| resolve(&galaxy, &id(ship)).unwrap().stats.gate_fuel;
+            assert_eq!(gate_fuel("thirsty-skiff-mk2"), Some(150), "inherited");
+            assert_eq!(gate_fuel("thrifty-skiff"), Some(0), "overridden: free");
+            assert_eq!(gate_fuel("skiff"), None, "left out");
         }
 
         #[test]
