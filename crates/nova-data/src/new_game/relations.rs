@@ -37,7 +37,7 @@
 //! `player_record` and each penalty are held within `i16`, with a
 //! [`Problem`] when one is outside it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use nova_galaxy_format::id::Id;
 use nova_galaxy_format::load::{Galaxy, Problem};
@@ -130,7 +130,8 @@ pub fn relations(
 
 /// The factions `list` names that are kept: each a faction other than
 /// `of`, once, at most [`RELATION_SLOTS`]; each left out is a problem
-/// against `path`, but a repeat.
+/// against `path`. A name given again, kept or left out, counts once: the
+/// repeat is skipped and reports nothing more.
 fn kept(
     of: &Id,
     list: &[Id],
@@ -140,8 +141,9 @@ fn kept(
     problems: &mut Vec<Problem>,
 ) -> Vec<Id> {
     let mut kept: Vec<Id> = Vec::new();
+    let mut seen: BTreeSet<&Id> = BTreeSet::new();
     for named in list {
-        if kept.contains(named) {
+        if !seen.insert(named) {
             continue;
         }
         let why = if named == of {
@@ -352,13 +354,15 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_name_itself_and_a_fifth_are_left_out_and_reported() {
+    fn an_unknown_name_itself_and_a_fifth_are_left_out_and_reported_once_each() {
+        // Each left-out name comes twice; a repeat counts once, so is
+        // reported once.
         let source = galaxy()
             .with(
                 "factions/band.md",
                 &faction_file(
                     "Band",
-                    "enemies: [ghost, band, a, b, a, c, d, e]\nallies: [league]\n",
+                    "enemies: [ghost, ghost, band, band, a, b, a, c, d, e, e]\nallies: [league]\n",
                 ),
             )
             .with("factions/a.md", &faction_file("A", ""))
