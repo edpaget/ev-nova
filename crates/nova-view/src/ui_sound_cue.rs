@@ -117,7 +117,10 @@ impl UiSound {
 
 #[cfg(test)]
 mod tests {
+    use nova_sim::sound::WEAPON_SOUNDS;
+
     use super::*;
+    use crate::menu::intro::INTRO_SOUND;
 
     fn cue(sound: i16, priority: u16) -> SoundCue {
         SoundCue::new(SoundId(sound), priority)
@@ -266,7 +269,22 @@ mod tests {
         ];
         for (sound, cue, source) in pinned {
             assert_eq!(sound.cue(), cue, "{sound:?}: {source}");
+            // The data gives these their sound: a port's ambient sound and
+            // the intro picture's (`INTRO_SOUND`, checked below). Every
+            // other cue is the interface's own.
+            let given = matches!(
+                sound,
+                UiSound::PortAmbient { .. } | UiSound::IntroPicture(_)
+            );
+            if let Some(cue) = cue.filter(|_| !given) {
+                assert!(
+                    !WEAPON_SOUNDS.contains(&cue.sound.0),
+                    "{sound:?} plays snd {}, a weapon's",
+                    cue.sound.0
+                );
+            }
         }
+        assert!(!WEAPON_SOUNDS.contains(&INTRO_SOUND.0), "the intro's");
     }
 
     #[test]

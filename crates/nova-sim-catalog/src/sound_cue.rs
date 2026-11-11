@@ -2,6 +2,8 @@
 //! of the original's `PlaySound` call, decided where the call is ported
 //! ([`SimSound::cue`]). Re-exported from [`sound`](crate::sound).
 
+use std::ops::RangeInclusive;
+
 use crate::catalog::SoundId;
 use crate::sound::SimSound;
 
@@ -87,6 +89,19 @@ const AIRLOCK: SoundId = SoundId(390);
 /// `_explodSnd[0]`, `snd ` 300, the first of the explosions `_LoadSounds`'
 /// loop from 0x1c200 loads from 300 to 363.
 const FIRST_EXPLOSION: SoundId = SoundId(300);
+
+/// The weapon sounds no fixed cue shares: `snd ` 200 to 299.
+///
+/// `_LoadSounds` loads the weapons' sounds into `_shotSnd` from `snd ` 200
+/// up to 455 (@0x1c1dc-0x1c1f8), and a weapon fires `snd ` 200 plus its
+/// `wëap`'s `Sound`. From 300 those handles overlap the explosions, which
+/// it loads into `_explodSnd` from 300 to 363 (@0x1c1fa-0x1c216), so only
+/// the handles below the first explosion's are a weapon's alone. Every
+/// other cue the engine fixes lies outside them: the warp sounds 128 to
+/// 130, the beeps ([`BEEP`]) 150 to 154, the alerts, the escape pod and
+/// the cloak 370 to 381, the airlock 390, the interface's 600 to 603
+/// and the voices from 1000.
+pub const WEAPON_SOUNDS: RangeInclusive<i16> = 200..=299;
 
 impl SimSound {
     /// What the sound plays: the `snd ` and priority of the original's
@@ -645,6 +660,26 @@ mod tests {
         ];
         for (sound, cue, source) in pinned {
             assert_eq!(sound.cue(), cue, "{sound:?}: {source}");
+            // The data gives these their sound: a script's, a voice's and
+            // an explosion's. Every other cue is the engine's own.
+            let given = matches!(
+                sound,
+                SimSound::Script { .. } | SimSound::Voice { .. } | SimSound::Explosion { .. }
+            );
+            if let Some(cue) = cue.filter(|_| !given) {
+                assert!(
+                    !WEAPON_SOUNDS.contains(&cue.sound.0),
+                    "{sound:?} plays snd {}, a weapon's",
+                    cue.sound.0
+                );
+            }
         }
+    }
+
+    #[test]
+    fn the_weapon_sounds_are_the_shot_handles_below_the_first_explosion() {
+        // `_shotSnd` from 200 (@0x1c1dc), `_explodSnd` from 300 (@0x1c1fa).
+        assert_eq!(WEAPON_SOUNDS, 200..=299);
+        assert_eq!(*WEAPON_SOUNDS.end() + 1, FIRST_EXPLOSION.0);
     }
 }
