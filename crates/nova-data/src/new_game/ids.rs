@@ -5,10 +5,17 @@
 //! [`OUTFIT_IDS`] for outfits, [`WEAPON_IDS`] for the outfits that are
 //! weapons, [`CHARACTER_IDS`] for starts, [`MISSION_IDS`] for the
 //! `take_point` missions' blockades ([`super::blockades`]), and
-//! [`COMMODITY_SLOTS`] then [`JUNK_IDS`] for goods ([`super::goods`]). The one traffic
+//! [`COMMODITY_SLOTS`] then [`JUNK_IDS`] for goods ([`super::goods`]). The placeholder traffic
 //! `düde` is [`CIVILIAN_DUDE`] and the one `ïntf` [`DEFAULT_INTERFACE`];
-//! neither depends on the data. The holders' guard `düde`s number after
-//! [`CIVILIAN_DUDE`], unpinned: nothing saves a `düde` ID.
+//! neither depends on the data.
+//!
+//! The holders' guard `düde`s number after [`CIVILIAN_DUDE`]
+//! ([`super::blockades`]), and the fleets' after the last guard, in fleet
+//! id order, within [`DUDE_IDS`] ([`super::traffic`]). Both are unpinned
+//! and kept out of [`IdTable`]: no saved pilot holds a `düde` ID (a
+//! blockade's guards are saved by their `mïsn`), so a fleet renumbered
+//! when a new holder's guards come in ahead of it changes nothing a pilot
+//! keeps.
 //!
 //! # Pinning
 //!
@@ -86,8 +93,12 @@ pub const COMMODITY_SLOTS: RangeInclusive<i16> = 0..=5;
 /// 1000 to 1127.
 pub const JUNK_IDS: RangeInclusive<i16> = 128..=255;
 
-/// The one traffic `düde`, "Civilian traffic" (see
-/// [`super::fleet`]).
+/// The `düde` IDs a system's `DudeTypes` reads as a `düde`: 128 to 639.
+/// Any value above them is unused.
+pub const DUDE_IDS: RangeInclusive<i16> = 128..=639;
+
+/// The placeholder traffic `düde`, "Civilian traffic", flown in each
+/// system that names no traffic of its own (see [`super::fleet`]).
 pub const CIVILIAN_DUDE: i16 = 128;
 
 /// The one `ïntf`, the placeholder status bar

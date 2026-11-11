@@ -210,9 +210,9 @@ fn the_fixture_folder_holds_a_record_for_each_thing_it_maps() {
     assert_eq!(data.ids(ShipAnim::TYPE), [128, 129, 130, 131, 132, 133]);
     assert_eq!(
         data.ids(Dude::TYPE),
-        [128, 129],
-        "the civilian traffic, then the wardens' guards: the raiders hold no point, so \
-         they have none"
+        [128, 129, 130, 131],
+        "the civilian traffic, the wardens' guards (the raiders hold no point, so they \
+         have none), then the raider band and the warden patrol"
     );
     assert_eq!(
         data.ids(Mission::TYPE),
@@ -747,6 +747,55 @@ fn the_wardens_hold_their_road_with_pickets_in_their_colours() {
         .position(|s| *s == Some(road))
         .expect("a slot");
     assert_eq!(i32::from(blockade.ship_start), -(slot as i32) - 1);
+}
+
+#[test]
+fn the_fringe_flies_the_raider_band_and_the_warden_patrol_at_even_weights() {
+    let game = new_game::open(&fixture()).expect("lists");
+    let (_, fringe) = named::<System>(&game.data, game.ids.systems[&id("fringe")]);
+    assert_eq!(
+        fringe.dude_types,
+        [130, 131, -1, -1, -1, -1, -1, -1],
+        "after the wardens' guards (129), in fleet id order"
+    );
+    assert_eq!(fringe.prob, [50, 50, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(fringe.avg_ships, 6);
+    let ship = |name: &str| Some(ShipId(game.ids.ships[&id(name)]));
+    let govt = |name: &str| Some(GovtId(game.ids.factions[&id(name)]));
+    let (name, band) = named::<Dude>(&game.data, 130);
+    assert_eq!(name, "Raider band");
+    assert_eq!((band.govt, band.ai_type), (govt("raider"), 3), "warships");
+    assert_eq!(
+        band.ship_type[..3],
+        [ship("armoured-skiff"), ship("raider-skiff"), None],
+        "the variant too"
+    );
+    assert_eq!(band.probability[..3], [1, 2, 0]);
+    let (name, patrol) = named::<Dude>(&game.data, 131);
+    assert_eq!(name, "Warden patrol");
+    assert_eq!(
+        (patrol.govt, patrol.ai_type),
+        (govt("warden"), 4),
+        "interceptors"
+    );
+    assert_eq!(patrol.ship_type[..2], [ship("warden-picket"), None]);
+    assert_eq!(patrol.probability[..2], [1, 0]);
+}
+
+#[test]
+fn a_take_point_s_blockade_holds_the_guards_it_names_or_three() {
+    let game = new_game::open(&fixture()).expect("lists");
+    let count = |mission: &str| {
+        let (_, blockade) = named::<Mission>(&game.data, game.ids.blockades[&id(mission)]);
+        blockade.ship_count
+    };
+    assert_eq!(count("fringe-road"), 2, "it names two");
+    assert_eq!(
+        count("clear-the-road"),
+        new_game::blockades::BLOCKADE_SHIPS,
+        "it names none"
+    );
+    assert_eq!(new_game::blockades::BLOCKADE_SHIPS, 3);
 }
 
 #[test]

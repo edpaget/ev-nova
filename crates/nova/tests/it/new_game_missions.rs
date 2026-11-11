@@ -314,6 +314,16 @@ fn the_road_is_taken_by_beating_the_wardens_at_its_gate() {
         .map(|npc| (npc.id, npc.govt, npc.state.position))
         .collect();
     assert!(!guards.is_empty(), "the wardens hold their road");
+    let record = (play
+        .data
+        .get::<nova_data::records::mission::Mission>(blockade.0))
+    .expect("present")
+    .expect("decodes");
+    assert_eq!(
+        guards.len(),
+        usize::try_from(record.record.ship_count).expect("a count"),
+        "as many as its blockade holds"
+    );
     for &(_, govt, position) in &guards {
         assert_eq!(govt, Some(wardens));
         assert_eq!(position, at, "at the road's gate");

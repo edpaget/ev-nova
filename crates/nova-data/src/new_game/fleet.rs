@@ -64,14 +64,14 @@
 //!   ([`crate::stock_look`]). The store's fittings keep each ship's chain
 //!   hardpoints too, for the player's exit points to be rebuilt from its
 //!   class and the kits it carries (`crate::store::Fittings`).
-//! - **Traffic** ([`civilian_traffic`]). One `düde`,
+//! - **Traffic** ([`civilian_traffic`]). The placeholder `düde`,
 //!   [`CIVILIAN_DUDE`], "Civilian traffic":
 //!   every hull (no `base`, no `mods`) of `style: civilian`, at even odds,
-//!   flown as wimpy traders of no government. Every system names it in
-//!   `DudeTypes[0]` at 100%, with [`TRAFFIC_SHIPS`] ships on average.
-//!   A faction holding a `take_point` gets its guards' `düde`
-//!   ([`super::blockades`]); variants in traffic and factions' traffic
-//!   fleets wait for the bible to author traffic.
+//!   flown as wimpy traders of no government. Every system that names no
+//!   `traffic` of its own names it in `DudeTypes[0]` at 100%, with
+//!   [`TRAFFIC_SHIPS`] ships on average. The fleets the data names, and
+//!   the systems that name them, are [`super::traffic`]'s; a faction
+//!   holding a `take_point` gets its guards' `düde` ([`super::blockades`]).
 //! - **Starts** ([`character`]). Each start is a `chär` in its ship, in
 //!   its system, with its cash, on [`START_DATE`].
 
@@ -133,8 +133,9 @@ pub const fn maneuver(handling: i64) -> i64 {
     handling
 }
 
-/// How many ships each system's traffic holds on average (`AvgShips`, a
-/// placeholder).
+/// How many ships a system's traffic holds on average (`AvgShips`): the
+/// civilian traffic's, and a system's whose `traffic` names no
+/// `average_ships`.
 pub const TRAFFIC_SHIPS: i16 = 4;
 
 /// The AI type the civilian traffic flies as: 1, a wimpy trader.

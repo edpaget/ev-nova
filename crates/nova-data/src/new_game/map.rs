@@ -2,7 +2,8 @@
 //! per kind over the neutral records of [`super::records`]: factions,
 //! systems and stellars here, a faction's relations in
 //! [`super::relations`], the jump points' gates in [`super::gates`],
-//! ships, traffic and starts in [`super::fleet`], outfits and weapons in
+//! ships, the civilian traffic and starts in [`super::fleet`], the fleets
+//! and a system's traffic in [`super::traffic`], outfits and weapons in
 //! [`super::outfits`], mod kits in [`super::kits`], which yards sell what
 //! in [`super::yards`], the `take_point`
 //! missions' guards and blockades in [`super::blockades`], goods and
@@ -17,10 +18,10 @@ use nova_galaxy_format::id::Id;
 use nova_galaxy_format::load::{Doc, Galaxy, Problem};
 use nova_galaxy_format::model::{Faction, Position, Stellar as BibleStellar};
 
-use super::fleet::{self, TRAFFIC_SHIPS};
+use super::fleet;
 use super::ids::{
-    CIVILIAN_DUDE, DEFAULT_INTERFACE, GOVT_IDS, IdTable, OUTFIT_IDS, STELLAR_IDS, SYSTEM_IDS,
-    after_pins, allocate_pinned,
+    DEFAULT_INTERFACE, GOVT_IDS, IdTable, OUTFIT_IDS, STELLAR_IDS, SYSTEM_IDS, after_pins,
+    allocate_pinned,
 };
 use super::kits::{
     self, FitBits, LAW_SCAN_FINE, LAW_SMUGGLE_PENALTY, LAWLESS_KIT_SCAN, YARD_TECH_LAWLESS,
@@ -33,7 +34,7 @@ use super::records::{
 };
 use super::relations::{self, Relations};
 use super::yards::{self, SPECIAL_TECH_SLOTS, Sales};
-use super::{blockades, descriptions, gates, goods, hazards, strings};
+use super::{blockades, descriptions, gates, goods, hazards, strings, traffic};
 use crate::decode::Entry;
 use crate::records::govt::Govt;
 use crate::records::stellar::Stellar;
@@ -80,21 +81,18 @@ pub fn map_pinned(galaxy: &Galaxy, pins: &IdTable) -> Mapped {
     let mut problems = Vec::new();
     let (ids, fit) = number_all(galaxy, pins, &mut problems);
     let sales = yards::sales(galaxy, &ids, &mut problems);
-    let traffic = fleet::civilian_traffic(galaxy, &ids.ships);
+    let civilian = fleet::civilian_traffic(galaxy, &ids.ships);
+    let guards = blockades::number_guards(galaxy, &ids);
+    let fleets = traffic::fleets(galaxy, &ids, &guards, &mut problems);
     let mut records = Vec::new();
     let relations = relations::relations(galaxy, &ids.factions, &mut problems);
     for (id, &nova) in &ids.factions {
         records.push(faction(nova, &galaxy.factions[id], &relations[id]));
     }
     for (id, &nova) in &ids.systems {
-        records.push(system(
-            galaxy,
-            &ids,
-            id,
-            nova,
-            traffic.is_some(),
-            &mut problems,
-        ));
+        let doc = &galaxy.systems[id];
+        let slots = traffic::slots(galaxy, &fleets.ids, civilian.is_some(), doc, &mut problems);
+        records.push(system(galaxy, &ids, id, nova, slots, &mut problems));
     }
     for (id, &nova) in &ids.stellars {
         let doc = &galaxy.stellars[id];
@@ -117,11 +115,11 @@ pub fn map_pinned(galaxy: &Galaxy, pins: &IdTable) -> Mapped {
         }
     }
     let fittings = fittings(galaxy, &ids, &fit, &sales, &mut records, &mut problems);
-    records.extend(traffic);
-    let guards = blockades::number_guards(galaxy, &ids);
+    records.extend(civilian);
     for (faction, &nova) in &guards {
         records.push(blockades::guard(galaxy, &ids, faction, nova));
     }
+    records.extend(fleets.records);
     for (mission, &nova) in &ids.blockades {
         records.extend(blockades::blockade(
             galaxy,
@@ -319,35 +317,26 @@ fn faction(nova: i16, faction: &Doc<Faction>, relations: &Relations) -> Entry<An
 }
 
 /// The `sÿst` of the system `id`: its stellars and gates in `nav_def`
-/// ([`gates::nav_def`]), and, with the civilian `traffic`, it in
-/// `DudeTypes[0]` at 100% with [`TRAFFIC_SHIPS`] ships on average.
+/// ([`gates::nav_def`]), and its traffic `slots` ([`traffic::slots`]).
 fn system(
     galaxy: &Galaxy,
     ids: &IdTable,
     id: &Id,
     nova: i16,
-    traffic: bool,
+    slots: traffic::Slots,
     problems: &mut Vec<Problem>,
 ) -> Entry<AnyRecord> {
     let doc = &galaxy.systems[id];
     let (x_pos, y_pos) = position(doc.data.map, "map position", &doc.path, problems);
     let nav_def = gates::nav_def(galaxy, ids, id, &doc.path, problems);
-    let mut dude_types = [-1; 8];
-    let mut prob = [0; 8];
-    let mut avg_ships = 0;
-    if traffic {
-        dude_types[0] = CIVILIAN_DUDE;
-        prob[0] = 100;
-        avg_ships = TRAFFIC_SHIPS;
-    }
     let hazards::Effects { murk, interference } = hazards::effects(&doc.data.hazards);
     let system = System {
         x_pos,
         y_pos,
         nav_def,
-        dude_types,
-        prob,
-        avg_ships,
+        dude_types: slots.dude_types,
+        prob: slots.prob,
+        avg_ships: slots.avg_ships,
         murk,
         interference,
         govt: govt(

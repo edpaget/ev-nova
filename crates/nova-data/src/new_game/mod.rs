@@ -20,7 +20,8 @@
 //! | `nova-ids.json` | every record's ID ([`pins`], [`ids`]) | the Nova ID each record keeps, by kind and bible id (a blockade's by its `take_point` mission's id); written only by `nova-dump --pin-ids` |
 //! | `factions/` | `gövt` | its `name` as `CommName`; `color` and `ship_color` from `color`, as `00RRGGBB`; one that keeps the law (not `lawless`) `SmugPenalty` [`kits::LAW_SMUGGLE_PENALTY`], `ScanFine` [`kits::LAW_SCAN_FINE`] and `ScanMask` [`kits::LAWLESS_KIT_SCAN`], placeholders, so its scans find a lawless kit; a lawless one none |
 //! | a faction's `allies`, `enemies`, `attacks_player`, `player_record` and `penalties` | `gövt` ([`relations`]) | `Class1` its own ID when another faction names it, else no class; `Ally1-4` and `Enemy1-4` the classes of the factions named, in order; `attacks_player` `always` or `never` as `Flags` [`ALWAYS_ATTACKS_PLAYER`](crate::records::govt::flags::ALWAYS_ATTACKS_PLAYER) or [`NEVER_ATTACKS_PLAYER`](crate::records::govt::flags::NEVER_ATTACKS_PLAYER); `player_record` as `InitialRec`; `penalties`' `attack`, `disable` and `destroy` as `ShootPenalty`, `DisabPenalty` and `KillPenalty`, of which `ShootPenalty` changes no record and only forgives a stray hit; a faction that names and is named by none stays neutral |
-//! | `systems/` | `sÿst` | `x_pos`/`y_pos` from `map`; `govt` from `government`; `nav_def` its stellars, then its gates, each in ID order; the civilian traffic; no `con` links |
+//! | `systems/` | `sÿst` | `x_pos`/`y_pos` from `map`; `govt` from `government`; `nav_def` its stellars, then its gates, each in ID order; the civilian traffic unless it names its own; no `con` links |
+//! | a system's `traffic` | `sÿst` `DudeTypes`, `Prob` and `AvgShips` ([`traffic`]) | each fleet's `düde` and its weight, held within `i16`, in fleet id order, at most eight; `average_ships`, held within `i16`, as `AvgShips`, or [`fleet::TRAFFIC_SHIPS`] when it names none; no fleet that flies, no traffic |
 //! | a system's `hazards` | `sÿst` ([`hazards`]) | `nebula` sets `Murk` [`hazards::NEBULA_MURK`] and `sensor-dead` sets `Interference` [`hazards::SENSOR_DEAD_INTERFERENCE`], both placeholders; a system naming both gets both, and a word named twice counts once; `radiation`, `ion-storm`, `solar-flares` and `gravity-well` are not read |
 //! | `stellars/` | `spöb` | `x_pos`/`y_pos` from `position`; `govt` from `owner`; `flags` from `services` and `kind` ([`records::stellar_flags`]); no `hyper_link`s; a law-keeping owner's `TechLevel` [`kits::YARD_TECH_LEGAL`] and `MinStatus` 0, a lawless owner's or an unowned one's `TechLevel` [`kits::YARD_TECH_LAWLESS`] and `MinStatus` [`records::ANY_RECORD`]; `SpecialTech` the tech numbers of the outfits and hulls sold there, ascending, `-1` for an unused slot ([`yards`]) |
 //! | `goods/`, the standard ones | `STR#` 4000, 4001, 4003 and 4004 ([`goods`]) | the first six goods by the ID table, each in its slot: the name, lower-cased, with a `:` (placeholders), and its `price` as text; six entries each, empty for an unused slot; none when no good takes a slot |
@@ -33,9 +34,10 @@
 //! | `game.md` | `dësc` [`ids::ABOUT_TEXT`] ([`descriptions`]) | its body, trimmed, named for its `name`: the About text; none for an empty body, or with no `game.md` |
 //! | a system's `jump_points` | hypergate `spöb` ([`gates`]) | unpinned, numbered after the unpinned stellars; `x_pos`/`y_pos` from `position`; `govt` from `owner`; `flags` `CAN_LAND`; `flags2` the hypergate bit; `hyper_link[0]` the partner point's gate; named for the partner's system; a random exit heading; `MinStatus` [`records::ANY_RECORD`] |
 //! | `ships/`, hulls and variants | `shïp` and `shän` ([`fleet`]) | its own `name` as `ShortName`, `LongName` and `CommName`; through the `base` chain: `speed`, `shields`, `hull` and `cargo` as `Speed`, `Shield`, `Armor` and `Holds`; `acceleration`, `turn`, `fuel`, `crew`, `shield_recharge`, `hull_recharge` and `mass` as `Accel`, `Maneuver`, `Fuel`, `Crew`, `ShieldRech`, `ArmorRech` and `Mass`, left out the speed, its `handling` on the turn scale, [`fleet::HULL_FUEL`], one, and 0 (a `turn` anywhere in the chain winning over `handling`); its kits as `DefaultItems`; its chain's hardpoints as `MaxGun` and `MaxTur`; its hardpoints' weapon outfits as stock weapons; the kit `fits` bits of its `role` and its chain hardpoints' mount bits ([`kits::FitBits::mount_bit`]) as `Contribute`; the `shän` `BaseXSize`/`BaseYSize` from `size` and its hardpoints' and kits' as exit points; `price` through the chain as `Cost`; sold at its `sold_at` yards as [`yards`] says, else `TechLevel` 0x7fff and `BuyRandom` 0; never for hire (`HireRandom` 0) |
-//! | (placeholder) | `düde` 128 ([`fleet`]) | "Civilian traffic": every civilian hull (no `base`, no `mods`) at even odds, wimpy traders of no government |
+//! | (placeholder) | `düde` 128 ([`fleet`]) | "Civilian traffic": every civilian hull (no `base`, no `mods`) at even odds, wimpy traders of no government; flown in each system that names no `traffic` |
+//! | `fleets/` | `düde` ([`traffic`]) | numbered after the guards, in fleet id order, unpinned; its `name`; its `faction`'s `gövt`; its `role`'s AI type ([`traffic::ai_type`]: `trader` 1, `armed-trader` 2, `warship` 3, `interceptor` 4); the ships it names that are mapped, hulls and variants, in ship id order at their weights held within `i16`, at most sixteen |
 //! | a `take_point`'s `held_by` | a guard `düde` ([`blockades`]) | "<faction> guards", numbered after 128 in faction id order, unpinned: the holder's ships (those whose livery names it) at even odds, of its `gövt`, flown as placeholder warships ([`blockades::GUARD_AI`]) |
-//! | a `take_point` objective | a hidden blockade `mïsn` ([`blockades`]) | its point's system as `ShipSyst`, its gate's nav slot as `ShipStart`, the holder's guards as `ShipDude`, [`blockades::BLOCKADE_SHIPS`] of them (a placeholder), chase off as `ShipGoal`, attacking the player; never offered, never completed by a landing; the store's objective names it |
+//! | a `take_point` objective | a hidden blockade `mïsn` ([`blockades`]) | its point's system as `ShipSyst`, its gate's nav slot as `ShipStart`, the holder's guards as `ShipDude`, its `guards` of them held within `i16`, or [`blockades::BLOCKADE_SHIPS`] when it names none, as `ShipCount`, chase off as `ShipGoal`, attacking the player; never offered, never completed by a landing; the store's objective names it |
 //! | (placeholder) | `ïntf` 128 ([`records::default_interface`]) | "Default status bar": a radar over the shield, armour and fuel gauges and the nav, weapon, target and cargo readouts, no background picture |
 //! | (placeholder) | `STR#` 128, 134, 138, 1100, 2002, 3000, 3001, 3002 and 5003 ([`strings`]) | the engine's own strings, in plain English, at the IDs and indices the engine reads: comm replies, messages, prompts and labels, default names, legal statuses, combat ratings and the stellar type label; each only at an ID no mapped `STR#` holds |
 //! | (placeholder) | the dialogs ([`interface::default_dialogs`]) | a `DLOG` and its items, titled "Default spaceport" and so on, for each dialog the view has no built-in layout for: the spaceport and every screen it opens, the text, note and question dialogs, the player info and the preferences; each fits the 640 x 480 view, with no art; the app reads them when the folder has no interface file (`nova::interface`) |
@@ -147,6 +149,11 @@
 //! - A `take_point` whose holder has no ships maps a blockade with no
 //!   ships, met at once; one whose gate has no nav slot places its guards
 //!   at random ([`blockades`]).
+//! - A fleet's ship that isn't in `ships/`, or a seventeenth it can fly,
+//!   is left out; its faction that isn't in `factions/` gives no
+//!   government; a fleet with no ship it can fly, or past the last `düde`
+//!   ID, gets no `düde`. A system's `traffic` fleet that isn't in
+//!   `fleets/`, or a ninth that flies, is left out ([`traffic`]).
 //! - A hull's `livery` that isn't in `liveries/` draws bare; a hull's
 //!   `model` or a stellar's `visual` that isn't in `assets/` draws as its
 //!   box or its disc; an asset whose model file doesn't decode is reported
@@ -194,17 +201,18 @@
 //!   noticed than 1 waits for the bible's law numbers.
 //! - A launcher's homing and ammunition, and `bay` hardpoints and outfits
 //!   as fighter bays: a launcher fires unguided, and a bay does nothing.
-//! - Variants in traffic: the civilian traffic flies hulls alone.
 //! - Hiring escorts: a ship's `HireRandom` is 0, never for hire, until the
 //!   format has a word for it. The new game greys the bar's Hire Escort
 //!   while nothing is for hire, and the Mission BBS while the computer
 //!   lists nothing, as its only `mïsn` are hidden blockades
 //!   (`nova_sim::RuleKey::EmptyServices`, pinned by `nova::ruleset`).
 //! - A livery's `decals` aren't drawn.
-//! - Traffic: the bible authors none, so the civilian `düde` and each
-//!   system's traffic are placeholders ([`fleet`]), as is a start's date.
-//!   A blockade's size and its guards' AI are placeholders too
-//!   ([`blockades`]).
+//! - Traffic: a system that names no `traffic` flies the placeholder
+//!   civilian `düde`, which flies hulls alone ([`fleet`]); a start's date
+//!   is a placeholder too. A blockade's guards fly a placeholder AI
+//!   ([`blockades::GUARD_AI`]): the format gives guards no role. The
+//!   plunderer `gövt` bit that sends a warship to the pirate AI isn't
+//!   mapped ([`traffic`]).
 //! - A hull's `FreeMass` and `Strength` stay 0: nothing in the new game
 //!   uses outfit mass, and the strength feeds odds no phase needs yet.
 //! - A faction's `BoardPenalty`, `CrimeTol`, `MaxOdds` and every `Flags`
@@ -253,6 +261,7 @@ pub mod relations;
 pub mod strings;
 #[cfg(test)]
 mod tests;
+pub mod traffic;
 pub mod yards;
 
 use std::io;

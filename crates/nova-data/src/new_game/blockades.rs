@@ -14,9 +14,10 @@
 //!
 //! # A faction's ships
 //!
-//! The format has no fleets: a faction's ships are the mapped ships, hulls
-//! and variants, whose livery (the nearest in the `base` chain) names it
-//! as its `faction` ([`faction_ships`]).
+//! A faction's ships are the mapped ships, hulls and variants, whose
+//! livery (the nearest in the `base` chain) names it as its `faction`
+//! ([`faction_ships`]). The fleets the format names (`fleets/`,
+//! [`super::traffic`]) are traffic, not read for a holder's guards.
 //!
 //! # The guard `düde`
 //!
@@ -26,7 +27,8 @@
 //! ([`GUARD_AI`], a placeholder), with no booty. The mission's `ShipBehav`
 //! sends them at the player whatever their government thinks of the
 //! player. They are numbered after [`CIVILIAN_DUDE`], in faction id
-//! order, unpinned: nothing saves a `düde` ID.
+//! order, unpinned: nothing saves a `düde` ID. The fleets' `düde`s number
+//! after them ([`super::traffic`]).
 //!
 //! # The blockade `mïsn`
 //!
@@ -42,7 +44,7 @@
 //! | `ShipSyst` | the point's system's `sÿst` |
 //! | `ShipStart` | `-(n+1)`, `n` the point's gate's slot in that system's `nav_def` |
 //! | `ShipDude` | the holder's guard `düde` |
-//! | `ShipCount` | [`BLOCKADE_SHIPS`], a placeholder, or 0 when the holder has no ships |
+//! | `ShipCount` | the `take_point`'s `guards`, held within `i16`, or [`BLOCKADE_SHIPS`] when it names none; 0 when the holder has no ships |
 //! | `ShipGoal` | [`CHASE_OFF`]: met once every guard is destroyed or chased off |
 //! | `ShipBehav` | [`ATTACK_PLAYER`] |
 //! | `Flags` | [`HIDDEN`] alone: kept off the mission info screen, never `Flags` 0x0001, which aborts a mission as its ships spawn |
@@ -69,6 +71,7 @@ use nova_galaxy_format::id::{Id, PointRef};
 use nova_galaxy_format::load::{Doc, Galaxy, Problem};
 use nova_galaxy_format::model::{Mission as BibleMission, Objective};
 
+use super::fleet::saturated;
 use super::gates;
 use super::ids::{CIVILIAN_DUDE, IdTable, MISSION_IDS, after_pins};
 use super::map::number;
@@ -80,12 +83,12 @@ use crate::registry::AnyRecord;
 use crate::wire::flags::Flags16;
 use crate::wire::id::{DudeId, GovtId, ShipId, StellarId};
 
-/// How many guards hold a point: 3, the briefings' "gunships", plural. A
-/// placeholder until the format gives a blockade's size.
+/// How many guards hold a point whose `take_point` names no `guards`: 3,
+/// the briefings' "gunships", plural. The format's documented default.
 pub const BLOCKADE_SHIPS: i16 = 3;
 
-/// The AI type the guards fly as: 3, a warship. A placeholder until the
-/// format gives one.
+/// The AI type the guards fly as: 3, a warship. A placeholder: the format
+/// gives guards no role, and a holder's fleets aren't read for its guards.
 pub const GUARD_AI: i16 = 3;
 
 /// The `ShipGoal` of a blockade: 6, chase off, met once every guard is
@@ -209,7 +212,12 @@ pub fn blockade(
     problems: &mut Vec<Problem>,
 ) -> Option<Entry<AnyRecord>> {
     let doc = galaxy.missions.get(mission)?;
-    let Some(Objective::TakePoint { point, held_by, .. }) = &doc.data.objective else {
+    let Some(Objective::TakePoint {
+        point,
+        held_by,
+        guards: size,
+    }) = &doc.data.objective
+    else {
         return None;
     };
     let system = point.system();
@@ -243,7 +251,7 @@ pub fn blockade(
     }
     let record = Mission {
         ship_count: if ship_dude.is_some() {
-            BLOCKADE_SHIPS
+            size.map_or(BLOCKADE_SHIPS, |size| saturated(size.get().into()))
         } else {
             0
         },
@@ -474,6 +482,47 @@ mod tests {
             (BLOCKADE_SHIPS, CHASE_OFF, ATTACK_PLAYER, HIDDEN),
             (3, 6, 0, 0x0400)
         );
+    }
+
+    /// The `ShipCount` of a `toll` on `beta/to-alpha` held by `holder` and
+    /// naming `guards`, if any.
+    fn ship_count(holder_source: MemSource, holder: &str, guards: Option<&str>) -> i16 {
+        let guards = guards.map_or(String::new(), |g| format!(", guards: {g}"));
+        let source = holder_source.with(
+            "missions/toll.md",
+            &format!(
+                "{HEAD}objective: {{take_point: {{point: beta/to-alpha, held_by: {holder}\
+                 {guards}}}}}\n---\n"
+            ),
+        );
+        let game = loaded(&source);
+        let (_, blockade) = mission(&game, game.ids.blockades[&id("toll")]);
+        blockade.ship_count
+    }
+
+    #[test]
+    fn a_take_point_s_blockade_holds_the_guards_it_names() {
+        assert_eq!(ship_count(galaxy(), "league", Some("2")), 2);
+        assert_eq!(ship_count(galaxy(), "league", Some("7")), 7);
+    }
+
+    #[test]
+    fn a_take_point_naming_no_guards_holds_three() {
+        assert_eq!(ship_count(galaxy(), "league", None), BLOCKADE_SHIPS);
+    }
+
+    #[test]
+    fn a_guard_count_past_i16_is_held_at_the_most() {
+        assert_eq!(ship_count(galaxy(), "league", Some("40000")), i16::MAX);
+    }
+
+    #[test]
+    fn a_shipless_holder_s_blockade_has_no_ships_whatever_it_names() {
+        let band = galaxy().with(
+            "factions/band.md",
+            "---\nname: Band\nkind: minor\ncolor: \"#111111\"\n---\n",
+        );
+        assert_eq!(ship_count(band, "band", Some("2")), 0);
     }
 
     #[test]
