@@ -229,6 +229,7 @@ mod ship_line;
 mod ship_pict;
 mod shot_spin;
 mod sound_files;
+mod soundtrack;
 mod spin_sprite;
 mod sprite;
 mod stand_in;
@@ -439,6 +440,10 @@ pub struct GameData {
     /// ([`GameData::with_sound_files`]); none in a stock store, which
     /// plays its `snd ` resources.
     sound_files: Option<SoundFiles>,
+    /// A new game's music, an MP3 file's bytes
+    /// ([`GameData::with_soundtrack`]); none in a stock store, whose
+    /// music is the loose `Nova Music.mp3` ([`crate::music`]).
+    soundtrack: Option<Arc<[u8]>>,
 }
 
 /// A test expression parsed once and shared: its tree, or why it did not
@@ -500,6 +505,7 @@ impl GameData {
             mounts: Mounts::default(),
             muzzle_reaches: BTreeMap::new(),
             sound_files: None,
+            soundtrack: None,
         })
     }
 
