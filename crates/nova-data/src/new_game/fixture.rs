@@ -12,12 +12,16 @@
 //! whose warships attack the player on sight; the systems `drift`, of
 //! jump points alone, `hearth`, the guild's, `verge`, ungoverned and
 //! in a `nebula`, the one hazard, so the port loop's flight to it is
-//! murky, and `fringe`, ungoverned, reached from `drift` alone by the
-//! stable fringe road, and the one system that names its traffic (the
-//! rest fly the civilian traffic): the fleets `raider-band` and
-//! `warden-patrol` at even weights, six ships on average. It is kept off
-//! every other system's roads because the raiders attack the player on
-//! sight, and the tests that fly Drift, Hearth and Verge would meet them.
+//! murky, `fringe`, ungoverned, reached from `drift` alone by the
+//! stable fringe road, and `spur`, ungoverned and clear, a dead end
+//! reached from `verge` alone by the stable spur road. These two name
+//! their traffic (the rest fly the civilian traffic): the Fringe the
+//! fleets `raider-band` and `warden-patrol` at even weights, six ships on
+//! average, and the Spur `raider-band` alone, one ship on average, the
+//! hostile traffic a pilot flies there to fight. Each is kept off every
+//! other system's roads, the Spur a dead end behind the Verge, because
+//! the raiders attack the player on sight, and the tests that fly Drift,
+//! Hearth and Verge would meet them.
 //! `raider-band` is the raiders' warships, flying `raider-skiff` at 2 and
 //! its armoured variant `armoured-skiff` at 1; `warden-patrol` is the
 //! wardens' interceptors, flying `warden-picket`;
@@ -26,8 +30,8 @@
 //! lawless yard; jump
 //! points that cover every case a link can take (two from `hearth` to
 //! `verge`, a dead pair between `verge` and `drift`, `drift`'s
-//! one-way back door to `verge`, and the stable pair between `drift` and
-//! `fringe`); the civilian hull `hauler`, in guild
+//! one-way back door to `verge`, and the stable pairs between `drift` and
+//! `fringe` and between `verge` and `spur`); the civilian hull `hauler`, in guild
 //! paint, priced 4000 and sold nowhere, the crown hull `cutter`, bare,
 //! 50,000 at `hearth-dock`, the wardens' crown hull `warden-picket`,
 //! in `warden-colours`, and the raiders' union hull `raider-skiff`, in

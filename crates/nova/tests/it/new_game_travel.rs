@@ -3,7 +3,8 @@
 //! mapped `GameData`, the rulebook `ruleset_rulebook` gives
 //! `Ruleset::NewGame`, and a seeded chance. It covers every kind of link a
 //! jump point can make: two roads from `hearth` to `verge`, a dead pair,
-//! a one-way back door and `drift`, a system of gates alone.
+//! a one-way back door and `drift`, a system of gates alone, and the
+//! stable roads to the dead ends `fringe` and `spur`.
 //!
 //! - **New Pilot** starts in the fixture's start system, in its hull.
 //! - **The player** goes through every open gate of every system and
@@ -367,7 +368,7 @@ fn new_pilot_starts_in_the_start_system_in_the_start_hull() {
 fn the_fixture_covers_every_kind_of_link() {
     let game = fixture();
     let gates = gates(&game);
-    assert_eq!(gates.len(), 11);
+    assert_eq!(gates.len(), 13);
     let hearth = SystemId(nova_of(&game.ids.systems, "hearth"));
     let verge = SystemId(nova_of(&game.ids.systems, "verge"));
     let to_verge: BTreeSet<StellarId> = gates
@@ -430,8 +431,9 @@ fn under_the_new_game_every_gate_is_one_the_traffic_comes_out_of_and_leaves_by()
 
 /// It runs over `drift`, of gates alone, `hearth`, the busiest, and
 /// `verge`: every fixture system with a closed gate, which no ship ever
-/// comes out of or goes into. `fringe` has one gate, open, and hostile
-/// traffic, so it is left out.
+/// comes out of or goes into. The Verge's open gates take in the spur
+/// road, so its traffic uses that road too. `fringe` and `spur` each have
+/// one gate, open, and hostile traffic, so they are left out.
 #[test]
 fn under_the_new_game_the_traffic_uses_every_open_gate_and_no_closed_one() {
     let game = fixture();

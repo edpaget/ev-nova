@@ -37,18 +37,22 @@ use nova_galaxy_media::BARE;
 /// penalties, and a `law` naming its own penalty, fine and scan rate) and
 /// `raider` (lawless, always attacking the player), the last two enemies;
 /// the systems `drift` (jump points alone),
-/// `hearth` (the guild's), `verge` (ungoverned, in a nebula) and `fringe`
-/// (ungoverned, reached from `drift` alone by one stable road, and the one
-/// system naming its traffic: the fleets `raider-band`, the raiders'
+/// `hearth` (the guild's), `verge` (ungoverned, in a nebula), `fringe`
+/// (ungoverned, reached from `drift` alone by one stable road, and naming
+/// its traffic: the fleets `raider-band`, the raiders'
 /// warships flying `raider-skiff` and its variant `armoured-skiff`, which
-/// carries the `welded-plate` kit, and `warden-patrol`, the wardens' interceptors flying `warden-picket`); four stellars:
+/// carries the `welded-plate` kit, and `warden-patrol`, the wardens' interceptors flying `warden-picket`)
+/// and `spur` (ungoverned, a dead end reached from `verge` alone by one
+/// stable road, whose traffic is the raider band alone, one ship on
+/// average); four stellars:
 /// `hearth-dock`, a guild station with every service; `hearth-moon`, with
 /// none; `verge-camp`, a warden outpost with a bar, an exchange and
 /// no fuel; and `verge-workshop`, an unowned outpost, a lawless yard, with
 /// an outfitter and fuel; seven goods, six standard and `vintage-wine` a `jünk`,
 /// contraband for the guild, which the two exchanges price; jump
 /// points two of which lead from `hearth` to `verge`, a dead pair between
-/// `verge` and `drift`, and `drift`'s one-way back door to `verge`; the
+/// `verge` and `drift`, `drift`'s one-way back door to `verge`, and the
+/// stable pairs from `drift` to `fringe` and from `verge` to `spur`; the
 /// civilian hull `hauler` (4000, sold nowhere), the crown hull `cutter`
 /// (50,000 at `hearth-dock`), the two naming their hull numbers, the
 /// wardens' crown hull `warden-picket` and the raiders' union hull
@@ -155,7 +159,7 @@ fn verge_camp_names_the_fixture_s_one_stellar_conversation() {
 }
 
 #[test]
-fn the_fixture_maps_five_missions_two_news_items_and_eleven_jump_points() {
+fn the_fixture_maps_five_missions_two_news_items_and_thirteen_jump_points() {
     let game = new_game::open(&fixture()).expect("lists");
     let storylines = game.data.storylines();
     let keys = |ids: Vec<&String>| ids.into_iter().cloned().collect::<Vec<_>>();
@@ -173,7 +177,7 @@ fn the_fixture_maps_five_missions_two_news_items_and_eleven_jump_points() {
         keys(storylines.news.keys().collect()),
         ["plate-arrives", "side-road-closes"]
     );
-    assert_eq!(storylines.points.len(), 11);
+    assert_eq!(storylines.points.len(), 13);
     let dock = StellarId(game.ids.stellars[&id("hearth-dock")]);
     let camp = StellarId(game.ids.stellars[&id("verge-camp")]);
     let job = &storylines.missions["dock-job"];
@@ -239,12 +243,13 @@ fn the_dock_job_is_offered_by_the_dockmaster_in_the_dock_work_storyline() {
 fn the_fixture_folder_holds_a_record_for_each_thing_it_maps() {
     let data = new_game::open(&fixture()).expect("lists").data;
     assert_eq!(data.ids(Govt::TYPE), [128, 129, 130]);
-    assert_eq!(data.ids(System::TYPE), [128, 129, 130, 131]);
+    assert_eq!(data.ids(System::TYPE), [128, 129, 130, 131, 132]);
     assert_eq!(
         data.ids(Stellar::TYPE),
-        (128..=142).collect::<Vec<_>>(),
+        (128..=144).collect::<Vec<_>>(),
         "three stellars, nine jump points' gates, the workshop, pinned after them, then \
-         the fringe road's two gates, pinned after it: eleven gates"
+         the fringe road's two gates, pinned after it, then the spur road's two: thirteen \
+         gates"
     );
     assert_eq!(
         data.ids(Desc::TYPE),
@@ -484,7 +489,7 @@ fn the_systems_are_placed_governed_and_hold_their_stellars_then_gates_with_no_li
     assert_eq!(name, "Verge");
     assert_eq!((verge.x_pos, verge.y_pos), (300, -120));
     assert_eq!(verge.govt, None);
-    assert_eq!(ids(&verge.nav_def), [130, 140, 137, 138, 139]);
+    assert_eq!(ids(&verge.nav_def), [130, 140, 137, 138, 139, 144]);
     assert_eq!(
         (verge.murk, verge.interference),
         (new_game::hazards::NEBULA_MURK, 0),
@@ -720,9 +725,11 @@ fn each_jump_point_is_a_hypergate_linked_to_its_partner_s() {
             ("hearth/drift-road".to_owned(), 134),
             ("hearth/side-road".to_owned(), 135),
             ("hearth/verge-road".to_owned(), 136),
+            ("spur/verge-road".to_owned(), 143),
             ("verge/drift-road".to_owned(), 137),
             ("verge/hearth-road".to_owned(), 138),
             ("verge/side-road".to_owned(), 139),
+            ("verge/spur-road".to_owned(), 144),
         ]
     );
     let link = |gate: i16| {
@@ -748,6 +755,9 @@ fn each_jump_point_is_a_hypergate_linked_to_its_partner_s() {
     // The fringe road, the Fringe's one way in and out.
     assert_eq!(link(141), Some(142));
     assert_eq!(link(142), Some(141));
+    // The spur road, the Spur's one way in and out, off the Verge.
+    assert_eq!(link(144), Some(143));
+    assert_eq!(link(143), Some(144));
     let (name, side) = named::<Stellar>(&game.data, 135);
     assert_eq!(name, "Verge", "named for the partner's system");
     assert_eq!((side.x_pos, side.y_pos), (0, 1300));
@@ -995,6 +1005,21 @@ fn the_fringe_flies_the_raider_band_and_the_warden_patrol_at_even_weights() {
     );
     assert_eq!(patrol.ship_type[..2], [ship("warden-picket"), None]);
     assert_eq!(patrol.probability[..2], [1, 0]);
+}
+
+/// The Spur, the Verge's dead end, names the raider band alone: the
+/// `düde` the Fringe's first slot names, read from there, not retyped.
+#[test]
+fn the_spur_flies_the_raider_band_alone_one_ship_on_average() {
+    let game = new_game::open(&fixture()).expect("lists");
+    let system = |name: &str| named::<System>(&game.data, game.ids.systems[&id(name)]).1;
+    let (fringe, spur) = (system("fringe"), system("spur"));
+    let band = fringe.dude_types[0];
+    assert_eq!(spur.dude_types, [band, -1, -1, -1, -1, -1, -1, -1]);
+    assert_eq!(spur.prob, [100, 0, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(spur.avg_ships, 1);
+    assert_eq!(spur.govt, None, "ungoverned");
+    assert_eq!((spur.murk, spur.interference), (0, 0), "no hazard, clear");
 }
 
 #[test]
@@ -1429,6 +1454,7 @@ fn the_ids_map_back_to_the_bible_s() {
             ("drift".to_owned(), 128),
             ("fringe".to_owned(), 131),
             ("hearth".to_owned(), 129),
+            ("spur".to_owned(), 132),
             ("verge".to_owned(), 130)
         ]
     );
@@ -1590,7 +1616,7 @@ fn a_non_utf8_system_file_is_reported_and_the_good_systems_still_map() {
     copy(&fixture(), &root);
     fs::write(root.join("systems").join("garbled.md"), b"---\xff\xfe\n").expect("writes");
     let game = new_game::open(&root).expect("lists");
-    assert_eq!(game.data.ids(System::TYPE), [128, 129, 130, 131]);
+    assert_eq!(game.data.ids(System::TYPE), [128, 129, 130, 131, 132]);
     // The format's relative path, written with `/` on every OS.
     assert!(
         game.problems.iter().any(|p| p.file.contains("garbled.md")),
@@ -1621,6 +1647,6 @@ fn media_holding_lfs_pointers_are_reported_and_the_data_still_loads() {
     fs::write(pack.join("real.glb"), b"glTF\x02").expect("writes");
     let game = new_game::open(&root).expect("lists");
     assert_eq!(game.lfs_pointers, ["media/export/pack/hull.glb"]);
-    assert_eq!(game.data.ids(System::TYPE), [128, 129, 130, 131]);
+    assert_eq!(game.data.ids(System::TYPE), [128, 129, 130, 131, 132]);
     assert!(game.problems.is_empty(), "{:?}", game.problems);
 }

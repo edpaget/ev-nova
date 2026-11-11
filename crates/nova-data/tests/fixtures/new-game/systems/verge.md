@@ -17,6 +17,10 @@ jump_points:
     position: [0, 1250]
     to: drift/verge-road
     stability: dead
+  - id: spur-road
+    position: [1250, -400]
+    to: spur/verge-road
+    stability: stable
 ---
 
 Nobody governs the Verge.

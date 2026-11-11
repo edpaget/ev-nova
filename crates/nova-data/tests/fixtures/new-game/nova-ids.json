@@ -28,9 +28,11 @@
     "hearth/drift-road": 134,
     "hearth/side-road": 135,
     "hearth/verge-road": 136,
+    "spur/verge-road": 143,
     "verge/drift-road": 137,
     "verge/hearth-road": 138,
-    "verge/side-road": 139
+    "verge/side-road": 139,
+    "verge/spur-road": 144
   },
   "junk": {
     "vintage-wine": 128
@@ -75,6 +77,7 @@
     "drift": 128,
     "fringe": 131,
     "hearth": 129,
+    "spur": 132,
     "verge": 130
   },
   "weapons": {
