@@ -8,41 +8,50 @@ use schemars::generate::SchemaSettings;
 
 use crate::asset::{Asset, Budget};
 use crate::fleet::{Livery, ModKit, Outfit, Ship};
+use crate::game::Game;
 use crate::goods::Good;
 use crate::model::{
     Character, Faction, Kind, Mission, News, Region, Start, Stellar, Storyline, System,
 };
 
-/// Each kind's schema as `(file name, pretty JSON)`, in folder order.
+/// Each kind's schema as `(file name, pretty JSON)`, in folder order,
+/// then `game.md`'s.
 #[must_use]
 pub fn schemas() -> Vec<(String, String)> {
     vec![
-        one::<Region>(),
-        one::<Faction>(),
-        one::<System>(),
-        one::<Stellar>(),
-        one::<Good>(),
-        one::<Storyline>(),
-        one::<Mission>(),
-        one::<News>(),
-        one::<Character>(),
-        one::<Ship>(),
-        one::<ModKit>(),
-        one::<Outfit>(),
-        one::<Livery>(),
-        one::<Asset>(),
-        one::<Budget>(),
-        one::<Start>(),
+        kind::<Region>(),
+        kind::<Faction>(),
+        kind::<System>(),
+        kind::<Stellar>(),
+        kind::<Good>(),
+        kind::<Storyline>(),
+        kind::<Mission>(),
+        kind::<News>(),
+        kind::<Character>(),
+        kind::<Ship>(),
+        kind::<ModKit>(),
+        kind::<Outfit>(),
+        kind::<Livery>(),
+        kind::<Asset>(),
+        kind::<Budget>(),
+        kind::<Start>(),
+        one::<Game>("game"),
     ]
 }
 
-/// Draft 7, which YAML editors support most widely.
-fn one<T: JsonSchema + Kind>() -> (String, String) {
+/// A kind's schema, named for the kind.
+fn kind<T: JsonSchema + Kind>() -> (String, String) {
+    one::<T>(T::NAME)
+}
+
+/// `T`'s schema as `name.schema.json`, in draft 7, which YAML editors
+/// support most widely.
+fn one<T: JsonSchema>(name: &str) -> (String, String) {
     let schema = SchemaSettings::draft07()
         .into_generator()
         .into_root_schema_for::<T>();
     let json = serde_json::to_string_pretty(&schema).expect("a schema serializes");
-    (format!("{}.schema.json", T::NAME), json + "\n")
+    (format!("{name}.schema.json"), json + "\n")
 }
 
 #[cfg(test)]
@@ -84,8 +93,23 @@ mod tests {
                 "asset.schema.json",
                 "budget.schema.json",
                 "start.schema.json",
+                "game.schema.json",
             ]
         );
+    }
+
+    #[test]
+    fn the_game_schema_describes_the_game_and_its_name() {
+        let game = value("game.schema.json");
+        assert_eq!(game["title"], "Game");
+        assert_eq!(game["additionalProperties"], false);
+        assert!(
+            game["description"]
+                .as_str()
+                .is_some_and(|d| d.contains("About text")),
+            "{game}"
+        );
+        assert_eq!(game["required"], serde_json::json!(["name"]));
     }
 
     #[test]

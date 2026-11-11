@@ -15,6 +15,7 @@ use serde::de::DeserializeOwned;
 use crate::asset::{Asset, Budget};
 use crate::fleet::{Livery, ModKit, Outfit, Ship};
 use crate::frontmatter;
+use crate::game::{self, Game};
 use crate::goods::Good;
 use crate::id::{Id, MediaPath, PointRef};
 use crate::model::{
@@ -68,6 +69,9 @@ pub struct Galaxy {
     pub assets: BTreeMap<Id, Doc<Asset>>,
     /// `budgets/`: what art may cost.
     pub budgets: BTreeMap<Id, Doc<Budget>>,
+    /// `game.md`, the game as a whole, if the folder has one and it
+    /// loaded.
+    pub game: Option<Doc<Game>>,
     /// Files with a valid name that failed to load, e.g.
     /// `systems/marrow.md`, and kind folders that failed to list, spelled
     /// with a trailing `/`, e.g. `systems/`. References to them aren't
@@ -159,6 +163,7 @@ pub fn load(source: &impl Source) -> (Galaxy, Vec<Problem>) {
         liveries: kind::<Livery>(source, p, u),
         assets: kind::<Asset>(source, p, u),
         budgets: kind::<Budget>(source, p, u),
+        game: game::read(source, p, u),
         unreadable,
     };
     (galaxy, problems)
@@ -320,6 +325,25 @@ mod tests {
         assert_eq!(point("beta/to-alpha").unwrap().id.as_str(), "to-alpha");
         assert!(point("alpha/to-alpha").is_none());
         assert!(point("gamma/to-beta").is_none());
+    }
+
+    #[test]
+    fn loads_game_md_beside_the_kinds() {
+        let (galaxy, problems) = load(&fixture::galaxy());
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(galaxy.game.is_none(), "the fixture has no game.md");
+        let source = fixture::galaxy().with("game.md", "---\nname: Test\n---\nAbout.\n");
+        let (galaxy, problems) = load(&source);
+        assert!(problems.is_empty(), "{problems:?}");
+        let game = galaxy.game.expect("game.md");
+        assert_eq!(
+            (game.data.name.as_str(), game.body.as_str()),
+            ("Test", "About.\n")
+        );
+        let (galaxy, problems) = load(&fixture::galaxy().with_bytes("game.md", b"\xff"));
+        assert!(galaxy.game.is_none());
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(galaxy.unreadable.contains("game.md"));
     }
 
     #[test]
