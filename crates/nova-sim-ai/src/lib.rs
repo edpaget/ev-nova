@@ -51,6 +51,9 @@
 //!   ([`GateKind`](gate::GateKind)), where each leads, and how a ship
 //!   comes out of one, under the [`GateArrivalRule`](gate::GateArrivalRule)
 //!   and [`WormholeRule`](gate::WormholeRule).
+//! - [`gate_fuel`]: what a hypergate passage costs in fuel by each
+//!   reading of `gate_fuel`: the hull's [`fare`](gate_fuel::fare) and
+//!   whether a ship [`affords`](gate_fuel::affords) it.
 //! - [`gate_pilot`]: the gate autopilot's pilot, the new game's: how it
 //!   steers the player's ship to a gate by the player's own controls and
 //!   when it presses L there ([`steer`](gate_pilot::steer)).
@@ -138,6 +141,7 @@ pub mod escort;
 pub mod escort_arrival;
 pub mod escort_voice;
 pub mod gate;
+pub mod gate_fuel;
 pub mod gate_lanes;
 pub mod gate_pilot;
 pub mod hail;
