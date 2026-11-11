@@ -236,8 +236,6 @@ pub use super::grid::{
 
 /// The first outfit's `PICT`; outfit n's is n - 128 after it.
 pub const FIRST_PICTURE: i16 = 6000;
-/// The first outfit's `dësc`; outfit n's is n - 128 after it.
-pub const FIRST_DESCRIPTION: i16 = 3000;
 /// The first `oütf` ID.
 const FIRST_OUTFIT: i16 = 128;
 
@@ -424,13 +422,6 @@ fn sale_sentence(
 pub fn outfit_picture(outfit: OutfitId, exists: impl Fn(i16) -> bool) -> Option<i16> {
     let picture = FIRST_PICTURE.saturating_add(outfit.0.saturating_sub(FIRST_OUTFIT));
     exists(picture).then_some(picture)
-}
-
-/// Outfit `outfit`'s `dësc`, 3000 plus its ID less 128
-/// (`_OutfitFilter` @0x58465, @0x588cc).
-#[must_use]
-pub fn outfit_desc_id(outfit: OutfitId) -> i16 {
-    FIRST_DESCRIPTION.saturating_add(outfit.0.saturating_sub(FIRST_OUTFIT))
 }
 
 /// What the outfitter reads about an outfit: its description, through
@@ -713,7 +704,7 @@ impl OutfitterScreen {
         else {
             return;
         };
-        if outfit_desc_id(*outfit) == id {
+        if nova_data::outfit_desc_id(*outfit) == Some(id) {
             let area = dialog.item_bounds(DESCRIPTION_ITEM).unwrap_or(Bounds::at(
                 Point::new(0.0, 0.0),
                 0.0,
@@ -1055,16 +1046,19 @@ impl OutfitterScreen {
         {
             return;
         }
-        let description = outfit_desc_id(outfit);
         let area = laid
             .dialog
             .item_bounds(DESCRIPTION_ITEM)
             .unwrap_or(Bounds::at(Point::new(0.0, 0.0), 0.0, 0.0));
-        let description = if read {
-            self.description_request = Some(description);
-            catalog.description(description).unwrap_or_default()
-        } else {
-            String::new()
+        // An outfit past the Bible's range has no `dësc` to read
+        // ([`nova_data::outfit_desc_id`]), so it asks for none and shows
+        // none, as the shipyard does for a ship past its range.
+        let description = match nova_data::outfit_desc_id(outfit) {
+            Some(description) if read => {
+                self.description_request = Some(description);
+                catalog.description(description).unwrap_or_default()
+            }
+            _ => String::new(),
         };
         laid.shown = Some((
             outfit,
@@ -1855,7 +1849,7 @@ mod tests {
             (key(OutfitterCommand::Buy), key(OutfitterCommand::Sell)),
             (Some(Key::KeyB), Some(Key::KeyS))
         );
-        assert_eq!((FIRST_PICTURE, FIRST_DESCRIPTION), (6000, 3000));
+        assert_eq!(FIRST_PICTURE, 6000);
         assert_eq!(
             [PRICE_LABEL, MASS_LABEL, AVAILABLE_LABEL, NO_PICTURE],
             ["Item Price:", "Item Mass:", "Available:", "No Picture"]
@@ -2878,10 +2872,8 @@ mod tests {
         };
         let mut screen = screen_with(odd, &art);
         press(&mut screen, Key::ArrowRight);
-        assert_eq!(
-            *art.asked.borrow(),
-            ["PICT -26768", "PICT 32767", "dësc -29768", "dësc 32767"]
-        );
+        // Neither is in the Bible's range, so neither has a `dësc` to ask.
+        assert_eq!(*art.asked.borrow(), ["PICT -26768", "PICT 32767"]);
     }
 
     #[test]
@@ -3788,7 +3780,20 @@ mod tests {
             "another outfit's is not shown"
         );
         assert!(words(&screen).contains(&"dësc 3001.".to_owned()));
-        assert_eq!(outfit_desc_id(OutfitId(130)), 3002);
+    }
+
+    #[test]
+    fn an_outfit_past_the_description_range_asks_for_none_and_shows_none() {
+        let mut screen = screen_of(Outfitter {
+            rows: vec![row(640, "Stray", 10, 0, 0)],
+            ..outfitter()
+        });
+        assert_eq!(screen.take_description_request(), None);
+        assert!(
+            !words(&screen).iter().any(|word| word.starts_with("dësc")),
+            "{:?}",
+            words(&screen)
+        );
     }
 
     #[test]

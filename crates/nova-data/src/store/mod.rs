@@ -187,6 +187,8 @@
 //! [`GameData::ship_description`] finds a ship's `dësc` by the Bible's
 //! convention, [`ship_desc_id`]: `dësc` 13000 to 13767 describe `shïp` 128
 //! to 895. Many ships (mostly variants) have none, which is not an error.
+//! An outfit's is [`outfit_desc_id`]: `dësc` 3000 to 3511 describe `oütf`
+//! 128 to 639.
 //!
 //! # Records decoded elsewhere
 //!
@@ -219,6 +221,7 @@ pub mod fs;
 mod interface;
 mod mounts;
 pub mod order;
+mod outfit_desc;
 mod pict_pair;
 mod ship_desc;
 mod ship_line;
@@ -240,6 +243,7 @@ pub use self::interface::{
     InterfaceData, NoInterfaceFile, interface_path_candidates, load_interface, open_interface,
 };
 pub use self::mounts::{Footing, Mount, Mounts, Shown};
+pub use self::outfit_desc::outfit_desc_id;
 pub use self::pict_pair::SheetKind;
 pub use self::ship_desc::ship_desc_id;
 pub use self::ship_line::ShipLine;

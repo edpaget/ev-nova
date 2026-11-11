@@ -207,8 +207,8 @@ pub use store::{
     ShipSpriteFrame, ShipSpriteInfo, ShipSpriteWords, SourceFile, SpinSheet, SpinSpriteError, Spot,
     SpotKind, SpriteError, StandIn, StandInOf, StarDot, StellarSprite, StellarSpriteError,
     StockArt, StoreEntry, StoreResource, StoryEffects, StoryMission, Storylines,
-    interface_path_candidates, load_interface, open_interface, ship_desc_id, shot_spin_id,
-    stellar_spin_id,
+    interface_path_candidates, load_interface, open_interface, outfit_desc_id, ship_desc_id,
+    shot_spin_id, stellar_spin_id,
 };
 pub use wire::flags::{Flags16, Flags32, Flags64};
 pub use wire::geometry::{Point, Rect};
