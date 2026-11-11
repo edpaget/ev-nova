@@ -538,7 +538,9 @@ impl Mission {
 }
 
 /// Which part of a storyline a mission falls in. See `story/structure.md`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+///
+/// Acts order as a storyline goes through them, [`Act::ALL`]'s order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum Act {
     /// Available to everyone, locking nothing.
@@ -1475,6 +1477,11 @@ pub(crate) mod tests {
         for outcome in Outcome::ALL {
             assert_eq!(Outcome::parse(outcome.as_str()), Some(outcome));
         }
+    }
+
+    #[test]
+    fn acts_order_as_a_storyline_goes_through_them() {
+        assert!(Act::ALL.windows(2).all(|pair| pair[0] < pair[1]));
     }
 
     #[test]
