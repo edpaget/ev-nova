@@ -7,7 +7,9 @@
 //! the hauler is traded in, the difference charged, and the new hull
 //! flies with its default kit and its own turret hardpoint's stock gun.
 //! It can still, having first bought goods and fitted the racks to the
-//! hauler, as the port loop does.
+//! hauler, as the port loop does, and the hauler's racks, unmarked, go
+//! with it. The Dock pass the dock job lends, whose file says it stays
+//! with the pilot, is still held after the purchase.
 //!
 //! This pins only that the fixture's data, the new game's mapping
 //! (`nova_data::new_game`) and the shipyard meet. The rules are pinned in
@@ -144,6 +146,28 @@ fn buying_the_racked_hauler_trades_in_the_hauler_charges_the_difference_and_fits
 }
 
 #[test]
+fn the_dock_job_s_lent_pass_stays_with_the_pilot_across_the_racked_hauler_s_purchase() {
+    let mut play = play();
+    let racked = ship(&play, "racked-hauler");
+    let pass = OutfitId(nova_of(&play.game.ids.outfits, "dock-pass"));
+    play.land("hearth-dock");
+    play.open();
+    play.choose(0);
+    play.close();
+    assert_eq!(play.session.pilot().owned(pass), 1, "lent at the accept");
+
+    play.session
+        .buy_ship(racked, "Rack", &mut play.chance)
+        .expect("bought");
+    assert_eq!(play.session.pilot().ship(), racked);
+    assert_eq!(
+        play.session.pilot().owned(pass),
+        1,
+        "marked to stay with the pilot, kept at the trade-in"
+    );
+}
+
+#[test]
 fn a_fresh_start_that_bought_goods_and_an_outfit_can_still_buy_the_racked_hauler() {
     let mut play = play();
     let cash = start_cash(&play);
@@ -190,4 +214,9 @@ fn a_fresh_start_that_bought_goods_and_an_outfit_can_still_buy_the_racked_hauler
         .buy_ship(racked, "Rack", &mut play.chance)
         .expect("affordable");
     assert_eq!(play.session.pilot().cash(), cash - spent - 6000 + trade_in);
+    assert_eq!(
+        play.session.pilot().owned(racks),
+        1,
+        "the hauler's racks, unmarked, went with it: these are the new hull's default kit"
+    );
 }

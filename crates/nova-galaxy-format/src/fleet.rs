@@ -383,6 +383,12 @@ pub struct Outfit {
     /// bay launches nothing.
     #[serde(default)]
     pub fighters: Option<Fighters>,
+    /// Whether it stays with the pilot when the pilot buys another hull,
+    /// as an outfit a mission lends must, instead of going with the
+    /// traded-in hull. Left out, `false`: it goes with the hull. A mod
+    /// kit has no such word, as it is a change to the hull itself.
+    #[serde(default)]
+    pub stays_with_pilot: bool,
 }
 
 /// A livery (`liveries/<id>.md`): paint and marks, so one model can serve
@@ -818,6 +824,26 @@ mod tests {
         assert_eq!(outfit.mount, Mount::Turret);
         assert_eq!(outfit.model.unwrap().as_str(), "turret-mount");
         assert!(outfit.sold_at.is_empty(), "sold nowhere when left out");
+        assert!(!outfit.stays_with_pilot, "goes with the hull when left out");
+    }
+
+    #[test]
+    fn an_outfit_can_say_it_stays_with_the_pilot() {
+        let outfit: Outfit = read(
+            "name: Dock pass\nmount: fixed\ndamage: 0\nrange: 0\nreload: 1\n\
+             price: 0\nstays_with_pilot: true\n",
+        )
+        .unwrap();
+        assert!(outfit.stays_with_pilot);
+    }
+
+    #[test]
+    fn a_mod_kit_can_t_say_it_stays_with_the_pilot() {
+        let read = read::<ModKit>(
+            "name: Tune\nfits: [shuttle]\nfitted_at: legal\nprice: 10\n\
+             stays_with_pilot: true\n",
+        );
+        assert!(read.is_err(), "a kit is the hull's: {read:?}");
     }
 
     #[test]

@@ -51,7 +51,8 @@
 //! with a `seeker-launcher` on its `rack` launcher hardpoint and a
 //! `drone-bay` on its `hangar` bay hardpoint, and the crown fighter
 //! `drone` the bay launches, bare, unpriced, unsold and in no fleet; the
-//! outfits `dock-pass`, a Dock pass, `mass-driver`, a turret weapon
+//! outfits `dock-pass`, a Dock pass that stays with the pilot across a
+//! hull change (`stays_with_pilot`), `mass-driver`, a turret weapon
 //! sold at `hearth-dock` alone (`sold_at`), so it is listed there only
 //! for a ship with a turret hardpoint, `seeker-launcher`, a homing
 //! launcher (`guidance: homing`) firing `seekers`, six a hardpoint, and
@@ -84,7 +85,7 @@
 //! - `dock-job`: offered at `hearth-dock` (`job_offer`), ten tons of hull
 //!   plate to `verge-camp`, completed there (`job_done`), each effect
 //!   block used; its accept lends the `dock-pass` and its success takes
-//!   it back and releases `plate-arrives`, from `verge`;
+//!   it back, even after a hull change, and releases `plate-arrives`, from `verge`;
 //! - `side-road-closes`: an event on day 8 that kills both ends of the
 //!   side road and releases `side-road-closes`, from `hearth`;
 //! - `warden-toll`: offered at `verge-camp` (`toll_offer`) once the side

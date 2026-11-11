@@ -71,6 +71,14 @@
 //!
 //! A weapon past the last `wëap` ID is reported and stays an `oütf` that
 //! does nothing.
+//!
+//! **Staying with the pilot.** An outfit whose file says
+//! `stays_with_pilot: true` also holds [`OUTFIT_PERSISTENT`] in its
+//! `Flags`, on top of whatever its mount and mod give it, so a ship
+//! purchase keeps it and the trade-in leaves it out, as a mission's lent
+//! outfit needs. Left out, it goes with the traded-in hull, as the
+//! original's non-persistent outfits do. A kit has no such word: it is
+//! the hull's ([`super::kits`]).
 
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
@@ -101,6 +109,11 @@ pub const OUTFIT_GUN: u16 = 0x0001;
 /// The `oütf` `Flags` bit of a turret, which takes a turret slot
 /// (`nova_sim::outfitter::OutfitFlags::TURRET`).
 pub const OUTFIT_TURRET: u16 = 0x0002;
+
+/// The `oütf` `Flags` bit of an outfit that stays with the pilot: a ship
+/// purchase keeps it and the trade-in leaves it out
+/// (`nova_sim::outfitter::OutfitFlags::PERSISTENT`).
+pub const OUTFIT_PERSISTENT: u16 = 0x0004;
 
 /// The `oütf` `ModType` of ammunition: its `ModVal` names the `wëap`
 /// whose rounds it is (`nova_sim::combat::armament::MOD_AMMO`).
@@ -248,6 +261,10 @@ pub fn outfit(
             outfit.mod_val = weapon;
         }
     }
+    // After the weapon branch, which sets the flags afresh.
+    if doc.data.stays_with_pilot {
+        outfit.flags = Flags16(outfit.flags.bits() | OUTFIT_PERSISTENT);
+    }
     Entry {
         id: nova,
         name: Some(doc.data.name.clone()),
@@ -383,6 +400,36 @@ mod tests {
         assert_eq!(outfit.buy_random, 0);
         assert_eq!(outfit.require_govt, -1);
         assert_eq!(outfit.flags, Flags16(HIDE_UNLESS_REQUIRED));
+    }
+
+    /// `text`, an outfit's file, marked to stay with the pilot.
+    fn marked(text: &str) -> String {
+        text.replace("\n---\n", "\nstays_with_pilot: true\n---\n")
+    }
+
+    #[test]
+    fn the_persistent_bit_is_the_original_s() {
+        assert_eq!(OUTFIT_PERSISTENT, 0x0004);
+    }
+
+    #[test]
+    fn a_marked_outfit_stays_with_the_pilot() {
+        let text = marked(&pass("Blaster", 100));
+        let (_, outfit) = named(&loaded(&galaxy().with("outfits/blaster.md", &text)), 128);
+        assert_eq!(
+            outfit.flags,
+            Flags16(HIDE_UNLESS_REQUIRED | OUTFIT_PERSISTENT)
+        );
+    }
+
+    #[test]
+    fn a_marked_weapon_keeps_its_slot_and_stays_with_the_pilot() {
+        let text = marked(&gun("Blaster", "turret", 5, 300, 0.5));
+        let (_, outfit) = named(&loaded(&galaxy().with("outfits/blaster.md", &text)), 128);
+        assert_eq!(
+            outfit.flags,
+            Flags16(OUTFIT_TURRET | HIDE_UNLESS_REQUIRED | OUTFIT_PERSISTENT)
+        );
     }
 
     #[test]

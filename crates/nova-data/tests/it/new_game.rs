@@ -10,6 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use nova_data::new_game::fleet::PX_PER_METRE;
+use nova_data::new_game::outfits::OUTFIT_PERSISTENT;
 use nova_data::records::character::Character;
 use nova_data::records::desc::Desc;
 use nova_data::records::dude::Dude;
@@ -59,7 +60,8 @@ use nova_galaxy_media::BARE;
 /// `tender` (9000 at `hearth-dock`), carrying a `seeker-launcher` on a
 /// launcher hardpoint and a `drone-bay` on a bay hardpoint, and the crown
 /// fighter `drone` it launches (unsold, in no fleet); the outfits
-/// `dock-pass`, `mass-driver`, a turret sold at `hearth-dock`,
+/// `dock-pass`, which stays with the pilot across a hull change,
+/// `mass-driver`, a turret sold at `hearth-dock`,
 /// `seeker-launcher`, a homing launcher firing `seekers` (six a
 /// hardpoint), `seekers`, sold at `hearth-dock`, and `drone-bay`, a bay
 /// launching drones (two a hardpoint), neither of these two sold; the mod
@@ -1199,6 +1201,19 @@ fn game_md_is_the_about_text() {
 }
 
 #[test]
+fn no_fixture_outfit_or_kit_but_the_dock_pass_stays_with_the_pilot() {
+    let game = new_game::open(&fixture()).expect("lists");
+    let staying: Vec<String> = (game.ids.outfits.iter())
+        .chain(&game.ids.kits)
+        .filter(|&(_, &nova)| {
+            named::<Outfit>(&game.data, nova).1.flags.bits() & OUTFIT_PERSISTENT != 0
+        })
+        .map(|(id, _)| id.to_string())
+        .collect();
+    assert_eq!(staying, ["dock-pass"]);
+}
+
+#[test]
 fn the_dock_pass_is_an_outfit_the_dock_job_lends_and_takes_back() {
     let game = new_game::open(&fixture()).expect("lists");
     assert_eq!(
@@ -1218,6 +1233,11 @@ fn the_dock_pass_is_an_outfit_the_dock_job_lends_and_takes_back() {
         pass.require.bits(),
         nova_data::new_game::kits::FitBits::mount_bit(nova_galaxy_format::fleet::Mount::Fixed),
         "its `fixed` mount"
+    );
+    assert_ne!(
+        pass.flags.bits() & OUTFIT_PERSISTENT,
+        0,
+        "marked to stay with the pilot"
     );
     let job = &game.data.storylines().missions["dock-job"];
     assert_eq!(job.on_accept.grant_outfits, [nova_data::OutfitId(128)]);

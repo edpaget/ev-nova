@@ -14,7 +14,7 @@
 //!    from the bar: the hull plate aboard and a Dock pass lent.
 //! 4. Grain bought and sold back at the Trade Center.
 //! 5. The racked hauler bought at the shipyard, the hauler traded in and
-//!    the plate kept aboard, its tank full; the turret ring kit fitted to
+//!    the plate and the Dock pass kept aboard, its tank full; the turret ring kit fitted to
 //!    it at the outfitter and a second mass driver bought onto its ring;
 //!    grain bought to hold.
 //! 6. Take-off, the stay's days passing, then the course to the Verge,
@@ -53,12 +53,11 @@
 //! course between systems is flown, and the fuel Recharge fills is the
 //! fuel the flight spent.
 //!
-//! The lent Dock pass goes with the old hull at the purchase, as the
-//! original's shipyard sends every outfit not flagged persistent: the new
-//! game's mapping writes no such flag, and whether a lent outfit should
-//! survive a hull change is nova-like-game's question
-//! (`lent-outfit-across-hull-change`). The completion's removal then
-//! finds none to take back.
+//! The Dock pass's file says it stays with the pilot, which the new game
+//! maps to the `oütf` persistent flag (`Flags` 0x0004), so the shipyard
+//! keeps it at the purchase and leaves it out of the trade-in
+//! (`RuleKey::PurchaseCarry`, `RuleKey::TradeInOutfits`, engine
+//! readings), and the completion takes it back.
 
 use std::collections::BTreeMap;
 
@@ -232,7 +231,7 @@ fn buy_and_sell_back_grain(game: &mut Harness) {
 }
 
 /// Step 5a: the racked hauler, bought from the shipyard, the hauler traded
-/// in: the plate stays aboard, and the lent pass goes (see the module
+/// in: the plate stays aboard, and so does the lent pass (see the module
 /// docs).
 fn buy_the_racked_hauler(game: &mut Harness) {
     let before = pilot(game);
@@ -254,8 +253,8 @@ fn buy_the_racked_hauler(game: &mut Harness) {
     );
     assert_eq!(
         rehulled.owned(outfit("dock-pass")),
-        0,
-        "not persistent, the lent pass goes with the old hull"
+        1,
+        "marked to stay with the pilot, the lent pass stays at the trade-in"
     );
     let fuel = rehulled.reserves.fuel;
     assert_eq!(fuel, Gauge::full(fuel.max), "the bought hull's tank full");
@@ -343,6 +342,7 @@ fn fly_to_the_verge(game: &mut Harness) {
 /// greeting and the news its success releases.
 fn deliver_the_plate(game: &mut Harness) {
     let before = pilot(game);
+    assert_eq!(before.owned(outfit("dock-pass")), 1, "lent, still held");
     land_at_verge_camp(game);
     for (line, what) in [
         (
@@ -368,6 +368,11 @@ fn deliver_the_plate(game: &mut Harness) {
         "the plate dropped off, the grain kept"
     );
     assert_eq!(delivered.cash, before.cash, "the job pays nothing");
+    assert_eq!(
+        delivered.owned(outfit("dock-pass")),
+        0,
+        "the completion takes the lent pass back"
+    );
 }
 
 /// Step 8: off the camp and down at Verge Workshop, which sells fuel:
@@ -420,7 +425,12 @@ fn recharge_at_verge_workshop(game: &mut Harness) {
 fn save_and_load(mut game: Harness, store: &MemoryPilots) {
     let before = pilot(&game);
     assert_eq!(before.ship, ship("racked-hauler"), "the bought hull");
-    for (id, count) in [("cargo-racks", 1), ("turret-ring", 1), ("mass-driver", 2)] {
+    for (id, count) in [
+        ("cargo-racks", 1),
+        ("turret-ring", 1),
+        ("mass-driver", 2),
+        ("dock-pass", 0),
+    ] {
         assert_eq!(before.owned(outfit(id)), count, "{id}");
     }
     assert_eq!(game.handle(WindowEvent::CloseRequested), Control::Exit);
