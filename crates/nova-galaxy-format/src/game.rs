@@ -68,17 +68,52 @@ pub struct EngineSounds {
 }
 
 impl EngineSounds {
-    /// Each role's name, as written in data, and the sound it names.
+    /// Each role and the sound the data names for it.
     #[must_use]
-    pub fn roles(&self) -> [(&'static str, Option<&Id>); 6] {
+    pub fn roles(&self) -> [(SoundRole, Option<&Id>); 6] {
         [
-            ("button_down", self.button_down.as_ref()),
-            ("button_up", self.button_up.as_ref()),
-            ("landing", self.landing.as_ref()),
-            ("refused", self.refused.as_ref()),
-            ("gate_passage", self.gate_passage.as_ref()),
-            ("explosion", self.explosion.as_ref()),
+            (SoundRole::ButtonDown, self.button_down.as_ref()),
+            (SoundRole::ButtonUp, self.button_up.as_ref()),
+            (SoundRole::Landing, self.landing.as_ref()),
+            (SoundRole::Refused, self.refused.as_ref()),
+            (SoundRole::GatePassage, self.gate_passage.as_ref()),
+            (SoundRole::Explosion, self.explosion.as_ref()),
         ]
+    }
+}
+
+/// One of the engine's sound roles: a field of [`EngineSounds`], as
+/// [`EngineSounds::roles`] gives it. A reader that must fill every role
+/// matches on it exhaustively, so a role added here fails to compile there
+/// rather than going unfilled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SoundRole {
+    /// [`EngineSounds::button_down`].
+    ButtonDown,
+    /// [`EngineSounds::button_up`].
+    ButtonUp,
+    /// [`EngineSounds::landing`].
+    Landing,
+    /// [`EngineSounds::refused`].
+    Refused,
+    /// [`EngineSounds::gate_passage`].
+    GatePassage,
+    /// [`EngineSounds::explosion`].
+    Explosion,
+}
+
+impl SoundRole {
+    /// The role's name: the key `game.md`'s `sounds` writes it as.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            SoundRole::ButtonDown => "button_down",
+            SoundRole::ButtonUp => "button_up",
+            SoundRole::Landing => "landing",
+            SoundRole::Refused => "refused",
+            SoundRole::GatePassage => "gate_passage",
+            SoundRole::Explosion => "explosion",
+        }
     }
 }
 
@@ -158,19 +193,35 @@ mod tests {
         let named: Vec<_> = sounds
             .roles()
             .into_iter()
-            .map(|(role, sound)| (role, sound.map(Id::as_str)))
+            .map(|(role, sound)| (role, role.name(), sound.map(Id::as_str)))
             .collect();
         assert_eq!(
             named,
             [
-                ("button_down", Some("click-down")),
-                ("button_up", Some("click-up")),
-                ("landing", Some("chime")),
-                ("refused", Some("buzz")),
-                ("gate_passage", Some("hum")),
-                ("explosion", Some("blast")),
+                (SoundRole::ButtonDown, "button_down", Some("click-down")),
+                (SoundRole::ButtonUp, "button_up", Some("click-up")),
+                (SoundRole::Landing, "landing", Some("chime")),
+                (SoundRole::Refused, "refused", Some("buzz")),
+                (SoundRole::GatePassage, "gate_passage", Some("hum")),
+                (SoundRole::Explosion, "explosion", Some("blast")),
             ]
         );
+    }
+
+    #[test]
+    fn each_role_is_read_from_the_key_its_name_gives_and_fills_only_itself() {
+        for (role, _) in EngineSounds::default().roles() {
+            let source = MemSource::default().with(
+                "game.md",
+                &format!("---\nname: A\nsounds: {{{}: chime}}\n---\n", role.name()),
+            );
+            let (game, problems, _) = read_from(&source);
+            assert!(problems.is_empty(), "{role:?}: {problems:?}");
+            let filled: Vec<_> = (game.expect("game.md").data.sounds.roles().into_iter())
+                .filter_map(|(filled, sound)| sound.map(|s| (filled, s.as_str().to_owned())))
+                .collect();
+            assert_eq!(filled, [(role, "chime".to_owned())], "{role:?}");
+        }
     }
 
     #[test]

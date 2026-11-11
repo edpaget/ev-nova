@@ -204,26 +204,40 @@ fn a_sound_that_failed_to_load_is_not_reported_again() {
 // The roles.
 
 #[test]
+fn each_role_fills_its_engine_cue() {
+    assert_eq!(cue(SoundRole::ButtonDown), BUTTON_DOWN);
+    assert_eq!(cue(SoundRole::ButtonUp), BUTTON_UP);
+    assert_eq!(cue(SoundRole::Landing), LANDING);
+    assert_eq!(cue(SoundRole::Refused), REFUSED);
+    assert_eq!(cue(SoundRole::GatePassage), GATE_PASSAGE);
+    assert_eq!(cue(SoundRole::Explosion), EXPLOSION);
+}
+
+#[test]
 fn each_role_s_clip_sits_at_its_cue_and_nothing_at_an_unnamed_one() {
     let roles = [
-        ("button_down", "down", 100),
-        ("button_up", "up", 200),
-        ("landing", "chime", 300),
-        ("refused", "buzz", 400),
-        ("gate_passage", "hum", 500),
-        ("explosion", "blast", 600),
+        (SoundRole::ButtonDown, "down", 100),
+        (SoundRole::ButtonUp, "up", 200),
+        (SoundRole::Landing, "chime", 300),
+        (SoundRole::Refused, "buzz", 400),
+        (SoundRole::GatePassage, "hum", 500),
+        (SoundRole::Explosion, "blast", 600),
     ];
     let source = roles.iter().fold(
         galaxy().with(
             "game.md",
-            &game_md(&roles.map(|(role, sound, _)| (role, sound))),
+            &game_md(&roles.map(|(role, sound, _)| (role.name(), sound))),
         ),
         |source, &(_, sound, tone)| with_sound(source, sound, tone),
     );
     let game = loaded(&source);
     assert_eq!(problems(&game), Vec::<String>::new());
     for (role, _, tone) in roles {
-        assert_eq!(files(&game).get(cue(role)), Some(&clip(tone)[..]), "{role}");
+        assert_eq!(
+            files(&game).get(cue(role)),
+            Some(&clip(tone)[..]),
+            "{role:?}"
+        );
     }
     assert_eq!(files(&game).ids().count(), 6);
     assert!(

@@ -55,6 +55,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use nova_galaxy_format::game::SoundRole;
 use nova_galaxy_format::id::Id;
 use nova_galaxy_format::load::{Galaxy, Problem};
 use nova_galaxy_format::media::is_lfs_pointer;
@@ -102,22 +103,23 @@ pub const EXPLOSION: SoundId = SoundId(300);
 /// small ([`super::wrecks::LARGE_EXPLOSION`], [`super::wrecks::SMALL_EXPLOSION`]).
 pub const BOOMS: [(i16, &str); 2] = [(128, "Large explosion"), (129, "Small explosion")];
 
-/// Each role's cue, by its name as `game.md` writes it
-/// ([`nova_galaxy_format::game::EngineSounds::roles`]).
-const CUES: [(&str, SoundId); 6] = [
-    ("button_down", BUTTON_DOWN),
-    ("button_up", BUTTON_UP),
-    ("landing", LANDING),
-    ("refused", REFUSED),
-    ("gate_passage", GATE_PASSAGE),
-    ("explosion", EXPLOSION),
-];
-
-/// The cue of the role `role`.
-fn cue(role: &str) -> SoundId {
-    CUES.iter()
-        .find_map(|&(name, cue)| (name == role).then_some(cue))
-        .expect("a role of the format's")
+/// The cue the role `role` fills.
+///
+/// The match is exhaustive on purpose: the mapper must give every role
+/// the format defines ([`EngineSounds::roles`]) a cue, and only this crate
+/// knows the cues, so a role added to the format fails to compile here
+/// until it is given one.
+///
+/// [`EngineSounds::roles`]: nova_galaxy_format::game::EngineSounds::roles
+fn cue(role: SoundRole) -> SoundId {
+    match role {
+        SoundRole::ButtonDown => BUTTON_DOWN,
+        SoundRole::ButtonUp => BUTTON_UP,
+        SoundRole::Landing => LANDING,
+        SoundRole::Refused => REFUSED,
+        SoundRole::GatePassage => GATE_PASSAGE,
+        SoundRole::Explosion => EXPLOSION,
+    }
 }
 
 /// Numbers the sounds `galaxy`'s weapons (`weapons`, by outfit id) fire
@@ -184,7 +186,10 @@ pub(super) fn read(
             } else if absent(galaxy, &galaxy.sounds, "sounds", sound) {
                 problems.push(Problem::new(
                     &game.path,
-                    format!("its `{role}` sound `{sound}` is not in sounds/; it is silent"),
+                    format!(
+                        "its `{}` sound `{sound}` is not in sounds/; it is silent",
+                        role.name()
+                    ),
                 ));
             }
         }
