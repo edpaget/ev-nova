@@ -19,6 +19,7 @@
 //! |---|---|---|
 //! | `nova-ids.json` | every record's ID ([`pins`], [`ids`]) | the Nova ID each record keeps, by kind and bible id (a blockade's by its `take_point` mission's id); written only by `nova-dump --pin-ids` |
 //! | `factions/` | `gövt` | its `name` as `CommName`; `color` and `ship_color` from `color`, as `00RRGGBB`; one that keeps the law (not `lawless`) `SmugPenalty` [`kits::LAW_SMUGGLE_PENALTY`], `ScanFine` [`kits::LAW_SCAN_FINE`] and `ScanMask` [`kits::LAWLESS_KIT_SCAN`], placeholders, so its scans find a lawless kit; a lawless one none |
+//! | a faction's `allies`, `enemies`, `attacks_player`, `player_record` and `penalties` | `gövt` ([`relations`]) | `Class1` its own ID when another faction names it, else no class; `Ally1-4` and `Enemy1-4` the classes of the factions named, in order; `attacks_player` `always` or `never` as `Flags` [`ALWAYS_ATTACKS_PLAYER`](crate::records::govt::flags::ALWAYS_ATTACKS_PLAYER) or [`NEVER_ATTACKS_PLAYER`](crate::records::govt::flags::NEVER_ATTACKS_PLAYER); `player_record` as `InitialRec`; `penalties`' `attack`, `disable` and `destroy` as `ShootPenalty`, `DisabPenalty` and `KillPenalty`, of which `ShootPenalty` changes no record and only forgives a stray hit; a faction that names and is named by none stays neutral |
 //! | `systems/` | `sÿst` | `x_pos`/`y_pos` from `map`; `govt` from `government`; `nav_def` its stellars, then its gates, each in ID order; the civilian traffic; no `con` links |
 //! | a system's `hazards` | `sÿst` ([`hazards`]) | `nebula` sets `Murk` [`hazards::NEBULA_MURK`] and `sensor-dead` sets `Interference` [`hazards::SENSOR_DEAD_INTERFERENCE`], both placeholders; a system naming both gets both, and a word named twice counts once; `radiation`, `ion-storm`, `solar-flares` and `gravity-well` are not read |
 //! | `stellars/` | `spöb` | `x_pos`/`y_pos` from `position`; `govt` from `owner`; `flags` from `services` and `kind` ([`records::stellar_flags`]); no `hyper_link`s; a law-keeping owner's `TechLevel` [`kits::YARD_TECH_LEGAL`] and `MinStatus` 0, a lawless owner's or an unowned one's `TechLevel` [`kits::YARD_TECH_LAWLESS`] and `MinStatus` [`records::ANY_RECORD`]; `SpecialTech` the tech numbers of the outfits and hulls sold there, ascending, `-1` for an unused slot ([`yards`]) |
@@ -84,6 +85,10 @@
 //! what mapped:
 //!
 //! - A `government` or `owner` naming no faction maps to no government.
+//! - A faction's `allies` or `enemies` naming no faction, the faction
+//!   itself, or a fifth faction leave that name out; a name given twice in
+//!   one list counts once. A `player_record` or penalty outside `i16` is
+//!   held at the nearest ([`relations`]).
 //! - A stellar whose `system` names no system is left out.
 //! - A map or system position outside `i16` is moved to the nearest.
 //! - A system with more than 16 stellars and gates keeps every gate in
@@ -202,6 +207,11 @@
 //!   ([`blockades`]).
 //! - A hull's `FreeMass` and `Strength` stay 0: nothing in the new game
 //!   uses outfit mass, and the strength feeds odds no phase needs yet.
+//! - A faction's `BoardPenalty`, `CrimeTol`, `MaxOdds` and every `Flags`
+//!   and `Flags2` bit but the stance toward the player stay neutral: the
+//!   format has no word for them. With every hull's `Strength` 0 the
+//!   odds filter never drops a target, so `MaxOdds` 0 changes nothing yet
+//!   ([`relations`]).
 //! - `storylines/`, a mission's `storyline`, `act` and an offer's
 //!   `giver`, and `characters/`: nothing in the engine reads them yet.
 //! - `budgets/` and an asset's provenance: tooling. An asset's models are
@@ -239,6 +249,7 @@ pub mod mounts;
 pub mod outfits;
 pub mod pins;
 pub mod records;
+pub mod relations;
 pub mod strings;
 #[cfg(test)]
 mod tests;

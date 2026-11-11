@@ -101,6 +101,16 @@ impl Record for Govt {
     const SIZE: Option<usize> = Some(192);
 }
 
+/// `Flags` bits (EV Nova Bible, "The gövt resource") that the new game's
+/// mapping writes. The engine's readings of the whole word live with the
+/// sim's governments.
+pub mod flags {
+    /// Its warships always attack the player.
+    pub const ALWAYS_ATTACKS_PLAYER: u16 = 0x0004;
+    /// Its ships never attack the player.
+    pub const NEVER_ATTACKS_PLAYER: u16 = 0x0040;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

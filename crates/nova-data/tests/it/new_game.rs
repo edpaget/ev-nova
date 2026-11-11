@@ -240,6 +240,75 @@ fn the_factions_are_govts_with_their_colours() {
 }
 
 #[test]
+fn the_wardens_and_the_raiders_are_enemies_with_the_penalties_their_files_name() {
+    use nova_data::records::govt::flags::ALWAYS_ATTACKS_PLAYER;
+
+    let game = new_game::open(&fixture()).expect("lists");
+    let (galaxy, _) =
+        nova_galaxy_format::load::load(&nova_galaxy_format::source::DirSource::new(fixture()));
+    let nova = |faction: &str| game.ids.factions[&id(faction)];
+    let govt = |faction: &str| named::<Govt>(&game.data, nova(faction)).1;
+    let (warden, raider) = (govt("warden"), govt("raider"));
+    assert_eq!(warden.class[0], nova("warden"));
+    assert_eq!(raider.class[0], nova("raider"));
+    assert_eq!(warden.enemy[0], raider.class[0]);
+    assert_eq!(raider.enemy[0], warden.class[0]);
+    let named = galaxy.factions[&id("warden")].data.penalties;
+    let penalty = |value: u32| i16::try_from(value).expect("within i16");
+    assert_eq!(
+        (
+            warden.shoot_penalty,
+            warden.disab_penalty,
+            warden.kill_penalty
+        ),
+        (
+            penalty(named.attack),
+            penalty(named.disable),
+            penalty(named.destroy)
+        )
+    );
+    assert!(
+        named.attack != named.disable && named.disable != named.destroy,
+        "three different values, so a swapped mapping fails"
+    );
+    assert_eq!(
+        (
+            raider.shoot_penalty,
+            raider.disab_penalty,
+            raider.kill_penalty
+        ),
+        (0, 0, 0)
+    );
+    assert_eq!(raider.flags.0, ALWAYS_ATTACKS_PLAYER);
+}
+
+#[test]
+fn the_guild_names_no_relations_and_is_as_neutral_as_before() {
+    use nova_data::new_game::kits::{LAW_SCAN_FINE, LAW_SMUGGLE_PENALTY, LAWLESS_KIT_SCAN};
+    use nova_data::new_game::records::{neutral_govt, rgb};
+    use nova_data::wire::flags::Flags16;
+
+    let game = new_game::open(&fixture()).expect("lists");
+    let (galaxy, _) =
+        nova_galaxy_format::load::load(&nova_galaxy_format::source::DirSource::new(fixture()));
+    let file = &galaxy.factions[&id("guild")].data;
+    let (name, guild) = named::<Govt>(&game.data, game.ids.factions[&id("guild")]);
+    let color = rgb(&file.color);
+    assert_eq!(
+        guild,
+        Govt {
+            color,
+            ship_color: color,
+            comm_name: name.as_str().into(),
+            smug_penalty: LAW_SMUGGLE_PENALTY,
+            scan_fine: LAW_SCAN_FINE,
+            scan_mask: Flags16(LAWLESS_KIT_SCAN),
+            ..neutral_govt()
+        }
+    );
+}
+
+#[test]
 fn the_systems_are_placed_governed_and_hold_their_stellars_then_gates_with_no_links() {
     let data = new_game::open(&fixture()).expect("lists").data;
     let ids = |nav_def: &[Option<StellarId>]| -> Vec<i16> {

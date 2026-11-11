@@ -1,6 +1,7 @@
 //! The mapping from a loaded [`Galaxy`] to records, one small function
 //! per kind over the neutral records of [`super::records`]: factions,
-//! systems and stellars here, the jump points' gates in [`super::gates`],
+//! systems and stellars here, a faction's relations in
+//! [`super::relations`], the jump points' gates in [`super::gates`],
 //! ships, traffic and starts in [`super::fleet`], outfits and weapons in
 //! [`super::outfits`], mod kits in [`super::kits`], which yards sell what
 //! in [`super::yards`], the `take_point`
@@ -30,6 +31,7 @@ use super::records::{
     ANY_RECORD, clamp_i16, default_interface, neutral_govt, neutral_stellar, neutral_system, rgb,
     stellar_flags,
 };
+use super::relations::{self, Relations};
 use super::yards::{self, SPECIAL_TECH_SLOTS, Sales};
 use super::{blockades, descriptions, gates, goods, hazards, strings};
 use crate::decode::Entry;
@@ -80,8 +82,9 @@ pub fn map_pinned(galaxy: &Galaxy, pins: &IdTable) -> Mapped {
     let sales = yards::sales(galaxy, &ids, &mut problems);
     let traffic = fleet::civilian_traffic(galaxy, &ids.ships);
     let mut records = Vec::new();
+    let relations = relations::relations(galaxy, &ids.factions, &mut problems);
     for (id, &nova) in &ids.factions {
-        records.push(faction(nova, &galaxy.factions[id]));
+        records.push(faction(nova, &galaxy.factions[id], &relations[id]));
     }
     for (id, &nova) in &ids.systems {
         records.push(system(
@@ -284,13 +287,23 @@ pub(super) fn absent<T>(galaxy: &Galaxy, loaded: &BTreeMap<Id, T>, dir: &str, id
 /// The `gövt` of `faction`, its name as its `CommName`, its colour as
 /// both colours, and, when it
 /// keeps the law, [`LAW_SMUGGLE_PENALTY`], [`LAW_SCAN_FINE`] and a
-/// `ScanMask` of [`LAWLESS_KIT_SCAN`], so its scans find a lawless kit.
-fn faction(nova: i16, faction: &Doc<Faction>) -> Entry<AnyRecord> {
+/// `ScanMask` of [`LAWLESS_KIT_SCAN`], so its scans find a lawless kit;
+/// its classes, allies, enemies, stance toward the player, starting
+/// record and penalties from `relations` ([`relations`]).
+fn faction(nova: i16, faction: &Doc<Faction>, relations: &Relations) -> Entry<AnyRecord> {
     let color = rgb(&faction.data.color);
     let mut govt = Govt {
         color,
         ship_color: color,
         comm_name: faction.data.name.as_str().into(),
+        flags: Flags16(relations.flags),
+        class: relations.class,
+        ally: relations.ally,
+        enemy: relations.enemy,
+        initial_rec: relations.initial_rec,
+        shoot_penalty: relations.shoot_penalty,
+        disab_penalty: relations.disab_penalty,
+        kill_penalty: relations.kill_penalty,
         ..neutral_govt()
     };
     if !faction.data.lawless {
