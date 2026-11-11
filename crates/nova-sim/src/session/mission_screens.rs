@@ -611,11 +611,11 @@ impl Session {
         {
             return Err(ComputerRefusal::SlotsFull);
         }
-        let offers = self.mission_offers(Venue::Computer);
-        if !offers.iter().any(|offer| self.still_available(offer)) {
+        if self.computer_lists_none() {
             return Err(ComputerRefusal::NoneAvailable);
         }
-        let rows = offers
+        let rows = self
+            .mission_offers(Venue::Computer)
             .iter()
             .map(|offer| {
                 let texts = self.mission_texts(offer.mission);
@@ -867,6 +867,19 @@ impl Session {
     /// suppressed offers, unless it is the spaceport ([`SPACEPORT`]).
     pub(crate) fn enter_offer_venue(&mut self, loc: i16) {
         self.run.enter_offer_venue(loc);
+    }
+
+    /// Whether the mission computer has nothing to list now: no offer of
+    /// the visit at [`Venue::Computer`] is still available
+    /// (`_IsMissionAvailable(i, 1)` @0xa38bd-0xa3956), drawing nothing,
+    /// which is always so in flight. It is the check
+    /// [`Session::mission_computer`] answers
+    /// [`ComputerRefusal::NoneAvailable`] by, the slots left out.
+    pub(super) fn computer_lists_none(&self) -> bool {
+        !self
+            .mission_offers(Venue::Computer)
+            .iter()
+            .any(|offer| self.still_available(offer))
     }
 
     /// Whether `offer`, on the visit under way, is still available at its

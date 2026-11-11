@@ -34,17 +34,22 @@ use crate::{MissionId, SimCatalog};
 impl Session {
     /// The spaceport's shops: the exchange ([`Session::market`]), the
     /// outfitter ([`Session::outfitter`]) and the shipyard
-    /// ([`Session::shipyard`]), read in that order on `chance`, and the
-    /// room to hire ([`Session::can_hire_escorts`]).
+    /// ([`Session::shipyard`]), read in that order on `chance`, the room
+    /// to hire ([`Session::can_hire_escorts`]), and then, on the same
+    /// chance, the services with nothing to list
+    /// ([`Session::empty_services`]).
     pub(super) fn shops_screen(&mut self, chance: &mut dyn Chance) -> ScreenAnswer {
         let market = self.market();
         let outfitter = self.outfitter(chance);
         let shipyard = self.shipyard(chance);
+        let can_hire_escorts = self.can_hire_escorts();
+        let empty = self.empty_services(chance);
         ScreenAnswer::Shops(Box::new(PortShops {
             market,
             outfitter,
             shipyard,
-            can_hire_escorts: self.can_hire_escorts(),
+            can_hire_escorts,
+            empty,
         }))
     }
 
@@ -299,6 +304,7 @@ pub(in crate::session) mod tests {
             outfitter: by_hand.outfitter(&mut chance),
             shipyard: by_hand.shipyard(&mut chance),
             can_hire_escorts: by_hand.can_hire_escorts(),
+            empty: by_hand.empty_services(&mut chance),
         };
         assert!(chance.draws > 0, "precondition: the day's rolls drawn");
         assert!(
@@ -313,6 +319,33 @@ pub(in crate::session) mod tests {
             asked(&mut session, None, &mut own, ScreenAsk::Shops),
             ScreenAnswer::Shops(Box::new(expected))
         );
+        assert_eq!(own, chance, "the same draws");
+        assert_eq!(session, by_hand, "the same rolls kept");
+    }
+
+    #[test]
+    fn by_the_other_reading_the_shops_name_the_sessions_empty_services() {
+        let catalog = port();
+        let mut session = docked(&catalog).with_rules(
+            Rulebook::default().with_override(RuleKey::EmptyServices, RuleSource::Bible),
+        );
+        let mut by_hand = session.clone();
+        let mut chance = FirstFires::default();
+        let _ = by_hand.outfitter(&mut chance);
+        let _ = by_hand.shipyard(&mut chance);
+        let drawn = chance.draws;
+        let empty = by_hand.empty_services(&mut chance);
+        assert!(chance.draws > drawn, "precondition: the hire rolls drawn");
+        assert!(
+            empty.mission_bbs,
+            "precondition: no computer offer but the one held"
+        );
+        let mut own = FirstFires::default();
+        let ScreenAnswer::Shops(shops) = asked(&mut session, None, &mut own, ScreenAsk::Shops)
+        else {
+            panic!("the shops");
+        };
+        assert_eq!(shops.empty, empty);
         assert_eq!(own, chance, "the same draws");
         assert_eq!(session, by_hand, "the same rolls kept");
     }

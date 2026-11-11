@@ -7,7 +7,7 @@
 //! changes anything a frame shows, which the tests here pin, so the view
 //! keeps its frame across them.
 
-mod port;
+pub(in crate::session) mod port;
 
 use super::Session;
 use super::apply::ApplyCollaborators;

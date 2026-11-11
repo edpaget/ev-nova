@@ -277,6 +277,9 @@ fn shops_by_hand(session: &mut Session, chance: &mut dyn Chance) -> ScreenAnswer
         outfitter,
         shipyard,
         can_hire_escorts: session.can_hire_escorts(),
+        // Nothing is empty by the default rulebook's engine reading of
+        // `RuleKey::EmptyServices`, which nova-sim pins.
+        empty: nova_sim::flight_frame::EmptyServices::default(),
     }))
 }
 

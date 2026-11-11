@@ -26,7 +26,7 @@ mod screen;
 mod story_screens;
 
 pub use crate::key_fade::{FadeKey, KeyFades};
-pub use port_screens::{BarNews, PortShops};
+pub use port_screens::{BarNews, EmptyServices, PortShops};
 pub use screen::{FloatingMap, GateEntry, MapOpen, MapScreen, MarksFrom, ScreenAnswer, ScreenAsk};
 pub use story_screens::{BarScene, BarStory, RoomRefusal, StoryObjective, StoryRow};
 

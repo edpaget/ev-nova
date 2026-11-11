@@ -109,6 +109,10 @@ fn the_shops_are_the_flights_asked_once_and_not_each_frame() {
         outfitter: Some(nova_sim::Outfitter::default()),
         shipyard: Some(empty_shipyard()),
         can_hire_escorts: true,
+        empty: nova_sim::flight_frame::EmptyServices {
+            mission_bbs: true,
+            hire_escort: false,
+        },
     };
     view.sim
         .queue_screen(ScreenAnswer::Shops(Box::new(shops.clone())));

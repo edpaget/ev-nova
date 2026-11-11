@@ -1,6 +1,7 @@
 //! The spaceport's merged screen answers: what the spaceport reads of its
 //! shops as it opens and at each refresh ([`PortShops`],
-//! [`ScreenAsk::Shops`](super::ScreenAsk::Shops)), and the bar's news as
+//! [`ScreenAsk::Shops`](super::ScreenAsk::Shops)), the services among
+//! them with nothing to list ([`EmptyServices`]), and the bar's news as
 //! News is pressed ([`BarNews`], [`ScreenAsk::News`](super::ScreenAsk::News)).
 //! Each is plain data the session builds from its own reads, borrowing
 //! nothing of the session's.
@@ -32,6 +33,32 @@ pub struct PortShops {
     /// ([`Session::can_hire_escorts`](crate::Session::can_hire_escorts),
     /// `_CanHireEscorts`), which the bar is told as it opens.
     pub can_hire_escorts: bool,
+    /// Which services have nothing to list, for the spaceport and its bar
+    /// to grey ([`EmptyServices`]), read after the shipyard on the same
+    /// chance; [`EmptyServices::default`] by the engine reading of
+    /// [`RuleKey::EmptyServices`](crate::rulebook::RuleKey::EmptyServices),
+    /// drawing nothing. Unlike the room, it is read again at each refresh.
+    pub empty: EmptyServices,
+}
+
+/// Which of the port's services have nothing to list, for the view to
+/// grey ([`RuleKey::EmptyServices`](crate::rulebook::RuleKey::EmptyServices)).
+/// By the engine reading (the default) neither is ever set: the Mission
+/// BBS of every inhabited stellar stays enabled (`_DrawPlanetButtons`
+/// @0x2968d) and answers #353 with nothing available, and Hire Escort is
+/// greyed only by the room to hire (`_DrawBarButtons` @0x26e1d) and
+/// answers #224 with nothing for hire. By the other reading each is set
+/// while its service has nothing to list. The default, as in flight,
+/// names nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EmptyServices {
+    /// The Mission BBS: landed, and no offer of the visit at the mission
+    /// computer is available now. A free slot isn't needed: a full set of
+    /// slots with offers to list still opens and says so.
+    pub mission_bbs: bool,
+    /// The bar's Hire Escort: landed at a bar that lists no ship for hire
+    /// today, whatever the room or the cash.
+    pub hire_escort: bool,
 }
 
 /// The news of the bar visit under way as it was drawn, and the picture
