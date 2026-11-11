@@ -12,15 +12,36 @@
 //! so it needs no `Rulebook` key, and stock never opens it.
 //!
 //! [`StoryLogScreen`] takes a [`StoryLog`] as plain data: a heading, then
-//! entries, each a title drawn in [`CHOICE_COLOR`] and its lines wrapped
-//! in white, then the close hint. The wording functions build the logs:
+//! entries, each a title drawn as its [`EntryKind`] says and its lines
+//! wrapped in white, then the close hint. The wording functions build the
+//! logs:
 //!
 //! - [`news_log`]: the news heard where the ship is, newest first, each
 //!   its headline, its source and age ("From Hearth, 6 days old.") and its
 //!   text. The age is the session's, worded as given.
 //! - [`missions_log`]: the active storyline missions, each its title, its
-//!   objective, the cargo aboard while there is some, and where to go once
-//!   it is met.
+//!   objective, who offered it ("Offered by Ode, dockmaster.") when its
+//!   offer names a giver, the cargo aboard while there is some, and where
+//!   to go once it is met. The rows naming no storyline come first, in
+//!   the order given, under no heading, so a log of only those lists as
+//!   it did before storylines were read. Then each storyline's title, in
+//!   white, by storyline id (the core's own key, as it lists missions by
+//!   id, so two storylines sharing a title stay apart), with its missions
+//!   under it by act (open, crossroads, committed), then in the order
+//!   given.
+//!
+//! **Selection.** A missions log selects its first mission in the order
+//! drawn as it opens, as stock mission info selects its first row. The
+//! selected title is drawn in [`CHOICE_COLOR`] and the others in
+//! [`Color::DIM`], so a one-mission log draws as it did. The shared UI's
+//! Tab (a fresh press) moves the selection to the next mission, round to
+//! the first, keeping the scroll. The map key (a fresh press of
+//! [`PlayCommand::GalaxyMap`], through the bindings given) asks for the
+//! selected mission's map, once ([`StoryLogScreen::take_map_request`]),
+//! and leaves the log open: whoever holds the flight opens the map over
+//! it. A news log has no selection, and neither key does anything there.
+//! Selecting by a click is left out, as a press off the arrows is the
+//! log's close.
 //!
 //! **Scrolling.** The heading, the entries and the hint are one page in
 //! the panel's text area ([`PanelScroll`]). When they don't all fit, the
@@ -37,12 +58,14 @@
 //! stock news does. It takes every input while it is
 //! open, so the screen under it gets none.
 //!
-//! Where and when it opens, and what its close marks read, is the
-//! router's (the `nova` crate's `app/screen/story_log.rs`).
+//! Where and when it opens, what its close marks read, and how its map
+//! request opens the map, is the router's (the `nova` crate's
+//! `app/screen/story_log.rs`).
 
 use std::rc::Rc;
 use std::time::Duration;
 
+use nova_data::MissionStoryline;
 use nova_sim::flight_frame::{Names, StoryObjective, StoryRow};
 use nova_sim::storylines::news::HeardNews;
 use nova_sim::{StellarId, SystemId};
@@ -51,12 +74,13 @@ use crate::color::Color;
 use crate::draw::DrawList;
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key};
-use crate::keymap::SharedBindings;
+use crate::keymap::{Command, CommandInput, PlayCommand, SharedBindings, UiCommand, contexts};
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
 use crate::spaceport::conversation::{CHOICE_COLOR, CLOSE_HINT, FONT, GAP, INSET, PANEL, SIZE};
 use crate::spaceport::credits::{TON, TONS};
 use crate::text::{TextMetrics, wrap};
+use crate::ui::own_keys::OwnKeys;
 use crate::ui::panel::PanelBacking;
 use crate::ui::panel_scroll::{PageLine, PanelScroll};
 use crate::ui::scroll_arrows::ScrollArrow;
@@ -85,10 +109,29 @@ pub struct StoryLog {
 /// One entry of a [`StoryLog`].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LogEntry {
-    /// Its title, drawn in [`CHOICE_COLOR`]; none drawn when empty.
+    /// Its title, drawn as its [`kind`](Self::kind) says; none drawn when
+    /// empty.
     pub title: String,
     /// Its lines, each wrapped, in white.
     pub lines: Vec<String>,
+    /// What it lists, which says how its title is drawn and whether it
+    /// can be selected.
+    pub kind: EntryKind,
+}
+
+/// What a [`LogEntry`] lists.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EntryKind {
+    /// News, or an untitled line: its title in [`CHOICE_COLOR`].
+    #[default]
+    Plain,
+    /// A storyline's title, heading the missions under it: drawn in white,
+    /// with no lines.
+    Section,
+    /// A mission, by the index of its [`StoryRow`] in the rows
+    /// [`missions_log`] was given: its title in [`CHOICE_COLOR`] while
+    /// selected, else [`Color::DIM`].
+    Mission(usize),
 }
 
 /// The source line of news from `from`, heard `age` days ago: "From
@@ -115,12 +158,14 @@ pub fn news_log(news: &[HeardNews], names: &Names) -> StoryLog {
         .map(|item| LogEntry {
             title: item.headline.clone(),
             lines: vec![news_source(item.from, item.age, names), item.text.clone()],
+            kind: EntryKind::Plain,
         })
         .collect();
     if entries.is_empty() {
         entries.push(LogEntry {
             title: String::new(),
             lines: vec![NOTHING_HEARD.to_owned()],
+            kind: EntryKind::Plain,
         });
     }
     StoryLog {
@@ -158,32 +203,65 @@ pub fn objective_line(objective: &StoryObjective, names: &Names) -> String {
     }
 }
 
-/// The missions log of `rows`, in their order: each its title, its
-/// objective, "Aboard: 10 tons." while its cargo is aboard, and "Done: see
-/// Verge Camp." once it is met.
+/// The missions log of `rows` (see the module docs for the order): the
+/// rows naming no storyline first, in their order; then each storyline's
+/// title, by storyline id, and its rows by act, then in their order. Each
+/// row is its title, its objective, "Offered by Ode, dockmaster." when it
+/// names its giver, "Aboard: 10 tons." while its cargo is aboard, and
+/// "Done: see Verge Camp." once it is met.
 #[must_use]
 pub fn missions_log(rows: &[StoryRow], names: &Names) -> StoryLog {
+    let mut storied: Vec<(usize, &MissionStoryline)> = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(at, row)| Some((at, row.storyline.as_ref()?)))
+        .collect();
+    // A stable sort, so rows of one storyline and act keep their order.
+    storied.sort_by(|(_, a), (_, b)| a.id.cmp(&b.id).then(a.act.cmp(&b.act)));
+    let mission = |at: usize| mission_entry(at, &rows[at], names);
+    let mut entries: Vec<LogEntry> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.storyline.is_none())
+        .map(|(at, _)| mission(at))
+        .collect();
+    let mut section: Option<&str> = None;
+    for (at, storyline) in storied {
+        if section != Some(storyline.id.as_str()) {
+            section = Some(storyline.id.as_str());
+            entries.push(LogEntry {
+                title: storyline.title.clone(),
+                lines: Vec::new(),
+                kind: EntryKind::Section,
+            });
+        }
+        entries.push(mission(at));
+    }
     StoryLog {
         heading: MISSIONS_HEADING.to_owned(),
-        entries: rows
-            .iter()
-            .map(|row| {
-                let mut lines = vec![objective_line(&row.objective, names)];
-                if row.cargo > 0 {
-                    lines.push(format!("Aboard: {}.", tons_of(row.cargo)));
-                }
-                if row.met {
-                    lines.push(match row.complete_at {
-                        Some(at) => format!("Done: see {}.", stellar_named(Some(at), names)),
-                        None => "Done.".to_owned(),
-                    });
-                }
-                LogEntry {
-                    title: row.title.clone(),
-                    lines,
-                }
-            })
-            .collect(),
+        entries,
+    }
+}
+
+/// The entry of `row`, the row at index `at` (see [`missions_log`]).
+fn mission_entry(at: usize, row: &StoryRow, names: &Names) -> LogEntry {
+    let mut lines = vec![objective_line(&row.objective, names)];
+    if let Some(giver) = &row.giver {
+        lines.push(format!("Offered by {}, {}.", giver.name, giver.role));
+    }
+    if row.cargo > 0 {
+        lines.push(format!("Aboard: {}.", tons_of(row.cargo)));
+    }
+    if row.met {
+        lines.push(match row.complete_at {
+            Some(at) => format!("Done: see {}.", stellar_named(Some(at), names)),
+            None => "Done.".to_owned(),
+        });
+    }
+    LogEntry {
+        title: row.title.clone(),
+        lines,
+        kind: EntryKind::Mission(at),
     }
 }
 
@@ -193,6 +271,17 @@ pub struct StoryLogScreen {
     log: StoryLog,
     /// The log laid out as one page, scrolled in the panel.
     page: PanelScroll,
+    /// What measures the page, kept to lay it out again as the selection
+    /// moves.
+    metrics: Rc<dyn TextMetrics>,
+    /// The selected entry, by its index in the log's entries: a mission
+    /// entry, or none in a log with no missions.
+    selected: Option<usize>,
+    /// The row whose map the map key asked for, not taken yet.
+    map_request: Option<usize>,
+    /// Its own reader of Tab and the map key, beside the page's of Up
+    /// and Down.
+    keys: OwnKeys,
     closed: bool,
     /// The sound it plays as it closes, if given
     /// ([`StoryLogScreen::with_sounds`]).
@@ -205,6 +294,7 @@ impl std::fmt::Debug for StoryLogScreen {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StoryLogScreen")
             .field("log", &self.log)
+            .field("selected", &self.selected)
             .field("closed", &self.closed)
             .finish_non_exhaustive()
     }
@@ -215,23 +305,85 @@ impl StoryLogScreen {
     #[must_use]
     #[allow(clippy::needless_pass_by_value)] // the router's shared metrics, handed over as `ConversationScreen::new` takes them
     pub fn new(log: StoryLog, metrics: Rc<dyn TextMetrics>) -> Self {
-        let lines = layout(&log, &metrics);
+        let selected = log
+            .entries
+            .iter()
+            .position(|entry| matches!(entry.kind, EntryKind::Mission(_)));
+        let lines = layout(&log, &metrics, selected);
         Self {
-            log,
             page: PanelScroll::new(PANEL, INSET, FONT, SIZE, lines, &metrics),
+            log,
+            metrics,
+            selected,
+            map_request: None,
+            keys: OwnKeys::new(contexts::DESC),
             closed: false,
             close_sound: None,
             sounds: Vec::new(),
         }
     }
 
-    /// The screen reading its Up and Down through `bindings`, the
-    /// router's, so a rebound key scrolls it.
+    /// The screen reading its keys (Up and Down, Tab and the map key)
+    /// through `bindings`, the router's, so a rebound key works on it.
     #[must_use]
-    pub fn with_bindings(self, bindings: SharedBindings) -> Self {
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.keys.set_bindings(bindings.clone());
         Self {
             page: self.page.with_bindings(bindings),
             ..self
+        }
+    }
+
+    /// The row whose map the map key asked for since this was last asked,
+    /// by its index in the rows the log was built from
+    /// ([`EntryKind::Mission`]), once. The log stays open under the map.
+    pub fn take_map_request(&mut self) -> Option<usize> {
+        self.map_request.take()
+    }
+
+    /// The selected entry's row, if a mission is selected.
+    fn selected_row(&self) -> Option<usize> {
+        match self.log.entries.get(self.selected?)?.kind {
+            EntryKind::Mission(at) => Some(at),
+            EntryKind::Plain | EntryKind::Section => None,
+        }
+    }
+
+    /// Moves the selection to the next mission entry, round to the first,
+    /// and restyles the page, keeping its scroll.
+    fn select_next(&mut self) {
+        let Some(from) = self.selected else {
+            return;
+        };
+        let entries = &self.log.entries;
+        let is_mission = |at: &usize| matches!(entries[*at].kind, EntryKind::Mission(_));
+        let next = (from + 1..entries.len())
+            .find(is_mission)
+            .or_else(|| (0..from).find(is_mission));
+        if let Some(next) = next {
+            self.selected = Some(next);
+            self.page = self
+                .page
+                .restyled(layout(&self.log, &self.metrics, self.selected));
+        }
+    }
+
+    /// Acts on `command` if it is Tab or the map key, pressed afresh:
+    /// whether it did.
+    fn own_command(&mut self, command: CommandInput) -> bool {
+        if !command.pressed || command.repeat {
+            return false;
+        }
+        match command.command {
+            Command::Ui(UiCommand::Tab) => {
+                self.select_next();
+                true
+            }
+            Command::Play(PlayCommand::GalaxyMap) => {
+                self.map_request = self.selected_row();
+                true
+            }
+            _ => false,
         }
     }
 
@@ -273,7 +425,7 @@ impl StoryLogScreen {
 /// `log` laid out down the panel as one page (see the module docs): the
 /// heading, each entry after its gap, and the hint after its gap, each
 /// line at its row below the gaps before it.
-fn layout(log: &StoryLog, metrics: &impl TextMetrics) -> Vec<PageLine> {
+fn layout(log: &StoryLog, metrics: &impl TextMetrics, selected: Option<usize>) -> Vec<PageLine> {
     let wrapped = |text: &str| wrap(metrics, FONT, SIZE, text, PANEL.width() - 2.0 * INSET);
     let left = PANEL.min.x + INSET;
     let top = PANEL.min.y + INSET;
@@ -292,15 +444,21 @@ fn layout(log: &StoryLog, metrics: &impl TextMetrics) -> Vec<PageLine> {
         }
     };
     put(&mut rows, gaps, wrapped(&log.heading), Color::WHITE);
-    for entry in &log.entries {
+    for (at, entry) in log.entries.iter().enumerate() {
         let title = if entry.title.is_empty() {
             Vec::new()
         } else {
             wrapped(&entry.title)
         };
         let lines: Vec<String> = entry.lines.iter().flat_map(|line| wrapped(line)).collect();
+        let title_color = match entry.kind {
+            EntryKind::Plain => CHOICE_COLOR,
+            EntryKind::Section => Color::WHITE,
+            EntryKind::Mission(_) if selected == Some(at) => CHOICE_COLOR,
+            EntryKind::Mission(_) => Color::DIM,
+        };
         gaps += 1;
-        put(&mut rows, gaps, title, CHOICE_COLOR);
+        put(&mut rows, gaps, title, title_color);
         put(&mut rows, gaps, lines, Color::WHITE);
     }
     gaps += 1;
@@ -312,6 +470,13 @@ impl Screen for StoryLogScreen {
     /// Scrolls its page, or notes a close (see the module docs), for
     /// [`StoryLogScreen::take_closed`]. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        // Its own reader follows every input, so it never misses a
+        // modifier's change; the page reads its own keys apart.
+        if let Some(command) = self.keys.follow(input)
+            && self.own_command(command)
+        {
+            return ScreenAction::None;
+        }
         if self.page.input(input) {
             return ScreenAction::None;
         }

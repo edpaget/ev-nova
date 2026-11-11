@@ -476,6 +476,9 @@ pub fn sample_screen_asks() -> Vec<ScreenAsk> {
         ScreenAsk::MapOpening {
             marks: MarksFrom::MissionInfo(Some(0)),
         },
+        ScreenAsk::MapOpening {
+            marks: MarksFrom::StoryLog(0),
+        },
         ScreenAsk::Map {
             hypergate: None,
             missions: course.to_vec(),

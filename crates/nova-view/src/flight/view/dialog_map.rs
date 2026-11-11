@@ -1,6 +1,9 @@
 //! [`FlightView`]'s map opened by a mission dialog: an offer, the mission
 //! computer, mission info or the accept's briefing text, each on the map
-//! key ([`FlightView::open_dialog_map`]), and who opened the map shown
+//! key ([`FlightView::open_dialog_map`]), or the new game's story log,
+//! which stands in for mission info ([`MapOpener::StoryLog`]: its marks
+//! the session's for the log's selected row, its restore none, as mission
+//! info's), and who opened the map shown
 //! ([`MapOpening`]), the port screens' maps among them
 //! ([`FlightView::open_port_screen_map`]). All addresses are in
 //! `EV Nova.app`'s `EV Nova` (i386).
@@ -70,6 +73,11 @@ pub enum MapOpener {
     /// it queued it ([`MissionText::map`](nova_sim::MissionText::map),
     /// `_ShowTextDialog` item 4, @0x5b164).
     Briefing(MapMarks),
+    /// The new game's story log, with the index of its selected mission
+    /// in the rows the session listed
+    /// ([`MarksFrom::StoryLog`]). The original has no story log; it
+    /// stands in for mission info, so its map restores nothing either.
+    StoryLog(usize),
 }
 
 impl MapOpener {
@@ -83,6 +91,7 @@ impl MapOpener {
             Self::Computer(selected) => MarksFrom::Computer(selected),
             Self::MissionInfo(slot) => MarksFrom::MissionInfo(slot),
             Self::Briefing(marks) => MarksFrom::Given(marks),
+            Self::StoryLog(index) => MarksFrom::StoryLog(index),
         }
     }
 }
@@ -172,7 +181,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
             return;
         };
         match opened.by {
-            MapOpening::Plain | MapOpening::Dialog(MapOpener::MissionInfo(_)) => {}
+            MapOpening::Plain
+            | MapOpening::Dialog(MapOpener::MissionInfo(_) | MapOpener::StoryLog(_)) => {}
             MapOpening::Bar => {
                 self.send(FlightCommand::RestoreBarNav);
             }

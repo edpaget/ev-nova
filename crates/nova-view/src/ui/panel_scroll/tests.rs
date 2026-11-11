@@ -270,3 +270,23 @@ fn a_rebound_down_scrolls_on_its_new_key_and_a_relaid_page_keeps_it() {
     assert!(relaid.input(&key(Key::KeyJ, true, false)));
     assert_eq!(relaid.first(), 1);
 }
+
+#[test]
+fn a_restyled_page_keeps_its_scroll_and_draws_its_new_colours() {
+    let mut long = scroll(page(10));
+    assert!(long.input(&key(Key::ArrowDown, true, false)));
+    assert!(long.input(&key(Key::ArrowDown, true, false)));
+    assert_eq!(long.first(), 2);
+    let mut lines = page(10);
+    lines[3].color = Color::DIM;
+    let restyled = long.restyled(lines);
+    assert_eq!(restyled.first(), 2, "kept");
+    assert_eq!(restyled.shift(), long.shift());
+    let colours: Vec<_> = restyled.shown().iter().map(|line| line.color).collect();
+    assert_eq!(colours[1], Color::DIM, "r3, the second shown");
+    assert_eq!(
+        texts(&restyled),
+        texts(&long),
+        "the same lines, where they were"
+    );
+}

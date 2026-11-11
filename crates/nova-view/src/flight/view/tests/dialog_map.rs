@@ -345,6 +345,27 @@ fn mission_infos_map_close_restores_nothing() {
 }
 
 #[test]
+fn the_story_logs_map_asks_its_rows_marks_draws_them_and_restores_nothing() {
+    let marks = green_on(131, false);
+    let mut view = faked(in_sol());
+    let mut drawing = sol_drawing();
+    drawing.systems[1].green_arrow = true;
+    view.sim.queue_screen(opening_with(MOON, Some(130), marks));
+    view.sim.queue_screen(redrawn(drawing));
+    view.open_dialog_map(MapOpener::StoryLog(1));
+    assert!(view.dialog_map_open());
+    assert_eq!(marks_asked(&view), [MarksFrom::StoryLog(1)]);
+    assert_eq!(marks_drawn(&view), [marks]);
+    let alpha = view.map.picture().expect("drawn").systems[1];
+    assert_eq!((alpha.id, alpha.green_arrow), (SystemId(131), true));
+    let stale = Some((MOON, NavDisplay::Stellar(Some("Stale".to_owned()))));
+    view.nav_scene = stale.clone();
+    restore_after(&mut view);
+    assert_eq!(sent(&view), [], "as mission info's, which it stands in for");
+    assert_eq!(view.nav_scene, stale);
+}
+
+#[test]
 fn docked_the_close_puts_back_the_selection_the_map_opened_with_on_every_map() {
     type Open = fn(&mut Faked);
     let earth = NavMode::Stellar(Some(StellarId(128)));

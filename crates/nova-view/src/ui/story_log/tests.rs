@@ -1,3 +1,5 @@
+use nova_data::{MissionGiver, MissionStoryline, StoryAct};
+
 use super::*;
 use crate::draw::{DrawCommand, fill_rect, frame_rect};
 use crate::input::{MouseButton, ScrollDelta, letter_key};
@@ -174,6 +176,7 @@ fn the_news_lists_the_newest_first_with_its_source_then_its_text() {
                     "From Verge, today.".to_owned(),
                     "Ten tons of Guild plate came in to Verge Camp today.".to_owned(),
                 ],
+                kind: EntryKind::Plain,
             },
             LogEntry {
                 title: "The side road has failed".to_owned(),
@@ -181,6 +184,7 @@ fn the_news_lists_the_newest_first_with_its_source_then_its_text() {
                     "From Hearth, 6 days old.".to_owned(),
                     fixture_news()[0].text.clone(),
                 ],
+                kind: EntryKind::Plain,
             },
         ]
     );
@@ -199,6 +203,7 @@ fn a_delivery_s_lines_say_the_job_the_cargo_aboard_and_where_once_met() {
                 "Deliver 10 tons of Hull plate to Verge Camp.".to_owned(),
                 "Aboard: 10 tons.".to_owned(),
             ],
+            kind: EntryKind::Mission(0),
         }]
     );
     let met = missions_log(&[dock_job(0, true)], &names);
@@ -267,6 +272,7 @@ fn an_untitled_entry_draws_its_lines_alone() {
         entries: vec![LogEntry {
             title: String::new(),
             lines: vec!["Found.".to_owned()],
+            kind: EntryKind::Plain,
         }],
     });
     assert_eq!(just_text(&shown), ["Log", "Found.", CLOSE_HINT]);
@@ -480,9 +486,19 @@ fn a_press_off_the_arrows_closes_a_long_log_and_one_on_them_does_not() {
 
 #[test]
 fn the_fixture_s_news_and_missions_fit_the_panel() {
+    let job = StoryRow {
+        giver: Some(ode()),
+        ..in_story(
+            dock_job(10, false),
+            "dock-work",
+            "Dock work",
+            StoryAct::Open,
+        )
+    };
+    let road = in_story(the_road(), "dock-work", "Dock work", StoryAct::Committed);
     for log in [
         news_log(&fixture_news(), &names()),
-        missions_log(&[dock_job(10, false), the_road()], &names()),
+        missions_log(&[job, road], &names()),
     ] {
         let entries = log.entries.len();
         let shown = screen(log);
@@ -527,6 +543,7 @@ fn rows(lines: usize) -> LogEntry {
     LogEntry {
         title: "T".to_owned(),
         lines: vec!["l".to_owned(); lines],
+        kind: EntryKind::Plain,
     }
 }
 
@@ -628,6 +645,7 @@ fn with_no_news_the_log_says_nothing_has_been_heard() {
         [LogEntry {
             title: String::new(),
             lines: vec![NOTHING_HEARD.to_owned()],
+            kind: EntryKind::Plain,
         }]
     );
     assert_eq!(NOTHING_HEARD, "Nothing heard here yet.");
@@ -649,4 +667,278 @@ fn a_log_is_silent_unless_given_its_sounds_which_play_as_it_opens_and_closes() {
     assert_eq!(sounding.take_sounds(), [], "nothing closed");
     assert!(key(&mut sounding, Key::Escape, false));
     assert_eq!(sounding.take_sounds(), [closed], "as it closes");
+}
+
+// Storylines, givers and the selection.
+
+/// The fixture's dockmaster.
+fn ode() -> MissionGiver {
+    MissionGiver {
+        name: "Ode".to_owned(),
+        role: "dockmaster".to_owned(),
+    }
+}
+
+/// `row` in the storyline `id`, titled `title`, in `act`.
+fn in_story(row: StoryRow, id: &str, title: &str, act: StoryAct) -> StoryRow {
+    StoryRow {
+        storyline: Some(MissionStoryline {
+            id: id.to_owned(),
+            title: title.to_owned(),
+            act,
+        }),
+        ..row
+    }
+}
+
+/// [`the_road`] titled `title`.
+fn titled(title: &str) -> StoryRow {
+    StoryRow {
+        mission: title.to_lowercase(),
+        title: title.to_owned(),
+        ..the_road()
+    }
+}
+
+/// Each entry's title and kind.
+fn outline(log: &StoryLog) -> Vec<(String, EntryKind)> {
+    log.entries
+        .iter()
+        .map(|entry| (entry.title.clone(), entry.kind))
+        .collect()
+}
+
+#[test]
+fn missions_group_under_their_storylines_by_id_then_act_after_the_unstoried() {
+    let (open, crossroads, committed) = (StoryAct::Open, StoryAct::Crossroads, StoryAct::Committed);
+    let rows = [
+        in_story(titled("Z late"), "zeta", "Zeta", committed),
+        titled("Loose one"),
+        in_story(titled("A open"), "alpha", "Alpha", open),
+        in_story(titled("Z open"), "zeta", "Zeta", open),
+        in_story(titled("A cross"), "alpha", "Alpha", crossroads),
+        titled("Loose two"),
+        in_story(titled("A late"), "alpha", "Alpha", committed),
+        in_story(titled("Z open again"), "zeta", "Zeta", open),
+    ];
+    let log = missions_log(&rows, &names());
+    let mission = |title: &str, at| (title.to_owned(), EntryKind::Mission(at));
+    let section = |title: &str| (title.to_owned(), EntryKind::Section);
+    assert_eq!(
+        outline(&log),
+        [
+            mission("Loose one", 1),
+            mission("Loose two", 5),
+            section("Alpha"),
+            mission("A open", 2),
+            mission("A cross", 4),
+            mission("A late", 6),
+            section("Zeta"),
+            mission("Z open", 3),
+            mission("Z open again", 7),
+            mission("Z late", 0),
+        ]
+    );
+    let alpha = &log.entries[2];
+    assert_eq!(alpha.lines, Vec::<String>::new(), "a section has no lines");
+}
+
+#[test]
+fn two_storylines_sharing_a_title_stay_apart() {
+    let rows = [
+        in_story(titled("First"), "a-work", "Work", StoryAct::Open),
+        in_story(titled("Second"), "b-work", "Work", StoryAct::Open),
+    ];
+    let sections = outline(&missions_log(&rows, &names()))
+        .into_iter()
+        .filter(|(_, kind)| *kind == EntryKind::Section)
+        .count();
+    assert_eq!(sections, 2);
+}
+
+#[test]
+fn a_section_s_title_is_drawn_white_at_its_row_before_its_missions() {
+    let job = in_story(
+        dock_job(10, false),
+        "dock-work",
+        "Dock work",
+        StoryAct::Open,
+    );
+    let shown = screen(missions_log(&[job], &names()));
+    assert_eq!(
+        texts(&shown)[..3],
+        [
+            (
+                MISSIONS_HEADING.to_owned(),
+                Point::new(LEFT, row(0.0, 0.0)),
+                Color::WHITE
+            ),
+            (
+                "Dock work".to_owned(),
+                Point::new(LEFT, row(1.0, 1.0)),
+                Color::WHITE
+            ),
+            (
+                "Hull plate for Verge Camp".to_owned(),
+                Point::new(LEFT, row(2.0, 2.0)),
+                CHOICE_COLOR
+            ),
+        ]
+    );
+}
+
+#[test]
+fn rows_with_no_storyline_list_as_before_with_no_section() {
+    let log = missions_log(&[dock_job(10, false), the_road()], &names());
+    assert_eq!(
+        outline(&log),
+        [
+            (
+                "Hull plate for Verge Camp".to_owned(),
+                EntryKind::Mission(0)
+            ),
+            ("Clear the hearth road".to_owned(), EntryKind::Mission(1)),
+        ]
+    );
+    assert_eq!(
+        log.entries[1].lines,
+        ["Take the jump point at Hearth Road from The Wardens."]
+    );
+}
+
+#[test]
+fn a_giver_is_named_with_their_role_after_the_objective() {
+    let job = StoryRow {
+        giver: Some(ode()),
+        ..dock_job(10, false)
+    };
+    assert_eq!(
+        missions_log(&[job], &names()).entries[0].lines,
+        [
+            "Deliver 10 tons of Hull plate to Verge Camp.",
+            "Offered by Ode, dockmaster.",
+            "Aboard: 10 tons."
+        ]
+    );
+}
+
+/// The colour each mission title is drawn in, by title.
+fn title_colours(shown: &StoryLogScreen, titles: &[&str]) -> Vec<Color> {
+    let drawn = texts(shown);
+    titles
+        .iter()
+        .map(|title| {
+            drawn
+                .iter()
+                .find(|(text, ..)| text == title)
+                .map(|(_, _, color)| *color)
+                .expect("drawn")
+        })
+        .collect()
+}
+
+fn press(shown: &mut StoryLogScreen, key: Key, repeat: bool) {
+    assert_eq!(
+        shown.input(&Input::Key {
+            key,
+            pressed: true,
+            repeat,
+        }),
+        ScreenAction::None
+    );
+    shown.input(&Input::Key {
+        key,
+        pressed: false,
+        repeat: false,
+    });
+}
+
+const BOTH: [&str; 2] = ["Hull plate for Verge Camp", "Clear the hearth road"];
+
+#[test]
+fn the_first_mission_drawn_is_selected_and_tab_moves_the_selection_round() {
+    let mut shown = screen(missions_log(&[dock_job(10, false), the_road()], &names()));
+    assert_eq!(
+        title_colours(&shown, &BOTH),
+        [CHOICE_COLOR, Color::DIM],
+        "the first selected"
+    );
+    press(&mut shown, Key::Tab, false);
+    assert_eq!(title_colours(&shown, &BOTH), [Color::DIM, CHOICE_COLOR]);
+    shown.input(&Input::Key {
+        key: Key::Tab,
+        pressed: true,
+        repeat: true,
+    });
+    assert_eq!(
+        title_colours(&shown, &BOTH),
+        [Color::DIM, CHOICE_COLOR],
+        "a repeat moves nothing"
+    );
+    press(&mut shown, Key::Tab, false);
+    assert_eq!(
+        title_colours(&shown, &BOTH),
+        [CHOICE_COLOR, Color::DIM],
+        "round to the first"
+    );
+    assert!(!shown.take_closed(), "Tab never closes it");
+}
+
+#[test]
+fn the_map_key_asks_once_for_the_selected_row_s_map_and_keeps_the_log_open() {
+    // The first drawn is the unstoried row, at index 1 of the rows given.
+    let rows = [
+        in_story(the_road(), "dock-work", "Dock work", StoryAct::Committed),
+        dock_job(10, false),
+    ];
+    let mut shown = screen(missions_log(&rows, &names()));
+    press(&mut shown, Key::KeyM, false);
+    assert_eq!(shown.take_map_request(), Some(1));
+    assert_eq!(shown.take_map_request(), None, "once");
+    assert!(!shown.take_closed(), "it stays open under the map");
+    press(&mut shown, Key::Tab, false);
+    press(&mut shown, Key::KeyM, false);
+    assert_eq!(shown.take_map_request(), Some(0), "the selection's row");
+    shown.input(&Input::Key {
+        key: Key::KeyM,
+        pressed: true,
+        repeat: true,
+    });
+    assert_eq!(shown.take_map_request(), None, "a repeat asks nothing");
+}
+
+#[test]
+fn over_the_news_the_map_key_and_tab_do_nothing() {
+    let mut shown = screen(news_log(&fixture_news(), &names()));
+    let before = texts(&shown);
+    press(&mut shown, Key::KeyM, false);
+    press(&mut shown, Key::Tab, false);
+    assert_eq!(shown.take_map_request(), None);
+    assert_eq!(texts(&shown), before, "no selection");
+    assert!(!shown.take_closed());
+}
+
+#[test]
+fn a_rebound_map_key_asks_through_the_bindings_given() {
+    let bindings = crate::keymap::SharedBindings::new(crate::keymap::Bindings::default().rebound(
+        crate::keymap::PlayCommand::GalaxyMap,
+        crate::keymap::KeyCombo::key(Key::KeyK),
+    ));
+    let mut shown = screen(missions_log(&[dock_job(10, false)], &names())).with_bindings(bindings);
+    press(&mut shown, Key::KeyM, false);
+    assert_eq!(shown.take_map_request(), None, "M is no longer the map key");
+    press(&mut shown, Key::KeyK, false);
+    assert_eq!(shown.take_map_request(), Some(0));
+}
+
+#[test]
+fn a_selection_moved_on_a_scrolled_log_keeps_its_scroll() {
+    let rows: Vec<StoryRow> = (0..8).map(|n| titled(&format!("Job {n}"))).collect();
+    let mut shown = screen(missions_log(&rows, &names()));
+    assert!(shown.overflows(), "precondition: it scrolls");
+    press(&mut shown, Key::ArrowDown, false);
+    let scrolled = just_text(&shown);
+    assert_ne!(scrolled[0], MISSIONS_HEADING, "precondition: scrolled");
+    press(&mut shown, Key::Tab, false);
+    assert_eq!(just_text(&shown), scrolled, "the same lines shown");
 }

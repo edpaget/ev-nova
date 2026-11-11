@@ -8,7 +8,8 @@
 //!
 //! - **The slots.** Items [`STORY_ITEMS`] (9 to 12) of the bar's template
 //!   show one button each for the first four scenes: an offer's labelled
-//!   with its title, the stellar's own with [`OWN_CONVERSATION_LABEL`]. A
+//!   with its title and its giver's name ([`offer_label`]), the stellar's
+//!   own with [`OWN_CONVERSATION_LABEL`]. A
 //!   slot with no scene is hidden: undrawn and greyed, so it draws
 //!   nothing, takes no click and no focus, and the pad passes over it. The
 //!   bar doesn't scroll: past four, the rest wait until fewer hold.
@@ -26,6 +27,7 @@
 //! and 10 outside and has no 11 or 12), the slots show nothing; a missing
 //! item changes nothing and never panics.
 
+use nova_data::MissionGiver;
 use nova_sim::flight_frame::{BarScene, BarStory};
 
 use super::BarScreen;
@@ -38,11 +40,23 @@ pub const STORY_ITEMS: [usize; 4] = [9, 10, 11, 12];
 /// The label of the stellar's own conversation's slot.
 pub const OWN_CONVERSATION_LABEL: &str = "Look around";
 
+/// An offer's slot label: its `title`, then the name of its `giver` in
+/// brackets when it has one ("Hull plate for Verge Camp (Ode)"), else the
+/// title alone. The giver's role is left to the story log's entry, which
+/// wraps: the slot is one centred line of fixed width.
+#[must_use]
+pub fn offer_label(title: &str, giver: Option<&MissionGiver>) -> String {
+    match giver {
+        Some(giver) => format!("{title} ({})", giver.name),
+        None => title.to_owned(),
+    }
+}
+
 /// `scene`'s slot label.
-fn label(scene: &BarScene) -> &str {
+fn label(scene: &BarScene) -> String {
     match scene {
-        BarScene::Offer { title, .. } => title,
-        BarScene::Stellar => OWN_CONVERSATION_LABEL,
+        BarScene::Offer { title, giver, .. } => offer_label(title, giver.as_ref()),
+        BarScene::Stellar => OWN_CONVERSATION_LABEL.to_owned(),
     }
 }
 
@@ -66,7 +80,7 @@ pub(super) fn show_slots(dialog: &mut Dialog, story: Option<&BarStory>) {
     for (index, item) in STORY_ITEMS.into_iter().enumerate() {
         let scene = scenes.get(index);
         if let Some(scene) = scene {
-            dialog.set_label(item, label(scene));
+            dialog.set_label(item, &label(scene));
         }
         dialog.set_drawn(item, scene.is_some());
         dialog.set_greyed(item, scene.is_none());
@@ -224,6 +238,27 @@ mod tests {
             slots(&screen),
             [(9, true), (10, true), (11, false), (12, false)]
         );
+    }
+
+    #[test]
+    fn an_offer_with_a_giver_is_labelled_its_title_then_the_giver_s_name() {
+        let ode = MissionGiver {
+            name: "Ode".to_owned(),
+            role: "dockmaster".to_owned(),
+        };
+        assert_eq!(offer_label("Hull plate", Some(&ode)), "Hull plate (Ode)");
+        assert_eq!(offer_label("Hull plate", None), "Hull plate");
+        let mut screen = bar_over(slotted());
+        let given = BarScene::Offer {
+            mission: "hull plate".to_owned(),
+            title: "Hull plate".to_owned(),
+            giver: Some(ode),
+        };
+        screen.set_story(Some(story(vec![given, offer("Toll")])));
+        let words = words(&screen);
+        assert!(words.contains(&"Hull plate (Ode)".to_owned()), "{words:?}");
+        assert!(words.contains(&"Toll".to_owned()), "no giver: {words:?}");
+        assert!(!words.contains(&"Hull plate".to_owned()), "{words:?}");
     }
 
     #[test]

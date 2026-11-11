@@ -126,6 +126,17 @@ impl PanelScroll {
         }
     }
 
+    /// `lines`, the same lines at the same places restyled (a colour
+    /// changed), keeping the scroll: as [`relaid`](Self::relaid), then
+    /// scrolled back to the first line this one shows.
+    #[must_use]
+    pub fn restyled(&self, lines: Vec<PageLine>) -> Self {
+        let mut next = self.relaid(lines);
+        next.text
+            .scroll_by(isize::try_from(self.first()).unwrap_or(isize::MAX));
+        next
+    }
+
     /// Whether the page holds more than the column shows.
     #[must_use]
     pub fn overflows(&self) -> bool {
