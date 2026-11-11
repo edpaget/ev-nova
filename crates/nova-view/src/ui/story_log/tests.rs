@@ -1,7 +1,8 @@
 use super::*;
 use crate::draw::{DrawCommand, fill_rect, frame_rect};
-use crate::input::{MouseButton, letter_key};
+use crate::input::{MouseButton, ScrollDelta, letter_key};
 use crate::text::fixture::MonoMetrics;
+use crate::ui::scroll_arrows::ScrollArrow;
 
 /// Hearth (130), Drift (131) and Verge (132); Hearth Dock (128), Verge
 /// Camp (129) and the Hearth Road gate (140).
@@ -263,7 +264,6 @@ fn an_untitled_entry_draws_its_lines_alone() {
             title: String::new(),
             lines: vec!["Found.".to_owned()],
         }],
-        cut_word: "more",
     });
     assert_eq!(just_text(&shown), ["Log", "Found.", CLOSE_HINT]);
 }
@@ -374,50 +374,104 @@ fn return_enter_escape_or_a_click_closes_it_and_digits_do_nothing() {
     assert!(!shown.take_closed(), "a release");
 }
 
-#[test]
-fn entries_that_do_not_fit_are_cut_whole_and_counted() {
+/// Twelve news items, `Item 0` the oldest, so listed last: more than the
+/// panel holds.
+fn twelve() -> StoryLogScreen {
     let many: Vec<HeardNews> = (0..12)
         .map(|n| heard(&format!("Item {n}"), "Some news.", 130, n))
         .collect();
-    let shown = screen(news_log(&many, &names()));
-    let drawn = just_text(&shown);
-    assert_inside(&shown);
-    assert_eq!(drawn.last().map(String::as_str), Some(CLOSE_HINT));
-    let titles = drawn
-        .iter()
-        .filter(|text| text.starts_with("Item "))
-        .count();
-    assert!(titles < 12, "some cut: {drawn:?}");
-    let cut = 12 - titles;
-    let said = format!("And {cut} older items.");
-    assert_eq!(drawn[drawn.len() - 2], said);
-    assert_eq!(drawn[1], "Item 11", "the newest kept");
-    let cut_line_at = texts(&shown)[drawn.len() - 2].2;
-    assert_eq!(cut_line_at, Color::DIM);
-    // Every entry kept is whole: its title, source and text.
-    for n in 0..titles {
-        let at = 1 + 3 * n;
-        assert!(drawn[at].starts_with("Item "), "{drawn:?}");
-        assert!(drawn[at + 1].starts_with("From Hearth"), "{drawn:?}");
-        assert_eq!(drawn[at + 2], "Some news.");
+    screen(news_log(&many, &names()))
+}
+
+/// Gives `shown` `input` until its oldest entry, `Item 0`, and the hint
+/// are drawn, at most 100 times: how many it took. Never closes it.
+fn scroll_to_the_oldest(shown: &mut StoryLogScreen, input: &Input) -> usize {
+    let reached = |shown: &StoryLogScreen| {
+        let drawn = just_text(shown);
+        drawn.ends_with(&[
+            "Item 0".to_owned(),
+            "From Hearth, today.".to_owned(),
+            "Some news.".to_owned(),
+            CLOSE_HINT.to_owned(),
+        ])
+    };
+    for n in 0..100 {
+        if reached(shown) {
+            return n;
+        }
+        assert_eq!(shown.input(input), ScreenAction::None);
+        assert!(!shown.take_closed(), "{input:?} closed it");
+    }
+    panic!(
+        "never reached the oldest by {input:?}: {:?}",
+        just_text(shown)
+    );
+}
+
+/// A press of the primary button at `at`.
+fn press_at(at: Point) -> Input {
+    Input::PointerButton {
+        button: MouseButton::Left,
+        pressed: true,
+        at,
     }
 }
 
 #[test]
-fn one_entry_cut_says_one_item() {
-    // The most that fit whole, and one more: one is left out.
-    let fits = |n: u32| {
-        let many: Vec<HeardNews> = (0..n)
-            .map(|i| heard(&format!("Item {i}"), "Some news.", 130, i))
-            .collect();
-        just_text(&screen(news_log(&many, &names())))
+fn a_long_log_shows_its_newest_first_and_no_oldest() {
+    let shown = twelve();
+    let drawn = just_text(&shown);
+    assert_eq!(drawn[1], "Item 11", "the newest first");
+    assert!(!drawn.contains(&"Item 0".to_owned()), "{drawn:?}");
+    assert!(!drawn.contains(&CLOSE_HINT.to_owned()), "{drawn:?}");
+    assert!(shown.overflows());
+    assert_inside(&shown);
+}
+
+#[test]
+fn a_long_log_reaches_its_oldest_entry_by_down_presses() {
+    let mut shown = twelve();
+    let down = Input::Key {
+        key: Key::ArrowDown,
+        pressed: true,
+        repeat: false,
     };
-    let whole = (1..30)
-        .take_while(|&n| !fits(n).iter().any(|t| t.starts_with("And ")))
-        .last();
-    let most = whole.expect("some fit whole");
-    let drawn = fits(most + 1);
-    assert_eq!(drawn[drawn.len() - 2], "And 1 older item.", "{drawn:?}");
+    assert!(scroll_to_the_oldest(&mut shown, &down) > 0);
+    assert_inside(&shown);
+}
+
+#[test]
+fn a_long_log_reaches_its_oldest_entry_by_the_wheel() {
+    let mut shown = twelve();
+    let notch = Input::Scroll {
+        delta: ScrollDelta::Lines(1.0),
+        at: PANEL.center(),
+    };
+    assert!(scroll_to_the_oldest(&mut shown, &notch) > 0);
+    assert_inside(&shown);
+}
+
+#[test]
+fn a_long_log_reaches_its_oldest_entry_by_its_down_arrow() {
+    let mut shown = twelve();
+    let arrow = shown
+        .arrow_bounds(ScrollArrow::Down)
+        .expect("a down arrow")
+        .center();
+    assert!(scroll_to_the_oldest(&mut shown, &press_at(arrow)) > 0);
+    assert_inside(&shown);
+}
+
+#[test]
+fn a_press_off_the_arrows_closes_a_long_log_and_one_on_them_does_not() {
+    let mut shown = twelve();
+    for arrow in [ScrollArrow::Up, ScrollArrow::Down] {
+        let at = shown.arrow_bounds(arrow).expect("drawn").center();
+        shown.input(&press_at(at));
+        assert!(!shown.take_closed(), "{arrow:?}");
+    }
+    shown.input(&press_at(PANEL.center()));
+    assert!(shown.take_closed(), "a press off the arrows");
 }
 
 #[test]
@@ -430,10 +484,8 @@ fn the_fixture_s_news_and_missions_fit_the_panel() {
         let shown = screen(log);
         let drawn = just_text(&shown);
         assert_inside(&shown);
-        assert!(
-            !drawn.iter().any(|text| text.starts_with("And ")),
-            "nothing cut: {drawn:?}"
-        );
+        assert!(!shown.overflows(), "nothing overflows: {drawn:?}");
+        assert_eq!(shown.arrow_bounds(ScrollArrow::Down), None);
         assert_eq!(drawn.last().map(String::as_str), Some(CLOSE_HINT));
         assert!(entries > 0);
     }
@@ -474,21 +526,24 @@ fn rows(lines: usize) -> LogEntry {
     }
 }
 
-/// What a log of `entries` draws, on [`Grid`].
-fn laid_out(entries: Vec<LogEntry>) -> Vec<String> {
-    let shown = StoryLogScreen::new(
+/// A log of `entries`, on [`Grid`].
+fn on_grid(entries: Vec<LogEntry>) -> StoryLogScreen {
+    StoryLogScreen::new(
         StoryLog {
             heading: "Log".to_owned(),
             entries,
-            cut_word: "more",
         },
         Rc::new(Grid),
-    );
-    just_text(&shown)
+    )
 }
 
-// On Grid the heading takes a row, an entry its gap and its rows, the cut
-// line a row, and the hint its gap and a row: 360 = 12 * rows + 12 * gaps.
+/// What a log of `entries` draws, on [`Grid`].
+fn laid_out(entries: Vec<LogEntry>) -> Vec<String> {
+    just_text(&on_grid(entries))
+}
+
+// On Grid the heading takes a row, an entry its gap and its rows, and the
+// hint its gap and a row: 360 = 12 * rows + 12 * gaps.
 
 #[test]
 fn an_entry_ending_exactly_at_the_foot_with_the_hint_fits() {
@@ -499,31 +554,64 @@ fn an_entry_ending_exactly_at_the_foot_with_the_hint_fits() {
 }
 
 #[test]
-fn an_entry_one_row_past_the_foot_is_cut() {
-    let drawn = laid_out(vec![rows(26)]);
-    assert_eq!(drawn, ["Log", "And 1 more item.", CLOSE_HINT]);
+fn the_exact_foot_entry_draws_no_arrows() {
+    let shown = on_grid(vec![rows(25)]);
+    assert!(!shown.overflows());
+    assert_eq!(shown.arrow_bounds(ScrollArrow::Up), None);
+    let mut list = DrawList::new();
+    shown.draw(&mut list);
+    let lines = list
+        .iter()
+        .filter(|command| matches!(command, DrawCommand::Line { .. }))
+        .count();
+    let mut panel = DrawList::new();
+    PanelBacking::NEW_GAME.draw(&mut panel, PANEL);
+    let backing = panel
+        .iter()
+        .filter(|command| matches!(command, DrawCommand::Line { .. }))
+        .count();
+    assert_eq!(lines, backing, "the panel's own fills alone");
 }
 
 #[test]
-fn an_entry_with_others_after_it_leaves_a_row_for_the_cut_line() {
-    // The first would fit alone, but not with the cut line below it.
-    let drawn = laid_out(vec![rows(25), rows(0)]);
-    assert_eq!(drawn, ["Log", "And 2 more items.", CLOSE_HINT]);
-    // One row shorter it fits with the cut line, and the second, which
-    // needs its own gap and row, is cut.
-    let drawn = laid_out(vec![rows(24), rows(0)]);
-    assert_eq!(drawn.len(), 1 + 25 + 1 + 1, "{drawn:?}");
-    assert_eq!(drawn[drawn.len() - 2], "And 1 more item.");
+fn an_entry_one_row_past_the_foot_overflows_and_one_down_shows_the_hint() {
+    let mut shown = on_grid(vec![rows(26)]);
+    assert!(shown.overflows());
+    let drawn = just_text(&shown);
+    assert_eq!(drawn.len(), 1 + 27, "all but the hint: {drawn:?}");
+    assert_eq!(drawn[0], "Log");
+    shown.input(&Input::Key {
+        key: Key::ArrowDown,
+        pressed: true,
+        repeat: false,
+    });
+    let drawn = just_text(&shown);
+    assert_eq!(drawn.len(), 27 + 1, "all but the heading: {drawn:?}");
+    assert_eq!(drawn.last().map(String::as_str), Some(CLOSE_HINT));
 }
 
 #[test]
-fn the_last_entry_needs_no_row_for_a_cut_line() {
-    // Heading 1 + 1 + 24 + hint 1 rows and 3 gaps: 27 * 12 + 36 = 360.
-    let drawn = laid_out(vec![rows(0), rows(23)]);
-    assert_eq!(drawn.len(), 1 + 1 + 24 + 1, "both whole: {drawn:?}");
-    assert!(
-        !drawn.iter().any(|text| text.starts_with("And ")),
-        "{drawn:?}"
+fn a_repeated_down_moves_nothing_and_a_rebound_one_scrolls() {
+    let mut shown = on_grid(vec![rows(26)]);
+    shown.input(&Input::Key {
+        key: Key::ArrowDown,
+        pressed: true,
+        repeat: true,
+    });
+    assert_eq!(just_text(&shown)[0], "Log", "a repeat moves nothing");
+    let bindings = crate::keymap::SharedBindings::new(crate::keymap::Bindings::default().rebound(
+        crate::keymap::UiCommand::Down,
+        crate::keymap::KeyCombo::key(Key::KeyJ),
+    ));
+    let mut shown = on_grid(vec![rows(26)]).with_bindings(bindings);
+    shown.input(&Input::Key {
+        key: Key::KeyJ,
+        pressed: true,
+        repeat: false,
+    });
+    assert_eq!(
+        just_text(&shown).last().map(String::as_str),
+        Some(CLOSE_HINT)
     );
 }
 

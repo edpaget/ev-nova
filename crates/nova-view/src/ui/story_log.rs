@@ -1,12 +1,14 @@
 //! The story log: the new game's own read-only panel for its news and its
 //! active missions.
 //!
-//! The new game ships no interface file, so the stock screens laid out
-//! from a `DLOG` (the bar's news, `DLOG` 1014; the mission info screen,
-//! `DLOG` 1012) can't open in it. Its landed screen is its own
-//! `DLOG`-free panel ([`ConversationScreen`](crate::spaceport::conversation::ConversationScreen)),
-//! and the story log is drawn on the same geometry and font
-//! ([`PANEL`], [`INSET`], [`FONT`], [`SIZE`]). It isn't a stock reading,
+//! The new game's placeholder dialogs (`nova::interface::wire`) lay out
+//! the stock mission info screen (`DLOG` 1012) and news screen
+//! (`DLOG` 1014), but those list the stock records: the mission slots and
+//! the `nëws` strings. The new game's news and storyline missions aren't
+//! those records, so they show on its own `DLOG`-free panel, drawn on the
+//! geometry and font of its landed screen
+//! ([`ConversationScreen`](crate::spaceport::conversation::ConversationScreen):
+//! [`PANEL`], [`INSET`], [`FONT`], [`SIZE`]). It isn't a stock reading,
 //! so it needs no `Rulebook` key, and stock never opens it.
 //!
 //! [`StoryLogScreen`] takes a [`StoryLog`] as plain data: a heading, then
@@ -20,19 +22,23 @@
 //!   objective, the cargo aboard while there is some, and where to go once
 //!   it is met.
 //!
-//! **The cut.** The log scrolls nothing. When the entries don't all fit
-//! above the close hint, the last ones (the oldest news) are cut whole,
-//! and a last line names how many: "And 2 older items."
+//! **Scrolling.** The heading, the entries and the hint are one page in
+//! the panel's text area ([`PanelScroll`]). When they don't all fit, the
+//! page scrolls a row at a time, by Up and Down (a press each, through
+//! the bindings given, [`StoryLogScreen::with_bindings`]), by a wheel
+//! over the text, and by the arrows in the panel's right inset, which
+//! show while it overflows: every entry, the oldest news last, is
+//! reachable. A log that fits draws as it is laid out, with no arrows.
 //!
-//! **Input.** Return, Enter, Escape or a click closes it
+//! **Input.** Return, Enter, Escape or a press off the arrows closes it
 //! ([`StoryLogScreen::take_closed`]). It is silent, unless given the
 //! sounds it plays as it opens and closes
 //! ([`StoryLogScreen::with_sounds`]): the bar's Holovid log beeps as the
 //! stock news does. It takes every input while it is
 //! open, so the screen under it gets none.
 //!
-//! Where it opens is the router's (the `nova` crate's
-//! `app/screen/story_log.rs`).
+//! Where and when it opens, and what its close marks read, is the
+//! router's (the `nova` crate's `app/screen/story_log.rs`).
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -43,14 +49,17 @@ use nova_sim::{StellarId, SystemId};
 
 use crate::color::Color;
 use crate::draw::DrawList;
-use crate::geometry::Point;
+use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key};
+use crate::keymap::SharedBindings;
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
 use crate::spaceport::conversation::{CHOICE_COLOR, CLOSE_HINT, FONT, GAP, INSET, PANEL, SIZE};
 use crate::spaceport::credits::{TON, TONS};
 use crate::text::{TextMetrics, wrap};
 use crate::ui::panel::PanelBacking;
+use crate::ui::panel_scroll::{PageLine, PanelScroll};
+use crate::ui::scroll_arrows::ScrollArrow;
 
 /// The news log's heading.
 pub const NEWS_HEADING: &str = "News";
@@ -71,8 +80,6 @@ pub struct StoryLog {
     pub heading: String,
     /// The entries, in the order drawn.
     pub entries: Vec<LogEntry>,
-    /// What the cut calls the entries it drops: "older" for news.
-    pub cut_word: &'static str,
 }
 
 /// One entry of a [`StoryLog`].
@@ -119,7 +126,6 @@ pub fn news_log(news: &[HeardNews], names: &Names) -> StoryLog {
     StoryLog {
         heading: NEWS_HEADING.to_owned(),
         entries,
-        cut_word: "older",
     }
 }
 
@@ -178,23 +184,15 @@ pub fn missions_log(rows: &[StoryRow], names: &Names) -> StoryLog {
                 }
             })
             .collect(),
-        cut_word: "more",
     }
-}
-
-/// A line of text placed on the panel.
-#[derive(Clone, Debug, PartialEq)]
-struct Placed {
-    text: String,
-    origin: Point,
-    color: Color,
 }
 
 /// The story log, drawn over the spaceport or the paused flight.
 #[derive(Clone)]
 pub struct StoryLogScreen {
     log: StoryLog,
-    metrics: Rc<dyn TextMetrics>,
+    /// The log laid out as one page, scrolled in the panel.
+    page: PanelScroll,
     closed: bool,
     /// The sound it plays as it closes, if given
     /// ([`StoryLogScreen::with_sounds`]).
@@ -215,14 +213,38 @@ impl std::fmt::Debug for StoryLogScreen {
 impl StoryLogScreen {
     /// The screen showing `log`, its text measured by `metrics`.
     #[must_use]
+    #[allow(clippy::needless_pass_by_value)] // the router's shared metrics, handed over as `ConversationScreen::new` takes them
     pub fn new(log: StoryLog, metrics: Rc<dyn TextMetrics>) -> Self {
+        let lines = layout(&log, &metrics);
         Self {
             log,
-            metrics,
+            page: PanelScroll::new(PANEL, INSET, FONT, SIZE, lines, &metrics),
             closed: false,
             close_sound: None,
             sounds: Vec::new(),
         }
+    }
+
+    /// The screen reading its Up and Down through `bindings`, the
+    /// router's, so a rebound key scrolls it.
+    #[must_use]
+    pub fn with_bindings(self, bindings: SharedBindings) -> Self {
+        Self {
+            page: self.page.with_bindings(bindings),
+            ..self
+        }
+    }
+
+    /// Whether the log holds more than the panel shows, so it scrolls.
+    #[must_use]
+    pub fn overflows(&self) -> bool {
+        self.page.overflows()
+    }
+
+    /// Where `arrow` is drawn, while the log overflows.
+    #[must_use]
+    pub fn arrow_bounds(&self, arrow: ScrollArrow) -> Option<Bounds> {
+        self.page.arrow_bounds(arrow)
     }
 
     /// The screen playing `open` as it opens and `close` as it closes, as
@@ -246,90 +268,53 @@ impl StoryLogScreen {
     pub fn take_closed(&mut self) -> bool {
         std::mem::take(&mut self.closed)
     }
-
-    /// `text` wrapped to the panel's width.
-    fn wrapped(&self, text: &str) -> Vec<String> {
-        wrap(&self.metrics, FONT, SIZE, text, PANEL.width() - 2.0 * INSET)
-    }
-
-    /// The log laid out down the panel (see the module docs' cut): each
-    /// line at its row, below the gaps before it.
-    fn layout(&self) -> Vec<Placed> {
-        let left = PANEL.min.x + INSET;
-        let top = PANEL.min.y + INSET;
-        let foot = PANEL.max.y - INSET;
-        let step = self.metrics.line_height(FONT, SIZE);
-        let at = |rows: usize, gaps: usize| top + rows as f32 * step + gaps as f32 * GAP;
-        let (mut rows, mut gaps) = (0, 0);
-        let mut placed = Vec::new();
-        let mut put = |rows: &mut usize, gaps: usize, lines: Vec<String>, color| {
-            for text in lines {
-                placed.push(Placed {
-                    text,
-                    origin: Point::new(left, at(*rows, gaps)),
-                    color,
-                });
-                *rows += 1;
-            }
-        };
-        put(
-            &mut rows,
-            gaps,
-            self.wrapped(&self.log.heading),
-            Color::WHITE,
-        );
-        let count = self.log.entries.len();
-        let mut shown = 0;
-        for (n, entry) in self.log.entries.iter().enumerate() {
-            let title = if entry.title.is_empty() {
-                Vec::new()
-            } else {
-                self.wrapped(&entry.title)
-            };
-            let lines: Vec<String> = entry
-                .lines
-                .iter()
-                .flat_map(|line| self.wrapped(line))
-                .collect();
-            let rest = count - n - 1;
-            let cut = if rest > 0 {
-                self.wrapped(&cut_line(rest, self.log.cut_word)).len()
-            } else {
-                0
-            };
-            // The entry after its gap, the cut line if any is left, and
-            // the hint after its gap.
-            let bottom = at(rows + title.len() + lines.len() + cut + 1, gaps + 2);
-            if bottom > foot {
-                break;
-            }
-            gaps += 1;
-            put(&mut rows, gaps, title, CHOICE_COLOR);
-            put(&mut rows, gaps, lines, Color::WHITE);
-            shown += 1;
-        }
-        let cut = count - shown;
-        if cut > 0 {
-            let line = self.wrapped(&cut_line(cut, self.log.cut_word));
-            put(&mut rows, gaps, line, Color::DIM);
-        }
-        gaps += 1;
-        put(&mut rows, gaps, vec![CLOSE_HINT.to_owned()], Color::DIM);
-        placed
-    }
 }
 
-/// The line naming the `cut` entries left out: "And 2 older items.", "And
-/// 1 older item.".
-fn cut_line(cut: usize, word: &str) -> String {
-    let items = if cut == 1 { "item" } else { "items" };
-    format!("And {cut} {word} {items}.")
+/// `log` laid out down the panel as one page (see the module docs): the
+/// heading, each entry after its gap, and the hint after its gap, each
+/// line at its row below the gaps before it.
+fn layout(log: &StoryLog, metrics: &impl TextMetrics) -> Vec<PageLine> {
+    let wrapped = |text: &str| wrap(metrics, FONT, SIZE, text, PANEL.width() - 2.0 * INSET);
+    let left = PANEL.min.x + INSET;
+    let top = PANEL.min.y + INSET;
+    let step = metrics.line_height(FONT, SIZE);
+    let at = |rows: usize, gaps: usize| top + rows as f32 * step + gaps as f32 * GAP;
+    let (mut rows, mut gaps) = (0, 0);
+    let mut placed = Vec::new();
+    let mut put = |rows: &mut usize, gaps: usize, lines: Vec<String>, color| {
+        for text in lines {
+            placed.push(PageLine {
+                text,
+                origin: Point::new(left, at(*rows, gaps)),
+                color,
+            });
+            *rows += 1;
+        }
+    };
+    put(&mut rows, gaps, wrapped(&log.heading), Color::WHITE);
+    for entry in &log.entries {
+        let title = if entry.title.is_empty() {
+            Vec::new()
+        } else {
+            wrapped(&entry.title)
+        };
+        let lines: Vec<String> = entry.lines.iter().flat_map(|line| wrapped(line)).collect();
+        gaps += 1;
+        put(&mut rows, gaps, title, CHOICE_COLOR);
+        put(&mut rows, gaps, lines, Color::WHITE);
+    }
+    gaps += 1;
+    put(&mut rows, gaps, vec![CLOSE_HINT.to_owned()], Color::DIM);
+    placed
 }
 
 impl Screen for StoryLogScreen {
-    /// Notes a close (see the module docs), for
+    /// Scrolls its page, or notes a close (see the module docs), for
     /// [`StoryLogScreen::take_closed`]. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if self.page.input(input) {
+            return ScreenAction::None;
+        }
         match *input {
             Input::Key {
                 key: Key::Enter | Key::NumpadEnter | Key::Escape,
@@ -355,9 +340,7 @@ impl Screen for StoryLogScreen {
 
     fn draw(&self, list: &mut DrawList) {
         PanelBacking::NEW_GAME.draw(list, PANEL);
-        for line in self.layout() {
-            list.text_in(FONT, line.text, line.origin, SIZE, None, line.color);
-        }
+        self.page.draw(list);
     }
 }
 

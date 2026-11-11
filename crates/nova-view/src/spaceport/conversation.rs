@@ -21,12 +21,22 @@
 //!   click.
 //! - While choices are pending, Return and Escape do nothing: a
 //!   conversation isn't dropped half-way.
-//! - An ended page closes on Return, Escape or a click anywhere.
+//! - An ended page closes on Return, Escape or a click anywhere but its
+//!   scroll arrows.
 //! - It takes every input while it is open, so the screen under it gets
 //!   none.
 //!
-//! Text the panel can't hold runs past its foot: the conversations so far
-//! are short.
+//! **Scrolling.** The lines, the problem, the notice, the choices and the
+//! hint are one page in the panel's text area ([`PanelScroll`]). A page
+//! the panel can't hold scrolls a row at a time, by Up and Down (a press
+//! each, through the bindings given,
+//! [`ConversationScreen::with_bindings`]), by a wheel over the text, and
+//! by the arrows in the panel's right inset, which show while it
+//! overflows, so a line longer than the panel is readable to its end. The
+//! choices scroll with the page: a digit takes its choice whatever is
+//! shown, and a click takes a choice only where it is drawn. A new page or
+//! a new notice lays the page out afresh, from its top. A page that fits
+//! draws as it is laid out, with no arrows.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -39,10 +49,13 @@ use crate::draw::DrawList;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key, key_letter};
+use crate::keymap::SharedBindings;
 use crate::screen::{Screen, ScreenAction};
 use crate::spaceport::credits::{TON, TONS};
 use crate::text::{TextMetrics, wrap};
 use crate::ui::panel::PanelBacking;
+use crate::ui::panel_scroll::{PageLine, PanelScroll};
+use crate::ui::scroll_arrows::ScrollArrow;
 
 /// The panel, centred in the 1024 by 768 screen.
 pub const PANEL: Bounds = Bounds {
@@ -92,18 +105,10 @@ pub enum ConversationChoice {
     Close,
 }
 
-/// A line of text placed on the panel.
-#[derive(Clone, Debug, PartialEq)]
-struct Placed {
-    text: String,
-    origin: Point,
-    color: Color,
-}
-
 /// The page laid out: every line placed, and the box each choice's text
-/// fills.
+/// fills, as laid out unscrolled.
 struct Layout {
-    lines: Vec<Placed>,
+    lines: Vec<PageLine>,
     choices: Vec<Bounds>,
 }
 
@@ -114,6 +119,8 @@ pub struct ConversationScreen {
     notice: Option<String>,
     metrics: Rc<dyn TextMetrics>,
     choice: Option<ConversationChoice>,
+    /// The page laid out, scrolled in the panel.
+    scroll: PanelScroll,
 }
 
 impl std::fmt::Debug for ConversationScreen {
@@ -130,12 +137,16 @@ impl ConversationScreen {
     /// The screen showing `page`, its text measured by `metrics`.
     #[must_use]
     pub fn new(page: ConversationPage, metrics: Rc<dyn TextMetrics>) -> Self {
-        Self {
+        let scroll = PanelScroll::new(PANEL, INSET, FONT, SIZE, Vec::new(), &metrics);
+        let mut screen = Self {
             page,
             notice: None,
             metrics,
             choice: None,
-        }
+            scroll,
+        };
+        screen.relay();
+        screen
     }
 
     /// The page it shows.
@@ -149,13 +160,15 @@ impl ConversationScreen {
     pub fn set_page(&mut self, page: ConversationPage) {
         self.page = page;
         self.notice = None;
+        self.relay();
     }
 
     /// Shows `notice` on the page, or none: a line of the router's own
     /// below the page's lines, such as an accept refused for room
-    /// ([`room_refusal_text`]).
+    /// ([`room_refusal_text`]). The page is laid out afresh, from its top.
     pub fn set_notice(&mut self, notice: Option<String>) {
         self.notice = notice;
+        self.relay();
     }
 
     /// The notice shown on the page, if any.
@@ -167,6 +180,33 @@ impl ConversationScreen {
     /// What the player did since this was last taken, if anything.
     pub fn take_choice(&mut self) -> Option<ConversationChoice> {
         self.choice.take()
+    }
+
+    /// The screen reading its Up and Down through `bindings`, the
+    /// router's, so a rebound key scrolls it.
+    #[must_use]
+    pub fn with_bindings(self, bindings: SharedBindings) -> Self {
+        Self {
+            scroll: self.scroll.with_bindings(bindings),
+            ..self
+        }
+    }
+
+    /// Whether the page holds more than the panel shows, so it scrolls.
+    #[must_use]
+    pub fn overflows(&self) -> bool {
+        self.scroll.overflows()
+    }
+
+    /// Where `arrow` is drawn, while the page overflows.
+    #[must_use]
+    pub fn arrow_bounds(&self, arrow: ScrollArrow) -> Option<Bounds> {
+        self.scroll.arrow_bounds(arrow)
+    }
+
+    /// Lays the page out afresh, from its top, keeping the bindings.
+    fn relay(&mut self) {
+        self.scroll = self.scroll.relaid(self.layout().lines);
     }
 
     /// The page laid out down the panel, each line at its row: the rows
@@ -182,7 +222,7 @@ impl ConversationScreen {
         let mut place = |text: &str, color: Color, gap: f32| {
             let first = rows;
             for line in wrap(&self.metrics, FONT, SIZE, text, width) {
-                lines.push(Placed {
+                lines.push(PageLine {
                     text: line,
                     origin: Point::new(left, top + f32::from(rows) * step + gap),
                     color,
@@ -241,10 +281,14 @@ impl ConversationScreen {
                 if self.page.ended {
                     return Some(ConversationChoice::Close);
                 }
+                // A choice is taken where it is drawn: its laid-out box
+                // moved up by the scroll, inside what is shown.
+                let shown = self.scroll.shown_span()?;
+                let up = Point::new(0.0, -self.scroll.shift());
                 self.layout()
                     .choices
                     .iter()
-                    .position(|area| area.contains(at))
+                    .position(|area| shown.contains(at) && area.offset(up).contains(at))
                     .map(ConversationChoice::Choose)
             }
             _ => None,
@@ -253,11 +297,19 @@ impl ConversationScreen {
 }
 
 impl Screen for ConversationScreen {
-    /// Notes the choice or the close the input makes (see the module
-    /// docs), for [`ConversationScreen::take_choice`]. It never quits.
+    /// Scrolls the page, or notes the choice or the close the input makes
+    /// (see the module docs), for [`ConversationScreen::take_choice`]. A
+    /// press on a scroll arrow only scrolls, and a key takes its choice or
+    /// close before it scrolls. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        let pointer = matches!(input, Input::PointerButton { .. } | Input::Scroll { .. });
+        if pointer && self.scroll.input(input) {
+            return ScreenAction::None;
+        }
         if let Some(choice) = self.read(input) {
             self.choice = Some(choice);
+        } else if !pointer {
+            self.scroll.input(input);
         }
         ScreenAction::None
     }
@@ -267,9 +319,7 @@ impl Screen for ConversationScreen {
 
     fn draw(&self, list: &mut DrawList) {
         PanelBacking::NEW_GAME.draw(list, PANEL);
-        for line in self.layout().lines {
-            list.text_in(FONT, line.text, line.origin, SIZE, None, line.color);
-        }
+        self.scroll.draw(list);
     }
 }
 
@@ -702,5 +752,209 @@ mod tests {
         let before = texts(&screen);
         screen.tick(Duration::from_secs(1));
         assert_eq!(texts(&screen), before);
+    }
+
+    // A line longer than the panel.
+
+    /// One line of 800 numbered words: some 45 rows wrapped, more than the
+    /// 25 the panel's text area holds.
+    fn long_line() -> String {
+        (0..800)
+            .map(|n| format!("w{n:03}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// The long line's last row, as it wraps.
+    fn last_row() -> String {
+        wrap(
+            &MonoMetrics,
+            FONT,
+            SIZE,
+            &long_line(),
+            PANEL.width() - 2.0 * INSET,
+        )
+        .pop()
+        .expect("rows")
+    }
+
+    /// The long line with two choices, or ended.
+    fn long(ended: bool) -> ConversationScreen {
+        let choices: &[&str] = if ended { &[] } else { &["Take it", "Not now"] };
+        ConversationScreen::new(page(&[&long_line()], choices, ended), Rc::new(MonoMetrics))
+    }
+
+    fn drawn_text(screen: &ConversationScreen) -> Vec<String> {
+        texts(screen).into_iter().map(|(text, ..)| text).collect()
+    }
+
+    /// Gives `screen` `input` until `last` is drawn, at most 100 times:
+    /// how many it took. Takes no choice.
+    fn scroll_until(screen: &mut ConversationScreen, input: &Input, last: &str) -> usize {
+        for n in 0..100 {
+            if drawn_text(screen).iter().any(|text| text == last) {
+                return n;
+            }
+            screen.input(input);
+            assert_eq!(screen.take_choice(), None, "{input:?}");
+        }
+        panic!("never drew {last:?} by {input:?}");
+    }
+
+    /// Asserts every line drawn on `screen` lies inside the panel's text
+    /// area.
+    fn assert_inside(screen: &ConversationScreen) {
+        let step = MonoMetrics.line_height(FONT, SIZE);
+        for (text, origin, _) in texts(screen) {
+            assert!(origin.y >= PANEL.min.y + INSET, "{text}");
+            assert!(origin.y + step <= PANEL.max.y - INSET, "{text}");
+        }
+    }
+
+    fn down() -> Input {
+        Input::Key {
+            key: Key::ArrowDown,
+            pressed: true,
+            repeat: false,
+        }
+    }
+
+    #[test]
+    fn a_line_longer_than_the_panel_does_not_draw_its_last_row_or_choices_at_first() {
+        let screen = long(false);
+        let drawn = drawn_text(&screen);
+        assert!(!drawn.contains(&last_row()), "{drawn:?}");
+        assert!(!drawn.contains(&"1. Take it".to_owned()), "{drawn:?}");
+        assert!(screen.overflows());
+        assert_inside(&screen);
+    }
+
+    #[test]
+    fn down_presses_reach_the_line_s_end_and_the_choices() {
+        let mut screen = long(false);
+        assert!(scroll_until(&mut screen, &down(), "2. Not now") > 0);
+        assert!(drawn_text(&screen).contains(&last_row()));
+        assert_inside(&screen);
+        let repeat = Input::Key {
+            key: Key::ArrowUp,
+            pressed: true,
+            repeat: true,
+        };
+        screen.input(&repeat);
+        assert!(
+            drawn_text(&screen).contains(&"2. Not now".to_owned()),
+            "a repeat moves nothing"
+        );
+    }
+
+    #[test]
+    fn the_wheel_reaches_the_line_s_end_and_the_choices() {
+        let mut screen = long(false);
+        let notch = Input::Scroll {
+            delta: crate::input::ScrollDelta::Lines(1.0),
+            at: PANEL.center(),
+        };
+        assert!(scroll_until(&mut screen, &notch, "2. Not now") > 0);
+        assert!(drawn_text(&screen).contains(&last_row()));
+    }
+
+    #[test]
+    fn the_down_arrow_reaches_the_line_s_end_and_the_choices() {
+        let mut screen = long(false);
+        let arrow = screen
+            .arrow_bounds(crate::ui::scroll_arrows::ScrollArrow::Down)
+            .expect("a down arrow")
+            .center();
+        let press = Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at: arrow,
+        };
+        assert!(scroll_until(&mut screen, &press, "2. Not now") > 0);
+        assert!(drawn_text(&screen).contains(&last_row()));
+    }
+
+    #[test]
+    fn a_digit_takes_a_choice_scrolled_out_of_view() {
+        let mut screen = long(false);
+        assert!(!drawn_text(&screen).contains(&"2. Not now".to_owned()));
+        assert_eq!(
+            key(&mut screen, letter_key('2').unwrap(), false),
+            Some(ConversationChoice::Choose(1))
+        );
+    }
+
+    #[test]
+    fn a_click_takes_a_choice_where_it_is_drawn_and_not_where_it_was_laid_out() {
+        let mut screen = long(false);
+        let laid_out = ConversationScreen::new(
+            page(&[&long_line()], &["Take it", "Not now"], false),
+            Rc::new(MonoMetrics),
+        )
+        .layout()
+        .choices[0];
+        let at_its_place = Point::new(laid_out.min.x + 1.0, laid_out.min.y + 1.0);
+        assert_eq!(click(&mut screen, at_its_place), None, "scrolled out");
+        scroll_until(&mut screen, &down(), "2. Not now");
+        let (_, origin, _) = texts(&screen)
+            .into_iter()
+            .find(|(text, ..)| text == "1. Take it")
+            .expect("drawn");
+        assert_eq!(click(&mut screen, at_its_place), None, "not drawn there");
+        assert_eq!(
+            click(&mut screen, Point::new(origin.x + 1.0, origin.y + 1.0)),
+            Some(ConversationChoice::Choose(0))
+        );
+    }
+
+    #[test]
+    fn an_ended_long_page_closes_on_a_press_off_its_arrows_and_not_on_them() {
+        use crate::ui::scroll_arrows::ScrollArrow;
+        let mut screen = long(true);
+        for arrow in [ScrollArrow::Up, ScrollArrow::Down] {
+            let at = screen.arrow_bounds(arrow).expect("drawn").center();
+            assert_eq!(click(&mut screen, at), None, "{arrow:?}");
+        }
+        assert_eq!(
+            click(&mut screen, PANEL.center()),
+            Some(ConversationChoice::Close)
+        );
+    }
+
+    #[test]
+    fn a_new_page_or_notice_starts_from_the_top() {
+        let mut screen = long(false);
+        let top = drawn_text(&screen)[0].clone();
+        screen.input(&down());
+        assert_ne!(drawn_text(&screen)[0], top, "scrolled");
+        screen.set_page(page(&[&long_line()], &["Take it", "Not now"], false));
+        assert_eq!(drawn_text(&screen)[0], top, "a new page");
+        screen.input(&down());
+        screen.set_notice(Some("No room.".to_owned()));
+        assert_eq!(drawn_text(&screen)[0], top, "a new notice");
+    }
+
+    #[test]
+    fn a_rebound_down_scrolls_it() {
+        let bindings =
+            crate::keymap::SharedBindings::new(crate::keymap::Bindings::default().rebound(
+                crate::keymap::UiCommand::Down,
+                crate::keymap::KeyCombo::key(Key::KeyJ),
+            ));
+        let mut screen = long(false).with_bindings(bindings);
+        let top = drawn_text(&screen)[0].clone();
+        screen.input(&Input::Key {
+            key: Key::KeyJ,
+            pressed: true,
+            repeat: false,
+        });
+        assert_ne!(drawn_text(&screen)[0], top);
+        screen.set_page(page(&[&long_line()], &[], true));
+        screen.input(&Input::Key {
+            key: Key::KeyJ,
+            pressed: true,
+            repeat: false,
+        });
+        assert_ne!(drawn_text(&screen)[0], top, "a new page keeps the bindings");
     }
 }

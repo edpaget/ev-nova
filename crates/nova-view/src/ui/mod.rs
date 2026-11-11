@@ -63,6 +63,9 @@
 //! - [`panel`]: the new game's panel style
 //!   ([`PanelBacking`](panel::PanelBacking)), the opaque backing behind
 //!   the story log, the conversation and the new game's dialogs.
+//! - [`panel_scroll`]: a page of placed lines scrolled a row at a time
+//!   inside such a panel ([`PanelScroll`](panel_scroll::PanelScroll)), by
+//!   keys, wheel and arrows, which the story log and the conversation share.
 //! - [`mission_info`]: the key that asks for the mission info screen,
 //!   the shared play keys' Mission Info, as a key wait waits on it.
 //! - [`mission_dialogs`]: the mission texts and the mission info screen
@@ -109,6 +112,7 @@ pub mod note;
 mod own_keys;
 pub(crate) mod pad_focus;
 pub mod panel;
+pub mod panel_scroll;
 pub mod picker;
 pub mod picture_variant;
 pub mod planet_comm;
