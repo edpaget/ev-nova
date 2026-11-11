@@ -12,6 +12,7 @@
   },
   "factions": {
     "guild": 128,
+    "raider": 130,
     "warden": 129
   },
   "gates": {
@@ -41,6 +42,7 @@
     "cutter": 128,
     "hauler": 129,
     "racked-hauler": 131,
+    "raider-skiff": 132,
     "warden-picket": 130
   },
   "starts": {

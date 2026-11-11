@@ -8,11 +8,11 @@
 //!   fixture's numbers stay nova-data's.
 //! - **A hull's shield recharge.** A new pilot's hauler, its shields put
 //!   low, recharges them by its `shield_recharge: 300` a tick as the app
-//!   runs frames, up to full and not past it. No ship in the fixture
-//!   shoots the player, and a loaded pilot's shields are refilled as
+//!   runs frames, up to full and not past it. No armed ship flies in the
+//!   system this test flies in, and a loaded pilot's shields are refilled as
 //!   `_LoadPilotData` refills them, so nova-sim's
 //!   `fixture::set_player_shield` puts them low. The fixture's hulls that
-//!   name no recharge (the warden picket) aren't sold or started in, so
+//!   name no recharge (the warden picket, the raider skiff) aren't sold or started in, so
 //!   the player can't fly one.
 //!
 //! What each format word maps to is nova-data's (`nova_data::new_game`),
@@ -83,7 +83,7 @@ fn the_racked_hauler_s_racks_take_their_acceleration_off_the_hull_s() {
 }
 
 /// Sets the flying ship's shield points to `now` through nova-sim's
-/// published helper: no ship in the fixture shoots the player, and a
+/// published helper: no armed ship flies in this test's system, and a
 /// loaded pilot's shields are refilled, as `_LoadPilotData` refills them.
 fn set_shield(game: &mut Harness, now: f32) {
     game.app

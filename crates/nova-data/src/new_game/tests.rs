@@ -1878,7 +1878,7 @@ fn the_storylines_map_each_faction_to_its_govt() {
             .iter()
             .map(|(id, _)| id.as_str())
             .collect::<Vec<_>>(),
-        ["guild", "warden"]
+        ["guild", "raider", "warden"]
     );
 }
 

@@ -4,7 +4,10 @@
 //!
 //! # `folder()`
 //!
-//! It holds the factions `guild` and `warden`; the systems `drift`, of
+//! It holds the factions `guild`, with no relations, `warden`, the
+//! raiders' enemy, whose ships cost the player 5 to attack, 20 to
+//! disable and 40 to destroy, and `raider`, lawless, the wardens' enemy,
+//! whose warships attack the player on sight; the systems `drift`, of
 //! jump points alone, `hearth`, the guild's, and `verge`, ungoverned and
 //! in a `nebula`, the one hazard, so the port loop's flight to it is
 //! murky;
@@ -15,12 +18,15 @@
 //! `verge`, a dead pair between `verge` and `drift`, and `drift`'s
 //! one-way back door to `verge`); the civilian hull `hauler`, in guild
 //! paint, priced 4000 and sold nowhere, the crown hull `cutter`, bare,
-//! 50,000 at `hearth-dock`, and the wardens' crown hull `warden-picket`,
-//! in `warden-colours`, unpriced and unsold, all on a placeholder model,
+//! 50,000 at `hearth-dock`, the wardens' crown hull `warden-picket`,
+//! in `warden-colours`, and the raiders' union hull `raider-skiff`, in
+//! `raider-paint`, each unpriced and unsold, with a nose turret carrying
+//! a `mass-driver`, all on a placeholder model,
 //! the cutter and the hauler each naming every hull number (acceleration,
 //! fuel, crew, both recharges and a mass under 100, so every jump takes a
 //! day), the cutter a `turn` too and the hauler only its `handling` and a
-//! `gate_fuel` of 150, and the picket none, flying on the defaults;
+//! `gate_fuel` of 150, and the picket and the skiff none, flying on the
+//! defaults;
 //! the variant `racked-hauler`, the hauler with `cargo-racks` and a nose
 //! turret carrying a `mass-driver`, sold at `hearth-dock` for the
 //! hauler's price plus the racks' (6000), so the start can buy it; the

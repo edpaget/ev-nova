@@ -31,7 +31,8 @@ use nova_galaxy_format::fleet::Size;
 use nova_galaxy_media::BARE;
 
 /// The checked-in fixture (`new_game::fixture::folder`): one region; the
-/// factions `guild` and `warden`; the systems `drift` (jump points alone),
+/// factions `guild` (no relations), `warden` (with penalties) and `raider`
+/// (always attacking the player), the last two enemies; the systems `drift` (jump points alone),
 /// `hearth` (the guild's) and `verge` (ungoverned, in a nebula); four stellars:
 /// `hearth-dock`, a guild station with every service; `hearth-moon`, with
 /// none; `verge-camp`, a warden outpost with a bar, an exchange and
@@ -41,9 +42,10 @@ use nova_galaxy_media::BARE;
 /// points two of which lead from `hearth` to `verge`, a dead pair between
 /// `verge` and `drift`, and `drift`'s one-way back door to `verge`; the
 /// civilian hull `hauler` (4000, sold nowhere), the crown hull `cutter`
-/// (50,000 at `hearth-dock`), the two naming their hull numbers, and the
-/// wardens' crown hull `warden-picket` (unsold), naming none, in their
-/// colours, and the variant `racked-hauler`, the
+/// (50,000 at `hearth-dock`), the two naming their hull numbers, the
+/// wardens' crown hull `warden-picket` and the raiders' union hull
+/// `raider-skiff` (both unsold), naming none, each in its faction's
+/// colours with a turret mass driver, and the variant `racked-hauler`, the
 /// hauler with cargo racks and a turret mass driver, sold at
 /// `hearth-dock` with no price of its own; the outfits
 /// `dock-pass` and `mass-driver`, a turret sold at `hearth-dock`; the mod
@@ -177,7 +179,7 @@ fn the_fixture_maps_four_missions_two_news_items_and_nine_jump_points() {
 #[test]
 fn the_fixture_folder_holds_a_record_for_each_thing_it_maps() {
     let data = new_game::open(&fixture()).expect("lists").data;
-    assert_eq!(data.ids(Govt::TYPE), [128, 129]);
+    assert_eq!(data.ids(Govt::TYPE), [128, 129, 130]);
     assert_eq!(data.ids(System::TYPE), [128, 129, 130]);
     assert_eq!(
         data.ids(Stellar::TYPE),
@@ -187,20 +189,21 @@ fn the_fixture_folder_holds_a_record_for_each_thing_it_maps() {
     assert_eq!(
         data.ids(Desc::TYPE),
         [
-            128, 130, 140, 3000, 3001, 3002, 3003, 3004, 13000, 13001, 13002, 13003, 32767
+            128, 130, 140, 3000, 3001, 3002, 3003, 3004, 13000, 13001, 13002, 13003, 13004, 32767
         ],
         "the stellars with a body, the outfits and kits, the ships, then game.md"
     );
     assert_eq!(
         data.ids(Ship::TYPE),
-        [128, 129, 130, 131],
-        "the three hulls and the variant"
+        [128, 129, 130, 131, 132],
+        "the four hulls and the variant"
     );
-    assert_eq!(data.ids(ShipAnim::TYPE), [128, 129, 130, 131]);
+    assert_eq!(data.ids(ShipAnim::TYPE), [128, 129, 130, 131, 132]);
     assert_eq!(
         data.ids(Dude::TYPE),
         [128, 129],
-        "the civilian traffic, then the wardens' guards"
+        "the civilian traffic, then the wardens' guards: the raiders hold no point, so \
+         they have none"
     );
     assert_eq!(data.ids(Mission::TYPE), [128], "clear-the-road's blockade");
     assert_eq!(data.ids(Character::TYPE), [128], "the start");
@@ -390,6 +393,7 @@ fn the_cutter_and_the_racked_hauler_are_sold_at_hearth_dock_alone_and_the_hauler
     );
     assert_eq!(sale(&ship("hauler")), (4000, OUTFIT_TECH_NEVER, 0, 0));
     assert_eq!(sale(&ship("warden-picket")), (0, OUTFIT_TECH_NEVER, 0, 0));
+    assert_eq!(sale(&ship("raider-skiff")), (0, OUTFIT_TECH_NEVER, 0, 0));
     let spob = |stellar: &str| named::<Stellar>(&game.data, game.ids.stellars[&id(stellar)]).1;
     assert_eq!(
         special_tech(&spob("hearth-dock")),
@@ -528,6 +532,7 @@ fn each_hull_is_a_ship_with_its_size_and_the_civilian_one_is_traffic() {
             ("cutter".to_owned(), 128),
             ("hauler".to_owned(), 129),
             ("racked-hauler".to_owned(), 131),
+            ("raider-skiff".to_owned(), 132),
             ("warden-picket".to_owned(), 130)
         ]
     );
