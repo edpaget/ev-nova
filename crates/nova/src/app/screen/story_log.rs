@@ -41,6 +41,12 @@
 //! ([`FlightView::take_room_refusals`]) is told on that page
 //! ([`ConversationScreen::set_notice`](nova_view::spaceport::ConversationScreen::set_notice)).
 //!
+//! **Scrolling.** A log longer than its panel scrolls by the router's Up
+//! and Down (the log reads the router's bindings), by its arrows, and by
+//! the wheel under [`RuleKey::DialogTextWheel`](nova_sim::RuleKey::DialogTextWheel)'s
+//! other reading only, as the router drops every wheel under the
+//! engine's (`AppScreen::route`).
+//!
 //! A router with no metrics shows none of it. The spaceport dropped (a
 //! take-off, the pilot put away, the window closed) and flight dropped
 //! drop it, unclosed.
@@ -87,7 +93,7 @@ impl AppScreen {
             return false;
         };
         self.story_log = Some(OpenLog {
-            screen: StoryLogScreen::new(log, metrics),
+            screen: StoryLogScreen::new(log, metrics).with_bindings(self.bindings.clone()),
             then,
             news,
         });

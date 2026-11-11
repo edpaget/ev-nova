@@ -6,8 +6,10 @@
 //! mission's completion or offer, or the stellar's own, which the session
 //! picks. If there is one, the router shows it in a
 //! [`ConversationScreen`], laid out with the router's metrics (a router
-//! given none shows no conversation). While it is open it takes every
-//! input the spaceport would, and is drawn over it. Each choice goes back
+//! given none shows no conversation) and reading the router's bindings,
+//! so a rebound Up or Down scrolls a page longer than the panel. While it
+//! is open it takes every input the spaceport would, and is drawn over it.
+//! Each choice goes back
 //! to flight ([`FlightView::choose_in_conversation`]), and the next page
 //! shows; the ended page's close goes back too
 //! ([`FlightView::close_conversation`]), and the router asks for the next
@@ -45,7 +47,9 @@ impl AppScreen {
             return;
         };
         let page = self.flight.as_mut().and_then(FlightView::open_conversation);
-        self.conversation = page.map(|page| ConversationScreen::new(page, metrics));
+        let bindings = self.bindings.clone();
+        self.conversation =
+            page.map(|page| ConversationScreen::new(page, metrics).with_bindings(bindings));
         if self.conversation.is_some() {
             self.tell_room_refusals();
         } else {
@@ -66,7 +70,9 @@ impl AppScreen {
             .as_mut()
             .and_then(|flight| flight.open_bar_scene(index));
         if let Some(page) = page {
-            self.conversation = Some(ConversationScreen::new(page, metrics));
+            let screen =
+                ConversationScreen::new(page, metrics).with_bindings(self.bindings.clone());
+            self.conversation = Some(screen);
             self.tell_room_refusals();
         }
     }

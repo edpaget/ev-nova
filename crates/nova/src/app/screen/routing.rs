@@ -706,7 +706,10 @@ impl AppScreen {
     /// A wheel or trackpad scroll reaches no screen by the engine's
     /// reading of [`RuleKey::DialogTextWheel`], as the original takes no
     /// wheel; by the other it goes where a pointer input goes, and only a
-    /// dialog's scrolling text acts on it.
+    /// dialog's scrolling text acts on it, and the new game's story log
+    /// and conversation panel, which scroll their page with one (see the
+    /// `story_log` and `conversation` modules). The new game's profile
+    /// doesn't pin the key, so neither panel takes a wheel by default.
     pub(super) fn route(&mut self, input: &Input) -> ScreenAction {
         if matches!(input, Input::Scroll { .. })
             && self.rules.source_for(RuleKey::DialogTextWheel) == RuleSource::Engine
