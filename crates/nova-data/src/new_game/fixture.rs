@@ -35,12 +35,15 @@
 //! fuel, crew, both recharges and a mass under 100, so every jump takes a
 //! day), the cutter a `turn` too and the hauler only its `handling` and a
 //! `gate_fuel` of 150, and the picket and the skiff none, flying on the
-//! defaults;
+//! defaults; the raider skiff alone naming a `wreck` (a two-second
+//! break-up, the large explosion and two escape pods), the rest dying by
+//! the default wreck;
 //! the variant `racked-hauler`, the hauler with `cargo-racks` and a nose
 //! turret carrying a `mass-driver`, sold at `hearth-dock` for the
 //! hauler's price plus the racks' (6000), so the start can buy it; the
-//! variant `armoured-skiff`, the raider skiff with 450 hull, unsold, in
-//! the raiders' paint through its base, which the raider band flies; the
+//! variant `armoured-skiff`, the raider skiff with the `welded-plate` kit
+//! (450 hull with it), unsold, in the raiders' paint and dying by the
+//! raiders' wreck through its base, which the raider band flies; the
 //! outfits `dock-pass`, a Dock pass, and `mass-driver`, a turret weapon
 //! sold at `hearth-dock` alone (`sold_at`), so it is listed there only
 //! for a ship with a turret hardpoint; the legal mod kit `cargo-racks`,
@@ -50,7 +53,10 @@
 //! so only Verge Workshop fits it, and the legal kit `turret-ring`
 //! (1000), fitting freighters, which adds an empty turret hardpoint for
 //! four tons of cargo, so Hearth Dock fits it to the racked hauler and
-//! sells a second mass driver onto it; the start `dock-hand`, in the hauler
+//! sells a second mass driver onto it, and the lawless kit `welded-plate`
+//! (1500), fitting raiders, which adds 150 to the hull, so an NPC flying
+//! the armoured skiff holds its armour only where its default items count
+//! (the `NpcDefaultItems` rule); the start `dock-hand`, in the hauler
 //! in `hearth`; seven goods, the six standard ones `alloys` (400 a ton),
 //! `fuel-cells` (150), `grain` (100), `machinery` (600), `medicine` (800)
 //! and `textiles` (250), in slots 0 to 5, and the special good

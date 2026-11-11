@@ -36,8 +36,8 @@ use nova_galaxy_media::BARE;
 /// `hearth` (the guild's), `verge` (ungoverned, in a nebula) and `fringe`
 /// (ungoverned, reached from `drift` alone by one stable road, and the one
 /// system naming its traffic: the fleets `raider-band`, the raiders'
-/// warships flying `raider-skiff` and its armoured variant `armoured-skiff`,
-/// and `warden-patrol`, the wardens' interceptors flying `warden-picket`); four stellars:
+/// warships flying `raider-skiff` and its variant `armoured-skiff`, which
+/// carries the `welded-plate` kit, and `warden-patrol`, the wardens' interceptors flying `warden-picket`); four stellars:
 /// `hearth-dock`, a guild station with every service; `hearth-moon`, with
 /// none; `verge-camp`, a warden outpost with a bar, an exchange and
 /// no fuel; and `verge-workshop`, an unowned outpost, a lawless yard, with
@@ -49,12 +49,15 @@ use nova_galaxy_media::BARE;
 /// (50,000 at `hearth-dock`), the two naming their hull numbers, the
 /// wardens' crown hull `warden-picket` and the raiders' union hull
 /// `raider-skiff` (both unsold), naming none, each in its faction's
-/// colours with a turret mass driver, and the variant `racked-hauler`, the
+/// colours with a turret mass driver, the raider skiff alone naming a
+/// `wreck` (a two-second break-up, the large explosion and two pods; the
+/// rest die by the default), and the variant `racked-hauler`, the
 /// hauler with cargo racks and a turret mass driver, sold at
 /// `hearth-dock` with no price of its own; the outfits
 /// `dock-pass` and `mass-driver`, a turret sold at `hearth-dock`; the mod
 /// kits `cargo-racks` (legal, slowing the hull's acceleration), `gun-mount` (lawless, adding a turret
-/// hardpoint) and `turret-ring` (legal, adding a turret hardpoint); the
+/// hardpoint), `turret-ring` (legal, adding a turret hardpoint) and
+/// `welded-plate` (lawless, for a raider, adding 150 to its hull); the
 /// start `dock-hand`, in the hauler in `hearth`; the
 /// storyline `dock-work`,
 /// whose four missions and two news items run over the conversations of
@@ -197,8 +200,8 @@ fn the_fixture_folder_holds_a_record_for_each_thing_it_maps() {
     assert_eq!(
         data.ids(Desc::TYPE),
         [
-            128, 130, 140, 3000, 3001, 3002, 3003, 3004, 13000, 13001, 13002, 13003, 13004, 13005,
-            32767
+            128, 130, 140, 3000, 3001, 3002, 3003, 3004, 3005, 13000, 13001, 13002, 13003, 13004,
+            13005, 32767
         ],
         "the stellars with a body, the outfits and kits, the ships, then game.md"
     );
@@ -222,8 +225,9 @@ fn the_fixture_folder_holds_a_record_for_each_thing_it_maps() {
     assert_eq!(data.ids(Character::TYPE), [128], "the start");
     assert_eq!(
         data.ids(Outfit::TYPE),
-        [128, 129, 130, 131, 132],
-        "the dock pass, the cargo racks kit, the mass driver, the gun mount kit, then the turret ring kit"
+        [128, 129, 130, 131, 132, 133],
+        "the dock pass, the cargo racks kit, the mass driver, the gun mount kit, the turret ring \
+         kit, then the welded plate kit"
     );
     assert_eq!(data.ids(Weapon::TYPE), [128], "the mass driver");
     assert_eq!(
@@ -707,6 +711,74 @@ fn the_warden_picket_names_no_hull_numbers_and_flies_on_the_defaults() {
         "its speed, its handling, three jumps, one crew, no recharge, massless"
     );
     assert_eq!(picket.speed, 400);
+}
+
+/// `ship`'s `DeathDelay`, `Explode1`, `Explode2` and `PodCount`.
+fn wreck_of(ship: &Ship) -> [i16; 4] {
+    [
+        ship.death_delay,
+        ship.explode1,
+        ship.explode2,
+        ship.pod_count,
+    ]
+}
+
+#[test]
+fn the_raider_skiffs_die_by_the_raiders_wreck_and_the_rest_by_the_default() {
+    use nova_data::new_game::outfits::TICKS_PER_SECOND;
+    use nova_data::new_game::wrecks::{DEFAULT_BREAK_UP, LARGE_EXPLOSION, SMALL_EXPLOSION};
+
+    #[allow(clippy::cast_possible_truncation)]
+    let ticks = |seconds: f64| (seconds * TICKS_PER_SECOND).round() as i16;
+    let game = new_game::open(&fixture()).expect("lists");
+    let raiders = [ticks(2.0), SMALL_EXPLOSION, LARGE_EXPLOSION, 2];
+    assert_eq!(wreck_of(&fixture_ship(&game, "raider-skiff")), raiders);
+    assert_eq!(
+        wreck_of(&fixture_ship(&game, "armoured-skiff")),
+        raiders,
+        "inherited"
+    );
+    let default = [ticks(DEFAULT_BREAK_UP), SMALL_EXPLOSION, SMALL_EXPLOSION, 0];
+    for ship in ["warden-picket", "hauler", "cutter", "racked-hauler"] {
+        assert_eq!(wreck_of(&fixture_ship(&game, ship)), default, "{ship}");
+    }
+}
+
+#[test]
+fn the_armoured_skiff_carries_one_welded_plate_whose_slots_hold_its_armour() {
+    use nova_data::new_game::kits::{KIT_TECH_LAWLESS, mod_type};
+
+    let game = new_game::open(&fixture()).expect("lists");
+    let plate = game.ids.kits[&id("welded-plate")];
+    let armoured = fixture_ship(&game, "armoured-skiff");
+    assert_eq!(
+        (armoured.default_items1_4, armoured.item_count1_4),
+        (
+            [Some(nova_data::OutfitId(plate)), None, None, None],
+            [1, 0, 0, 0]
+        )
+    );
+    assert_eq!(armoured.default_items5_8, [None; 4]);
+    assert_eq!(
+        armoured.armor,
+        fixture_ship(&game, "raider-skiff").armor,
+        "the hull's own; the plate adds the rest"
+    );
+    let (name, kit) = named::<Outfit>(&game.data, plate);
+    assert_eq!(name, "Welded plate");
+    assert_eq!(kit.tech_level, KIT_TECH_LAWLESS);
+    assert_eq!(
+        [
+            (kit.mod_type, kit.mod_val),
+            (kit.mod_type2, kit.mod_val2),
+            (kit.mod_type3, kit.mod_val3),
+            (kit.mod_type4, kit.mod_val4),
+        ],
+        [(mod_type::MORE_ARMOR, 150), (-1, 0), (-1, 0), (-1, 0)]
+    );
+    let fits = |ship: &str| fixture_ship(&game, ship).contribute.bits() & kit.require.bits() != 0;
+    assert!(fits("raider-skiff") && fits("armoured-skiff"), "a raider");
+    assert!(!fits("hauler") && !fits("warden-picket"));
 }
 
 #[test]

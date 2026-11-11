@@ -11,6 +11,7 @@ hardpoints:
     mount: turret
     position: [0, 10]
     outfit: mass-driver
+wreck: {break_up: 2, explosion: large, pods: 2}
 ---
 
 A raider's gunboat, welded together and armed with a turret mass driver.

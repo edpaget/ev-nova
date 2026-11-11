@@ -35,7 +35,8 @@
   "kits": {
     "cargo-racks": 129,
     "gun-mount": 131,
-    "turret-ring": 132
+    "turret-ring": 132,
+    "welded-plate": 133
   },
   "outfits": {
     "dock-pass": 128,
