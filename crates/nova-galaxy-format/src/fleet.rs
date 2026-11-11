@@ -153,12 +153,61 @@ pub struct Stats {
     /// Top speed.
     #[serde(default)]
     pub speed: Option<u32>,
-    /// How well it turns and accelerates, 0 to 100.
+    /// How well it turns, 0 to 100: the coarse turn stat. It sets the turn
+    /// rate only when nobody in the chain gives `turn`.
     #[serde(default)]
     pub handling: Option<u32>,
     /// Tons of cargo.
     #[serde(default)]
     pub cargo: Option<u32>,
+    /// How fast it picks up speed, on `speed`'s scale: an acceleration
+    /// equal to its `speed` reaches top speed in 50 ticks. Left out, it is
+    /// the hull's `speed`.
+    #[serde(default)]
+    pub acceleration: Option<u32>,
+    /// Its turn rate in tenths of a degree a tick (10 is a degree a tick,
+    /// about 30° a second). Given anywhere in the chain, it wins over
+    /// `handling`. Left out, the turn rate is the `handling`.
+    #[serde(default)]
+    pub turn: Option<u32>,
+    /// The fuel it holds: 100 is one jump. Left out, 300.
+    #[serde(default)]
+    pub fuel: Option<u32>,
+    /// Its crew, a head count. Left out, 1.
+    #[serde(default)]
+    pub crew: Option<u32>,
+    /// How fast its shields regenerate, in thousandths of a point a tick
+    /// (300 is 0.3 a tick, 9 a second). Left out, 0: they don't.
+    #[serde(default)]
+    pub shield_recharge: Option<u32>,
+    /// How fast its hull repairs itself, in thousandths of a point a tick.
+    /// Left out, 0: it doesn't.
+    #[serde(default)]
+    pub hull_recharge: Option<u32>,
+    /// Its mass in tons, which sets how long a jump takes: under 100 is one
+    /// day, 100 to 199 two, 200 and up three. Left out, 0.
+    #[serde(default)]
+    pub mass: Option<u32>,
+}
+
+impl Stats {
+    /// These stats over `base`'s: each one this gives, else `base`'s.
+    fn over(self, base: Stats) -> Stats {
+        Stats {
+            hull: self.hull.or(base.hull),
+            shields: self.shields.or(base.shields),
+            speed: self.speed.or(base.speed),
+            handling: self.handling.or(base.handling),
+            cargo: self.cargo.or(base.cargo),
+            acceleration: self.acceleration.or(base.acceleration),
+            turn: self.turn.or(base.turn),
+            fuel: self.fuel.or(base.fuel),
+            crew: self.crew.or(base.crew),
+            shield_recharge: self.shield_recharge.or(base.shield_recharge),
+            hull_recharge: self.hull_recharge.or(base.hull_recharge),
+            mass: self.mass.or(base.mass),
+        }
+    }
 }
 
 /// A place on a hull where an outfit mounts.
@@ -265,6 +314,18 @@ pub struct Effects {
     /// How much more the law notices the ship: scans, suspicion.
     #[serde(default)]
     pub attention: u32,
+    /// Change to acceleration, on `speed`'s scale.
+    #[serde(default)]
+    pub acceleration: i32,
+    /// Change to fuel: 100 is one jump.
+    #[serde(default)]
+    pub fuel: i32,
+    /// Change to shield recharge, in thousandths of a point a tick.
+    #[serde(default)]
+    pub shield_recharge: i32,
+    /// Change to hull recharge, in thousandths of a point a tick.
+    #[serde(default)]
+    pub hull_recharge: i32,
 }
 
 /// An outfit (`outfits/<id>.md`): a weapon or system that fits a
@@ -351,7 +412,8 @@ pub struct Resolved<'a> {
     /// The chain's stats merged field by field, the nearest given winning,
     /// before any kit: a stat nobody in the chain gives is `None`.
     pub stats: Stats,
-    /// The stats with every kit's effects added. A stat nobody gives is 0.
+    /// The stats a kit can change, with every kit's effects added. A stat
+    /// nobody gives counts as 0.
     pub totals: Totals,
     /// What it costs: the nearest `price` in the chain, plus the price of
     /// every kit added below the ship that gave it (by the ship itself
@@ -370,8 +432,15 @@ pub struct Placed<'a> {
     pub from: &'a Id,
 }
 
-/// A finished ship's numbers, mods included. Signed, so a kit that takes
-/// away more than the hull has shows as negative.
+/// Each number a kit can change, with every kit's effects added. Signed,
+/// so a kit that takes away more than the hull has shows as negative.
+///
+/// A number nobody in the chain gives counts as 0 here, before the kits'
+/// effects are added. That differs from what a game falls back to for a
+/// hull that leaves the word out (its `speed` for `acceleration`, 300 for
+/// `fuel`): `acceleration` and `fuel` here are the chain's own value plus
+/// the kits', not what the hull flies with. `turn`, `crew` and `mass` are
+/// left out, since no kit changes them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Totals {
     /// Hull.
@@ -388,12 +457,54 @@ pub struct Totals {
     pub hidden_cargo: i64,
     /// How much the law notices it.
     pub attention: i64,
+    /// Acceleration.
+    pub acceleration: i64,
+    /// Fuel: 100 is one jump.
+    pub fuel: i64,
+    /// Shield recharge, in thousandths of a point a tick.
+    pub shield_recharge: i64,
+    /// Hull recharge, in thousandths of a point a tick.
+    pub hull_recharge: i64,
 }
 
 impl Totals {
+    /// The chain's merged `stats` before any kit, a stat nobody gives
+    /// counting as 0.
+    fn of(stats: Stats) -> Totals {
+        let value = |v: Option<u32>| i64::from(v.unwrap_or(0));
+        Totals {
+            hull: value(stats.hull),
+            shields: value(stats.shields),
+            speed: value(stats.speed),
+            handling: value(stats.handling),
+            cargo: value(stats.cargo),
+            hidden_cargo: 0,
+            attention: 0,
+            acceleration: value(stats.acceleration),
+            fuel: value(stats.fuel),
+            shield_recharge: value(stats.shield_recharge),
+            hull_recharge: value(stats.hull_recharge),
+        }
+    }
+
+    /// Adds one kit's effects.
+    fn add(&mut self, e: Effects) {
+        self.hull += i64::from(e.hull);
+        self.shields += i64::from(e.shields);
+        self.speed += i64::from(e.speed);
+        self.handling += i64::from(e.handling);
+        self.cargo += i64::from(e.cargo);
+        self.hidden_cargo += i64::from(e.hidden_cargo);
+        self.attention += i64::from(e.attention);
+        self.acceleration += i64::from(e.acceleration);
+        self.fuel += i64::from(e.fuel);
+        self.shield_recharge += i64::from(e.shield_recharge);
+        self.hull_recharge += i64::from(e.hull_recharge);
+    }
+
     /// Each total with its name, in a fixed order.
     #[must_use]
-    pub fn named(&self) -> [(&'static str, i64); 7] {
+    pub fn named(&self) -> [(&'static str, i64); 11] {
         [
             ("hull", self.hull),
             ("shields", self.shields),
@@ -402,6 +513,10 @@ impl Totals {
             ("cargo", self.cargo),
             ("hidden_cargo", self.hidden_cargo),
             ("attention", self.attention),
+            ("acceleration", self.acceleration),
+            ("fuel", self.fuel),
+            ("shield_recharge", self.shield_recharge),
+            ("hull_recharge", self.hull_recharge),
         ]
     }
 }
@@ -442,12 +557,7 @@ pub fn resolve<'a>(galaxy: &'a Galaxy, id: &Id) -> Result<Resolved<'a>, ResolveE
     let mut hardpoints: Vec<Placed<'a>> = Vec::new();
     let mut mods = Vec::new();
     for (ship_id, ship) in chain.iter().rev() {
-        let s = ship.stats;
-        stats.hull = s.hull.or(stats.hull);
-        stats.shields = s.shields.or(stats.shields);
-        stats.speed = s.speed.or(stats.speed);
-        stats.handling = s.handling.or(stats.handling);
-        stats.cargo = s.cargo.or(stats.cargo);
+        stats = ship.stats.over(stats);
         for hardpoint in &ship.hardpoints {
             let placed = Placed {
                 hardpoint,
@@ -463,25 +573,9 @@ pub fn resolve<'a>(galaxy: &'a Galaxy, id: &Id) -> Result<Resolved<'a>, ResolveE
         }
         mods.extend(ship.mods.iter().cloned());
     }
-    let value = |v: Option<u32>| i64::from(v.unwrap_or(0));
-    let mut totals = Totals {
-        hull: value(stats.hull),
-        shields: value(stats.shields),
-        speed: value(stats.speed),
-        handling: value(stats.handling),
-        cargo: value(stats.cargo),
-        hidden_cargo: 0,
-        attention: 0,
-    };
+    let mut totals = Totals::of(stats);
     for (kit_id, kit) in mods.iter().filter_map(|m| galaxy.mods.get_key_value(m)) {
-        let e = kit.data.effects;
-        totals.hull += i64::from(e.hull);
-        totals.shields += i64::from(e.shields);
-        totals.speed += i64::from(e.speed);
-        totals.handling += i64::from(e.handling);
-        totals.cargo += i64::from(e.cargo);
-        totals.hidden_cargo += i64::from(e.hidden_cargo);
-        totals.attention += i64::from(e.attention);
+        totals.add(kit.data.effects);
         hardpoints.extend(kit.data.hardpoints.iter().map(|hardpoint| Placed {
             hardpoint,
             from: kit_id,
@@ -601,6 +695,10 @@ mod tests {
             cargo: 5,
             hidden_cargo: 6,
             attention: 7,
+            acceleration: 8,
+            fuel: 9,
+            shield_recharge: 10,
+            hull_recharge: 11,
         };
         assert_eq!(
             totals.named(),
@@ -612,6 +710,10 @@ mod tests {
                 ("cargo", 5),
                 ("hidden_cargo", 6),
                 ("attention", 7),
+                ("acceleration", 8),
+                ("fuel", 9),
+                ("shield_recharge", 10),
+                ("hull_recharge", 11),
             ]
         );
     }
@@ -629,6 +731,39 @@ mod tests {
         assert_eq!(kit.effects.hull, 0);
         assert_eq!(kit.effects.attention, 2);
         assert_eq!(kit.hardpoints[0].mount, Mount::Turret);
+    }
+
+    #[test]
+    fn a_hull_reads_its_acceleration_turn_fuel_crew_recharges_and_mass() {
+        let ship: Ship = read(
+            "name: Hauler\nstats: {acceleration: 500, turn: 60, fuel: 400, crew: 3, \
+             shield_recharge: 300, hull_recharge: 50, mass: 80}\n",
+        )
+        .unwrap();
+        let s = ship.stats;
+        assert_eq!(
+            (s.acceleration, s.turn, s.fuel, s.crew),
+            (Some(500), Some(60), Some(400), Some(3))
+        );
+        assert_eq!(
+            (s.shield_recharge, s.hull_recharge, s.mass),
+            (Some(300), Some(50), Some(80))
+        );
+    }
+
+    #[test]
+    fn a_mod_kit_reads_its_acceleration_fuel_and_recharge_effects() {
+        let kit: ModKit = read(
+            "name: Tune\nfits: [shuttle]\nfitted_at: legal\nprice: 10\n\
+             effects: {acceleration: -50, fuel: 100, shield_recharge: 200, hull_recharge: 20}\n",
+        )
+        .unwrap();
+        let e = kit.effects;
+        assert_eq!(
+            (e.acceleration, e.fuel, e.shield_recharge, e.hull_recharge),
+            (-50, 100, 200, 20)
+        );
+        assert_eq!(e.speed, 0);
     }
 
     #[test]
@@ -749,7 +884,98 @@ mod tests {
                     speed: Some(500),
                     handling: None,
                     cargo: Some(4),
+                    acceleration: None,
+                    turn: None,
+                    fuel: None,
+                    crew: None,
+                    shield_recharge: None,
+                    hull_recharge: None,
+                    mass: None,
                 }
+            );
+        }
+
+        #[test]
+        fn a_variant_inherits_its_base_s_hull_numbers_and_overrides_those_it_gives() {
+            let galaxy = galaxy_with(&[
+                (
+                    "ships/heavy-skiff.md",
+                    "---\nname: Heavy skiff\nbase: skiff\nstats: {acceleration: 500, turn: 60, \
+                     fuel: 400, crew: 3, shield_recharge: 300, hull_recharge: 50, mass: 80}\n---\n",
+                ),
+                (
+                    "ships/heavier-skiff.md",
+                    "---\nname: Heavier skiff\nbase: heavy-skiff\nstats: {mass: 150}\n---\n",
+                ),
+            ]);
+            let s = resolve(&galaxy, &id("heavier-skiff")).unwrap().stats;
+            assert_eq!(
+                (s.acceleration, s.turn, s.fuel, s.crew),
+                (Some(500), Some(60), Some(400), Some(3))
+            );
+            assert_eq!(
+                (s.shield_recharge, s.hull_recharge, s.mass),
+                (Some(300), Some(50), Some(150))
+            );
+        }
+
+        #[test]
+        fn a_variant_naming_only_handling_keeps_its_base_s_turn() {
+            let galaxy = galaxy_with(&[
+                (
+                    "ships/turning-skiff.md",
+                    "---\nname: Turning skiff\nbase: skiff\nstats: {turn: 60}\n---\n",
+                ),
+                (
+                    "ships/handy-skiff.md",
+                    "---\nname: Handy skiff\nbase: turning-skiff\nstats: {handling: 80}\n---\n",
+                ),
+            ]);
+            let s = resolve(&galaxy, &id("handy-skiff")).unwrap().stats;
+            assert_eq!((s.turn, s.handling), (Some(60), Some(80)));
+        }
+
+        #[test]
+        fn a_kit_adds_its_acceleration_fuel_and_recharge_effects_to_the_totals() {
+            let galaxy = galaxy_with(&[
+                (
+                    "mods/tune-kit.md",
+                    "---\nname: Tune kit\nfits: [shuttle]\nfitted_at: legal\nprice: 10\n\
+                     effects: {acceleration: -50, fuel: 100, shield_recharge: 200, \
+                     hull_recharge: 20}\n---\n",
+                ),
+                (
+                    "ships/tuned-skiff.md",
+                    "---\nname: Tuned\nbase: skiff\nstats: {acceleration: 360, fuel: 400, \
+                     shield_recharge: 300}\nmods: [tune-kit]\n---\n",
+                ),
+            ]);
+            let t = resolve(&galaxy, &id("tuned-skiff")).unwrap().totals;
+            assert_eq!(
+                (t.acceleration, t.fuel, t.shield_recharge, t.hull_recharge),
+                (310, 500, 500, 20),
+                "a recharge nobody gives counts as 0"
+            );
+        }
+
+        #[test]
+        fn a_total_nobody_in_the_chain_gives_counts_as_0_not_the_game_s_default() {
+            let galaxy = galaxy_with(&[
+                (
+                    "mods/slow-kit.md",
+                    "---\nname: Slow kit\nfits: [shuttle]\nfitted_at: legal\nprice: 10\n\
+                     effects: {acceleration: -50}\n---\n",
+                ),
+                (
+                    "ships/slow-skiff.md",
+                    "---\nname: Slow\nbase: skiff\nstats: {speed: 300}\nmods: [slow-kit]\n---\n",
+                ),
+            ]);
+            let t = resolve(&galaxy, &id("slow-skiff")).unwrap().totals;
+            assert_eq!(
+                (t.acceleration, t.fuel),
+                (-50, 0),
+                "not speed - 50, not 300"
             );
         }
 
@@ -819,6 +1045,10 @@ mod tests {
                     cargo: 10,
                     hidden_cargo: 4,
                     attention: 0,
+                    acceleration: 0,
+                    fuel: 0,
+                    shield_recharge: 0,
+                    hull_recharge: 0,
                 }
             );
         }
