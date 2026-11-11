@@ -80,7 +80,9 @@
 //!   [`RuleKey::GateCourse`]'s engine reading every exit restarts the
 //!   course, so the first exit is the end;
 //! - a final refusal of its own press, one it can't fly through:
-//!   `NotLandable`, `Denied`, `CannotPayFee`, `Cloaked` or `Disabled`.
+//!   `NotLandable`, `Denied`, `CannotPayFee`, `GateFuelShort` (the new
+//!   game's fare for a hypergate's passage, see the `gate_fuel` module,
+//!   which J's engaging doesn't check), `Cloaked` or `Disabled`.
 //!   `TooFar` and `TooFast` only mean "keep flying", and the pilot never
 //!   asks for a press they would answer;
 //! - a hypergate's entry refused (`Cancelled`, `NoLinks`), or a
@@ -302,6 +304,7 @@ fn ends_on(refusal: LandingRefusal) -> bool {
         LandingRefusal::NotLandable { .. }
             | LandingRefusal::Denied { .. }
             | LandingRefusal::CannotPayFee { .. }
+            | LandingRefusal::GateFuelShort { .. }
             | LandingRefusal::Cloaked
             | LandingRefusal::Disabled
     )
@@ -1102,6 +1105,45 @@ pub(in crate::session) mod tests {
             ),
             "{answer:?}"
         );
+        assert!(!session.gate_pilot_engaged());
+    }
+
+    #[test]
+    fn short_of_a_passages_fuel_its_entering_press_is_refused_and_it_lets_go() {
+        let session = coursed(RuleSource::Bible, &[HEARTH, VERGE]);
+        let rules = session
+            .setup
+            .rules
+            .with_override(RuleKey::GateFuel, RuleSource::Bible);
+        let mut session = session.with_rules(rules);
+        session.pilot.reserves.fuel.now = 0.0;
+        session.pilot_controls(Controls::default());
+        assert!(matches!(
+            land(&mut session),
+            Answer::LandPress(LandPress::Outcome(
+                crate::landing::LandOutcome::Requested { .. }
+            ))
+        ));
+        assert!(
+            session.gate_pilot_engaged(),
+            "the request is not the gate's"
+        );
+        session.dock_approach();
+        session.pilot_controls(Controls::default());
+        assert_eq!(shown(&session).map(|shown| shown.press_land), Some(true));
+        session.take_sounds();
+        let answer = land(&mut session);
+        assert!(
+            matches!(
+                answer,
+                Answer::LandRefused {
+                    refusal: LandingRefusal::GateFuelShort { .. },
+                    ..
+                }
+            ),
+            "{answer:?}"
+        );
+        assert!(session.take_sounds().contains(&SimSound::Refused));
         assert!(!session.gate_pilot_engaged());
     }
 

@@ -543,6 +543,7 @@ mod game_work;
 mod gate_desc;
 mod gate_escorts;
 mod gate_follow;
+mod gate_fuel;
 #[cfg(test)]
 mod gate_partner;
 mod gate_pilot;
@@ -3787,6 +3788,9 @@ impl Session {
         }
         let outcome = self.apply_press(press)?;
         if let LandOutcome::Landed(stellar) = outcome {
+            // The new game's fare for a hypergate's passage, before its
+            // fee (see the `gate_fuel` module).
+            self.gate_fuel_refusal(stellar)?;
             // Before the branch on the stellar's kind (@0x66db9-0x66df5),
             // so a gate's entry pays it too.
             self.chart.charge_fee(stellar, &mut self.pilot);
@@ -3931,7 +3935,9 @@ impl Session {
     /// ends the entry and turns the nav system off, as the original's
     /// `_PlayerEnterHypergate` does as it ends (@0x63fa2-0x63faa); a
     /// refusal otherwise changes nothing. See [`Session::enter_wormhole`]
-    /// for the arrival. An exit from a jump point's gate meets no
+    /// for the arrival. By [`RuleKey::GateFuel`]'s other reading an exit
+    /// pays the hull's fare out of its fuel first, and a refusal pays
+    /// none (see the `gate_fuel` module). An exit from a jump point's gate meets no
     /// `take_point` mission: beating the holder's guards does (see the
     /// `blockades` module).
     ///
@@ -3952,6 +3958,9 @@ impl Session {
             .ok_or(GateRefusal::NotAtGate)?;
         let exit = self.hypergate_route(here, to, &catalog.gate_sites());
         let entered = exit.map(|(system, exit)| {
+            // The new game's fare, out of the hull that entered (see the
+            // `gate_fuel` module).
+            self.ship.pay_gate_fuel(&mut self.pilot, &self.setup);
             self.come_out(here, system, &exit, GateKind::Hypergate, catalog, chance);
             let system = self.pilot.system;
             self.space
@@ -3988,7 +3997,9 @@ impl Session {
     /// the exit gate, as [`emerge`] says, with no day passing; like a jump,
     /// where a jump between the two systems arrives, with a jump's days
     /// passing, each stepping the planetary events on `chance`. Either way
-    /// no fuel is used, the minimum jump distance does not count, and the
+    /// no fuel is used (a hypergate's fare, by [`RuleKey::GateFuel`]'s
+    /// other reading, is paid before, see [`Session::enter_hypergate`]),
+    /// the minimum jump distance does not count, and the
     /// ship is in the new system, explored, its stellars read, with the
     /// course cleared and the nav selection let go, its thrust stopped,
     /// populated with its traffic ([`Session::populate`]), even when it is
