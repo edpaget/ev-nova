@@ -435,7 +435,46 @@ fn ammunition_that_failed_to_load_is_not_reported_again() {
     assert_eq!(weapon(&game, "rocket").ammo_type, -1);
 }
 
+#[test]
+fn ammunition_past_the_last_outfit_id_has_no_rounds_to_fire() {
+    // 510 harmless outfits, the blaster and the rack fill the 512 `oütf`
+    // IDs; the seekers, last by id, are left out.
+    let source = (0..510).fold(racked(), |source, n| {
+        source.with(&format!("outfits/a{n:03}.md"), &harmless("A", "fixed", ""))
+    });
+    let game = loaded(&source);
+    assert!(!game.ids.outfits.contains_key(&id("seekers")));
+    assert!(
+        problems(&game).contains(
+            &"outfits/seekers.md: it is past the last oütf ID, 639; it is left out".to_owned()
+        ),
+        "{:?}",
+        problems(&game)
+    );
+    assert_eq!(weapon(&game, "rocket").ammo_type, -1, "no rounds to spend");
+    assert_eq!(
+        slot(&ship(&game, "skiff"), weapon_id(&game, "rocket")),
+        (2, 0)
+    );
+}
+
 // Bays.
+
+#[test]
+fn a_hull_carrying_a_bay_that_names_no_fighters_is_still_launched() {
+    let game = loaded(&carrying().with("outfits/hold.md", &bay("Hold", "")).with(
+        "ships/drone.md",
+        &format!(
+            "---\nname: Drone\nstyle: crown\nrole: fighter\nmodel: hull\n\
+                 size: {{length: 4, beam: 2, collision_radius: 2}}\n\
+                 hardpoints:\n{}---\n",
+            hardpoint("hold", "bay", "hold")
+        ),
+    ));
+    assert_eq!(against(&game, "outfits/drone-bay.md"), Vec::<String>::new());
+    assert!(game.ids.weapons.contains_key(&id("drone-bay")));
+    assert_eq!(ship(&game, "drone").escort_type, FIGHTER_ESCORT);
+}
 
 #[test]
 fn a_bay_naming_fighters_is_a_secondary_launching_its_hull() {
