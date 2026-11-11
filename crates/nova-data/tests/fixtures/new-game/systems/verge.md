@@ -2,6 +2,7 @@
 name: Verge
 region: rim
 map: [300, -120]
+hazards: [nebula]
 jump_points:
   - id: hearth-road
     position: [-1200, 0]

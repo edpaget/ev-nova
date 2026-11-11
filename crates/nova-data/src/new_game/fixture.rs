@@ -5,7 +5,9 @@
 //! # `folder()`
 //!
 //! It holds the factions `guild` and `warden`; the systems `drift`, of
-//! jump points alone, `hearth`, the guild's, and `verge`, ungoverned;
+//! jump points alone, `hearth`, the guild's, and `verge`, ungoverned and
+//! in a `nebula`, the one hazard, so the port loop's flight to it is
+//! murky;
 //! the stellars `hearth-dock`, `hearth-moon`, `verge-camp` and
 //! `verge-workshop`, an unowned outpost with an outfitter and fuel, so a
 //! lawless yard; jump
@@ -105,7 +107,8 @@ pub fn folder() -> PathBuf {
 /// It holds the factions `commonwealth`, `association`, `harrow-band` and
 /// `marrow-commons`, the last two lawless; the regions `commonwealth-rim` and
 /// `association-border`; the systems `luyten-crossing` (the
-/// commonwealth's), `brightwater` (the association's) and `marrow`, with
+/// commonwealth's, clear), `brightwater` (the association's, its one
+/// hazard `sensor-dead`) and `marrow` (its one hazard a `nebula`), with
 /// the sample's jump points between them alone: the Luyten road
 /// (`luyten-crossing/association-road` to `brightwater/luyten-road`), the
 /// Marrow road (`luyten-crossing/marrow-road` to `marrow/luyten-road`) and

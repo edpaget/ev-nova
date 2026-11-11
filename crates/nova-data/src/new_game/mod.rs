@@ -20,6 +20,7 @@
 //! | `nova-ids.json` | every record's ID ([`pins`], [`ids`]) | the Nova ID each record keeps, by kind and bible id (a blockade's by its `take_point` mission's id); written only by `nova-dump --pin-ids` |
 //! | `factions/` | `gövt` | its `name` as `CommName`; `color` and `ship_color` from `color`, as `00RRGGBB`; one that keeps the law (not `lawless`) `SmugPenalty` [`kits::LAW_SMUGGLE_PENALTY`], `ScanFine` [`kits::LAW_SCAN_FINE`] and `ScanMask` [`kits::LAWLESS_KIT_SCAN`], placeholders, so its scans find a lawless kit; a lawless one none |
 //! | `systems/` | `sÿst` | `x_pos`/`y_pos` from `map`; `govt` from `government`; `nav_def` its stellars, then its gates, each in ID order; the civilian traffic; no `con` links |
+//! | a system's `hazards` | `sÿst` ([`hazards`]) | `nebula` sets `Murk` [`hazards::NEBULA_MURK`] and `sensor-dead` sets `Interference` [`hazards::SENSOR_DEAD_INTERFERENCE`], both placeholders; a system naming both gets both, and a word named twice counts once; `radiation`, `ion-storm`, `solar-flares` and `gravity-well` are not read |
 //! | `stellars/` | `spöb` | `x_pos`/`y_pos` from `position`; `govt` from `owner`; `flags` from `services` and `kind` ([`records::stellar_flags`]); no `hyper_link`s; a law-keeping owner's `TechLevel` [`kits::YARD_TECH_LEGAL`] and `MinStatus` 0, a lawless owner's or an unowned one's `TechLevel` [`kits::YARD_TECH_LAWLESS`] and `MinStatus` [`records::ANY_RECORD`]; `SpecialTech` the tech numbers of the outfits and hulls sold there, ascending, `-1` for an unused slot ([`yards`]) |
 //! | `goods/`, the standard ones | `STR#` 4000, 4001, 4003 and 4004 ([`goods`]) | the first six goods by the ID table, each in its slot: the name, lower-cased, with a `:` (placeholders), and its `price` as text; six entries each, empty for an unused slot; none when no good takes a slot |
 //! | `goods/`, the rest | `jünk` ([`goods`]) | named for the good: `BasePrice` its `price`, `LCName` its name lower-cased, `Abbrev` its name, blank `BuyOn` and `SellOn`, no flags and no `ScanMask` |
@@ -174,9 +175,15 @@
 //!   `Subtitle`, a faction's `TargetCode` (an abbreviation) and its
 //!   `MediumName`, which only reinforcements read, and the new game has
 //!   none. Each stays blank.
-//! - `regions/` and `harshness`, and a system's `hazards`: Nova has no
-//!   region record, and hazards belong to a later hazards phase (nebulae,
-//!   murk, interference). They stay readable on the loaded `Galaxy`.
+//! - `regions/` and `harshness` (a region's, and a system's override):
+//!   Nova has no region record, and no `sÿst` field carries a harshness.
+//!   They stay readable on the loaded `Galaxy`.
+//! - The hazards `radiation`, `ion-storm`, `solar-flares` and
+//!   `gravity-well`: no `sÿst` field carries them, nor does the engine
+//!   have a system-wide shield drain, ion storm or scheduled sweep; the
+//!   nearest to a gravity well is a `spöb`'s `Gravity`, which belongs to
+//!   one stellar ([`hazards`]). The loader reports nothing for them, and
+//!   they stay readable on the loaded `Galaxy`.
 //! - A kit's `hidden_cargo`: nothing in the new game is contraband cargo
 //!   yet. A kit's `attention` is read only as "any": how much more 2 is
 //!   noticed than 1 waits for the bible's law numbers.
@@ -221,6 +228,7 @@ pub mod fixture;
 pub mod fleet;
 pub mod gates;
 pub mod goods;
+pub mod hazards;
 pub mod ids;
 pub mod interface;
 pub mod kits;

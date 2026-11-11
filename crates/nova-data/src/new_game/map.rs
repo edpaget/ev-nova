@@ -31,7 +31,7 @@ use super::records::{
     stellar_flags,
 };
 use super::yards::{self, SPECIAL_TECH_SLOTS, Sales};
-use super::{blockades, descriptions, gates, goods, strings};
+use super::{blockades, descriptions, gates, goods, hazards, strings};
 use crate::decode::Entry;
 use crate::records::govt::Govt;
 use crate::records::stellar::Stellar;
@@ -327,6 +327,7 @@ fn system(
         prob[0] = 100;
         avg_ships = TRAFFIC_SHIPS;
     }
+    let hazards::Effects { murk, interference } = hazards::effects(&doc.data.hazards);
     let system = System {
         x_pos,
         y_pos,
@@ -334,6 +335,8 @@ fn system(
         dude_types,
         prob,
         avg_ships,
+        murk,
+        interference,
         govt: govt(
             galaxy,
             ids,

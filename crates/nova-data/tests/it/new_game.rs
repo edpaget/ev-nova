@@ -32,7 +32,7 @@ use nova_galaxy_media::BARE;
 
 /// The checked-in fixture (`new_game::fixture::folder`): one region; the
 /// factions `guild` and `warden`; the systems `drift` (jump points alone),
-/// `hearth` (the guild's) and `verge` (ungoverned); four stellars:
+/// `hearth` (the guild's) and `verge` (ungoverned, in a nebula); four stellars:
 /// `hearth-dock`, a guild station with every service; `hearth-moon`, with
 /// none; `verge-camp`, a warden outpost with a bar, an exchange and
 /// no fuel; and `verge-workshop`, an unowned outpost, a lawless yard, with
@@ -255,6 +255,18 @@ fn the_systems_are_placed_governed_and_hold_their_stellars_then_gates_with_no_li
     assert_eq!((verge.x_pos, verge.y_pos), (300, -120));
     assert_eq!(verge.govt, None);
     assert_eq!(ids(&verge.nav_def), [130, 140, 137, 138, 139]);
+    assert_eq!(
+        (verge.murk, verge.interference),
+        (new_game::hazards::NEBULA_MURK, 0),
+        "the Verge's nebula"
+    );
+    for system in [&drift, &hearth] {
+        assert_eq!(
+            (system.murk, system.interference),
+            (0, 0),
+            "no hazard, clear"
+        );
+    }
     for system in [drift, hearth, verge] {
         assert_eq!(system.con, [None; 16], "the jump points are not links");
         assert_eq!(system.dude_types[0], 128, "the civilian traffic");
@@ -923,6 +935,21 @@ fn the_sample_folder_loads_without_problems() {
     let problems: Vec<_> = game.problems.iter().map(ToString::to_string).collect();
     assert_eq!(problems, Vec::<String>::new());
     assert_eq!(game.lfs_pointers, Vec::<String>::new());
+}
+
+#[test]
+fn the_sample_s_marrow_is_murky_brightwater_sensor_dead_and_its_start_clear() {
+    let game = new_game::open(&new_game::fixture::sample_folder()).expect("lists");
+    let hazards = |system: &str| {
+        let (_, record) = named::<System>(&game.data, game.ids.systems[&id(system)]);
+        (record.murk, record.interference)
+    };
+    assert_eq!(hazards("marrow"), (new_game::hazards::NEBULA_MURK, 0));
+    assert_eq!(
+        hazards("brightwater"),
+        (0, new_game::hazards::SENSOR_DEAD_INTERFERENCE)
+    );
+    assert_eq!(hazards("luyten-crossing"), (0, 0), "the start, clear");
 }
 
 #[test]

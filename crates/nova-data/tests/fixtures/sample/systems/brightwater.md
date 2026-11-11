@@ -3,6 +3,7 @@ name: Brightwater
 region: association-border
 government: association
 map: [0, 160]
+hazards: [sensor-dead]
 jump_points:
   - id: luyten-road
     position: [1500, -250]

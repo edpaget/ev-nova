@@ -3,6 +3,7 @@ name: Marrow
 region: commonwealth-rim
 government: commonwealth
 map: [300, 340]
+hazards: [nebula]
 jump_points:
   - id: far-gate
     position: [-1400, -500]

@@ -365,6 +365,83 @@ fn no_system_has_a_hyperspace_link() {
     }
 }
 
+// Hazards.
+
+/// The fixture galaxy with `beta` carrying the YAML `extra` lines before
+/// its jump points.
+fn beta_with(extra: &str) -> MemSource {
+    galaxy().with(
+        "systems/beta.md",
+        &format!(
+            "---\nname: Beta\nregion: rim\nmap: [200, 50]\n{extra}jump_points:\n\
+             \x20 - id: to-alpha\n    position: [-100, 0]\n    to: alpha/to-beta\n    \
+             stability: unstable\n    owner: league\n---\n"
+        ),
+    )
+}
+
+/// `beta`'s `sÿst` with the `extra` lines, after asserting it loads
+/// without problems.
+fn beta_loaded_with(extra: &str) -> System {
+    let game = loaded(&beta_with(extra));
+    assert_eq!(problems(&game), Vec::<String>::new(), "{extra}");
+    system(&game, 129)
+}
+
+#[test]
+fn beta_rewritten_with_nothing_extra_is_the_fixture_s_beta() {
+    assert_eq!(beta_loaded_with(""), system(&loaded(&galaxy()), 129));
+}
+
+#[test]
+fn a_nebula_sets_the_system_s_murk_and_no_interference() {
+    let beta = beta_loaded_with("hazards: [nebula]\n");
+    assert_eq!((beta.murk, beta.interference), (hazards::NEBULA_MURK, 0));
+}
+
+#[test]
+fn sensor_dead_sets_the_system_s_interference_and_no_murk() {
+    let beta = beta_loaded_with("hazards: [sensor-dead]\n");
+    assert_eq!(
+        (beta.murk, beta.interference),
+        (0, hazards::SENSOR_DEAD_INTERFERENCE)
+    );
+}
+
+#[test]
+fn a_nebula_and_sensor_dead_set_both() {
+    let beta = beta_loaded_with("hazards: [nebula, sensor-dead]\n");
+    assert_eq!(
+        (beta.murk, beta.interference),
+        (hazards::NEBULA_MURK, hazards::SENSOR_DEAD_INTERFERENCE)
+    );
+}
+
+#[test]
+fn a_nebula_named_twice_is_one_nebula() {
+    assert_eq!(
+        beta_loaded_with("hazards: [nebula, nebula]\n"),
+        beta_loaded_with("hazards: [nebula]\n")
+    );
+}
+
+#[test]
+fn a_hazard_with_no_field_loads_the_system_as_without_it() {
+    let clear = beta_loaded_with("");
+    for word in ["radiation", "ion-storm", "solar-flares", "gravity-well"] {
+        assert_eq!(
+            beta_loaded_with(&format!("hazards: [{word}]\n")),
+            clear,
+            "{word}"
+        );
+    }
+}
+
+#[test]
+fn a_system_s_harshness_loads_the_system_as_without_it() {
+    assert_eq!(beta_loaded_with("harshness: 5\n"), beta_loaded_with(""));
+}
+
 // Jump points.
 
 #[test]
