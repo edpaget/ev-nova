@@ -93,6 +93,15 @@
 //! and
 //! [`RuleKey::DeparturesThroughGates`](crate::RuleKey::DeparturesThroughGates)
 //! draw among.
+//!
+//! By the other reading of [`RuleKey::GateFuel`](crate::RuleKey::GateFuel)
+//! a ship that can't pay its hull's fare for a hypergate passage
+//! ([`gate_fuel::affords`](crate::gate_fuel::affords)) finds no hypergate
+//! ok, under every branch, as a closed one is never ok; a wormhole costs
+//! nothing. Its caller says so per ship ([`candidates_within`]'s
+//! `pays_gates`), and an arriving ship always pays: arrivals cost nothing.
+//! The original reads no fuel there: an NPC's gate entry
+//! (`_HighLevelAIHandler` state 20, @0x8db5f-0x8dd5e) reads none.
 
 use crate::catalog::{GovtId, LandingSite, StellarId};
 use crate::chance::Chance;
@@ -147,12 +156,15 @@ pub fn candidates<'s>(
     govts: &Governments,
     admit: Admit,
 ) -> Vec<&'s LandingSite> {
-    candidates_within(govt, sites, govts, admit, RuleSource::Engine)
+    candidates_within(govt, sites, govts, admit, RuleSource::Engine, true)
 }
 
 /// The stellars among `sites` that `_SelectRandomStellarDest` picks among
 /// for a ship of `govt`, admitting `admit`, within `reach`
-/// ([`within_reach`]), in order (see the module docs).
+/// ([`within_reach`]), in order (see the module docs). A ship that can't
+/// pay a hypergate's fare (`pays_gates` false; see
+/// [`gate_fuel::affords`](crate::gate_fuel::affords)) finds no hypergate
+/// ok, as a closed one is never ok.
 #[must_use]
 pub fn candidates_within<'s>(
     govt: Option<GovtId>,
@@ -160,12 +172,14 @@ pub fn candidates_within<'s>(
     govts: &Governments,
     admit: Admit,
     reach: RuleSource,
+    pays_gates: bool,
 ) -> Vec<&'s LandingSite> {
     let ok: Vec<&LandingSite> = sites
         .iter()
         .filter(|site| {
             is_landable(site)
                 && !site.gate_closed
+                && (pays_gates || GateKind::of(site.flags2) != Some(GateKind::Hypergate))
                 && within_reach(site, reach)
                 && !govts.npc_enemies(govt, site.govt)
         })
@@ -214,9 +228,10 @@ pub fn candidates_within<'s>(
 }
 
 /// The gates among `sites` a ship of `govt` may use, within `reach`: the
-/// hypergates and wormholes among its [`candidates`] admitting
+/// hypergates and wormholes among its [`candidates_within`] admitting
 /// [`Admit::All`], in order, so its government's `Flags2` choose among them
-/// as they do for a destination. What the other readings of
+/// as they do for a destination, and no hypergate unless `pays_gates`.
+/// What the other readings of
 /// [`RuleKey::ArrivalsThroughGates`](crate::RuleKey::ArrivalsThroughGates)
 /// and
 /// [`RuleKey::DeparturesThroughGates`](crate::RuleKey::DeparturesThroughGates)
@@ -227,27 +242,30 @@ pub fn usable_gates<'s>(
     sites: &'s [LandingSite],
     govts: &Governments,
     reach: RuleSource,
+    pays_gates: bool,
 ) -> Vec<&'s LandingSite> {
-    candidates_within(govt, sites, govts, Admit::All, reach)
+    candidates_within(govt, sites, govts, Admit::All, reach, pays_gates)
         .into_iter()
         .filter(|site| GateKind::of(site.flags2).is_some())
         .collect()
 }
 
 /// One of the [`usable_gates`] among `sites` for a ship of `govt` within
-/// `reach`, drawn uniformly on `chance`, leaving out `exclude` when another
-/// gate is usable. `None`, drawing nothing, when no gate is usable. The
-/// one draw arrivals and departures through gates share.
+/// `reach`, paying a hypergate's fare as `pays_gates` says, drawn
+/// uniformly on `chance`, leaving out `exclude` when another gate is
+/// usable. `None`, drawing nothing, when no gate is usable. The one draw
+/// arrivals and departures through gates share.
 #[must_use]
 pub fn draw_usable_gate<'s>(
     govt: Option<GovtId>,
     sites: &'s [LandingSite],
     govts: &Governments,
     reach: RuleSource,
+    pays_gates: bool,
     exclude: Option<StellarId>,
     chance: &mut (impl Chance + ?Sized),
 ) -> Option<&'s LandingSite> {
-    let usable = usable_gates(govt, sites, govts, reach);
+    let usable = usable_gates(govt, sites, govts, reach, pays_gates);
     let others: Vec<_> = usable
         .iter()
         .copied()
@@ -387,7 +405,7 @@ mod tests {
     /// The IDs of the candidates among `sites` for an independent ship,
     /// within `reach`.
     fn reached(sites: &[LandingSite], reach: RuleSource) -> Vec<i16> {
-        candidates_within(None, sites, &govts(), Admit::All, reach)
+        candidates_within(None, sites, &govts(), Admit::All, reach, true)
             .into_iter()
             .map(|site| site.id.0)
             .collect()
@@ -439,7 +457,7 @@ mod tests {
             unlandable,
         ];
         let usable = |govt, reach| -> Vec<i16> {
-            usable_gates(govt, &sites, &govts(), reach)
+            usable_gates(govt, &sites, &govts(), reach, true)
                 .into_iter()
                 .map(|site| site.id.0)
                 .collect()
@@ -511,7 +529,7 @@ mod tests {
         assert_eq!(pick(140), [129], "hypergates preferred");
         assert_eq!(pick(128), [128, 129], "the default branch");
         assert_eq!(ids(None, &sites, Admit::All), [128, 129]);
-        let usable: Vec<i16> = usable_gates(None, &sites, &govts(), RuleSource::Bible)
+        let usable: Vec<i16> = usable_gates(None, &sites, &govts(), RuleSource::Bible, true)
             .into_iter()
             .map(|site| site.id.0)
             .collect();
@@ -522,7 +540,62 @@ mod tests {
             [128],
             "no ok hypergate: the rest"
         );
-        assert!(usable_gates(None, &only_closed, &govts(), RuleSource::Bible).is_empty());
+        assert!(usable_gates(None, &only_closed, &govts(), RuleSource::Bible, true).is_empty());
+    }
+
+    /// The IDs of the candidates among `sites` for a ship of `govt` that
+    /// can pay a hypergate's fare or not, as `pays` says, anywhere.
+    fn paying(govt: Option<GovtId>, sites: &[LandingSite], admit: Admit, pays: bool) -> Vec<i16> {
+        candidates_within(govt, sites, &govts(), admit, RuleSource::Bible, pays)
+            .into_iter()
+            .map(|site| site.id.0)
+            .collect()
+    }
+
+    #[test]
+    fn a_ship_that_cannot_pay_its_fare_finds_no_hypergate_under_any_branch() {
+        let sites = [planet(128, 0.0, 0.0), hypergate(129), wormhole(130)];
+        let short = |govt| paying(Some(GovtId(govt)), &sites, Admit::All, false);
+        assert_eq!(short(140), [128], "hypergates preferred: the rest");
+        assert_eq!(short(128), [128], "the default branch");
+        assert_eq!(short(141), [130], "a wormhole costs nothing");
+        assert_eq!(short(143), [130], "wormholes first");
+        assert_eq!(paying(None, &sites, Admit::All, false), [128]);
+        assert_eq!(paying(None, &sites, PLAIN, false), [128], "plain only");
+        // Able to pay, nothing changes.
+        assert_eq!(paying(Some(GovtId(140)), &sites, Admit::All, true), [129]);
+        assert_eq!(paying(None, &sites, Admit::All, true), [128, 129]);
+        let usable = |pays| -> Vec<i16> {
+            usable_gates(None, &sites, &govts(), RuleSource::Bible, pays)
+                .into_iter()
+                .map(|site| site.id.0)
+                .collect()
+        };
+        assert!(usable(false).is_empty(), "no wormhole for an independent");
+        assert_eq!(usable(true), [129]);
+        let wormholer: Vec<i16> = usable_gates(
+            Some(GovtId(141)),
+            &sites,
+            &govts(),
+            RuleSource::Bible,
+            false,
+        )
+        .into_iter()
+        .map(|site| site.id.0)
+        .collect();
+        assert_eq!(wormholer, [130], "a wormhole stays usable");
+        let mut chance = nova_sim_base::fixture::Draws::of(&[0]);
+        let drawn = draw_usable_gate(
+            None,
+            &sites,
+            &govts(),
+            RuleSource::Bible,
+            false,
+            None,
+            &mut chance,
+        );
+        assert_eq!(drawn, None);
+        assert!(chance.asked.is_empty(), "nothing drawn");
     }
 
     fn drawn(
@@ -537,6 +610,7 @@ mod tests {
             sites,
             &govts(),
             reach,
+            true,
             exclude.map(StellarId),
             &mut chance,
         )

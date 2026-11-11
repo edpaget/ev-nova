@@ -461,6 +461,7 @@ fn the_traffic_steps_and_spawns_in_worlds_holding_the_rulebooks_gate_readings() 
             RuleKey::DestinationReach,
             RuleKey::ArrivalsThroughGates,
             RuleKey::DeparturesThroughGates,
+            RuleKey::GateFuel,
         ]
         .into_iter()
         .fold(Rulebook::default(), |rules, key| {
@@ -472,11 +473,13 @@ fn the_traffic_steps_and_spawns_in_worlds_holding_the_rulebooks_gate_readings() 
                 world.destination_reach,
                 world.arrivals_through_gates,
                 world.departures_through_gates,
+                world.gate_fuel,
             )
         };
-        assert_eq!(readings(&session.world()), (source, source, source));
+        let all = (source, source, source, source);
+        assert_eq!(readings(&session.world()), all);
         let entered = session.world_in(session.system());
-        assert_eq!(readings(&entered), (source, source, source));
+        assert_eq!(readings(&entered), all);
         let stellars = entered.stellars();
         assert_eq!(
             (stellars.rules.reach, stellars.rules.through_gates),
@@ -484,6 +487,6 @@ fn the_traffic_steps_and_spawns_in_worlds_holding_the_rulebooks_gate_readings() 
         );
         let mut flown = None;
         session.step_traffic(|_, world| flown = Some(readings(&world)));
-        assert_eq!(flown, Some((source, source, source)));
+        assert_eq!(flown, Some(all));
     }
 }

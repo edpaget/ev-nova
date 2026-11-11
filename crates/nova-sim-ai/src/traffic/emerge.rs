@@ -178,9 +178,11 @@ pub fn emerge_stellar<'s>(
     chance: &mut (impl Chance + ?Sized),
 ) -> Option<&'s LandingSite> {
     if rules.through_gates == RuleSource::Bible {
-        return destination::draw_usable_gate(govt, sites, govts, rules.reach, None, chance);
+        // An arrival pays no fare (see the `destination` module).
+        return destination::draw_usable_gate(govt, sites, govts, rules.reach, true, None, chance);
     }
-    let candidates = destination::candidates_within(govt, sites, govts, Admit::All, rules.reach);
+    let candidates =
+        destination::candidates_within(govt, sites, govts, Admit::All, rules.reach, true);
     if !candidates
         .iter()
         .any(|site| GateKind::of(site.flags2).is_some())

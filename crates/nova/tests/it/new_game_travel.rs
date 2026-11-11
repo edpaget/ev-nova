@@ -334,9 +334,10 @@ pub(crate) fn nova_of<K: ToString>(table: &std::collections::BTreeMap<K, i16>, i
     nova
 }
 
-/// The gates among `system`'s stellars an independent ship may pick to
-/// come out of or leave by, as `rules` read the reach: what the traffic's
-/// gate picks draw among (`nova_sim::traffic::destination::usable_gates`).
+/// The gates among `system`'s stellars an independent ship with the fuel
+/// for its fare may pick to come out of or leave by, as `rules` read the
+/// reach: what the traffic's gate picks draw among
+/// (`nova_sim::traffic::destination::usable_gates`).
 pub(crate) fn usable_gates(
     data: &GameData,
     rules: &Rulebook,
@@ -344,7 +345,7 @@ pub(crate) fn usable_gates(
 ) -> BTreeSet<StellarId> {
     let sites = data.landing_sites(system);
     let reach = rules.source_for(RuleKey::DestinationReach);
-    usable(None, &sites, &Governments::empty(), reach)
+    usable(None, &sites, &Governments::empty(), reach, true)
         .into_iter()
         .map(|site| site.id)
         .collect()

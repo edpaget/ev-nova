@@ -778,6 +778,10 @@ pub struct Surroundings<'a> {
     /// gate, by
     /// [`RuleKey::DeparturesThroughGates`](crate::RuleKey::DeparturesThroughGates).
     pub departures_through_gates: RuleSource,
+    /// Whether a hypergate passage costs fuel, so a ship holding less than
+    /// its fare finds no hypergate open to it ([`pays_gates`]), by
+    /// [`RuleKey::GateFuel`](crate::RuleKey::GateFuel).
+    pub gate_fuel: RuleSource,
     /// Which odds the odds' readers read ([`odds::cached_odds`]): each
     /// ship's cached odds ([`Npc::odds`]) by the engine, worked out fresh
     /// by the other reading, by
@@ -888,6 +892,7 @@ impl<'a> Surroundings<'a> {
             jump_fuel: RuleSource::Engine,
             destination_reach: RuleSource::Engine,
             departures_through_gates: RuleSource::Engine,
+            gate_fuel: RuleSource::Engine,
             odds_cache: RuleSource::Engine,
             led_speed: 1.0,
             weapons: &NO_WEAPONS,
@@ -1451,6 +1456,15 @@ pub fn idle(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
         .unwrap_or_else(|| idle_block::leave_or_wait(npc, around, chance))
 }
 
+/// Whether `npc` can pay its hull's fare for a hypergate passage with the
+/// fuel it holds, as `around` reads [`RuleKey::GateFuel`](crate::RuleKey::GateFuel)
+/// ([`gate_fuel::affords`](crate::gate_fuel::affords)): what its
+/// destination pick and its leave through a gate admit hypergates by.
+#[must_use]
+pub fn pays_gates(npc: &Npc, around: &Surroundings) -> bool {
+    crate::gate_fuel::affords(npc.reserves.fuel.now, &npc.stats, around.gate_fuel)
+}
+
 /// A stellar picked at random for `npc` among those `around` lists, shown
 /// or not ([`Surroundings::listed`]), admitting `admit`, as
 /// `_SelectRandomStellarDest` picks over the system's `NavDefs`
@@ -1470,6 +1484,7 @@ pub(crate) fn random_stellar(
         around.govts,
         admit,
         around.destination_reach,
+        pays_gates(npc, around),
     );
     if candidates.is_empty() {
         return None;

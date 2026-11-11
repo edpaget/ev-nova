@@ -81,6 +81,12 @@
 //!   still waits. It reaches every type whose block leaves through
 //!   [`leave_or_wait`]: the traders, the warship, the interceptor's
 //!   patrol, which picks no gate as a destination, and the pirate.
+//! - **A hypergate's fare** ([`RuleKey::GateFuel`](crate::RuleKey::GateFuel)'s
+//!   other reading): a ship holding less fuel than its hull's fare
+//!   ([`pays_gates`](super::pays_gates)) finds no hypergate among its
+//!   picks, its leave's gates or its pick's write, so with no other
+//!   candidate it leaves as the engine has it: by hyperspace if it can
+//!   jump, else it waits. A wormhole costs nothing.
 //!
 //! None of these blocks plays a sound. +0x92 and +0x6c are 16-bit there;
 //! not replicated.
@@ -99,7 +105,7 @@
 //! - The emerge's gate-index test (@0x8952d): every stellar passes it.
 
 use crate::ai::travel::{self, TravelWrite};
-use crate::ai::{Admit, Goal, Surroundings, leave, random_stellar, trader_keep};
+use crate::ai::{Admit, Goal, Surroundings, leave, pays_gates, random_stellar, trader_keep};
 use crate::catalog::StellarId;
 use crate::chance::Chance;
 use crate::rulebook::RuleSource;
@@ -146,6 +152,7 @@ fn gate_out(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Option
         around.listed,
         around.govts,
         around.destination_reach,
+        pays_gates(npc, around),
         npc.visited,
         chance,
     )
@@ -242,6 +249,7 @@ pub fn pick_write(npc: &Npc, around: &Surroundings, thought: Goal) -> TravelWrit
         around.govts,
         Admit::All,
         around.destination_reach,
+        pays_gates(npc, around),
     )
     .first()
     .map_or(TravelWrite::Clear, |site| TravelWrite::Set(site.id))
@@ -605,6 +613,142 @@ mod tests {
             Goal::EnterGate(StellarId(300)),
             "within the other reach"
         );
+    }
+
+    // The other reading of `GateFuel`.
+
+    /// `npc` with a hull whose gate fuel is 150, holding `fuel`.
+    fn fuelled(fuel: f32, npc: &Npc) -> Npc {
+        let mut npc = Npc {
+            stats: ShipStats::new(
+                nova_sim_base::ShipFields {
+                    gate_fuel: Some(150),
+                    ..FAST
+                },
+                &[],
+            ),
+            ..npc.clone()
+        };
+        npc.reserves.fuel.now = fuel;
+        npc
+    }
+
+    /// `sites` around a ship that leaves through gates, a passage costing
+    /// fuel as `gate_fuel` reads.
+    fn paying(sites: &[LandingSite], gate_fuel: RuleSource) -> Surroundings<'_> {
+        Surroundings {
+            gate_fuel,
+            ..through_gates(sites)
+        }
+    }
+
+    #[test]
+    fn short_of_its_fare_a_ship_neither_heads_for_nor_leaves_by_a_hypergate() {
+        let sites = [gate_at(300, 0.0)];
+        let around = paying(&sites, RuleSource::Bible);
+        for npc in [ship(), out_of(300)] {
+            // A draw is there to take, were the gate a candidate.
+            let mut chance = Draws::of(&[0]);
+            assert_eq!(
+                idle(&fuelled(120.0, &npc), &around, &mut chance),
+                Goal::JumpOut,
+                "{:?}",
+                npc.visited
+            );
+            assert!(chance.asked.is_empty(), "no gate to draw");
+            let mut chance = Draws::of(&[0]);
+            assert_eq!(
+                idle(&stranded(fuelled(120.0, &npc)), &around, &mut chance),
+                Goal::Wait
+            );
+            assert!(chance.asked.is_empty());
+        }
+    }
+
+    #[test]
+    fn with_its_fare_or_by_the_engine_a_ship_takes_the_hypergate() {
+        let sites = [gate_at(300, 0.0)];
+        for (fuel, reading) in [(150.0, RuleSource::Bible), (120.0, RuleSource::Engine)] {
+            let around = paying(&sites, reading);
+            for npc in [ship(), out_of(300)] {
+                let mut chance = Draws::of(&[0]);
+                assert_eq!(
+                    idle(&fuelled(fuel, &npc), &around, &mut chance),
+                    Goal::EnterGate(StellarId(300)),
+                    "{fuel} by {reading:?}, {:?}",
+                    npc.visited
+                );
+                assert_eq!(chance.asked, [1]);
+            }
+        }
+    }
+
+    #[test]
+    fn short_of_its_fare_the_pick_finds_no_hypergate_to_write() {
+        let npc = holding(ship(), Goal::Idle);
+        let flee = Goal::Flee(crate::combat::ShipRef::Player);
+        let sites = [gate_at(300, 0.0)];
+        assert_eq!(
+            pick_write(
+                &fuelled(120.0, &npc),
+                &paying(&sites, RuleSource::Bible),
+                flee
+            ),
+            TravelWrite::Clear
+        );
+        assert_eq!(
+            pick_write(
+                &fuelled(150.0, &npc),
+                &paying(&sites, RuleSource::Bible),
+                flee
+            ),
+            TravelWrite::Set(StellarId(300))
+        );
+        assert_eq!(
+            pick_write(
+                &fuelled(120.0, &npc),
+                &paying(&sites, RuleSource::Engine),
+                flee
+            ),
+            TravelWrite::Set(StellarId(300))
+        );
+    }
+
+    #[test]
+    fn short_of_its_fare_a_ship_still_takes_a_wormhole_or_lands() {
+        let wormhole = LandingSite {
+            flags2: crate::gate::WORMHOLE,
+            ..planet(310, 0.0, 0.0)
+        };
+        let govts = crate::govt::Governments::new([crate::catalog::GovtRecord {
+            flags2: crate::govt::PREFERS_WORMHOLES,
+            ..nova_sim_catalog::fixture::govt(128)
+        }]);
+        let sites = [gate_at(300, 0.0), wormhole];
+        let around = Surroundings {
+            govts: &govts,
+            ..paying(&sites, RuleSource::Bible)
+        };
+        let npc = Npc {
+            govt: Some(crate::catalog::GovtId(128)),
+            ..fuelled(120.0, &ship())
+        };
+        let mut chance = Draws::of(&[0]);
+        assert_eq!(
+            idle(&npc, &around, &mut chance),
+            Goal::EnterGate(StellarId(310))
+        );
+        let sites = [gate_at(300, 0.0), planet(128, 0.0, 0.0)];
+        let mut chance = Draws::of(&[0]);
+        assert_eq!(
+            idle(
+                &fuelled(120.0, &ship()),
+                &paying(&sites, RuleSource::Bible),
+                &mut chance
+            ),
+            Goal::Land(StellarId(128))
+        );
+        assert_eq!(chance.asked, [1], "the planet alone");
     }
 
     #[test]

@@ -792,6 +792,11 @@ pub struct World<'a> {
     /// reading
     /// ([`RuleKey::DeparturesThroughGates`](crate::RuleKey::DeparturesThroughGates)).
     pub departures_through_gates: RuleSource,
+    /// Whether a hypergate passage costs an NPC its hull's fare, so one
+    /// holding less finds no hypergate open to it
+    /// ([`pays_gates`](crate::ai::pays_gates)), by
+    /// [`RuleKey::GateFuel`](crate::RuleKey::GateFuel).
+    pub gate_fuel: RuleSource,
     /// Which odds the odds' readers read
     /// ([`cached_odds`](crate::ai::odds::cached_odds)): the cache's by the
     /// engine, fresh by the other reading
@@ -975,6 +980,7 @@ impl<'a> World<'a> {
             destination_reach: RuleSource::Engine,
             arrivals_through_gates: RuleSource::Engine,
             departures_through_gates: RuleSource::Engine,
+            gate_fuel: RuleSource::Engine,
             odds_cache: RuleSource::Engine,
             refuel_cap: RuleSource::Engine,
             cloak_on_reload: RuleSource::Engine,
@@ -1060,6 +1066,7 @@ impl<'a> World<'a> {
             jump_fuel: self.npc_jump_fuel,
             destination_reach: self.destination_reach,
             departures_through_gates: self.departures_through_gates,
+            gate_fuel: self.gate_fuel,
             odds_cache: self.odds_cache,
             led_speed: self.led_speed,
             weapons: self.weapons,
