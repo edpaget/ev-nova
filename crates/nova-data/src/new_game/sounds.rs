@@ -224,22 +224,35 @@ fn clip(
         ));
         None
     };
-    if !file.is_export() {
-        return silent("isn't under media/export/".to_owned());
-    }
-    let bytes = match source.bytes(file.as_str()) {
+    let bytes = match export_bytes(file, source) {
         Ok(Some(bytes)) => bytes,
-        Ok(None) => return silent("isn't there".to_owned()),
-        Err(error) => return silent(format!("couldn't be read ({error})")),
+        Ok(None) => return None,
+        Err(why) => return silent(why),
     };
-    if is_lfs_pointer(&bytes) {
-        return None;
-    }
     match decode_wav(&bytes) {
         Ok(pcm) if pcm.frames() > 0 => Some(bytes),
         Ok(_) => silent("holds no samples".to_owned()),
         Err(error) => silent(format!("doesn't decode as a WAV file ({error})")),
     }
+}
+
+/// The bytes of a sound's `file`, read from `source`: none when they are
+/// a Git LFS pointer, which the load lists among the pointers; otherwise,
+/// when the file isn't under `media/export/`, isn't there or can't be
+/// read, why, for the caller to report with what follows from it.
+pub(super) fn export_bytes(
+    file: &nova_galaxy_format::id::MediaPath,
+    source: &impl Source,
+) -> Result<Option<Vec<u8>>, String> {
+    if !file.is_export() {
+        return Err("isn't under media/export/".to_owned());
+    }
+    let bytes = match source.bytes(file.as_str()) {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => return Err("isn't there".to_owned()),
+        Err(error) => return Err(format!("couldn't be read ({error})")),
+    };
+    Ok((!is_lfs_pointer(&bytes)).then_some(bytes))
 }
 
 /// `bööm` 128 and 129 ([`BOOMS`]), each playing [`EXPLOSION`], when

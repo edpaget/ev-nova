@@ -1,5 +1,6 @@
 # The tests compare the bodies as text: keep LF line endings on every
 # checkout, Windows included.
 * text eol=lf
-# The sounds' clips are bytes: no line-ending conversion.
+# The sounds' clips and the music are bytes: no line-ending conversion.
 *.wav binary
+*.mp3 binary

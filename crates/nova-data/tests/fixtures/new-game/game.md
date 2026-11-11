@@ -1,5 +1,6 @@
 ---
 name: Hearth and Verge
+music: hearth-theme
 sounds:
   button_down: click-down
   button_up: click-up

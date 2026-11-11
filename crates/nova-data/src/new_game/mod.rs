@@ -49,6 +49,7 @@
 //! | `sounds/` | the store's sound files ([`sounds`], [`GameData::sound_files`]) | each clip a weapon or a role needs, read once and checked as a WAV file of at least one frame, its bytes at every `snd ` ID it fills; every other ID silent |
 //! | an outfit's `sound` | its `wëap` `Sound`, and a weapon sound ID ([`sounds`], [`ids::WEAPON_SOUND_IDS`]) | the sound numbered within 200 to 299, in sound id order, pinned by the sound's id (`sounds`); `Sound` that ID less 200, so the weapon fires its clip; left out, -1, silent; read only on a weapon |
 //! | `game.md`'s `sounds` | the store's sound files at the engine's cues, and `bööm` 128 and 129 ([`sounds`]) | `button_down` at `snd ` 600, `button_up` 601, `landing` 151 (the traffic controller's beep and the touchdown), `refused` 153 (the refusal beep), `gate_passage` 130 (an arrival), `explosion` 300, each event sharing a cue playing its clip; with an `explosion`, both explosions supplied as `bööm`s playing it, drawn as nothing; a role left out silent |
+//! | `game.md`'s `music` | the store's soundtrack ([`music`], [`GameData::soundtrack`]) | its `sounds/` entry's `.mp3` bytes, played where the stock game plays `Nova Music.mp3` (the main menu, until a pilot enters); none named, no music |
 //! | a launcher's `guidance` and `ammunition` | `wëap` `Guidance`, `GuidedTurn`, `AmmoType` and `Flags`, the ammunition's `oütf`, and each carrying `shïp`'s `AmmoLoad` ([`munitions`], [`outfits`]) | `homing` as `Guidance` 1 with `GuidedTurn` [`outfits::HOMING_TURN`] (a placeholder), `unguided` -1; an `ammunition` outfit with an `oütf` that is no weapon as the rounds of the lowest-ID launcher `wëap` naming it: each such launcher's `AmmoType` that `wëap` less 128 and `Flags` secondary, and the ammunition's first `ModType` 3 naming it; its `load` a hardpoint, times the slot's `WeapCount`, held within `i16`, as `AmmoLoad`, the chain's and the as-built kits' hardpoints alike |
 //! | a bay's `fighters` | a fighter bay `wëap`, a fighters `oütf`, each carrier's `AmmoLoad` and the hull's `EscortType` ([`munitions`]) | a `hull` that is a mapped ship carrying no bay with `fighters` makes the bay a weapon: `Guidance` 99, `AmmoType` the hull's `shïp`, `Flags` secondary; its fighters an `oütf` numbered after the kits, pinned by the bay's id, named for the hull, `ModType` 3 naming the bay's `wëap`, of no cost, never sold; its `load` a hardpoint, times the slot's `WeapCount`, as `AmmoLoad`; the hull `EscortType` 0, a fighter, every other -1 |
 //! | `mods/` | `oütf` ([`kits`]) | unpinned, numbered after the unpinned outfits; its `name` as `ShortName` and lower-cased as `LCName`; `Cost` from `price`; `Max` 1, `BuyRandom` 100, hidden unless it fits; its effects in the four `ModType` slots, `acceleration`, `fuel`, `shield_recharge` and `hull_recharge` among them; its `fits` as a `Require` bit; its hardpoints' mount bits as `Contribute`; `fitted_at` as `TechLevel` and, lawless, `ScanMask`; its hardpoints' outfits given by `OnPurchase` and taken back by `OnSell` |
@@ -198,6 +199,12 @@
 //!   be read, doesn't decode as a WAV file or holds no samples is silent,
 //!   reported against the sound with the decoder's error; one that is an
 //!   LFS pointer is silent, and listed with the pointers ([`sounds`]).
+//! - `game.md`'s `music` naming a sound that isn't in `sounds/` is
+//!   reported against `game.md`; a music sound whose file isn't an
+//!   `.mp3`, isn't under `media/export/`, isn't there or can't be read is
+//!   reported against the sound. Either way the game plays no music; one
+//!   that is an LFS pointer plays none, and is listed with the pointers
+//!   ([`music`]).
 //!
 //! A reference to a file that failed to load, or to a record left out for
 //! its ID, isn't reported again; a stellar in such a system is left out
@@ -313,6 +320,7 @@ mod map;
 pub mod missions;
 pub mod mounts;
 pub mod munitions;
+pub mod music;
 pub mod outfits;
 pub mod pins;
 pub mod records;
@@ -388,8 +396,8 @@ pub fn open(dir: &Path) -> Result<NewGame, ListError> {
 /// the format's loader, the ID table ([`pins`]), the LFS check over its
 /// media, the mapping under the table's pins, then the stand-ins
 /// ([`looks`]) and the mounts ([`mounts`]), whose models are read from
-/// `source` too, each once, and the sounds' clips ([`sounds`]), each once.
-/// It never writes the table.
+/// `source` too, each once, the sounds' clips ([`sounds`]), each once, and
+/// the music ([`music`]). It never writes the table.
 pub fn load(source: &impl Source, dir: &Path) -> NewGame {
     let (galaxy, mut problems) = nova_galaxy_format::load::load(source);
     let pins = pins::read(source, &mut problems);
@@ -415,19 +423,24 @@ pub fn load(source: &impl Source, dir: &Path) -> NewGame {
     let dialogs = dialogs::read(&galaxy, &ids, &compiled, &mut problems);
     let storylines = missions::map(&galaxy, &ids, &compiled, &mut problems);
     let sound_files = sounds::read(&galaxy, &ids, source, &mut problems);
+    let soundtrack = music::read(&galaxy, source, &mut problems);
+    let data = GameData::from_decoded(dir.to_path_buf(), records)
+        .with_stand_ins(stand_ins)
+        .with_ship_lines(ship_lines)
+        .with_star_dots(looks::STAR_DOTS.to_vec())
+        .with_dialogs(dialogs)
+        .with_storylines(storylines)
+        .with_fittings(fittings)
+        .with_collision_radii(collision_radii)
+        .with_gate_fuels(gate_fuels)
+        .with_mounts(mounted.mounts)
+        .with_muzzle_reaches(mounted.muzzle_reaches)
+        .with_sound_files(sound_files);
     NewGame {
-        data: GameData::from_decoded(dir.to_path_buf(), records)
-            .with_stand_ins(stand_ins)
-            .with_ship_lines(ship_lines)
-            .with_star_dots(looks::STAR_DOTS.to_vec())
-            .with_dialogs(dialogs)
-            .with_storylines(storylines)
-            .with_fittings(fittings)
-            .with_collision_radii(collision_radii)
-            .with_gate_fuels(gate_fuels)
-            .with_mounts(mounted.mounts)
-            .with_muzzle_reaches(mounted.muzzle_reaches)
-            .with_sound_files(sound_files),
+        data: match soundtrack {
+            Some(track) => data.with_soundtrack(track.into()),
+            None => data,
+        },
         ids,
         problems,
         lfs_pointers,

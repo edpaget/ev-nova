@@ -123,8 +123,11 @@
 //! `blast` as the explosion, which brings `bööm` 128 and 129; it leaves
 //! the refusal empty on purpose, so it is silent. Each `sounds/*.md` body
 //! says how its clip was made (Python's `wave` and `math` modules, once;
-//! no test makes them). The folder's `.gitattributes` keeps the clips
-//! binary.
+//! no test makes them). A seventh, `hearth-theme`, is the music
+//! `game.md`'s `music` names: `media/export/sounds/hearth-theme.mp3`,
+//! eight silent MP3 frames, its body giving the Python one-liner that
+//! wrote it once, with no encoder. The folder's `.gitattributes` keeps the
+//! clips and the track binary.
 //!
 //! Each folder holds its ID table, `nova-ids.json`
 //! ([`pins`](super::pins)), pinning every record it maps at the ID it had

@@ -1399,6 +1399,19 @@ fn each_role_game_md_names_holds_its_clip_at_its_cue_and_the_refusal_none() {
 }
 
 #[test]
+fn the_music_game_md_names_is_the_store_s_soundtrack() {
+    let game = new_game::open(&fixture()).expect("lists");
+    assert_eq!(game.problems, Vec::new());
+    let music = (game.galaxy.game.as_ref().expect("game.md").data.music)
+        .as_ref()
+        .expect("the fixture names its music");
+    assert_eq!(
+        game.data.soundtrack(),
+        Some(&clip_of(&game, music.as_str())[..])
+    );
+}
+
+#[test]
 fn the_ids_map_back_to_the_bible_s() {
     let ids = new_game::open(&fixture()).expect("lists").ids;
     assert_eq!(
