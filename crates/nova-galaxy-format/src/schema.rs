@@ -198,6 +198,40 @@ mod tests {
     }
 
     #[test]
+    fn the_ship_schema_describes_its_wreck_and_its_two_explosions() {
+        let ship = value("ship.schema.json");
+        let wreck = &ship["properties"]["wreck"];
+        let name = wreck["allOf"][0]["$ref"]
+            .as_str()
+            .and_then(|r| r.rsplit('/').next())
+            .unwrap_or_else(|| panic!("a wreck definition: {wreck}"));
+        let wreck = &ship["definitions"][name];
+        assert_eq!(wreck["additionalProperties"], false, "{wreck}");
+        let words: Vec<&str> = wreck["properties"]
+            .as_object()
+            .expect("its words")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(words, ["break_up", "explosion", "pods"], "{wreck}");
+        assert!(
+            wreck["properties"]["break_up"]["description"]
+                .as_str()
+                .is_some_and(|d| d.contains("one second")),
+            "{wreck}"
+        );
+        let explosions: Vec<&str> = ship["definitions"]["Explosion"]["oneOf"]
+            .as_array()
+            .expect("the explosions")
+            .iter()
+            .filter_map(|e| e["const"].as_str())
+            .collect();
+        assert_eq!(explosions, ["small", "large"], "{ship}");
+        let required = ship["required"].as_array().expect("required");
+        assert!(!required.contains(&"wreck".into()), "{required:?}");
+    }
+
+    #[test]
     fn the_outfit_schema_lists_the_stellars_that_sell_it() {
         let outfit = value("outfit.schema.json");
         let sold_at = &outfit["properties"]["sold_at"];

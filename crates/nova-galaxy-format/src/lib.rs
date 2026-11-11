@@ -8,7 +8,8 @@
 //! ([`frontmatter`]), the loader ([`load`]) and the [`source::Source`]
 //! port it reads through, the JSON Schemas generated from the types
 //! ([`schema`]), the rules for derived data, such as how a ship
-//! resolves its base chain ([`fleet::resolve`]), and which media are Git
+//! resolves its base chain ([`fleet::resolve`]) and dies
+//! ([`fleet::Wreck`]), and which media are Git
 //! LFS pointers rather than the files ([`media`]).
 //!
 //! It doesn't hold media decoding (glTF, PNG), Ink parsing, the checks,
@@ -52,3 +53,4 @@ pub mod model;
 pub mod schema;
 pub mod source;
 pub mod traffic;
+mod wreck;

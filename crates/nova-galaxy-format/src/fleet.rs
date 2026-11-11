@@ -12,11 +12,13 @@ use serde::Deserialize;
 use crate::id::{Color, Id};
 use crate::load::Galaxy;
 
+pub use crate::wreck::{Explosion, Wreck};
+
 /// A ship (`ships/<id>.md`): a hull class, or a variant of one.
 ///
 /// A variant names a `base` ship and inherits every field it leaves out,
-/// except `sold_at`: where a ship is sold is its own. Its `stats` are
-/// merged field by field, its `hardpoints` are added to the base's (one
+/// except `sold_at`: where a ship is sold is its own. Its `stats` and its
+/// `wreck` are merged field by field, its `hardpoints` are added to the base's (one
 /// with the same `id` replaces the base's), and its `mods` are added to
 /// the base's. A variant that leaves out `price` costs its base's plus
 /// the kits it adds. The finished ship must end up with a `style`,
@@ -63,6 +65,11 @@ pub struct Ship {
     /// it. A variant doesn't inherit its base's.
     #[serde(default)]
     pub sold_at: Vec<Id>,
+    /// How it dies once its hull is gone. Left out, or a word of it left
+    /// out, it takes its base's, else the default: a one-second break-up,
+    /// a small explosion and no escape pods.
+    #[serde(default)]
+    pub wreck: Wreck,
 }
 
 /// A ship's design language. See `mechanics/ships.md`.
@@ -418,6 +425,9 @@ pub struct Resolved<'a> {
     /// The chain's stats merged field by field, the nearest given winning,
     /// before any kit: a stat nobody in the chain gives is `None`.
     pub stats: Stats,
+    /// The chain's wrecks merged word by word, the nearest given winning:
+    /// a word nobody in the chain gives is `None`, for the game's default.
+    pub wreck: Wreck,
     /// The stats a kit can change, with every kit's effects added. A stat
     /// nobody gives counts as 0.
     pub totals: Totals,
@@ -560,10 +570,12 @@ pub fn resolve<'a>(galaxy: &'a Galaxy, id: &Id) -> Result<Resolved<'a>, ResolveE
 
     let nearest = |f: &dyn Fn(&'a Ship) -> bool| chain.iter().map(|(_, s)| *s).find(|s| f(s));
     let mut stats = Stats::default();
+    let mut wreck = Wreck::default();
     let mut hardpoints: Vec<Placed<'a>> = Vec::new();
     let mut mods = Vec::new();
     for (ship_id, ship) in chain.iter().rev() {
         stats = ship.stats.over(stats);
+        wreck = ship.wreck.over(wreck);
         for hardpoint in &ship.hardpoints {
             let placed = Placed {
                 hardpoint,
@@ -611,6 +623,7 @@ pub fn resolve<'a>(galaxy: &'a Galaxy, id: &Id) -> Result<Resolved<'a>, ResolveE
         mods,
         hardpoints,
         stats,
+        wreck,
         totals,
     })
 }
@@ -1195,6 +1208,34 @@ mod tests {
                 "odd",
             );
             assert_eq!(price, Some(907));
+        }
+
+        #[test]
+        fn a_variant_inherits_its_base_s_wreck_word_by_word() {
+            let galaxy = galaxy_with(&[
+                (
+                    "ships/doomed-skiff.md",
+                    "---\nname: Doomed skiff\nbase: skiff\n\
+                     wreck: {break_up: 2, explosion: large}\n---\n",
+                ),
+                (
+                    "ships/crewed-skiff.md",
+                    "---\nname: Crewed skiff\nbase: doomed-skiff\nwreck: {pods: 3}\n---\n",
+                ),
+            ]);
+            assert_eq!(
+                resolve(&galaxy, &id("crewed-skiff")).unwrap().wreck,
+                Wreck {
+                    break_up: Some(2.0),
+                    explosion: Some(Explosion::Large),
+                    pods: Some(3),
+                }
+            );
+            assert_eq!(
+                resolve(&galaxy, &id("skiff")).unwrap().wreck,
+                Wreck::default(),
+                "a hull that names none"
+            );
         }
 
         #[test]
