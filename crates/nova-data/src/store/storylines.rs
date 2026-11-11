@@ -30,6 +30,10 @@ pub use nova_galaxy_format::model::Outcome;
 /// (`nova_galaxy_format::model::jump_stability`).
 pub use nova_galaxy_format::model::Stability as GateStability;
 
+/// Which part of its storyline a mission falls in: the format's own
+/// `act`, ordered open, then crossroads, then committed.
+pub use nova_galaxy_format::model::Act as StoryAct;
+
 use super::{DialogPlace, GameData};
 use crate::wire::id::{GovtId, MissionId, OutfitId, StellarId, SystemId};
 
@@ -53,6 +57,10 @@ pub struct Storylines {
 pub struct StoryMission {
     /// Its display title.
     pub title: String,
+    /// The storyline it belongs to and the act it falls in; `None` when
+    /// the storyline it names isn't in the data (it is shown, never acted
+    /// on, so the mission stays).
+    pub storyline: Option<MissionStoryline>,
     /// What must hold before it is offered or happens.
     pub requires: Requires,
     /// Where it is offered and the offer's conversation; `None` for an
@@ -78,8 +86,33 @@ pub struct StoryMission {
 pub struct MissionOffer {
     /// The stellar it is offered at.
     pub at: StellarId,
+    /// Who offers it (`characters/<id>.md`); `None` when the offer names
+    /// no one, or names a character that isn't in the data.
+    pub giver: Option<MissionGiver>,
     /// The offer's conversation. Every path ends in an outcome tag.
     pub dialog: DialogPlace,
+}
+
+/// The character who offers a mission, as the bar and the story log show
+/// them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MissionGiver {
+    /// The name they go by.
+    pub name: String,
+    /// What they do, in a few words.
+    pub role: String,
+}
+
+/// The storyline a mission belongs to and the act it falls in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MissionStoryline {
+    /// The storyline's id (`storylines/<id>.md`): the story log's group
+    /// key, so two storylines that share a title stay apart.
+    pub id: String,
+    /// The storyline's display title.
+    pub title: String,
+    /// The act the mission falls in.
+    pub act: StoryAct,
 }
 
 /// The conversation where a mission's objective is done.

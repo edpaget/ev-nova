@@ -61,6 +61,7 @@ fn story_data_with(job: Option<u32>, edit: impl FnOnce(&mut Storylines)) -> Rc<G
                 title: JOB.to_owned(),
                 offer: Some(MissionOffer {
                     at: nova_data::StellarId(128),
+                    giver: None,
                     dialog: DialogPlace {
                         file: FILE.to_owned(),
                         knot: "offer".to_owned(),

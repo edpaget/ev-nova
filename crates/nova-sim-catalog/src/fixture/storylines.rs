@@ -26,6 +26,7 @@ pub fn offered_at(stellar: i16, file: &str, knot: &str) -> StoryMission {
     StoryMission {
         offer: Some(MissionOffer {
             at: StellarId(stellar),
+            giver: None,
             dialog: place(file, knot),
         }),
         ..StoryMission::default()

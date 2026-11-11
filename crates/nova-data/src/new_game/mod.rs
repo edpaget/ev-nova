@@ -62,6 +62,8 @@
 //! | `dialog/<file>.ink.json` | its compiled text on the store ([`dialogs`], [`GameData::dialogs`]) | by the Ink file a ref names (`dialog/<file>.ink`); the `.ink` source isn't read |
 //! | a stellar's `dialog` | its `spöb`'s conversation on the store ([`dialogs`]) | the file and the knot (or `knot.stitch`) a landed pilot's conversation enters |
 //! | `missions/` | a mission on the store ([`missions`], [`GameData::storylines`]) | by its id: its title, `requires`, `offer`, `objective`, `complete` and the four effect blocks, its ids kept as text; a stellar it names as its `spöb`; an outfit an effect grants or removes as its `oütf`; a `take_point`'s blockade as its `mïsn`; its dialogs as places in the compiled texts |
+//! | `storylines/`, with a mission's `storyline` and `act` | the mission's [`MissionStoryline`](crate::MissionStoryline) ([`missions`]) | the storyline's id and `title`, and the mission's act, which the story log groups and orders by; an unknown storyline reported and the mission kept without one |
+//! | `characters/`, with an offer's `giver` | the offer's [`MissionGiver`](crate::MissionGiver) ([`missions`]) | the character's `name` and `role`, which the bar and the story log show; an unknown character reported and the offer kept without a giver |
 //! | `news/` | a news item on the store ([`missions`]) | by its id: its headline, its body trimmed, and its `from` system's `sÿst` |
 //! | a jump point's `owner` and `stability` | its static state on the store ([`missions`]) | by `system/point`: its gate's `spöb`, its owner's id and its stability, which missions' effects overlay in play |
 //!
@@ -253,8 +255,10 @@
 //!   format has no word for them. With every hull's `Strength` 0 the
 //!   odds filter never drops a target, so `MaxOdds` 0 changes nothing yet
 //!   ([`relations`]).
-//! - `storylines/`, a mission's `storyline`, `act` and an offer's
-//!   `giver`, and `characters/`: nothing in the engine reads them yet.
+//! - A storyline's `kind` and `faction`, and a character's `pronouns`,
+//!   `faction`, `home`, `companion` and `storylines`: nothing in the
+//!   engine reads them yet. Portraits, speakers and companions are the
+//!   bible's `design-portrait-format`.
 //! - `budgets/` and an asset's provenance: tooling. An asset's models are
 //!   read for the stand-ins ([`looks`]), and the export media paths for the
 //!   LFS report ([`NewGame::lfs_pointers`]); its textures aren't drawn.

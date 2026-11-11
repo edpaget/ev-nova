@@ -69,7 +69,8 @@ use nova_galaxy_media::BARE;
 /// `false-floor` (lawless, hiding four tons from a scan); the
 /// start `dock-hand`, in the hauler in `hearth`; the
 /// storyline `dock-work`,
-/// whose four missions and two news items run over the conversations of
+/// whose dock job the character `dockmaster` (Ode, the dockmaster) offers,
+/// and whose four missions and two news items run over the conversations of
 /// `dialog/dock-job.ink`, compiled, whose greeting `verge-camp` names, and
 /// whose fifth mission, `fringe-road`, is never offered and names its
 /// blockade's two guards; and
@@ -193,6 +194,37 @@ fn the_fixture_maps_five_missions_two_news_items_and_eleven_jump_points() {
     let road = &storylines.points["verge/hearth-road"];
     assert_eq!(road.owner.as_deref(), Some("warden"));
     assert_eq!(road.stability, nova_data::GateStability::Unstable);
+}
+
+#[test]
+fn the_dock_job_is_offered_by_the_dockmaster_in_the_dock_work_storyline() {
+    let game = new_game::open(&fixture()).expect("lists");
+    let missions = &game.data.storylines().missions;
+    let job = &missions["dock-job"];
+    assert_eq!(
+        job.offer.as_ref().and_then(|offer| offer.giver.clone()),
+        Some(nova_data::MissionGiver {
+            name: "Ode".to_owned(),
+            role: "dockmaster".to_owned(),
+        })
+    );
+    assert_eq!(
+        job.storyline,
+        Some(nova_data::MissionStoryline {
+            id: "dock-work".to_owned(),
+            title: "Dock work".to_owned(),
+            act: nova_data::StoryAct::Open,
+        })
+    );
+    let toll = missions["warden-toll"].offer.as_ref().expect("offered");
+    assert_eq!(toll.giver, None, "the toll names no giver");
+    assert_eq!(
+        missions["clear-the-road"]
+            .storyline
+            .as_ref()
+            .map(|storyline| storyline.act),
+        Some(nova_data::StoryAct::Committed)
+    );
 }
 
 #[test]

@@ -18,8 +18,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub use nova_data::{
-    DialogPlace, MissionCompletion, MissionObjective, MissionOffer, NewsItem, Outcome, PointAt,
-    PointState, Requires, StoryEffects, StoryMission,
+    DialogPlace, MissionCompletion, MissionGiver, MissionObjective, MissionOffer, MissionStoryline,
+    NewsItem, Outcome, PointAt, PointState, Requires, StoryAct, StoryEffects, StoryMission,
 };
 
 /// A jump point's stability as missions test and set it: the data's own
@@ -120,6 +120,7 @@ mod tests {
         StoryMission {
             offer: Some(MissionOffer {
                 at: StellarId(128),
+                giver: None,
                 dialog: place(file, knot),
             }),
             ..StoryMission::default()

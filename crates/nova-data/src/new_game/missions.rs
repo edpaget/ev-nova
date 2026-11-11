@@ -21,8 +21,18 @@
 //! mission out. A mission whose `requires` names a mission that was left
 //! out (here, or later by [`NewGame::check_dialogs`]) is left out too,
 //! with a problem against its own file naming the one it needs, and so on
-//! down the chain ([`drop_dependents`]). A mission's `storyline`, `act`
-//! and `giver` aren't read yet.
+//! down the chain ([`drop_dependents`]).
+//!
+//! A mission's `storyline` and `act` become its
+//! [`MissionStoryline`] (the storyline's id and `title`), and its offer's
+//! `giver` the offer's [`MissionGiver`] (the character's `name` and
+//! `role`). These are shown, never placed or acted on, so a name that
+//! isn't there keeps the mission and drops only the name, with one
+//! problem against its file; leaving the mission out would also leave out
+//! its dependents over a display typo. A character or storyline that
+//! failed to load is dropped unreported. No act can be missing from its
+//! storyline: storylines declare no acts, and an act outside the three
+//! fails the mission's own parse.
 //!
 //! [`NewGame::check_dialogs`]: super::NewGame::check_dialogs
 
@@ -36,8 +46,8 @@ use super::dialogs::Compiled;
 use super::ids::IdTable;
 use super::map::absent;
 use crate::store::{
-    MissionCompletion, MissionObjective, MissionOffer, NewsItem, PointAt, PointState, Requires,
-    StoryEffects, StoryMission, Storylines,
+    MissionCompletion, MissionGiver, MissionObjective, MissionOffer, MissionStoryline, NewsItem,
+    PointAt, PointState, Requires, StoryAct, StoryEffects, StoryMission, Storylines,
 };
 use crate::wire::id::{GovtId, MissionId, OutfitId, StellarId, SystemId};
 
@@ -209,8 +219,10 @@ impl Names<'_> {
         let offer = mission.offer.as_ref().and_then(|offer| {
             let at = self.stellar("offer.at", &offer.at);
             let dialog = self.dialog("offer", &offer.dialog);
+            let giver = offer.giver.as_ref().and_then(|giver| self.giver(giver));
             Some(MissionOffer {
                 at: at?,
+                giver,
                 dialog: dialog?,
             })
         });
@@ -246,6 +258,7 @@ impl Names<'_> {
             });
         StoryMission {
             title: mission.title.clone(),
+            storyline: self.storyline(&mission.storyline, mission.act),
             requires: self.requires("requires", &mission.requires),
             offer,
             objective,
@@ -349,6 +362,46 @@ impl Names<'_> {
             self.missing(field, id.as_str(), "stellar", "stellars");
         }
         self.left_out = true;
+        None
+    }
+
+    /// The character `id`, an offer's `giver`, as the offer shows them.
+    /// The name is shown, never acted on, so one that isn't there is
+    /// reported and the mission kept without it; one that failed to load
+    /// is dropped unreported.
+    fn giver(&mut self, id: &Id) -> Option<MissionGiver> {
+        if let Some(doc) = self.galaxy.characters.get(id) {
+            return Some(MissionGiver {
+                name: doc.data.name.clone(),
+                role: doc.data.role.clone(),
+            });
+        }
+        if absent(self.galaxy, &self.galaxy.characters, "characters", id) {
+            self.broken.push(format!(
+                "offer.giver names the character `{id}`, which is not in characters/; \
+                 it is listed without a giver"
+            ));
+        }
+        None
+    }
+
+    /// The storyline `id` with the mission's `act`, as the story log
+    /// groups it. Like [`giver`](Self::giver), one that isn't there is
+    /// reported and the mission kept without it.
+    fn storyline(&mut self, id: &Id, act: StoryAct) -> Option<MissionStoryline> {
+        if let Some(doc) = self.galaxy.storylines.get(id) {
+            return Some(MissionStoryline {
+                id: id.to_string(),
+                title: doc.data.title.clone(),
+                act,
+            });
+        }
+        if absent(self.galaxy, &self.galaxy.storylines, "storylines", id) {
+            self.broken.push(format!(
+                "storyline names the storyline `{id}`, which is not in storylines/; \
+                 it is listed without one"
+            ));
+        }
         None
     }
 
@@ -483,8 +536,17 @@ mod tests {
             parcel,
             &StoryMission {
                 title: "Parcel".to_owned(),
+                storyline: Some(MissionStoryline {
+                    id: "errands".to_owned(),
+                    title: "Errands".to_owned(),
+                    act: StoryAct::Open,
+                }),
                 offer: Some(MissionOffer {
                     at: yard,
+                    giver: Some(MissionGiver {
+                        name: "Clerk".to_owned(),
+                        role: "Clerk".to_owned(),
+                    }),
                     dialog: place("dialog/errands.ink", "parcel"),
                 }),
                 objective: Some(MissionObjective::Deliver {
@@ -500,6 +562,78 @@ mod tests {
                 ..StoryMission::default()
             }
         );
+    }
+
+    #[test]
+    fn an_offer_naming_no_giver_maps_without_one_and_keeps_its_act() {
+        let game = loaded(&with_toll(
+            "offer: {at: alpha-yard, dialog: dialog/errands.ink#toll}\n",
+        ));
+        assert_eq!(problems(&game), Vec::<String>::new());
+        let toll = toll(&game).expect("mapped");
+        assert_eq!(
+            toll.offer,
+            Some(MissionOffer {
+                at: stellar(&game, "alpha-yard"),
+                giver: None,
+                dialog: place("dialog/errands.ink", "toll"),
+            })
+        );
+        assert_eq!(
+            toll.storyline,
+            Some(MissionStoryline {
+                id: "errands".to_owned(),
+                title: "Errands".to_owned(),
+                act: StoryAct::Crossroads,
+            })
+        );
+    }
+
+    #[test]
+    fn an_unknown_giver_or_storyline_is_reported_and_the_mission_kept_without_it() {
+        let game = loaded(&with_toll(
+            "offer: {at: alpha-yard, giver: nobody, dialog: dialog/errands.ink#toll}\n",
+        ));
+        assert_eq!(
+            problems(&game),
+            [
+                "missions/toll.md: offer.giver names the character `nobody`, which is not in \
+                 characters/; it is listed without a giver"
+            ]
+        );
+        let mapped = toll(&game).expect("kept");
+        assert_eq!(mapped.offer.as_ref().map(|o| o.giver.clone()), Some(None));
+        assert!(mapped.storyline.is_some());
+
+        let source = galaxy().with(
+            "missions/toll.md",
+            "---\ntitle: Toll\nstoryline: lost\nact: open\n---\n",
+        );
+        let game = loaded(&source);
+        assert_eq!(
+            problems(&game),
+            [
+                "missions/toll.md: storyline names the storyline `lost`, which is not in \
+                 storylines/; it is listed without one"
+            ]
+        );
+        assert_eq!(toll(&game).expect("kept").storyline, None);
+    }
+
+    #[test]
+    fn a_giver_or_storyline_that_failed_to_load_is_dropped_unreported() {
+        let source = galaxy()
+            .with("characters/clerk.md", "---\nnot: valid\n---\n")
+            .with("storylines/errands.md", "---\nnot: valid\n---\n");
+        let game = loaded(&source);
+        assert!(
+            problems(&game).iter().all(|p| !p.starts_with("missions/")),
+            "{:?}",
+            problems(&game)
+        );
+        let parcel = &game.data.storylines().missions["parcel"];
+        assert_eq!(parcel.offer.as_ref().map(|o| o.giver.clone()), Some(None));
+        assert_eq!(parcel.storyline, None);
     }
 
     #[test]

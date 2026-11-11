@@ -255,6 +255,7 @@ fn offering_data() -> Rc<GameData> {
     let job = nova_data::StoryMission {
         offer: Some(nova_data::MissionOffer {
             at: nova_data::StellarId(128),
+            giver: None,
             dialog: DialogPlace {
                 file: "dialog/dock.ink".to_owned(),
                 knot: "job".to_owned(),

@@ -261,8 +261,9 @@ pub use self::stellar_sprite::{
 };
 pub use self::stock_art::StockArt;
 pub use self::storylines::{
-    GateStability, MissionCompletion, MissionObjective, MissionOffer, NewsItem, Outcome, PointAt,
-    PointState, Requires, StoryEffects, StoryMission, Storylines,
+    GateStability, MissionCompletion, MissionGiver, MissionObjective, MissionOffer,
+    MissionStoryline, NewsItem, Outcome, PointAt, PointState, Requires, StoryAct, StoryEffects,
+    StoryMission, Storylines,
 };
 
 /// Why the store could not be opened at all.

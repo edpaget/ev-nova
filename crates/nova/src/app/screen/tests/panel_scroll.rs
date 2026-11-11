@@ -62,6 +62,7 @@ fn panel_data(offer: bool) -> Rc<GameData> {
             StoryMission {
                 offer: Some(MissionOffer {
                     at: nova_data::StellarId(128),
+                    giver: None,
                     dialog: DialogPlace {
                         file: FILE.to_owned(),
                         knot: "offer".to_owned(),
