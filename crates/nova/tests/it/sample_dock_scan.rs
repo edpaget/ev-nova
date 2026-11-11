@@ -3,7 +3,10 @@
 //! as `main` wires it: a pilot carrying the gun mount kit, a lawless kit
 //! (`sample_kits` buys it at Marrow Yard; here it is set on the saved
 //! pilot), asks Luyten Exchange to land and is found, fined and denied.
-//! The line keeps the find and the fine over the denial. The scan's rule
+//! The scan is certain whatever the chance draws: the cut's commonwealth
+//! names a scan rate of 50 a point of attention, and the gun mount's 2
+//! give odds of 100. The line keeps the find and the fine over the
+//! denial. The scan's rule
 //! is pinned in nova-sim, the line's order in nova-view; this pins that
 //! they meet.
 

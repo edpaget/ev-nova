@@ -9,7 +9,8 @@
 //! - **Outfitter.** For a pilot owning the turret ring, so the mass
 //!   driver, a turret, is listed, the mass driver's cell and the cargo
 //!   racks' cell each show their body. (Not the gun mount: it is a
-//!   lawless kit, and Hearth Dock's scan denies the landing.)
+//!   lawless kit, and Hearth Dock's scan may deny the landing: the
+//!   guild's default odds for its attention are even.)
 //! - **Hail.** The comm dialog's class line names the hailed hull.
 //! - **About.** Over the fixture the menu bar's About is offered in flight
 //!   and shows `game.md`'s body. Over a copy without `game.md`, pressing

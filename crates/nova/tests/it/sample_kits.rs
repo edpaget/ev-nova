@@ -2,7 +2,10 @@
 //! commands: the pilot fits armour plating at Luyten Exchange, a legal
 //! yard, and a gun mount at Marrow Yard, a lawless one, feels each kit's
 //! costs, then asks Luyten Exchange to land with the lawless kit aboard
-//! and is scanned, fined, convicted and denied.
+//! and is scanned, fined, convicted and denied. The scan is certain
+//! whatever the chance draws: the cut's commonwealth names a scan rate of
+//! 50 a point of attention, and the plating's 1 and the gun mount's 2
+//! give odds past 100, held at 100.
 //!
 //! This pins only that the sample's data, the new game's mapping
 //! (`nova_data::new_game`), the outfitter and the session meet. The rules
