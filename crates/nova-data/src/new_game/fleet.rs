@@ -38,7 +38,10 @@
 //!   of its `sold_at`, it takes their tech number ([`super::yards`]) and
 //!   `BuyRandom` 100; sold nowhere, `TechLevel` 0x7fff, which no yard
 //!   reaches and which keeps the low-tech discount off its trade-in, and
-//!   `BuyRandom` 0. `HireRandom` stays 0: no ship is for hire. A chain
+//!   `BuyRandom` 0. `HireRandom` stays 0: no ship is for hire. Its
+//!   chain's `wreck` is its `DeathDelay`, `Explode1`, `Explode2` and
+//!   `PodCount`, a ship that names none taking the default
+//!   ([`super::wrecks`]). A chain
 //!   that loops, or names a base that isn't there, leaves the ship out.
 //! - **Size and firing positions** ([`ship_anim`]). A ship's `shän` sets
 //!   `BaseXSize` (the beam) and `BaseYSize` (the length), in pixels at
@@ -313,6 +316,7 @@ pub fn ship(
         buy_random: if sold.is_some() { ALWAYS } else { 0 },
         ..named_ship(&doc.data.name)
     };
+    super::wrecks::apply(&mut ship, &resolved);
     let items = default_items(galaxy, ids, doc, &resolved, problems);
     for (slot, &(item, n)) in items.iter().enumerate() {
         let item = Some(OutfitId(item));

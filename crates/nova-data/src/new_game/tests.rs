@@ -1071,6 +1071,11 @@ fn a_hull_sets_nothing_else() {
         holds: 10,
         fuel: 300,
         crew: 1,
+        // The default wreck: a second's break-up, small, no pods.
+        death_delay: 30,
+        explode1: 1,
+        explode2: 1,
+        pod_count: 0,
         contribute: crate::Flags64(1),
         tech_level: OUTFIT_TECH_NEVER,
         short_name: "Skiff".into(),
@@ -1079,6 +1084,79 @@ fn a_hull_sets_nothing_else() {
         ..neutral_ship()
     };
     assert_eq!(skiff(&skiff_with_stats()), expected);
+}
+
+/// The fixture galaxy with the skiff dying by `wreck`, a front-matter
+/// line (or none).
+fn skiff_wrecked(wreck: &str) -> MemSource {
+    galaxy().with(
+        "ships/skiff.md",
+        &format!(
+            "---\nname: Skiff\nstyle: civilian\nrole: shuttle\nmodel: hull\n\
+             size: {{length: 8, beam: 4, collision_radius: 4}}\n{wreck}---\n"
+        ),
+    )
+}
+
+/// `ship`'s `DeathDelay`, `Explode1`, `Explode2` and `PodCount`.
+fn wreck_of(ship: &Ship) -> [i16; 4] {
+    [
+        ship.death_delay,
+        ship.explode1,
+        ship.explode2,
+        ship.pod_count,
+    ]
+}
+
+#[test]
+fn a_hull_naming_its_wreck_breaks_up_for_its_seconds_in_its_explosion_with_its_pods() {
+    let ship = skiff(&skiff_wrecked(
+        "wreck: {break_up: 2, explosion: large, pods: 3}\n",
+    ));
+    assert_eq!(
+        wreck_of(&ship),
+        [60, 1, 0, 3],
+        "60 ticks, small puffs, bööm 128"
+    );
+    let ship = skiff(&skiff_wrecked("wreck: {break_up: 0.5, explosion: small}\n"));
+    assert_eq!(wreck_of(&ship), [15, 1, 1, 0], "15 ticks, bööm 129");
+    let ship = skiff(&skiff_wrecked("wreck: {break_up: 0.49}\n"));
+    assert_eq!(ship.death_delay, 15, "14.7 ticks, rounded");
+}
+
+#[test]
+fn a_break_up_too_short_holds_at_two_ticks_and_one_too_long_at_the_most_a_ship_holds() {
+    for short in ["0", "0.01", "-3", ".nan"] {
+        let ship = skiff(&skiff_wrecked(&format!("wreck: {{break_up: {short}}}\n")));
+        assert_eq!(ship.death_delay, 2, "{short}");
+    }
+    for long in ["2000", ".inf"] {
+        let ship = skiff(&skiff_wrecked(&format!("wreck: {{break_up: {long}}}\n")));
+        assert_eq!(ship.death_delay, i16::MAX, "{long}");
+    }
+    let ship = skiff(&skiff_wrecked("wreck: {pods: 40000}\n"));
+    assert_eq!(ship.pod_count, i16::MAX);
+}
+
+#[test]
+fn a_hull_naming_no_wreck_breaks_up_for_a_second_in_a_small_explosion_with_no_pods() {
+    assert_eq!(wreck_of(&skiff(&skiff_wrecked(""))), [30, 1, 1, 0]);
+    assert_eq!(
+        wreck_of(&skiff(&skiff_wrecked("wreck: {}\n"))),
+        [30, 1, 1, 0]
+    );
+}
+
+#[test]
+fn a_variant_inherits_its_base_s_wreck_and_overrides_the_words_it_gives() {
+    let source = skiff_wrecked("wreck: {break_up: 2, explosion: large}\n").with(
+        "ships/armed-skiff.md",
+        "---\nname: Armed skiff\nbase: skiff\nmods: [gun-mount]\nwreck: {pods: 2}\n---\n",
+    );
+    let game = loaded(&source);
+    assert!(game.problems.is_empty(), "{:?}", game.problems);
+    assert_eq!(wreck_of(&ship_of(&game, "armed-skiff")), [60, 1, 0, 2]);
+    assert_eq!(wreck_of(&ship_of(&game, "skiff")), [60, 1, 0, 0]);
 }
 
 /// The fixture galaxy with the skiff naming every hull number as well as

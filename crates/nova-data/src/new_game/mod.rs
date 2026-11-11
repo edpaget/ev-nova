@@ -34,6 +34,7 @@
 //! | `game.md` | `dësc` [`ids::ABOUT_TEXT`] ([`descriptions`]) | its body, trimmed, named for its `name`: the About text; none for an empty body, or with no `game.md` |
 //! | a system's `jump_points` | hypergate `spöb` ([`gates`]) | unpinned, numbered after the unpinned stellars; `x_pos`/`y_pos` from `position`; `govt` from `owner`; `flags` `CAN_LAND`; `flags2` the hypergate bit; `hyper_link[0]` the partner point's gate; named for the partner's system; a random exit heading; `MinStatus` [`records::ANY_RECORD`] |
 //! | `ships/`, hulls and variants | `shïp` and `shän` ([`fleet`]) | its own `name` as `ShortName`, `LongName` and `CommName`; through the `base` chain: `speed`, `shields`, `hull` and `cargo` as `Speed`, `Shield`, `Armor` and `Holds`; `acceleration`, `turn`, `fuel`, `crew`, `shield_recharge`, `hull_recharge` and `mass` as `Accel`, `Maneuver`, `Fuel`, `Crew`, `ShieldRech`, `ArmorRech` and `Mass`, left out the speed, its `handling` on the turn scale, [`fleet::HULL_FUEL`], one, and 0 (a `turn` anywhere in the chain winning over `handling`); its kits as `DefaultItems`; its chain's hardpoints as `MaxGun` and `MaxTur`; its hardpoints' weapon outfits as stock weapons; the kit `fits` bits of its `role` and its chain hardpoints' mount bits ([`kits::FitBits::mount_bit`]) as `Contribute`; the `shän` `BaseXSize`/`BaseYSize` from `size` and its hardpoints' and kits' as exit points; `price` through the chain as `Cost`; sold at its `sold_at` yards as [`yards`] says, else `TechLevel` 0x7fff and `BuyRandom` 0; never for hire (`HireRandom` 0) |
+//! | a ship's `wreck` | `shïp` `DeathDelay`, `Explode1`, `Explode2` and `PodCount` ([`wrecks`]) | through the `base` chain, word by word: `break_up` seconds as `DeathDelay` at [`outfits::TICKS_PER_SECOND`], rounded, held within [`wrecks::MIN_BREAK_UP_TICKS`] and `i16::MAX`; `explosion` as `Explode2`, `small` [`wrecks::SMALL_EXPLOSION`] and `large` [`wrecks::LARGE_EXPLOSION`]; `Explode1` always small; `pods` as `PodCount`, held within `i16`; left out, [`wrecks::DEFAULT_BREAK_UP`], small and no pods; no `bööm` is supplied |
 //! | (placeholder) | `düde` 128 ([`fleet`]) | "Civilian traffic": every civilian hull (no `base`, no `mods`) at even odds, wimpy traders of no government; flown in each system that names no `traffic` |
 //! | `fleets/` | `düde` ([`traffic`]) | numbered after the guards, in fleet id order, unpinned; its `name`; its `faction`'s `gövt`; its `role`'s AI type ([`traffic::ai_type`]: `trader` 1, `armed-trader` 2, `warship` 3, `interceptor` 4); the ships it names that are mapped, hulls and variants, in ship id order at their weights held within `i16`, at most sixteen |
 //! | a `take_point`'s `held_by` | a guard `düde` ([`blockades`]) | "<faction> guards", numbered after 128 in faction id order, unpinned: the holder's ships (those whose livery names it) at even odds, of its `gövt`, flown as placeholder warships ([`blockades::GUARD_AI`]) |
@@ -206,6 +207,10 @@
 //!   while nothing is for hire, and the Mission BBS while the computer
 //!   lists nothing, as its only `mïsn` are hidden blockades
 //!   (`nova_sim::RuleKey::EmptyServices`, pinned by `nova::ruleset`).
+//! - An explosion's look and sound: no `bööm` is supplied, so a wreck's
+//!   explosions ([`wrecks`]) are neither seen nor heard until the view has
+//!   a look for them and the data an explosion sound. Its events and
+//!   timings run all the same.
 //! - A livery's `decals` aren't drawn.
 //! - Traffic: a system that names no `traffic` flies the placeholder
 //!   civilian `düde`, which flies hulls alone ([`fleet`]); a start's date
@@ -262,6 +267,7 @@ pub mod strings;
 #[cfg(test)]
 mod tests;
 pub mod traffic;
+pub mod wrecks;
 pub mod yards;
 
 use std::io;
