@@ -48,6 +48,63 @@ pub struct Faction {
     /// governs is lawless too.
     #[serde(default)]
     pub lawless: bool,
+    /// Factions this one is allied with (`factions/<id>.md`), at most four.
+    /// Allies don't fight each other, and a crime against one of them
+    /// doesn't win the criminal favour with the other. One side naming the
+    /// other is enough. Omit for a faction with no allies.
+    #[serde(default)]
+    pub allies: Vec<Id>,
+    /// Factions this one is at war with (`factions/<id>.md`), at most four.
+    /// Their warships attack each other on sight. One side naming the other
+    /// is enough. Omit for a faction with no enemies.
+    #[serde(default)]
+    pub enemies: Vec<Id>,
+    /// Whether the faction's warships attack the player on sight
+    /// (`always`) or never attack the player at all (`never`), whatever
+    /// the player's legal record. Omit for a faction whose warships attack
+    /// the player only when the player's record in a system it governs
+    /// makes the player a criminal there.
+    #[serde(default)]
+    pub attacks_player: Option<PlayerStance>,
+    /// The legal record a pilot starts with in each system the faction
+    /// governs, and the record the escape pod's rescue puts back. Positive
+    /// is good standing, negative is criminal. Omit for 0.
+    #[serde(default)]
+    pub player_record: i32,
+    /// What crimes against the faction's ships cost the player, in points
+    /// of the player's legal record with the faction. Omit for a faction
+    /// that doesn't mind.
+    #[serde(default)]
+    pub penalties: Penalties,
+}
+
+/// How a faction's warships treat the player, whatever the player's record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum PlayerStance {
+    /// Its warships attack the player on sight.
+    Always,
+    /// Its warships never attack the player.
+    Never,
+}
+
+/// What crimes against a faction's ships cost the player, in points of the
+/// player's legal record with the faction. Positive values lower the
+/// record. A crime against a faction also raises the record with every
+/// faction not allied with it, by half the penalty.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Penalties {
+    /// Firing on one of its ships. This changes no record: it only decides
+    /// whether a stray hit on one of its ships is forgiven. Omit for 0.
+    #[serde(default)]
+    pub attack: u32,
+    /// Disabling one of its ships. Omit for 0.
+    #[serde(default)]
+    pub disable: u32,
+    /// Destroying one of its ships. Omit for 0.
+    #[serde(default)]
+    pub destroy: u32,
 }
 
 /// Major power or minor faction.
@@ -807,6 +864,108 @@ pub(crate) mod tests {
             .filter_map(|r| r.as_str())
             .collect();
         assert!(!required.contains(&"lawless"), "{required:?}");
+    }
+
+    #[test]
+    fn a_faction_has_no_relations_unless_it_names_them() {
+        let plain: Faction = read("name: Crown\nkind: major\ncolor: \"#aa0000\"\n").unwrap();
+        assert!(plain.allies.is_empty());
+        assert!(plain.enemies.is_empty());
+        assert_eq!(plain.attacks_player, None);
+        assert_eq!(plain.player_record, 0);
+        assert_eq!(plain.penalties, Penalties::default());
+        assert_eq!(
+            plain.penalties,
+            Penalties {
+                attack: 0,
+                disable: 0,
+                destroy: 0
+            }
+        );
+    }
+
+    #[test]
+    fn a_faction_reads_its_relations() {
+        let faction: Faction = read(
+            "name: Wardens\nkind: minor\ncolor: \"#3366cc\"\nallies: [guild]\n\
+             enemies: [raider, union]\nattacks_player: never\nplayer_record: -12\n\
+             penalties:\n  attack: 5\n  disable: 20\n  destroy: 40\n",
+        )
+        .unwrap();
+        let ids = |list: &[Id]| {
+            list.iter()
+                .map(|id| id.as_str().to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(&faction.allies), ["guild"]);
+        assert_eq!(ids(&faction.enemies), ["raider", "union"]);
+        assert_eq!(faction.attacks_player, Some(PlayerStance::Never));
+        assert_eq!(faction.player_record, -12);
+        assert_eq!(
+            faction.penalties,
+            Penalties {
+                attack: 5,
+                disable: 20,
+                destroy: 40
+            }
+        );
+        let always: Faction =
+            read("name: Band\nkind: minor\ncolor: \"#333333\"\nattacks_player: always\n").unwrap();
+        assert_eq!(always.attacks_player, Some(PlayerStance::Always));
+    }
+
+    #[test]
+    fn a_penalty_left_out_is_zero() {
+        let faction: Faction =
+            read("name: Band\nkind: minor\ncolor: \"#333333\"\npenalties:\n  destroy: 9\n")
+                .unwrap();
+        assert_eq!(
+            faction.penalties,
+            Penalties {
+                attack: 0,
+                disable: 0,
+                destroy: 9
+            }
+        );
+    }
+
+    #[test]
+    fn a_faction_refuses_an_unknown_penalty_or_stance() {
+        let penalty = read::<Faction>(
+            "name: Band\nkind: minor\ncolor: \"#333333\"\npenalties:\n  board: 3\n",
+        );
+        assert!(penalty.is_err(), "{penalty:?}");
+        let stance = read::<Faction>(
+            "name: Band\nkind: minor\ncolor: \"#333333\"\nattacks_player: sometimes\n",
+        );
+        assert!(stance.is_err(), "{stance:?}");
+    }
+
+    #[test]
+    fn the_faction_schema_lists_the_relation_words_as_optional() {
+        let schema = schemars::schema_for!(Faction);
+        let value = schema.as_value();
+        let required: Vec<&str> = value["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|r| r.as_str())
+            .collect();
+        for word in [
+            "allies",
+            "enemies",
+            "attacks_player",
+            "player_record",
+            "penalties",
+        ] {
+            assert!(
+                value["properties"][word]["description"]
+                    .as_str()
+                    .is_some_and(|d| !d.is_empty()),
+                "{word}: {value}"
+            );
+            assert!(!required.contains(&word), "{word}: {required:?}");
+        }
     }
 
     #[test]
