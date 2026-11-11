@@ -12,9 +12,10 @@
 //!   lawless kit, and Hearth Dock's scan denies the landing.)
 //! - **Hail.** The comm dialog's class line names the hailed hull.
 //! - **About.** Over the fixture the menu bar's About is offered in flight
-//!   and shows `game.md`'s body; over a copy without `game.md` it is
-//!   greyed, and picking it or pressing I shows nothing and warns of
-//!   nothing (each [`Harness::frame`] asserts it).
+//!   and shows `game.md`'s body. Over a copy without `game.md`, pressing
+//!   I or A on the main menu, where each is About, opens nothing and
+//!   warns of nothing (each [`Harness::frame`] asserts it), and in flight
+//!   the menu bar's About is greyed and picking it shows nothing.
 //!
 //! The mapping is pinned in nova-data (`new_game::descriptions`, its
 //! fixture tests), the screens in nova-view, and About's greying in
@@ -161,12 +162,22 @@ fn over_data_with_no_game_md_about_is_greyed_and_shows_nothing_or_warns() {
     let copied = dir.path().join("new-game");
     copy(&folder(), &copied);
     fs::remove_file(copied.join("game.md")).expect("removes game.md");
-    let mut game = flying_over(&copied);
+    // On the main menu I is About (`MainScreenCommand::About`) and so is
+    // A (`MainMenuCommand::About`, after its button's click); in flight I
+    // is mission info, so the keys are pressed here.
+    let mut game = app_over(opened_from(&copied), &MemoryPilots::new());
+    game.frame();
+    assert_eq!(game.showing(), Showing::MainMenu);
+    for key in [KeyCode::KeyI, KeyCode::KeyA] {
+        game.press(key);
+        for _ in 0..30 {
+            game.frame();
+        }
+        assert_eq!(game.showing(), Showing::MainMenu, "{key:?}");
+    }
+    let mut game = new_pilot_flying(game);
     assert!(!game.app.menu_enabled(about()), "greyed");
     game.handle(WindowEvent::Menu(MenuCommand::About));
     game.frame();
     assert_eq!(game.showing(), Showing::Flight, "picked");
-    game.press(KeyCode::KeyI);
-    game.frame();
-    assert_eq!(game.showing(), Showing::Flight, "I");
 }
