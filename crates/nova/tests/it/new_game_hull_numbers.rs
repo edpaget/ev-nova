@@ -2,7 +2,10 @@
 //!
 //! - **A kit's acceleration.** Bought at Hearth Dock, the racked hauler
 //!   picks up speed slower than the hauler it replaces, by its cargo
-//!   racks' `acceleration` effect alone: the two hulls share their own.
+//!   racks' `acceleration` effect alone: the flown acceleration scales by
+//!   the racked hull's `Accel` plus the racks' `MORE_ACCEL` over the
+//!   hauler's `Accel`, each read from the data the app opened, so the
+//!   fixture's numbers stay nova-data's.
 //! - **A hull's shield recharge.** A new pilot's hauler, its shields put
 //!   low, recharges them by its `shield_recharge: 300` a tick as the app
 //!   runs frames, up to full and not past it. No ship in the fixture
@@ -18,6 +21,10 @@
 //! opens it.
 
 use nova_data::new_game::fixture::folder;
+use nova_data::new_game::kits::mod_type;
+use nova_data::records::outfit::Outfit;
+use nova_data::records::ship::Ship;
+use nova_data::{GameData, Registered};
 use nova_sim::{Gauge, ShipId};
 
 use crate::new_game_conversation::flying;
@@ -25,20 +32,53 @@ use crate::new_game_play::Play;
 use crate::new_game_travel::nova_of;
 use crate::pilots::Harness;
 
+/// `id`'s record in the data the app opened.
+fn record<T: Registered + Clone>(data: &GameData, id: i16) -> T {
+    data.get::<T>(id)
+        .expect("present")
+        .expect("decoded")
+        .record
+        .clone()
+}
+
+/// The acceleration `kit`'s effects add, from its `MORE_ACCEL` slots.
+fn accel_delta(kit: &Outfit) -> f32 {
+    [
+        (kit.mod_type, kit.mod_val),
+        (kit.mod_type2, kit.mod_val2),
+        (kit.mod_type3, kit.mod_val3),
+        (kit.mod_type4, kit.mod_val4),
+    ]
+    .into_iter()
+    .filter(|&(kind, _)| kind == mod_type::MORE_ACCEL)
+    .map(|(_, val)| f32::from(val))
+    .sum()
+}
+
 #[test]
 fn the_racked_hauler_s_racks_take_their_acceleration_off_the_hull_s() {
     let mut play = Play::new(&folder(), "hearth", |_| {});
     play.land("hearth-dock");
     let hauler = play.session.stats().handling.accel;
-    let racked = ShipId(nova_of(&play.game.ids.ships, "racked-hauler"));
+    let ids = &play.game.ids;
+    let hull = f32::from(record::<Ship>(&play.data, nova_of(&ids.ships, "hauler")).accel);
+    let racked_hull =
+        f32::from(record::<Ship>(&play.data, nova_of(&ids.ships, "racked-hauler")).accel);
+    let delta = accel_delta(&record::<Outfit>(
+        &play.data,
+        nova_of(&ids.kits, "cargo-racks"),
+    ));
+    assert!(delta != 0.0, "the racks change the acceleration");
+    let racked = ShipId(nova_of(&ids.ships, "racked-hauler"));
     play.session
         .buy_ship(racked, "Rack", &mut play.chance)
         .expect("bought");
     let racks = play.session.stats().handling.accel;
-    let expected = hauler * 310.0 / 360.0;
+    let expected = hauler * (racked_hull + delta) / hull;
     assert!(
-        (racks - expected).abs() < expected * 1e-4,
-        "the hauler's 360 less the racks' 50: {hauler} then {racks}, not {expected}"
+        (racks - expected).abs() < expected.abs() * 1e-4,
+        "the hauler's {hull}, the racked hull's {racked_hull} and the racks' {delta}: \
+         {hauler} then {racks}, not {expected}"
     );
 }
 
