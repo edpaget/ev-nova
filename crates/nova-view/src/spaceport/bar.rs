@@ -30,7 +30,10 @@
 //!
 //! Hire Escort, clicked or with H or E (presses, never repeats), asks for
 //! the ships for hire ([`BarScreen::take_hire_request`]); it is greyed
-//! while the fleet has no room (`_CanHireEscorts` @0x5795). Whoever holds
+//! while the fleet has no room (`_CanHireEscorts` @0x5795), and, by the
+//! other reading of `RuleKey::EmptyServices`, while the frame says the
+//! bar lists no ship for hire ([`BarScreen::set_nothing_for_hire`]),
+//! when it asks for nothing either. Whoever holds
 //! the session answers with the list ([`BarScreen::open_hire`]): the hire
 //! screen ([`HireScreen`]) opens over the bar, or, with nothing for hire,
 //! nothing opens, and `STR#` 2002 #224 shows in the text dialog over the
@@ -262,6 +265,24 @@ struct Asks {
     map: Option<PortMap>,
 }
 
+/// What greys the bar's Hire Escort.
+#[derive(Clone, Copy, Debug)]
+struct HireGate {
+    /// Whether the fleet has room for another escort.
+    room: bool,
+    /// Whether the bar lists no ship for hire, by the other reading of
+    /// `RuleKey::EmptyServices` ([`BarScreen::set_nothing_for_hire`]).
+    nothing_for_hire: bool,
+}
+
+impl HireGate {
+    /// Whether Hire Escort may ask: the fleet has room, and the bar isn't
+    /// told it has nothing for hire.
+    fn enabled(self) -> bool {
+        self.room && !self.nothing_for_hire
+    }
+}
+
 /// The bar of the stellar landed on.
 #[derive(Clone, Debug)]
 pub struct BarScreen {
@@ -271,8 +292,8 @@ pub struct BarScreen {
     style: ButtonStyle,
     /// Whether its dialogs' buttons take the keyboard focus.
     focus_ring: FocusRing,
-    /// Whether the fleet has room for another escort.
-    room: bool,
+    /// What greys Hire Escort.
+    hire_gate: HireGate,
     /// The hire screen, while it is open.
     hire: Option<HireScreen>,
     /// Whether the hire screen has closed since this was last taken.
@@ -380,7 +401,10 @@ impl BarScreen {
             hiring,
             style,
             focus_ring: FocusRing::default(),
-            room,
+            hire_gate: HireGate {
+                room,
+                nothing_for_hire: false,
+            },
             desc,
             description_request,
             hire: None,
@@ -867,9 +891,25 @@ impl BarScreen {
     /// Escort is greyed unless `list`'s fleet still has room.
     pub fn set_hire(&mut self, list: &HireList) {
         self.hire_closed |= self.close_hire();
-        self.room = list.room;
+        self.hire_gate.room = list.room;
+        self.grey_hire();
+    }
+
+    /// Tells the bar whether it lists no ship for hire: by the other
+    /// reading of `RuleKey::EmptyServices` the frame says so
+    /// (`nova_sim::flight_frame::EmptyServices`), and Hire Escort is then
+    /// greyed and asks for nothing, as it is with no room. By the engine
+    /// reading it is never told so, and only the room greys it.
+    pub fn set_nothing_for_hire(&mut self, nothing: bool) {
+        self.hire_gate.nothing_for_hire = nothing;
+        self.grey_hire();
+    }
+
+    /// Greys Hire Escort unless it may ask ([`HireGate::enabled`]).
+    fn grey_hire(&mut self) {
+        let enabled = self.hire_gate.enabled();
         if let Ok(laid) = &mut self.laid {
-            laid.dialog.set_greyed(HIRE_ITEM, !self.room);
+            laid.dialog.set_greyed(HIRE_ITEM, !enabled);
         }
     }
 
@@ -888,9 +928,10 @@ impl BarScreen {
         true
     }
 
-    /// Asks for the ships for hire, if the fleet has room.
+    /// Asks for the ships for hire, if the fleet has room and the bar
+    /// isn't told it has nothing for hire.
     fn ask(&mut self) {
-        if self.room {
+        if self.hire_gate.enabled() {
             self.asks.hire = true;
         }
     }
@@ -1813,6 +1854,36 @@ mod tests {
         click_item(&mut screen, HIRE_ITEM);
         screen.input(&key(Key::KeyH, false));
         assert!(!screen.take_hire_request());
+    }
+
+    /// The other reading of `RuleKey::EmptyServices`: with room but
+    /// nothing for hire, Hire Escort is greyed and asks for nothing, by
+    /// a click or either key, until it is told there is something again.
+    #[test]
+    fn with_nothing_for_hire_hire_escort_is_greyed_and_asks_nothing() {
+        let art = Rc::new(FakeArt {
+            asked: RefCell::default(),
+            pictures: BTreeSet::new(),
+            graphic: None,
+        });
+        let mut screen = bar_of(&art, true);
+        assert!(enabled(&screen, HIRE_ESCORT), "precondition: room");
+        screen.set_nothing_for_hire(true);
+        assert!(!enabled(&screen, HIRE_ESCORT));
+        click_item(&mut screen, HIRE_ITEM);
+        for hire in HIRE_KEYS {
+            screen.input(&key(hire, false));
+        }
+        assert!(!screen.take_hire_request());
+        screen.set_hire(&list(1));
+        assert!(!enabled(&screen, HIRE_ESCORT), "a hire keeps it greyed");
+        screen.set_nothing_for_hire(false);
+        assert!(enabled(&screen, HIRE_ESCORT), "the room alone again");
+        click_item(&mut screen, HIRE_ITEM);
+        assert!(screen.take_hire_request());
+        let mut full = bar_of(&art, false);
+        full.set_nothing_for_hire(false);
+        assert!(!enabled(&full, HIRE_ESCORT), "no room still greys it");
     }
 
     /// [`hiring`], with stock "Shipyard" (`DLOG` 1004) and plain

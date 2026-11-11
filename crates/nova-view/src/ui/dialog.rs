@@ -857,6 +857,14 @@ impl Dialog {
         self.item(item).is_some_and(|item| item.shown)
     }
 
+    /// Whether item `item` (from 1) is enabled: its template enables it
+    /// and it isn't greyed ([`Dialog::set_greyed`], [`Role::Greyed`]).
+    /// No such item reads false.
+    #[must_use]
+    pub fn item_enabled(&self, item: usize) -> bool {
+        self.item(item).is_some_and(|item| item.enabled)
+    }
+
     /// The focused item's number (from 1), if any, whether the keyboard
     /// or the pad placed it.
     #[must_use]
@@ -2751,6 +2759,19 @@ mod tests {
         assert_eq!(drawn(&greyed), drawn(&built));
         assert_eq!(click(&mut greyed, cancel), Some(DialogEvent::Item(5)));
         assert_eq!(greyed.input(&key(Key::Escape)), Some(DialogEvent::Item(5)));
+    }
+
+    #[test]
+    fn an_item_reads_enabled_until_it_is_greyed_and_again_once_ungreyed() {
+        let mut dialog = dialog(&yes_no(), &[]);
+        assert!(dialog.item_enabled(1), "built enabled");
+        dialog.set_greyed(1, true);
+        assert!(!dialog.item_enabled(1), "greyed");
+        dialog.set_greyed(1, false);
+        assert!(dialog.item_enabled(1), "ungreyed");
+        assert!(!dialog.item_enabled(3), "disabled in the template");
+        assert!(!dialog.item_enabled(0), "no item 0");
+        assert!(!dialog.item_enabled(99), "no such item");
     }
 
     #[test]

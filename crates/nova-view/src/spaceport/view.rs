@@ -178,6 +178,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
+use nova_sim::flight_frame::EmptyServices;
 use nova_sim::hire::NONE_FOR_HIRE;
 use nova_sim::mission::screens::{BAR, OUTFITTER, SHIPYARD, SPACEPORT, TRADE_CENTER};
 use nova_sim::{
@@ -190,6 +191,7 @@ use nova_sim::{
 mod bar_story;
 mod close_keys;
 mod computer_keys;
+mod empty_services;
 mod flushing_layers;
 mod gamble;
 
@@ -253,6 +255,9 @@ struct Port {
     /// What the landscape item shows.
     landscape: Landscape,
     offered: Vec<Service>,
+    /// The services the frame last said have nothing to list
+    /// ([`SpaceportView::set_empty_services`]).
+    empty: EmptyServices,
     /// Whether the stellar sells fuel, so Recharge can be enabled.
     sells_fuel: bool,
     /// Why there is no description, if there is none.
@@ -440,6 +445,9 @@ struct Barkeeping {
     news: Result<DialogTemplate, String>,
     hiring: Hiring,
     room: bool,
+    /// Whether the frame last said the bar lists no ship for hire
+    /// ([`SpaceportView::set_empty_services`]).
+    nothing_for_hire: bool,
     /// Whether the bar has opened since this was last taken.
     opened: bool,
 }
@@ -651,6 +659,7 @@ impl SpaceportView {
                     record.stand_in,
                 ),
                 offered,
+                empty: EmptyServices::default(),
                 sells_fuel,
                 description_problem,
                 style,
@@ -1270,6 +1279,7 @@ impl SpaceportView {
                     catalog,
                 },
                 room,
+                nothing_for_hire: false,
                 opened: false,
             }),
             ..self
@@ -2239,6 +2249,7 @@ impl SpaceportView {
             style,
             barkeeping.room,
         );
+        bar.set_nothing_for_hire(barkeeping.nothing_for_hire);
         bar = self.gambling.give_race(
             bar.with_news(barkeeping.news.clone())
                 .with_focus_ring(ring)
@@ -2268,7 +2279,9 @@ impl SpaceportView {
             self.recharge = true;
             return;
         }
-        let Some(service) = item_service(item).filter(|s| port.offered.contains(s)) else {
+        let Some(service) =
+            item_service(item).filter(|s| port.offered.contains(s) && !port.names_empty(*s))
+        else {
             return;
         };
         if let (Some(missioning), Service::MissionBbs) = (&mut self.missioning, service) {
@@ -4872,7 +4885,7 @@ pub(in crate::spaceport) mod tests {
     }
 
     /// Earth with its bar given, the fleet with `room` or not.
-    fn drinking(room: bool) -> SpaceportView {
+    pub(in crate::spaceport) fn drinking(room: bool) -> SpaceportView {
         let art: Rc<dyn ShipyardCatalog> = Rc::new(catalog());
         earth().with_bar(
             plain_bar(Ok(bar_template())),

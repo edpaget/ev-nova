@@ -16,8 +16,11 @@
 //! is enabled where the stellar sells fuel, the cash is above 0 and the
 //! tank isn't full (@0x297a3-0x297f4); the view is told the last two
 //! (`SpaceportView::set_recharge_enabled`). Each service is enabled when
-//! the stellar offers it (`nova_sim::services`). Neither routine plays a
-//! sound.
+//! the stellar offers it (`nova_sim::services`). By the other reading of
+//! `RuleKey::EmptyServices`, the Mission BBS is also greyed, and opens
+//! nothing by click or key, while the frame says the mission computer
+//! has nothing to list (`SpaceportView::set_empty_services`). Neither
+//! routine plays a sound.
 //!
 //! [`ButtonSkin::disabled`]: crate::ui::button::ButtonSkin
 //! [`Dialog`]: crate::ui::dialog::Dialog
