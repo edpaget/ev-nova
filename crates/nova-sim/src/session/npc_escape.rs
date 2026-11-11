@@ -1416,6 +1416,67 @@ mod tests {
         assert_eq!(session.space.npc(carrier).map(|npc| npc.pods_left), Some(1));
     }
 
+    #[test]
+    fn a_ship_whose_record_names_pods_ejects_that_many_before_it_is_destroyed() {
+        // Built from the record, as every NPC of play is: the spawn sets
+        // its pods left from the class's `PodCount`, its death timer from
+        // its `DeathDelay`.
+        const PODDED: ShipId = ShipId(151);
+        let mut catalog = catalog();
+        catalog.ship_records.push(ship(PODDED.0, FAST));
+        catalog.hulls.push(crate::catalog::HullRecord {
+            death_delay: 90,
+            pod_count: 3,
+            ..hull(PODDED.0)
+        });
+        let mut session = flying(&catalog, RuleSource::Engine);
+        let id = session
+            .bring_in(
+                PODDED,
+                None,
+                crate::traffic::npc::AiType::Warship,
+                Vec2::new(300.0, 0.0),
+            )
+            .expect("brought in");
+        assert_eq!(session.space.npc(id).expect("there").pods_left, 3);
+        session.space.npc_mut(id).expect("there").reserves.armor.now = 0.0;
+        session.take_combat_events();
+        let mut events = Vec::new();
+        for _ in 0..400 {
+            if session.space.npc(id).is_none() {
+                break;
+            }
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Passive,
+                Rules::default(),
+                &mut Rolls::default(),
+            );
+            events.extend(session.take_combat_events().into_iter().filter(|event| {
+                matches!(
+                    event,
+                    CombatEvent::PodEjected { ship, .. } | CombatEvent::Destroyed { ship, .. }
+                        if *ship == ShipRef::Npc(id)
+                )
+            }));
+        }
+        assert!(session.space.npc(id).is_none(), "gone");
+        let pods = |events: &[CombatEvent]| {
+            events
+                .iter()
+                .filter(|event| matches!(event, CombatEvent::PodEjected { .. }))
+                .count()
+        };
+        assert_eq!(pods(&events), 3, "{events:?}");
+        assert!(
+            matches!(events.last(), Some(CombatEvent::Destroyed { .. })),
+            "every pod before its destruction: {events:?}"
+        );
+        assert_eq!(pods(&events[..events.len() - 1]), 3);
+    }
+
     /// The test-support `fixture::place`, which only other crates' tests
     /// call, tested here where a session's traffic can be reached.
     #[test]
