@@ -908,6 +908,32 @@ fn the_map_key_asks_once_for_the_selected_row_s_map_and_keeps_the_log_open() {
 }
 
 #[test]
+fn tab_and_the_map_key_act_on_the_press_and_not_on_the_release() {
+    let mut shown = screen(missions_log(&[dock_job(10, false), the_road()], &names()));
+    let input = |key, pressed| Input::Key {
+        key,
+        pressed,
+        repeat: false,
+    };
+    shown.input(&input(Key::Tab, true));
+    assert_eq!(
+        title_colours(&shown, &BOTH),
+        [Color::DIM, CHOICE_COLOR],
+        "moved on the press"
+    );
+    shown.input(&input(Key::Tab, false));
+    assert_eq!(
+        title_colours(&shown, &BOTH),
+        [Color::DIM, CHOICE_COLOR],
+        "not again on the release"
+    );
+    shown.input(&input(Key::KeyM, true));
+    assert_eq!(shown.take_map_request(), Some(1), "asked on the press");
+    shown.input(&input(Key::KeyM, false));
+    assert_eq!(shown.take_map_request(), None, "not on the release");
+}
+
+#[test]
 fn over_the_news_the_map_key_and_tab_do_nothing() {
     let mut shown = screen(news_log(&fixture_news(), &names()));
     let before = texts(&shown);

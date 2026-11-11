@@ -43,8 +43,8 @@
 //! info stays open under its map. Over flight it opens as a mission
 //! dialog's map does there (`AppScreen::open_flight_dialog_map`): the
 //! dialog map is in front of the log among the overlays, and the log is
-//! drawn under it. In port it opens as the spaceport's dialogs open theirs
-//! (the spaceport's pointer cancelled and its keys released first): the
+//! drawn under it. In port it opens the same way, the spaceport's pointer
+//! cancelled and its keys released first, as its dialogs' maps do: the
 //! log is no overlay while the map is open over the spaceport, so the
 //! map takes the input through the spaceport's, and the log is drawn
 //! between the spaceport and the map. Either way the map's close
@@ -78,7 +78,7 @@ use nova_view::spaceport::conversation::room_refusal_text;
 use nova_view::ui::story_log::{StoryLog, StoryLogScreen, missions_log, news_log};
 use nova_view::{Input, Screen, ScreenAction};
 
-use super::{AppScreen, ENTERED, Side};
+use super::{AppScreen, ENTERED};
 
 /// What comes after the open log closes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -175,22 +175,17 @@ impl AppScreen {
     }
 
     /// Opens flight's course map for the missions log's row `row`, with
-    /// the log left open under it (see the module docs): over flight as
-    /// a mission dialog's map opens there, in port as the spaceport's
-    /// dialogs open theirs, its pointer and keys let go first.
+    /// the log left open under it (see the module docs), as a mission
+    /// dialog's map opens over flight, the keys held let go
+    /// (`AppScreen::open_flight_dialog_map`). Landed, the spaceport's
+    /// pointer and keys are let go first, as its own dialogs' maps let
+    /// them go; in flight there is no spaceport.
     fn open_story_map(&mut self, row: usize) {
-        let opener = MapOpener::StoryLog(row);
-        if self.side == Side::Spaceport {
-            if let Some(spaceport) = &mut self.spaceport {
-                spaceport.cancel_pointer();
-                spaceport.release_keys();
-            }
-            if let Some(flight) = &mut self.flight {
-                flight.open_dialog_map(opener);
-            }
-        } else {
-            self.open_flight_dialog_map(opener);
+        if let Some(spaceport) = &mut self.spaceport {
+            spaceport.cancel_pointer();
+            spaceport.release_keys();
         }
+        self.open_flight_dialog_map(MapOpener::StoryLog(row));
     }
 
     /// Tells the open conversation's page the accept the flight last
