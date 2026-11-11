@@ -13,6 +13,14 @@
 //! told to the bar open and kept for the next one
 //! ([`BarScreen::set_nothing_for_hire`]).
 //!
+//! The spaceport opens before the landing settles, and the session rolls
+//! the visit's mission offers in that settle (`_DoPortDialog` shows the
+//! port @0x5faff before `_OfferMissionFromPort` @0x5fc37), so a read as
+//! it opens doesn't know the computer's offers yet. It asks once to be
+//! told again ([`SpaceportView::take_empty_services_request`]), and
+//! whoever flies the ship answers after the settle, before the first
+//! frame.
+//!
 //! [`Dialog`]: crate::ui::dialog::Dialog
 //! [`BarScreen::set_nothing_for_hire`]: crate::spaceport::bar::BarScreen::set_nothing_for_hire
 
@@ -44,6 +52,14 @@ impl SpaceportView {
         if let Some(Open::Bar(screen)) = &mut self.open {
             screen.set_nothing_for_hire(empty.hire_escort);
         }
+    }
+
+    /// Whether the spaceport asks to be told its services with nothing to
+    /// list ([`SpaceportView::set_empty_services`]), once, from when it
+    /// is built: whoever flies the ship answers after the landing's
+    /// settle, when the visit's offers are rolled (see the module docs).
+    pub fn take_empty_services_request(&mut self) -> bool {
+        std::mem::take(&mut self.empty_services_request)
     }
 }
 
@@ -105,6 +121,13 @@ mod tests {
         let clicked = view.take_mission_computer_request();
         view.input(&key(Key::KeyN));
         clicked | view.take_mission_computer_request()
+    }
+
+    #[test]
+    fn the_spaceport_asks_once_to_be_told_its_empty_services() {
+        let mut view = missioned();
+        assert!(view.take_empty_services_request());
+        assert!(!view.take_empty_services_request(), "once");
     }
 
     #[test]

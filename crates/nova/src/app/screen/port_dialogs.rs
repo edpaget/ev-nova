@@ -201,13 +201,16 @@ pub(super) fn refresh_status_bar(
 }
 
 /// Shows `spaceport` the exchange, outfitter and shipyard as `flight`
-/// now has them, asked together ([`FlightView::shops`]); the room to hire
+/// now has them, asked together ([`FlightView::shops`]), and the services
+/// with nothing to list, which a hire or an accept can empty mid-visit,
+/// greyed afresh ([`SpaceportView::set_empty_services`]); the room to hire
 /// the bar was told as it opened stays as it is.
 pub(super) fn refresh_spaceport(
     spaceport: &mut SpaceportView,
     flight: &mut FlightView<Rc<GameData>>,
 ) {
     let shops = flight.shops();
+    spaceport.set_empty_services(shops.empty);
     if let Some(market) = shops.market {
         spaceport.set_market(market);
     }
@@ -216,6 +219,20 @@ pub(super) fn refresh_spaceport(
     }
     if let Some(shipyard) = shops.shipyard {
         spaceport.set_shipyard(shipyard);
+    }
+}
+
+/// Tells `spaceport`, when it asks once after it opens
+/// ([`SpaceportView::take_empty_services_request`]), its services with
+/// nothing to list as `flight` now has them, read with the shops
+/// ([`FlightView::shops`], `RuleKey::EmptyServices`): after the landing's
+/// settle, which rolls the visit's mission offers, and before any frame.
+pub(super) fn serve_empty_services(
+    spaceport: &mut SpaceportView,
+    flight: &mut FlightView<Rc<GameData>>,
+) {
+    if spaceport.take_empty_services_request() {
+        spaceport.set_empty_services(flight.shops().empty);
     }
 }
 

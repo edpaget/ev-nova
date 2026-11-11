@@ -572,6 +572,10 @@ pub struct SpaceportView {
     alert_after: Option<DescMovie>,
     /// Whether the spaceport's own `dësc` waits to be loaded.
     description_request: bool,
+    /// Whether the spaceport waits to be told its services with nothing
+    /// to list once the landing has settled
+    /// ([`SpaceportView::take_empty_services_request`]).
+    empty_services_request: bool,
     /// Whether the outfitter just opened listed nothing, and so never
     /// opened, since this was last taken.
     empty_outfitter: bool,
@@ -703,6 +707,7 @@ impl SpaceportView {
             outfitter_closed: false,
             alert_after: None,
             description_request,
+            empty_services_request: true,
             status_refresh: false,
             close_keys: CloseKeys::default(),
             wait_replay: Vec::new(),

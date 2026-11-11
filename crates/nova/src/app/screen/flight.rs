@@ -33,7 +33,7 @@ use nova_view::ui::text_input::TEXT_INPUT_DIALOG;
 use nova_view::ui::yes_no::YES_NO_DIALOG;
 use nova_view::ui::{DescriptionSource, DialogResources};
 
-use super::port_dialogs::{close_mission_texts, close_port_dialogs};
+use super::port_dialogs::{close_mission_texts, close_port_dialogs, serve_empty_services};
 use super::{AppScreen, NO_INTERFACE, Side};
 
 impl AppScreen {
@@ -133,6 +133,8 @@ impl AppScreen {
             .with_focus_ring(self.dialog_focus_ring())
             .with_movies(self.movies.clone())
             .with_chance(self.chance.clone());
+        // The services with nothing to list wait for the landing's settle,
+        // which rolls the visit's offers ([`serve_empty_services`]).
         // Recharge is enabled by the cash and the tank, which only flight
         // knows; it is told again after each input.
         if let Some(flight) = &self.flight {
@@ -455,7 +457,9 @@ impl AppScreen {
     /// visit's offers as it settles, so the spaceport's offer is asked for
     /// here, after the texts the landing queued, as `_DoPortDialog` offers
     /// after `_MissionLandCheck` (@0x5fbeb-0x5fc37), and before any input
-    /// can open a service. Then a `Q` run while landed leaves, once
+    /// can open a service. A spaceport opened since is told its services
+    /// with nothing to list, read now the visit's offers are rolled
+    /// ([`serve_empty_services`]). Then a `Q` run while landed leaves, once
     /// nothing shown holds it ([`AppScreen::leave_if_due`]). Last, the
     /// main menu's pilot panel is brought in step with the game held
     /// ([`AppScreen::show_game_on_menu`]): this runs after every input and
@@ -466,6 +470,9 @@ impl AppScreen {
         }
         self.show_mission_texts();
         self.serve_offers();
+        if let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) {
+            serve_empty_services(spaceport, flight);
+        }
         self.leave_if_due();
         self.show_game_on_menu();
     }

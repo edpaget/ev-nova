@@ -1383,6 +1383,39 @@ fn mission_bbs_opens_the_computer_whose_accept_reaches_the_session_and_whose_tex
     );
 }
 
+/// By the other reading of `RuleKey::EmptyServices`, the Mission BBS is
+/// enabled while the Pad's computer offers its two runs and greyed once
+/// both are taken, the refresh after the accept greying it before the
+/// next frame; by the engine reading it stays enabled.
+#[test]
+fn by_the_empty_services_rule_the_bbs_greys_once_the_computers_offers_are_taken() {
+    let other = Rulebook::default().with_override(RuleKey::EmptyServices, RuleSource::Bible);
+    for (rules, greyed) in [(Rulebook::default(), false), (other, true)] {
+        let store = MemoryPilots::new();
+        let mut game = Game::with_rules(&store, &ada(), game_data(), rules);
+        game.frame();
+        game.land();
+        let enabled = |game: &Game| {
+            game.spaceport()
+                .dialog()
+                .expect("laid out")
+                .item_enabled(MISSION_BBS)
+        };
+        assert!(enabled(&game), "offered, {rules:?}");
+        game.accept_both();
+        if game.shown_text().is_some() {
+            game.tap(Key::Enter);
+        }
+        if game.spaceport().mission_computer().is_some() {
+            game.tap(Key::Escape);
+        }
+        assert_eq!(game.showing(), Showing::Spaceport, "{rules:?}");
+        assert!(game.spaceport().mission_computer().is_none(), "{rules:?}");
+        game.frame();
+        assert_eq!(enabled(&game), !greyed, "taken, {rules:?}");
+    }
+}
+
 /// [`game_data`] where the run's `OnSuccess` moves the player to Beta
 /// (`M129`), with no `Q` after it, Beta listing the Dock (129) alone.
 fn moving_run_data() -> Rc<GameData> {

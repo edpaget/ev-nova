@@ -832,6 +832,38 @@ pub(super) fn in_the_bar_by(rules: Rulebook) -> AppScreen {
     screen
 }
 
+/// At Alpha Prime, whose computer offers nothing and whose bar lists no
+/// ship for hire, the Mission BBS and the bar's Hire Escort are greyed
+/// by the other reading of `RuleKey::EmptyServices`, and, by the engine
+/// reading, enabled as before.
+#[test]
+fn the_empty_services_rule_greys_an_empty_bbs_and_hire_escort() {
+    use nova_view::spaceport::bar::HIRE_ITEM;
+    let other = Rulebook::default().with_override(RuleKey::EmptyServices, RuleSource::Bible);
+    for (rules, greyed) in [(Rulebook::default(), false), (other, true)] {
+        let screen = in_the_bar_by(rules);
+        let port = spaceport(&screen);
+        assert!(
+            port.offered().contains(&nova_sim::Service::MissionBbs),
+            "precondition: inhabited"
+        );
+        assert_eq!(
+            port.dialog().expect("laid out").item_enabled(10),
+            !greyed,
+            "the BBS, {rules:?}"
+        );
+        let bar = port
+            .open_bar()
+            .and_then(BarScreen::dialog)
+            .expect("the bar laid out");
+        assert_eq!(
+            bar.item_enabled(HIRE_ITEM),
+            !greyed,
+            "Hire Escort, {rules:?}"
+        );
+    }
+}
+
 #[test]
 fn the_bars_map_ticks_its_borders_and_saves_no_change() {
     use nova_sim::map_borders::Next;
