@@ -7,6 +7,8 @@
 //! ship's loaded base-sprite frame in [`hull_frames`].
 
 #[cfg(test)]
+mod gate_fuel;
+#[cfg(test)]
 mod hull_collision;
 mod hull_frames;
 mod rle_sheets;
@@ -150,7 +152,10 @@ impl PilotCatalog for GameData {
 
     fn ship_fields(&self, id: ShipId) -> Result<ShipFields, String> {
         match self.get::<Ship>(id.0) {
-            Some(Ok(ship)) => Ok(ship_fields(ship.record)),
+            Some(Ok(ship)) => Ok(ShipFields {
+                gate_fuel: self.gate_fuel(id),
+                ..ship_fields(ship.record)
+            }),
             Some(Err(err)) => Err(err.to_string()),
             None => Err(format!("no shïp {}", id.0)),
         }
@@ -177,7 +182,10 @@ impl PilotCatalog for GameData {
                     ),
                     short_name,
                     long_name: record.long_name.as_str().to_owned(),
-                    fields: ship_fields(record),
+                    fields: ShipFields {
+                        gate_fuel: self.gate_fuel(ShipId(id)),
+                        ..ship_fields(record)
+                    },
                     defaults: default_items(record),
                     default_slots: default_slots(record),
                     strength: record.strength,
@@ -1504,7 +1512,9 @@ pub fn ship_blink(data: &GameData, id: i16) -> Blink {
     }
 }
 
-/// A `shïp`'s handling, reserve, cargo and mass fields, and its flags.
+/// A `shïp`'s handling, reserve, cargo and mass fields, and its flags; no
+/// gate fuel, which is the store's, not the record's (see
+/// `GameData::gate_fuel`).
 fn ship_fields(ship: &Ship) -> ShipFields {
     ShipFields {
         speed: ship.speed,
