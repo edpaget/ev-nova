@@ -719,6 +719,22 @@ impl Harness {
             .collect()
     }
 
+    /// The effects' plays and halts since the last call, in order; the
+    /// rest (the music, the engine loop) let go.
+    pub(crate) fn sounds(&self) -> Vec<AudioCommand> {
+        std::mem::take(&mut *self.log.borrow_mut())
+            .into_iter()
+            .filter(|command| {
+                matches!(
+                    command,
+                    AudioCommand::Play { .. }
+                        | AudioCommand::PlayUnlessPlaying { .. }
+                        | AudioCommand::Halt { .. }
+                )
+            })
+            .collect()
+    }
+
     /// The `snd `s played since the last call; the rest let go.
     fn played(&self) -> Vec<SoundId> {
         std::mem::take(&mut *self.log.borrow_mut())

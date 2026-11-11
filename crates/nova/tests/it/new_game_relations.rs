@@ -24,8 +24,8 @@ use nova_data::new_game::fixture::folder;
 use nova_sim::fixture::{bring_in, disable, put_player_at, set_player_shield};
 use nova_sim::flight_frame::{StepInput, StepReport};
 use nova_sim::{
-    AiType, Crime, Governments, GovtId, LegalCode, NovaAi, NovaLaw, Npc, NpcId, Rules, ShipId,
-    ShipRef, StepCollaborators, TargetPick, Vec2,
+    AiType, CombatEvent, Crime, Governments, GovtId, LegalCode, NovaAi, NovaLaw, Npc, NpcId, Rules,
+    ShipId, ShipRef, StepCollaborators, TargetPick, Vec2,
 };
 
 use crate::new_game_play::Play;
@@ -36,7 +36,7 @@ const STEPS: usize = 600;
 
 /// The fixture's start, landed at Hearth Dock, flying out of it in the
 /// racked hauler, whose nose turret carries a mass driver.
-fn armed_at_hearth() -> Play {
+pub(crate) fn armed_at_hearth() -> Play {
     let mut play = Play::new(&folder(), "hearth", |_| {});
     play.land("hearth-dock");
     let racked = ship(&play, "racked-hauler");
@@ -79,8 +79,9 @@ fn worn(play: &Play, id: NpcId) -> Option<f32> {
 /// trigger held when `fire`, its shields topped up first so no scene ends
 /// with it shot down. A step, not a bare pass of the game's work: the
 /// take-off leaves the frame's gain at zero, which only a step's ramp
-/// lifts.
-fn step(play: &mut Play, law: NovaLaw, fire: bool) {
+/// lifts. The fight's events its passes raised, in order: a step reports
+/// them, rather than leaving them to `Session::take_combat_events`.
+pub(crate) fn step(play: &mut Play, law: NovaLaw, fire: bool) -> Vec<CombatEvent> {
     let most = play.session.reserves().shield.max;
     set_player_shield(&mut play.session, most);
     let input = StepInput {
@@ -98,8 +99,14 @@ fn step(play: &mut Play, law: NovaLaw, fire: bool) {
         },
         chance: &mut play.chance,
     };
-    play.session
-        .step(&input, 1, &mut collab, &mut StepReport::default());
+    let mut report = StepReport::default();
+    play.session.step(&input, 1, &mut collab, &mut report);
+    report
+        .steps
+        .into_iter()
+        .flat_map(|run| run.passes)
+        .flat_map(|pass| pass.combat)
+        .collect()
 }
 
 /// Whether a shot `firer` fired is in flight.
