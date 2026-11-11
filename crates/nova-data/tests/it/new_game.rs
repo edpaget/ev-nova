@@ -53,8 +53,14 @@ use nova_galaxy_media::BARE;
 /// `wreck` (a two-second break-up, the large explosion and two pods; the
 /// rest die by the default), and the variant `racked-hauler`, the
 /// hauler with cargo racks and a turret mass driver, sold at
-/// `hearth-dock` with no price of its own; the outfits
-/// `dock-pass` and `mass-driver`, a turret sold at `hearth-dock`; the mod
+/// `hearth-dock` with no price of its own; the Guild's crown carrier
+/// `tender` (9000 at `hearth-dock`), carrying a `seeker-launcher` on a
+/// launcher hardpoint and a `drone-bay` on a bay hardpoint, and the crown
+/// fighter `drone` it launches (unsold, in no fleet); the outfits
+/// `dock-pass`, `mass-driver`, a turret sold at `hearth-dock`,
+/// `seeker-launcher`, a homing launcher firing `seekers` (six a
+/// hardpoint), `seekers`, sold at `hearth-dock`, and `drone-bay`, a bay
+/// launching drones (two a hardpoint), neither of these two sold; the mod
 /// kits `cargo-racks` (legal, slowing the hull's acceleration), `gun-mount` (lawless, adding a turret
 /// hardpoint), `turret-ring` (legal, adding a turret hardpoint) and
 /// `welded-plate` (lawless, for a raider, adding 150 to its hull); the
@@ -200,17 +206,18 @@ fn the_fixture_folder_holds_a_record_for_each_thing_it_maps() {
     assert_eq!(
         data.ids(Desc::TYPE),
         [
-            128, 130, 140, 3000, 3001, 3002, 3003, 3004, 3005, 13000, 13001, 13002, 13003, 13004,
-            13005, 32767
+            128, 130, 140, 3000, 3001, 3002, 3003, 3004, 3005, 3006, 3007, 3008, 13000, 13001,
+            13002, 13003, 13004, 13005, 13006, 13007, 32767
         ],
-        "the stellars with a body, the outfits and kits, the ships, then game.md"
+        "the stellars with a body, the outfits and kits (not the drones), the ships, then \
+         game.md"
     );
     assert_eq!(
         data.ids(Ship::TYPE),
-        [128, 129, 130, 131, 132, 133],
-        "the four hulls and the two variants"
+        (128..=135).collect::<Vec<_>>(),
+        "the six hulls and the two variants"
     );
-    assert_eq!(data.ids(ShipAnim::TYPE), [128, 129, 130, 131, 132, 133]);
+    assert_eq!(data.ids(ShipAnim::TYPE), (128..=135).collect::<Vec<_>>());
     assert_eq!(
         data.ids(Dude::TYPE),
         [128, 129, 130, 131],
@@ -225,11 +232,16 @@ fn the_fixture_folder_holds_a_record_for_each_thing_it_maps() {
     assert_eq!(data.ids(Character::TYPE), [128], "the start");
     assert_eq!(
         data.ids(Outfit::TYPE),
-        [128, 129, 130, 131, 132, 133],
+        (128..=137).collect::<Vec<_>>(),
         "the dock pass, the cargo racks kit, the mass driver, the gun mount kit, the turret ring \
-         kit, then the welded plate kit"
+         kit, the welded plate kit, then the drone bay, the seeker launcher and the seekers, \
+         and the drone bay's drones"
     );
-    assert_eq!(data.ids(Weapon::TYPE), [128], "the mass driver");
+    assert_eq!(
+        data.ids(Weapon::TYPE),
+        [128, 129, 130],
+        "the mass driver, the drone bay and the seeker launcher"
+    );
     assert_eq!(
         data.ids(StrList::TYPE),
         [
@@ -622,9 +634,11 @@ fn each_hull_is_a_ship_with_its_size_and_the_civilian_one_is_traffic() {
         [
             ("armoured-skiff".to_owned(), 133),
             ("cutter".to_owned(), 128),
+            ("drone".to_owned(), 134),
             ("hauler".to_owned(), 129),
             ("racked-hauler".to_owned(), 131),
             ("raider-skiff".to_owned(), 132),
+            ("tender".to_owned(), 135),
             ("warden-picket".to_owned(), 130)
         ]
     );
@@ -1075,7 +1089,10 @@ fn the_dock_pass_is_an_outfit_the_dock_job_lends_and_takes_back() {
         pairs(&game.ids.outfits),
         [
             ("dock-pass".to_owned(), 128),
-            ("mass-driver".to_owned(), 130)
+            ("drone-bay".to_owned(), 134),
+            ("mass-driver".to_owned(), 130),
+            ("seeker-launcher".to_owned(), 135),
+            ("seekers".to_owned(), 136)
         ]
     );
     let (name, pass) = named::<Outfit>(&game.data, 128);
@@ -1091,6 +1108,85 @@ fn the_dock_pass_is_an_outfit_the_dock_job_lends_and_takes_back() {
     assert_eq!(job.on_accept.remove_outfits, []);
     assert_eq!(job.on_success.grant_outfits, []);
     assert_eq!(job.on_success.remove_outfits, [nova_data::OutfitId(128)]);
+}
+
+/// The `(WeapCount, AmmoLoad)` of `ship`'s stock slot of `weapon`.
+fn stock_slot(ship: &Ship, weapon: i16) -> (i16, i16) {
+    let types = ship.weap_type1_4.iter().chain(&ship.weap_type5_8);
+    let counts = ship.weap_count1_4.iter().chain(&ship.weap_count5_8);
+    let loads = ship.ammo_load1_4.iter().chain(&ship.ammo_load5_8);
+    types
+        .zip(counts.zip(loads))
+        .find(|(held, _)| **held == Some(nova_data::WeaponId(weapon)))
+        .map(|(_, (&count, &load))| (count, load))
+        .expect("a slot of the weapon")
+}
+
+#[test]
+fn the_seeker_launcher_is_a_homing_weapon_firing_seekers_sold_at_hearth_dock() {
+    let game = new_game::open(&fixture()).expect("lists");
+    let launcher = game.ids.weapons[&id("seeker-launcher")];
+    let (name, weapon) = named::<Weapon>(&game.data, launcher);
+    assert_eq!(name, "Seeker launcher");
+    assert_eq!(weapon.guidance, 1, "homing");
+    assert!(weapon.guided_turn > 0, "it steers");
+    assert_eq!(
+        weapon.ammo_type,
+        launcher - 128,
+        "it spends its own wëap's rounds"
+    );
+    let (name, seekers) = named::<Outfit>(&game.data, game.ids.outfits[&id("seekers")]);
+    assert_eq!(name, "Seekers");
+    assert_eq!(
+        (seekers.mod_type, seekers.mod_val),
+        (new_game::outfits::MOD_AMMO, launcher)
+    );
+    assert_eq!(
+        (seekers.tech_level, seekers.buy_random),
+        (new_game::yards::SOLD_TECH_FIRST, 100),
+        "sold at Hearth Dock, with the mass driver"
+    );
+    let tender = fixture_ship(&game, "tender");
+    assert_eq!(stock_slot(&tender, launcher), (1, 6), "one rack of six");
+}
+
+#[test]
+fn the_drone_bay_launches_drones_and_the_tender_carries_two() {
+    let game = new_game::open(&fixture()).expect("lists");
+    let bay = game.ids.weapons[&id("drone-bay")];
+    let drone = game.ids.ships[&id("drone")];
+    let (_, weapon) = named::<Weapon>(&game.data, bay);
+    assert_eq!((weapon.guidance, weapon.ammo_type), (99, drone));
+    let (name, drones) = named::<Outfit>(&game.data, game.ids.fighters[&id("drone-bay")]);
+    assert_eq!(name, "Drone");
+    assert_eq!(
+        (drones.mod_type, drones.mod_val),
+        (new_game::outfits::MOD_AMMO, bay)
+    );
+    assert_eq!(
+        (drones.cost, drones.tech_level, drones.buy_random),
+        (0, 0x7fff, 0),
+        "they come with the tender"
+    );
+    let tender = fixture_ship(&game, "tender");
+    assert_eq!(stock_slot(&tender, bay), (1, 2), "one bay of two");
+    let drone_ship = fixture_ship(&game, "drone");
+    assert_eq!(drone_ship.escort_type, 0, "a fighter");
+    assert_eq!(tender.escort_type, -1);
+    assert_eq!(
+        (drone_ship.tech_level, drone_ship.buy_random),
+        (0x7fff, 0),
+        "sold nowhere"
+    );
+    for &nova in game.data.ids(Dude::TYPE) {
+        let (name, dude) = named::<Dude>(&game.data, nova);
+        for flown in [drone, game.ids.ships[&id("tender")]] {
+            assert!(
+                !dude.ship_type.contains(&Some(ShipId(flown))),
+                "{name} flies {flown}"
+            );
+        }
+    }
 }
 
 #[test]

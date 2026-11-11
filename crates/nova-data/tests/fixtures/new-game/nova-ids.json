@@ -16,7 +16,9 @@
     "raider": 130,
     "warden": 129
   },
-  "fighters": {},
+  "fighters": {
+    "drone-bay": 137
+  },
   "gates": {
     "drift/back-door": 131,
     "drift/fringe-road": 141,
@@ -41,14 +43,19 @@
   },
   "outfits": {
     "dock-pass": 128,
-    "mass-driver": 130
+    "drone-bay": 134,
+    "mass-driver": 130,
+    "seeker-launcher": 135,
+    "seekers": 136
   },
   "ships": {
     "armoured-skiff": 133,
     "cutter": 128,
+    "drone": 134,
     "hauler": 129,
     "racked-hauler": 131,
     "raider-skiff": 132,
+    "tender": 135,
     "warden-picket": 130
   },
   "starts": {
@@ -67,6 +74,8 @@
     "verge": 130
   },
   "weapons": {
-    "mass-driver": 128
+    "drone-bay": 129,
+    "mass-driver": 128,
+    "seeker-launcher": 130
   }
 }

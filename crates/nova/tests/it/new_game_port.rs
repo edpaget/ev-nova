@@ -26,8 +26,8 @@
 //!   back to the spaceport through their own Leave or Done. What the
 //!   Trade Center lists and trades, here and at Verge Camp, is
 //!   `new_game_trade`'s. The outfitter
-//!   lists the fixture's kit, and the shipyard the cutter and the racked
-//!   hauler the fixture sells there (what it lists and sells is
+//!   lists the fixture's kit, and the shipyard the cutter, the racked
+//!   hauler and the tender the fixture sells there (what it lists and sells is
 //!   `new_game_shipyard`'s).
 //!   The Mission BBS and the bar's Hire Escort, with nothing behind
 //!   them, are `new_game_empty_services`'.

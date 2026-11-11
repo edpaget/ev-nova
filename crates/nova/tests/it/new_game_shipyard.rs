@@ -1,7 +1,8 @@
 //! The new-game fixture's shipyard played headless through the session's
 //! own commands: Hearth Dock, the fixture's one shipyard, sells the
-//! cutter and the racked hauler, which their `sold_at` names; the hauler,
-//! priced but sold nowhere, and the wardens' picket aren't listed. A
+//! cutter, the racked hauler and the tender, which their `sold_at` names;
+//! the hauler, priced but sold nowhere, the wardens' picket and the
+//! tender's drone aren't listed. A
 //! fresh start, on its own cash in the hauler, buys the racked hauler:
 //! the hauler is traded in, the difference charged, and the new hull
 //! flies with its default kit and its own turret hardpoint's stock gun.
@@ -63,7 +64,22 @@ fn hearth_dock_s_shipyard_lists_the_hulls_the_data_sells_there_at_their_prices()
     let (rows, trade_in) = listed(&mut play);
     let cutter = ship(&play, "cutter");
     let racked = ship(&play, "racked-hauler");
-    assert_eq!(rows, [(cutter, 50_000), (racked, 6000)]);
+    let tender = ship(&play, "tender");
+    let tender_cost = play
+        .data
+        .get::<nova_data::records::ship::Ship>(tender.0)
+        .expect("present")
+        .expect("decoded")
+        .record
+        .cost;
+    assert_eq!(
+        rows,
+        [
+            (cutter, 50_000),
+            (racked, 6000),
+            (tender, i64::from(tender_cost))
+        ]
+    );
     assert_eq!(
         trade_in, 1000,
         "a quarter of the hauler's 4000, whose tech level takes no discount"

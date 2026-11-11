@@ -44,9 +44,18 @@
 //! variant `armoured-skiff`, the raider skiff with the `welded-plate` kit
 //! (450 hull with it), unsold, in the raiders' paint and dying by the
 //! raiders' wreck through its base, which the raider band flies; the
-//! outfits `dock-pass`, a Dock pass, and `mass-driver`, a turret weapon
+//! Guild's crown carrier `tender`, in guild paint, 9000 at `hearth-dock`
+//! (so the start can buy it from its cash and the hauler's trade-in),
+//! with a `seeker-launcher` on its `rack` launcher hardpoint and a
+//! `drone-bay` on its `hangar` bay hardpoint, and the crown fighter
+//! `drone` the bay launches, bare, unpriced, unsold and in no fleet; the
+//! outfits `dock-pass`, a Dock pass, `mass-driver`, a turret weapon
 //! sold at `hearth-dock` alone (`sold_at`), so it is listed there only
-//! for a ship with a turret hardpoint; the legal mod kit `cargo-racks`,
+//! for a ship with a turret hardpoint, `seeker-launcher`, a homing
+//! launcher (`guidance: homing`) firing `seekers`, six a hardpoint, and
+//! unsold, `seekers`, its ammunition, sold at `hearth-dock` alone, so
+//! listed only for a ship with a launcher hardpoint, and `drone-bay`, a
+//! bay launching `drone`s, two a hardpoint, unsold; the legal mod kit `cargo-racks`,
 //! ten tons of cargo for 50 of acceleration, fitting freighters, so Hearth Dock's outfitter lists it for the
 //! hauler, the lawless kit `gun-mount`, fitting freighters, which
 //! adds a turret hardpoint with no gun on it (the bare hauler has none),
