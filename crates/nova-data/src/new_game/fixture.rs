@@ -14,14 +14,18 @@
 //! one-way back door to `verge`); the civilian hull `hauler`, in guild
 //! paint, priced 4000 and sold nowhere, the crown hull `cutter`, bare,
 //! 50,000 at `hearth-dock`, and the wardens' crown hull `warden-picket`,
-//! in `warden-colours`, unpriced and unsold, all on a placeholder model;
+//! in `warden-colours`, unpriced and unsold, all on a placeholder model,
+//! the cutter and the hauler each naming every hull number (acceleration,
+//! fuel, crew, both recharges and a mass under 100, so every jump takes a
+//! day), the cutter a `turn` too and the hauler only its `handling`, and
+//! the picket none, flying on the defaults;
 //! the variant `racked-hauler`, the hauler with `cargo-racks` and a nose
 //! turret carrying a `mass-driver`, sold at `hearth-dock` for the
 //! hauler's price plus the racks' (6000), so the start can buy it; the
 //! outfits `dock-pass`, a Dock pass, and `mass-driver`, a turret weapon
 //! sold at `hearth-dock` alone (`sold_at`), so it is listed there only
 //! for a ship with a turret hardpoint; the legal mod kit `cargo-racks`,
-//! fitting freighters, so Hearth Dock's outfitter lists it for the
+//! ten tons of cargo for 50 of acceleration, fitting freighters, so Hearth Dock's outfitter lists it for the
 //! hauler, the lawless kit `gun-mount`, fitting freighters, which
 //! adds a turret hardpoint with no gun on it (the bare hauler has none),
 //! so only Verge Workshop fits it, and the legal kit `turret-ring`

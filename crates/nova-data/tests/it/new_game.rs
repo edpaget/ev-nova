@@ -41,12 +41,13 @@ use nova_galaxy_media::BARE;
 /// points two of which lead from `hearth` to `verge`, a dead pair between
 /// `verge` and `drift`, and `drift`'s one-way back door to `verge`; the
 /// civilian hull `hauler` (4000, sold nowhere), the crown hull `cutter`
-/// (50,000 at `hearth-dock`) and the wardens' crown hull `warden-picket`
-/// (unsold), in their colours, and the variant `racked-hauler`, the
+/// (50,000 at `hearth-dock`), the two naming their hull numbers, and the
+/// wardens' crown hull `warden-picket` (unsold), naming none, in their
+/// colours, and the variant `racked-hauler`, the
 /// hauler with cargo racks and a turret mass driver, sold at
 /// `hearth-dock` with no price of its own; the outfits
 /// `dock-pass` and `mass-driver`, a turret sold at `hearth-dock`; the mod
-/// kits `cargo-racks` (legal), `gun-mount` (lawless, adding a turret
+/// kits `cargo-racks` (legal, slowing the hull's acceleration), `gun-mount` (lawless, adding a turret
 /// hardpoint) and `turret-ring` (legal, adding a turret hardpoint); the
 /// start `dock-hand`, in the hauler in `hearth`; the
 /// storyline `dock-work`,
@@ -524,13 +525,88 @@ fn each_hull_is_a_ship_with_its_size_and_the_civilian_one_is_traffic() {
         (hauler.speed, hauler.shield, hauler.armor, hauler.holds),
         (300, 100, 200, 50)
     );
-    assert_eq!((hauler.accel, hauler.maneuver, hauler.fuel), (300, 40, 300));
+    assert_eq!((hauler.accel, hauler.maneuver, hauler.fuel), (360, 40, 400));
     let (_, anim) = named::<ShipAnim>(&game.data, 129);
     assert_eq!((anim.base_x_size, anim.base_y_size), (12, 30));
     let (name, dude) = named::<Dude>(&game.data, 128);
     assert_eq!(name, "Civilian traffic");
     assert_eq!(dude.ship_type[..2], [Some(ShipId(129)), None]);
     assert_eq!(dude.ai_type, 1);
+}
+
+/// The fixture's `shïp` of `ship`.
+fn fixture_ship(game: &new_game::NewGame, ship: &str) -> Ship {
+    named::<Ship>(&game.data, game.ids.ships[&id(ship)]).1
+}
+
+/// `ship`'s acceleration, turn, fuel, crew, shield and armour recharges,
+/// and mass.
+fn hull_numbers(ship: &Ship) -> [i16; 7] {
+    [
+        ship.accel,
+        ship.maneuver,
+        ship.fuel,
+        ship.crew,
+        ship.shield_rech,
+        ship.armor_rech,
+        ship.mass,
+    ]
+}
+
+#[test]
+fn the_cutter_and_the_hauler_fly_on_their_own_hull_numbers() {
+    let game = new_game::open(&fixture()).expect("lists");
+    let cutter = hull_numbers(&fixture_ship(&game, "cutter"));
+    let hauler = hull_numbers(&fixture_ship(&game, "hauler"));
+    assert_eq!(
+        cutter,
+        [800, 60, 200, 12, 600, 100, 40],
+        "its `turn` 60 over its `handling` 80"
+    );
+    assert_eq!(
+        hauler,
+        [360, 40, 400, 3, 300, 50, 80],
+        "no `turn`: its `handling` 40 turns it"
+    );
+    for (n, (c, h)) in cutter.iter().zip(&hauler).enumerate() {
+        assert_ne!(c, h, "number {n} differs");
+    }
+}
+
+#[test]
+fn the_racked_hauler_flies_on_the_hauler_s_hull_numbers() {
+    let game = new_game::open(&fixture()).expect("lists");
+    assert_eq!(
+        hull_numbers(&fixture_ship(&game, "racked-hauler")),
+        hull_numbers(&fixture_ship(&game, "hauler"))
+    );
+}
+
+#[test]
+fn the_warden_picket_names_no_hull_numbers_and_flies_on_the_defaults() {
+    let game = new_game::open(&fixture()).expect("lists");
+    let picket = fixture_ship(&game, "warden-picket");
+    assert_eq!(
+        hull_numbers(&picket),
+        [picket.speed, 80, 300, 1, 0, 0, 0],
+        "its speed, its handling, three jumps, one crew, no recharge, massless"
+    );
+    assert_eq!(picket.speed, 400);
+}
+
+#[test]
+fn the_cargo_racks_take_their_cargo_and_acceleration_slots() {
+    let game = new_game::open(&fixture()).expect("lists");
+    let (_, racks) = named::<Outfit>(&game.data, game.ids.kits[&id("cargo-racks")]);
+    assert_eq!(
+        [
+            (racks.mod_type, racks.mod_val),
+            (racks.mod_type2, racks.mod_val2),
+            (racks.mod_type3, racks.mod_val3),
+            (racks.mod_type4, racks.mod_val4),
+        ],
+        [(2, 10), (7, -50), (-1, 0), (-1, 0)]
+    );
 }
 
 #[test]
