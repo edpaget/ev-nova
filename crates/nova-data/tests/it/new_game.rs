@@ -208,8 +208,10 @@ fn the_fixture_folder_holds_a_record_for_each_thing_it_maps() {
     assert_eq!(data.ids(Weapon::TYPE), [128], "the mass driver");
     assert_eq!(
         data.ids(StrList::TYPE),
-        [4000, 4001, 4003, 4004],
-        "the standard goods' lists"
+        [
+            128, 134, 138, 1100, 2002, 3000, 3001, 3002, 4000, 4001, 4003, 4004, 5003
+        ],
+        "the engine's own lists around the standard goods' lists"
     );
     assert_eq!(data.ids(Junk::TYPE), [128], "the vintage wine");
     let [file] = data.files() else {

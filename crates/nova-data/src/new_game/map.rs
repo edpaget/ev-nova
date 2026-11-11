@@ -30,7 +30,7 @@ use super::records::{
     stellar_flags, text_desc,
 };
 use super::yards::{self, SPECIAL_TECH_SLOTS, Sales};
-use super::{blockades, gates, goods};
+use super::{blockades, gates, goods, strings};
 use crate::decode::Entry;
 use crate::records::govt::Govt;
 use crate::records::stellar::Stellar;
@@ -59,8 +59,9 @@ pub struct Mapped {
 /// `spöb`, `dësc`, `STR#`, `jünk`, `shïp`, `shän`, `düde`, `chär`, `oütf`,
 /// `wëap` and `mïsn` records, and their fittings,
 /// plus the placeholder `ïntf` status bar, which a flight frame always
-/// needs, so even an empty galaxy maps it. Nothing is pinned: see
-/// [`map_pinned`].
+/// needs, and the engine's own `STR#` lists ([`super::strings`]) at each ID
+/// no good's list holds, so even an empty galaxy maps them. Nothing is
+/// pinned: see [`map_pinned`].
 #[must_use]
 pub fn map(galaxy: &Galaxy) -> Mapped {
     map_pinned(galaxy, &IdTable::default())
@@ -140,6 +141,7 @@ pub fn map_pinned(galaxy: &Galaxy, pins: &IdTable) -> Mapped {
         name: Some("Default status bar".to_owned()),
         record: AnyRecord::Interface(Box::new(default_interface())),
     });
+    strings::fill(&mut records);
     Mapped {
         records,
         ids,

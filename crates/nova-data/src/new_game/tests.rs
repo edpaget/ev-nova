@@ -32,6 +32,7 @@ use crate::records::ship::Ship;
 use crate::records::ship_anim::ShipAnim;
 use crate::records::stellar::{Stellar, flags, flags2};
 use crate::records::system::System;
+use crate::registry::AnyRecord;
 use crate::wire::flags::{Flags16, Flags32};
 use crate::wire::id::{GovtId, OutfitId, ShipId, StellarId, SystemId, WeaponId};
 use nova_galaxy_format::id::PointRef;
@@ -1947,4 +1948,74 @@ fn the_fixture_folder_s_hulls_have_their_roles() {
     );
     let cutter = line_of(&game, "cutter").expect("a line");
     assert_eq!(cutter.role, Some(Role::Corvette));
+}
+
+/// `STR#` `list`'s strings in `game`'s store, if it has the list.
+fn string_list(game: &NewGame, list: i16) -> Option<Vec<String>> {
+    use crate::records::string_list::StrList;
+    let entry = game.data.get::<StrList>(list)?.expect("decoded");
+    Some(
+        entry
+            .record
+            .strings
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+    )
+}
+
+#[test]
+fn over_the_fixture_each_engine_list_holds_every_entry_its_reader_asks_for() {
+    let game = open(&super::fixture::folder()).expect("lists");
+    for list in strings::defaults() {
+        let held =
+            string_list(&game, list.id).unwrap_or_else(|| panic!("STR# {} is mapped", list.id));
+        for &(index, _) in &list.entries {
+            let text = held.get(usize::from(index) - 1).map(String::as_str);
+            assert!(
+                text.is_some_and(|text| !text.trim().is_empty()),
+                "STR# {} #{index}: {text:?}",
+                list.id
+            );
+        }
+    }
+}
+
+#[test]
+fn over_the_fixture_the_goods_keep_their_own_lists_and_each_list_is_mapped_once() {
+    let game = open(&super::fixture::folder()).expect("lists");
+    let mut problems = Vec::new();
+    let goods = goods::standard_strings(&game.galaxy, &game.ids, &mut problems);
+    assert_eq!(goods.len(), 4, "the fixture has goods");
+    for good in &goods {
+        let AnyRecord::StrList(own) = &good.record else {
+            panic!("a STR#");
+        };
+        let own: Vec<String> = own.strings.iter().map(ToString::to_string).collect();
+        assert_eq!(string_list(&game, good.id), Some(own), "STR# {}", good.id);
+    }
+    let mapped = map_pinned(&game.galaxy, &game.ids);
+    let mut ids: Vec<i16> = mapped
+        .records
+        .iter()
+        .filter(|entry| matches!(entry.record, AnyRecord::StrList(_)))
+        .map(|entry| entry.id)
+        .collect();
+    let all = ids.len();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), all, "each STR# once: {ids:?}");
+}
+
+#[test]
+fn an_empty_galaxy_maps_the_engine_lists_too() {
+    let game = loaded(&MemSource::default());
+    let mut expected: Vec<i16> = strings::defaults().iter().map(|list| list.id).collect();
+    expected.sort_unstable();
+    let mut held = game
+        .data
+        .ids(crate::records::string_list::StrList::TYPE)
+        .to_vec();
+    held.sort_unstable();
+    assert_eq!(held, expected);
 }
