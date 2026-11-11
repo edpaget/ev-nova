@@ -11,10 +11,16 @@
 //!   chain's, a variant's replacing its base's of the same `id`, then its
 //!   kits'; its kits its base's, then its own. The bible's `speed` is
 //!   Nova's (speed/100 pixels a tick), `shields`, `hull` and `cargo` are
-//!   its `Shield`, `Armor` and `Holds`. Its acceleration is its speed and
-//!   its `Maneuver` its `handling` ([`maneuver`], the turn scale), both
-//!   placeholders, and every ship holds [`HULL_FUEL`] and a crew of
-//!   one. Its kits are its `DefaultItems`, one of each, so its stats come
+//!   its `Shield`, `Armor` and `Holds`. Its `acceleration`, `turn`,
+//!   `fuel`, `crew`, `shield_recharge`, `hull_recharge` and `mass` are its
+//!   `Accel`, `Maneuver`, `Fuel`, `Crew`, `ShieldRech`, `ArmorRech` and
+//!   `Mass`, one to one, each held within `i16`. Left out of the whole
+//!   chain, its `Accel` is its speed, its `Maneuver` its `handling`
+//!   ([`maneuver`], the turn scale), its `Fuel` [`HULL_FUEL`], its crew
+//!   one, and the rest 0: a `turn` anywhere in the chain wins over every
+//!   `handling`. Its `FreeMass` and `Strength` stay 0: nothing in the new
+//!   game reads outfit mass, and the strength feeds odds no phase needs
+//!   yet. Its kits are its `DefaultItems`, one of each, so its stats come
 //!   from them as a fitted kit's do (`super::kits`). Its chain's `fixed`
 //!   and `launcher` hardpoints are its `MaxGun` and its `turret` ones its
 //!   `MaxTur` (a kit adds its own through its effects). The weapon
@@ -96,9 +102,13 @@ use crate::wire::id::{OutfitId, ShipId, SystemId, WeaponId};
 /// guess, kept here alone).
 pub const PX_PER_METRE: f64 = 1.0;
 
-/// Every hull's fuel: 300, three jumps, a placeholder above the 99 the
-/// engine's reading needs for an NPC to jump out where a ruleset lets it.
+/// The fuel of a hull whose chain gives no `fuel`: 300, three jumps, above
+/// the 99 the engine's reading needs for an NPC to jump out where a
+/// ruleset lets it.
 pub const HULL_FUEL: i16 = 300;
+
+/// The crew of a hull whose chain gives no `crew`: one.
+const HULL_CREW: i16 = 1;
 
 /// The new game's turn scale: the `Maneuver`, in tenths of a degree a
 /// tick, that `handling` makes. A hull's `Maneuver` and a kit's turn
@@ -270,15 +280,23 @@ pub fn ship(
     };
     let mut ship = Ship {
         speed,
-        accel: speed,
-        maneuver: stats
-            .handling
-            .map_or(0, |handling| saturated(maneuver(handling.into()))),
+        accel: stats
+            .acceleration
+            .map_or(speed, |accel| saturated(accel.into())),
+        maneuver: match stats.turn {
+            Some(turn) => saturated(turn.into()),
+            None => stats
+                .handling
+                .map_or(0, |handling| saturated(maneuver(handling.into()))),
+        },
         shield: word(stats.shields),
         armor: word(stats.hull),
         holds: word(stats.cargo),
-        fuel: HULL_FUEL,
-        crew: 1,
+        fuel: stats.fuel.map_or(HULL_FUEL, |fuel| saturated(fuel.into())),
+        crew: stats.crew.map_or(HULL_CREW, |crew| saturated(crew.into())),
+        shield_rech: word(stats.shield_recharge),
+        armor_rech: word(stats.hull_recharge),
+        mass: word(stats.mass),
         max_gun: mounted(&[Mount::Fixed, Mount::Launcher]),
         max_tur: mounted(&[Mount::Turret]),
         contribute: Flags64(

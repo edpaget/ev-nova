@@ -1004,6 +1004,54 @@ fn a_hull_sets_nothing_else() {
     assert_eq!(skiff(&skiff_with_stats()), expected);
 }
 
+/// The fixture galaxy with the skiff naming every hull number as well as
+/// its `handling` 60, and `heavy-skiff` a variant of it giving only `mass`.
+fn skiff_with_hull_numbers() -> MemSource {
+    galaxy()
+        .with(
+            "ships/skiff.md",
+            "---\nname: Skiff\nstyle: civilian\nrole: shuttle\nmodel: hull\n\
+             size: {length: 8, beam: 4, collision_radius: 4}\n\
+             stats: {speed: 300, handling: 60, acceleration: 500, turn: 25, fuel: 400, \
+             crew: 3, shield_recharge: 300, hull_recharge: 50, mass: 80}\n---\n",
+        )
+        .with(
+            "ships/heavy-skiff.md",
+            "---\nname: Heavy skiff\nbase: skiff\nstats: {mass: 150}\n---\n",
+        )
+}
+
+/// `ship`'s acceleration, turn, fuel, crew, recharges and mass.
+fn hull_numbers(ship: &Ship) -> [i16; 7] {
+    [
+        ship.accel,
+        ship.maneuver,
+        ship.fuel,
+        ship.crew,
+        ship.shield_rech,
+        ship.armor_rech,
+        ship.mass,
+    ]
+}
+
+#[test]
+fn a_hull_takes_its_acceleration_turn_fuel_crew_recharges_and_mass_from_its_stats() {
+    assert_eq!(
+        hull_numbers(&skiff(&skiff_with_hull_numbers())),
+        [500, 25, 400, 3, 300, 50, 80],
+        "its `turn` 25, not its `handling` 60"
+    );
+}
+
+#[test]
+fn a_variant_giving_one_hull_number_keeps_the_rest_from_its_base() {
+    let game = loaded(&skiff_with_hull_numbers());
+    assert_eq!(
+        hull_numbers(&ship_of(&game, "heavy-skiff")),
+        [500, 25, 400, 3, 300, 50, 150]
+    );
+}
+
 #[test]
 fn a_ship_s_short_long_and_comm_names_are_its_name_as_written() {
     let game = loaded(&galaxy());

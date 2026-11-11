@@ -22,13 +22,24 @@
 //! - **Effects** ([`effect_slots`]), in the four `ModType`/`ModVal` slots,
 //!   in this order, an effect of 0 taking none: `hull` as
 //!   [`mod_type::MORE_ARMOR`], `shields` as [`mod_type::MORE_SHIELD`],
-//!   `speed` as [`mod_type::MORE_SPEED`] (top speed only: acceleration
-//!   stays the hull's placeholder), `handling` as
+//!   `speed` as [`mod_type::MORE_SPEED`] (top speed only), `handling` as
 //!   [`mod_type::TURN_CHANGE`] on the hull's turn scale ([`turn_change`]),
-//!   `cargo` as [`mod_type::MORE_CARGO`], then its `fixed` and `launcher`
-//!   hardpoints as [`mod_type::MORE_GUNS`] and its `turret` ones as
-//!   [`mod_type::MORE_TURRETS`]. `hidden_cargo` isn't mapped: nothing in
-//!   the new game is contraband cargo yet.
+//!   `cargo` as [`mod_type::MORE_CARGO`], `acceleration` as
+//!   [`mod_type::MORE_ACCEL`], `fuel` as [`mod_type::MORE_FUEL`],
+//!   `shield_recharge` as [`mod_type::MORE_SHIELD_RECHARGE`] and
+//!   `hull_recharge` as [`mod_type::MORE_ARMOR_RECHARGE`], each on the
+//!   scale of the hull word of the same name (`super::fleet`), then its
+//!   `fixed` and `launcher` hardpoints as [`mod_type::MORE_GUNS`] and its
+//!   `turret` ones as [`mod_type::MORE_TURRETS`]. The four newer effects
+//!   come after `cargo`, so a kit without them keeps its slots. A kit has
+//!   no `turn` effect: its `handling` is already its turn change, on the
+//!   same scale as a hull's `turn` ([`maneuver`] is the identity), and a
+//!   second word for the one `ModType` would split it two ways. Nor a
+//!   `crew` or `mass` one: no `ModType` changes a hull's crew or mass (an
+//!   outfit's own mass weighs on the hull's `FreeMass`, which the new game
+//!   doesn't read).
+//!   `hidden_cargo` isn't mapped: nothing in the new game is contraband
+//!   cargo yet.
 //! - **Its hardpoints' outfits** come with it: its `OnPurchase` grants
 //!   each (`G<oütf>`) and its `OnSell` takes each back (`D<oütf>`), so a
 //!   gun mount's gun arrives in the turret slot the kit adds and leaves
@@ -91,10 +102,22 @@ pub mod mod_type {
     pub const MORE_CARGO: i16 = 2;
     /// Adds shield points.
     pub const MORE_SHIELD: i16 = 4;
+    /// Adds shield recharge, in thousandths of a point a tick, as the
+    /// hull's `ShieldRech` (`nova_sim::stats::MORE_SHIELD_RECHARGE`).
+    pub const MORE_SHIELD_RECHARGE: i16 = 5;
     /// Adds armour points.
     pub const MORE_ARMOR: i16 = 6;
+    /// Adds acceleration, on `Speed`'s scale as the hull's `Accel`
+    /// (`nova_sim::stats::MORE_ACCEL`).
+    pub const MORE_ACCEL: i16 = 7;
     /// Adds top speed, on `Speed`'s scale.
     pub const MORE_SPEED: i16 = 8;
+    /// Adds fuel, 100 a jump, as the hull's `Fuel`
+    /// (`nova_sim::stats::MORE_FUEL`).
+    pub const MORE_FUEL: i16 = 12;
+    /// Adds armour recharge, in thousandths of a point a tick, as the
+    /// hull's `ArmorRech` (`nova_sim::stats::MORE_ARMOR_RECHARGE`).
+    pub const MORE_ARMOR_RECHARGE: i16 = 29;
     /// Changes the turn rate, [`super::TURN_MOD_PER_MANEUVER`] a unit of
     /// `Maneuver`.
     pub const TURN_CHANGE: i16 = 9;
@@ -278,6 +301,22 @@ pub fn effect_slots(kit: &ModKit) -> Vec<(&'static str, i16, i16)> {
         ("speed", mod_type::MORE_SPEED, word(e.speed.into())),
         ("handling", mod_type::TURN_CHANGE, turn_change(e.handling)),
         ("cargo", mod_type::MORE_CARGO, word(e.cargo.into())),
+        (
+            "acceleration",
+            mod_type::MORE_ACCEL,
+            word(e.acceleration.into()),
+        ),
+        ("fuel", mod_type::MORE_FUEL, word(e.fuel.into())),
+        (
+            "shield_recharge",
+            mod_type::MORE_SHIELD_RECHARGE,
+            word(e.shield_recharge.into()),
+        ),
+        (
+            "hull_recharge",
+            mod_type::MORE_ARMOR_RECHARGE,
+            word(e.hull_recharge.into()),
+        ),
         (
             "gun hardpoints",
             mod_type::MORE_GUNS,
@@ -496,6 +535,33 @@ mod tests {
     fn armour_plating_takes_four_slots_in_order() {
         let plating = kit_of(&loaded(&sample_kits()), "armour-plating");
         assert_eq!(slots(&plating), [(6, 300), (8, -40), (9, -100), (2, -10)]);
+    }
+
+    #[test]
+    fn a_kit_s_acceleration_fuel_and_recharges_take_their_slots() {
+        let game = loaded(&galaxy().with(
+            "mods/tune-kit.md",
+            "---\nname: Tune kit\nfits: [shuttle]\nfitted_at: legal\nprice: 100\n\
+             effects: {acceleration: -50, fuel: 100, shield_recharge: 200, hull_recharge: 20}\n\
+             ---\n",
+        ));
+        assert_eq!(
+            slots(&kit_of(&game, "tune-kit")),
+            [(7, -50), (12, 100), (5, 200), (29, 20)]
+        );
+    }
+
+    #[test]
+    fn a_kit_s_cargo_comes_before_its_acceleration() {
+        let game = loaded(&galaxy().with(
+            "mods/racks.md",
+            "---\nname: Racks\nfits: [shuttle]\nfitted_at: legal\nprice: 100\n\
+             effects: {acceleration: -50, cargo: 10}\n---\n",
+        ));
+        assert_eq!(
+            slots(&kit_of(&game, "racks")),
+            [(2, 10), (7, -50), (-1, 0), (-1, 0)]
+        );
     }
 
     #[test]
