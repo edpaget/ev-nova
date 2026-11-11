@@ -445,6 +445,37 @@ mod tests {
     }
 
     #[test]
+    fn bringing_a_ship_in_gives_the_id_of_the_ship_it_placed() {
+        use crate::catalog::{GovtId, ShipId};
+        use crate::testkit::{FAST, FakePilotCatalog, ship};
+        use crate::traffic::npc::AiType;
+        let catalog = FakePilotCatalog {
+            ship_records: vec![ship(129, FAST)],
+            ..catalog()
+        };
+        let mut session = Session::start(&catalog).expect("starts");
+        let at = crate::geometry::Vec2::new(40.0, 60.0);
+        let first =
+            bring_in(&mut session, ShipId(129), None, AiType::Warship, at).expect("brought in");
+        let second = bring_in(
+            &mut session,
+            ShipId(129),
+            Some(GovtId(131)),
+            AiType::Warship,
+            at,
+        )
+        .expect("brought in");
+        assert_ne!(first, second);
+        let npc = |id| session.npcs().iter().find(|npc| npc.id == id).cloned();
+        assert_eq!(npc(first).map(|npc| npc.govt), Some(None));
+        assert_eq!(npc(second).map(|npc| npc.govt), Some(Some(GovtId(131))));
+        assert_eq!(
+            bring_in(&mut session, ShipId(999), None, AiType::Warship, at),
+            None
+        );
+    }
+
+    #[test]
     #[allow(clippy::float_cmp)] // the helper assigns, so the points match exactly
     fn setting_the_players_shield_sets_only_its_points() {
         let mut session = Session::start(&catalog()).expect("starts");

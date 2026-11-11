@@ -185,7 +185,8 @@ fn stance_flags(stance: Option<PlayerStance>) -> u16 {
 /// `value`, held within `i16`, with a problem against `path` naming
 /// `what` when it is outside.
 fn held_i16(value: i64, what: &str, path: &str, problems: &mut Vec<Problem>) -> i16 {
-    let held = i16::try_from(value).unwrap_or(if value < 0 { i16::MIN } else { i16::MAX });
+    let clamped = value.clamp(i16::MIN.into(), i16::MAX.into());
+    let held = i16::try_from(clamped).expect("clamped within i16");
     if i64::from(held) != value {
         problems.push(Problem::new(
             path,
