@@ -368,7 +368,7 @@ fn a_deferred_offer_is_listed_in_the_bar_and_opens_from_it() {
 }
 
 /// A pilot carrying the dock job, flying in the Verge.
-fn in_the_verge_on_the_dock_job(pilot: &mut Pilot) {
+pub(crate) fn in_the_verge_on_the_dock_job(pilot: &mut Pilot) {
     on_the_dock_job(pilot);
     pilot.system = nova_sim::SystemId(nova_of(&fixture().ids.systems, "verge"));
     pilot.stellar = None;

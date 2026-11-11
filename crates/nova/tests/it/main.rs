@@ -58,6 +58,7 @@ mod new_game_looks;
 mod new_game_missions;
 mod new_game_models;
 mod new_game_muzzles;
+mod new_game_news;
 mod new_game_outfits;
 mod new_game_play;
 mod new_game_port;
