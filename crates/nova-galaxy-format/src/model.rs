@@ -78,6 +78,38 @@ pub struct Faction {
     /// that doesn't mind.
     #[serde(default)]
     pub penalties: Penalties,
+    /// What the faction's law costs a smuggler, and how often its traffic
+    /// control looks. Each word left out takes the game's default. A
+    /// lawless faction keeps no law, so it names none. Omit for a faction
+    /// that keeps the game's default law.
+    #[serde(default)]
+    pub law: Law,
+}
+
+/// What a law-keeping faction's law costs a smuggler its scans catch,
+/// and how often its traffic control scans a ship that asks to land. Its
+/// patrols scan whatever this says. Each word left out takes the game's
+/// default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Law {
+    /// Points of the player's legal record with the faction that a
+    /// smuggling conviction costs: a scan that finds contraband. Not 0: a
+    /// faction whose scans cost nothing scans nobody, which `lawless`
+    /// says. Omit for the game's default.
+    #[serde(default)]
+    pub smuggling: Option<NonZeroU32>,
+    /// Credits a find costs the player. 0 convicts without a fine. Omit
+    /// for the game's default.
+    #[serde(default)]
+    pub fine: Option<u32>,
+    /// The percent chance, for each point of a ship's attention (its mod
+    /// kits'), that the faction's traffic control scans a ship asking to
+    /// land. A ship that draws no attention is never scanned there. 0
+    /// means its traffic control never looks; its patrols still scan. Omit
+    /// for the game's default.
+    #[serde(default)]
+    pub scan_rate: Option<u32>,
 }
 
 /// How a faction's warships treat the player, whatever the player's record.
@@ -977,6 +1009,79 @@ pub(crate) mod tests {
             );
             assert!(!required.contains(&word), "{word}: {required:?}");
         }
+    }
+
+    #[test]
+    fn a_faction_reads_its_law() {
+        let faction: Faction = read(
+            "name: Wardens\nkind: minor\ncolor: \"#3366cc\"\n\
+             law:\n  smuggling: 15\n  fine: 800\n  scan_rate: 50\n",
+        )
+        .unwrap();
+        assert_eq!(
+            faction.law,
+            Law {
+                smuggling: NonZeroU32::new(15),
+                fine: Some(800),
+                scan_rate: Some(50),
+            }
+        );
+        let free: Faction = read(
+            "name: Wardens\nkind: minor\ncolor: \"#3366cc\"\nlaw:\n  fine: 0\n  scan_rate: 0\n",
+        )
+        .unwrap();
+        assert_eq!(
+            free.law,
+            Law {
+                smuggling: None,
+                fine: Some(0),
+                scan_rate: Some(0),
+            }
+        );
+    }
+
+    #[test]
+    fn a_faction_that_names_no_law_leaves_it_to_the_game() {
+        let plain: Faction = read("name: Crown\nkind: major\ncolor: \"#aa0000\"\n").unwrap();
+        assert_eq!(plain.law, Law::default());
+        assert_eq!(
+            plain.law,
+            Law {
+                smuggling: None,
+                fine: None,
+                scan_rate: None,
+            }
+        );
+    }
+
+    #[test]
+    fn a_faction_refuses_an_unknown_law_word_or_a_smuggling_penalty_of_zero() {
+        let unknown =
+            read::<Faction>("name: Band\nkind: minor\ncolor: \"#333333\"\nlaw:\n  bribe: 3\n")
+                .unwrap_err();
+        assert!(unknown.contains("unknown field `bribe`"), "{unknown}");
+        let zero =
+            read::<Faction>("name: Band\nkind: minor\ncolor: \"#333333\"\nlaw:\n  smuggling: 0\n");
+        assert!(zero.is_err(), "{zero:?}");
+    }
+
+    #[test]
+    fn the_faction_schema_lists_the_law_as_optional() {
+        let schema = schemars::schema_for!(Faction);
+        let value = schema.as_value();
+        assert!(
+            value["properties"]["law"]["description"]
+                .as_str()
+                .is_some_and(|d| d.contains("law")),
+            "{value}"
+        );
+        let required: Vec<&str> = value["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|r| r.as_str())
+            .collect();
+        assert!(!required.contains(&"law"), "{required:?}");
     }
 
     #[test]

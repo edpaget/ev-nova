@@ -2,12 +2,15 @@
 //! them in: a stellar's `prices` maps each good it trades to a
 //! [`PriceLevel`].
 //!
-//! These are kept small: a good is a name and a base price, and a port
-//! prices it low, medium or high. Legality, prices that drift with what a
-//! port has heard, and fuel are left for the spaceport's design.
+//! These are kept small: a good is a name, a base price and the factions
+//! whose scans find it (its `contraband`), and a port prices it low,
+//! medium or high. Prices that drift with what a port has heard, and
+//! fuel, are left for the spaceport's design.
 
 use schemars::JsonSchema;
 use serde::Deserialize;
+
+use crate::id::Id;
 
 /// A trade good (`goods/<id>.md`): something a pilot buys at one port and
 /// sells at another. A stellar that trades it names it in its `prices`.
@@ -19,6 +22,13 @@ pub struct Good {
     /// The base price, in credits a ton: what a port that prices it
     /// `medium` asks. A `low` port asks less and a `high` port more.
     pub price: u32,
+    /// The factions (`factions/<id>.md`) whose scans find the good: their
+    /// patrols' and their traffic control's. Holding it where one of them
+    /// scans is smuggling. A good is contraband for a faction wherever
+    /// that faction scans, not system by system. Omit for a good that is
+    /// legal everywhere.
+    #[serde(default)]
+    pub contraband: Vec<Id>,
 }
 
 /// How dear a good is at a stellar that trades it.
@@ -77,6 +87,41 @@ mod tests {
         assert!(error.contains("unknown field `legal`"), "{error}");
         let error = read::<Good>("name: Grain\n").unwrap_err();
         assert!(error.contains("missing field `price`"), "{error}");
+    }
+
+    #[test]
+    fn a_good_reads_the_factions_it_is_contraband_for() {
+        let good: Good = read("name: Wine\nprice: 300\ncontraband: [guild, crown]\n").unwrap();
+        let factions: Vec<_> = good.contraband.iter().map(Id::as_str).collect();
+        assert_eq!(factions, ["guild", "crown"]);
+    }
+
+    #[test]
+    fn a_good_that_names_no_faction_is_legal_everywhere() {
+        let good: Good = read("name: Grain\nprice: 100\n").unwrap();
+        assert!(good.contraband.is_empty());
+        let error = read::<Good>("name: Grain\nprice: 100\ncontraband: [Guild]\n").unwrap_err();
+        assert!(error.contains("`Guild`"), "{error}");
+    }
+
+    #[test]
+    fn the_good_schema_lists_contraband_as_optional() {
+        let schema = schemars::schema_for!(Good);
+        let value = schema.as_value();
+        assert!(
+            value["properties"]["contraband"]["description"]
+                .as_str()
+                .is_some_and(|d| d.contains("faction")),
+            "{value}"
+        );
+        let required: Vec<&str> = value["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|r| r.as_str())
+            .collect();
+        assert!(!required.contains(&"contraband"), "{required:?}");
+        assert!(required.contains(&"price"), "{required:?}");
     }
 
     #[test]
