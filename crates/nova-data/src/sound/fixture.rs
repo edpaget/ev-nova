@@ -1,4 +1,4 @@
-//! Synthetic `snd ` builders for tests.
+//! Synthetic `snd ` and WAV builders for tests.
 //!
 //! Available to this crate's tests and, through the `fixture` feature, to
 //! other crates' tests. The builders write well-formed sound resources from
@@ -225,6 +225,44 @@ pub fn ima4_packet(predictor: i16, index: u8, codes: [u8; 64]) -> [u8; 34] {
         *byte = (pair[0] & 0x0F) + (pair[1] << 4);
     }
     packet
+}
+
+/// A WAV file of integer PCM: `channels` interleaved `samples` at `rate`
+/// hertz, `bits` 8 or 16 to a sample. An 8-bit sample is the high byte of
+/// its `i16`, offset to silence at `0x80`; the data chunk is padded to an
+/// even length.
+///
+/// # Panics
+///
+/// On `bits` other than 8 or 16, or no channels.
+#[must_use]
+pub fn wav(channels: u16, rate: u32, bits: u16, samples: &[i16]) -> Vec<u8> {
+    let data: Vec<u8> = match bits {
+        // The high byte, as an unsigned offset: `(s >> 8) + 128` in 0..=255.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        8 => samples.iter().map(|&s| ((s >> 8) + 128) as u8).collect(),
+        16 => samples.iter().flat_map(|s| s.to_le_bytes()).collect(),
+        _ => panic!("a WAV fixture is 8 or 16 bits, not {bits}"),
+    };
+    let align = channels * (bits / 8);
+    assert!(align > 0, "a WAV fixture has a channel");
+    let mut out = b"RIFF".to_vec();
+    let len = |n: usize| u32::try_from(n).expect("a small fixture");
+    let padded = data.len() + data.len() % 2;
+    out.extend(len(4 + 8 + 16 + 8 + padded).to_le_bytes());
+    out.extend(b"WAVEfmt ");
+    out.extend(16u32.to_le_bytes());
+    out.extend(1u16.to_le_bytes());
+    out.extend(channels.to_le_bytes());
+    out.extend(rate.to_le_bytes());
+    out.extend((rate * u32::from(align)).to_le_bytes());
+    out.extend(align.to_le_bytes());
+    out.extend(bits.to_le_bytes());
+    out.extend(b"data");
+    out.extend(len(data.len()).to_le_bytes());
+    out.extend(&data);
+    out.resize(out.len() + data.len() % 2, 0);
+    out
 }
 
 #[cfg(test)]

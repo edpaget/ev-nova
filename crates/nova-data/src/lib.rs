@@ -204,11 +204,11 @@ pub use store::{
     MissionOffer, MissionStoryline, NewsItem, NoInterfaceFile, OpenError, Origin, Outcome, Outline,
     OutlineTriangle, ParsedSet, ParsedTest, PointAt, PointState, Provenance, Requires, SheetKind,
     SheetScan, ShipImage, ShipImageError, ShipImageFields, ShipLayer, ShipLayerInfos, ShipLayers,
-    ShipLine, ShipSprite, ShipSpriteFrame, ShipSpriteInfo, ShipSpriteWords, SourceFile, SpinSheet,
-    SpinSpriteError, Spot, SpotKind, SpriteError, StandIn, StandInOf, StarDot, StellarSprite,
-    StellarSpriteError, StockArt, StoreEntry, StoreResource, StoryAct, StoryEffects, StoryMission,
-    Storylines, interface_path_candidates, load_interface, open_interface, outfit_desc_id,
-    ship_desc_id, shot_spin_id, stellar_spin_id,
+    ShipLine, ShipSprite, ShipSpriteFrame, ShipSpriteInfo, ShipSpriteWords, SoundFiles, SourceFile,
+    SpinSheet, SpinSpriteError, Spot, SpotKind, SpriteError, StandIn, StandInOf, StarDot,
+    StellarSprite, StellarSpriteError, StockArt, StoreEntry, StoreResource, StoryAct, StoryEffects,
+    StoryMission, Storylines, interface_path_candidates, load_interface, open_interface,
+    outfit_desc_id, ship_desc_id, shot_spin_id, stellar_spin_id,
 };
 pub use wire::flags::{Flags16, Flags32, Flags64};
 pub use wire::geometry::{Point, Rect};

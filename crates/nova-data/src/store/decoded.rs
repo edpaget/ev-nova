@@ -71,6 +71,7 @@ impl GameData {
             gate_fuels: BTreeMap::new(),
             mounts: super::Mounts::default(),
             muzzle_reaches: BTreeMap::new(),
+            sound_files: None,
         }
     }
 

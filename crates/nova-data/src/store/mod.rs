@@ -228,6 +228,7 @@ mod ship_desc;
 mod ship_line;
 mod ship_pict;
 mod shot_spin;
+mod sound_files;
 mod spin_sprite;
 mod sprite;
 mod stand_in;
@@ -250,6 +251,7 @@ pub use self::ship_desc::ship_desc_id;
 pub use self::ship_line::ShipLine;
 pub use self::ship_pict::{ShipImage, ShipImageError, ShipImageFields};
 pub use self::shot_spin::shot_spin_id;
+pub use self::sound_files::SoundFiles;
 pub use self::spin_sprite::{SpinSheet, SpinSpriteError};
 pub use self::sprite::{
     LayerError, LayerSprite, SheetScan, ShipLayer, ShipLayerInfos, ShipLayers, ShipSprite,
@@ -433,6 +435,10 @@ pub struct GameData {
     /// Each new-game weapon's muzzle reach in whole pixels
     /// ([`GameData::with_muzzle_reaches`]); none in a stock store.
     muzzle_reaches: BTreeMap<crate::wire::id::WeaponId, i16>,
+    /// A new game's clips by the `snd ` ID each fills
+    /// ([`GameData::with_sound_files`]); none in a stock store, which
+    /// plays its `snd ` resources.
+    sound_files: Option<SoundFiles>,
 }
 
 /// A test expression parsed once and shared: its tree, or why it did not
@@ -493,6 +499,7 @@ impl GameData {
             gate_fuels: BTreeMap::new(),
             mounts: Mounts::default(),
             muzzle_reaches: BTreeMap::new(),
+            sound_files: None,
         })
     }
 

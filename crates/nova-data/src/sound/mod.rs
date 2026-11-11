@@ -1,7 +1,9 @@
-//! Sound decoder: `snd ` resources in, 16-bit PCM out.
+//! Sound decoders: `snd ` resources and WAV files in, 16-bit PCM out.
 //!
 //! [`decode_snd`] is pure: it turns one `snd ` resource's bytes into a
-//! [`Pcm`] and does no resource lookup or I/O. A [`Pcm`] holds the header's
+//! [`Pcm`] and does no resource lookup or I/O. [`decode_wav`] does the same
+//! for a WAV file's bytes, a new game's clips (its own module docs say what
+//! it reads, in [`wav`]). A [`Pcm`] holds the header's
 //! exact sample rate ([`SampleRate`], 16.16 fixed point), the channel count,
 //! and signed 16-bit linear samples interleaved by frame:
 //!
@@ -12,6 +14,10 @@
 //! - 16-bit samples (extended headers with `sampleSize` 16) are big-endian
 //!   two's complement and are kept as they are.
 //! - IMA4 decodes directly to 16-bit samples.
+//! - A WAV file's 8-bit samples are unsigned with silence at `0x80` too, and
+//!   become `(byte - 128) << 8` the same way; its 16-bit samples are
+//!   little-endian two's complement and are kept as they are. Its rate is
+//!   whole hertz, so its [`SampleRate`] has no fraction.
 //!
 //! # Example
 //!
@@ -118,7 +124,7 @@
 //! [`graphics`]: crate::graphics
 //!
 //! The `fixture` feature exposes the `fixture` module, builders for
-//! synthetic `snd ` resources, to other crates' tests.
+//! synthetic `snd ` resources and WAV files, to other crates' tests.
 
 mod bytes;
 mod error;
@@ -126,6 +132,7 @@ mod header;
 mod ima4;
 mod pcm;
 mod snd;
+pub mod wav;
 
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
@@ -133,3 +140,4 @@ pub mod fixture;
 pub use error::SoundError;
 pub use pcm::{Pcm, SampleRate};
 pub use snd::decode_snd;
+pub use wav::{WavError, decode_wav};
