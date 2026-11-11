@@ -3,7 +3,8 @@
 //! and HG-Kania entered for Tichel, a new pilot offered the tutorial
 //! over the spaceport, a storyline finale's texts shown over Earth's
 //! spaceport before its `Q` leaves, a new pilot's intro screen, and the
-//! main screen drawn by the view and rendered with every image packed.
+//! main screen drawn by the view and rendered with every image packed,
+//! and start-up's music, the stock soundtrack found as it always was.
 //! Skips, passing, when `NOVA_DATA` is unset.
 
 use crate::common;
@@ -1015,4 +1016,19 @@ fn the_stock_main_screen_renders_with_every_image_packed() {
     let report = renderer.render(&list, &Viewport::new(LOGICAL, (1024, 768), 1.0), &mut gpu);
     assert_eq!(report.new_failures, vec![]);
     assert!(matches!(gpu.calls.last(), Some(GpuCall::Submit(_))));
+}
+
+/// Start-up finds the stock soundtrack as it always has: `Nova Music.mp3`
+/// in the `Nova Files`, its bytes unchanged, with no warning.
+#[test]
+fn start_up_hands_the_audio_side_the_stock_soundtrack() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let stock = nova_data::music::open_music(&dir).expect("the stock soundtrack reads");
+    assert_eq!(
+        nova::audio::game_music(nova::ruleset::Ruleset::Stock, &data, &dir),
+        (Some(stock), None)
+    );
 }
