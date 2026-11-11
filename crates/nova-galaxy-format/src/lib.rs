@@ -47,6 +47,7 @@ pub mod frontmatter;
 pub mod game;
 pub mod goods;
 pub mod id;
+mod launch;
 pub mod load;
 pub mod media;
 pub mod model;

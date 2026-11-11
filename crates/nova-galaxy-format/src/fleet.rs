@@ -12,6 +12,7 @@ use serde::Deserialize;
 use crate::id::{Color, Id};
 use crate::load::Galaxy;
 
+pub use crate::launch::{Ammunition, Fighters, Guidance};
 pub use crate::wreck::{Explosion, Wreck};
 
 /// A ship (`ships/<id>.md`): a hull class, or a variant of one.
@@ -368,6 +369,20 @@ pub struct Outfit {
     /// mission.
     #[serde(default)]
     pub sold_at: Vec<Id>,
+    /// How a launcher's shots fly: `unguided` or `homing`. Read only on a
+    /// launcher. Left out, `unguided`.
+    #[serde(default)]
+    pub guidance: Guidance,
+    /// The ammunition a launcher fires, and the load each hardpoint
+    /// carrying it comes with. Read only on a launcher. Left out, it fires
+    /// without ammunition.
+    #[serde(default)]
+    pub ammunition: Option<Ammunition>,
+    /// The hull a bay launches as fighters, and how many each bay
+    /// hardpoint carrying it comes with. Read only on a bay. Left out, the
+    /// bay launches nothing.
+    #[serde(default)]
+    pub fighters: Option<Fighters>,
 }
 
 /// A livery (`liveries/<id>.md`): paint and marks, so one model can serve
