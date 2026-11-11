@@ -31,7 +31,14 @@
 //! Preferences… while dialogs are missing, a quit is pending, or nothing
 //! holds input and something in front takes it (the intro's text takes
 //! Command-comma and opens nothing); About likewise, and also while
-//! anything holds input.
+//! anything holds input, or while the data has no About text (`dësc`
+//! 32767). The original always has one; a new game's data has one only
+//! from a `game.md` with a body.
+//!
+//! The main menu's About button and its A key have no greyed state: the
+//! main menu draws no disabled button. Over data with no About text they
+//! still click, and open nothing, and report nothing
+//! ([`AppScreen::open_text`]).
 
 use nova_view::{Input, Key, MenuCommand, ScreenAction};
 
@@ -90,7 +97,7 @@ impl AppScreen {
         let in_front = self.front().is_some() || self.entry_takes_commands();
         match command {
             MenuCommand::Preferences => holds || !in_front,
-            MenuCommand::About => !holds && !in_front,
+            MenuCommand::About => !holds && !in_front && self.has_text(super::ABOUT_TEXT),
             MenuCommand::Quit => true,
         }
     }

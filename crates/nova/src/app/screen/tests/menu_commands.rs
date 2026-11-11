@@ -337,7 +337,24 @@ fn without_dialogs() -> AppScreen {
     menu(&MemoryPilots::new())
 }
 
-fn states() -> [State; 23] {
+/// [`data`] with no About text: its `dësc` 32767 moved to 32000.
+fn no_about_data() -> Rc<GameData> {
+    let mut built = game_data_fork(false, false, false, 100, b"", b"", None).build();
+    let about = built.layout.reference(Desc::TYPE, ABOUT_TEXT);
+    built.put_u16(about, 32000);
+    let data = loaded_bytes(built.bytes);
+    assert!(data.get::<Desc>(ABOUT_TEXT).is_none(), "no About text");
+    data
+}
+
+/// [`main_menu`] over data with no About text ([`no_about_data`]).
+fn no_about_text() -> AppScreen {
+    with_dialogs(no_about_data())
+        .with_pilots(Some(keeper(&MemoryPilots::new())), Rc::new(MonoMetrics))
+        .appeared()
+}
+
+fn states() -> [State; 24] {
     let state = |name, make, then, preferences, about| State {
         name,
         make,
@@ -379,6 +396,7 @@ fn states() -> [State; 23] {
         state("a keyed click", keyed_click, click_ends, true, false),
         state("Quit's delay", quitting, nothing, false, false),
         state("no dialogs", without_dialogs, nothing, false, false),
+        state("no About text", no_about_text, nothing, true, false),
         state(
             "the start-up appear, not ended",
             starting_up,
@@ -483,6 +501,27 @@ fn about_is_greyed_wherever_it_opens_nothing() {
             state.name
         );
     }
+}
+
+/// I opens the About text where the router reads it itself: on the
+/// main menu, the ship browser and the galaxy viewer (flight and the
+/// spaceport take their own keys first).
+#[test]
+fn with_no_about_text_i_and_the_main_menu_s_a_open_nothing_and_warn_nothing() {
+    let mut screen = no_about_text();
+    screen.take_warnings();
+    screen.input(&Input::Text('a'));
+    screen.keyed_click_ended();
+    assert!(screen.about().is_none(), "the main menu's A");
+    assert_eq!(screen.showing(), Showing::MainMenu);
+    assert_eq!(screen.take_warnings(), Vec::<String>::new(), "A");
+    let mut screen = with_dialogs(no_about_data());
+    screen.take_warnings();
+    screen.input(&key(Key::KeyI, true));
+    screen.input(&key(Key::KeyI, false));
+    assert!(screen.about().is_none(), "I on the ship browser");
+    assert_eq!(screen.showing(), Showing::ShipBrowser);
+    assert_eq!(screen.take_warnings(), Vec::<String>::new(), "I");
 }
 
 /// `_QuitAEVTHandler` (@0x5619e) reads no `_inBackground`, and each event

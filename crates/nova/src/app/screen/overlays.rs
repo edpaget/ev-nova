@@ -31,6 +31,7 @@ use nova_view::{FullscreenKind, Input, KeyCombo, Screen, ScreenAction, VideoMode
 use super::port_dialogs::{abort_and_refresh, start_up_words};
 use super::{ABOUT_TEXT, AppScreen, ENTERED, MENU_X_TEXT, NO_INTERFACE, Side};
 use crate::app::keyboard_access::prefs_focus_ring;
+use nova_data::records::desc::Desc;
 
 impl AppScreen {
     /// Whether the in-game dialogs' buttons take the keyboard focus, as
@@ -77,10 +78,17 @@ impl AppScreen {
 
     /// Opens the About dialog over the side shown, first cancelling its
     /// pointer gesture and letting go of its keys (their releases will go
-    /// to the dialog). With no dialogs, nothing opens; when the dialog
-    /// cannot be built, nothing opens and the reason goes to stderr.
+    /// to the dialog). With no dialogs, or no About text in the data,
+    /// nothing opens; when the dialog cannot be built, nothing opens and
+    /// the reason goes to the warnings ([`open_text`](Self::open_text)).
     pub(super) fn open_about(&mut self) {
         self.open_text(ABOUT_TEXT);
+    }
+
+    /// Whether the data holds `dësc` `id`, decoded or not: the About text
+    /// or the X text [`open_text`](Self::open_text) can try to show.
+    pub(super) fn has_text(&self, id: i16) -> bool {
+        self.data.get::<Desc>(id).is_some()
     }
 
     /// Opens "Desc Dialog" on `dësc` `id` over the side shown, as
@@ -93,8 +101,15 @@ impl AppScreen {
     /// `desc_movie_globals` says, and a `Graphic` above 127 shows it in the
     /// picture variant: through [`MissionDialogs`], which says how. An
     /// empty text with no movie before it shows nothing (@0x5a7b0).
+    ///
+    /// A `dësc` the data doesn't hold is no text: nothing opens and
+    /// nothing is reported. The original always has both, so only a new
+    /// game's data, which may have no About text (`game.md`), comes here
+    /// without one. One that is there but can't be shown (it doesn't
+    /// decode, or there is no "Desc Dialog") opens nothing and goes to the
+    /// warnings, which the runner prints.
     pub(super) fn open_text(&mut self, id: i16) {
-        if self.dialogs.is_none() {
+        if self.dialogs.is_none() || !self.has_text(id) {
             return;
         }
         let text = if id == MENU_X_TEXT || id == ABOUT_TEXT {
@@ -110,7 +125,8 @@ impl AppScreen {
         let text = match checked {
             Ok(text) => text,
             Err(reason) => {
-                eprintln!("nova: cannot show dësc {id}: {reason}");
+                self.warnings
+                    .push(format!("nova: cannot show dësc {id}: {reason}"));
                 return;
             }
         };

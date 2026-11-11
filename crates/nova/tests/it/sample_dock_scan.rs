@@ -78,10 +78,11 @@ fn asking_luyten_exchange_to_land_with_the_kit_reads_the_find_and_the_fine() {
         .change_sim(|sim| {
             nova_sim::fixture::put_player_at(sim.session_mut().expect("a session"), at);
         });
-    // The words are nova-view's; the find and the fine are named in them.
+    // The words are nova-view's, and the kit's name in them nova-data's
+    // (its `LCName`); the find and the fine are named in them.
     let reads_find = |line: &Option<String>| {
         line.as_deref()
-            .is_some_and(|line| line.contains("Gun mount") && line.contains("500"))
+            .is_some_and(|line| line.to_lowercase().contains("gun mount") && line.contains("500"))
     };
     let mut presses = 0;
     while !reads_find(&message(&game)) {

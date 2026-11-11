@@ -250,15 +250,27 @@ fn with_a_pad_last_used_the_hint_names_the_pad_s_inputs_through_nova_view() {
 }
 
 #[test]
-fn a_missing_dialog_or_text_opens_nothing() {
+fn a_missing_desc_dialog_opens_nothing_and_warns_through_the_warnings() {
     let mut screen = AppScreen::new(data()).with_dialogs(Rc::new(NoDialogs), Rc::new(MonoMetrics));
+    screen.take_warnings();
     screen.input(&key(Key::KeyI, true));
     assert_eq!(screen.showing(), Showing::ShipBrowser);
+    let warnings = screen.take_warnings();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].starts_with("nova: cannot show dësc 32767: "),
+        "{warnings:?}"
+    );
+}
 
+#[test]
+fn a_missing_about_text_opens_nothing_and_warns_nothing() {
     let empty = Rc::new(one_file(ForkBuilder::new().build().bytes).load());
     let mut screen = with_dialogs(empty);
+    screen.take_warnings();
     screen.input(&key(Key::KeyI, true));
     assert!(screen.about().is_none());
+    assert_eq!(screen.take_warnings(), Vec::<String>::new());
 }
 
 #[test]

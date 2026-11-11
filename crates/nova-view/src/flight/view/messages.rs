@@ -372,7 +372,8 @@ pub fn dock_scanned_message(found: &str, fine: i64) -> String {
 
 /// What a dock scan's notice calls what it found: an outfit by its
 /// `LCName` for one or its `LCPlural` for more, else, for an outfit with
-/// none (the new game's), by its name; a `jünk` by its `LCName`.
+/// none (a new game's kit has no `LCPlural`), by its name; a `jünk` by
+/// its `LCName`.
 fn dock_find_name(found: DockFind, names: &Names) -> &str {
     match found {
         DockFind::Junk(junk) => names.junk_lc(junk).unwrap_or_default(),
