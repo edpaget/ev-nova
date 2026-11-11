@@ -68,6 +68,7 @@ impl GameData {
             fittings: super::Fittings::default(),
             ship_lines: BTreeMap::new(),
             collision_radii: BTreeMap::new(),
+            gate_fuels: BTreeMap::new(),
             mounts: super::Mounts::default(),
             muzzle_reaches: BTreeMap::new(),
         }

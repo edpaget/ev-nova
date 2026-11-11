@@ -14,7 +14,9 @@
 //!   its `Shield`, `Armor` and `Holds`. Its `acceleration`, `turn`,
 //!   `fuel`, `crew`, `shield_recharge`, `hull_recharge` and `mass` are its
 //!   `Accel`, `Maneuver`, `Fuel`, `Crew`, `ShieldRech`, `ArmorRech` and
-//!   `Mass`, one to one, each held within `i16`. Left out of the whole
+//!   `Mass`, one to one, each held within `i16`; its `gate_fuel`, which a
+//!   `shïp` has no field for, rides on the store ([`gate_fuel`],
+//!   `GameData::gate_fuel`). Left out of the whole
 //!   chain, its `Accel` is its speed, its `Maneuver` its `handling`
 //!   ([`maneuver`], the turn scale), its `Fuel` [`HULL_FUEL`], its crew
 //!   one, and the rest 0: a `turn` anywhere in the chain wins over every
@@ -495,6 +497,29 @@ pub fn collision_radii(galaxy: &Galaxy, ids: &IdTable) -> BTreeMap<ShipId, i16> 
     ids.ships
         .iter()
         .filter_map(|(id, &nova)| Some((ShipId(nova), collision_radius(galaxy, id)?)))
+        .collect()
+}
+
+/// The fuel a hypergate passage costs the ship `id`: its chain's
+/// `stats.gate_fuel`, the nearest given, held within `i16` as `Fuel` is;
+/// none when no ship of the chain gives one, or when the chain doesn't
+/// resolve.
+#[must_use]
+pub fn gate_fuel(galaxy: &Galaxy, id: &Id) -> Option<i16> {
+    let fuel = resolved(galaxy, id)?.stats.gate_fuel?;
+    Some(saturated(fuel.into()))
+}
+
+/// Every mapped ship's gate fuel ([`gate_fuel`]), by its `shïp`, for the
+/// store ([`GameData::with_gate_fuels`]): only the ships whose chain gives
+/// one.
+///
+/// [`GameData::with_gate_fuels`]: crate::store::GameData::with_gate_fuels
+#[must_use]
+pub fn gate_fuels(galaxy: &Galaxy, ids: &IdTable) -> BTreeMap<ShipId, i16> {
+    ids.ships
+        .iter()
+        .filter_map(|(id, &nova)| Some((ShipId(nova), gate_fuel(galaxy, id)?)))
         .collect()
 }
 

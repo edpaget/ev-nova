@@ -1547,6 +1547,32 @@ fn a_radius_that_is_not_a_whole_positive_pixel_or_not_finite_is_none() {
     }
 }
 
+/// The fixture galaxy with a hull `barge` whose stats give `gate_fuel`.
+fn barge_with_gate_fuel(gate_fuel: u32) -> MemSource {
+    galaxy().with(
+        "ships/barge.md",
+        &format!(
+            "---\nname: Barge\nstyle: civilian\nrole: freighter\nmodel: hull\n\
+             stats: {{gate_fuel: {gate_fuel}}}\n---\n"
+        ),
+    )
+}
+
+#[test]
+fn a_hull_s_gate_fuel_is_kept_on_the_store_held_within_i16() {
+    let gate_fuel = |game: &NewGame| game.data.gate_fuel(ShipId(game.ids.ships[&id("barge")]));
+    assert_eq!(gate_fuel(&loaded(&barge_with_gate_fuel(150))), Some(150));
+    assert_eq!(
+        gate_fuel(&loaded(&barge_with_gate_fuel(0))),
+        Some(0),
+        "free"
+    );
+    assert_eq!(
+        gate_fuel(&loaded(&barge_with_gate_fuel(1_000_000))),
+        Some(i16::MAX)
+    );
+}
+
 #[test]
 fn a_radius_past_the_widest_pixel_count_is_held_at_it() {
     let game = loaded(&barge_with_radius("1e9"));

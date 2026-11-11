@@ -42,6 +42,7 @@
 //! | `mods/` | `oütf` ([`kits`]) | unpinned, numbered after the unpinned outfits; its `name` as `ShortName` and lower-cased as `LCName`; `Cost` from `price`; `Max` 1, `BuyRandom` 100, hidden unless it fits; its effects in the four `ModType` slots, `acceleration`, `fuel`, `shield_recharge` and `hull_recharge` among them; its `fits` as a `Require` bit; its hardpoints' mount bits as `Contribute`; `fitted_at` as `TechLevel` and, lawless, `ScanMask`; its hardpoints' outfits given by `OnPurchase` and taken back by `OnSell` |
 //! | a ship's chain hardpoints, a kit's hardpoints and `attention` | the store's fittings ([`GameData::fittings`], [`fleet`], [`kits`]) | each `shïp`'s own exit spots and each kit `oütf`'s, and each kit's attention, which `nova_sim::dock_scan` reads |
 //! | a ship's `size`'s `collision_radius` | its collision radius on the store ([`GameData::collision_radius`], [`fleet::collision_radius`]) | through the `base` chain, the nearest `size`'s, in whole pixels at [`fleet::PX_PER_METRE`]; none when it isn't finite or rounds to no positive pixel; the fight reads it under `data_collision` |
+//! | a ship's `stats.gate_fuel` | its gate fuel on the store ([`GameData::gate_fuel`], [`fleet::gate_fuel`]) | through the `base` chain, the nearest given, held within `i16`; none when no ship of the chain gives one; a hypergate passage charges it under `gate_fuel` (`nova_sim::gate_fuel`), one jump's worth for a ship with none |
 //! | each hardpoint's `position` on its hull's `model`, and its outfit's `model` | its mount on the store ([`GameData::mounts`], [`mounts`]) | a ray cast down at the hardpoint onto the hull's model at its `size`'s length, standing on the highest surface, on the plane for a placeholder; every class's chain hardpoints, and every kit's on every class; the outfit model it shows, lifted to rest on it; the view draws them (`nova_view::flight::mounted_outfits`) |
 //! | a weapon outfit's `model` | its muzzle reach on the store ([`GameData::muzzle_reach`], [`mounts`]) | half the model's length at a metre a unit, in whole pixels at [`fleet::PX_PER_METRE`]; none with no model that reads; the fight starts its shots that far ahead of the exit under `mounted_muzzles` |
 //! | `starts/` | `chär` ([`fleet`]) | its hull, its system in `system[0]`, its cash, and a placeholder date |
@@ -319,6 +320,7 @@ pub fn load(source: &impl Source, dir: &Path) -> NewGame {
     let mounted = mounts::mounted(&galaxy, &ids, &mut models, &mut problems);
     let ship_lines = looks::ship_lines(&galaxy, &ids);
     let collision_radii = fleet::collision_radii(&galaxy, &ids);
+    let gate_fuels = fleet::gate_fuels(&galaxy, &ids);
     let compiled = dialogs::compiled(&galaxy, source, &mut problems);
     let dialogs = dialogs::read(&galaxy, &ids, &compiled, &mut problems);
     let storylines = missions::map(&galaxy, &ids, &compiled, &mut problems);
@@ -331,6 +333,7 @@ pub fn load(source: &impl Source, dir: &Path) -> NewGame {
             .with_storylines(storylines)
             .with_fittings(fittings)
             .with_collision_radii(collision_radii)
+            .with_gate_fuels(gate_fuels)
             .with_mounts(mounted.mounts)
             .with_muzzle_reaches(mounted.muzzle_reaches),
         ids,

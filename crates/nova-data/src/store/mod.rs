@@ -218,6 +218,7 @@ mod fittings;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod fs;
+mod gate_fuels;
 mod interface;
 mod mounts;
 pub mod order;
@@ -422,6 +423,9 @@ pub struct GameData {
     /// Each new-game ship's collision radius in whole pixels
     /// ([`GameData::with_collision_radii`]); none in a stock store.
     collision_radii: BTreeMap<crate::wire::id::ShipId, i16>,
+    /// Each new-game ship's gate fuel, the fuel a hypergate passage costs
+    /// it ([`GameData::with_gate_fuels`]); none in a stock store.
+    gate_fuels: BTreeMap<crate::wire::id::ShipId, i16>,
     /// Where each new-game hardpoint's outfit stands and what it shows
     /// ([`GameData::with_mounts`]); none in a stock store.
     mounts: Mounts,
@@ -485,6 +489,7 @@ impl GameData {
             fittings: Fittings::default(),
             ship_lines: BTreeMap::new(),
             collision_radii: BTreeMap::new(),
+            gate_fuels: BTreeMap::new(),
             mounts: Mounts::default(),
             muzzle_reaches: BTreeMap::new(),
         })

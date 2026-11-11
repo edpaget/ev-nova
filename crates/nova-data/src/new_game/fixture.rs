@@ -17,8 +17,8 @@
 //! in `warden-colours`, unpriced and unsold, all on a placeholder model,
 //! the cutter and the hauler each naming every hull number (acceleration,
 //! fuel, crew, both recharges and a mass under 100, so every jump takes a
-//! day), the cutter a `turn` too and the hauler only its `handling`, and
-//! the picket none, flying on the defaults;
+//! day), the cutter a `turn` too and the hauler only its `handling` and a
+//! `gate_fuel` of 150, and the picket none, flying on the defaults;
 //! the variant `racked-hauler`, the hauler with `cargo-racks` and a nose
 //! turret carrying a `mass-driver`, sold at `hearth-dock` for the
 //! hauler's price plus the racks' (6000), so the start can buy it; the

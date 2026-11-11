@@ -583,6 +583,16 @@ fn the_racked_hauler_flies_on_the_hauler_s_hull_numbers() {
 }
 
 #[test]
+fn the_hauler_s_gate_fuel_rides_on_the_store_and_its_variant_inherits_it() {
+    let game = new_game::open(&fixture()).expect("lists");
+    let gate_fuel = |ship| game.data.gate_fuel(ShipId(game.ids.ships[&id(ship)]));
+    assert_eq!(gate_fuel("hauler"), Some(150), "its `stats.gate_fuel`");
+    assert_eq!(gate_fuel("racked-hauler"), Some(150), "from its base");
+    assert_eq!(gate_fuel("cutter"), None, "it names none");
+    assert_eq!(gate_fuel("warden-picket"), None, "it names none");
+}
+
+#[test]
 fn the_warden_picket_names_no_hull_numbers_and_flies_on_the_defaults() {
     let game = new_game::open(&fixture()).expect("lists");
     let picket = fixture_ship(&game, "warden-picket");
