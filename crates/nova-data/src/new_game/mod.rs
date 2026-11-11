@@ -183,7 +183,10 @@
 //!   as fighter bays: a launcher fires unguided, and a bay does nothing.
 //! - Variants in traffic: the civilian traffic flies hulls alone.
 //! - Hiring escorts: a ship's `HireRandom` is 0, never for hire, until the
-//!   format has a word for it.
+//!   format has a word for it. The new game greys the bar's Hire Escort
+//!   while nothing is for hire, and the Mission BBS while the computer
+//!   lists nothing, as its only `mïsn` are hidden blockades
+//!   (`nova_sim::RuleKey::EmptyServices`, pinned by `nova::ruleset`).
 //! - A livery's `decals` aren't drawn.
 //! - Traffic: the bible authors none, so the civilian `düde` and each
 //!   system's traffic are placeholders ([`fleet`]), as are a hull's

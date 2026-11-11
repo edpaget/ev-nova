@@ -10,8 +10,8 @@
 //! each defaulting to the original's reading.
 //!
 //! The stock game pins nothing. The new game pins the other reading of
-//! eighteen keys: twelve as a jump point's gate is the only way in or out
-//! of a system, one as its story lives in port, one as its exchange
+//! nineteen keys: twelve as a jump point's gate is the only way in or out
+//! of a system, two as its story lives in port, one as its exchange
 //! lists every good a port prices, three as its ships are 3D models, and
 //! one as its sky is drawn in 3D:
 //!
@@ -46,12 +46,16 @@
 //!   be broken by destroying every guard). The new game's blockades
 //!   (`nova_data::new_game`'s `blockades`) are its first mission ships;
 //!   the first two are pinned for any that go further afield;
-//! - its port's one: [`RuleKey::BarStory`] (the bar lists the landed
+//! - its port's two: [`RuleKey::BarStory`] (the bar lists the landed
 //!   stellar's own conversation and the storyline offers that hold there,
 //!   any of which the player opens from it, and its News lists the news
 //!   heard in the system with each item's source and age, as the new game
 //!   has no bar `mïsn` and no news `STR#` lists; the scenes still open by
-//!   themselves at landing);
+//!   themselves at landing) and [`RuleKey::EmptyServices`] (the Mission
+//!   BBS is greyed while the mission computer has nothing to list, and
+//!   the bar's Hire Escort while no ship is for hire, so a button the
+//!   new game has nothing behind promises nothing: its only `mïsn` are
+//!   hidden blockades and no ship is for hire);
 //! - its exchange's one: [`RuleKey::JunkListing`] (each side of the
 //!   exchange lists every special good the port prices, where the
 //!   original lists only the highest-ID one, so two of the new game's
@@ -116,7 +120,7 @@ const STOCK: Profile = Profile {
 };
 
 /// The new game's profile: its traffic's three gate readings, its map
-/// and courses' four, J's two, its mission ships' three, its port's one,
+/// and courses' four, J's two, its mission ships' three, its port's two,
 /// its exchange's one, its hulls' three and its sky's one (see the module
 /// docs), and pilots of its own.
 const NEW_GAME: Profile = Profile {
@@ -134,6 +138,7 @@ const NEW_GAME: Profile = Profile {
         (RuleKey::AuxShipLinks, RuleSource::Bible),
         (RuleKey::GateExitCounts, RuleSource::Bible),
         (RuleKey::BarStory, RuleSource::Bible),
+        (RuleKey::EmptyServices, RuleSource::Bible),
         (RuleKey::JunkListing, RuleSource::Bible),
         (RuleKey::ContinuousHeadings, RuleSource::Bible),
         (RuleKey::DataCollision, RuleSource::Bible),
@@ -205,7 +210,7 @@ mod tests {
     }
 
     #[test]
-    fn the_new_game_pins_the_other_reading_of_its_eighteen_gate_lane_map_autopilot_mission_ship_bar_exchange_hull_and_sky_keys()
+    fn the_new_game_pins_the_other_reading_of_its_nineteen_gate_lane_map_autopilot_mission_ship_port_exchange_hull_and_sky_keys()
      {
         assert_eq!(
             Ruleset::NewGame.profile().readings,
@@ -223,6 +228,7 @@ mod tests {
                 (RuleKey::AuxShipLinks, RuleSource::Bible),
                 (RuleKey::GateExitCounts, RuleSource::Bible),
                 (RuleKey::BarStory, RuleSource::Bible),
+                (RuleKey::EmptyServices, RuleSource::Bible),
                 (RuleKey::JunkListing, RuleSource::Bible),
                 (RuleKey::ContinuousHeadings, RuleSource::Bible),
                 (RuleKey::DataCollision, RuleSource::Bible),

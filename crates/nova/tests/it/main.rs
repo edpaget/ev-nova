@@ -48,6 +48,7 @@ mod new_game_collision;
 mod new_game_conversation;
 mod new_game_descriptions;
 mod new_game_dialog_backing;
+mod new_game_empty_services;
 mod new_game_engine_strings;
 mod new_game_galaxy_viewer;
 mod new_game_hail_replies;

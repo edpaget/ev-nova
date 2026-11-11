@@ -29,7 +29,8 @@
 //!   lists the fixture's kit, and the shipyard the cutter and the racked
 //!   hauler the fixture sells there (what it lists and sells is
 //!   `new_game_shipyard`'s).
-//!   The Mission BBS, with no mission offered, says so and closes back.
+//!   The Mission BBS and the bar's Hire Escort, with nothing behind
+//!   them, are `new_game_empty_services`'.
 //! - **Landscape.** The fixture has no landscape `PICT`, so the landscape
 //!   item draws the stellar's stand-in from the store: Hearth Dock's disc
 //!   in the guild's colour, or, over a variant whose Hearth Dock has a
@@ -56,9 +57,9 @@ use nova_sim::fixture::MemoryPilots;
 use nova_sim::mission::OfferLabels;
 use nova_sim::storylines::state::MissionState;
 use nova_sim::{
-    ComputerRefusal, FUEL_PRICE_PER_UNIT, Gauge, InfoRow, MissionComputer, MissionId, MissionInfo,
-    News, OfferPrompt, Pilot, PilotStore, RuleSource, Rulebook, Service, ShipFacts, ShipFields,
-    ShipRow, ShipSpecs, Shipyard,
+    FUEL_PRICE_PER_UNIT, Gauge, InfoRow, MissionComputer, MissionId, MissionInfo, News,
+    OfferPrompt, Pilot, PilotStore, RuleSource, Rulebook, Service, ShipFacts, ShipFields, ShipRow,
+    ShipSpecs, Shipyard,
 };
 use nova_view::color::Color;
 use nova_view::draw::{DrawCommand, DrawList};
@@ -243,7 +244,7 @@ fn hearth_dock_s_spaceport_is_laid_out_with_its_description_and_a_button_for_eac
 }
 
 /// What the spaceport has open over it, in a word.
-fn open_over(game: &Harness) -> &'static str {
+pub(crate) fn open_over(game: &Harness) -> &'static str {
     let port = spaceport(game);
     if port.open_bar().is_some() {
         "bar"
@@ -576,26 +577,6 @@ fn the_shipyard_opens_from_its_button_and_its_done_closes_it_back() {
 
     let done = centre_of(shipyard.dialog(), SHIPYARD_DONE_ITEM);
     game.click(done);
-    game.frame();
-    assert_eq!(open_over(&game), "nothing", "closed");
-    assert_eq!(game.showing(), Showing::Spaceport);
-}
-
-/// Over the fixture no mission is offered on the computer, so the Mission
-/// BBS says so in a text over the spaceport, laid out by the placeholder
-/// text dialog, rather than opening; the text closes back to the
-/// spaceport. The computer's own placeholder is built in
-/// [`every_placeholder_the_walk_does_not_reach_lays_its_screen_out`].
-#[test]
-fn the_mission_bbs_says_there_is_nothing_here_and_closes_back() {
-    let none_here = ComputerRefusal::NoneAvailable.message();
-    let mut game = at_hearth_dock();
-    click_port_item(&mut game, service_item(Service::MissionBbs));
-    let drawn = texts(&game.frame());
-    assert_eq!(open_over(&game), "text");
-    assert!(drawn.contains(&none_here), "{drawn:?}");
-
-    game.press(KeyCode::Enter);
     game.frame();
     assert_eq!(open_over(&game), "nothing", "closed");
     assert_eq!(game.showing(), Showing::Spaceport);
