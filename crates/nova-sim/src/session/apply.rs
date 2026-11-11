@@ -10,8 +10,8 @@
 //! `missions` module, the player info key's and its dialog's in the
 //! `player_info` module, the view's settings' in the `settings` module,
 //! the asks' (the hover, the coming traffic and a description's load) in
-//! the `asks` module, and the landed stellar's conversation's in the
-//! `conversation` module.
+//! the `asks` module, the landed stellar's conversation's in the
+//! `conversation` module, and the news log's close in the `news` module.
 
 use super::Session;
 use crate::board::BoardingRule;
@@ -26,6 +26,7 @@ mod comm;
 mod conversation;
 mod faded;
 mod missions;
+mod news;
 mod player_info;
 mod port;
 mod settings;
@@ -119,6 +120,8 @@ impl Session {
     /// - The asks ([`FlightCommand::is_ask`]) are answered as the `asks`
     ///   module says: the hover, a description's load and the port's own
     ///   description's, none changing anything a frame shows.
+    /// - [`FlightCommand::ReadNews`] is answered as the `news` module says:
+    ///   done when it marked an item read, refused when it marked none.
     /// - The rest are never refused, and answer [`Answer::Done`]:
     ///   [`FlightCommand::SelectWeapon`] ([`Session::press_weapon_select`],
     ///   which the next pass takes; the view asks the gate first),
@@ -289,6 +292,7 @@ impl Session {
             | FlightCommand::LoadDescription { .. }
             | FlightCommand::LoadPortDescription => self.apply_ask(command, collab),
             FlightCommand::Converse(converse) => self.apply_conversation(converse, collab.chance),
+            FlightCommand::ReadNews(ids) => self.apply_read_news(&ids),
         }
     }
 }

@@ -1110,6 +1110,12 @@ pub enum FlightCommand {
     /// The intro screen was shown
     /// ([`Session::mark_intro_seen`](crate::Session::mark_intro_seen)).
     MarkIntroSeen,
+    /// The player closed a news log listing these news items, by id: each
+    /// the ship's system has heard becomes read (the session's
+    /// `apply/news` module). Sent at the player's close only, whether the
+    /// log opened at landing or from the bar; a log dropped unclosed sends
+    /// none.
+    ReadNews(Vec<String>),
     /// The view's game window is this many logical units wide, which each
     /// system's `Asteroids` is stored by
     /// ([`Session::set_window_width`](crate::Session::set_window_width)):
@@ -1328,6 +1334,7 @@ impl FlightCommand {
             | Self::Assign(_)
             | Self::NameCapture(_)
             | Self::MarkIntroSeen
+            | Self::ReadNews(_)
             | Self::OpenPlayerInfo
             | Self::CloseInfoDialog
             | Self::SetWindowWidth(_)
@@ -2615,6 +2622,7 @@ mod tests {
             C::Assign(crate::Assignment::Escort),
             C::NameCapture(None),
             C::MarkIntroSeen,
+            C::ReadNews(vec!["word".to_owned()]),
             C::Converse(crate::flight_frame::Converse::Open),
             C::Converse(crate::flight_frame::Converse::Choose(1)),
             C::Converse(crate::flight_frame::Converse::Close),

@@ -787,6 +787,7 @@ mod tests {
             FlightCommand::Jettison { all: true },
             FlightCommand::Assign(nova_sim::Assignment::Escort),
             FlightCommand::MarkIntroSeen,
+            FlightCommand::ReadNews(vec!["word".to_owned()]),
         ] {
             assert_eq!(
                 flight.apply(command.clone()),

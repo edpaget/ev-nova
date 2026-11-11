@@ -54,6 +54,20 @@ fn the_news_asked_is_handed_back_as_the_flight_answered() {
 }
 
 #[test]
+fn reading_the_news_sends_its_ids_once() {
+    let mut view = docked();
+    let before = view.sim.applied().len();
+    view.read_news(vec!["one".to_owned(), "two".to_owned()]);
+    assert_eq!(
+        view.sim.applied()[before..],
+        [FlightCommand::ReadNews(vec![
+            "one".to_owned(),
+            "two".to_owned()
+        ])]
+    );
+}
+
+#[test]
 fn the_bar_story_asked_is_handed_back_as_the_flight_answered_or_none() {
     let mut view = docked();
     let story = BarStory {

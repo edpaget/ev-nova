@@ -2,14 +2,18 @@
 //! [`FlightSim`] port: the news heard in the system the ship is in
 //! ([`ScreenAsk::HeardNews`]), the story the landed stellar's bar hosts
 //! ([`ScreenAsk::BarStory`]), and the offers' accepts the flight refused
-//! for room ([`FlightEvent::RoomRefused`]), each taken once. What the
+//! for room ([`FlightEvent::RoomRefused`]), each taken once; and one
+//! command, the news a closed log listed read ([`FlightCommand::ReadNews`]).
+//! What the
 //! session answers and raises is nova-sim's (`session/story_screens.rs`,
 //! `session/bar_story.rs`, `session/storylines.rs`); the router words and
 //! shows them.
 //!
 //! [`FlightEvent::RoomRefused`]: nova_sim::flight_frame::FlightEvent::RoomRefused
 
-use nova_sim::flight_frame::{BarStory, Names, RoomRefusal, ScreenAnswer, ScreenAsk};
+use nova_sim::flight_frame::{
+    BarStory, FlightCommand, Names, RoomRefusal, ScreenAnswer, ScreenAsk,
+};
 use nova_sim::storylines::news::HeardNews;
 
 use crate::flight::sim_port::FlightSim;
@@ -43,6 +47,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
             ScreenAnswer::BarStory(story) => Some(story),
             _ => None,
         }
+    }
+
+    /// Marks read the news items a log the player closed listed, by id
+    /// ([`FlightCommand::ReadNews`]): the session marks those the ship's
+    /// system has heard (`session/apply/news.rs`).
+    pub fn read_news(&mut self, ids: Vec<String>) {
+        self.send(FlightCommand::ReadNews(ids));
     }
 
     /// The offers' accepts the flight refused for room since they were
