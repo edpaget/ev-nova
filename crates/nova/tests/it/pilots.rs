@@ -751,7 +751,7 @@ impl Harness {
         self.app.screen().showing()
     }
 
-    fn ship_session(&self) -> &nova_sim::Session {
+    pub(crate) fn ship_session(&self) -> &nova_sim::Session {
         self.app
             .screen()
             .flight_view()
