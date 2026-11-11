@@ -6,11 +6,16 @@
 //! derives from it at once.
 
 use super::Session;
-use crate::catalog::{ShipId, StellarId, SystemId};
+use crate::catalog::{GovtId, ShipId, StellarId, SystemId};
+use crate::chance::NeverFires;
 use crate::fleet::Escort;
+use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::mission::ActiveMission;
 use crate::ship_change::OutfitCarry;
+use crate::traffic::SPAWN_RESERVE;
+use crate::traffic::npc::{AiType, NpcId};
+use crate::traffic::spawn::{Entry, NewShip};
 
 impl Session {
     /// Makes `hops` the course, started at the system the ship is in, or
@@ -77,6 +82,62 @@ impl Session {
     /// Makes the pilot play Strict Play when `strict`, or not.
     pub(crate) fn set_strict_play(&mut self, strict: bool) {
         self.pilot.strict_play = strict;
+    }
+
+    /// Brings a ship of class `ship`, of `govt`, flying as `ai`, into the
+    /// system at `at`, at rest, as a placed spawn: no mission, no person,
+    /// no leader, aggression 3, its skill rolled on [`NeverFires`], its
+    /// type's kind added to the spawn table. For
+    /// [`fixture::bring_in`](crate::fixture::bring_in). Gives its id, or
+    /// `None`, with nothing changed, when the session has no record of
+    /// `ship`.
+    pub(crate) fn bring_in(
+        &mut self,
+        ship: ShipId,
+        govt: Option<GovtId>,
+        ai: AiType,
+        at: Vec2,
+    ) -> Option<NpcId> {
+        let record = self.statics.ship_record(ship)?;
+        let kind = self.setup.ship_kind(&self.statics, record);
+        self.space.traffic.table_mut().ships.insert(ship, kind);
+        let new = NewShip {
+            ship,
+            govt,
+            ai_type: ai.into(),
+            lead: None,
+            state: ShipState {
+                position: at,
+                velocity: Vec2::ZERO,
+                heading: 0.0,
+            },
+            entry: Entry::Placed,
+            aggression: 3,
+            booty: None,
+            info_types: 0,
+            person: None,
+            mission: None,
+            aux: None,
+            derelict: false,
+            held: false,
+            boarded: false,
+            cloaked: false,
+            quote: None,
+            cargo: None,
+            rolls_voice: false,
+            asks_scoop: false,
+            clears_mark: false,
+        };
+        let came = self.space.traffic.bring_in_within(
+            vec![new],
+            SPAWN_RESERVE,
+            &self.statics.govts,
+            &mut NeverFires,
+        );
+        if came != 1 {
+            return None;
+        }
+        self.space.traffic.npcs().last().map(|npc| npc.id)
     }
 
     /// Makes the ship class `ship`, as `C` changes it: the outfits kept,
@@ -216,6 +277,55 @@ mod tests {
         assert!(session.pilot().strict_play());
         session.set_strict_play(false);
         assert!(!session.pilot().strict_play());
+    }
+
+    #[test]
+    fn a_ship_brought_in_is_placed_at_rest_with_its_class_government_and_ai() {
+        use crate::catalog::GovtId;
+        use crate::testkit::{FAST, FakePilotCatalog, ship};
+        use crate::traffic::npc::AiType;
+        let catalog = FakePilotCatalog {
+            ship_records: vec![ship(129, FAST)],
+            ..catalog()
+        };
+        let mut session = Session::start(&catalog).expect("starts");
+        let at = Vec2::new(150.0, -200.0);
+        let id = session
+            .bring_in(ShipId(129), Some(GovtId(131)), AiType::Warship, at)
+            .expect("brought in");
+        let npc = session.npcs().last().expect("in the system").clone();
+        assert_eq!(npc.id, id);
+        assert_eq!(npc.ship, ShipId(129));
+        assert_eq!(npc.govt, Some(GovtId(131)));
+        assert_eq!(npc.ai_type, AiType::Warship);
+        assert_eq!(npc.state.position, at);
+        assert_eq!(npc.state.velocity, Vec2::ZERO);
+        assert_eq!(npc.aggression, 3);
+        assert_eq!(npc.mission, None);
+        assert_eq!(npc.person, None);
+        assert_eq!(npc.leader, None);
+        let independent = session
+            .bring_in(ShipId(129), None, AiType::Interceptor, Vec2::ZERO)
+            .expect("brought in");
+        let npc = session
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == independent)
+            .expect("in the system");
+        assert_eq!((npc.govt, npc.ai_type), (None, AiType::Interceptor));
+        assert_ne!(independent, id);
+    }
+
+    #[test]
+    fn a_class_with_no_record_brings_nothing_in() {
+        use crate::traffic::npc::AiType;
+        let mut session = Session::start(&catalog()).expect("starts");
+        let before = session.npcs().len();
+        assert_eq!(
+            session.bring_in(ShipId(999), None, AiType::Warship, Vec2::ZERO),
+            None
+        );
+        assert_eq!(session.npcs().len(), before);
     }
 
     #[test]

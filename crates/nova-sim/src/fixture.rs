@@ -14,7 +14,8 @@
 //! [`cloak`] and [`set_player_cloak`], for setting a ship's or the
 //! player's cloak directly; [`hide`], for
 //! making a ship's type one whose `Cost` is -1; [`place`], for putting a
-//! ship somewhere directly; [`sabotage_kill`], for setting off the
+//! ship somewhere directly; [`bring_in`], for bringing a ship of a given
+//! class and government into the system directly; [`sabotage_kill`], for setting off the
 //! player's kill outfit directly; [`alarm_stellar`] and
 //! [`defence_ships_left`], for a stellar's defence fleet;
 //! [`listed_stellars`], a fake catalog's listed stellars derived from its
@@ -171,6 +172,22 @@ pub fn place(session: &mut Session, id: NpcId, at: crate::geometry::Vec2) {
         npc.state.position = at;
         npc.state.velocity = crate::geometry::Vec2::ZERO;
     }
+}
+
+/// Brings a ship of class `ship`, of `govt`, flying as `ai`, into the
+/// player's system in `session` at `at`, at rest, as a placed spawn: no
+/// mission, no person, no leader, aggression 3. Its id, or `None` for a
+/// class the catalog lacks. For a test that needs a ship of a given class
+/// and government in the system without the traffic's draws, such as two
+/// enemies set side by side to fight.
+pub fn bring_in(
+    session: &mut Session,
+    ship: crate::catalog::ShipId,
+    govt: Option<crate::catalog::GovtId>,
+    ai: crate::traffic::npc::AiType,
+    at: crate::geometry::Vec2,
+) -> Option<NpcId> {
+    session.bring_in(ship, govt, ai, at)
 }
 
 /// Takes NPC `id` out of `session` and puts a copy of it in its berth at
