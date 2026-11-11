@@ -99,7 +99,8 @@ pub fn jump_refusal_ticks(refusal: &JumpRefusal) -> u16 {
 /// How long the message for `refusal` stays: [`TOO_FAR_TICKS`] too far
 /// or too fast, [`LANDING_TICKS`] denied, not landable, cloaked or short
 /// of the fee (`_DisplayComm` @0x67c88), and
-/// [`MESSAGE_TICKS`] for the silent ones. A disabled ship's refusal, and
+/// [`MESSAGE_TICKS`] for the silent ones and for a gate passage short of
+/// fuel, J's fuel time (@0x6baac). A disabled ship's refusal, and
 /// one where the land key makes no dock request (jumping, no stellars,
 /// nothing landable), shows no message ([`refusal_message`]), so its
 /// time is never used.
@@ -114,7 +115,8 @@ pub fn landing_refusal_ticks(refusal: &LandingRefusal) -> u16 {
         LandingRefusal::Jumping
         | LandingRefusal::Disabled
         | LandingRefusal::NoStellars
-        | LandingRefusal::NothingLandable => MESSAGE_TICKS,
+        | LandingRefusal::NothingLandable
+        | LandingRefusal::GateFuelShort { .. } => MESSAGE_TICKS,
     }
 }
 
@@ -235,6 +237,12 @@ pub const JUMP_COLLAPSED: &str = "Ship disabled - hyperspace field collapsed.";
 /// [`RuleKey::NoGateRefusal`](nova_sim::RuleKey::NoGateRefusal): the
 /// original's J says nothing there, so it has no `STR#` for it.
 pub const NO_GATE_LEADS_THERE: &str = "No jump point leads there.";
+/// The press that would enter a hypergate refused because the ship holds
+/// less fuel than the passage costs, by the other reading of
+/// [`RuleKey::GateFuel`](nova_sim::RuleKey::GateFuel): the original's
+/// hypergates read no fuel, so it has no `STR#` for it. Worded after J's
+/// #10, [`NO_FUEL`].
+pub const GATE_FUEL_SHORT: &str = "Insufficient energy to pass through this jump point.";
 /// `STR#` 2002 #385: what each of the self-destruct's lines but the last
 /// begins with (`_HandlePlayer` @0x6fe3f, @0x6ff8a, @0x700ea).
 pub const SELF_DESTRUCT_LEAD: &str = "Self-destruct";
@@ -1248,6 +1256,8 @@ pub fn approach_greeting(
 ///   " ", then [`TO_PAY_HYPERGATE_FEE`] at a hypergate, else
 ///   [`TO_PAY_DOCKING_FEE`] at a station or [`TO_PAY_LANDING_FEE`], so a
 ///   wormhole says the station's or the planet's.
+/// - Short of a hypergate passage's fuel, the new game's refusal:
+///   [`GATE_FUEL_SHORT`].
 #[must_use]
 pub fn refusal_message(
     refusal: &LandingRefusal,
@@ -1268,6 +1278,7 @@ pub fn refusal_message(
         | LandingRefusal::NoStellars
         | LandingRefusal::NothingLandable => return None,
         LandingRefusal::Cloaked => DISENGAGE_CLOAK,
+        LandingRefusal::GateFuelShort { .. } => GATE_FUEL_SHORT,
         LandingRefusal::TooFar { station, .. } => by_gate(
             station,
             TOO_FAR_HYPERGATE,
@@ -1988,6 +1999,23 @@ mod tests {
                 "The planet's environment is too hostile.",
             ]
         );
+    }
+
+    #[test]
+    fn a_pilot_short_of_a_passages_fuel_is_told_so_for_js_fuel_time() {
+        let short = LandingRefusal::GateFuelShort {
+            stellar: StellarId(300),
+        };
+        assert_eq!(
+            refusal_message(&short, Some(GateKind::Hypergate), "Jump point").as_deref(),
+            Some(GATE_FUEL_SHORT)
+        );
+        assert_eq!(
+            GATE_FUEL_SHORT,
+            "Insufficient energy to pass through this jump point."
+        );
+        assert_eq!(landing_refusal_ticks(&short), MESSAGE_TICKS);
+        assert_eq!(MESSAGE_TICKS, 240, "J's fuel time (@0x6baac)");
     }
 
     #[test]

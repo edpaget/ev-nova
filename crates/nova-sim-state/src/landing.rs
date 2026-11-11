@@ -391,6 +391,17 @@ pub enum LandingRefusal {
         /// The ship's speed, in pixels a tick.
         speed: f32,
     },
+    /// The ship holds less fuel than a passage through the hypergate it
+    /// would enter costs, by the other reading of
+    /// [`RuleKey::GateFuel`](crate::RuleKey::GateFuel) (see
+    /// `nova_sim::gate_fuel`): the press that would enter the gate is
+    /// refused before its fee. Not the original's, whose hypergates read
+    /// no fuel (`_PlayerEnterHypergate` @0x637bf-0x64005); it beeps
+    /// `_beepSnd[3]` as J short of fuel does (`_HandlePlayer` @0x6ba72).
+    GateFuelShort {
+        /// The hypergate.
+        stellar: StellarId,
+    },
 }
 
 impl LandingRefusal {
@@ -412,11 +423,18 @@ impl LandingRefusal {
     /// press selects the nearest stellar with the can-land flag
     /// ([`nearest_stellar`]) and makes its dock request, which refuses it
     /// as the original's does (@0x66977 -> 0x67cda).
+    ///
+    /// The new game's [`Self::GateFuelShort`] beeps it too, as J short of
+    /// fuel does (`_HandlePlayer` @0x6ba72).
     #[must_use]
     pub fn beeps(&self) -> bool {
         matches!(
             self,
-            Self::NotLandable { .. } | Self::Cloaked | Self::TooFar { .. } | Self::TooFast { .. }
+            Self::NotLandable { .. }
+                | Self::Cloaked
+                | Self::TooFar { .. }
+                | Self::TooFast { .. }
+                | Self::GateFuelShort { .. }
         )
     }
 
@@ -431,7 +449,8 @@ impl LandingRefusal {
             | Self::TooFast { stellar, .. }
             | Self::NotLandable { stellar, .. }
             | Self::Denied { stellar, .. }
-            | Self::CannotPayFee { stellar, .. } => Some(stellar),
+            | Self::CannotPayFee { stellar, .. }
+            | Self::GateFuelShort { stellar } => Some(stellar),
             Self::Jumping
             | Self::NoStellars
             | Self::NothingLandable
@@ -3554,6 +3573,17 @@ mod tests {
         for refusal in silent {
             assert!(!refusal.beeps(), "{refusal:?}");
         }
+    }
+
+    #[test]
+    fn a_gate_passage_short_of_fuel_beeps_and_names_its_gate() {
+        // The new game's refusal, beeping as J short of fuel does
+        // (`_HandlePlayer` `PlaySound` @0x6ba72).
+        let short = LandingRefusal::GateFuelShort {
+            stellar: StellarId(300),
+        };
+        assert!(short.beeps());
+        assert_eq!(short.stellar(), Some(StellarId(300)));
     }
 
     /// `site` with this `Fee`.
