@@ -144,9 +144,10 @@ pub fn decode_wav(data: &[u8]) -> Result<Pcm, WavError> {
         });
     }
     let samples = match format.bits {
+        // Worked wide, so a slip can't wrap round to the same sample.
         8 => samples
             .iter()
-            .map(|&byte| (i16::from(byte) - 128) << 8)
+            .map(|&byte| i16::try_from((i32::from(byte) - 128) * 256).expect("within i16"))
             .collect(),
         _ => samples
             .as_chunks::<2>()
@@ -320,6 +321,23 @@ mod tests {
         assert_eq!(file.len() % 2, 0, "padded");
         let pcm = decode_wav(&file).expect("decodes");
         assert_eq!(pcm.samples(), [7, 8], "the first data chunk");
+    }
+
+    #[test]
+    fn the_first_format_and_the_first_data_are_read() {
+        let formats = riff(&[
+            chunk_of(b"fmt ", &fmt_body(1, 1, 8000, 16)),
+            chunk_of(b"fmt ", &fmt_body(1, 2, 44_100, 16)),
+            chunk_of(b"data", &le16(&[5, 6])),
+        ]);
+        let pcm = decode_wav(&formats).expect("decodes");
+        assert_eq!((pcm.channels(), pcm.sample_rate().nearest_hz()), (1, 8000));
+        let data = riff(&[
+            chunk_of(b"data", &le16(&[5])),
+            chunk_of(b"data", &le16(&[7, 8])),
+            chunk_of(b"fmt ", &fmt_body(1, 1, 8000, 16)),
+        ]);
+        assert_eq!(decode_wav(&data).expect("decodes").samples(), [5]);
     }
 
     #[test]

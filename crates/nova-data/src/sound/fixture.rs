@@ -238,9 +238,11 @@ pub fn ima4_packet(predictor: i16, index: u8, codes: [u8; 64]) -> [u8; 34] {
 #[must_use]
 pub fn wav(channels: u16, rate: u32, bits: u16, samples: &[i16]) -> Vec<u8> {
     let data: Vec<u8> = match bits {
-        // The high byte, as an unsigned offset: `(s >> 8) + 128` in 0..=255.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        8 => samples.iter().map(|&s| ((s >> 8) + 128) as u8).collect(),
+        // The high byte, as an unsigned offset: `(s >> 8) + 128`, 0 to 255.
+        8 => samples
+            .iter()
+            .map(|&s| u8::try_from((s >> 8) + 128).expect("0 to 255"))
+            .collect(),
         16 => samples.iter().flat_map(|s| s.to_le_bytes()).collect(),
         _ => panic!("a WAV fixture is 8 or 16 bits, not {bits}"),
     };
@@ -268,6 +270,44 @@ pub fn wav(channels: u16, rate: u32, bits: u16, samples: &[i16]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The little-endian `u32` at `at`.
+    fn u32_le(bytes: &[u8], at: usize) -> u32 {
+        u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
+    }
+
+    /// The little-endian `u16` at `at`.
+    fn u16_le(bytes: &[u8], at: usize) -> u16 {
+        u16::from_le_bytes(bytes[at..at + 2].try_into().unwrap())
+    }
+
+    #[test]
+    fn a_wav_has_the_canonical_pcm_header_and_an_even_data_chunk() {
+        // Five 8-bit mono samples: an odd data chunk, padded by one byte.
+        let odd = wav(1, 8000, 8, &[0, -32768, 32767, 16384, -256]);
+        assert_eq!(odd.len(), 44 + 6);
+        assert_eq!((&odd[0..4], &odd[8..16]), (&b"RIFF"[..], &b"WAVEfmt "[..]));
+        assert_eq!(u32_le(&odd, 4), 4 + 8 + 16 + 8 + 6, "the RIFF size");
+        assert_eq!(u32_le(&odd, 16), 16, "the fmt size");
+        assert_eq!(u16_le(&odd, 20), 1, "integer PCM");
+        assert_eq!(u16_le(&odd, 22), 1, "mono");
+        assert_eq!(u32_le(&odd, 24), 8000, "the rate");
+        assert_eq!(u32_le(&odd, 28), 8000, "the byte rate");
+        assert_eq!(u16_le(&odd, 32), 1, "the block align");
+        assert_eq!(u16_le(&odd, 34), 8, "the sample size");
+        assert_eq!(&odd[36..40], b"data");
+        assert_eq!(u32_le(&odd, 40), 5, "the unpadded data size");
+        assert_eq!(&odd[44..], [0x80, 0x00, 0xFF, 0xC0, 0x7F, 0x00]);
+        // Three 16-bit mono samples: an even data chunk, two bytes a frame.
+        let even = wav(1, 22_050, 16, &[1, -2, 300]);
+        assert_eq!(even.len(), 44 + 6);
+        assert_eq!(u32_le(&even, 4), 4 + 8 + 16 + 8 + 6);
+        assert_eq!(u32_le(&even, 28), 44_100, "two bytes a frame");
+        assert_eq!(u16_le(&even, 32), 2);
+        assert_eq!(u32_le(&even, 40), 6);
+        let stereo = wav(2, 8000, 16, &[1, 2]);
+        assert_eq!((u32_le(&stereo, 28), u16_le(&stereo, 32)), (32_000, 4));
+    }
 
     #[test]
     fn a_format_1_standard_sound_has_the_stock_layout() {
