@@ -245,6 +245,10 @@ pub struct ShipStats {
     pub warp_factor: f32,
     /// What its ionization's capacity and rate are worked out from.
     pub ion: IonStats,
+    /// The fuel a hypergate passage costs it, its hull's
+    /// [`gate_fuel`](ShipFields::gate_fuel) raw, which no outfit changes;
+    /// `None` when its data gives none (see `nova_sim::gate_fuel`).
+    pub gate_fuel: Option<f32>,
 }
 
 /// What a ship's ion capacity and deionization rate are worked out from:
@@ -348,6 +352,7 @@ impl Default for ShipStats {
             afterburner: None,
             warp_factor: nova_sim_catalog::warp::warp_factor(0),
             ion: IonStats::default(),
+            gate_fuel: None,
         }
     }
 }
@@ -475,6 +480,7 @@ impl ShipStats {
             afterburner: afterburner_usage(outfits),
             warp_factor: nova_sim_catalog::warp::warp_factor(fields.flags),
             ion: IonStats::new(fields, outfits),
+            gate_fuel: fields.gate_fuel.map(f32::from),
         }
     }
 
@@ -537,6 +543,7 @@ mod tests {
         flags2: 0,
         ionize_max: 0,
         deionize: 0,
+        gate_fuel: None,
     };
 
     fn outfit(mod_type: i16, mod_val: i16, count: u16) -> OutfitMod {
@@ -553,6 +560,29 @@ mod tests {
             deionize,
             ..AVERAGE
         }
+    }
+
+    #[test]
+    fn a_hulls_gate_fuel_passes_to_its_stats_unchanged_by_its_outfits() {
+        let tanks = [outfit(MORE_FUEL, 200, 2), outfit(FUEL_SCOOP, 10, 1)];
+        for gate_fuel in [Some(150), Some(0), None] {
+            let hull = ShipFields {
+                gate_fuel,
+                ..AVERAGE
+            };
+            let fare = gate_fuel.map(f32::from);
+            assert_eq!(
+                ShipStats::new(hull, &tanks).gate_fuel,
+                fare,
+                "{gate_fuel:?}"
+            );
+            assert_eq!(
+                ShipStats::for_player(hull, &tanks).gate_fuel,
+                fare,
+                "{gate_fuel:?}"
+            );
+        }
+        assert_eq!(ShipStats::default().gate_fuel, None);
     }
 
     #[test]

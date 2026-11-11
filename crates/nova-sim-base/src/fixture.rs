@@ -38,6 +38,7 @@ pub const FAST: ShipFields = ShipFields {
     flags2: 0,
     ionize_max: 0,
     deionize: 0,
+    gate_fuel: None,
 };
 
 /// A [`Chance`] that answers and rolls from a script (no, and 0, once it

@@ -2197,6 +2197,7 @@ mod tests {
             flags2: 0,
             ionize_max: 0,
             deionize: 0,
+            gate_fuel: None,
         },
         max_gun: 2,
         max_tur: 1,

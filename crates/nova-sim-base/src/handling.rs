@@ -18,7 +18,8 @@ use crate::rule_values::RuleValue;
 
 /// A `shïp`'s `Speed`, `Accel`, `Maneuver`, `Shield`, `Armor`, `Fuel`,
 /// `FuelRegen`, `Holds`, `Mass`, `FreeMass`, `Contribute`, `ShieldRech`,
-/// `ArmorRech`, `Flags` and `Flags2`, raw from the record.
+/// `ArmorRech`, `Flags` and `Flags2`, raw from the record, and the gate
+/// fuel the catalog's data may give it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ShipFields {
     /// `Speed`: top speed; 300 is average.
@@ -67,6 +68,12 @@ pub struct ShipFields {
     /// `Deionize`: the ion charge it sheds a tick, ×100; 0 or below sheds
     /// 1 a tick (class +0x48, `_LoadObjectData` @0x7a5be-0x7a60f).
     pub deionize: i16,
+    /// The fuel a passage through a hypergate costs the ship, in
+    /// [`fuel`](Self::fuel)'s units, when the catalog's data gives one
+    /// (read by `nova_sim::gate_fuel`). Not a `shïp` field: it comes from
+    /// the catalog's data, and only the new game's store has it, so a
+    /// stock hull's is `None`.
+    pub gate_fuel: Option<i16>,
 }
 
 impl ShipFields {

@@ -162,6 +162,7 @@ fn the_first_chär_starts_a_session_in_one_of_its_systems() {
         contribute: ship.contribute.bits(),
         shield_rech: ship.shield_rech,
         armor_rech: ship.armor_rech,
+        gate_fuel: None,
     };
     assert_eq!(data.ship_fields(session.ship()), Ok(fields));
     // The Shuttle carries no default items, and its one outfit, its Light

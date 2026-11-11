@@ -279,6 +279,7 @@ pub(in crate::flight) const FIELDS: ShipFields = ShipFields {
     flags2: 0,
     ionize_max: 0,
     deionize: 0,
+    gate_fuel: None,
 };
 
 pub(in crate::flight) fn sheet() -> ShipSheet {

@@ -1524,6 +1524,7 @@ fn ship_fields(ship: &Ship) -> ShipFields {
         flags2: ship.flags2.bits(),
         ionize_max: ship.ionize_max,
         deionize: ship.deionize,
+        gate_fuel: None,
     }
 }
 
