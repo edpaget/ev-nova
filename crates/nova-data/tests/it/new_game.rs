@@ -51,7 +51,8 @@ use nova_galaxy_media::BARE;
 /// start `dock-hand`, in the hauler in `hearth`; the
 /// storyline `dock-work`,
 /// whose four missions and two news items run over the conversations of
-/// `dialog/dock-job.ink`, compiled, whose greeting `verge-camp` names.
+/// `dialog/dock-job.ink`, compiled, whose greeting `verge-camp` names; and
+/// `game.md`, naming the galaxy, whose body is its About text.
 fn fixture() -> PathBuf {
     new_game::fixture::folder()
 }
@@ -184,8 +185,10 @@ fn the_fixture_folder_holds_a_record_for_each_thing_it_maps() {
     );
     assert_eq!(
         data.ids(Desc::TYPE),
-        [128, 130, 140],
-        "the stellars with a body"
+        [
+            128, 130, 140, 3000, 3001, 3002, 3003, 3004, 13000, 13001, 13002, 13003, 32767
+        ],
+        "the stellars with a body, the outfits and kits, the ships, then game.md"
     );
     assert_eq!(
         data.ids(Ship::TYPE),
@@ -678,6 +681,60 @@ fn a_stellar_s_body_is_its_landing_text() {
     assert_eq!(
         dock.text.as_str(),
         "The Guild's great dock.\n\nShips are built and sold here."
+    );
+}
+
+#[test]
+fn the_cutter_s_the_racked_hauler_s_the_mass_driver_s_and_the_racks_bodies_are_their_descriptions()
+{
+    let game = new_game::open(&fixture()).expect("lists");
+    let desc = |id: Option<i16>| named::<Desc>(&game.data, id.expect("in range"));
+    let ship = |ship: &str| desc(nova_data::ship_desc_id(ShipId(game.ids.ships[&id(ship)])));
+    let outfit = |nova: i16| desc(nova_data::outfit_desc_id(nova_data::OutfitId(nova)));
+    let (name, cutter) = ship("cutter");
+    assert_eq!(
+        (name.as_str(), cutter.text.as_str()),
+        ("Cutter", "A patrol corvette.")
+    );
+    let (name, racked) = ship("racked-hauler");
+    assert_eq!(name, "Racked hauler");
+    assert!(
+        racked
+            .text
+            .as_str()
+            .starts_with("The hauler as the Guild's dock sells it"),
+        "its own body, not the hauler's: {:?}",
+        racked.text
+    );
+    let (name, driver) = outfit(game.ids.outfits[&id("mass-driver")]);
+    assert_eq!(name, "Mass driver");
+    assert!(
+        driver
+            .text
+            .as_str()
+            .starts_with("A slug thrower on a turret ring."),
+        "{:?}",
+        driver.text
+    );
+    let (name, racks) = outfit(game.ids.kits[&id("cargo-racks")]);
+    assert_eq!(
+        (name.as_str(), racks.text.as_str()),
+        (
+            "Cargo racks",
+            "Extra racks bolted into the hold. Any yard fits them to a freighter."
+        )
+    );
+}
+
+#[test]
+fn game_md_is_the_about_text() {
+    let data = new_game::open(&fixture()).expect("lists").data;
+    let (name, about) = named::<Desc>(&data, 32767);
+    assert_eq!(name, "Hearth and Verge");
+    assert_eq!(
+        about.text.as_str(),
+        "A small galaxy for ev-nova's tests: the Guild's dock at Hearth and the\n\
+         wardens' road to Verge."
     );
 }
 

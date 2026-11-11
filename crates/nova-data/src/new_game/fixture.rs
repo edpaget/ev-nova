@@ -59,6 +59,10 @@
 //! `.ink`'s header, and [`dialogs`](super::dialogs)' docs, give the
 //! `inklecate` command that compiles it again.
 //!
+//! Every hull, outfit and kit has a body, its shop's description, and
+//! `game.md` names the galaxy, "Hearth and Verge", with a body that is its
+//! About text.
+//!
 //! Each folder holds its ID table, `nova-ids.json`
 //! ([`pins`](super::pins)), pinning every record it maps at the ID it had
 //! before tables existed. After adding a record to either folder, run

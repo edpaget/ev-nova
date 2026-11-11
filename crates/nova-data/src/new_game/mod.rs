@@ -194,6 +194,7 @@
 //! other record and a pilot saved before keeps its place ([`ids`]).
 
 pub mod blockades;
+mod descriptions;
 pub mod dialogs;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;

@@ -96,6 +96,11 @@ pub const CIVILIAN_DUDE: i16 = 128;
 /// (nova-view's `hud::DEFAULT_INTERFACE`).
 pub const DEFAULT_INTERFACE: i16 = 128;
 
+/// The `dësc` holding the About text, `game.md`'s body
+/// ([`super::descriptions`]): the one the menu bar's About and the main
+/// menu's About button show (`nova`'s `ABOUT_TEXT`).
+pub const ABOUT_TEXT: i16 = 32767;
+
 /// The Nova ID of each record that has one, by its bible id, per kind.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct IdTable {

@@ -4,8 +4,9 @@
 //! ships, traffic and starts in [`super::fleet`], outfits and weapons in
 //! [`super::outfits`], mod kits in [`super::kits`], which yards sell what
 //! in [`super::yards`], the `take_point`
-//! missions' guards and blockades in [`super::blockades`], and goods and
-//! a stellar's prices in [`super::goods`]. The module docs of
+//! missions' guards and blockades in [`super::blockades`], goods and
+//! a stellar's prices in [`super::goods`], and the bodies read as
+//! descriptions in [`super::descriptions`]. The module docs of
 //! [`super`] list what maps to what, and each problem.
 
 use std::collections::BTreeMap;
@@ -27,10 +28,10 @@ use super::kits::{
 use super::outfits;
 use super::records::{
     ANY_RECORD, clamp_i16, default_interface, neutral_govt, neutral_stellar, neutral_system, rgb,
-    stellar_flags, text_desc,
+    stellar_flags,
 };
 use super::yards::{self, SPECIAL_TECH_SLOTS, Sales};
-use super::{blockades, gates, goods, strings};
+use super::{blockades, descriptions, gates, goods, strings};
 use crate::decode::Entry;
 use crate::records::govt::Govt;
 use crate::records::stellar::Stellar;
@@ -56,8 +57,10 @@ pub struct Mapped {
 
 /// Maps `galaxy`'s factions, systems, stellars, goods, jump points, ships,
 /// starts, outfits, mod kits and `take_point` blockades to `gövt`, `sÿst`,
-/// `spöb`, `dësc`, `STR#`, `jünk`, `shïp`, `shän`, `düde`, `chär`, `oütf`,
-/// `wëap` and `mïsn` records, and their fittings,
+/// `spöb`, `STR#`, `jünk`, `shïp`, `shän`, `düde`, `chär`, `oütf`,
+/// `wëap` and `mïsn` records, and their fittings; the bodies of its
+/// stellars, ships, outfits and kits, and of `game.md`, to `dësc`s
+/// ([`super::descriptions`]);
 /// plus the placeholder `ïntf` status bar, which a flight frame always
 /// needs, and the engine's own `STR#` lists ([`super::strings`]) at each ID
 /// no good's list holds, so even an empty galaxy maps them. Nothing is
@@ -93,15 +96,8 @@ pub fn map_pinned(galaxy: &Galaxy, pins: &IdTable) -> Mapped {
     for (id, &nova) in &ids.stellars {
         let doc = &galaxy.stellars[id];
         records.push(stellar(galaxy, &ids, &sales, nova, doc, &mut problems));
-        let body = doc.body.trim();
-        if !body.is_empty() {
-            records.push(Entry {
-                id: nova,
-                name: Some(doc.data.name.clone()),
-                record: AnyRecord::Desc(Box::new(text_desc(body))),
-            });
-        }
     }
+    records.extend(descriptions::descriptions(galaxy, &ids));
     records.extend(goods::standard_strings(galaxy, &ids, &mut problems));
     records.extend(goods::junk(galaxy, &ids, &mut problems));
     for (at, &nova) in &ids.gates {
