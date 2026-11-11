@@ -2,8 +2,9 @@
 //! and remove one ([`super::missions`]), and a weapon when it is one.
 //!
 //! Each outfit is numbered within [`OUTFIT_IDS`](super::ids::OUTFIT_IDS) ([`number_outfits`]) and
-//! maps to an `oütf` ([`outfit`], over [`neutral_outfit`]) with the
-//! outfit's `name` and its `price` as `Cost`. It weighs nothing and has no
+//! maps to an `oütf` ([`outfit`], over [`named_outfit`]) with the
+//! outfit's `name`, as its `ShortName` and lower-cased as its `LCName`,
+//! and its `price` as `Cost`. It weighs nothing and has no
 //! limit on how many are owned.
 //!
 //! **Its mount.** Its `Require` is its `mount`'s bit
@@ -65,7 +66,7 @@ use nova_galaxy_format::load::{Doc, Galaxy, Problem};
 use super::ids::{WEAPON_IDS, after_pins};
 use super::kits::{ALWAYS, FitBits, HIDE_UNLESS_REQUIRED};
 use super::map::number;
-use super::records::{neutral_outfit, neutral_weapon};
+use super::records::{named_outfit, neutral_weapon};
 use crate::decode::Entry;
 use crate::records::outfit::Outfit;
 use crate::records::weapon::Weapon;
@@ -174,7 +175,7 @@ pub fn outfit(
         cost: i32::try_from(doc.data.price).unwrap_or(i32::MAX),
         flags: Flags16(HIDE_UNLESS_REQUIRED),
         require: Flags64(FitBits::mount_bit(doc.data.mount)),
-        ..neutral_outfit()
+        ..named_outfit(&doc.data.name)
     };
     if let Some(sold) = sold {
         outfit.tech_level = sold;
@@ -285,6 +286,20 @@ mod tests {
         let (name, outfit) = named(&game, 128);
         assert_eq!(name, "Blaster");
         assert_eq!(outfit.cost, 100);
+    }
+
+    #[test]
+    fn an_outfit_s_short_name_is_its_name_and_its_lower_case_name_lower_cased() {
+        let (_, outfit) = named(&loaded(&galaxy()), 128);
+        assert_eq!(
+            (
+                outfit.short_name.as_str(),
+                outfit.lc_name.as_str(),
+                outfit.lc_plural.as_str()
+            ),
+            ("Blaster", "blaster", ""),
+            "no plural derives"
+        );
     }
 
     #[test]

@@ -165,6 +165,15 @@ fn a_faction_becomes_a_govt_with_its_name_and_colour() {
         scan_mask: Flags16(LAWLESS_KIT_SCAN),
         ..neutral_govt()
     };
+    assert_eq!(
+        league.record.comm_name.as_str(),
+        "League",
+        "its name as written"
+    );
+    let expected = Govt {
+        comm_name: "League".into(),
+        ..expected
+    };
     assert_eq!(*league.record, expected, "it keeps the law");
     assert_eq!((LAW_SMUGGLE_PENALTY, LAW_SCAN_FINE), (10, 500));
 }
@@ -184,6 +193,7 @@ fn a_lawless_faction_s_govt_is_neutral_but_its_colour() {
     let expected = Govt {
         color: 0x00AA_8800,
         ship_color: 0x00AA_8800,
+        comm_name: "League".into(),
         ..neutral_govt()
     };
     assert_eq!(league, expected);
@@ -986,9 +996,30 @@ fn a_hull_sets_nothing_else() {
         crew: 1,
         contribute: crate::Flags64(1),
         tech_level: OUTFIT_TECH_NEVER,
+        short_name: "Skiff".into(),
+        comm_name: "Skiff".into(),
+        long_name: "Skiff".into(),
         ..neutral_ship()
     };
     assert_eq!(skiff(&skiff_with_stats()), expected);
+}
+
+#[test]
+fn a_ship_s_short_long_and_comm_names_are_its_name_as_written() {
+    let game = loaded(&galaxy());
+    for (ship, name) in [("skiff", "Skiff"), ("armed-skiff", "Armed skiff")] {
+        let record = ship_of(&game, ship);
+        assert_eq!(
+            [
+                record.short_name.as_str(),
+                record.long_name.as_str(),
+                record.comm_name.as_str()
+            ],
+            [name; 3],
+            "{ship}"
+        );
+        assert_eq!(record.subtitle.as_str(), "", "{ship}: no subtitle derives");
+    }
 }
 
 /// The fixture galaxy with `alpha-prime` a shipyard and the skiff priced

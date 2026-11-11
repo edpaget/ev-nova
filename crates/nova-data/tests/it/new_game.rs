@@ -727,6 +727,24 @@ fn the_cutter_s_the_racked_hauler_s_the_mass_driver_s_and_the_racks_bodies_are_t
 }
 
 #[test]
+fn the_cutter_s_names_and_the_guild_s_comm_name_are_their_names_as_written() {
+    let game = new_game::open(&fixture()).expect("lists");
+    let (name, cutter) = named::<Ship>(&game.data, game.ids.ships[&id("cutter")]);
+    assert_eq!(name, "Cutter");
+    assert_eq!(
+        [
+            cutter.short_name.as_str(),
+            cutter.long_name.as_str(),
+            cutter.comm_name.as_str()
+        ],
+        ["Cutter"; 3]
+    );
+    let (name, guild) = named::<Govt>(&game.data, game.ids.factions[&id("guild")]);
+    assert_eq!(name, "The Guild");
+    assert_eq!(guild.comm_name.as_str(), "The Guild");
+}
+
+#[test]
 fn game_md_is_the_about_text() {
     let data = new_game::open(&fixture()).expect("lists").data;
     let (name, about) = named::<Desc>(&data, 32767);

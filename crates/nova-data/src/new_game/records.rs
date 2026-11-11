@@ -413,6 +413,19 @@ pub fn neutral_outfit() -> Outfit {
     }
 }
 
+/// The [`neutral_outfit`] with `name` as written as its `ShortName`,
+/// which the outfitter's grid cell draws, and lower-cased as its
+/// `LCName`, as a good's `LCName` is ([`super::goods`]). Its `LCPlural`
+/// stays blank: an English plural doesn't derive from a name.
+#[must_use]
+pub fn named_outfit(name: &str) -> Outfit {
+    Outfit {
+        short_name: name.into(),
+        lc_name: name.to_lowercase().as_str().into(),
+        ..neutral_outfit()
+    }
+}
+
 /// A `wëap` that does nothing: no reload, life, damage, speed, flags,
 /// particles, beam, submunitions or ammunition limit; unguided
 /// (`Guidance` -1), using no ammunition (`AmmoType` -1), drawn with

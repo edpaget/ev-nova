@@ -12,7 +12,8 @@
 //!   pinned outfit or kit and the unpinned outfits, in kit id order, so
 //!   adding a kit renumbers no outfit and adding an outfit no pinned kit
 //!   ([`super::ids`]).
-//! - **The `oütf`** ([`kit`], over [`neutral_outfit`]): its `name`;
+//! - **The `oütf`** ([`kit`], over [`named_outfit`]): its `name`, as
+//!   its `ShortName` and lower-cased as its `LCName`;
 //!   `Cost` its `price`; massless; `Max` 1, fitted once; `BuyRandom` 100,
 //!   for sale every day; `Flags` [`HIDE_UNLESS_REQUIRED`], so a kit that
 //!   doesn't fit the hull isn't listed; `Contribute` its hardpoints' mount
@@ -75,7 +76,7 @@ use nova_galaxy_format::load::{Doc, Galaxy, Problem};
 use super::fleet::{maneuver, saturated as word, spot};
 use super::ids::allocate_pinned;
 use super::map::absent;
-use super::records::neutral_outfit;
+use super::records::named_outfit;
 use crate::decode::Entry;
 use crate::records::outfit::Outfit;
 use crate::registry::AnyRecord;
@@ -371,7 +372,7 @@ pub fn kit(
         mod_val4: pairs[3].1,
         on_purchase: script('G'),
         on_sell: script('D'),
-        ..neutral_outfit()
+        ..named_outfit(&data.name)
     };
     Entry {
         id: nova,
@@ -434,6 +435,20 @@ mod tests {
 
     fn problems(game: &NewGame) -> Vec<String> {
         game.problems.iter().map(ToString::to_string).collect()
+    }
+
+    #[test]
+    fn a_kit_s_short_name_is_its_name_and_its_lower_case_name_lower_cased() {
+        let kit = kit_of(&loaded(&galaxy()), "gun-mount");
+        assert_eq!(
+            (
+                kit.short_name.as_str(),
+                kit.lc_name.as_str(),
+                kit.lc_plural.as_str()
+            ),
+            ("Gun mount", "gun mount", ""),
+            "no plural derives"
+        );
     }
 
     const MASS_DRIVER: &str = "---\nname: Mass driver\nmount: turret\ndamage: 12\nrange: 600\n\

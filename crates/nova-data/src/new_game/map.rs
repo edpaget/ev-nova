@@ -281,7 +281,8 @@ pub(super) fn absent<T>(galaxy: &Galaxy, loaded: &BTreeMap<Id, T>, dir: &str, id
     !loaded.contains_key(id) && !galaxy.is_unreadable(dir, id)
 }
 
-/// The `gövt` of `faction`, its colour as both colours, and, when it
+/// The `gövt` of `faction`, its name as its `CommName`, its colour as
+/// both colours, and, when it
 /// keeps the law, [`LAW_SMUGGLE_PENALTY`], [`LAW_SCAN_FINE`] and a
 /// `ScanMask` of [`LAWLESS_KIT_SCAN`], so its scans find a lawless kit.
 fn faction(nova: i16, faction: &Doc<Faction>) -> Entry<AnyRecord> {
@@ -289,6 +290,7 @@ fn faction(nova: i16, faction: &Doc<Faction>) -> Entry<AnyRecord> {
     let mut govt = Govt {
         color,
         ship_color: color,
+        comm_name: faction.data.name.as_str().into(),
         ..neutral_govt()
     };
     if !faction.data.lawless {

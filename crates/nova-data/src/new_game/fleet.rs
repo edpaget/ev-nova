@@ -220,10 +220,25 @@ fn resolved<'a>(galaxy: &'a Galaxy, id: &Id) -> Option<Resolved<'a>> {
     resolve(galaxy, id).ok()
 }
 
+/// The neutral `shïp` with `name`, as written, as its short, long and
+/// comm names: the format has one name, and the screens read three
+/// (the grid cell, the Info panel's title, the comm dialog's class line).
+/// Its `Subtitle` stays blank: nothing in the format derives one.
+fn named_ship(name: &str) -> Ship {
+    Ship {
+        short_name: name.into(),
+        comm_name: name.into(),
+        long_name: name.into(),
+        ..neutral_ship()
+    }
+}
+
 /// The `shïp` of the ship `id`, numbered `nova` (see the module docs), its
+/// names its `name` ([`named_ship`]), its
 /// kits' `oütf`s and its weapons' `wëap`s from `ids`, its `Contribute` its
 /// role's kit sets in `fit` and its chain hardpoints' mounts, sold at the
-/// yards holding the tech number `sold` when it is sold.
+/// yards holding the tech number `sold` when it is sold. A ship whose
+/// chain doesn't resolve is the neutral `shïp` with its names.
 #[must_use]
 pub fn ship(
     galaxy: &Galaxy,
@@ -239,7 +254,7 @@ pub fn ship(
         return Entry {
             id: nova,
             name: Some(doc.data.name.clone()),
-            record: AnyRecord::Ship(Box::new(neutral_ship())),
+            record: AnyRecord::Ship(Box::new(named_ship(&doc.data.name))),
         };
     };
     let stats = resolved.stats;
@@ -275,7 +290,7 @@ pub fn ship(
             .map_or(0, |price| i32::try_from(price).unwrap_or(i32::MAX)),
         tech_level: sold.unwrap_or(OUTFIT_TECH_NEVER),
         buy_random: if sold.is_some() { ALWAYS } else { 0 },
-        ..neutral_ship()
+        ..named_ship(&doc.data.name)
     };
     let items = default_items(galaxy, ids, doc, &resolved, problems);
     for (slot, &(item, n)) in items.iter().enumerate() {
