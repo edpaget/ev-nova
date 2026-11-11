@@ -65,14 +65,14 @@ mod tests {
                 OutfitId(130),
                 Kit {
                     attention: 1,
-                    spots: Vec::new(),
+                    ..Kit::default()
                 },
             ),
             (
                 OutfitId(131),
                 Kit {
                     attention: 2,
-                    spots: Vec::new(),
+                    ..Kit::default()
                 },
             ),
         ])

@@ -18,14 +18,16 @@
 //! | Bible | Record | Fields |
 //! |---|---|---|
 //! | `nova-ids.json` | every record's ID ([`pins`], [`ids`]) | the Nova ID each record keeps, by kind and bible id (a blockade's by its `take_point` mission's id); written only by `nova-dump --pin-ids` |
-//! | `factions/` | `gövt` | its `name` as `CommName`; `color` and `ship_color` from `color`, as `00RRGGBB`; one that keeps the law (not `lawless`) `SmugPenalty` [`kits::LAW_SMUGGLE_PENALTY`], `ScanFine` [`kits::LAW_SCAN_FINE`] and `ScanMask` [`kits::LAWLESS_KIT_SCAN`], placeholders, so its scans find a lawless kit; a lawless one none |
+//! | `factions/` | `gövt` | its `name` as `CommName`; `color` and `ship_color` from `color`, as `00RRGGBB`; one that keeps the law (not `lawless`) `SmugPenalty`, `ScanFine` and `ScanMask` from its `law` (below), so its scans find a lawless kit and the goods contraband for it; a lawless one none |
+//! | a faction's `law` | `gövt` `SmugPenalty` and `ScanFine`, and the store's scan rates ([`law`]) | `smuggling` as `SmugPenalty`, else [`kits::LAW_SMUGGLE_PENALTY`]; `fine` as `ScanFine`, in credits, else [`kits::LAW_SCAN_FINE`], each held within `i16`; `scan_rate` as written on the store's fittings ([`GameData::fittings`]), which `nova_sim::dock_scan` reads, none when it names none; a lawless faction's left out |
+//! | a good's `contraband` | the `jünk`'s and each named faction's `gövt` `ScanMask` ([`law`]) | each law-keeping faction a mapped `jünk`'s good names gets a bit of its own, in faction id order from [`law::FIRST_CONTRABAND_BIT`], at most [`law::CONTRABAND_FACTIONS`]: the faction's `ScanMask` [`kits::LAWLESS_KIT_SCAN`] or'd with its bit, the `jünk`'s the or of its factions' bits |
 //! | a faction's `allies`, `enemies`, `attacks_player`, `player_record` and `penalties` | `gövt` ([`relations`]) | `Class1` its own ID when another faction names it, else no class; `Ally1-4` and `Enemy1-4` the classes of the factions named, in order; `attacks_player` `always` or `never` as `Flags` [`ALWAYS_ATTACKS_PLAYER`](crate::records::govt::flags::ALWAYS_ATTACKS_PLAYER) or [`NEVER_ATTACKS_PLAYER`](crate::records::govt::flags::NEVER_ATTACKS_PLAYER); `player_record` as `InitialRec`; `penalties`' `attack`, `disable` and `destroy` as `ShootPenalty`, `DisabPenalty` and `KillPenalty`, of which `ShootPenalty` changes no record and only forgives a stray hit; a faction that names and is named by none stays neutral |
 //! | `systems/` | `sÿst` | `x_pos`/`y_pos` from `map`; `govt` from `government`; `nav_def` its stellars, then its gates, each in ID order; the civilian traffic unless it names its own; no `con` links |
 //! | a system's `traffic` | `sÿst` `DudeTypes`, `Prob` and `AvgShips` ([`traffic`]) | each fleet's `düde` and its weight as a whole percentage, each at least 1 and summing to 100 so the engine's rescale keeps them ([`traffic`] gives the rounding), in fleet id order, at most eight; `average_ships`, held within `i16`, as `AvgShips`, or [`fleet::TRAFFIC_SHIPS`] when it names none; no fleet that flies, no traffic |
 //! | a system's `hazards` | `sÿst` ([`hazards`]) | `nebula` sets `Murk` [`hazards::NEBULA_MURK`] and `sensor-dead` sets `Interference` [`hazards::SENSOR_DEAD_INTERFERENCE`], both placeholders; a system naming both gets both, and a word named twice counts once; `radiation`, `ion-storm`, `solar-flares` and `gravity-well` are not read |
 //! | `stellars/` | `spöb` | `x_pos`/`y_pos` from `position`; `govt` from `owner`; `flags` from `services` and `kind` ([`records::stellar_flags`]); no `hyper_link`s; a law-keeping owner's `TechLevel` [`kits::YARD_TECH_LEGAL`] and `MinStatus` 0, a lawless owner's or an unowned one's `TechLevel` [`kits::YARD_TECH_LAWLESS`] and `MinStatus` [`records::ANY_RECORD`]; `SpecialTech` the tech numbers of the outfits and hulls sold there, ascending, `-1` for an unused slot ([`yards`]) |
-//! | `goods/`, the standard ones | `STR#` 4000, 4001, 4003 and 4004 ([`goods`]) | the first six goods by the ID table, each in its slot: the name, lower-cased, with a `:` (placeholders), and its `price` as text; six entries each, empty for an unused slot; none when no good takes a slot |
-//! | `goods/`, the rest | `jünk` ([`goods`]) | named for the good: `BasePrice` its `price`, `LCName` its name lower-cased, `Abbrev` its name, blank `BuyOn` and `SellOn`, no flags and no `ScanMask` |
+//! | `goods/`, the standard ones | `STR#` 4000, 4001, 4003 and 4004 ([`goods`]) | the first six goods by the ID table that name no `contraband` (or the table pins to a slot), each in its slot: the name, lower-cased, with a `:` (placeholders), and its `price` as text; six entries each, empty for an unused slot; none when no good takes a slot |
+//! | `goods/`, the rest | `jünk` ([`goods`]) | every contraband good and those past the slots, named for the good: `BasePrice` its `price`, `LCName` its name lower-cased, `Abbrev` its name, blank `BuyOn` and `SellOn`, no flags, and `ScanMask` the bits of the factions its `contraband` names ([`law`]) |
 //! | a stellar's `prices` | `spöb` `Flags`' price nibbles, and each `jünk`'s `SoldAt`/`BoughtAt` ([`goods`]) | a standard good's level as its slot's low, medium or high bit ([`crate::records::stellar::flags::price_bits`]); a special good's `low` stellars as `SoldAt` and `high` ones as `BoughtAt`, in `spöb` ID order; only at a stellar with `trade` |
 //! | a stellar's body | `dësc` ([`descriptions`]) | the body, trimmed, at its `spöb`'s ID: the engine reads a stellar's landing text from the `dësc` with its `spöb`'s ID; an empty body has none |
 //! | a ship's body | `dësc` ([`descriptions`]) | the body, trimmed, at [`ship_desc_id`](crate::ship_desc_id) of its `shïp`, 13000 + (ID - 128): the shipyard's description; a variant's is its own file's, not inherited through `base`; an empty body has none |
@@ -47,7 +49,7 @@
 //! | a launcher's `guidance` and `ammunition` | `wëap` `Guidance`, `GuidedTurn`, `AmmoType` and `Flags`, the ammunition's `oütf`, and each carrying `shïp`'s `AmmoLoad` ([`munitions`], [`outfits`]) | `homing` as `Guidance` 1 with `GuidedTurn` [`outfits::HOMING_TURN`] (a placeholder), `unguided` -1; an `ammunition` outfit with an `oütf` that is no weapon as the rounds of the lowest-ID launcher `wëap` naming it: each such launcher's `AmmoType` that `wëap` less 128 and `Flags` secondary, and the ammunition's first `ModType` 3 naming it; its `load` a hardpoint, times the slot's `WeapCount`, held within `i16`, as `AmmoLoad`, the chain's and the as-built kits' hardpoints alike |
 //! | a bay's `fighters` | a fighter bay `wëap`, a fighters `oütf`, each carrier's `AmmoLoad` and the hull's `EscortType` ([`munitions`]) | a `hull` that is a mapped ship carrying no bay with `fighters` makes the bay a weapon: `Guidance` 99, `AmmoType` the hull's `shïp`, `Flags` secondary; its fighters an `oütf` numbered after the kits, pinned by the bay's id, named for the hull, `ModType` 3 naming the bay's `wëap`, of no cost, never sold; its `load` a hardpoint, times the slot's `WeapCount`, as `AmmoLoad`; the hull `EscortType` 0, a fighter, every other -1 |
 //! | `mods/` | `oütf` ([`kits`]) | unpinned, numbered after the unpinned outfits; its `name` as `ShortName` and lower-cased as `LCName`; `Cost` from `price`; `Max` 1, `BuyRandom` 100, hidden unless it fits; its effects in the four `ModType` slots, `acceleration`, `fuel`, `shield_recharge` and `hull_recharge` among them; its `fits` as a `Require` bit; its hardpoints' mount bits as `Contribute`; `fitted_at` as `TechLevel` and, lawless, `ScanMask`; its hardpoints' outfits given by `OnPurchase` and taken back by `OnSell` |
-//! | a ship's chain hardpoints, a kit's hardpoints and `attention` | the store's fittings ([`GameData::fittings`], [`fleet`], [`kits`]) | each `shïp`'s own exit spots and each kit `oütf`'s, and each kit's attention, which `nova_sim::dock_scan` reads |
+//! | a ship's chain hardpoints, a kit's hardpoints, `attention` and `hidden_cargo` | the store's fittings ([`GameData::fittings`], [`fleet`], [`kits`]) | each `shïp`'s own exit spots and each kit `oütf`'s, and each kit's attention and hidden cargo, which `nova_sim::dock_scan` reads |
 //! | a ship's `size`'s `collision_radius` | its collision radius on the store ([`GameData::collision_radius`], [`fleet::collision_radius`]) | through the `base` chain, the nearest `size`'s, in whole pixels at [`fleet::PX_PER_METRE`]; none when it isn't finite or rounds to no positive pixel; the fight reads it under `data_collision` |
 //! | a ship's `stats.gate_fuel` | its gate fuel on the store ([`GameData::gate_fuel`], [`fleet::gate_fuel`]) | through the `base` chain, the nearest given, held within `i16`; none when no ship of the chain gives one; a hypergate passage charges it under `gate_fuel` (`nova_sim::gate_fuel`), one jump's worth for a ship with none |
 //! | each hardpoint's `position` on its hull's `model`, and its outfit's `model` | its mount on the store ([`GameData::mounts`], [`mounts`]) | a ray cast down at the hardpoint onto the hull's model at its `size`'s length, standing on the highest surface, on the plane for a placeholder; every class's chain hardpoints, and every kit's on every class; the outfit model it shows, lifted to rest on it; the view draws them (`nova_view::flight::mounted_outfits`) |
@@ -94,6 +96,12 @@
 //!   itself, or a fifth faction leave that name out; a name given twice in
 //!   one list counts once. A `player_record` or penalty outside `i16` is
 //!   held at the nearest ([`relations`]).
+//! - A lawless faction's `law` is left out. A `law`'s `smuggling` or
+//!   `fine` outside `i16` is held at the nearest. A good's `contraband`
+//!   name that is no faction, is a lawless faction, or is past the 15th
+//!   faction named is left out; a name given twice counts once ([`law`]).
+//!   A contraband good the ID table pins to a standard slot keeps it, and
+//!   its `contraband` is left out ([`goods`]).
 //! - A stellar whose `system` names no system is left out.
 //! - A map or system position outside `i16` is moved to the nearest.
 //! - A system with more than 16 stellars and gates keeps every gate in
@@ -206,9 +214,6 @@
 //!   nearest to a gravity well is a `spöb`'s `Gravity`, which belongs to
 //!   one stellar ([`hazards`]). The loader reports nothing for them, and
 //!   they stay readable on the loaded `Galaxy`.
-//! - A kit's `hidden_cargo`: nothing in the new game is contraband cargo
-//!   yet. A kit's `attention` is read only as "any": how much more 2 is
-//!   noticed than 1 waits for the bible's law numbers.
 //! - Guidance other than homing: rockets, bombs, beams, turreted missiles
 //!   and point defence have no `guidance` word.
 //! - A launcher's `MaxAmmo`: it stays 0, no magazine cap, as the format
@@ -255,10 +260,9 @@
 //! - A stellar's generated look beyond its first colour, and a faction's
 //!   `kind`: Nova has nothing like them yet (the planet shader and 3D come
 //!   with `engine-3d`).
-//! - A good's legality (a `jünk`'s `ScanMask`, contraband), the `jünk`
-//!   flags (tribbles, perishable), prices that move with what a port has
-//!   heard, and `STR#` 4002 (mission cargo): they wait on the spaceport's
-//!   design. A trade centre that prices nothing still opens an empty
+//! - The `jünk` flags (tribbles, perishable), prices that move with what
+//!   a port has heard, and `STR#` 4002 (mission cargo): they wait on the
+//!   spaceport's design. A trade centre that prices nothing still opens an empty
 //!   exchange: the original's clearing of its trade bit isn't ported
 //!   (rdm:phase/ports-and-story/phase-5-load-object-data-junk-and-trade-flag).
 //!
@@ -277,6 +281,7 @@ pub mod hazards;
 pub mod ids;
 pub mod interface;
 pub mod kits;
+pub mod law;
 pub mod looks;
 mod map;
 pub mod missions;

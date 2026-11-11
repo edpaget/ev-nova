@@ -1,15 +1,17 @@
 //! The new game's fittings: where each ship class's own hardpoints sit,
-//! and each mod kit's attention and hardpoints.
+//! each mod kit's attention, hidden cargo and hardpoints, and each
+//! law-keeping faction's own scan rate.
 //!
 //! The store keeps them as the loader mapped them (`nova_data::Fittings`),
-//! by `shïp` and by kit `oütf`, each hardpoint a [`Spot`] in the `shän`'s
-//! pixels. They serve here as they are, re-exported, as
+//! by `shïp`, by kit `oütf` and by `gövt`, each hardpoint a [`Spot`] in
+//! the `shän`'s pixels. They serve here as they are, re-exported, as
 //! [`storylines`](crate::storylines) re-exports its types. The catalog
 //! serves them through [`PilotCatalog::fittings`], whose default is none:
-//! the stock game has no fittings, so its exit points are its `shän`s'
-//! and no kit draws the law's attention. The rules that read them are
-//! above: the player's exit points (`nova_sim::combat::spots`) and the
-//! dock scan (`nova_sim::dock_scan`).
+//! the stock game has no fittings, so its exit points are its `shän`s',
+//! no kit draws the law's attention and no kit hides cargo. The rules
+//! that read them are above: the player's exit points
+//! (`nova_sim::combat::spots`), and the dock scan's odds and both scans'
+//! hidden cargo (`nova_sim::dock_scan`).
 //!
 //! [`PilotCatalog::fittings`]: crate::catalog::PilotCatalog::fittings
 
@@ -19,7 +21,7 @@ pub use nova_data::{Fittings, Kit, Spot, SpotKind};
 mod tests {
     use std::collections::BTreeMap;
 
-    use nova_data::{GameData, OutfitId, ShipId};
+    use nova_data::{GameData, GovtId, OutfitId, ShipId};
 
     use super::*;
     use crate::catalog::PilotCatalog;
@@ -38,12 +40,14 @@ mod tests {
                 OutfitId(131),
                 Kit {
                     attention: 2,
+                    hidden_cargo: 4,
                     spots: vec![Spot {
                         kind: SpotKind::Turret,
                         at: (0, -2),
                     }],
                 },
             )]),
+            scan_rates: BTreeMap::from([(GovtId(129), 50)]),
         }
     }
 

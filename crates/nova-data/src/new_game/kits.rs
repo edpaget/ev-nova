@@ -37,9 +37,8 @@
 //!   second word for the one `ModType` would split it two ways. Nor a
 //!   `crew` or `mass` one: no `ModType` changes a hull's crew or mass (an
 //!   outfit's own mass weighs on the hull's `FreeMass`, which the new game
-//!   doesn't read).
-//!   `hidden_cargo` isn't mapped: nothing in the new game is contraband
-//!   cargo yet.
+//!   doesn't read). `hidden_cargo` takes no slot either: no `ModType`
+//!   hides cargo, so it is kept on the fittings (below).
 //! - **Its hardpoints' outfits** come with it: its `OnPurchase` grants
 //!   each (`G<oütf>`) and its `OnSell` takes each back (`D<oütf>`), so a
 //!   gun mount's gun arrives in the turret slot the kit adds and leaves
@@ -65,8 +64,10 @@
 //! - **The law** (`ScanMask`): a lawless kit carries [`LAWLESS_KIT_SCAN`],
 //!   the bit a law-keeping government's scan looks for (`super::map`); a
 //!   legal one none.
-//! - **Fittings** ([`kit_fittings`]): each kit's `attention` and its
-//!   hardpoints' places, on the store's side table.
+//! - **Fittings** ([`kit_fittings`]): each kit's `attention`, its
+//!   `hidden_cargo` and its hardpoints' places, on the store's side
+//!   table, which the dock scan and the interceptor's scan read
+//!   (`nova_sim::dock_scan`).
 //!
 //! # Problems
 //!
@@ -148,13 +149,14 @@ pub const YARD_TECH_LAWLESS: i16 = KIT_TECH_LAWLESS;
 /// scan looks for.
 pub const LAWLESS_KIT_SCAN: u16 = 0x0001;
 
-/// A law-keeping government's `SmugPenalty`: what a smuggling conviction
-/// costs the player's record with it, and what makes its traffic control
-/// scan (a placeholder until the bible gives the law's numbers).
+/// A law-keeping government's default `SmugPenalty`, for a faction whose
+/// `law` names no `smuggling`: what a smuggling conviction costs the
+/// player's record with it, and what makes its scans look at all
+/// ([`super::law`]).
 pub const LAW_SMUGGLE_PENALTY: i16 = 10;
 
-/// A law-keeping government's `ScanFine`: the credits a find costs (a
-/// placeholder until the bible gives the law's numbers).
+/// A law-keeping government's default `ScanFine`, for a faction whose
+/// `law` names no `fine`: the credits a find costs ([`super::law`]).
 pub const LAW_SCAN_FINE: i16 = 500;
 
 /// Every kit's and every sold outfit's `BuyRandom`: always for sale.
@@ -420,12 +422,13 @@ pub fn kit(
     }
 }
 
-/// The kit `kit`'s fittings: its attention and its hardpoints' places
-/// ([`spot`]), a bay's none.
+/// The kit `kit`'s fittings: its attention, the tons it hides and its
+/// hardpoints' places ([`spot`]), a bay's none.
 #[must_use]
 pub fn kit_fittings(kit: &ModKit) -> Kit {
     Kit {
         attention: kit.effects.attention,
+        hidden_cargo: kit.effects.hidden_cargo,
         spots: kit.hardpoints.iter().filter_map(spot).collect(),
     }
 }
@@ -838,13 +841,22 @@ mod tests {
     }
 
     #[test]
-    fn the_side_table_holds_each_kit_s_attention_and_spots() {
-        let game = loaded(&sample_kits());
+    fn the_side_table_holds_each_kit_s_attention_hidden_cargo_and_spots() {
+        let source = galaxy()
+            .with("outfits/mass-driver.md", MASS_DRIVER)
+            .with("mods/armour-plating.md", ARMOUR_PLATING)
+            .with(
+                "mods/gun-mount.md",
+                &GUN_MOUNT.replace("attention: 2}", "attention: 2, hidden_cargo: 4}"),
+            );
+        let game = loaded(&source);
+        assert_eq!(problems(&game), Vec::<String>::new());
         let kits = &game.data.fittings().kits;
         assert_eq!(
             kits[&OutfitId(130)],
             Kit {
                 attention: 1,
+                hidden_cargo: 0,
                 spots: Vec::new(),
             }
         );
@@ -852,6 +864,7 @@ mod tests {
             kits[&OutfitId(131)],
             Kit {
                 attention: 2,
+                hidden_cargo: 4,
                 spots: vec![Spot {
                     kind: SpotKind::Turret,
                     at: (0, -2),

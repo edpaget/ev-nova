@@ -10,8 +10,11 @@
 //! and [`GameData::fittings`] answers them, so the session can rebuild
 //! the player's exit points from its class and the kits it carries
 //! (`nova_sim::combat::spots`). A kit's attention, how much more the law
-//! notices a ship that carries it, has no `oütf` field either, so it is
-//! kept here too (`nova_sim::dock_scan`).
+//! notices a ship that carries it, and its hidden cargo, the tons it
+//! hides from a scan, have no `oütf` field either, so they are kept here
+//! too, and so is each law-keeping faction's own scan rate
+//! ([`Fittings::scan_rates`]), which scales the attention and has no
+//! `gövt` field (`nova_sim::dock_scan`).
 //!
 //! How a ship's spots become its four exit points of each kind is one
 //! rule, [`Spot::exit_points`], which both the loader's `shän` for an NPC
@@ -23,23 +26,30 @@
 use std::collections::BTreeMap;
 
 use super::GameData;
-use crate::wire::id::{OutfitId, ShipId};
+use crate::wire::id::{GovtId, OutfitId, ShipId};
 
-/// The new game's hardpoints and kit attention.
+/// The new game's hardpoints, kit attention and hidden cargo, and the
+/// law's scan rates.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Fittings {
     /// Each ship class's own hardpoints, its `base` chain's, by its
     /// `shïp`: its kits' are in [`kits`](Self::kits).
     pub hulls: BTreeMap<ShipId, Vec<Spot>>,
-    /// Each mod kit's attention and hardpoints, by its `oütf`.
+    /// Each mod kit's attention, hidden cargo and hardpoints, by its
+    /// `oütf`.
     pub kits: BTreeMap<OutfitId, Kit>,
+    /// Each law-keeping faction's own scan rate, by its `gövt`: the
+    /// percent chance, for each point of a ship's attention, that its
+    /// traffic control scans a ship asking to land. Only a faction that
+    /// names one has an entry; the others take the dock scan's default.
+    pub scan_rates: BTreeMap<GovtId, u32>,
 }
 
 impl Fittings {
     /// Whether there are none: a stock store's.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.hulls.is_empty() && self.kits.is_empty()
+        self.hulls.is_empty() && self.kits.is_empty() && self.scan_rates.is_empty()
     }
 }
 
@@ -48,6 +58,8 @@ impl Fittings {
 pub struct Kit {
     /// How much more the law notices a ship carrying it.
     pub attention: u32,
+    /// How many tons of cargo it hides from a scan.
+    pub hidden_cargo: u32,
     /// The hardpoints it adds, in the order it gives them.
     pub spots: Vec<Spot>,
 }
@@ -131,9 +143,11 @@ mod tests {
                 OutfitId(130),
                 Kit {
                     attention: 2,
+                    hidden_cargo: 4,
                     spots: vec![spot(SpotKind::Turret, (0, -2))],
                 },
             )]),
+            scan_rates: BTreeMap::from([(GovtId(129), 50)]),
         }
     }
 
@@ -225,13 +239,24 @@ mod tests {
     fn hulls_alone_or_kits_alone_are_not_empty() {
         let hulls = Fittings {
             kits: BTreeMap::new(),
+            scan_rates: BTreeMap::new(),
             ..fittings()
         };
         let kits = Fittings {
             hulls: BTreeMap::new(),
+            scan_rates: BTreeMap::new(),
             ..fittings()
         };
         assert!(!hulls.is_empty());
         assert!(!kits.is_empty());
+    }
+
+    #[test]
+    fn scan_rates_alone_are_not_empty() {
+        let rates = Fittings {
+            scan_rates: BTreeMap::from([(GovtId(128), 0)]),
+            ..Fittings::default()
+        };
+        assert!(!rates.is_empty());
     }
 }

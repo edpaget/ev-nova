@@ -9,6 +9,11 @@
 //! IDs ([`JUNK_IDS`]). The format says nothing of slots, so which goods
 //! are standard is the mapping's choice, and the table keeps it.
 //!
+//! A good with a `contraband` list takes no free slot: it is numbered
+//! among the special goods, since only a `jünk` has a `ScanMask` for a
+//! scan to read ([`super::law`]). One the table pins to a slot keeps it,
+//! so a save stays stable, and its `contraband` is left out.
+//!
 //! # Standard goods
 //!
 //! When any good takes a slot, the commodity lists are written, six
@@ -32,8 +37,9 @@
 //! trade stellars that price it `low` and `BoughtAt` those that price it
 //! `high`, each in `spöb` ID order and at most eight; `BasePrice` its
 //! price; `LCName` its name lower-cased and `Abbrev` its name; blank
-//! `BuyOn` and `SellOn`, so both always hold; no flags and no `ScanMask`.
-//! A `jünk` has no medium price.
+//! `BuyOn` and `SellOn`, so both always hold; no flags; and `ScanMask` the
+//! bits of the factions its `contraband` names ([`super::law`]), none for
+//! a good legal everywhere. A `jünk` has no medium price.
 //!
 //! # Problems
 //!
@@ -54,6 +60,9 @@
 //!   holds it wide, so it doesn't here.
 //! - A stellar with `prices` but no `trade` service: nothing is traded
 //!   there.
+//! - A contraband good the table pins to a standard slot: its
+//!   `contraband` is left out, as no scan reads a commodity. Its
+//!   `contraband` names are reported as [`super::law`] says.
 
 use std::collections::BTreeMap;
 
@@ -63,6 +72,7 @@ use nova_galaxy_format::load::{Doc, Galaxy, Problem};
 use nova_galaxy_format::model::{Service, Stellar as BibleStellar};
 
 use super::ids::{COMMODITY_SLOTS, IdTable, JUNK_IDS, after_pins, allocate_pinned};
+use super::law;
 use super::map::{absent, number};
 use crate::decode::Entry;
 use crate::records::junk::Junk;
@@ -99,16 +109,30 @@ pub(super) fn number_goods(
     pins: &IdTable,
     problems: &mut Vec<Problem>,
 ) -> (BTreeMap<Id, i16>, BTreeMap<Id, i16>) {
-    let standard = galaxy
-        .goods
-        .keys()
-        .filter(|good| !pins.junk.contains_key(*good));
+    // A contraband good is special unless the table pins it to a slot.
+    let special_only = |good: &Id, doc: &Doc<Good>| {
+        pins.junk.contains_key(good)
+            || (!doc.data.contraband.is_empty() && !pins.commodities.contains_key(good))
+    };
+    let standard = (galaxy.goods.iter())
+        .filter(|&(good, doc)| !special_only(good, doc))
+        .map(|(good, _)| good);
     let mut free = after_pins(COMMODITY_SLOTS, pins.commodities.values());
     let (commodities, past) = allocate_pinned(standard, &pins.commodities, &mut free);
-    let special = galaxy
-        .goods
-        .iter()
-        .filter(|(good, _)| pins.junk.contains_key(*good) || past.contains(good));
+    for (good, slot) in &commodities {
+        let doc = &galaxy.goods[good];
+        if !doc.data.contraband.is_empty() {
+            problems.push(Problem::new(
+                &doc.path,
+                format!(
+                    "it takes standard slot {slot}, which no scan reads; its `contraband` is \
+                     left out"
+                ),
+            ));
+        }
+    }
+    let special = (galaxy.goods.iter())
+        .filter(|&(good, doc)| special_only(good, doc) || past.contains(&good));
     let mut free = after_pins(JUNK_IDS, pins.junk.values());
     let junk = number(special, &pins.junk, &mut free, "jünk", problems);
     (commodities, junk)
@@ -158,10 +182,12 @@ pub(super) fn standard_strings(
     .collect()
 }
 
-/// The `jünk` of each special good.
+/// The `jünk` of each special good, its `ScanMask` the `contraband` bits
+/// of the factions its good names ([`law::junk_scan_mask`]).
 pub(super) fn junk(
     galaxy: &Galaxy,
     ids: &IdTable,
+    contraband: &BTreeMap<Id, u16>,
     problems: &mut Vec<Problem>,
 ) -> Vec<Entry<AnyRecord>> {
     let mut by_id: Vec<(i16, &Doc<BibleStellar>)> = (ids.stellars.iter())
@@ -196,12 +222,13 @@ pub(super) fn junk(
             let sold_at = side(PriceLevel::Low);
             let bought_at = side(PriceLevel::High);
             let name = &doc.data.name;
+            let scan_mask = law::junk_scan_mask(galaxy, ids, contraband, doc, problems);
             let junk = Junk {
                 sold_at,
                 bought_at,
                 base_price: price(doc, problems),
                 flags: Flags16(0),
-                scan_mask: Flags16(0),
+                scan_mask: Flags16(scan_mask),
                 lc_name: name.to_lowercase().as_str().into(),
                 abbrev: name.as_str().into(),
                 buy_on: MacString::default(),

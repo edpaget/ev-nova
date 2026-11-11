@@ -5,7 +5,8 @@
 //! ships, the civilian traffic and starts in [`super::fleet`], the fleets
 //! and a system's traffic in [`super::traffic`], outfits and weapons in
 //! [`super::outfits`], what launchers fire and bays launch in
-//! [`super::munitions`], mod kits in [`super::kits`], which yards sell what
+//! [`super::munitions`], mod kits in [`super::kits`], a faction's law and
+//! the goods contraband for it in [`super::law`], which yards sell what
 //! in [`super::yards`], the `take_point`
 //! missions' guards and blockades in [`super::blockades`], goods and
 //! a stellar's prices in [`super::goods`], and the bodies read as
@@ -24,10 +25,8 @@ use super::ids::{
     DEFAULT_INTERFACE, GOVT_IDS, IdTable, OUTFIT_IDS, STELLAR_IDS, SYSTEM_IDS, after_pins,
     allocate_pinned,
 };
-use super::kits::{
-    self, FitBits, LAW_SCAN_FINE, LAW_SMUGGLE_PENALTY, LAWLESS_KIT_SCAN, YARD_TECH_LAWLESS,
-    YARD_TECH_LEGAL,
-};
+use super::kits::{self, FitBits, YARD_TECH_LAWLESS, YARD_TECH_LEGAL};
+use super::law::{self, GovtLaw};
 use super::munitions;
 use super::outfits::{self, Fitted};
 use super::records::{
@@ -55,8 +54,9 @@ pub struct Mapped {
     pub ids: IdTable,
     /// What couldn't be mapped as written, each against its file.
     pub problems: Vec<Problem>,
-    /// Each ship's chain hardpoints and each kit's attention and
-    /// hardpoints, for the store.
+    /// Each ship's chain hardpoints, each kit's attention, hidden cargo
+    /// and hardpoints, and each law-keeping faction's own scan rate, for
+    /// the store.
     pub fittings: Fittings,
 }
 
@@ -88,8 +88,11 @@ pub fn map_pinned(galaxy: &Galaxy, pins: &IdTable) -> Mapped {
     let fleets = traffic::fleets(galaxy, &ids, &guards, &mut problems);
     let mut records = Vec::new();
     let relations = relations::relations(galaxy, &ids.factions, &mut problems);
+    let contraband = law::contraband_bits(galaxy, &ids);
     for (id, &nova) in &ids.factions {
-        records.push(faction(nova, &galaxy.factions[id], &relations[id]));
+        let doc = &galaxy.factions[id];
+        let law = law::govt_law(doc, contraband.get(id).copied(), &mut problems);
+        records.push(faction(nova, doc, &relations[id], law));
     }
     for (id, &nova) in &ids.systems {
         let doc = &galaxy.systems[id];
@@ -102,7 +105,7 @@ pub fn map_pinned(galaxy: &Galaxy, pins: &IdTable) -> Mapped {
     }
     records.extend(descriptions::descriptions(galaxy, &ids));
     records.extend(goods::standard_strings(galaxy, &ids, &mut problems));
-    records.extend(goods::junk(galaxy, &ids, &mut problems));
+    records.extend(goods::junk(galaxy, &ids, &contraband, &mut problems));
     for (at, &nova) in &ids.gates {
         let doc = &galaxy.systems[&at.system()];
         if let Some(point) = doc.data.jump_points.iter().find(|p| p.id == at.point()) {
@@ -116,7 +119,8 @@ pub fn map_pinned(galaxy: &Galaxy, pins: &IdTable) -> Mapped {
             ));
         }
     }
-    let fittings = fittings(galaxy, &ids, &fit, &sales, &mut records, &mut problems);
+    let mut fittings = fittings(galaxy, &ids, &fit, &sales, &mut records, &mut problems);
+    fittings.scan_rates = law::scan_rates(galaxy, &ids.factions);
     records.extend(civilian);
     for (faction, &nova) in &guards {
         records.push(blockades::guard(galaxy, &ids, faction, nova));
@@ -307,14 +311,22 @@ pub(super) fn absent<T>(galaxy: &Galaxy, loaded: &BTreeMap<Id, T>, dir: &str, id
 }
 
 /// The `gövt` of `faction`, its name as its `CommName`, its colour as
-/// both colours, and, when it
-/// keeps the law, [`LAW_SMUGGLE_PENALTY`], [`LAW_SCAN_FINE`] and a
-/// `ScanMask` of [`LAWLESS_KIT_SCAN`], so its scans find a lawless kit;
+/// both colours; its `SmugPenalty`, `ScanFine` and `ScanMask` from `law`
+/// ([`law`]): when it keeps the law, its own or
+/// [`kits::LAW_SMUGGLE_PENALTY`] and [`kits::LAW_SCAN_FINE`], and a
+/// `ScanMask` of [`kits::LAWLESS_KIT_SCAN`] and its contraband bit, so
+/// its scans find a
+/// lawless kit and the goods contraband for it, and none when lawless;
 /// its classes, allies, enemies, stance toward the player, starting
 /// record and penalties from `relations` ([`relations`]).
-fn faction(nova: i16, faction: &Doc<Faction>, relations: &Relations) -> Entry<AnyRecord> {
+fn faction(
+    nova: i16,
+    faction: &Doc<Faction>,
+    relations: &Relations,
+    law: GovtLaw,
+) -> Entry<AnyRecord> {
     let color = rgb(&faction.data.color);
-    let mut govt = Govt {
+    let govt = Govt {
         color,
         ship_color: color,
         comm_name: faction.data.name.as_str().into(),
@@ -326,13 +338,11 @@ fn faction(nova: i16, faction: &Doc<Faction>, relations: &Relations) -> Entry<An
         shoot_penalty: relations.shoot_penalty,
         disab_penalty: relations.disab_penalty,
         kill_penalty: relations.kill_penalty,
+        smug_penalty: law.smug_penalty,
+        scan_fine: law.scan_fine,
+        scan_mask: Flags16(law.scan_mask),
         ..neutral_govt()
     };
-    if !faction.data.lawless {
-        govt.smug_penalty = LAW_SMUGGLE_PENALTY;
-        govt.scan_fine = LAW_SCAN_FINE;
-        govt.scan_mask = Flags16(LAWLESS_KIT_SCAN);
-    }
     Entry {
         id: nova,
         name: Some(faction.data.name.clone()),

@@ -232,9 +232,14 @@ mod tests {
                 ..outfit(132, &[])
             },
         ]);
-        let kit = |attention, spots| Kit { attention, spots };
+        let kit = |attention, spots| Kit {
+            attention,
+            spots,
+            ..Kit::default()
+        };
         catalog.fittings = Fittings {
             hulls: BTreeMap::new(),
+            scan_rates: BTreeMap::new(),
             kits: BTreeMap::from([
                 (PLATING, kit(1, Vec::new())),
                 (
@@ -644,18 +649,19 @@ mod tests {
                 (
                     RACKS,
                     Kit {
-                        attention: 0,
                         spots: vec![rack],
+                        ..Kit::default()
                     },
                 ),
                 (
                     BED,
                     Kit {
-                        attention: 0,
                         spots: vec![bed],
+                        ..Kit::default()
                     },
                 ),
             ]),
+            scan_rates: BTreeMap::new(),
         };
         let bought = |catalog: &FakePilotCatalog| {
             let mut session = outfitted(catalog);

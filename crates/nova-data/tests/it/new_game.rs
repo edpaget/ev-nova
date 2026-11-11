@@ -31,8 +31,10 @@ use nova_galaxy_format::fleet::Size;
 use nova_galaxy_media::BARE;
 
 /// The checked-in fixture (`new_game::fixture::folder`): one region; the
-/// factions `guild` (no relations), `warden` (with penalties) and `raider`
-/// (always attacking the player), the last two enemies; the systems `drift` (jump points alone),
+/// factions `guild` (no relations, the default law), `warden` (with
+/// penalties, and a `law` naming its own penalty, fine and scan rate) and
+/// `raider` (lawless, always attacking the player), the last two enemies;
+/// the systems `drift` (jump points alone),
 /// `hearth` (the guild's), `verge` (ungoverned, in a nebula) and `fringe`
 /// (ungoverned, reached from `drift` alone by one stable road, and the one
 /// system naming its traffic: the fleets `raider-band`, the raiders'
@@ -41,8 +43,8 @@ use nova_galaxy_media::BARE;
 /// `hearth-dock`, a guild station with every service; `hearth-moon`, with
 /// none; `verge-camp`, a warden outpost with a bar, an exchange and
 /// no fuel; and `verge-workshop`, an unowned outpost, a lawless yard, with
-/// an outfitter and fuel; seven goods, six standard and `vintage-wine` a `jünk`, which
-/// the two exchanges price; jump
+/// an outfitter and fuel; seven goods, six standard and `vintage-wine` a `jünk`,
+/// contraband for the guild, which the two exchanges price; jump
 /// points two of which lead from `hearth` to `verge`, a dead pair between
 /// `verge` and `drift`, and `drift`'s one-way back door to `verge`; the
 /// civilian hull `hauler` (4000, sold nowhere), the crown hull `cutter`
@@ -62,8 +64,9 @@ use nova_galaxy_media::BARE;
 /// hardpoint), `seekers`, sold at `hearth-dock`, and `drone-bay`, a bay
 /// launching drones (two a hardpoint), neither of these two sold; the mod
 /// kits `cargo-racks` (legal, slowing the hull's acceleration), `gun-mount` (lawless, adding a turret
-/// hardpoint), `turret-ring` (legal, adding a turret hardpoint) and
-/// `welded-plate` (lawless, for a raider, adding 150 to its hull); the
+/// hardpoint), `turret-ring` (legal, adding a turret hardpoint),
+/// `welded-plate` (lawless, for a raider, adding 150 to its hull) and
+/// `false-floor` (lawless, hiding four tons from a scan); the
 /// start `dock-hand`, in the hauler in `hearth`; the
 /// storyline `dock-work`,
 /// whose four missions and two news items run over the conversations of
@@ -206,11 +209,11 @@ fn the_fixture_folder_holds_a_record_for_each_thing_it_maps() {
     assert_eq!(
         data.ids(Desc::TYPE),
         [
-            128, 130, 140, 3000, 3001, 3002, 3003, 3004, 3005, 3006, 3007, 3008, 13000, 13001,
-            13002, 13003, 13004, 13005, 13006, 13007, 32767
+            128, 130, 140, 3000, 3001, 3002, 3003, 3004, 3005, 3006, 3007, 3008, 3010, 13000,
+            13001, 13002, 13003, 13004, 13005, 13006, 13007, 32767
         ],
-        "the stellars with a body, the outfits and kits (not the drones), the ships, then \
-         game.md"
+        "the stellars with a body, the outfits and kits (not the drones, but the false floor \
+         after them), the ships, then game.md"
     );
     assert_eq!(
         data.ids(Ship::TYPE),
@@ -232,10 +235,10 @@ fn the_fixture_folder_holds_a_record_for_each_thing_it_maps() {
     assert_eq!(data.ids(Character::TYPE), [128], "the start");
     assert_eq!(
         data.ids(Outfit::TYPE),
-        (128..=137).collect::<Vec<_>>(),
+        (128..=138).collect::<Vec<_>>(),
         "the dock pass, the cargo racks kit, the mass driver, the gun mount kit, the turret ring \
          kit, the welded plate kit, then the drone bay, the seeker launcher and the seekers, \
-         and the drone bay's drones"
+         the drone bay's drones, and the false floor kit"
     );
     assert_eq!(
         data.ids(Weapon::TYPE),
@@ -312,8 +315,88 @@ fn the_wardens_and_the_raiders_are_enemies_with_the_penalties_their_files_name()
 }
 
 #[test]
+fn the_wardens_law_is_the_one_their_file_names_and_the_guild_takes_the_defaults() {
+    use nova_data::new_game::kits::{LAW_SCAN_FINE, LAW_SMUGGLE_PENALTY};
+
+    let game = new_game::open(&fixture()).expect("lists");
+    let (galaxy, _) =
+        nova_galaxy_format::load::load(&nova_galaxy_format::source::DirSource::new(fixture()));
+    let nova = |faction: &str| game.ids.factions[&id(faction)];
+    let govt = |faction: &str| named::<Govt>(&game.data, nova(faction)).1;
+    let rate = |faction: &str| {
+        let rates = &game.data.fittings().scan_rates;
+        rates.get(&GovtId(nova(faction))).copied()
+    };
+    let law = galaxy.factions[&id("warden")].data.law;
+    let smuggling = law.smuggling.expect("the wardens name a penalty").get();
+    let fine = law.fine.expect("the wardens name a fine");
+    let scan_rate = law.scan_rate.expect("the wardens name a rate");
+    let held = |value: u32| i16::try_from(value).expect("within i16");
+    let warden = govt("warden");
+    assert_eq!(
+        (warden.smug_penalty, warden.scan_fine, rate("warden")),
+        (held(smuggling), held(fine), Some(scan_rate))
+    );
+    assert_ne!(held(smuggling), LAW_SMUGGLE_PENALTY, "not the default");
+    assert_ne!(held(fine), LAW_SCAN_FINE, "not the default");
+    let guild = govt("guild");
+    assert_eq!(
+        (guild.smug_penalty, guild.scan_fine, rate("guild")),
+        (LAW_SMUGGLE_PENALTY, LAW_SCAN_FINE, None),
+        "the guild names no law"
+    );
+    let raider = govt("raider");
+    assert_eq!(
+        (raider.smug_penalty, raider.scan_fine, rate("raider")),
+        (0, 0, None),
+        "lawless"
+    );
+}
+
+#[test]
+fn the_vintage_wine_is_contraband_where_the_guild_scans_and_nowhere_else() {
+    use nova_data::new_game::kits::LAWLESS_KIT_SCAN;
+
+    let game = new_game::open(&fixture()).expect("lists");
+    let govt = |faction: &str| named::<Govt>(&game.data, game.ids.factions[&id(faction)]).1;
+    let (_, wine) = named::<Junk>(&game.data, game.ids.junk[&id("vintage-wine")]);
+    let wine = wine.scan_mask.0;
+    assert_ne!(
+        wine & govt("guild").scan_mask.0,
+        0,
+        "the guild's scans find it"
+    );
+    assert_eq!(wine & govt("warden").scan_mask.0, 0, "the wardens' don't");
+    assert_eq!(
+        wine & govt("raider").scan_mask.0,
+        0,
+        "the raiders scan nobody"
+    );
+    assert_eq!(
+        wine & LAWLESS_KIT_SCAN,
+        0,
+        "it shares no bit with a lawless kit"
+    );
+}
+
+#[test]
+fn the_false_floor_hides_the_tons_its_file_names() {
+    let game = new_game::open(&fixture()).expect("lists");
+    let (galaxy, _) =
+        nova_galaxy_format::load::load(&nova_galaxy_format::source::DirSource::new(fixture()));
+    let named = galaxy.mods[&id("false-floor")].data.effects.hidden_cargo;
+    assert_ne!(named, 0);
+    let floor = nova_data::OutfitId(game.ids.kits[&id("false-floor")]);
+    let kit = &game.data.fittings().kits[&floor];
+    assert_eq!((kit.hidden_cargo, kit.attention), (named, 0));
+    let racks = nova_data::OutfitId(game.ids.kits[&id("cargo-racks")]);
+    assert_eq!(game.data.fittings().kits[&racks].hidden_cargo, 0);
+}
+
+#[test]
 fn the_guild_names_no_relations_and_is_as_neutral_as_before() {
     use nova_data::new_game::kits::{LAW_SCAN_FINE, LAW_SMUGGLE_PENALTY, LAWLESS_KIT_SCAN};
+    use nova_data::new_game::law::FIRST_CONTRABAND_BIT;
     use nova_data::new_game::records::{neutral_govt, rgb};
     use nova_data::wire::flags::Flags16;
 
@@ -331,9 +414,10 @@ fn the_guild_names_no_relations_and_is_as_neutral_as_before() {
             comm_name: name.as_str().into(),
             smug_penalty: LAW_SMUGGLE_PENALTY,
             scan_fine: LAW_SCAN_FINE,
-            scan_mask: Flags16(LAWLESS_KIT_SCAN),
+            scan_mask: Flags16(LAWLESS_KIT_SCAN | FIRST_CONTRABAND_BIT),
             ..neutral_govt()
-        }
+        },
+        "its scans find a lawless kit and the vintage wine, the one faction named contraband"
     );
 }
 

@@ -125,6 +125,47 @@ fn seven_goods_fill_the_six_slots_in_id_order_then_junk_128() {
 }
 
 #[test]
+fn a_contraband_good_is_numbered_as_junk_and_takes_no_free_slot() {
+    let source = with_goods(galaxy(), &[("bread", "Bread", 5)]).with(
+        "goods/ale.md",
+        "---\nname: Ale\nprice: 10\ncontraband: [league]\n---\n",
+    );
+    let game = loaded(&source);
+    assert_eq!(problems(&game), Vec::<String>::new());
+    assert_eq!(table(&game.ids.commodities), [("bread".to_owned(), 0)]);
+    assert_eq!(table(&game.ids.junk), [("ale".to_owned(), 128)]);
+    let (_, ale) = junk_of(&game, "ale");
+    assert_eq!(
+        ale.scan_mask,
+        Flags16(super::super::law::FIRST_CONTRABAND_BIT),
+        "the league's bit"
+    );
+}
+
+#[test]
+fn a_contraband_good_pinned_to_a_slot_keeps_it_and_is_reported() {
+    let source = with_goods(galaxy(), &[("bread", "Bread", 5)]).with(
+        "goods/ale.md",
+        "---\nname: Ale\nprice: 10\ncontraband: [league]\n---\n",
+    );
+    let game = loaded(&pinned(
+        source,
+        r#"{"commodities": {"ale": 2, "bread": 0}}"#,
+    ));
+    assert_eq!(
+        problems(&game),
+        [
+            "goods/ale.md: it takes standard slot 2, which no scan reads; its `contraband` is left out"
+        ]
+    );
+    assert_eq!(
+        table(&game.ids.commodities),
+        [("ale".to_owned(), 2), ("bread".to_owned(), 0)]
+    );
+    assert!(game.ids.junk.is_empty());
+}
+
+#[test]
 fn a_good_pinned_as_junk_takes_no_free_slot() {
     let source = with_goods(galaxy(), &[("ale", "Ale", 10), ("bread", "Bread", 5)]);
     let game = loaded(&pinned(source, r#"{"junk": {"ale": 200}}"#));

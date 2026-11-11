@@ -4,9 +4,11 @@
 //!
 //! # `folder()`
 //!
-//! It holds the factions `guild`, with no relations, `warden`, the
-//! raiders' enemy, whose ships cost the player 5 to attack, 20 to
-//! disable and 40 to destroy, and `raider`, lawless, the wardens' enemy,
+//! It holds the factions `guild`, with no relations and the default law,
+//! `warden`, the raiders' enemy, whose ships cost the player 5 to attack,
+//! 20 to disable and 40 to destroy, and whose `law` names its own
+//! smuggling penalty (15), fine (800) and scan rate (50), and `raider`,
+//! lawless, the wardens' enemy,
 //! whose warships attack the player on sight; the systems `drift`, of
 //! jump points alone, `hearth`, the guild's, `verge`, ungoverned and
 //! in a `nebula`, the one hazard, so the port loop's flight to it is
@@ -62,14 +64,18 @@
 //! so only Verge Workshop fits it, and the legal kit `turret-ring`
 //! (1000), fitting freighters, which adds an empty turret hardpoint for
 //! four tons of cargo, so Hearth Dock fits it to the racked hauler and
-//! sells a second mass driver onto it, and the lawless kit `welded-plate`
+//! sells a second mass driver onto it, the lawless kit `welded-plate`
 //! (1500), fitting raiders, which adds 150 to the hull, so an NPC flying
 //! the armoured skiff holds its armour only where its default items count
-//! (the `NpcDefaultItems` rule); the start `dock-hand`, in the hauler
+//! (the `NpcDefaultItems` rule), and the lawless kit `false-floor`
+//! (2500), fitting freighters, which hides four tons from a scan
+//! (`hidden_cargo`) for four tons of cargo and draws no attention; the
+//! start `dock-hand`, in the hauler
 //! in `hearth`; seven goods, the six standard ones `alloys` (400 a ton),
 //! `fuel-cells` (150), `grain` (100), `machinery` (600), `medicine` (800)
 //! and `textiles` (250), in slots 0 to 5, and the special good
-//! `vintage-wine` (1200), `jünk` 128; two trade stellars that price
+//! `vintage-wine` (1200), `jünk` 128, contraband for the guild (cheap at
+//! the wardens' camp, dear at the Guild's dock); two trade stellars that price
 //! them, `hearth-dock` (alloys and medicine medium, fuel cells and grain
 //! low, machinery, textiles and vintage wine high) and `verge-camp`
 //! (grain and medicine high, vintage wine low); and the storyline
@@ -143,7 +149,10 @@ pub fn folder() -> PathBuf {
 /// failure, copied in so no test reads game-bible.
 ///
 /// It holds the factions `commonwealth`, `association`, `harrow-band` and
-/// `marrow-commons`, the last two lawless; the regions `commonwealth-rim` and
+/// `marrow-commons`, the last two lawless, the commonwealth naming a scan
+/// rate of 50 in its `law` (so its traffic control surely scans a ship of
+/// attention 2 or more: the cut's own value, not the sample's, which names
+/// none yet); the regions `commonwealth-rim` and
 /// `association-border`; the systems `luyten-crossing` (the
 /// commonwealth's, clear), `brightwater` (the association's, its one
 /// hazard `sensor-dead`) and `marrow` (its one hazard a `nebula`), with

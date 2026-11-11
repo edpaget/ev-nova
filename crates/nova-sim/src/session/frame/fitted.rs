@@ -60,6 +60,7 @@ mod tests {
                 .into_iter()
                 .map(|kit| (kit, Kit::default()))
                 .collect(),
+            ..Fittings::default()
         };
         catalog
     }
