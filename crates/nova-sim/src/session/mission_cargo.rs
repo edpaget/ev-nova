@@ -9,11 +9,12 @@
 //! [`scan`](crate::scan) module).
 
 use super::mission_screens::MissionTextKind;
-use super::{Session, Space};
+use super::{PlayerShip, Session, Setup, Space, Statics};
 use crate::ai::Goal;
 use crate::catalog::{GovtId, GovtRecord, MissionId, MissionRecord, ShipId, StellarId};
 use crate::chance::{Chance, NeverFires};
 use crate::combat::ShipRef;
+use crate::dock_scan;
 use crate::legal::{Crime, LegalCode};
 use crate::market::Good;
 use crate::message::SimMessage;
@@ -21,6 +22,7 @@ use crate::mission::cargo::{
     JettisonMessage, PICKUP_BOARDING, PickupFacts, ScanOutcome, drops_off, jettison,
     loads_at_accept, picks_up_at_destination, pickup_checks, scan,
 };
+use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::scan::{self, Contraband};
 use crate::sound::SimSound;
@@ -217,7 +219,8 @@ impl Session {
     /// attacking the player (@0x7e7b1-0x7e7c0, @0x7e8f6-0x7e905).
     ///
     /// Then, found or not, the contraband ([`scan::contraband`], against
-    /// the cash left): a find convicts the player of [`Crime::Smuggle`]
+    /// the cash left, over the cargo the ship's kits don't hide:
+    /// [`PlayerShip::contraband_found`]): a find convicts the player of [`Crime::Smuggle`]
     /// against the scanner's government and takes the ranks it reaches
     /// (`_SlapWithPenalty` @0x7ebcc, @0x7f01f, passing slot -1, so a
     /// mission ship's scan convicts too), sets the scanner attacking the
@@ -254,27 +257,10 @@ impl Session {
             return;
         }
         self.scan_mission_cargo(id, scanner, &govt, chance);
-        // `_ScanPlayer` reads the outfit counts (@0x7efd1-0x7eff6,
-        // @0x7f103-0x7f10e), a purchase's held stock left out (see the
-        // `held_readers` module).
-        let outfits = self.ship.counted_outfits(&self.pilot);
-        let carried = scan::Carried {
-            cargo: &self.pilot.cargo,
-            junk: self.statics.goods.junk(),
-            outfits: &outfits,
-            outfit_records: &self.statics.outfits,
-        };
-        let rules = scan::ScanRules {
-            outfits_past_junk: self.setup.rules.source_for(RuleKey::ScanOutfitsPastJunk),
-            outfit_fine: self.setup.rules.source_for(RuleKey::OutfitScanFine),
-        };
-        let Some(found) = scan::contraband(
-            &govt,
-            &carried,
-            self.pilot.cash,
-            self.ship.latches.scan_latches,
-            rules,
-        ) else {
+        let found = self
+            .ship
+            .contraband_found(&self.pilot, &self.statics, &self.setup, &govt);
+        let Some(found) = found else {
             return;
         };
         self.space.set_on_player(id);
@@ -332,7 +318,45 @@ impl Session {
         self.out.sounds.push(SimSound::Smuggling);
         self.ship.latches.scan_latches.clear(found);
     }
+}
 
+impl PlayerShip {
+    /// The contraband a scan by government `govt` finds on the player
+    /// ([`scan::contraband`]): over the ship's outfit counts, a purchase's
+    /// held stock left out, as `_ScanPlayer` reads them
+    /// (@0x7efd1-0x7eff6, @0x7f103-0x7f10e; see the `held_readers`
+    /// module), the pilot's cargo less what the kits carried hide
+    /// ([`dock_scan::hidden_cargo`], [`dock_scan::seen_cargo`]), the
+    /// pilot's cash, the scan latches, and the setup's
+    /// [`RuleKey::ScanOutfitsPastJunk`] and [`RuleKey::OutfitScanFine`].
+    /// The interceptor's scan ([`Session::scanned_by`]) and the dock scan
+    /// (the `dock_scan` module) both read it, so they find the same
+    /// things. Stock data has no fittings, so no kit hides anything.
+    pub(super) fn contraband_found(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        govt: &GovtRecord,
+    ) -> Option<Contraband> {
+        let outfits = self.counted_outfits(pilot);
+        let hidden = dock_scan::hidden_cargo(&outfits, &statics.fittings.kits);
+        let cargo = dock_scan::seen_cargo(&pilot.cargo, hidden);
+        let carried = scan::Carried {
+            cargo: &cargo,
+            junk: statics.goods.junk(),
+            outfits: &outfits,
+            outfit_records: &statics.outfits,
+        };
+        let rules = scan::ScanRules {
+            outfits_past_junk: setup.rules.source_for(RuleKey::ScanOutfitsPastJunk),
+            outfit_fine: setup.rules.source_for(RuleKey::OutfitScanFine),
+        };
+        scan::contraband(govt, &carried, pilot.cash, self.latches.scan_latches, rules)
+    }
+}
+
+impl Session {
     /// The mission cargo's part of the scan by NPC `id`, of ship type
     /// `scanner` and government `govt` (see [`Session::scanned_by`]).
     fn scan_mission_cargo(
@@ -1794,6 +1818,63 @@ mod tests {
                 junk: false,
                 outfits: true
             }
+        );
+    }
+
+    /// A hold kit, outfit 151: no `ScanMask`, no attention, hiding 2 tons.
+    const HOLD: OutfitId = OutfitId(151);
+
+    /// [`contraband_catalog`] fining 500, with the [`HOLD`] kit.
+    fn hiding_catalog() -> FakePilotCatalog {
+        use nova_sim_catalog::fittings::{Fittings, Kit};
+
+        let mut catalog = contraband_catalog(500);
+        catalog.outfits.push(outfit(HOLD.0, &[]));
+        catalog.fittings = Fittings {
+            kits: std::collections::BTreeMap::from([(
+                HOLD,
+                Kit {
+                    hidden_cargo: 2,
+                    ..Kit::default()
+                },
+            )]),
+            ..Fittings::default()
+        };
+        catalog
+    }
+
+    /// [`smuggler`] of [`hiding_catalog`], owning the hold kit.
+    fn hiding(catalog: &FakePilotCatalog, tons: u32, blasters: u16) -> Session {
+        let mut session = smuggler(catalog, tons, blasters, 1200);
+        session.pilot.outfits.insert(HOLD, 1);
+        session
+    }
+
+    #[test]
+    fn a_scan_finds_no_junk_the_kits_hide_and_finds_it_held_past_them() {
+        let catalog = hiding_catalog();
+        let mut session = hiding(&catalog, 2, 0);
+        let record = session.pilot().legal_record(GovtId(128));
+        looked_over(&mut session, &catalog, 0);
+        assert_eq!(session.take_messages(), [], "2 tons, all hidden");
+        assert_eq!(session.pilot().cash(), 1200);
+        assert_eq!(session.pilot().legal_record(GovtId(128)), record);
+        let mut session = hiding(&catalog, 3, 0);
+        looked_over(&mut session, &catalog, 0);
+        assert_eq!(session.take_messages(), [illegal_junk(500)], "3 tons");
+        assert_eq!(session.pilot().cash(), 700);
+        assert_eq!(session.pilot().legal_record(GovtId(128)), record - 5);
+    }
+
+    #[test]
+    fn junk_the_kits_hide_sets_no_latch_so_an_outfit_is_still_found() {
+        let catalog = hiding_catalog();
+        let mut session = hiding(&catalog, 2, 1);
+        looked_over(&mut session, &catalog, 0);
+        assert_eq!(
+            session.take_messages(),
+            [illegal_outfit(true, 500)],
+            "the hidden bio-weapons don't shadow the blaster"
         );
     }
 

@@ -118,9 +118,10 @@
 //!   at a time ([`ConversationPage`]) for the spaceport's conversation;
 //!   with the `fixture` feature, its fake (`dialog::fake`) too. The game
 //!   wires `nova-ink`'s adapter.
-//! - [`dock_scan`]: the new game's attention from the law: whether
+//! - [`dock_scan`]: the new game's law over mod kits: the odds that
 //!   traffic control scans a ship that asks to land, by the attention its
-//!   kits draw.
+//!   kits draw and its government's rate, and the cargo the kits hide
+//!   from every scan.
 //! - [`escape`]: the player's escape: the escape pod and auto-eject
 //!   outfits, the escape ship a fighter bay offers, when auto-eject arms,
 //!   and where the escape pod is taken.

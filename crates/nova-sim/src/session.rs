@@ -775,6 +775,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use self::chart::Chart;
+use self::dock_scan::DockLaw;
 use self::entry::{Arrival, Dock, Entry, Placement, ShipPlacement};
 use self::hooks::ShipHook;
 use self::jump_hops::Chain;
@@ -3676,11 +3677,11 @@ impl Session {
     /// (`_FindNearestStellar` gives -1, @0x6a94c), so its
     /// [`LandingRefusal::NothingLandable`] is silent.
     ///
-    /// This bare press carries no [`LegalCode`], so the new game's traffic
-    /// control scans nothing:
+    /// This bare press carries no [`LegalCode`] and no chance, so the new
+    /// game's traffic control scans nothing and draws nothing:
     /// [`FlightCommand::Land`](crate::flight_frame::FlightCommand::Land)
-    /// presses with its collaborators' law, which runs the dock scan at
-    /// the request (see the `dock_scan` module).
+    /// presses with its collaborators' law and chance, which run the dock
+    /// scan at the request (see the `dock_scan` module).
     pub fn land(&mut self) -> Result<LandPress, LandingRefusal> {
         self.land_requesting().0
     }
@@ -3696,13 +3697,13 @@ impl Session {
     }
 
     /// [`Session::land_requesting`], traffic control scanning the ship
-    /// first and convicting by `law`, when given (see the `dock_scan`
-    /// module).
+    /// first, drawing its odds on `dock`'s chance and convicting by its
+    /// law, when given (see the `dock_scan` module).
     pub(crate) fn land_requesting_by(
         &mut self,
-        law: Option<&dyn LegalCode>,
+        dock: Option<DockLaw<'_>>,
     ) -> (Result<LandPress, LandingRefusal>, bool) {
-        let (press, requested) = self.land_press(law);
+        let (press, requested) = self.land_press(dock);
         if let Err(refusal) = &press
             && refusal.beeps()
         {
@@ -3713,7 +3714,7 @@ impl Session {
 
     fn land_press(
         &mut self,
-        law: Option<&dyn LegalCode>,
+        dock: Option<DockLaw<'_>>,
     ) -> (Result<LandPress, LandingRefusal>, bool) {
         if self.mode.jump().is_some() {
             return (Err(LandingRefusal::Jumping), false);
@@ -3753,7 +3754,7 @@ impl Session {
         );
         let press = match stage {
             DockStage::Done(press) => press,
-            DockStage::Asks(ask) => self.answer_dock_ask(ask, law, barred),
+            DockStage::Asks(ask) => self.answer_dock_ask(ask, dock, barred),
         };
         let requested = had_target || press.selected.is_some();
         (self.land_picked(press, barred), requested)

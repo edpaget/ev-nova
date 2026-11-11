@@ -6,14 +6,18 @@
 //! ([`dock_request`](crate::landing::dock_request) gives
 //! [`DockStage::Asks`](crate::landing::DockStage::Asks)), and
 //! [`Session::answer_dock_ask`] answers it: when the press carries a
-//! [`LegalCode`] to convict by, [`Session::dock_scan`] runs before the
+//! [`LegalCode`] to convict by and a chance to draw on ([`DockLaw`]),
+//! [`Session::dock_scan`] runs before the
 //! clearance, which then reads the record the scan leaves. It runs only
 //! for a ship neither cloaked nor disabled (the original refuses those
 //! first: `_ShipIsCloaked` @0x66a8e, `_IsDisabled` @0x66aee), read once
 //! for the scan and the refusal both (`PlayerShip::landing_bar`), at a
 //! stellar that is no hypergate or wormhole, governed by
-//! a government that keeps the law, for a ship whose kits draw any
-//! attention. A request already granted for the stellar never reaches the
+//! a government that keeps the law, at the odds its kits' attention and
+//! the government's rate give (the fittings' scan rates, the rule's
+//! default when it names none), drawn on the press's chance. It scans
+//! what the kits don't hide, as an interceptor's scan does
+//! (`PlayerShip::contraband_found`, which both read). A request already granted for the stellar never reaches the
 //! scan, since the press lands or fails on it before traffic control is
 //! asked. One granted at another stellar spares no scan: the find is
 //! applied, though the clearance that follows still grants on it, as the
@@ -27,9 +31,9 @@
 //! precalced reset (a landing, a jump, a load), keeps a second press from
 //! fining again.
 //!
-//! `FlightCommand::Land` presses with its collaborators' law
-//! ([`Session::press_land_key`]). The bare [`Session::land`] carries none
-//! and scans nothing.
+//! `FlightCommand::Land` presses with its collaborators' law and chance
+//! ([`Session::press_land_key`]). The bare [`Session::land`] carries
+//! neither, and scans and draws nothing.
 //!
 //! **The exits.** The player's refit lays its class's own hardpoints and
 //! those of the kits it carries over its class's exit points
@@ -45,12 +49,13 @@ use std::collections::BTreeMap;
 
 use super::{Session, Statics};
 use crate::catalog::{LandingSite, OutfitId, ShipId};
+use crate::chance::Chance;
 use crate::combat::hull::HullSpec;
 use crate::landing::{DockAsk, DockPress, LandingRefusal};
 use crate::legal::LegalCode;
 use crate::message::{DockFind, SimMessage};
 use crate::rulebook::RuleKey;
-use crate::scan::{self, Contraband};
+use crate::scan::Contraband;
 use nova_sim_catalog::fittings::Spot;
 
 impl Statics {
@@ -79,23 +84,34 @@ impl Statics {
     }
 }
 
+/// What traffic control's scan at the land press works with: the law it
+/// convicts a find by, and the chance its odds draw on. Only
+/// `FlightCommand::Land` presses with one ([`Session::press_land_key`]),
+/// from its collaborators.
+pub(crate) struct DockLaw<'a> {
+    /// The law a find convicts by.
+    pub(crate) law: &'a dyn LegalCode,
+    /// The chance the scan's odds draw on.
+    pub(crate) chance: &'a mut dyn Chance,
+}
+
 impl Session {
     /// Traffic control's answer to `ask`, the land press's request: the
-    /// dock scan first ([`Session::dock_scan`]), convicting by `law`,
-    /// when the press carries one and nothing bars the ship itself from
-    /// landing (`barred`, `PlayerShip::landing_bar`: the original refuses
-    /// a cloaked or disabled ship before it asks); then the clearance,
-    /// which reads the record the scan leaves.
+    /// dock scan first ([`Session::dock_scan`]), by `dock`'s law and
+    /// chance, when the press carries them and nothing bars the ship
+    /// itself from landing (`barred`, `PlayerShip::landing_bar`: the
+    /// original refuses a cloaked or disabled ship before it asks); then
+    /// the clearance, which reads the record the scan leaves.
     pub(super) fn answer_dock_ask(
         &mut self,
         ask: DockAsk,
-        law: Option<&dyn LegalCode>,
+        dock: Option<DockLaw<'_>>,
         barred: Option<LandingRefusal>,
     ) -> DockPress {
-        if let Some(law) = law
+        if let Some(DockLaw { law, chance }) = dock
             && barred.is_none()
         {
-            self.dock_scan(ask.site(), law);
+            self.dock_scan(ask.site(), law, chance);
         }
         let blessing = self.blessing();
         let reading = self.setup.rules.source_for(RuleKey::BlessingLanding);
@@ -108,17 +124,30 @@ impl Session {
     }
 
     /// Traffic control's scan of the player as it asks `site` for
-    /// clearance, convicting by `law` (see the module docs): nothing at a
-    /// hypergate or wormhole, a stellar of no government or one that keeps
-    /// no law, or for a ship drawing no attention; else the contraband
-    /// scan, a find applied and said.
+    /// clearance, convicting by `law` at odds drawn on `chance` (see the
+    /// module docs):
+    /// nothing at a hypergate or wormhole, a stellar of no government or
+    /// one that keeps no law; else, at the odds the ship's attention and
+    /// the government's rate give
+    /// ([`dock_scan::scans`](crate::dock_scan::scans), the rate from the
+    /// fittings' scan rates), the contraband scan of what the ship's kits
+    /// don't hide
+    /// ([`PlayerShip::contraband_found`](super::PlayerShip::contraband_found)),
+    /// a find applied and
+    /// said. The odds are drawn whatever the ship carries: they decide
+    /// only whether traffic control looks.
     ///
     /// It needs no check for a request already granted: traffic control
     /// is asked only when the player holds no request for `site`
     /// ([`dock_request`](crate::landing::dock_request) ends a press at a
     /// stellar with its own request before it asks), and a request held
     /// for another stellar spares no scan.
-    pub(super) fn dock_scan(&mut self, site: &LandingSite, law: &dyn LegalCode) {
+    pub(super) fn dock_scan(
+        &mut self,
+        site: &LandingSite,
+        law: &dyn LegalCode,
+        chance: &mut dyn Chance,
+    ) {
         if self.gate_kind(site.id).is_some() {
             return;
         }
@@ -128,29 +157,16 @@ impl Session {
         let Some(govt) = self.statics.govts.get(govt_id).cloned() else {
             return;
         };
+        let fittings = &self.statics.fittings;
         let outfits = self.ship.counted_outfits(&self.pilot);
-        let attention = crate::dock_scan::attention(&outfits, &self.statics.fittings.kits);
-        if !crate::dock_scan::scans(&govt, attention) {
+        let attention = crate::dock_scan::attention(&outfits, &fittings.kits);
+        let rate = fittings.scan_rates.get(&govt_id).copied();
+        if !crate::dock_scan::scans(&govt, attention, rate, chance) {
             return;
         }
-        let carried = scan::Carried {
-            cargo: &self.pilot.cargo,
-            junk: self.statics.goods.junk(),
-            outfits: &outfits,
-            outfit_records: &self.statics.outfits,
-        };
-        let rules = scan::ScanRules {
-            outfits_past_junk: self.setup.rules.source_for(RuleKey::ScanOutfitsPastJunk),
-            outfit_fine: self.setup.rules.source_for(RuleKey::OutfitScanFine),
-        };
-        let found = scan::contraband(
-            &govt,
-            &carried,
-            self.pilot.cash,
-            self.ship.latches.scan_latches,
-            rules,
-        );
-        drop(outfits);
+        let found = self
+            .ship
+            .contraband_found(&self.pilot, &self.statics, &self.setup, &govt);
         let Some(found) = found else {
             return;
         };
@@ -203,8 +219,8 @@ mod tests {
     const PENALTY: i16 = 10;
 
     /// The test catalog with planet 128, under the ship, governed by a
-    /// law-keeping government whose systems these are, and the two kits
-    /// and the loose outfit.
+    /// law-keeping government whose systems these are, scanning at a rate
+    /// of 100 a point of attention, and the two kits and the loose outfit.
     fn policed() -> FakePilotCatalog {
         let mut catalog = catalog();
         catalog.govts = vec![GovtRecord {
@@ -239,7 +255,9 @@ mod tests {
         };
         catalog.fittings = Fittings {
             hulls: BTreeMap::new(),
-            scan_rates: BTreeMap::new(),
+            // The rate that scans any attention at all, so a press is sure
+            // to scan whatever the chance draws.
+            scan_rates: BTreeMap::from([(LAW, 100)]),
             kits: BTreeMap::from([
                 (PLATING, kit(1, Vec::new())),
                 (
@@ -272,18 +290,48 @@ mod tests {
     }
 
     /// The land key pressed as `FlightCommand::Land` does, with Nova's
-    /// law.
+    /// law, on a chance that never fires.
     fn press(session: &mut Session) -> Answer {
+        press_drawing(session, &mut crate::chance::NeverFires)
+    }
+
+    /// [`press`], drawing on `chance`.
+    fn press_drawing(session: &mut Session, chance: &mut dyn crate::chance::Chance) -> Answer {
         session.apply(
             FlightCommand::Land,
             &mut ApplyCollaborators {
                 catalog: None,
-                chance: &mut crate::chance::NeverFires,
+                chance,
                 law: &crate::legal::NovaLaw::default(),
                 boarding_rule: &crate::board::NovaBoarding::default(),
                 hail_options: &crate::hail::HailOptions::default(),
             },
         )
+    }
+
+    /// [`policed`], its government scanning at `rate` a point of
+    /// attention.
+    fn policed_at(rate: u32) -> FakePilotCatalog {
+        let mut catalog = policed();
+        catalog.fittings.scan_rates.insert(LAW, rate);
+        catalog
+    }
+
+    /// The opals, a `jünk` in the law's `ScanMask`.
+    fn opals() -> JunkRecord {
+        JunkRecord {
+            id: OPALS,
+            name: "Opals".to_owned(),
+            abbrev: String::new(),
+            base_price: 100,
+            sold_at: Vec::new(),
+            bought_at: Vec::new(),
+            buy_on: Test::default(),
+            sell_on: Test::default(),
+            flags: 0,
+            scan_mask: MASK,
+            lc_name: "opals".to_owned(),
+        }
     }
 
     fn requested() -> Answer {
@@ -485,6 +533,74 @@ mod tests {
         let mut session = carrying(&catalog, &[GUN_MOUNT]);
         assert!(session.land().is_ok());
         assert_eq!(session.pilot().cash(), 2000);
+    }
+
+    #[test]
+    fn the_press_scans_on_the_collaborators_chance() {
+        use crate::testkit::Draws;
+
+        let catalog = policed_at(25);
+        let mut session = carrying(&catalog, &[GUN_MOUNT]);
+        let mut high = Draws::of(&[99]);
+        assert_eq!(press_drawing(&mut session, &mut high), requested());
+        assert_eq!(session.pilot().cash(), 2000, "not scanned");
+        assert_eq!(session.take_messages(), []);
+        assert_eq!(
+            high.times_asked(100),
+            1,
+            "one draw decides whether it looks"
+        );
+        let mut session = carrying(&catalog, &[GUN_MOUNT]);
+        let mut low = Draws::of(&[0]);
+        assert_eq!(press_drawing(&mut session, &mut low), denied(0));
+        assert_eq!(session.pilot().cash(), 2000 - i64::from(FINE));
+        assert_eq!(session.take_messages(), [scanned(i64::from(FINE))]);
+    }
+
+    #[test]
+    fn a_government_s_rate_of_0_never_scans() {
+        use crate::testkit::Draws;
+
+        let catalog = policed_at(0);
+        let mut session = carrying(&catalog, &[GUN_MOUNT]);
+        let mut chance = Draws::of(&[0]);
+        assert_eq!(press_drawing(&mut session, &mut chance), requested());
+        assert_eq!(session.pilot().cash(), 2000);
+        assert_eq!(chance.times_asked(100), 0, "no draw");
+    }
+
+    #[test]
+    fn junk_the_kits_hide_is_not_found_at_the_dock_and_one_ton_more_is() {
+        /// A legal hold kit: attention 1, hiding 3 tons, no `ScanMask`.
+        const HOLD: OutfitId = OutfitId(133);
+        let mut catalog = policed();
+        catalog.junk = vec![opals()];
+        catalog.outfits.push(outfit(HOLD.0, &[]));
+        catalog.fittings.kits.insert(
+            HOLD,
+            Kit {
+                attention: 1,
+                hidden_cargo: 3,
+                ..Kit::default()
+            },
+        );
+        let mut session = carrying(&catalog, &[HOLD]);
+        session.pilot.cargo.insert(Good::Junk(OPALS), 3);
+        assert_eq!(press(&mut session), requested(), "3 tons, all hidden");
+        assert_eq!(session.pilot().cash(), 2000);
+        assert_eq!(session.take_messages(), []);
+        let mut session = carrying(&catalog, &[HOLD]);
+        session.pilot.cargo.insert(Good::Junk(OPALS), 4);
+        assert_eq!(press(&mut session), denied(0));
+        assert_eq!(session.pilot().cash(), 2000 - i64::from(FINE));
+        assert_eq!(
+            session.take_messages(),
+            [SimMessage::DockScanned {
+                stellar: PLANET,
+                found: DockFind::Junk(OPALS),
+                fine: i64::from(FINE),
+            }]
+        );
     }
 
     #[test]
