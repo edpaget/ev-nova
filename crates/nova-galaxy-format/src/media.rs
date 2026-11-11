@@ -1,8 +1,9 @@
-//! Media the asset manifest names that a checkout hasn't fetched: Git LFS
-//! pointers in place of the files.
+//! Media the asset manifest and the sounds name that a checkout hasn't
+//! fetched: Git LFS pointers in place of the files.
 //!
 //! The engine and the `galaxy` tool both need to tell a pointer from the
-//! file, so it lives here, beside the manifest ([`crate::asset`]).
+//! file, so it lives here, beside the manifest ([`crate::asset`]) and the
+//! sounds ([`crate::sound`]).
 
 use crate::id::MediaPath;
 use crate::load::Galaxy;
@@ -18,7 +19,7 @@ pub fn is_lfs_pointer(bytes: &[u8]) -> bool {
     bytes.starts_with(LFS_POINTER)
 }
 
-/// The export media paths `galaxy`'s asset manifest names
+/// The export media paths `galaxy`'s asset manifest and sounds name
 /// ([`Galaxy::media_paths`] that are [`MediaPath::is_export`]) whose bytes in
 /// `source` are LFS pointers, sorted.
 ///
@@ -149,5 +150,22 @@ mod tests {
     fn a_pointer_the_manifest_does_not_name_is_not_listed() {
         let source = with_media(&[("media/export/other/stray.glb", POINTER)]);
         assert_eq!(pointers(&source), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_sound_s_clip_that_is_a_pointer_is_listed() {
+        let source = with_media(&[
+            ("media/export/sounds/click.wav", POINTER),
+            ("media/export/sounds/hum.wav", b"RIFF"),
+        ])
+        .with(
+            "sounds/click.md",
+            "---\nplaceholder: true\nfile: media/export/sounds/click.wav\n---\n",
+        )
+        .with(
+            "sounds/hum.md",
+            "---\nplaceholder: true\nfile: media/export/sounds/hum.wav\n---\n",
+        );
+        assert_eq!(pointers(&source), ["media/export/sounds/click.wav"]);
     }
 }

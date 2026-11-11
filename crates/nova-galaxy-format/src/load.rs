@@ -21,6 +21,7 @@ use crate::id::{Id, MediaPath, PointRef};
 use crate::model::{
     Character, Faction, JumpPoint, Kind, Mission, News, Region, Start, Stellar, Storyline, System,
 };
+use crate::sound::Sound;
 use crate::source::Source;
 use crate::traffic::Fleet;
 
@@ -72,6 +73,8 @@ pub struct Galaxy {
     pub assets: BTreeMap<Id, Doc<Asset>>,
     /// `budgets/`: what art may cost.
     pub budgets: BTreeMap<Id, Doc<Budget>>,
+    /// `sounds/`: the clips the engine plays.
+    pub sounds: BTreeMap<Id, Doc<Sound>>,
     /// `game.md`, the game as a whole, if the folder has one and it
     /// loaded.
     pub game: Option<Doc<Game>>,
@@ -84,21 +87,24 @@ pub struct Galaxy {
 
 impl Galaxy {
     /// Every media file path an asset names (`files`, `sources`,
-    /// `licence_file`), each once, sorted.
+    /// `licence_file`) or a sound names (`file`, `licence_file`), each
+    /// once, sorted.
     #[must_use]
     pub fn media_paths(&self) -> Vec<&str> {
         self.media().into_iter().map(MediaPath::as_str).collect()
     }
 
-    /// Every media file an asset names, each once, sorted.
+    /// Every media file an asset or a sound names, each once, sorted.
     pub(crate) fn media(&self) -> BTreeSet<&MediaPath> {
-        self.assets
-            .values()
-            .flat_map(|asset| {
-                let a = &asset.data;
-                a.files.iter().chain(&a.sources).chain(&a.licence_file)
-            })
-            .collect()
+        let assets = self.assets.values().flat_map(|asset| {
+            let a = &asset.data;
+            a.files.iter().chain(&a.sources).chain(&a.licence_file)
+        });
+        let sounds = self.sounds.values().flat_map(|sound| {
+            let s = &sound.data;
+            std::iter::once(&s.file).chain(&s.licence_file)
+        });
+        assets.chain(sounds).collect()
     }
 
     /// Whether the file `dir/id.md` failed to load, or the folder `dir`
@@ -167,6 +173,7 @@ pub fn load(source: &impl Source) -> (Galaxy, Vec<Problem>) {
         fleets: kind::<Fleet>(source, p, u),
         assets: kind::<Asset>(source, p, u),
         budgets: kind::<Budget>(source, p, u),
+        sounds: kind::<Sound>(source, p, u),
         game: game::read(source, p, u),
         unreadable,
     };
@@ -304,6 +311,38 @@ mod tests {
                 "media/export/pack/surface.png"
             ]
         );
+    }
+
+    #[test]
+    fn loads_the_sounds_and_lists_each_clip_and_its_licence_among_the_media_paths() {
+        let (galaxy, _) = load(&fixture::galaxy());
+        assert!(galaxy.sounds.is_empty(), "the fixture has no sounds");
+        let source = fixture::galaxy().with(
+            "sounds/click.md",
+            "---\nplaceholder: true\nfile: media/export/sounds/click.wav\n\
+             licence_file: media/export/sounds/LICENSE.txt\n---\nA click.\n",
+        );
+        let (galaxy, problems) = load(&source);
+        assert!(problems.is_empty(), "{problems:?}");
+        let sounds: Vec<_> = galaxy.sounds.values().map(|d| d.path.as_str()).collect();
+        assert_eq!(sounds, ["sounds/click.md"]);
+        let paths = galaxy.media_paths();
+        for path in [
+            "media/export/sounds/click.wav",
+            "media/export/sounds/LICENSE.txt",
+        ] {
+            assert!(paths.contains(&path), "{path}: {paths:?}");
+        }
+    }
+
+    #[test]
+    fn a_sound_that_does_not_parse_drops_only_itself() {
+        let source = fixture::galaxy().with("sounds/hum.md", "---\nplaceholder: true\n---\n");
+        let (galaxy, problems) = load(&source);
+        assert!(galaxy.sounds.is_empty());
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert_eq!(problems[0].file, "sounds/hum.md");
+        assert!(galaxy.is_unreadable("sounds", &id("hum")));
     }
 
     #[test]

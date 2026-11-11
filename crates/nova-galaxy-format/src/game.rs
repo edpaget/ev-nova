@@ -1,10 +1,13 @@
 //! `game.md`: the one content file about the game as a whole, at the
 //! data folder's root rather than in a kind's folder.
 //!
-//! Its front matter names the game, and its Markdown body is the game's
+//! Its front matter names the game and the sounds its engine plays for
+//! its own events ([`EngineSounds`]), and its Markdown body is the game's
 //! About text. A data folder without one is fine: the game then has no
-//! About text. One that can't be read or doesn't parse is reported
-//! against `game.md`, marked unreadable, and left out.
+//! About text and its engine plays no sound of its own. One that can't be
+//! read or doesn't parse (an unknown role, or one named twice, among
+//! them) is reported against `game.md`, marked unreadable, and left out
+//! whole, its About text and its sounds with it.
 
 use std::collections::BTreeSet;
 
@@ -12,6 +15,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::frontmatter;
+use crate::id::Id;
 use crate::load::{Doc, Problem};
 use crate::source::Source;
 
@@ -22,6 +26,60 @@ use crate::source::Source;
 pub struct Game {
     /// The game's name (a placeholder).
     pub name: String,
+    /// The sound the engine plays for each of its own events, by role
+    /// (`sounds/<id>.md`). Left out, it plays none of them.
+    #[serde(default)]
+    pub sounds: EngineSounds,
+}
+
+/// The sounds the engine plays for its own events, each a sound's id
+/// (`sounds/<id>.md`). A role names one sound, and every event that
+/// shares the role plays it. A role left out is silent.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EngineSounds {
+    /// A button going down: a click on an interface button, and the first
+    /// half of a button pressed by its key.
+    #[serde(default)]
+    pub button_down: Option<Id>,
+    /// A button coming up: the end of a click on an interface button, and
+    /// the second half of a button pressed by its key.
+    #[serde(default)]
+    pub button_up: Option<Id>,
+    /// The landing: a traffic controller's word (a clearance asked for,
+    /// granted or refused) and the touchdown, and every other event that
+    /// shares their beep, such as the player's ship disabled, the news
+    /// opening and a comm button.
+    #[serde(default)]
+    pub landing: Option<Id>,
+    /// A refusal: a key or a button that can't act (no fuel for a jump or
+    /// a gate, nothing to buy, no game to enter), and every other event
+    /// that shares its beep, such as a system the map can't find and the
+    /// self-destruct's start.
+    #[serde(default)]
+    pub refused: Option<Id>,
+    /// A ship arriving: out of a gate passage, and out of every jump.
+    #[serde(default)]
+    pub gate_passage: Option<Id>,
+    /// An explosion: a ship's wreck exploding, small or large, and an
+    /// explosion on board the player's ship.
+    #[serde(default)]
+    pub explosion: Option<Id>,
+}
+
+impl EngineSounds {
+    /// Each role's name, as written in data, and the sound it names.
+    #[must_use]
+    pub fn roles(&self) -> [(&'static str, Option<&Id>); 6] {
+        [
+            ("button_down", self.button_down.as_ref()),
+            ("button_up", self.button_up.as_ref()),
+            ("landing", self.landing.as_ref()),
+            ("refused", self.refused.as_ref()),
+            ("gate_passage", self.gate_passage.as_ref()),
+            ("explosion", self.explosion.as_ref()),
+        ]
+    }
 }
 
 /// `game.md`'s path in the data folder.
@@ -85,6 +143,81 @@ mod tests {
         assert_eq!(game.path, "game.md");
         assert_eq!(game.data.name, "Hearthlight");
         assert_eq!(game.body, "A game about haulers.\n");
+    }
+
+    #[test]
+    fn reads_each_role_s_sound() {
+        let source = MemSource::default().with(
+            "game.md",
+            "---\nname: A\nsounds:\n  button_down: click-down\n  button_up: click-up\n\
+             \x20 landing: chime\n  refused: buzz\n  gate_passage: hum\n  explosion: blast\n---\n",
+        );
+        let (game, problems, _) = read_from(&source);
+        assert!(problems.is_empty(), "{problems:?}");
+        let sounds = game.expect("game.md").data.sounds;
+        let named: Vec<_> = sounds
+            .roles()
+            .into_iter()
+            .map(|(role, sound)| (role, sound.map(Id::as_str)))
+            .collect();
+        assert_eq!(
+            named,
+            [
+                ("button_down", Some("click-down")),
+                ("button_up", Some("click-up")),
+                ("landing", Some("chime")),
+                ("refused", Some("buzz")),
+                ("gate_passage", Some("hum")),
+                ("explosion", Some("blast")),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_game_naming_no_sounds_or_some_leaves_the_rest_silent() {
+        let source = MemSource::default().with("game.md", "---\nname: A\n---\n");
+        let (game, _, _) = read_from(&source);
+        assert_eq!(game.expect("game.md").data.sounds, EngineSounds::default());
+        assert!(
+            EngineSounds::default()
+                .roles()
+                .iter()
+                .all(|(_, s)| s.is_none())
+        );
+        let source =
+            MemSource::default().with("game.md", "---\nname: A\nsounds: {landing: chime}\n---\n");
+        let (game, problems, _) = read_from(&source);
+        assert!(problems.is_empty(), "{problems:?}");
+        let sounds = game.expect("game.md").data.sounds;
+        assert_eq!(sounds.landing.as_ref().map(Id::as_str), Some("chime"));
+        assert!(sounds.refused.is_none() && sounds.button_down.is_none());
+    }
+
+    #[test]
+    fn an_unknown_role_is_a_problem_and_leaves_the_file_out() {
+        let source = MemSource::default().with(
+            "game.md",
+            "---\nname: A\nsounds:\n  landing: chime\n  launch: whoosh\n---\nAbout.\n",
+        );
+        assert_one_problem(&source, "line 5");
+        let (_, problems, _) = read_from(&source);
+        assert!(problems[0].message.contains("launch"), "{}", problems[0]);
+    }
+
+    #[test]
+    fn a_role_named_twice_is_a_problem_and_leaves_the_file_out() {
+        let source = MemSource::default().with(
+            "game.md",
+            "---\nname: A\nsounds:\n  landing: chime\n  landing: hum\n---\nAbout.\n",
+        );
+        assert_one_problem(&source, "line 5");
+    }
+
+    #[test]
+    fn a_role_naming_what_is_not_an_id_is_a_problem() {
+        let source =
+            MemSource::default().with("game.md", "---\nname: A\nsounds: {landing: Chime}\n---\n");
+        assert_one_problem(&source, "line 3");
     }
 
     #[test]

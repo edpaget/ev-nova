@@ -389,6 +389,10 @@ pub struct Outfit {
     /// kit has no such word, as it is a change to the hull itself.
     #[serde(default)]
     pub stays_with_pilot: bool,
+    /// The sound its weapon fires (`sounds/<id>.md`). Read only on a
+    /// weapon. Left out, it fires silently.
+    #[serde(default)]
+    pub sound: Option<Id>,
 }
 
 /// A livery (`liveries/<id>.md`): paint and marks, so one model can serve
@@ -835,6 +839,23 @@ mod tests {
         )
         .unwrap();
         assert!(outfit.stays_with_pilot);
+    }
+
+    #[test]
+    fn an_outfit_names_the_sound_its_weapon_fires_or_none() {
+        let outfit: Outfit = read(
+            "name: Mass driver\nmount: turret\ndamage: 12\nrange: 600\nreload: 0.5\n\
+             price: 2500\nsound: slug-thump\n",
+        )
+        .unwrap();
+        assert_eq!(outfit.sound.unwrap().as_str(), "slug-thump");
+        let silent: Outfit =
+            read("name: Pass\nmount: fixed\ndamage: 0\nrange: 0\nreload: 1\nprice: 0\n").unwrap();
+        assert!(silent.sound.is_none(), "silent when left out");
+        let read = read::<Outfit>(
+            "name: Pass\nmount: fixed\ndamage: 0\nrange: 0\nreload: 1\nprice: 0\nsound: Thump\n",
+        );
+        assert!(read.is_err(), "a sound's id: {read:?}");
     }
 
     #[test]

@@ -13,6 +13,7 @@ use crate::goods::Good;
 use crate::model::{
     Character, Faction, Kind, Mission, News, Region, Start, Stellar, Storyline, System,
 };
+use crate::sound::Sound;
 use crate::traffic::Fleet;
 
 /// Each kind's schema as `(file name, pretty JSON)`, in folder order,
@@ -36,6 +37,7 @@ pub fn schemas() -> Vec<(String, String)> {
         kind::<Fleet>(),
         kind::<Asset>(),
         kind::<Budget>(),
+        kind::<Sound>(),
         kind::<Start>(),
         one::<Game>("game"),
     ]
@@ -95,10 +97,78 @@ mod tests {
                 "fleet.schema.json",
                 "asset.schema.json",
                 "budget.schema.json",
+                "sound.schema.json",
                 "start.schema.json",
                 "game.schema.json",
             ]
         );
+    }
+
+    #[test]
+    fn the_sound_schema_names_its_one_file_and_its_provenance() {
+        let sound = value("sound.schema.json");
+        assert_eq!(sound["title"], "Sound");
+        assert_eq!(sound["additionalProperties"], false);
+        let words: Vec<&str> = sound["properties"]
+            .as_object()
+            .expect("its words")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            words,
+            [
+                "author",
+                "file",
+                "licence",
+                "licence_file",
+                "placeholder",
+                "retrieved",
+                "source_url"
+            ],
+            "{sound}"
+        );
+        assert_eq!(
+            sound["required"],
+            serde_json::json!(["placeholder", "file"])
+        );
+        assert!(
+            sound["properties"]["file"]["description"]
+                .as_str()
+                .is_some_and(|d| d.contains(".wav")),
+            "{sound}"
+        );
+    }
+
+    #[test]
+    fn the_game_schema_lists_the_engine_s_sound_roles() {
+        let game = value("game.schema.json");
+        let name = game["properties"]["sounds"]["allOf"][0]["$ref"]
+            .as_str()
+            .or_else(|| game["properties"]["sounds"]["$ref"].as_str())
+            .and_then(|r| r.rsplit('/').next())
+            .unwrap_or_else(|| panic!("a sounds definition: {game}"));
+        let sounds = &game["definitions"][name];
+        assert_eq!(sounds["additionalProperties"], false, "{sounds}");
+        let roles: Vec<&str> = sounds["properties"]
+            .as_object()
+            .expect("its roles")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            roles,
+            [
+                "button_down",
+                "button_up",
+                "explosion",
+                "gate_passage",
+                "landing",
+                "refused"
+            ],
+            "{sounds}"
+        );
+        assert_eq!(game["required"], serde_json::json!(["name"]));
     }
 
     #[test]
