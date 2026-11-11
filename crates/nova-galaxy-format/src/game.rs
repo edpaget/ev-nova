@@ -1,10 +1,11 @@
 //! `game.md`: the one content file about the game as a whole, at the
 //! data folder's root rather than in a kind's folder.
 //!
-//! Its front matter names the game and the sounds its engine plays for
-//! its own events ([`EngineSounds`]), and its Markdown body is the game's
-//! About text. A data folder without one is fine: the game then has no
-//! About text and its engine plays no sound of its own. One that can't be
+//! Its front matter names the game, its music ([`Game::music`], a sound
+//! like any other) and the sounds its engine plays for its own events
+//! ([`EngineSounds`]), and its Markdown body is the game's About text. A
+//! data folder without one is fine: the game then has no About text, no
+//! music, and its engine plays no sound of its own. One that can't be
 //! read or doesn't parse (an unknown role, or one named twice, among
 //! them) is reported against `game.md`, marked unreadable, and left out
 //! whole, its About text and its sounds with it.
@@ -26,6 +27,12 @@ use crate::source::Source;
 pub struct Game {
     /// The game's name (a placeholder).
     pub name: String,
+    /// The game's music: a sound's id (`sounds/<id>.md`) whose file is an
+    /// `.mp3`, played where the stock game plays its own (at the main
+    /// menu, until a pilot enters the game). Left out, the game plays no
+    /// music.
+    #[serde(default)]
+    pub music: Option<Id>,
     /// The sound the engine plays for each of its own events, by role
     /// (`sounds/<id>.md`). Left out, it plays none of them.
     #[serde(default)]
@@ -242,6 +249,36 @@ mod tests {
         let sounds = game.expect("game.md").data.sounds;
         assert_eq!(sounds.landing.as_ref().map(Id::as_str), Some("chime"));
         assert!(sounds.refused.is_none() && sounds.button_down.is_none());
+    }
+
+    #[test]
+    fn reads_the_music_the_game_names_beside_its_sounds() {
+        let source = MemSource::default().with(
+            "game.md",
+            "---\nname: A\nmusic: theme\nsounds: {landing: chime}\n---\n",
+        );
+        let (game, problems, _) = read_from(&source);
+        assert!(problems.is_empty(), "{problems:?}");
+        let game = game.expect("game.md").data;
+        assert_eq!(game.music.as_ref().map(Id::as_str), Some("theme"));
+        assert_eq!(game.sounds.landing.as_ref().map(Id::as_str), Some("chime"));
+    }
+
+    #[test]
+    fn a_game_naming_no_music_has_none_and_its_sounds_are_unaffected() {
+        let source =
+            MemSource::default().with("game.md", "---\nname: A\nsounds: {landing: chime}\n---\n");
+        let (game, problems, _) = read_from(&source);
+        assert!(problems.is_empty(), "{problems:?}");
+        let game = game.expect("game.md").data;
+        assert!(game.music.is_none());
+        assert_eq!(game.sounds.landing.as_ref().map(Id::as_str), Some("chime"));
+    }
+
+    #[test]
+    fn music_naming_what_is_not_an_id_is_a_problem() {
+        let source = MemSource::default().with("game.md", "---\nname: A\nmusic: Theme\n---\n");
+        assert_one_problem(&source, "line 3");
     }
 
     #[test]

@@ -172,6 +172,24 @@ mod tests {
     }
 
     #[test]
+    fn the_game_schema_lists_its_music_beside_its_sounds() {
+        let game = value("game.schema.json");
+        let words: Vec<&str> = game["properties"]
+            .as_object()
+            .expect("its words")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(words, ["music", "name", "sounds"], "{game}");
+        assert!(
+            game["properties"]["music"]["description"]
+                .as_str()
+                .is_some_and(|d| d.contains("sounds/")),
+            "{game}"
+        );
+    }
+
+    #[test]
     fn the_game_schema_describes_the_game_and_its_name() {
         let game = value("game.schema.json");
         assert_eq!(game["title"], "Game");

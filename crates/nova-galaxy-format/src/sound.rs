@@ -1,8 +1,9 @@
 //! The sounds (`sounds/<id>.md`): one entry per clip, naming the file the
 //! engine plays and where it came from, in the asset manifest's style
 //! ([`crate::asset`]). Data names a sound only by its id: an outfit's
-//! `sound` ([`crate::fleet::Outfit::sound`]) and `game.md`'s `sounds`
-//! ([`crate::game::EngineSounds`]).
+//! `sound` ([`crate::fleet::Outfit::sound`]), `game.md`'s `sounds`
+//! ([`crate::game::EngineSounds`]) and `game.md`'s `music`
+//! ([`crate::game::Game::music`]).
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -12,7 +13,8 @@ use crate::id::{Date, MediaPath, Url};
 
 /// A sound (`sounds/<id>.md`): one clip and where it came from.
 ///
-/// The engine plays its `file`, a `.wav` under `media/export/`. A sound
+/// The engine plays its `file`, under `media/export/`: a `.wav` for a
+/// sound it plays as an effect, or an `.mp3` for the game's music. A sound
 /// has no stand-in but silence, so it always names its file; a
 /// placeholder is a clip that stands in for one still to come.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -20,7 +22,9 @@ use crate::id::{Date, MediaPath, Url};
 pub struct Sound {
     /// Whether it is a stand-in for a clip still to come.
     pub placeholder: bool,
-    /// What the engine plays, under `media/export/`: one `.wav`.
+    /// What the engine plays, under `media/export/`: one `.wav` for a
+    /// sound the engine plays as an effect, or an `.mp3` for the game's
+    /// music (`game.md`'s `music`).
     pub file: MediaPath,
     /// The licence it is used under.
     #[serde(default)]
