@@ -509,7 +509,7 @@ fn system(id: &str) -> SystemId {
 /// Opens the course map, clicks `to` on it, scrolled into view with the
 /// arrows first, and closes it: one gate away, `to` is the next hop,
 /// selected in mode 3 with no further course.
-fn plot_course_to(game: &mut Harness, to: SystemId) {
+pub(crate) fn plot_course_to(game: &mut Harness, to: SystemId) {
     open_the_map(game);
     let shown = map_area().grown(-12.0);
     let at = (0..200)
@@ -570,7 +570,7 @@ fn plot_course_to(game: &mut Harness, to: SystemId) {
 const AUTOPILOT_FRAMES: u32 = 8_000;
 
 /// Draws frames while the gate autopilot flies, until it lets go.
-fn fly_the_autopilot(game: &mut Harness) {
+pub(crate) fn fly_the_autopilot(game: &mut Harness) {
     let flying = |game: &Harness| {
         let session = game.app.screen().flight_view().expect("flying").session();
         let mut frame = FlightFrame::default();
