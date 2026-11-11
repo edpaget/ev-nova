@@ -6,6 +6,7 @@
 //! a pilot up directly; [`disable`] and [`destroy`], for disabling or
 //! destroying a ship directly;
 //! [`set_player_condition`], for downing or repairing the player directly;
+//! [`set_player_shield`], for putting the player's shields down directly;
 //! [`set_player_ion`] and [`set_player_tractor`], for ionizing or
 //! holding the player directly; [`put_player_over`], for bringing the player over a ship to board it;
 //! [`put_player_at`], for bringing the player to a place, a gate among them;
@@ -95,6 +96,13 @@ pub fn repair(session: &mut Session, id: NpcId) {
 /// without a fight.
 pub fn set_player_condition(session: &mut Session, to: Condition) {
     session.set_player_condition(to);
+}
+
+/// Sets the player's shield points in `session` to `now`, its most kept:
+/// for a test that needs the player's shields down without a fight, a
+/// loaded pilot's being refilled as `_LoadPilotData` refills them.
+pub fn set_player_shield(session: &mut Session, now: f32) {
+    session.set_player_shield(now);
 }
 
 /// Sets the player's ionization in `session` to `ion`: for a test that
@@ -417,6 +425,19 @@ mod tests {
         assert_eq!(session.player_condition(), Condition::Disabled);
         set_player_condition(&mut session, Condition::Intact);
         assert_eq!(session.player_condition(), Condition::Intact);
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)] // the helper assigns, so the points match exactly
+    fn setting_the_players_shield_sets_only_its_points() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        let before = session.reserves();
+        assert!(before.shield.max > 10.0, "{before:?}");
+        set_player_shield(&mut session, 10.0);
+        let after = session.reserves();
+        assert_eq!(after.shield.now, 10.0);
+        assert_eq!(after.shield.max, before.shield.max, "its most kept");
+        assert_eq!((after.armor, after.fuel), (before.armor, before.fuel));
     }
 
     #[test]

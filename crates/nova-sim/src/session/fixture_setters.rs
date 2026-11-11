@@ -67,6 +67,13 @@ impl Session {
         self.pilot.ship_name = Some(name);
     }
 
+    /// Sets the player's shield points to `now`, its most kept, for
+    /// [`fixture::set_player_shield`](crate::fixture::set_player_shield).
+    /// The gauge is the pilot's reserves, which no sub-state holds.
+    pub(crate) fn set_player_shield(&mut self, now: f32) {
+        self.pilot.reserves.shield.now = now;
+    }
+
     /// Makes the pilot play Strict Play when `strict`, or not.
     pub(crate) fn set_strict_play(&mut self, strict: bool) {
         self.pilot.strict_play = strict;
