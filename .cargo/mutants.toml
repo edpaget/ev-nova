@@ -915,4 +915,9 @@ exclude_re = [
     # sunward ray's discriminant is 1 − |p|², below 0, so `<=` shadows
     # nothing more than `<`.
     "nova-render/src/planet\\.rs:[0-9]+:[0-9]+: replace < with <= in in_planet_shadow$",
+    # A faction's `ScanMask`, the lawless kit's bit or'd with its contraband
+    # bit: every contraband bit is `FIRST_CONTRABAND_BIT << n`, above the
+    # lawless kit's bit 0, so the two never overlap and `^` gives the same
+    # mask as `|`.
+    "nova-data/src/new_game/law\\.rs:[0-9]+:[0-9]+: replace \\| with \\^ in govt_law$",
 ]
