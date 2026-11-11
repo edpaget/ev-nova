@@ -60,9 +60,10 @@
 //!   holds it wide, so it doesn't here.
 //! - A stellar with `prices` but no `trade` service: nothing is traded
 //!   there.
-//! - A contraband good the table pins to a standard slot: its
-//!   `contraband` is left out, as no scan reads a commodity. Its
-//!   `contraband` names are reported as [`super::law`] says.
+//! - A contraband good the table pins to a standard slot: it keeps its
+//!   slot and is reported once, with its whole `contraband` list left
+//!   out, as no scan reads a commodity. Its `contraband` names aren't
+//!   checked further, since nothing reads them.
 
 use std::collections::BTreeMap;
 

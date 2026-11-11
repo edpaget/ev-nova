@@ -97,11 +97,12 @@
 //!   one list counts once. A `player_record` or penalty outside `i16` is
 //!   held at the nearest ([`relations`]).
 //! - A lawless faction's `law` is left out. A `law`'s `smuggling` or
-//!   `fine` outside `i16` is held at the nearest. A good's `contraband`
-//!   name that is no faction, is a lawless faction, or is past the 15th
-//!   faction named is left out; a name given twice counts once ([`law`]).
-//!   A contraband good the ID table pins to a standard slot keeps it, and
-//!   its `contraband` is left out ([`goods`]).
+//!   `fine` outside `i16` is held at the nearest. A special good's
+//!   `contraband` name that is no faction, is a lawless faction, or is
+//!   past the 15th faction named is left out; a name given twice counts
+//!   once ([`law`]). A contraband good the ID table pins to a standard
+//!   slot keeps it and is reported once, its whole `contraband` left out
+//!   and its names not checked further ([`goods`]).
 //! - A stellar whose `system` names no system is left out.
 //! - A map or system position outside `i16` is moved to the nearest.
 //! - A system with more than 16 stellars and gates keeps every gate in

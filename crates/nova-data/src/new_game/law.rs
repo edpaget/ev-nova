@@ -36,10 +36,12 @@
 //! - A lawless faction that names any `law` word: it keeps no law, so
 //!   its `law` is left out.
 //! - A `smuggling` or `fine` outside `i16`: held at the nearest.
-//! - A `contraband` name that is no faction (one whose file failed to
-//!   load isn't reported again), a lawless faction, or a faction past the
-//!   [`CONTRABAND_FACTIONS`]th: left out, against the good's file. A name
-//!   given twice in one list counts once.
+//! - A special good's `contraband` name that is no faction (one whose
+//!   file failed to load isn't reported again), a lawless faction, or a
+//!   faction past the [`CONTRABAND_FACTIONS`]th: left out, against the
+//!   good's file. A name given twice in one list counts once. A good
+//!   pinned to a standard slot has its names left out unchecked
+//!   ([`super::goods`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 
