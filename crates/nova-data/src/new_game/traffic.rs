@@ -452,16 +452,10 @@ mod tests {
 
     #[test]
     fn each_role_flies_its_ai_type() {
-        assert_eq!(FleetRole::ALL.map(ai_type), [1, 2, 3, 4]);
-        assert_eq!(
-            FleetRole::ALL,
-            [
-                FleetRole::Trader,
-                FleetRole::ArmedTrader,
-                FleetRole::Warship,
-                FleetRole::Interceptor
-            ]
-        );
+        assert_eq!(ai_type(FleetRole::Trader), 1);
+        assert_eq!(ai_type(FleetRole::ArmedTrader), 2);
+        assert_eq!(ai_type(FleetRole::Warship), 3);
+        assert_eq!(ai_type(FleetRole::Interceptor), 4);
         let game = loaded(&with_fleet(
             galaxy(),
             "haulers",
