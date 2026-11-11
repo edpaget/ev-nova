@@ -11,7 +11,8 @@
 //!
 //! One JSON object, holding one object per [`IdTable`] kind ([`KINDS`]),
 //! each mapping a bible id (`system/point` for `gates`, the outfit's id
-//! for `weapons`, the `take_point` mission's id for `blockades`, a good's
+//! for `weapons`, the bay outfit's id for `fighters`, the `take_point`
+//! mission's id for `blockades`, a good's
 //! id for `commodities` and `junk`) to its ID: for `commodities`, the
 //! good's standard slot, 0 to 5. A kind left out pins nothing. The writer
 //! writes every kind, pretty-printed with sorted keys and a trailing
@@ -28,7 +29,8 @@
 //!   `system/point`), or whose ID is outside its kind's range: the entry
 //!   is ignored.
 //! - Two entries of one range with one ID (a stellar and a gate, or an
-//!   outfit and a kit, included): the first, in allocation order (kind,
+//!   outfit, a kit and a bay's fighters, included): the first, in
+//!   allocation order (kind,
 //!   then key), keeps it, and the other is ignored, so its record is
 //!   unpinned.
 //! - A table that leaves out some mapped record: one problem, counting
@@ -64,10 +66,11 @@ use super::ids::{
 /// The table's path in the data folder.
 pub const FILE: &str = "nova-ids.json";
 
-/// The table's kinds, in allocation order: the stellars before the gates
-/// and the outfits before the kits, which share their ranges, and a good's
-/// standard slot (`commodities`) before its `jünk` (`junk`).
-pub const KINDS: [&str; 12] = [
+/// The table's kinds, in allocation order: the stellars before the gates,
+/// and the outfits before the kits before the bays' fighters, which share
+/// their ranges, and a good's standard slot (`commodities`) before its
+/// `jünk` (`junk`).
+pub const KINDS: [&str; 13] = [
     "factions",
     "systems",
     "stellars",
@@ -76,6 +79,7 @@ pub const KINDS: [&str; 12] = [
     "starts",
     "outfits",
     "kits",
+    "fighters",
     "weapons",
     "blockades",
     "commodities",
@@ -145,10 +149,11 @@ pub fn parse(bytes: &[u8]) -> Result<Table, TableError> {
         starts: keyed(take(5)),
         outfits: keyed(take(6)),
         kits: keyed(take(7)),
-        weapons: keyed(take(8)),
-        blockades: keyed(take(9)),
-        commodities: keyed(take(10)),
-        junk: keyed(take(11)),
+        fighters: keyed(take(8)),
+        weapons: keyed(take(9)),
+        blockades: keyed(take(10)),
+        commodities: keyed(take(11)),
+        junk: keyed(take(12)),
     };
     Ok(Table { pins, problems })
 }
@@ -203,13 +208,14 @@ impl Held {
 }
 
 /// The range of each of [`KINDS`].
-const RANGES: [RangeInclusive<i16>; 12] = [
+const RANGES: [RangeInclusive<i16>; 13] = [
     GOVT_IDS,
     SYSTEM_IDS,
     STELLAR_IDS,
     STELLAR_IDS,
     SHIP_IDS,
     CHARACTER_IDS,
+    OUTFIT_IDS,
     OUTFIT_IDS,
     OUTFIT_IDS,
     WEAPON_IDS,
@@ -219,8 +225,9 @@ const RANGES: [RangeInclusive<i16>; 12] = [
 ];
 
 /// Which range each of [`KINDS`] numbers in, by the first kind of it: the
-/// gates share the stellars', and the kits the outfits'.
-const SHARED: [usize; 12] = [0, 1, 2, 2, 4, 5, 6, 6, 8, 9, 10, 11];
+/// gates share the stellars', and the kits and the bays' fighters the
+/// outfits'.
+const SHARED: [usize; 13] = [0, 1, 2, 2, 4, 5, 6, 6, 6, 9, 10, 11, 12];
 
 /// `kept`, whose keys are spelled right, as a kind's table.
 fn keyed<K: TryFrom<String> + Ord>(kept: Vec<(String, i16)>) -> BTreeMap<K, i16> {
@@ -247,6 +254,7 @@ fn entries(table: &IdTable) -> Vec<(&'static str, String, i16)> {
         .chain(of("starts", &table.starts))
         .chain(of("outfits", &table.outfits))
         .chain(of("kits", &table.kits))
+        .chain(of("fighters", &table.fighters))
         .chain(of("weapons", &table.weapons))
         .chain(of("blockades", &table.blockades))
         .chain(of("commodities", &table.commodities))
@@ -288,6 +296,7 @@ pub fn pin(previous: Option<&[u8]>, loaded: &IdTable) -> Result<Pinned, TableErr
     overlay(&mut table.starts, &loaded.starts);
     overlay(&mut table.outfits, &loaded.outfits);
     overlay(&mut table.kits, &loaded.kits);
+    overlay(&mut table.fighters, &loaded.fighters);
     overlay(&mut table.weapons, &loaded.weapons);
     overlay(&mut table.blockades, &loaded.blockades);
     overlay(&mut table.commodities, &loaded.commodities);

@@ -25,33 +25,49 @@
 //! tech level rule.
 //!
 //! **Weapons** ([`is_weapon`]). An outfit with `damage` above 0 and a
-//! `fixed`, `turret` or `launcher` mount is a weapon: it is numbered
-//! again within [`WEAPON_IDS`] ([`number_weapons`]), in outfit id order
-//! and pinned by the outfit's id,
-//! and maps to a `wëap` ([`weapon`]) as well. Its `oütf`'s first
+//! `fixed`, `turret` or `launcher` mount is a weapon, and so is a bay
+//! naming `fighters` it can launch ([`launched_hull`]), whatever its
+//! `damage`: it is numbered again within [`WEAPON_IDS`]
+//! ([`number_weapons`]), in outfit id order and pinned by the outfit's
+//! id, and maps to a `wëap` ([`weapon`]) as well. Its `oütf`'s first
 //! `ModType` is [`MOD_WEAPON`] naming that `wëap`, and its `Flags`
 //! [`OUTFIT_GUN`] (fixed, launcher) or [`OUTFIT_TURRET`] (turret), so it
-//! takes a gun or a turret slot, on top of [`HIDE_UNLESS_REQUIRED`].
-//! The `wëap`, over [`neutral_weapon`]:
+//! takes a gun or a turret slot, on top of [`HIDE_UNLESS_REQUIRED`]; a
+//! bay takes neither. The `wëap`, over [`neutral_weapon`]:
 //!
 //! - `MassDmg` and `EnergyDmg` are its `damage`;
 //! - `Reload` is its `reload` seconds at [`TICKS_PER_SECOND`], rounded, at
 //!   least 1;
 //! - `Speed` is [`SHOT_SPEED`], 10 pixels a tick (a placeholder), and
 //!   `Count`, the shot's life, its `range` over those 10 pixels, rounded
-//!   up, at least 1;
-//! - `Guidance` is -1, unguided, for a fixed gun or a launcher, and 4,
-//!   turreted and unguided, for a turret; `ExitType` 0, 1 or 2 by the
-//!   mount ([`exit_type`]), so a shot leaves from its kind of exit point;
-//! - it uses no ammunition, draws as the view's placeholder box (its
-//!   `Graphic` 0 names a `spïn` the new game never holds), plays no sound
-//!   and explodes into nothing.
+//!   up, at least 1: for a bay, the push its fighter is launched at and
+//!   how long it glides;
+//! - `Guidance` is -1, unguided, for a fixed gun or a launcher, 1, homing,
+//!   for a launcher naming `guidance: homing`, with a `GuidedTurn` of
+//!   [`HOMING_TURN`] (a placeholder: a homing shot of none never steers),
+//!   4, turreted and unguided, for a turret, and 99, a fighter bay, for a
+//!   bay; `ExitType` 0, 1 or 2 by the mount ([`exit_type`]), so a shot
+//!   leaves from its kind of exit point, and -1, the centre, for a bay;
+//! - a launcher firing an `ammunition` and a bay launching a hull take the
+//!   `AmmoType` [`super::munitions`] works out and `Flags`
+//!   [`WEAPON_SECONDARY`], on the second trigger, as every stock missile
+//!   launcher and bay is; any other weapon uses no ammunition (`AmmoType`
+//!   -1), on the first trigger;
+//! - `MaxAmmo` is 0, no limit of its own;
+//! - it draws as the view's placeholder box (its `Graphic` 0 names a
+//!   `spïn` the new game never holds), plays no sound and explodes into
+//!   nothing.
 //!
-//! A launcher's homing and ammunition and a bay's fighters aren't mapped:
-//! a `bay` outfit, like one doing no damage, stays an `oütf` that does
-//! nothing. The outfit's `model` isn't part of its records: it is the
-//! model its hardpoints show and the weapon's muzzle reach, kept on the
-//! store ([`super::mounts`]).
+//! **Ammunition.** An outfit a launcher's `ammunition` names, whose
+//! rounds resolve ([`super::munitions`]), keeps its name, price, mount
+//! and sale, and its first `ModType` is [`MOD_AMMO`] naming its rounds'
+//! `wëap` ([`Fitted::Rounds`]). A bay's fighters are an `oütf` of their
+//! own ([`super::munitions::fighters`]).
+//!
+//! A `bay` naming no `fighters`, like an outfit doing no damage, stays an
+//! `oütf` that does nothing. The outfit's `model` isn't part of its
+//! records: it is the model its hardpoints show and the weapon's muzzle
+//! reach, kept on the store ([`super::mounts`]).
 //!
 //! A weapon past the last `wëap` ID is reported and stays an `oütf` that
 //! does nothing.
@@ -59,13 +75,14 @@
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
 
-use nova_galaxy_format::fleet::{Mount, Outfit as BibleOutfit};
+use nova_galaxy_format::fleet::{Guidance, Mount, Outfit as BibleOutfit};
 use nova_galaxy_format::id::Id;
 use nova_galaxy_format::load::{Doc, Galaxy, Problem};
 
 use super::ids::{WEAPON_IDS, after_pins};
 use super::kits::{ALWAYS, FitBits, HIDE_UNLESS_REQUIRED};
 use super::map::number;
+use super::munitions::launched_hull;
 use super::records::{named_outfit, neutral_weapon};
 use crate::decode::Entry;
 use crate::records::outfit::Outfit;
@@ -85,8 +102,29 @@ pub const OUTFIT_GUN: u16 = 0x0001;
 /// (`nova_sim::outfitter::OutfitFlags::TURRET`).
 pub const OUTFIT_TURRET: u16 = 0x0002;
 
+/// The `oütf` `ModType` of ammunition: its `ModVal` names the `wëap`
+/// whose rounds it is (`nova_sim::combat::armament::MOD_AMMO`).
+pub const MOD_AMMO: i16 = 3;
+
+/// The `wëap` `Flags` bit of a weapon on the second trigger
+/// (`nova_sim::combat::weapon::SECONDARY`): a launcher firing ammunition,
+/// as every stock missile launcher is, and a fighter bay.
+pub const WEAPON_SECONDARY: u16 = 0x0002;
+
 /// Every weapon's shot speed: 1000, ten pixels a tick (a placeholder).
 pub const SHOT_SPEED: i16 = 1000;
+
+/// A homing launcher's `GuidedTurn`: 70, seven degrees a tick (a
+/// placeholder, the stock IR missile's). A homing shot of no `GuidedTurn`
+/// never steers.
+pub const HOMING_TURN: i16 = 70;
+
+/// The `Guidance` of a homing shot.
+const HOMING: i16 = 1;
+
+/// The `Guidance` of a fighter bay, whose `AmmoType` is the `shïp` it
+/// launches.
+const FIGHTER_BAY: i16 = 99;
 
 /// The pixels a shot at [`SHOT_SPEED`] flies a tick.
 const PIXELS_PER_TICK: f64 = 10.0;
@@ -120,16 +158,17 @@ pub fn is_weapon(outfit: &BibleOutfit) -> bool {
 
 /// Numbers the outfits of `galaxy` that are weapons within [`WEAPON_IDS`],
 /// in id order, each `pins` names (by its outfit's id) at its pin and the
-/// others after the highest pin.
+/// others after the highest pin: each [`is_weapon`], and each bay that
+/// launches a hull of `ships` ([`launched_hull`]).
 pub fn number_weapons(
     galaxy: &Galaxy,
+    ships: &BTreeMap<Id, i16>,
     pins: &BTreeMap<Id, i16>,
     problems: &mut Vec<Problem>,
 ) -> BTreeMap<Id, i16> {
-    let weapons = galaxy
-        .outfits
-        .iter()
-        .filter(|(_, doc)| is_weapon(&doc.data));
+    let weapons = galaxy.outfits.iter().filter(|(_, doc)| {
+        is_weapon(&doc.data) || launched_hull(galaxy, ships, &doc.data).is_some()
+    });
     let mut free = after_pins(WEAPON_IDS, pins.values());
     number(weapons, pins, &mut free, "wëap", problems)
 }
@@ -161,14 +200,25 @@ fn at_least_one(value: f64) -> i16 {
     value.max(1)
 }
 
-/// The `oütf` of the outfit `doc`, numbered `nova`, a weapon of the `wëap`
-/// `weapon` when it is one, sold at the yards holding the tech number
-/// `sold` when it is sold (see the module docs).
+/// What an outfit's first mod is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fitted {
+    /// None: it does nothing.
+    Nothing,
+    /// A weapon, of this `wëap`.
+    Weapon(i16),
+    /// Ammunition, the rounds of this `wëap` ([`super::munitions`]).
+    Rounds(i16),
+}
+
+/// The `oütf` of the outfit `doc`, numbered `nova`, its first mod
+/// `fitted`, sold at the yards holding the tech number `sold` when it is
+/// sold (see the module docs).
 #[must_use]
 pub fn outfit(
     nova: i16,
     doc: &Doc<BibleOutfit>,
-    weapon: Option<i16>,
+    fitted: Fitted,
     sold: Option<i16>,
 ) -> Entry<AnyRecord> {
     let mut outfit = Outfit {
@@ -181,14 +231,22 @@ pub fn outfit(
         outfit.tech_level = sold;
         outfit.buy_random = ALWAYS;
     }
-    if let Some(weapon) = weapon {
-        outfit.mod_type = MOD_WEAPON;
-        outfit.mod_val = weapon;
-        let slot = match doc.data.mount {
-            Mount::Turret => OUTFIT_TURRET,
-            _ => OUTFIT_GUN,
-        };
-        outfit.flags = Flags16(HIDE_UNLESS_REQUIRED | slot);
+    match fitted {
+        Fitted::Nothing => {}
+        Fitted::Weapon(weapon) => {
+            outfit.mod_type = MOD_WEAPON;
+            outfit.mod_val = weapon;
+            let slot = match doc.data.mount {
+                Mount::Turret => OUTFIT_TURRET,
+                Mount::Bay => 0,
+                Mount::Fixed | Mount::Launcher => OUTFIT_GUN,
+            };
+            outfit.flags = Flags16(HIDE_UNLESS_REQUIRED | slot);
+        }
+        Fitted::Rounds(weapon) => {
+            outfit.mod_type = MOD_AMMO;
+            outfit.mod_val = weapon;
+        }
     }
     Entry {
         id: nova,
@@ -197,22 +255,28 @@ pub fn outfit(
     }
 }
 
-/// The `wëap` of the weapon outfit `doc`, numbered `nova` (see the module
-/// docs).
+/// The `wëap` of the weapon outfit `doc`, numbered `nova`, of the
+/// `AmmoType` `ammo` when it fires rounds ([`super::munitions`]; see the
+/// module docs).
 #[must_use]
-pub fn weapon(nova: i16, doc: &Doc<BibleOutfit>) -> Entry<AnyRecord> {
+pub fn weapon(nova: i16, doc: &Doc<BibleOutfit>, ammo: Option<i16>) -> Entry<AnyRecord> {
     let data = &doc.data;
     let damage = word(data.damage);
+    let (guidance, guided_turn) = match data.mount {
+        Mount::Turret => (TURRETED, 0),
+        Mount::Bay => (FIGHTER_BAY, 0),
+        Mount::Launcher if data.guidance == Guidance::Homing => (HOMING, HOMING_TURN),
+        Mount::Fixed | Mount::Launcher => (-1, 0),
+    };
     let weapon = Weapon {
         reload: at_least_one((data.reload * TICKS_PER_SECOND).round()),
         count: at_least_one((f64::from(data.range) / PIXELS_PER_TICK).ceil()),
         mass_dmg: damage,
         energy_dmg: damage,
-        guidance: if data.mount == Mount::Turret {
-            TURRETED
-        } else {
-            -1
-        },
+        guidance,
+        guided_turn,
+        ammo_type: ammo.unwrap_or(-1),
+        flags: Flags16(if ammo.is_some() { WEAPON_SECONDARY } else { 0 }),
         speed: SHOT_SPEED,
         exit_type: exit_type(data.mount).unwrap_or(-1),
         ..neutral_weapon()
@@ -421,19 +485,55 @@ mod tests {
         assert_eq!(outfit.buy_random, 0);
     }
 
+    /// A guard for a launcher naming neither `guidance` nor `ammunition`:
+    /// it maps whole as it did before launchers read either, so it passes
+    /// before and after they do.
     #[test]
     fn a_fixed_gun_or_a_launcher_is_a_gun_and_unguided() {
-        for (mount, exit) in [("fixed", 0), ("launcher", 2)] {
+        for (fits, exit) in [(Mount::Fixed, 0), (Mount::Launcher, 2)] {
+            let mount = fits.as_str();
             let game =
                 loaded(&galaxy().with("outfits/blaster.md", &gun("Blaster", mount, 5, 300, 0.5)));
             let (_, weapon) = weapon_of(&game, 128);
-            assert_eq!(weapon.guidance, -1, "{mount}");
-            assert_eq!(weapon.exit_type, exit, "{mount}");
             assert_eq!(
-                named(&game, 128).1.flags,
-                Flags16(OUTFIT_GUN | HIDE_UNLESS_REQUIRED),
-                "{mount}"
+                weapon,
+                Weapon {
+                    reload: 15,
+                    count: 30,
+                    mass_dmg: 5,
+                    energy_dmg: 5,
+                    guidance: -1,
+                    speed: SHOT_SPEED,
+                    exit_type: exit,
+                    ..neutral_weapon()
+                },
+                "{mount}: unguided, of no ammunition, no turn and no flags"
             );
+            let expected = Outfit {
+                cost: 2500,
+                flags: Flags16(OUTFIT_GUN | HIDE_UNLESS_REQUIRED),
+                require: Flags64(FitBits::mount_bit(fits)),
+                mod_type: MOD_WEAPON,
+                mod_val: 128,
+                ..named_outfit("Blaster")
+            };
+            assert_eq!(named(&game, 128).1, expected, "{mount}");
+            let skiff = game
+                .data
+                .get::<crate::records::ship::Ship>(
+                    game.ids.ships[&Id::try_from("skiff".to_owned()).unwrap()],
+                )
+                .expect("present")
+                .expect("decoded")
+                .record
+                .clone();
+            assert_eq!(skiff.weap_type1_4[0], Some(crate::wire::id::WeaponId(128)));
+            assert_eq!(
+                (skiff.ammo_load1_4, skiff.ammo_load5_8),
+                ([0; 4], [0; 4]),
+                "{mount}: its hull carries no rounds"
+            );
+            assert_eq!(skiff.escort_type, -1, "{mount}");
         }
     }
 
@@ -456,7 +556,7 @@ mod tests {
             &galaxy().with("outfits/blaster.md", &gun("Bay", "bay", 30, 900, 2.0)),
         );
         let doc = &galaxy.outfits[&Id::try_from("blaster".to_owned()).unwrap()];
-        let AnyRecord::Weapon(weapon) = weapon(128, doc).record else {
+        let AnyRecord::Weapon(weapon) = weapon(128, doc, None).record else {
             panic!("a wëap");
         };
         assert_eq!(weapon.exit_type, -1);
@@ -470,6 +570,9 @@ mod tests {
         assert_eq!((weapon.mass_dmg, weapon.energy_dmg), (i16::MAX, i16::MAX));
     }
 
+    /// A guard for a bay naming no `fighters`: it stays an `oütf` that does
+    /// nothing, as before bays launched anything, so it passes before and
+    /// after they do.
     #[test]
     fn an_outfit_of_no_damage_or_a_bay_is_no_weapon() {
         for text in [pass("Blaster", 100), gun("Bay", "bay", 30, 900, 2.0)] {

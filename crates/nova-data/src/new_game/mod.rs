@@ -42,8 +42,10 @@
 //! | (placeholder) | `ïntf` 128 ([`records::default_interface`]) | "Default status bar": a radar over the shield, armour and fuel gauges and the nav, weapon, target and cargo readouts, no background picture |
 //! | (placeholder) | `STR#` 128, 134, 138, 1100, 2002, 3000, 3001, 3002 and 5003 ([`strings`]) | the engine's own strings, in plain English, at the IDs and indices the engine reads: comm replies, messages, prompts and labels, default names, legal statuses, combat ratings and the stellar type label; each only at an ID no mapped `STR#` holds |
 //! | (placeholder) | the dialogs ([`interface::default_dialogs`]) | a `DLOG` and its items, titled "Default spaceport" and so on, for each dialog the view has no built-in layout for: the spaceport and every screen it opens, the text, note and question dialogs, the player info and the preferences; each fits the 640 x 480 view, with no art; the app reads them when the folder has no interface file (`nova::interface`) |
-//! | `outfits/` | `oütf` ([`outfits`]) | its `name`, as `ShortName` and lower-cased as `LCName`, and `Cost` from `price`; massless, with no `Max`; its `mount`'s bit as `Require`, with `Flags` `HIDE_UNLESS_REQUIRED`, so it is listed only for a ship with a hardpoint of that mount; sold at the stellars its `sold_at` names, as a `TechLevel` from [`yards::SOLD_TECH_FIRST`] that only their `SpecialTech` slots hold and `BuyRandom` 100 ([`yards`]); with no `sold_at`, never for sale (`TechLevel` 0x7fff, `BuyRandom` 0); a weapon (`damage` above 0, not a `bay`) a `ModType` 1 naming its `wëap`, `Flags` gun or turret; any other doing nothing; `model` goes to the mounts, below |
-//! | a weapon outfit | `wëap` ([`outfits`]) | pinned by, and numbered in, outfit id order; `damage`, `range` and `reload` as damage, life and `Reload` at a placeholder speed; unguided, turreted for a turret; its mount's `ExitType`; drawn as the placeholder box, with no sound or explosion |
+//! | `outfits/` | `oütf` ([`outfits`]) | its `name`, as `ShortName` and lower-cased as `LCName`, and `Cost` from `price`; massless, with no `Max`; its `mount`'s bit as `Require`, with `Flags` `HIDE_UNLESS_REQUIRED`, so it is listed only for a ship with a hardpoint of that mount; sold at the stellars its `sold_at` names, as a `TechLevel` from [`yards::SOLD_TECH_FIRST`] that only their `SpecialTech` slots hold and `BuyRandom` 100 ([`yards`]); with no `sold_at`, never for sale (`TechLevel` 0x7fff, `BuyRandom` 0); a weapon (`damage` above 0 on a `fixed`, `turret` or `launcher` mount, or a `bay` launching fighters) a `ModType` 1 naming its `wëap`, `Flags` gun, turret or (a bay) neither; a launcher's ammunition a `ModType` 3 naming its rounds' `wëap`; any other doing nothing; `model` goes to the mounts, below |
+//! | a weapon outfit | `wëap` ([`outfits`]) | pinned by, and numbered in, outfit id order; `damage`, `range` and `reload` as damage, life and `Reload` at a placeholder speed; unguided, turreted for a turret, a fighter bay (99) for a bay; its mount's `ExitType`, the centre for a bay; drawn as the placeholder box, with no sound or explosion |
+//! | a launcher's `guidance` and `ammunition` | `wëap` `Guidance`, `GuidedTurn`, `AmmoType` and `Flags`, the ammunition's `oütf`, and each carrying `shïp`'s `AmmoLoad` ([`munitions`], [`outfits`]) | `homing` as `Guidance` 1 with `GuidedTurn` [`outfits::HOMING_TURN`] (a placeholder), `unguided` -1; an `ammunition` outfit with an `oütf` that is no weapon as the rounds of the lowest-ID launcher `wëap` naming it: each such launcher's `AmmoType` that `wëap` less 128 and `Flags` secondary, and the ammunition's first `ModType` 3 naming it; its `load` a hardpoint, times the slot's `WeapCount`, held within `i16`, as `AmmoLoad`, the chain's and the as-built kits' hardpoints alike |
+//! | a bay's `fighters` | a fighter bay `wëap`, a fighters `oütf`, each carrier's `AmmoLoad` and the hull's `EscortType` ([`munitions`]) | a `hull` that is a mapped ship carrying no bay with `fighters` makes the bay a weapon: `Guidance` 99, `AmmoType` the hull's `shïp`, `Flags` secondary; its fighters an `oütf` numbered after the kits, pinned by the bay's id, named for the hull, `ModType` 3 naming the bay's `wëap`, of no cost, never sold; its `load` a hardpoint, times the slot's `WeapCount`, as `AmmoLoad`; the hull `EscortType` 0, a fighter, every other -1 |
 //! | `mods/` | `oütf` ([`kits`]) | unpinned, numbered after the unpinned outfits; its `name` as `ShortName` and lower-cased as `LCName`; `Cost` from `price`; `Max` 1, `BuyRandom` 100, hidden unless it fits; its effects in the four `ModType` slots, `acceleration`, `fuel`, `shield_recharge` and `hull_recharge` among them; its `fits` as a `Require` bit; its hardpoints' mount bits as `Contribute`; `fitted_at` as `TechLevel` and, lawless, `ScanMask`; its hardpoints' outfits given by `OnPurchase` and taken back by `OnSell` |
 //! | a ship's chain hardpoints, a kit's hardpoints and `attention` | the store's fittings ([`GameData::fittings`], [`fleet`], [`kits`]) | each `shïp`'s own exit spots and each kit `oütf`'s, and each kit's attention, which `nova_sim::dock_scan` reads |
 //! | a ship's `size`'s `collision_radius` | its collision radius on the store ([`GameData::collision_radius`], [`fleet::collision_radius`]) | through the `base` chain, the nearest `size`'s, in whole pixels at [`fleet::PX_PER_METRE`]; none when it isn't finite or rounds to no positive pixel; the fight reads it under `data_collision` |
@@ -127,6 +129,13 @@
 //!   its sets with the outfits'. A ship with a `sold_at` but no `price`
 //!   anywhere in its `base` chain isn't sold ([`yards`]).
 //! - A weapon past the last `wëap` ID does nothing ([`outfits`]).
+//! - A `guidance` other than `unguided` or an `ammunition` on an outfit
+//!   that isn't a launcher, or `fighters` on one that isn't a bay, is
+//!   ignored; so are a launcher's `guidance` and `ammunition` when it does
+//!   no damage, and so is no weapon. A launcher whose ammunition isn't in
+//!   `outfits/`, or is a weapon, fires without ammunition. A bay whose
+//!   fighters' hull isn't in `ships/`, or carries a bay with `fighters` of
+//!   its own, launches nothing ([`munitions`]).
 //! - A record past its kind's ID range is left out.
 //! - The ID table, `nova-ids.json` ([`pins`]): one that doesn't parse or
 //!   names an unknown kind is ignored whole, and every record is unpinned;
@@ -200,8 +209,21 @@
 //! - A kit's `hidden_cargo`: nothing in the new game is contraband cargo
 //!   yet. A kit's `attention` is read only as "any": how much more 2 is
 //!   noticed than 1 waits for the bible's law numbers.
-//! - A launcher's homing and ammunition, and `bay` hardpoints and outfits
-//!   as fighter bays: a launcher fires unguided, and a bay does nothing.
+//! - Guidance other than homing: rockets, bombs, beams, turreted missiles
+//!   and point defence have no `guidance` word.
+//! - A launcher's `MaxAmmo`: it stays 0, no magazine cap, as the format
+//!   has no word for a magazine beyond the load a hull comes with; a cap
+//!   equal to the load would refuse a hull bought full a single round.
+//! - Every weapon number but guidance and ammunition: [`outfits::HOMING_TURN`]
+//!   is a placeholder, as [`outfits::SHOT_SPEED`] is, and inaccuracy,
+//!   proximity, durability and the seeker flags stay neutral.
+//! - A bay's fighters' `Max`: no limit, as for every outfit.
+//! - A kit bought loose granting its launcher's load: a kit's `OnPurchase`
+//!   grants one outfit per `G`, and a load as repeated `G`s can pass the
+//!   script's 255 bytes, so its rounds are bought.
+//! - A weapon's sound and look: every `wëap` keeps `Sound` -1, so a
+//!   launch or a bay's launch plays nothing, and draws as the placeholder
+//!   box (phase 16, sound effects).
 //! - Hiring escorts: a ship's `HireRandom` is 0, never for hire, until the
 //!   format has a word for it. The new game greys the bar's Hire Escort
 //!   while nothing is for hire, and the Mission BBS while the computer
@@ -259,6 +281,7 @@ pub mod looks;
 mod map;
 pub mod missions;
 pub mod mounts;
+pub mod munitions;
 pub mod outfits;
 pub mod pins;
 pub mod records;

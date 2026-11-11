@@ -194,6 +194,84 @@ fn adding_an_outfit_leaves_pinned_kits_alone() {
     assert_eq!(game.ids.weapons[&id("aaa-cannon")], 129);
 }
 
+/// `galaxy()` with `json` as its table, and a drone bay launching drones:
+/// unpinned, `drone-bay` numbers after the blaster, and its fighters
+/// after the kit.
+fn carrying(json: &str) -> MemSource {
+    pinned(json)
+        .with(
+            "outfits/drone-bay.md",
+            "---\nname: Drone bay\nmount: bay\ndamage: 0\nrange: 300\nreload: 2\nprice: 10\n\
+             fighters: {hull: drone, load: 2}\n---\n",
+        )
+        .with(
+            "ships/drone.md",
+            "---\nname: Drone\nstyle: crown\nrole: fighter\nmodel: hull\n\
+             size: {length: 4, beam: 2, collision_radius: 2}\n---\n",
+        )
+}
+
+#[test]
+fn an_unpinned_bay_s_fighters_number_after_the_kits() {
+    let game = loaded(&carrying("{}"));
+    assert_eq!(game.ids.outfits[&id("blaster")], 128);
+    assert_eq!(game.ids.outfits[&id("drone-bay")], 129);
+    assert_eq!(game.ids.kits[&id("gun-mount")], 130);
+    assert_eq!(game.ids.fighters[&id("drone-bay")], 131);
+}
+
+#[test]
+fn a_bay_s_fighters_pin_and_new_ones_never_move_a_pinned_outfit_or_kit() {
+    let game = loaded(&carrying(
+        r#"{"outfits": {"blaster": 128}, "kits": {"gun-mount": 129},
+            "fighters": {"drone-bay": 200}}"#,
+    ));
+    assert_eq!(game.ids.fighters[&id("drone-bay")], 200);
+    assert_eq!(game.ids.outfits[&id("blaster")], 128);
+    assert_eq!(game.ids.kits[&id("gun-mount")], 129);
+    assert_eq!(
+        game.ids.outfits[&id("drone-bay")],
+        201,
+        "after the highest pin, the fighters' counted"
+    );
+    let pinned_before = loaded(&carrying(
+        r#"{"outfits": {"blaster": 128}, "kits": {"gun-mount": 129}}"#,
+    ));
+    assert_eq!(pinned_before.ids.outfits[&id("blaster")], 128);
+    assert_eq!(pinned_before.ids.kits[&id("gun-mount")], 129);
+    assert_eq!(pinned_before.ids.outfits[&id("drone-bay")], 130);
+    assert_eq!(pinned_before.ids.fighters[&id("drone-bay")], 131);
+}
+
+#[test]
+fn a_bay_s_fighters_sharing_an_outfit_s_id_are_ignored() {
+    let game = loaded(&carrying(
+        r#"{"outfits": {"blaster": 150}, "fighters": {"drone-bay": 150}}"#,
+    ));
+    assert_eq!(game.ids.outfits[&id("blaster")], 150);
+    assert_ne!(game.ids.fighters[&id("drone-bay")], 150);
+    assert!(
+        table_problems(&game).contains(&format!(
+            "{FILE}: its fighters entry `drone-bay` is 150, which `outfits/blaster` holds; \
+             it is ignored"
+        )),
+        "{:?}",
+        table_problems(&game)
+    );
+}
+
+#[test]
+fn the_writer_writes_the_fighters_and_reads_them_back() {
+    let table = loaded(&carrying("{}")).ids;
+    let written = text(&table);
+    let value: serde_json::Value = serde_json::from_str(&written).expect("json");
+    assert_eq!(value["fighters"]["drone-bay"], 131);
+    assert_eq!(parse(written.as_bytes()).expect("parses").pins, table);
+    let game = loaded(&carrying(&written));
+    assert_eq!(table_problems(&game), Vec::<String>::new());
+    assert_eq!(game.ids, table);
+}
+
 #[test]
 fn weapons_pin_by_outfit_id_in_their_own_range() {
     let game = loaded(&pinned(r#"{"weapons": {"blaster": 200}}"#));
@@ -408,8 +486,9 @@ fn parse_reads_every_kind() {
     let table = parse(
         br#"{"factions": {"f": 128}, "systems": {"s": 129}, "stellars": {"p": 130},
              "gates": {"s/g": 131}, "ships": {"h": 132}, "starts": {"c": 133},
-             "outfits": {"o": 134}, "kits": {"k": 135}, "weapons": {"o": 136},
-             "blockades": {"m": 137}, "commodities": {"g": 5}, "junk": {"w": 255}}"#,
+             "outfits": {"o": 134}, "kits": {"k": 135}, "fighters": {"b": 138},
+             "weapons": {"o": 136}, "blockades": {"m": 137}, "commodities": {"g": 5},
+             "junk": {"w": 255}}"#,
     )
     .expect("parses");
     assert_eq!(table.problems, Vec::<String>::new());
@@ -425,6 +504,7 @@ fn parse_reads_every_kind() {
             starts: one("c", 133),
             outfits: one("o", 134),
             kits: one("k", 135),
+            fighters: one("b", 138),
             weapons: one("o", 136),
             blockades: one("m", 137),
             commodities: one("g", 5),

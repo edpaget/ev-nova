@@ -2,7 +2,8 @@
 //!
 //! Each kind has its range: [`GOVT_IDS`] for factions, [`SYSTEM_IDS`] and
 //! [`STELLAR_IDS`] for systems and stellars, [`SHIP_IDS`] for ships,
-//! [`OUTFIT_IDS`] for outfits, [`WEAPON_IDS`] for the outfits that are
+//! [`OUTFIT_IDS`] for outfits, kits and the bays' fighters,
+//! [`WEAPON_IDS`] for the outfits that are
 //! weapons, [`CHARACTER_IDS`] for starts, [`MISSION_IDS`] for the
 //! `take_point` missions' blockades ([`super::blockades`]), and
 //! [`COMMODITY_SLOTS`] then [`JUNK_IDS`] for goods ([`super::goods`]). The placeholder traffic
@@ -31,9 +32,11 @@
 //!   none ([`after_pins`], [`allocate_pinned`]).
 //! - Two kinds share a range. The jump points' gates share
 //!   [`STELLAR_IDS`]: the unpinned stellars come first, then the unpinned
-//!   gates in (system id, point id) order. The mod kits share
-//!   [`OUTFIT_IDS`]: the unpinned outfits, then the unpinned kits in kit
-//!   id order. "The highest ID the table holds" counts both kinds' pins.
+//!   gates in (system id, point id) order. The mod kits and the bays'
+//!   fighters share [`OUTFIT_IDS`]: the unpinned outfits, then the
+//!   unpinned kits in kit id order, then the unpinned fighters in bay id
+//!   order ([`super::munitions`]). "The highest ID the table holds" counts
+//!   every sharing kind's pins.
 //! - An entry whose record has left the folder is retired: it stays in
 //!   the table, so its ID, and every ID below the highest, is never handed
 //!   out again.
@@ -49,7 +52,7 @@
 //!
 //! With no table, or an empty one, nothing is pinned: every kind numbers
 //! from 128, and the gates and kits come after the last stellar and
-//! outfit. Loading never writes the table; `nova-dump --pin-ids
+//! outfit, and the fighters after the last kit. Loading never writes the table; `nova-dump --pin-ids
 //! <GAME_DATA>` does, an authoring step to run whenever a record is
 //! added.
 
@@ -134,6 +137,9 @@ pub struct IdTable {
     pub weapons: BTreeMap<Id, i16>,
     /// Each mod kit's `oütf`.
     pub kits: BTreeMap<Id, i16>,
+    /// Each fighter bay's fighters `oütf`, the rounds of its `wëap`, by
+    /// the bay outfit's id ([`super::munitions`]).
+    pub fighters: BTreeMap<Id, i16>,
     /// Each `take_point` mission's blockade `mïsn`, by the mission's id
     /// ([`super::blockades`]).
     pub blockades: BTreeMap<Id, i16>,

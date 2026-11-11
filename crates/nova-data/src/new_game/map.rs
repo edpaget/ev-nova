@@ -4,7 +4,8 @@
 //! [`super::relations`], the jump points' gates in [`super::gates`],
 //! ships, the civilian traffic and starts in [`super::fleet`], the fleets
 //! and a system's traffic in [`super::traffic`], outfits and weapons in
-//! [`super::outfits`], mod kits in [`super::kits`], which yards sell what
+//! [`super::outfits`], what launchers fire and bays launch in
+//! [`super::munitions`], mod kits in [`super::kits`], which yards sell what
 //! in [`super::yards`], the `take_point`
 //! missions' guards and blockades in [`super::blockades`], goods and
 //! a stellar's prices in [`super::goods`], and the bodies read as
@@ -27,7 +28,8 @@ use super::kits::{
     self, FitBits, LAW_SCAN_FINE, LAW_SMUGGLE_PENALTY, LAWLESS_KIT_SCAN, YARD_TECH_LAWLESS,
     YARD_TECH_LEGAL,
 };
-use super::outfits;
+use super::munitions;
+use super::outfits::{self, Fitted};
 use super::records::{
     ANY_RECORD, clamp_i16, default_interface, neutral_govt, neutral_stellar, neutral_system, rgb,
     stellar_flags,
@@ -182,11 +184,18 @@ fn number_all(galaxy: &Galaxy, pins: &IdTable, problems: &mut Vec<Problem>) -> (
     let stellars = number(placed, &pins.stellars, &mut free, "spöb", problems);
     let gates = gates::number(galaxy, &systems, &pins.gates, &mut free, problems);
     let ships = fleet::number_ships(galaxy, &pins.ships, problems);
-    let mut free = after_pins(OUTFIT_IDS, pins.outfits.values().chain(pins.kits.values()));
+    let mut free = after_pins(
+        OUTFIT_IDS,
+        (pins.outfits.values())
+            .chain(pins.kits.values())
+            .chain(pins.fighters.values()),
+    );
     let outfits = outfits::number_outfits(galaxy, &pins.outfits, &mut free, problems);
-    let weapons = outfits::number_weapons(galaxy, &pins.weapons, problems);
+    let weapons = outfits::number_weapons(galaxy, &ships, &pins.weapons, problems);
     let fit = FitBits::of(galaxy, problems);
     let kits = kits::number_kits(galaxy, &fit, &pins.kits, &mut free, problems);
+    let fighters =
+        munitions::number_fighters(galaxy, &weapons, &pins.fighters, &mut free, problems);
     let blockades = blockades::number_blockades(galaxy, &gates, &pins.blockades, problems);
     let (commodities, junk) = goods::number_goods(galaxy, pins, problems);
     let mut ids = IdTable {
@@ -199,6 +208,7 @@ fn number_all(galaxy: &Galaxy, pins: &IdTable, problems: &mut Vec<Problem>) -> (
         outfits,
         weapons,
         kits,
+        fighters,
         blockades,
         commodities,
         junk,
@@ -219,9 +229,14 @@ fn fittings(
     problems: &mut Vec<Problem>,
 ) -> Fittings {
     let mut fittings = Fittings::default();
+    let munitions = munitions::munitions(galaxy, ids, problems);
     for (id, &nova) in &ids.ships {
         let sold = sales.ships.get(id).copied();
-        records.push(fleet::ship(galaxy, ids, fit, id, nova, sold, problems));
+        let mut ship = fleet::ship(galaxy, ids, fit, id, nova, sold, problems);
+        if let AnyRecord::Ship(record) = &mut ship.record {
+            munitions.arm(id, record);
+        }
+        records.push(ship);
         records.extend(fleet::ship_anim(galaxy, id, nova, problems));
         let spots = fleet::chain_spots(galaxy, id);
         if !spots.is_empty() {
@@ -232,8 +247,17 @@ fn fittings(
         let doc = &galaxy.outfits[id];
         let weapon = ids.weapons.get(id).copied();
         let sold = sales.outfits.get(id).copied();
-        records.push(outfits::outfit(nova, doc, weapon, sold));
-        records.extend(weapon.map(|weapon| outfits::weapon(weapon, doc)));
+        let fitted = match (weapon, munitions.ammunition.get(id)) {
+            (Some(weapon), _) => Fitted::Weapon(weapon),
+            (None, Some(&owner)) => Fitted::Rounds(owner),
+            (None, None) => Fitted::Nothing,
+        };
+        records.push(outfits::outfit(nova, doc, fitted, sold));
+        let ammo = munitions.ammo_types.get(id).copied();
+        records.extend(weapon.map(|weapon| outfits::weapon(weapon, doc, ammo)));
+    }
+    for (bay, &nova) in &ids.fighters {
+        records.push(munitions::fighters(galaxy, ids, bay, nova));
     }
     for (id, &nova) in &ids.kits {
         let doc = &galaxy.mods[id];

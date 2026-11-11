@@ -27,7 +27,10 @@
 //!   and `launcher` hardpoints are its `MaxGun` and its `turret` ones its
 //!   `MaxTur` (a kit adds its own through its effects). The weapon
 //!   outfits its hardpoints and its kits' hardpoints carry are its stock
-//!   weapons, one a hardpoint, so the traffic fires them. It contributes
+//!   weapons, one a hardpoint, so the traffic fires them; a launcher
+//!   firing ammunition and a bay launching fighters come with their load a
+//!   hardpoint as `AmmoLoad`, and a hull a bay launches is a fighter,
+//!   `EscortType` 0 (both [`super::munitions`]). It contributes
 //!   the `Require` bit of every kit `fits` set holding its `role`
 //!   ([`FitBits`]), and the mount bit of each of its chain's hardpoints
 //!   ([`FitBits::mounts`]): its kits' hardpoints come with the kits' own
