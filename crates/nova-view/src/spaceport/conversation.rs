@@ -830,6 +830,15 @@ mod tests {
     }
 
     #[test]
+    fn a_page_that_fits_does_not_overflow_and_shows_no_arrows() {
+        use crate::ui::scroll_arrows::ScrollArrow;
+        for screen in [offer(), ended()] {
+            assert!(!screen.overflows());
+            assert_eq!(screen.arrow_bounds(ScrollArrow::Down), None);
+        }
+    }
+
+    #[test]
     fn down_presses_reach_the_line_s_end_and_the_choices() {
         let mut screen = long(false);
         assert!(scroll_until(&mut screen, &down(), "2. Not now") > 0);
