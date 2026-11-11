@@ -1299,7 +1299,7 @@ mod tests {
             .map(nova_data::DialogPlace::as_ref_text);
         assert_eq!(loaded.data.dialogs().stellars.len(), 1);
         assert_eq!(camp.as_deref(), Some("dialog/dock-job.ink#camp_greeting"));
-        assert_eq!(loaded.data.storylines().missions.len(), 4);
+        assert_eq!(loaded.data.storylines().missions.len(), 5);
     }
 
     #[test]
@@ -1343,7 +1343,7 @@ mod tests {
         );
         let missions = &loaded.data.storylines().missions;
         assert!(!missions.contains_key("clear-the-road"));
-        assert_eq!(missions.len(), 3, "the others stay");
+        assert_eq!(missions.len(), 4, "the other four stay");
     }
 
     #[test]

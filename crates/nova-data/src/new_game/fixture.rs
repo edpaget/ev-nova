@@ -8,15 +8,24 @@
 //! raiders' enemy, whose ships cost the player 5 to attack, 20 to
 //! disable and 40 to destroy, and `raider`, lawless, the wardens' enemy,
 //! whose warships attack the player on sight; the systems `drift`, of
-//! jump points alone, `hearth`, the guild's, and `verge`, ungoverned and
+//! jump points alone, `hearth`, the guild's, `verge`, ungoverned and
 //! in a `nebula`, the one hazard, so the port loop's flight to it is
-//! murky;
+//! murky, and `fringe`, ungoverned, reached from `drift` alone by the
+//! stable fringe road, and the one system that names its traffic (the
+//! rest fly the civilian traffic): the fleets `raider-band` and
+//! `warden-patrol` at even weights, six ships on average. It is kept off
+//! every other system's roads because the raiders attack the player on
+//! sight, and the tests that fly Drift, Hearth and Verge would meet them.
+//! `raider-band` is the raiders' warships, flying `raider-skiff` at 2 and
+//! its armoured variant `armoured-skiff` at 1; `warden-patrol` is the
+//! wardens' interceptors, flying `warden-picket`;
 //! the stellars `hearth-dock`, `hearth-moon`, `verge-camp` and
 //! `verge-workshop`, an unowned outpost with an outfitter and fuel, so a
 //! lawless yard; jump
 //! points that cover every case a link can take (two from `hearth` to
-//! `verge`, a dead pair between `verge` and `drift`, and `drift`'s
-//! one-way back door to `verge`); the civilian hull `hauler`, in guild
+//! `verge`, a dead pair between `verge` and `drift`, `drift`'s
+//! one-way back door to `verge`, and the stable pair between `drift` and
+//! `fringe`); the civilian hull `hauler`, in guild
 //! paint, priced 4000 and sold nowhere, the crown hull `cutter`, bare,
 //! 50,000 at `hearth-dock`, the wardens' crown hull `warden-picket`,
 //! in `warden-colours`, and the raiders' union hull `raider-skiff`, in
@@ -30,6 +39,8 @@
 //! the variant `racked-hauler`, the hauler with `cargo-racks` and a nose
 //! turret carrying a `mass-driver`, sold at `hearth-dock` for the
 //! hauler's price plus the racks' (6000), so the start can buy it; the
+//! variant `armoured-skiff`, the raider skiff with 450 hull, unsold, in
+//! the raiders' paint through its base, which the raider band flies; the
 //! outfits `dock-pass`, a Dock pass, and `mass-driver`, a turret weapon
 //! sold at `hearth-dock` alone (`sold_at`), so it is listed there only
 //! for a ship with a turret hardpoint; the legal mod kit `cargo-racks`,
@@ -47,7 +58,7 @@
 //! them, `hearth-dock` (alloys and medicine medium, fuel cells and grain
 //! low, machinery, textiles and vintage wine high) and `verge-camp`
 //! (grain and medicine high, vintage wine low); and the storyline
-//! `dock-work`, with its four missions and two news items:
+//! `dock-work`, with its five missions and two news items:
 //!
 //! - `dock-job`: offered at `hearth-dock` (`job_offer`), ten tons of hull
 //!   plate to `verge-camp`, completed there (`job_done`), each effect
@@ -60,7 +71,13 @@
 //!   groups, with no objective;
 //! - `clear-the-road`: offered at `verge-camp` (`road_offer`) once the
 //!   toll is refused, a `take_point` objective on the wardens' road,
-//!   whose blockade is three warden pickets at the road's gate.
+//!   whose blockade is three warden pickets at the road's gate: it names
+//!   no guard count, so it holds the default;
+//! - `fringe-road`: a `take_point` on the Fringe's end of the fringe road,
+//!   held by the wardens, that names two `guards`. Nothing sets the flag
+//!   it requires, so it is never offered or started in play; a test sets
+//!   it active to see its blockade. It is held by the wardens so its
+//!   guards share the hearth road's guard `düde`.
 //!
 //! Their conversations are one file, `dialog/dock-job.ink`, with its
 //! compiled `dock-job.ink.json` beside it, which also holds `verge-camp`'s

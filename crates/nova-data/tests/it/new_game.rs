@@ -33,7 +33,11 @@ use nova_galaxy_media::BARE;
 /// The checked-in fixture (`new_game::fixture::folder`): one region; the
 /// factions `guild` (no relations), `warden` (with penalties) and `raider`
 /// (always attacking the player), the last two enemies; the systems `drift` (jump points alone),
-/// `hearth` (the guild's) and `verge` (ungoverned, in a nebula); four stellars:
+/// `hearth` (the guild's), `verge` (ungoverned, in a nebula) and `fringe`
+/// (ungoverned, reached from `drift` alone by one stable road, and the one
+/// system naming its traffic: the fleets `raider-band`, the raiders'
+/// warships flying `raider-skiff` and its armoured variant `armoured-skiff`,
+/// and `warden-patrol`, the wardens' interceptors flying `warden-picket`); four stellars:
 /// `hearth-dock`, a guild station with every service; `hearth-moon`, with
 /// none; `verge-camp`, a warden outpost with a bar, an exchange and
 /// no fuel; and `verge-workshop`, an unowned outpost, a lawless yard, with
@@ -54,7 +58,9 @@ use nova_galaxy_media::BARE;
 /// start `dock-hand`, in the hauler in `hearth`; the
 /// storyline `dock-work`,
 /// whose four missions and two news items run over the conversations of
-/// `dialog/dock-job.ink`, compiled, whose greeting `verge-camp` names; and
+/// `dialog/dock-job.ink`, compiled, whose greeting `verge-camp` names, and
+/// whose fifth mission, `fringe-road`, is never offered and names its
+/// blockade's two guards; and
 /// `game.md`, naming the galaxy, whose body is its About text.
 fn fixture() -> PathBuf {
     new_game::fixture::folder()
@@ -128,7 +134,7 @@ fn verge_camp_names_the_fixture_s_one_stellar_conversation() {
 }
 
 #[test]
-fn the_fixture_maps_four_missions_two_news_items_and_nine_jump_points() {
+fn the_fixture_maps_five_missions_two_news_items_and_eleven_jump_points() {
     let game = new_game::open(&fixture()).expect("lists");
     let storylines = game.data.storylines();
     let keys = |ids: Vec<&String>| ids.into_iter().cloned().collect::<Vec<_>>();
@@ -137,6 +143,7 @@ fn the_fixture_maps_four_missions_two_news_items_and_nine_jump_points() {
         [
             "clear-the-road",
             "dock-job",
+            "fringe-road",
             "side-road-closes",
             "warden-toll"
         ]
@@ -145,7 +152,7 @@ fn the_fixture_maps_four_missions_two_news_items_and_nine_jump_points() {
         keys(storylines.news.keys().collect()),
         ["plate-arrives", "side-road-closes"]
     );
-    assert_eq!(storylines.points.len(), 9);
+    assert_eq!(storylines.points.len(), 11);
     let dock = StellarId(game.ids.stellars[&id("hearth-dock")]);
     let camp = StellarId(game.ids.stellars[&id("verge-camp")]);
     let job = &storylines.missions["dock-job"];
@@ -180,32 +187,38 @@ fn the_fixture_maps_four_missions_two_news_items_and_nine_jump_points() {
 fn the_fixture_folder_holds_a_record_for_each_thing_it_maps() {
     let data = new_game::open(&fixture()).expect("lists").data;
     assert_eq!(data.ids(Govt::TYPE), [128, 129, 130]);
-    assert_eq!(data.ids(System::TYPE), [128, 129, 130]);
+    assert_eq!(data.ids(System::TYPE), [128, 129, 130, 131]);
     assert_eq!(
         data.ids(Stellar::TYPE),
-        (128..=140).collect::<Vec<_>>(),
-        "three stellars, nine jump points' gates, then the workshop, pinned after them"
+        (128..=142).collect::<Vec<_>>(),
+        "three stellars, nine jump points' gates, the workshop, pinned after them, then \
+         the fringe road's two gates, pinned after it: eleven gates"
     );
     assert_eq!(
         data.ids(Desc::TYPE),
         [
-            128, 130, 140, 3000, 3001, 3002, 3003, 3004, 13000, 13001, 13002, 13003, 13004, 32767
+            128, 130, 140, 3000, 3001, 3002, 3003, 3004, 13000, 13001, 13002, 13003, 13004, 13005,
+            32767
         ],
         "the stellars with a body, the outfits and kits, the ships, then game.md"
     );
     assert_eq!(
         data.ids(Ship::TYPE),
-        [128, 129, 130, 131, 132],
-        "the four hulls and the variant"
+        [128, 129, 130, 131, 132, 133],
+        "the four hulls and the two variants"
     );
-    assert_eq!(data.ids(ShipAnim::TYPE), [128, 129, 130, 131, 132]);
+    assert_eq!(data.ids(ShipAnim::TYPE), [128, 129, 130, 131, 132, 133]);
     assert_eq!(
         data.ids(Dude::TYPE),
         [128, 129],
         "the civilian traffic, then the wardens' guards: the raiders hold no point, so \
          they have none"
     );
-    assert_eq!(data.ids(Mission::TYPE), [128], "clear-the-road's blockade");
+    assert_eq!(
+        data.ids(Mission::TYPE),
+        [128, 129],
+        "clear-the-road's blockade, then fringe-road's"
+    );
     assert_eq!(data.ids(Character::TYPE), [128], "the start");
     assert_eq!(
         data.ids(Outfit::TYPE),
@@ -316,7 +329,7 @@ fn the_systems_are_placed_governed_and_hold_their_stellars_then_gates_with_no_li
     };
     let (name, drift) = named::<System>(&data, 128);
     assert_eq!(name, "Drift");
-    assert_eq!(ids(&drift.nav_def), [131, 132, 133], "gates alone");
+    assert_eq!(ids(&drift.nav_def), [131, 132, 133, 141], "gates alone");
     let (name, hearth) = named::<System>(&data, 129);
     assert_eq!(name, "Hearth");
     assert_eq!((hearth.x_pos, hearth.y_pos), (0, 0));
@@ -555,8 +568,10 @@ fn each_jump_point_is_a_hypergate_linked_to_its_partner_s() {
         pairs(&game.ids.gates),
         [
             ("drift/back-door".to_owned(), 131),
+            ("drift/fringe-road".to_owned(), 141),
             ("drift/hearth-road".to_owned(), 132),
             ("drift/verge-road".to_owned(), 133),
+            ("fringe/drift-road".to_owned(), 142),
             ("hearth/drift-road".to_owned(), 134),
             ("hearth/side-road".to_owned(), 135),
             ("hearth/verge-road".to_owned(), 136),
@@ -585,6 +600,9 @@ fn each_jump_point_is_a_hypergate_linked_to_its_partner_s() {
     assert_eq!(link(131), Some(139));
     assert_eq!(link(132), Some(134));
     assert_eq!(link(134), Some(132));
+    // The fringe road, the Fringe's one way in and out.
+    assert_eq!(link(141), Some(142));
+    assert_eq!(link(142), Some(141));
     let (name, side) = named::<Stellar>(&game.data, 135);
     assert_eq!(name, "Verge", "named for the partner's system");
     assert_eq!((side.x_pos, side.y_pos), (0, 1300));
@@ -598,6 +616,7 @@ fn each_hull_is_a_ship_with_its_size_and_the_civilian_one_is_traffic() {
     assert_eq!(
         pairs(&game.ids.ships),
         [
+            ("armoured-skiff".to_owned(), 133),
             ("cutter".to_owned(), 128),
             ("hauler".to_owned(), 129),
             ("racked-hauler".to_owned(), 131),
@@ -969,6 +988,7 @@ fn the_ids_map_back_to_the_bible_s() {
         pairs(&ids.systems),
         [
             ("drift".to_owned(), 128),
+            ("fringe".to_owned(), 131),
             ("hearth".to_owned(), 129),
             ("verge".to_owned(), 130)
         ]
@@ -1131,7 +1151,7 @@ fn a_non_utf8_system_file_is_reported_and_the_good_systems_still_map() {
     copy(&fixture(), &root);
     fs::write(root.join("systems").join("garbled.md"), b"---\xff\xfe\n").expect("writes");
     let game = new_game::open(&root).expect("lists");
-    assert_eq!(game.data.ids(System::TYPE), [128, 129, 130]);
+    assert_eq!(game.data.ids(System::TYPE), [128, 129, 130, 131]);
     // The format's relative path, written with `/` on every OS.
     assert!(
         game.problems.iter().any(|p| p.file.contains("garbled.md")),
@@ -1162,6 +1182,6 @@ fn media_holding_lfs_pointers_are_reported_and_the_data_still_loads() {
     fs::write(pack.join("real.glb"), b"glTF\x02").expect("writes");
     let game = new_game::open(&root).expect("lists");
     assert_eq!(game.lfs_pointers, ["media/export/pack/hull.glb"]);
-    assert_eq!(game.data.ids(System::TYPE), [128, 129, 130]);
+    assert_eq!(game.data.ids(System::TYPE), [128, 129, 130, 131]);
     assert!(game.problems.is_empty(), "{:?}", game.problems);
 }

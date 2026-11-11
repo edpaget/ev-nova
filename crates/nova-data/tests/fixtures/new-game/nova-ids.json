@@ -1,6 +1,7 @@
 {
   "blockades": {
-    "clear-the-road": 128
+    "clear-the-road": 128,
+    "fringe-road": 129
   },
   "commodities": {
     "alloys": 0,
@@ -17,8 +18,10 @@
   },
   "gates": {
     "drift/back-door": 131,
+    "drift/fringe-road": 141,
     "drift/hearth-road": 132,
     "drift/verge-road": 133,
+    "fringe/drift-road": 142,
     "hearth/drift-road": 134,
     "hearth/side-road": 135,
     "hearth/verge-road": 136,
@@ -39,6 +42,7 @@
     "mass-driver": 130
   },
   "ships": {
+    "armoured-skiff": 133,
     "cutter": 128,
     "hauler": 129,
     "racked-hauler": 131,
@@ -56,6 +60,7 @@
   },
   "systems": {
     "drift": 128,
+    "fringe": 131,
     "hearth": 129,
     "verge": 130
   },

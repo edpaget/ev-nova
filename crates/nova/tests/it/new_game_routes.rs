@@ -310,10 +310,11 @@ fn a_shift_click_course_over_the_gates_is_flown_on_the_autopilot_gate_by_gate() 
 fn the_map_draws_each_lane_per_direction_in_its_stabilitys_look() {
     let game = fixture();
     let session = flying_from(&game, &new_game_rules(), system(&game, "drift"));
-    let (drift, hearth, verge) = (
+    let (drift, hearth, verge, fringe) = (
         system(&game, "drift"),
         system(&game, "hearth"),
         system(&game, "verge"),
+        system(&game, "fringe"),
     );
     let both = |out| (Some(out), Back::Way(Some(out)));
     let look = |a, b| {
@@ -327,7 +328,7 @@ fn the_map_draws_each_lane_per_direction_in_its_stabilitys_look() {
     let drawing = session.map_drawing(None, &[], MapMarks::NONE);
     assert_eq!(
         drawing.current_links,
-        [(drift, hearth)],
+        [(drift, hearth), (drift, fringe)],
         "drift–verge is closed both ways"
     );
     for (at, &(from, to)) in drawing.current_links.iter().enumerate() {

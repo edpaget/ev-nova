@@ -6,12 +6,14 @@
 //! fails if the committed schemas fall behind.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU32;
 
 use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::goods::PriceLevel;
 use crate::id::{Color, DialogRef, Flag, Fraction, Harshness, Id, PointRef};
+use crate::traffic::Traffic;
 
 /// An `[x, y]` position. On the galaxy map and inside a system, x grows
 /// rightward and y grows downward.
@@ -140,6 +142,11 @@ pub struct System {
     /// The specific places where ships enter and leave hyperspace.
     #[serde(default)]
     pub jump_points: Vec<JumpPoint>,
+    /// The ships that fly through the system on their own: which fleets,
+    /// how often each, and how many ships on average. Omit for the game's
+    /// usual civilian traffic.
+    #[serde(default)]
+    pub traffic: Option<Traffic>,
 }
 
 /// A system-wide hazard. See `mechanics/systems-and-regions.md`.
@@ -604,6 +611,10 @@ pub enum Objective {
         point: PointRef,
         /// The faction holding it (`factions/<id>.md`).
         held_by: Id,
+        /// How many of the holder's ships guard the point, at least 1.
+        /// Omit for three.
+        #[serde(default)]
+        guards: Option<NonZeroU32>,
     },
 }
 

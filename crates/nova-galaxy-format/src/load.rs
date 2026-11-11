@@ -22,6 +22,7 @@ use crate::model::{
     Character, Faction, JumpPoint, Kind, Mission, News, Region, Start, Stellar, Storyline, System,
 };
 use crate::source::Source;
+use crate::traffic::Fleet;
 
 /// One loaded content file.
 #[derive(Debug)]
@@ -65,6 +66,8 @@ pub struct Galaxy {
     pub outfits: BTreeMap<Id, Doc<Outfit>>,
     /// `liveries/`.
     pub liveries: BTreeMap<Id, Doc<Livery>>,
+    /// `fleets/`.
+    pub fleets: BTreeMap<Id, Doc<Fleet>>,
     /// `assets/`: the asset manifest.
     pub assets: BTreeMap<Id, Doc<Asset>>,
     /// `budgets/`: what art may cost.
@@ -161,6 +164,7 @@ pub fn load(source: &impl Source) -> (Galaxy, Vec<Problem>) {
         mods: kind::<ModKit>(source, p, u),
         outfits: kind::<Outfit>(source, p, u),
         liveries: kind::<Livery>(source, p, u),
+        fleets: kind::<Fleet>(source, p, u),
         assets: kind::<Asset>(source, p, u),
         budgets: kind::<Budget>(source, p, u),
         game: game::read(source, p, u),

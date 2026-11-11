@@ -16,6 +16,10 @@ jump_points:
     to: verge/side-road
     stability: unstable
     one_way: true
+  - id: fringe-road
+    position: [0, 1100]
+    to: fringe/drift-road
+    stability: stable
 ---
 
 Nothing but jump points: no world, no station.

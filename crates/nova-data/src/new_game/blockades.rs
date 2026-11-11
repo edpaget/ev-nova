@@ -129,7 +129,7 @@ fn take_points(galaxy: &Galaxy) -> impl Iterator<Item = (&Id, &Doc<BibleMission>
         .missions
         .iter()
         .filter_map(|(id, doc)| match &doc.data.objective {
-            Some(Objective::TakePoint { point, held_by }) => Some((id, doc, point, held_by)),
+            Some(Objective::TakePoint { point, held_by, .. }) => Some((id, doc, point, held_by)),
             _ => None,
         })
 }
@@ -209,7 +209,7 @@ pub fn blockade(
     problems: &mut Vec<Problem>,
 ) -> Option<Entry<AnyRecord>> {
     let doc = galaxy.missions.get(mission)?;
-    let Some(Objective::TakePoint { point, held_by }) = &doc.data.objective else {
+    let Some(Objective::TakePoint { point, held_by, .. }) = &doc.data.objective else {
         return None;
     };
     let system = point.system();

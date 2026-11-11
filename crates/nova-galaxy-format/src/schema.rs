@@ -13,6 +13,7 @@ use crate::goods::Good;
 use crate::model::{
     Character, Faction, Kind, Mission, News, Region, Start, Stellar, Storyline, System,
 };
+use crate::traffic::Fleet;
 
 /// Each kind's schema as `(file name, pretty JSON)`, in folder order,
 /// then `game.md`'s.
@@ -32,6 +33,7 @@ pub fn schemas() -> Vec<(String, String)> {
         kind::<ModKit>(),
         kind::<Outfit>(),
         kind::<Livery>(),
+        kind::<Fleet>(),
         kind::<Asset>(),
         kind::<Budget>(),
         kind::<Start>(),
@@ -90,6 +92,7 @@ mod tests {
                 "mod.schema.json",
                 "outfit.schema.json",
                 "livery.schema.json",
+                "fleet.schema.json",
                 "asset.schema.json",
                 "budget.schema.json",
                 "start.schema.json",

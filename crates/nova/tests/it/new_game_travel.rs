@@ -367,7 +367,7 @@ fn new_pilot_starts_in_the_start_system_in_the_start_hull() {
 fn the_fixture_covers_every_kind_of_link() {
     let game = fixture();
     let gates = gates(&game);
-    assert_eq!(gates.len(), 9);
+    assert_eq!(gates.len(), 11);
     let hearth = SystemId(nova_of(&game.ids.systems, "hearth"));
     let verge = SystemId(nova_of(&game.ids.systems, "verge"));
     let to_verge: BTreeSet<StellarId> = gates
@@ -429,8 +429,9 @@ fn under_the_new_game_every_gate_is_one_the_traffic_comes_out_of_and_leaves_by()
 }
 
 /// It runs over `drift`, of gates alone, `hearth`, the busiest, and
-/// `verge`: every fixture system with gates. Each has a closed gate, which
-/// no ship ever comes out of or goes into.
+/// `verge`: every fixture system with a closed gate, which no ship ever
+/// comes out of or goes into. `fringe` has one gate, open, and hostile
+/// traffic, so it is left out.
 #[test]
 fn under_the_new_game_the_traffic_uses_every_open_gate_and_no_closed_one() {
     let game = fixture();

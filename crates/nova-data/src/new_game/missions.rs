@@ -234,7 +234,7 @@ impl Names<'_> {
                     tons: *tons,
                     to: self.stellar("objective.deliver.to", to)?,
                 }),
-                Objective::TakePoint { point, held_by } => {
+                Objective::TakePoint { point, held_by, .. } => {
                     self.point("objective.take_point.point", point);
                     self.faction("objective.take_point.held_by", held_by);
                     Some(MissionObjective::TakePoint {
