@@ -185,10 +185,11 @@ pub enum ScreenAsk {
     /// ([`ScreenAnswer::GateEntryDesc`]). Answered nothing without a
     /// catalog, as the gate sites are the catalog's.
     GateEntryDesc(GateEntry),
-    /// The news heard in the system the ship is in, landed or flying,
-    /// asked as the new game's news log opens
-    /// ([`ScreenAnswer::HeardNews`]). Empty for a session whose data holds
-    /// no storylines.
+    /// The news heard in the system the ship is in, landed or flying, each
+    /// item saying whether the pilot has read it, asked as the new game's
+    /// news log opens and before the landing's log opens, which it does
+    /// only when something heard is unread ([`ScreenAnswer::HeardNews`]).
+    /// Empty for a session whose data holds no storylines.
     HeardNews,
     /// The story the landed stellar's bar hosts, asked as the bar opens
     /// and after each conversation opened from it closes
@@ -368,8 +369,8 @@ pub enum ScreenAnswer {
     /// [`ScreenAsk::GateEntryDesc`]'s: the `dësc` ID, or `None` when the
     /// entry would be refused and so plays no movie.
     GateEntryDesc(Option<i16>),
-    /// [`ScreenAsk::HeardNews`]'s: each item by release day, then id
-    /// (`Session::heard_news`).
+    /// [`ScreenAsk::HeardNews`]'s: each item by release day, then id, read
+    /// items included, each with its read flag (`Session::heard_news`).
     HeardNews(Vec<HeardNews>),
     /// [`ScreenAsk::BarStory`]'s: the scenes the bar lists and the news
     /// heard in the system (`Session::bar_story`).

@@ -5,17 +5,26 @@
 //! is open it takes every input in front of what is under it, flight
 //! stays paused under it, and it is drawn over it.
 //!
-//! **The news** opens once a visit, as the landed visit's last page: when
-//! the last conversation has closed (or there was none) and the system
-//! the ship is in has heard any ([`FlightView::heard_news`]). The flag
-//! that keeps it to once a visit resets as the spaceport opens. A dock
-//! scan's find needs no page here: a press that scans never lands, and
-//! the message line keeps the find over a denial (`FlightView::land`).
+//! **The news** is offered once a visit, as the landed visit's last page:
+//! when the last conversation has closed (or there was none), it opens if
+//! the system the ship is in has heard anything the pilot hasn't read
+//! ([`FlightView::heard_news`], each item with its read flag), and lists
+//! everything heard there, read items too. The flag that keeps the offer
+//! to once a visit resets as the spaceport opens; what the pilot has read
+//! is the session's, kept with the pilot and saved.
+//! A dock scan's find needs no page here: a press that scans never lands,
+//! and the message line keeps the find over a denial (`FlightView::land`).
+//!
+//! **Reading.** The player's close of a news log (Return, Enter, Escape,
+//! or a press off its scroll arrows) marks read every item it lists,
+//! drawn or reached only by scrolling ([`FlightView::read_news`]), however
+//! it opened. A log the router drops unclosed marks nothing, so it opens
+//! again at the next landing.
 //!
 //! **The bar's news.** Under the new game's reading of
 //! [`RuleKey::BarStory`](nova_sim::RuleKey::BarStory), the bar's Holovid
 //! opens the news log on the news its story lists, the news heard in the
-//! system, saying so when nothing has been heard
+//! system, read or not, saying so when nothing has been heard
 //! ([`AppScreen::open_bar_news`]). It beeps as it opens and closes, as the
 //! stock news does, and closes back to the bar. The landing's news stays
 //! silent.
@@ -33,9 +42,11 @@
 //! ([`ConversationScreen::set_notice`](nova_view::spaceport::ConversationScreen::set_notice)).
 //!
 //! A router with no metrics shows none of it. The spaceport dropped (a
-//! take-off, the pilot put away) and flight dropped drop it.
+//! take-off, the pilot put away, the window closed) and flight dropped
+//! drop it, unclosed.
 //!
 //! [`FlightView::heard_news`]: nova_view::flight::FlightView::heard_news
+//! [`FlightView::read_news`]: nova_view::flight::FlightView::read_news
 //! [`FlightView::close_info_dialog`]: nova_view::flight::FlightView::close_info_dialog
 //! [`FlightView::take_room_refusals`]: nova_view::flight::FlightView::take_room_refusals
 
@@ -63,18 +74,22 @@ pub(super) struct OpenLog {
     pub(super) screen: StoryLogScreen,
     /// What follows its close.
     pub(super) then: AfterLog,
+    /// The ids of the news items it lists, which its close marks read:
+    /// none for the missions log and for a log that has heard nothing.
+    pub(super) news: Vec<String>,
 }
 
 impl AppScreen {
-    /// Opens `log`, followed by `then`, if the router has metrics to lay
-    /// it out with: whether it opened.
-    fn open_story_log(&mut self, log: StoryLog, then: AfterLog) -> bool {
+    /// Opens `log`, listing the news items `news`, followed by `then`, if
+    /// the router has metrics to lay it out with: whether it opened.
+    fn open_story_log(&mut self, log: StoryLog, then: AfterLog, news: Vec<String>) -> bool {
         let Some(metrics) = self.metrics() else {
             return false;
         };
         self.story_log = Some(OpenLog {
             screen: StoryLogScreen::new(log, metrics),
             then,
+            news,
         });
         true
     }
@@ -82,26 +97,27 @@ impl AppScreen {
     /// The landed visit's first pages, as the spaceport opens: its news
     /// not offered yet, and its conversations (see the module docs).
     pub(super) fn open_landed_pages(&mut self) {
-        self.news_read = false;
+        self.news_offered = false;
         self.open_conversation();
     }
 
-    /// Opens the news heard where the ship is, once a visit, when there is
-    /// any (see the module docs).
+    /// Opens the news heard where the ship is, once a visit, when any of
+    /// it is unread, listing it all (see the module docs).
     pub(super) fn open_news_once(&mut self) {
-        if self.news_read {
+        if self.news_offered {
             return;
         }
-        self.news_read = true;
+        self.news_offered = true;
         let Some(flight) = self.flight.as_mut() else {
             return;
         };
         let news = flight.heard_news();
-        if news.is_empty() {
+        if !news.iter().any(|item| !item.read) {
             return;
         }
         let log = news_log(&news, flight.names());
-        self.open_story_log(log, AfterLog::Nothing);
+        let ids = news.into_iter().map(|item| item.id).collect();
+        self.open_story_log(log, AfterLog::Nothing, ids);
     }
 
     /// Opens the news log on the bar's story's news, with the stock news's
@@ -114,7 +130,8 @@ impl AppScreen {
             return;
         };
         let log = news_log(&story.news, flight.names());
-        if self.open_story_log(log, AfterLog::Nothing)
+        let ids = story.news.iter().map(|item| item.id.clone()).collect();
+        if self.open_story_log(log, AfterLog::Nothing, ids)
             && let Some(open) = &mut self.story_log
         {
             open.screen = open.screen.clone().with_sounds(
@@ -132,7 +149,7 @@ impl AppScreen {
         }
         let flight = self.flight.as_ref().expect(ENTERED);
         let log = missions_log(&info.story, flight.names());
-        self.open_story_log(log, then)
+        self.open_story_log(log, then, Vec::new())
     }
 
     /// Tells the open conversation's page the accept the flight last
@@ -147,8 +164,9 @@ impl AppScreen {
         }
     }
 
-    /// The story log's input: it closes on Return, Escape or a click, and
-    /// what follows its close runs (see the module docs).
+    /// The story log's input: it closes on Return, Escape or a click, its
+    /// close marks read the news it lists, and what follows its close runs
+    /// (see the module docs).
     pub(super) fn story_log_input(&mut self, input: &Input) -> ScreenAction {
         let Some(open) = &mut self.story_log else {
             return ScreenAction::None;
@@ -160,7 +178,13 @@ impl AppScreen {
         // Its closing beep outlives it.
         self.sounds.extend(open.screen.take_sounds());
         let then = open.then;
+        let news = std::mem::take(&mut open.news);
         self.story_log = None;
+        if !news.is_empty()
+            && let Some(flight) = &mut self.flight
+        {
+            flight.read_news(news);
+        }
         match then {
             AfterLog::InfoOverFlight => {
                 if let Some(flight) = &mut self.flight {

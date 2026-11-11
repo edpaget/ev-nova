@@ -22,13 +22,15 @@
 //!    through the side road, the passage costing the hull's gate fuel.
 //! 7. Verge Camp: the delivery's completion, then the camp's greeting
 //!    and the news the success releases.
-//! 8. Take-off from the camp and a landing at Verge Workshop, the news
-//!    heard there closed, where Recharge refills what the passage spent.
+//! 8. Take-off from the camp and a landing at Verge Workshop, where the
+//!    news heard there, read at the camp, opens no log, and Recharge
+//!    refills what the passage spent.
 //! 9. The window closed, which saves the pilot, and the pilot opened
 //!    again in a new app over the same store.
 //!
 //! The pilot saved after the Recharge is the pilot just before saving,
-//! field by field. The pilot loaded from it is too, but for the course's
+//! field by field, the news read included. The pilot loaded from it is
+//! too, but for the course's
 //! start: the side road's exit leaves it at the Verge, as the original's
 //! hypergate exit does, and the load clears it by `RuleKey::LoadedCourse`'s
 //! engine reading, as the original's open does.
@@ -385,13 +387,23 @@ fn recharge_at_verge_workshop(game: &mut Harness) {
         },
         "short by the fare"
     );
-    // The news the delivery released is heard here too, over the port.
+    // The news the delivery released is heard here too, but read at the
+    // camp, so no log opens over the port.
+    let plate_news = opened_from(&folder()).storylines().missions["dock-job"]
+        .on_success
+        .news
+        .clone();
+    assert!(!plate_news.is_empty(), "the delivery releases news");
+    let heard = flight_session(game).heard_news(landed.system);
+    for id in &plate_news {
+        let item = heard.iter().find(|item| &item.id == id);
+        assert!(item.is_some_and(|item| item.read), "{id} heard, read");
+    }
     let page = drawn(game);
     assert!(
-        page.contains(&"Hull plate reaches Verge Camp".to_owned()),
-        "the news pop: {page:?}"
+        !page.contains(&"Hull plate reaches Verge Camp".to_owned()),
+        "no news pop: {page:?}"
     );
-    game.press(KeyCode::Enter);
     click_port_item(game, RECHARGE_ITEM);
     let fuelled = pilot(game);
     assert_eq!(fuelled.reserves.fuel, Gauge::full(fuel.max), "filled");
@@ -458,6 +470,7 @@ fn assert_same(got: &Pilot, want: &Pilot, how: &str) {
         "{how}: the dock job"
     );
     assert_eq!(got.story.day, want.story.day, "{how}: day");
+    assert_eq!(got.story.read, want.story.read, "{how}: the news read");
     assert_eq!(got.flags, want.flags, "{how}: flags");
     assert_eq!(got.dialogs, want.dialogs, "{how}: dialogs");
     assert_eq!(got, want, "{how}: the whole pilot");

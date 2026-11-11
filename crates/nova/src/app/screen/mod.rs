@@ -627,8 +627,9 @@ pub struct AppScreen {
     /// the `story_log` module).
     story_log: Option<story_log::OpenLog>,
     /// Whether this visit's news has been offered (see the `story_log`
-    /// module); reset as the spaceport opens.
-    news_read: bool,
+    /// module); reset as the spaceport opens. Not what the pilot has
+    /// read, which is the session's.
+    news_offered: bool,
     /// The sounds of screens closed since the sounds were last taken.
     sounds: Vec<Sound>,
     /// The player's preferences, as last chosen.

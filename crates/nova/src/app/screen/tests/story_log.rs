@@ -1,6 +1,8 @@
 //! The story log over the spaceport and over flight: the news heard
 //! where the ship lands, opened once a visit after the visit's
-//! conversations; the active storyline missions on the mission info key;
+//! conversations while any of it is unread, and marked read as the player
+//! closes it there or from the bar; the active storyline missions on the
+//! mission info key;
 //! and an accept refused for room told on the conversation's page. What
 //! the session decides is pinned in `nova_sim`, the panel in `nova_view`.
 
@@ -12,6 +14,7 @@ use nova_data::{
     StoryMission, Storylines,
 };
 use nova_sim::dialog::fake::{FakeChoice, FakeDialog, FakeKnot, FakeLoader};
+use nova_view::spaceport::bar::STORY_ITEMS;
 use nova_view::spaceport::conversation::CLOSE_HINT;
 use nova_view::spaceport::layout::service_item;
 use nova_view::ui::story_log::{MISSIONS_HEADING, NEWS_HEADING};
@@ -36,6 +39,11 @@ fn loader() -> FakeLoader {
 /// start system as the ship first lands, and, with `job` some, an offer
 /// at the planet of that many tons of plate for stellar 129.
 fn story_data(job: Option<u32>) -> Rc<GameData> {
+    story_data_with(job, |_| {})
+}
+
+/// [`story_data`], its storylines changed by `edit`.
+fn story_data_with(job: Option<u32>, edit: impl FnOnce(&mut Storylines)) -> Rc<GameData> {
     let mut missions = BTreeMap::from([(
         "breaks".to_owned(),
         StoryMission {
@@ -67,25 +75,52 @@ fn story_data(job: Option<u32>) -> Rc<GameData> {
             },
         );
     }
+    let mut storylines = Storylines {
+        missions,
+        news: BTreeMap::from([(
+            "word".to_owned(),
+            NewsItem {
+                headline: HEADLINE.to_owned(),
+                text: "It spreads.".to_owned(),
+                from: SystemId(128),
+            },
+        )]),
+        ..Storylines::default()
+    };
+    edit(&mut storylines);
     let data = Rc::into_inner(data()).expect("one owner");
     Rc::new(
         data.with_dialogs(StoredDialogs {
             compiled: BTreeMap::from([(FILE.to_owned(), Arc::from(STORY))]),
             stellars: BTreeMap::new(),
         })
-        .with_storylines(Storylines {
-            missions,
-            news: BTreeMap::from([(
-                "word".to_owned(),
-                NewsItem {
-                    headline: HEADLINE.to_owned(),
-                    text: "It spreads.".to_owned(),
-                    from: SystemId(128),
-                },
-            )]),
-            ..Storylines::default()
-        }),
+        .with_storylines(storylines),
     )
+}
+
+const DEAL: &str = "A deal is struck";
+
+/// [`story_data`] with a 0-ton job whose accept releases a second news
+/// item, `deal`, from the start system.
+fn deal_data() -> Rc<GameData> {
+    story_data_with(Some(0), |storylines| {
+        storylines.news.insert(
+            "deal".to_owned(),
+            NewsItem {
+                headline: DEAL.to_owned(),
+                text: "Hands are shaken.".to_owned(),
+                from: SystemId(128),
+            },
+        );
+        let job = storylines.missions.get_mut("job").expect("the job");
+        job.on_accept.news = vec!["deal".to_owned()];
+    })
+}
+
+/// The news ids the pilot flying has read.
+fn read_news(screen: &AppScreen) -> Vec<String> {
+    let session = flight(screen).session().expect("flying");
+    session.pilot().story.read.iter().cloned().collect()
 }
 
 /// A router over `data` with the interface's dialogs and metrics, its
@@ -150,17 +185,111 @@ fn the_news_opens_after_the_last_conversation_closes_and_not_twice_a_visit() {
 }
 
 #[test]
-fn the_news_opens_again_at_the_next_landing() {
+fn the_news_read_at_one_landing_does_not_open_at_the_next() {
     let mut screen = storied(story_data(None));
     land(&mut screen);
     assert!(
         shows(&screen, HEADLINE),
         "no conversation: the news at once"
     );
+    assert_eq!(read_news(&screen), [] as [String; 0], "not read while open");
     tap(&mut screen, Key::Enter);
     assert!(!shows(&screen, HEADLINE));
+    assert_eq!(read_news(&screen), ["word"], "read as it closes");
     visit_again(&mut screen);
-    assert!(shows(&screen, HEADLINE), "{:?}", texts(&screen));
+    assert_eq!(
+        drawn(&screen),
+        drawn(spaceport(&screen)),
+        "the spaceport alone"
+    );
+}
+
+#[test]
+fn news_heard_at_a_later_visit_opens_the_log_again_listing_the_read_too() {
+    let mut screen = storied(deal_data());
+    land(&mut screen);
+    tap(&mut screen, Key::Digit2);
+    assert!(shows(&screen, "Later."), "deferred");
+    tap(&mut screen, Key::Enter);
+    assert!(shows(&screen, HEADLINE));
+    assert!(!shows(&screen, DEAL), "not released yet");
+    tap(&mut screen, Key::Enter);
+    visit_again(&mut screen);
+    assert!(shows(&screen, "A job?"), "the offer again");
+    tap(&mut screen, Key::Digit1);
+    assert!(shows(&screen, "Bay two."), "taken, releasing the deal");
+    tap(&mut screen, Key::Enter);
+    assert!(shows(&screen, DEAL), "{:?}", texts(&screen));
+    assert!(shows(&screen, HEADLINE), "the read one listed too");
+    tap(&mut screen, Key::Enter);
+    assert_eq!(read_news(&screen), ["deal", "word"]);
+}
+
+/// The bar's story slot 9 inside [`bar_template`], so the bar lists its
+/// first scene there.
+struct StoryBarDialogs;
+
+impl DialogResources for StoryBarDialogs {
+    fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
+        if id != BAR_DIALOG {
+            return PastTheHoldsDialogs.dialog_template(id);
+        }
+        let mut bar = bar_template();
+        bar.items[8] = ItemTemplate {
+            bounds: Bounds::at(Point::new(160.0, 125.0), 90.0, 20.0),
+            enabled: false,
+            kind: ItemSpec::User,
+        };
+        Ok(bar)
+    }
+}
+
+#[test]
+fn the_holovid_s_close_marks_what_it_lists_read() {
+    let rules = Rulebook::default().with_override(RuleKey::BarStory, RuleSource::Bible);
+    let mut screen = AppScreen::new(deal_data())
+        .with_dialogs(Rc::new(StoryBarDialogs), Rc::new(MonoMetrics))
+        .with_dialog_loader(Rc::new(loader()))
+        .with_rules(rules);
+    land(&mut screen);
+    tap(&mut screen, Key::Digit2);
+    tap(&mut screen, Key::Enter);
+    assert!(shows(&screen, HEADLINE), "the landing's news");
+    tap(&mut screen, Key::Enter);
+    click_port_item(&mut screen, service_item(nova_sim::Service::Bar));
+    let slot = spaceport(&screen)
+        .open_bar()
+        .expect("in the bar")
+        .dialog()
+        .expect("laid out")
+        .item_bounds(STORY_ITEMS[0])
+        .expect("the offer's slot")
+        .center();
+    for pressed in [true, false] {
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at: slot,
+        });
+    }
+    assert!(shows(&screen, "A job?"), "{:?}", texts(&screen));
+    tap(&mut screen, Key::Digit1);
+    tap(&mut screen, Key::Enter);
+    assert!(!shows(&screen, DEAL), "the visit's news was offered");
+    assert_eq!(read_news(&screen), ["word"]);
+    tap(&mut screen, Key::KeyN);
+    assert!(shows(&screen, DEAL), "the Holovid lists it");
+    assert!(shows(&screen, HEADLINE));
+    tap(&mut screen, Key::Enter);
+    assert_eq!(read_news(&screen), ["deal", "word"]);
+    tap(&mut screen, Key::Escape);
+    assert!(spaceport(&screen).open_bar().is_none(), "left the bar");
+    visit_again(&mut screen);
+    assert_eq!(
+        drawn(&screen),
+        drawn(spaceport(&screen)),
+        "the spaceport alone"
+    );
 }
 
 #[test]
