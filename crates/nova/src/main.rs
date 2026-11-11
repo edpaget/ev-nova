@@ -62,7 +62,9 @@
 //! Sound effects come from the game data's `snd ` resources and the music
 //! from `Nova Music.mp3` in `Nova Files`, played on the default audio
 //! device. Without the music the game plays none, with a warning; without
-//! an audio device it runs silently, with a warning.
+//! an audio device it runs silently, with a warning. The new game plays
+//! its own clips and the track its `game.md` names as `music`
+//! ([`nova::audio::game_music`]), and never looks for `Nova Music.mp3`.
 //!
 //! The settings (sound, and Hyperspace Effects) are saved in
 //! `settings.json` in a `nova` directory under the platform's
@@ -121,10 +123,11 @@
 //! factions, systems and stellars become the game's records. Each file
 //! that doesn't load or map is a warning, as are media that are Git LFS
 //! pointers (with the `git lfs` commands that fetch them) and a folder
-//! with no systems; the game starts with what loaded (and the missing
-//! music warns as it does anywhere; a missing interface file doesn't, as
-//! the placeholder dialogs stand in for it, but one there that doesn't
-//! load does). A folder that
+//! with no systems; the game starts with what loaded (a folder that
+//! names no music plays none and says nothing, and a named track that
+//! doesn't load is one of those warnings; a missing interface file
+//! doesn't warn, as the placeholder dialogs stand in for it, but one
+//! there that doesn't load does). A folder that
 //! can't be listed ends the launch with exit status 2. Its pilots are
 //! saved in `New Game Pilots`, beside `Pilots`, so a stock pilot never
 //! opens over the new game's data. An empty `GAME_DATA` is unset.
@@ -184,7 +187,7 @@ use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use nova::app::{AppScreen, start_screen};
-use nova::audio::{game_audio, music_warning, voice_limit};
+use nova::audio::{game_audio, game_music, voice_limit};
 use nova::chance::SplitMix;
 use nova::config::{Os, legacy_pilots_dir, log_path, pilots_dir, settings_path};
 use nova::exit::OpenFailure;
@@ -204,7 +207,6 @@ use nova::startup::{
 use nova::stock_look::StockLook;
 use nova_audio::{Audio, AudioCore, FileSettings, KiraAudio, SettingsStore};
 use nova_data::fonts::open_charcoal;
-use nova_data::music::open_music;
 use nova_data::{GameData, StockArt, open_interface};
 use nova_render::GameImages;
 use nova_render::wgpu::GlyphonMetrics;
@@ -215,15 +217,18 @@ use nova_view::text::TextMetrics;
 use winit::event_loop::EventLoop;
 
 /// The audio core over the default device, playing `data`'s sounds and
-/// the soundtrack in `dir`, with as many voices as `rulebook` says; none
-/// when the device did not open. Each warning goes to `report`.
+/// `ruleset`'s music (the soundtrack in `dir` for the stock game, the one
+/// `data` names for the new game), with as many voices as `rulebook`
+/// says; none when the device did not open. Each warning goes to
+/// `report`.
 fn open_audio(
     data: &Rc<GameData>,
     dir: &Path,
+    ruleset: Ruleset,
     rulebook: &Rulebook,
     report: &mut Report,
 ) -> Option<AudioCore<Box<dyn Audio>>> {
-    let (music, warning) = music_warning(open_music(dir));
+    let (music, warning) = game_music(ruleset, data, dir);
     if let Some(warning) = warning {
         report.warn(&warning);
     }
@@ -464,7 +469,7 @@ fn main() -> ExitCode {
     }
     // Last, once the rules and the chance its load reads are given.
     let screen = screen.open_last_pilot();
-    let audio = open_audio(&data, &dir, &rulebook, &mut report);
+    let audio = open_audio(&data, &dir, ruleset, &rulebook, &mut report);
     let report = Rc::new(RefCell::new(report));
     // The simulation's diagnostics are the running game's, not startup's.
     let images = nova::stock_look::images(&data, &rulebook, interface.file, stock_art);
