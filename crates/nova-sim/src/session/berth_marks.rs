@@ -8,7 +8,6 @@ use super::fighters::tests::{carrying, fleet_npcs, flying_by, launch, pilot, war
 use super::*;
 use crate::chance::NeverFires;
 use crate::escort::{EscortClass, EscortCommand, EscortGroup, EscortOrder, FormationSlot};
-use crate::govt::Governments;
 use crate::mission::ships::ShipBehav;
 use crate::rulebook::{RuleSource, Rulebook};
 use crate::testkit::FakePilotCatalog;
@@ -106,22 +105,10 @@ fn mission_mark(behav: ShipBehav, escorts: bool) -> MissionMark {
 /// Brings `ship` into `session`'s traffic, its type's kind added to the
 /// spawn table: its NPC.
 fn bring(session: &mut Session, ship: NewShip) -> NpcId {
-    let record = session.statics.ship_record(ship.ship).expect("a record");
-    let kind = session.setup.ship_kind(&session.statics, record);
     session
         .space
-        .traffic
-        .table_mut()
-        .ships
-        .insert(ship.ship, kind);
-    let came = session.space.traffic.bring_in_within(
-        vec![ship],
-        SPAWN_RESERVE,
-        &Governments::empty(),
-        &mut NeverFires,
-    );
-    assert_eq!(came, 1);
-    session.npcs().last().expect("brought in").id
+        .bring_in_placed(ship, &session.statics, &session.setup)
+        .expect("brought in")
 }
 
 /// Whether the warships' Hold stands through the bookkeeping, as the

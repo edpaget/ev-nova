@@ -5,7 +5,7 @@
 //! state it writes, and writes only that state and what the session
 //! derives from it at once.
 
-use super::Session;
+use super::{Session, Setup, Space, Statics};
 use crate::catalog::{GovtId, ShipId, StellarId, SystemId};
 use crate::chance::NeverFires;
 use crate::fleet::Escort;
@@ -98,9 +98,6 @@ impl Session {
         ai: AiType,
         at: Vec2,
     ) -> Option<NpcId> {
-        let record = self.statics.ship_record(ship)?;
-        let kind = self.setup.ship_kind(&self.statics, record);
-        self.space.traffic.table_mut().ships.insert(ship, kind);
         let new = NewShip {
             ship,
             govt,
@@ -128,16 +125,7 @@ impl Session {
             asks_scoop: false,
             clears_mark: false,
         };
-        let came = self.space.traffic.bring_in_within(
-            vec![new],
-            SPAWN_RESERVE,
-            &self.statics.govts,
-            &mut NeverFires,
-        );
-        if came != 1 {
-            return None;
-        }
-        self.space.traffic.npcs().last().map(|npc| npc.id)
+        self.space.bring_in_placed(new, &self.statics, &self.setup)
     }
 
     /// Makes the ship class `ship`, as `C` changes it: the outfits kept,
@@ -146,6 +134,36 @@ impl Session {
     pub(crate) fn become_ship(&mut self, ship: ShipId) -> bool {
         self.change_ship(ship, OutfitCarry::Keep, false);
         self.pilot.ship == ship
+    }
+}
+
+impl Space {
+    /// Brings `new` into the traffic as a spawn, its type's kind added to
+    /// the spawn table first, its skill rolled on [`NeverFires`], within
+    /// [`SPAWN_RESERVE`]. For [`Session::bring_in`] and the session's
+    /// tests that place a ship directly. Gives its id, or `None`, with
+    /// nothing changed, when `statics` has no record of its type; `None`
+    /// too when the traffic has no room for it.
+    ///
+    /// The ship joins its government through `statics`' governments, as
+    /// every spawn of play does (`aux_ships`, `mission_ships`), so its
+    /// skill takes its government's factor.
+    pub(super) fn bring_in_placed(
+        &mut self,
+        new: NewShip,
+        statics: &Statics,
+        setup: &Setup,
+    ) -> Option<NpcId> {
+        let record = statics.ship_record(new.ship)?;
+        let kind = setup.ship_kind(statics, record);
+        self.traffic.table_mut().ships.insert(new.ship, kind);
+        let came =
+            self.traffic
+                .bring_in_within(vec![new], SPAWN_RESERVE, &statics.govts, &mut NeverFires);
+        if came != 1 {
+            return None;
+        }
+        self.traffic.npcs().last().map(|npc| npc.id)
     }
 }
 
