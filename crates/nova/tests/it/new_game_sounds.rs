@@ -51,7 +51,7 @@ use crate::pilots::Harness;
 
 /// The bytes of the fixture's sound `sound`'s file, read from the folder
 /// at the path its `sounds/` entry names.
-fn clip_bytes(game: &NewGame, sound: &str) -> Vec<u8> {
+pub(crate) fn clip_bytes(game: &NewGame, sound: &str) -> Vec<u8> {
     let (_, doc) = (game.galaxy.sounds.iter())
         .find(|(id, _)| id.as_str() == sound)
         .unwrap_or_else(|| panic!("sounds/{sound}.md"));
