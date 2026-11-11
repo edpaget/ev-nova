@@ -241,6 +241,13 @@ pub enum MarksFrom {
     /// Mission info, with its selected mission's slot
     /// (`Session::mission_info_map_marks`).
     MissionInfo(Option<u8>),
+    /// The new game's story log, with its selected mission's index in
+    /// [`MissionInfo::story`](crate::MissionInfo::story) as the session
+    /// listed it (`Chart::story_map_marks`). An index, not the mission's
+    /// id, so this stays `Copy`: it is stable for the log's life, as
+    /// nothing changes the story while the log is open (flight is paused
+    /// under it, and the port doesn't step).
+    StoryLog(usize),
 }
 
 impl MarksFrom {
@@ -251,7 +258,9 @@ impl MarksFrom {
     pub fn unanswered(self) -> MapMarks {
         match self {
             Self::Given(marks) => marks,
-            Self::Offer(_) | Self::Computer(_) | Self::MissionInfo(_) => MapMarks::NONE,
+            Self::Offer(_) | Self::Computer(_) | Self::MissionInfo(_) | Self::StoryLog(_) => {
+                MapMarks::NONE
+            }
         }
     }
 }
@@ -612,6 +621,7 @@ mod tests {
             MarksFrom::Offer(MissionId(128)),
             MarksFrom::Computer(Some(MissionId(128))),
             MarksFrom::MissionInfo(Some(0)),
+            MarksFrom::StoryLog(0),
         ] {
             assert_eq!(from.unanswered(), MapMarks::NONE, "{from:?}");
         }

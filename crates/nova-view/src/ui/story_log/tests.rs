@@ -65,6 +65,8 @@ fn dock_job(cargo: u32, met: bool) -> StoryRow {
         cargo,
         met,
         complete_at: Some(StellarId(129)),
+        storyline: None,
+        giver: None,
     }
 }
 
@@ -80,6 +82,8 @@ fn the_road() -> StoryRow {
         cargo: 0,
         met: false,
         complete_at: None,
+        storyline: None,
+        giver: None,
     }
 }
 

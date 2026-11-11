@@ -52,16 +52,16 @@ impl Session {
             .listed_scenes()?
             .into_iter()
             .map(|scene| match scene {
-                Scene::Offer(mission) => BarScene::Offer {
-                    title: self
-                        .statics
-                        .storylines
-                        .missions
-                        .get(&mission)
-                        .map(|record| record.title.clone())
-                        .unwrap_or_default(),
-                    mission,
-                },
+                Scene::Offer(mission) => {
+                    let record = self.statics.storylines.missions.get(&mission);
+                    BarScene::Offer {
+                        title: record.map(|r| r.title.clone()).unwrap_or_default(),
+                        giver: record
+                            .and_then(|r| r.offer.as_ref())
+                            .and_then(|offer| offer.giver.clone()),
+                        mission,
+                    }
+                }
                 // A bar never lists a completion (`Play::bar_scenes`).
                 Scene::Stellar(_) | Scene::Completion(_) => BarScene::Stellar,
             })
@@ -112,7 +112,7 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use nova_sim_catalog::storylines::{StoryEffects, StoryMission};
+    use nova_sim_catalog::storylines::{MissionGiver, StoryEffects, StoryMission};
 
     use super::*;
     use crate::catalog::MissionRecord;
@@ -160,10 +160,12 @@ mod tests {
         session
     }
 
+    /// The titled job's listing: it names no giver.
     fn offer() -> BarScene {
         BarScene::Offer {
             mission: "job".to_owned(),
             title: "Hull plate".to_owned(),
+            giver: None,
         }
     }
 
@@ -197,6 +199,30 @@ mod tests {
         let catalog = bar_catalog();
         let mut session = landed_under(&catalog, hosting());
         assert_eq!(scenes(&mut session), [offer(), BarScene::Stellar]);
+    }
+
+    #[test]
+    fn the_bar_lists_an_offer_with_the_giver_its_record_names() {
+        let giver = MissionGiver {
+            name: "Ode".to_owned(),
+            role: "dockmaster".to_owned(),
+        };
+        let mut job = titled();
+        job.offer.as_mut().expect("offered").giver = Some(giver.clone());
+        let mut catalog = talking(&[("job", job)]);
+        catalog.sites[0].1[0].flags |= StellarFlags::BAR;
+        let mut session = landed_under(&catalog, hosting());
+        assert_eq!(
+            scenes(&mut session),
+            [
+                BarScene::Offer {
+                    mission: "job".to_owned(),
+                    title: "Hull plate".to_owned(),
+                    giver: Some(giver),
+                },
+                BarScene::Stellar
+            ]
+        );
     }
 
     #[test]

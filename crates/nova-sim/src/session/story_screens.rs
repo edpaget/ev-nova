@@ -39,6 +39,8 @@ impl Statics {
                     cargo,
                     met,
                     complete_at: complete_at(mission),
+                    storyline: mission.storyline.clone(),
+                    giver: mission.offer.as_ref().and_then(|offer| offer.giver.clone()),
                 })
             })
             .collect()
@@ -88,8 +90,10 @@ impl Session {
 }
 
 #[cfg(test)]
-mod tests {
-    use nova_sim_catalog::storylines::{MissionCompletion, MissionObjective, StoryMission};
+pub(in crate::session) mod tests {
+    use nova_sim_catalog::storylines::{
+        MissionCompletion, MissionGiver, MissionObjective, MissionStoryline, StoryAct, StoryMission,
+    };
 
     use super::*;
     use crate::catalog::{GovtId, StellarId, SystemId};
@@ -100,7 +104,7 @@ mod tests {
     use crate::testkit::{FakePilotCatalog, catalog, govt};
 
     /// The job, titled, 10 tons of plate to the dock, completing at 129.
-    fn hauling() -> StoryMission {
+    pub(in crate::session) fn hauling() -> StoryMission {
         let mut mission = StoryMission {
             title: "Plate run".to_owned(),
             ..job(10)
@@ -112,7 +116,7 @@ mod tests {
     }
 
     /// Taking the point `a/b` from the warden, with no completion.
-    fn taking(held_by: &str) -> StoryMission {
+    pub(in crate::session) fn taking(held_by: &str) -> StoryMission {
         StoryMission {
             title: "Break the gate".to_owned(),
             objective: Some(MissionObjective::TakePoint {
@@ -127,7 +131,7 @@ mod tests {
 
     /// [`talking`] with `missions`, the faction `warden` the government
     /// 140 named The Wardens.
-    fn storied(missions: &[(&str, StoryMission)]) -> FakePilotCatalog {
+    pub(in crate::session) fn storied(missions: &[(&str, StoryMission)]) -> FakePilotCatalog {
         let mut catalog = talking(missions);
         catalog
             .storylines
@@ -141,7 +145,10 @@ mod tests {
     }
 
     /// A session of `catalog`'s in flight, each of `states` set.
-    fn with_states(catalog: &FakePilotCatalog, states: &[(&str, MissionState)]) -> Session {
+    pub(in crate::session) fn with_states(
+        catalog: &FakePilotCatalog,
+        states: &[(&str, MissionState)],
+    ) -> Session {
         let mut session = flying(catalog);
         for (id, state) in states {
             session
@@ -153,7 +160,7 @@ mod tests {
         session
     }
 
-    fn active(cargo: u32, met: bool) -> MissionState {
+    pub(in crate::session) fn active(cargo: u32, met: bool) -> MissionState {
         MissionState::Active { cargo, met }
     }
 
@@ -174,11 +181,34 @@ mod tests {
                 cargo: 10,
                 met: false,
                 complete_at: Some(StellarId(129)),
+                storyline: None,
+                giver: None,
             }]
         );
         let session = with_states(&catalog, &[("job", active(0, true))]);
         let rows = session.statics.story_rows(&session.pilot);
         assert_eq!((rows[0].cargo, rows[0].met), (0, true));
+    }
+
+    #[test]
+    fn a_row_carries_its_record_s_storyline_and_giver() {
+        let storyline = MissionStoryline {
+            id: "dock-work".to_owned(),
+            title: "Dock work".to_owned(),
+            act: StoryAct::Crossroads,
+        };
+        let giver = MissionGiver {
+            name: "Ode".to_owned(),
+            role: "dockmaster".to_owned(),
+        };
+        let mut mission = hauling();
+        mission.storyline = Some(storyline.clone());
+        mission.offer.as_mut().expect("offered").giver = Some(giver.clone());
+        let catalog = storied(&[("job", mission)]);
+        let session = with_states(&catalog, &[("job", active(10, false))]);
+        let rows = session.statics.story_rows(&session.pilot);
+        assert_eq!(rows[0].storyline, Some(storyline));
+        assert_eq!(rows[0].giver, Some(giver));
     }
 
     #[test]

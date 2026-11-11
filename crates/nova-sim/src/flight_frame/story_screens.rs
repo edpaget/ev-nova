@@ -10,6 +10,8 @@
 //! session's. A session whose data holds no storylines (the stock game's)
 //! never raises one.
 
+use nova_sim_catalog::storylines::{MissionGiver, MissionStoryline};
+
 use crate::catalog::StellarId;
 use crate::storylines::news::HeardNews;
 
@@ -30,6 +32,11 @@ pub struct StoryRow {
     /// Where it completes: its completion's stellar, else a delivery's.
     /// `None` when neither names one.
     pub complete_at: Option<StellarId>,
+    /// The storyline it belongs to and its act, which the log groups and
+    /// orders it by; `None` when its record names none.
+    pub storyline: Option<MissionStoryline>,
+    /// Who offered it; `None` for an event, or an offer naming no one.
+    pub giver: Option<MissionGiver>,
 }
 
 /// A storyline mission's objective, its names resolved for the screen.
@@ -98,6 +105,8 @@ pub enum BarScene {
         mission: String,
         /// Its display title.
         title: String,
+        /// Who offers it; `None` when its record names no one.
+        giver: Option<MissionGiver>,
     },
     /// The stellar's own conversation.
     Stellar,

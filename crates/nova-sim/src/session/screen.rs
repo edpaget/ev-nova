@@ -168,13 +168,18 @@ impl Session {
 
     /// The marks `from` names: those given, or the dialog's
     /// ([`Session::offer_map_marks`], [`Session::computer_map_marks`],
-    /// [`Session::mission_info_map_marks`]).
+    /// [`Session::mission_info_map_marks`]), or the story log's
+    /// (`Chart::story_map_marks`, in the `story_map` module).
     fn marks_from(&self, from: MarksFrom) -> MapMarks {
         match from {
             MarksFrom::Given(marks) => marks,
             MarksFrom::Offer(mission) => self.offer_map_marks(mission),
             MarksFrom::Computer(selected) => self.computer_map_marks(selected),
             MarksFrom::MissionInfo(slot) => self.mission_info_map_marks(slot),
+            MarksFrom::StoryLog(index) => {
+                self.chart
+                    .story_map_marks(&self.pilot, &self.statics, index)
+            }
         }
     }
 }
@@ -299,6 +304,47 @@ mod tests {
                 "{from:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_story_logs_map_takes_its_marks_from_the_selected_row() {
+        use crate::session::story_screens::tests::{active, hauling, storied, with_states};
+
+        let mut far = hauling();
+        if let Some(complete) = &mut far.complete {
+            complete.at = Some(crate::catalog::StellarId(140));
+        }
+        let catalog = storied(&[("a-near", hauling()), ("b-far", far)]);
+        let mut session = with_states(
+            &catalog,
+            &[("a-near", active(10, false)), ("b-far", active(10, false))],
+        );
+        for index in [0, 1, 2] {
+            let marks = session
+                .chart
+                .story_map_marks(&session.pilot, &session.statics, index);
+            assert_eq!(
+                screen(
+                    &mut session,
+                    None,
+                    ScreenAsk::MapOpening {
+                        marks: MarksFrom::StoryLog(index),
+                    }
+                ),
+                opening(&session, marks),
+                "{index}"
+            );
+        }
+        let far_marks = session
+            .chart
+            .story_map_marks(&session.pilot, &session.statics, 1);
+        assert_ne!(
+            far_marks,
+            session
+                .chart
+                .story_map_marks(&session.pilot, &session.statics, 0),
+            "precondition: the rows mark apart"
+        );
     }
 
     #[test]

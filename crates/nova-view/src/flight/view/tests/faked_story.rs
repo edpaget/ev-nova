@@ -93,6 +93,8 @@ pub(super) fn plate_row() -> StoryRow {
         cargo: 10,
         met: false,
         complete_at: Some(StellarId(129)),
+        storyline: None,
+        giver: None,
     }
 }
 

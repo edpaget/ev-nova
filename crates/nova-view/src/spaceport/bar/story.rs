@@ -170,6 +170,7 @@ mod tests {
         BarScene::Offer {
             mission: title.to_lowercase(),
             title: title.to_owned(),
+            giver: None,
         }
     }
 
