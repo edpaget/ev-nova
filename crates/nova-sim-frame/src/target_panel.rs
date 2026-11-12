@@ -8,10 +8,10 @@
 //! **The status line** ([`status`]), tested in this order:
 //!
 //! 1. [`TargetStatus::Hidden`] when the ship type's `Flags` 0x0200 is set
-//!    ([`HIDES_STATUS`](crate::combat::hull::HIDES_STATUS), byte +0x9e9 &
+//!    (`nova_sim::combat::hull::HIDES_STATUS`, byte +0x9e9 &
 //!    0x02) or its person's `ShieldMod` is below 0 (+0x61c, which
 //!    `_LoadObjectData` sets to `ShieldMod / 100` @0x7c20e-0x7c239: the
-//!    engine's [`NpcPerson::invincible`](crate::NpcPerson::invincible))
+//!    engine's `nova_sim::NpcPerson::invincible`)
 //!    (@0x4b941-0x4b970).
 //! 2. [`TargetStatus::Shield`] while its shield is above 0 and it is not
 //!    disabled (@0x4b9a4-0x4b9b6): `trunc(shield / capacity x 100)` in
@@ -25,7 +25,7 @@
 //!    of its armour test, @0x2d79-0x2dcc), else
 //!    [`TargetStatus::Disabled`] (@0x4bb7f).
 //! 4. The ship type's `Flags` 0x0100
-//!    ([`SHOWS_ARMOR`](crate::combat::hull::SHOWS_ARMOR)) (@0x4bbaa):
+//!    (`nova_sim::combat::hull::SHOWS_ARMOR`) (@0x4bbaa):
 //!    [`TargetStatus::ArmorNa`] for an armour capacity of 0 or below,
 //!    else [`TargetStatus::Armor`]: 0 for armour of 0 or below, 100 for
 //!    armour over the capacity, else `trunc(armour x 100 / capacity)`
@@ -49,9 +49,9 @@
 //! `Mass` is [`FIGHTER_MASS`] or less (@0x4be23-0x4be3e). Either way it
 //! is drawn in the same colour and place (@0x4be80-0x4bece).
 
-use crate::catalog::GovtId;
-use crate::reserves::Reserves;
-use crate::self_repair::FormerKind;
+use nova_sim_base::reserves::Reserves;
+use nova_sim_catalog::catalog::GovtId;
+use nova_sim_state::shown::self_repair::FormerKind;
 
 /// The heaviest ship type, in tons, a fighter the player launched is
 /// labelled "Fighter" at (`cmpw $0x63` @0x4be35); a heavier one is an
@@ -195,7 +195,7 @@ pub fn tag(facts: &TagFacts) -> Option<TargetTag> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reserves::Gauge;
+    use nova_sim_base::reserves::Gauge;
 
     /// Facts of a target with `shield` of 40 and `armor` of 50, its type
     /// shielded, intact.

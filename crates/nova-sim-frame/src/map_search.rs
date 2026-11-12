@@ -33,7 +33,7 @@
 //! not this module's: a query with nothing left once normalised finds
 //! nothing here.
 
-use crate::catalog::SystemId;
+use nova_sim_catalog::catalog::SystemId;
 
 /// What a search found.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

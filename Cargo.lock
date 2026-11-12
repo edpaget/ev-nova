@@ -2024,6 +2024,7 @@ dependencies = [
  "nova-sim-base",
  "nova-sim-catalog",
  "nova-sim-combat",
+ "nova-sim-frame",
  "nova-sim-port",
  "nova-sim-save",
  "nova-sim-state",
@@ -2058,6 +2059,15 @@ dependencies = [
 
 [[package]]
 name = "nova-sim-combat"
+version = "0.1.0"
+dependencies = [
+ "nova-sim-base",
+ "nova-sim-catalog",
+ "nova-sim-state",
+]
+
+[[package]]
+name = "nova-sim-frame"
 version = "0.1.0"
 dependencies = [
  "nova-sim-base",

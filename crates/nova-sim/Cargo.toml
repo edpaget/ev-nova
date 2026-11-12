@@ -20,6 +20,11 @@ nova-sim-catalog.workspace = true
 # market, crons, landing and clearance, outfit effects and ship stats,
 # re-exported at their old paths (`nova_sim::market`, ...).
 nova-sim-state.workspace = true
+# The view vocabulary, on the state: the view models the session fills
+# (the map's panels, borders and Find, the status bar's cargo and target
+# panels, the pilot panel, the engine glow, the cursor's key fades and the
+# Red Alert), re-exported at their old paths (`nova_sim::map_panel`, ...).
+nova-sim-frame.workspace = true
 # The combat layer, on the state: combat, the asteroid field, fighter bays,
 # cloaking, the fleet, messages, the player's fate, sabotage, self-repair,
 # ship layers and the tutorial, re-exported at their old paths

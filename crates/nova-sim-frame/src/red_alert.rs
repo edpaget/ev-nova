@@ -12,7 +12,7 @@
 //! A dying player out of the pod is not held back. Else
 //! `snd ` 370 plays (@0x68cdd-0x68cff), and, only when the player's
 //! `Volume` preference is 1 or less (@0x68d04-0x68d15; see
-//! [`RuleKey::AlertBlink`](crate::RuleKey::AlertBlink)), the blink starts
+//! [`RuleKey::AlertBlink`](nova_sim_base::RuleKey::AlertBlink)), the blink starts
 //! with [`ALERT_STEPS`] steps.
 //!
 //! `_HandleAlertSprite` (@0x2e61d-0x2e6f0), every pass after the check,

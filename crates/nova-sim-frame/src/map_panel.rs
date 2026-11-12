@@ -36,7 +36,7 @@
 //!   "Selected System:"; in any other mode, "Current System:" for the
 //!   current system, "Hypergate Destination:" for a system the hypergate
 //!   map's gate offers (owner-first, as
-//!   [`gate::hypergate_offers`](crate::gate::hypergate_offers) resolves
+//!   `nova_sim::gate::hypergate_offers` resolves
 //!   them), else "Selected System:".
 //! - Unexplored: the name reads `<Unknown>` and nothing more
 //!   (@0x10cc5-0x10cd7). Not `_SystemIsInhabited` (read under
@@ -85,12 +85,12 @@
 //! out, with the reasons rdm:phase/flight-controls/phase-2-map-dialog-update-left-out-branches
 //! records.
 
-use crate::catalog::{GovtId, SystemId};
-use crate::exploration::GATES;
-use crate::landing::{StellarFlags, landable};
-use crate::market::price_level;
-use crate::navigation::NavMode;
-use crate::pilot::ExploredLevel;
+use nova_sim_catalog::catalog::{GovtId, SystemId};
+use nova_sim_state::landing::{StellarFlags, landable};
+use nova_sim_state::market::price_level;
+use nova_sim_state::shown::exploration::GATES;
+use nova_sim_state::shown::navigation::NavMode;
+use nova_sim_state::shown::pilot::ExploredLevel;
 
 /// The `spöb` `Flags` bit of a stellar with a commodity exchange.
 const TRADES: u32 = 0x0002;
@@ -259,7 +259,7 @@ pub struct PanelInput<'a> {
     pub asteroids: i16,
     /// Its `Interference`, raw.
     pub interference: i16,
-    /// Its `Murk` as loaded ([`crate::murk::loaded_murk`]), the runtime
+    /// Its `Murk` as loaded (`nova_sim::murk::loaded_murk`), the runtime
     /// +0xbc the panel reads.
     pub murk: i16,
     /// Its `NavDefs` stellars, in slot order.
@@ -690,7 +690,7 @@ mod tests {
     use std::sync::LazyLock;
 
     use super::*;
-    use crate::catalog::{GovtId, StellarId};
+    use nova_sim_catalog::catalog::{GovtId, StellarId};
 
     /// Each word its own number, "#n".
     fn words() -> PanelWords {

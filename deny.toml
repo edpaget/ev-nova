@@ -49,7 +49,7 @@ deny = [
     # - nova-data (on nova-rsrc, nova-galaxy-format and nova-galaxy-media);
     # - the layered nova-sim crates (roadmap nova-sim-layered-crates):
     #   catalog, state, combat, ai, story, then port and save (both on
-    #   story);
+    #   story), with frame, the view vocabulary, on state beside combat;
     # - nova-ink (on nova-sim-story; the dialog adapter, wired by nova);
     # - nova-sim (the facade);
     # - nova-view;
@@ -112,9 +112,10 @@ deny = [
     { crate = "ffmpeg-next", wrappers = ["nova-movie"], reason = "FFmpeg is reached only through the movie decoder" },
     { crate = "ffmpeg-sys-next", wrappers = ["ffmpeg-next"], reason = "FFmpeg's bindings are reached only through ffmpeg-next" },
     { crate = "nova-sim", wrappers = ["nova", "nova-sim-it", "nova-view", "nova-view-it"], reason = "a layered nova-sim crate must never depend on the facade above it" },
-    { crate = "nova-sim-base", wrappers = ["nova-sim", "nova-sim-ai", "nova-sim-catalog", "nova-sim-combat", "nova-sim-it", "nova-sim-port", "nova-sim-save", "nova-sim-state", "nova-sim-story"], reason = "the foundation sits below every nova-sim crate and is reached through the nova-sim facade" },
-    { crate = "nova-sim-catalog", wrappers = ["nova-sim", "nova-sim-ai", "nova-sim-combat", "nova-sim-port", "nova-sim-save", "nova-sim-state", "nova-sim-story"], reason = "the catalog layer sits below every nova-sim crate but the foundation and is reached through the nova-sim facade" },
-    { crate = "nova-sim-state", wrappers = ["nova-sim", "nova-sim-ai", "nova-sim-combat", "nova-sim-port", "nova-sim-save", "nova-sim-story"], reason = "the state layer sits on the foundation and the catalog, below every other nova-sim crate, and is reached through the nova-sim facade" },
+    { crate = "nova-sim-base", wrappers = ["nova-sim", "nova-sim-ai", "nova-sim-catalog", "nova-sim-combat", "nova-sim-frame", "nova-sim-it", "nova-sim-port", "nova-sim-save", "nova-sim-state", "nova-sim-story"], reason = "the foundation sits below every nova-sim crate and is reached through the nova-sim facade" },
+    { crate = "nova-sim-catalog", wrappers = ["nova-sim", "nova-sim-ai", "nova-sim-combat", "nova-sim-frame", "nova-sim-port", "nova-sim-save", "nova-sim-state", "nova-sim-story"], reason = "the catalog layer sits below every nova-sim crate but the foundation and is reached through the nova-sim facade" },
+    { crate = "nova-sim-state", wrappers = ["nova-sim", "nova-sim-ai", "nova-sim-combat", "nova-sim-frame", "nova-sim-port", "nova-sim-save", "nova-sim-story"], reason = "the state layer sits on the foundation and the catalog, below every other nova-sim crate, and is reached through the nova-sim facade" },
+    { crate = "nova-sim-frame", wrappers = ["nova-sim"], reason = "the view vocabulary sits on the state layer, below combat, the ai, the story, the port and the session; only the nova-sim facade (and, from phase 6, nova-view) reaches it" },
     { crate = "nova-sim-combat", wrappers = ["nova-sim", "nova-sim-ai", "nova-sim-it", "nova-sim-port", "nova-sim-save", "nova-sim-story"], reason = "the combat layer sits on the foundation, the catalog and the state, below the ai, story, port and session layers, and is reached through the nova-sim facade" },
     { crate = "nova-sim-ai", wrappers = ["nova-sim", "nova-sim-port", "nova-sim-save", "nova-sim-story"], reason = "the ai and traffic layer sits on the foundation, the catalog, the state and combat, below the story, port and session layers, and is reached through the nova-sim facade" },
     { crate = "nova-sim-story", wrappers = ["nova-ink", "nova-sim", "nova-sim-port", "nova-sim-save"], reason = "the story layer sits on the foundation, the catalog, the state, combat and the ai, below the port and session layers, and is reached through the nova-sim facade" },

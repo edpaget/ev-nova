@@ -55,8 +55,8 @@ pub mod passes;
 pub use grid::{InfluenceGrid, Slot};
 pub use passes::{BorderPasses, Next, NullEvent, PaintedCell};
 
-use crate::catalog::{GovtId, SystemId};
-use crate::govt::{Governments, SMALL_INFLUENCE};
+use nova_sim_catalog::catalog::{GovtId, SystemId};
+use nova_sim_state::govt::{Governments, SMALL_INFLUENCE};
 
 /// A system that adds to the borders: where it is, whose government it
 /// is, and whether that government's spread is the smaller one.
@@ -93,7 +93,7 @@ pub struct BorderSources {
 impl BorderSources {
     /// The viewer's sources: every one of `systems` with a government,
     /// each on its own place, by ascending ID, whatever its government's
-    /// `Flags2` [`NO_INFLUENCE`](crate::govt::NO_INFLUENCE) says, with
+    /// `Flags2` [`NO_INFLUENCE`](nova_sim_state::govt::NO_INFLUENCE) says, with
     /// [`SMALL_INFLUENCE`] read from `govts`. The viewer has no session, so
     /// nothing is active, known, explored or inhabited to filter by.
     #[must_use]
@@ -150,14 +150,14 @@ impl GridFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::govt;
+    use nova_sim_catalog::fixture::govt;
 
     #[test]
     fn the_viewers_sources_are_every_governed_system_by_id_with_the_small_bit() {
         let govts = Governments::new([
             govt(128),
-            crate::catalog::GovtRecord {
-                flags2: SMALL_INFLUENCE | crate::govt::NO_INFLUENCE,
+            nova_sim_catalog::catalog::GovtRecord {
+                flags2: SMALL_INFLUENCE | nova_sim_state::govt::NO_INFLUENCE,
                 ..govt(129)
             },
         ]);

@@ -5,14 +5,17 @@
 //! This crate is the session layer and the facade over the layered
 //! crates below it, bottom to top: `nova-sim-base`, `nova-sim-catalog`,
 //! `nova-sim-state`, `nova-sim-combat`, `nova-sim-ai`, `nova-sim-story`,
-//! then `nova-sim-port` and `nova-sim-save` (both on the story layer).
-//! Each of their modules is re-exported here at its old
+//! then `nova-sim-port` and `nova-sim-save` (both on the story layer),
+//! with the view vocabulary, `nova-sim-frame`, on the state layer beside
+//! combat. Each of their modules is re-exported here at its old
 //! path, so a `nova_sim::…` path doesn't depend on which crate holds the
-//! code. The crate's own modules are the session layer's: [`session`],
-//! [`course`], [`flight_frame`], [`galaxy_map`], [`glow`],
-//! [`key_fade`], [`map_borders`], [`map_panel`], [`map_route`], [`map_search`], [`pre_jump`], [`rating`],
-//! [`red_alert`], [`status_cargo`], [`target_panel`] and [`top_speed`],
-//! with the test support in `fixture`.
+//! code. The view models come from `nova-sim-frame`: [`glow`],
+//! [`key_fade`], [`map_borders`], [`map_panel`], [`map_search`],
+//! [`pilot_panel`], [`red_alert`], [`status_cargo`] and [`target_panel`].
+//! The crate's own modules are the session layer's: [`session`],
+//! [`course`], [`flight_frame`], [`galaxy_map`], [`map_route`],
+//! [`pre_jump`], [`rating`] and [`top_speed`], with the test support in
+//! `fixture`.
 //!
 //! - [`ai`]: NPC decisions: the [`Behaviour`] port that sets each NPC's
 //!   [`Goal`] from its [`Surroundings`] and answers hits; [`Peaceful`],
@@ -468,15 +471,15 @@ pub use nova_sim_ai::gate_fuel;
 pub use nova_sim_ai::gate_lanes;
 pub use nova_sim_ai::gate_pilot;
 pub use nova_sim_base::geometry;
+pub use nova_sim_frame::glow;
+pub use nova_sim_frame::key_fade;
+pub use nova_sim_frame::map_borders;
 pub use nova_sim_port::gate_sprite;
 pub use nova_sim_port::stellar_frames;
-pub mod glow;
-pub mod key_fade;
-pub mod map_borders;
 pub mod map_lanes;
-pub mod map_panel;
+pub use nova_sim_frame::map_panel;
 pub mod map_route;
-pub mod map_search;
+pub use nova_sim_frame::map_search;
 pub mod viewer_lanes;
 pub use nova_sim_ai::hail;
 pub use nova_sim_ai::hover;
@@ -513,12 +516,10 @@ pub use nova_sim_story::person;
 pub use nova_sim_story::pilot;
 #[cfg(test)]
 mod pilot_keeping;
-pub mod pilot_panel;
+pub use nova_sim_frame::pilot_panel;
 pub mod pre_jump;
 pub use nova_sim_story::rank;
 pub mod rating;
-pub use nova_sim_port::recharge;
-pub mod red_alert;
 pub use nova_sim_ai::dock_scan;
 pub use nova_sim_ai::scan;
 pub use nova_sim_ai::scoop;
@@ -533,21 +534,23 @@ pub use nova_sim_combat::player_cloak;
 pub use nova_sim_combat::sabotage;
 pub use nova_sim_combat::self_destruct;
 pub use nova_sim_combat::self_repair;
+pub use nova_sim_frame::red_alert;
+pub use nova_sim_port::recharge;
 pub use nova_sim_save::save;
 pub use nova_sim_save::saves;
 pub mod session;
+pub use nova_sim_ai::targeting;
 pub use nova_sim_catalog::sound;
+pub use nova_sim_catalog::strings;
 pub use nova_sim_combat::ship_layer;
 pub use nova_sim_combat::sprite_layer;
+pub use nova_sim_frame::status_cargo;
+pub use nova_sim_frame::target_panel;
 pub use nova_sim_port::ship_change;
 pub use nova_sim_port::shipyard;
 pub use nova_sim_state::stats;
-pub mod status_cargo;
-pub use nova_sim_catalog::strings;
 pub use nova_sim_story::story;
 pub use nova_sim_story::storylines;
-pub mod target_panel;
-pub use nova_sim_ai::targeting;
 #[cfg(test)]
 mod testkit;
 pub use nova_sim_story::text_parse;

@@ -3,8 +3,8 @@
 //! @0x114f7-0x11591, `_AddSystemInfluenceToMap` @0x11592-0x119ed).
 
 use super::{BorderSource, GridFrame};
-use crate::catalog::GovtId;
-use crate::govt::Governments;
+use nova_sim_catalog::catalog::GovtId;
+use nova_sim_state::govt::Governments;
 
 /// The radius in cells at a zoom of 1, `Flags2` 0x0002 clear (0xdd1e0).
 pub const RADIUS: f64 = 30.72;
@@ -260,8 +260,8 @@ fn step_of(step: i32) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::{GovtRecord, SystemId};
-    use crate::testkit::govt;
+    use nova_sim_catalog::catalog::{GovtRecord, SystemId};
+    use nova_sim_catalog::fixture::govt;
 
     /// Item 3's frame at `zoom`, looking at (0, 0).
     fn frame(zoom: f64) -> GridFrame {

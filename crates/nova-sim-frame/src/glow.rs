@@ -69,7 +69,7 @@
 //!
 //! The original steps the base and rolls the flicker once a frame, and
 //! its frame rate is not established: it has no frame limiter. Here both
-//! happen once a 1/30 s tick (the simulation's [`TICK`](crate::TICK), the
+//! happen once a 1/30 s tick (the simulation's [`TICK`](nova_sim_base::clock::TICK), the
 //! frame `_gSpeedMult` normalises to), so steady thrust brightens the glow
 //! from 0 to 24 in 24 ticks (0.8 s) and releasing it fades the glow out in
 //! as many, at any display rate. The rolls keep the original's
@@ -99,7 +99,7 @@
 //! fall above cruise after them, the brake holds it a little under cruise
 //! and the move-off at 31.
 
-use crate::blink::{BlinkChance, FULL};
+use nova_sim_base::blink::{BlinkChance, FULL};
 
 /// The base level steady thrust holds the glow at.
 pub const GLOW_CRUISE: u8 = 24;
@@ -381,7 +381,7 @@ mod tests {
     use nova_sim_base::fixture::blink::ScriptedRolls;
 
     use super::*;
-    use crate::blink::HashedRolls;
+    use nova_sim_base::blink::HashedRolls;
 
     /// The level for `base` with a roll of `roll`.
     fn rolled(base: u8, roll: u16) -> Option<u8> {

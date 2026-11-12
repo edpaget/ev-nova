@@ -17,12 +17,12 @@
 //!   otherwise `_DrawLegalStatusString` of it (@0x18113): exactly the
 //!   player info's Legal Status row.
 //! - **The combat rating's words**, `_DrawCombatRatingString` @0x57e5
-//!   ([`rating::string_index`](crate::rating::string_index) into `STR#`
+//!   (`nova_sim::rating::string_index` into `STR#`
 //!   138); empty when the list lacks the string.
 //! - **The date**, `_DateToMedString(_gameTime)`
 //!   (`nova_sim::Session::med_date_text`).
 
-use crate::catalog::ShipId;
+use nova_sim_catalog::catalog::ShipId;
 
 /// What the pilot panel says about the pilot loaded (see the module
 /// docs).

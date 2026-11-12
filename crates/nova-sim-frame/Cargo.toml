@@ -1,0 +1,32 @@
+[package]
+name = "nova-sim-frame"
+description = "The view vocabulary of nova-sim's layered crates, on the state layer: the flight port's frame, commands, events and screen asks, the view models and the session's value types"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The foundation below it: the blink chance the engine glow flickers on,
+# and the reserves the target panel reads.
+nova-sim-base.workspace = true
+# The catalog below it: the typed ids the view models name.
+nova-sim-catalog.workspace = true
+# The state below it: the governments the map's borders are drawn from,
+# landing's and the market's flags the map panel reads, and the view
+# vocabulary the layers above build (`shown`). Nothing else of the
+# nova-sim stack: `deny.toml` bans the way up to combat, the ai, the
+# story, the port, the save layer and the session.
+nova-sim-state.workspace = true
+
+[dev-dependencies]
+# The scripted blink rolls (`fixture::blink::ScriptedRolls`) the glow
+# tests draw on.
+nova-sim-base = { workspace = true, features = ["fixture"] }
+# The government record builder (`fixture::govt`) the border tests build
+# from.
+nova-sim-catalog = { workspace = true, features = ["fixture"] }
+
+[lints]
+workspace = true

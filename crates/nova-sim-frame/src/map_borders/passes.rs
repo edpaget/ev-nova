@@ -41,7 +41,7 @@
 
 use super::grid::InfluenceGrid;
 use super::{BorderSources, GridFrame};
-use crate::catalog::{GovtId, SystemId};
+use nova_sim_catalog::catalog::{GovtId, SystemId};
 
 /// The step of the coarse pass's lattice (`_RecalcAllMapInfluence`
 /// @0x11c42, and each caller).
@@ -256,11 +256,12 @@ impl BorderPasses {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::GovtRecord;
-    use crate::govt::Governments;
+    use nova_sim_catalog::catalog::GovtRecord;
+    use nova_sim_catalog::fixture::govt;
+    use nova_sim_state::govt::Governments;
+
     use crate::map_borders::BorderSource;
     use crate::map_borders::grid::{SLOTS, Slot};
-    use crate::testkit::govt;
 
     /// Item 3's frame at zoom 1, looking at (0, 0).
     fn frame() -> GridFrame {

@@ -26,6 +26,7 @@ nova-sim = { path = "crates/nova-sim" }
 nova-sim-base = { path = "crates/nova-sim-base" }
 nova-sim-catalog = { path = "crates/nova-sim-catalog" }
 nova-sim-state = { path = "crates/nova-sim-state" }
+nova-sim-frame = { path = "crates/nova-sim-frame" }
 nova-sim-combat = { path = "crates/nova-sim-combat" }
 nova-sim-ai = { path = "crates/nova-sim-ai" }
 nova-sim-story = { path = "crates/nova-sim-story" }
