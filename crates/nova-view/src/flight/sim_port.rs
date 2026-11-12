@@ -194,14 +194,14 @@
 //! The view's component tests run on `FakeFlight`: they set a frame (the
 //! builders in `flight/view/tests/frames.rs`), script its answers and
 //! events, and assert what the view draws, plays and sends. A real
-//! `Session` starts in nova-view only in:
+//! `Session` starts in nova-view's tests only in:
 //!
-//! - `tests/it/flight_seam.rs`, one test per port surface or router
-//!   handoff, as its module doc says;
+//! - `nova-view-it`'s `tests/it/flight_seam.rs`, one test per port surface
+//!   or router handoff, as its module doc says;
 //! - the adapter's checks, `sim_adapter`'s tests and
 //!   `sim_adapter/fake_catalog_checks.rs`;
 //! - the edge's checks, `flight/view/build/edge_checks.rs`;
-//! - the `stock_*` tests.
+//! - `nova-view-it`'s `stock_*` tests.
 //!
 //! The developer tools reach the flight through
 //! [`DevDesk`](crate::devtools::DevDesk), not this port.
