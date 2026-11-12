@@ -1,6 +1,7 @@
 //! A system's own sky look ([`SkyLook`]): how dense its stars are, the
-//! colour they lean toward, and its distant backdrop, set by the system's
-//! data or left to the engine's defaults.
+//! colour they lean toward, and its distant backdrop
+//! ([`super::backdrop`](mod@super::backdrop)), set by the system's data
+//! or left to the engine's defaults.
 //!
 //! The renderer holds a table of looks keyed by the sky's seed
 //! ([`SkyLooks`]), filled once from the game's data, and looks each

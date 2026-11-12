@@ -74,14 +74,43 @@
 //! into it still shows; the extra cells keep the work within
 //! [`rushing_cell_bound`]. With no rush every star is round and exactly
 //! as it is without one.
+//!
+//! # The look
+//!
+//! A system's data can set its own sky look ([`SkyLook`], from its
+//! `sky` block): its star density, 0 to 2 times the layers', and a tint
+//! each star leans [`TINT_SHARE`] of the way toward ([`look`]). The
+//! renderer holds the looks in a table keyed by the sky's seed
+//! ([`SkyLooks`]); a seed with none draws the default, the engine's stars
+//! and a seeded backdrop. [`stars_of`] is [`stars`] in a look.
+//!
+//! # The backdrop
+//!
+//! Behind every star layer is a distant nebula backdrop
+//! ([`backdrop`](mod@backdrop)):
+//! one far layer at [`BACKDROP_DEPTH`], parallax 0.025, of large, faint
+//! puffs clustered into clouds, one cloud at most in each
+//! [`BACKDROP_CELL`]-unit cell, with dark sky between them. Its colour
+//! and amount come from the look, or from the seed ([`seeded`]). It is
+//! drawn first, as [`StarInstance`]s of no trail through the same
+//! pipeline ([`instances`]), doesn't streak through the warp, and keeps
+//! its light, instance count and shaded area within bounds it holds by
+//! construction ([`backdrop_instance_bound`], [`backdrop_area_bound`],
+//! [`BACKDROP_LIGHT_BOUND`]).
 
 use nova_view::{Point, SkyPose};
 
 use crate::viewport::LogicalSize;
 
+mod backdrop;
 mod look;
 
-pub use look::{BackdropLook, SkyLook, SkyLooks};
+pub use backdrop::{
+    BACKDROP_CELL, BACKDROP_DEPTH, BACKDROP_HUES, BACKDROP_LIGHT_BOUND, Backdrop, CLOUD_EXTENT,
+    CLOUD_LIGHT, Cloud, PUFF_RADIUS, PUFF_SPREAD, PUFFS, Puff, SEEDED_AMOUNT, backdrop,
+    backdrop_area_bound, backdrop_instance_bound, cloud, instances, resolved, seeded,
+};
+pub use look::{BackdropLook, SkyLook, SkyLooks, TINT_SHARE, normalised};
 
 /// How high above the play plane the eye is, in world units.
 pub const EYE_HEIGHT: f32 = 1000.0;
