@@ -26,13 +26,21 @@
 //!    spent, and the raider its traffic flies there met as it is, no ship
 //!    placed. It is targeted with R (and Tab, once it is disabled and no
 //!    threat), fought with Space held down and destroyed: the mass
-//!    driver's sound and the raider's explosion raised. The road home
-//!    goes through on what the tank still holds.
+//!    driver's sound and the raider's explosion raised. The raider
+//!    carries a mass driver too, and the audio's play commands don't say
+//!    who fired, so the sound is the player's only because it is heard in
+//!    the frames before any other ship's shot is in flight
+//!    (`Session::shots`, each with its firer), with a shot of the
+//!    player's among them: the raider answers in the fight's first few
+//!    frames, after the player's first shot. The road home goes through on
+//!    what the tank still holds.
 //! 5. **The road taken**: down at Verge Workshop until the side road has
 //!    closed, then Verge Camp, the wardens' toll refused and the road's
 //!    offer taken; off the camp the blockade's guards hold the road's
 //!    gate and are fought the same way, in the nebula, until every one is
-//!    destroyed, and the road is the Guild's.
+//!    destroyed, and the road is the Guild's. The player fires first here
+//!    too, and the mass driver's sound is heard again before any guard's
+//!    shot is in flight.
 //! 6. **The storyline is finished**: every `dock-work` mission ended but
 //!    the one nothing calls for, and the plate's news heard and read, its
 //!    log shown once in the run.
@@ -57,6 +65,7 @@
 //! fixture's files and the session, none retyped.
 
 use std::collections::BTreeSet;
+use std::ops::Range;
 
 use nova::app::{Control, Showing, WindowEvent};
 use nova_audio::AudioCommand;
@@ -168,24 +177,22 @@ fn a_new_pilot_plays_the_fixture_through_its_storyline_and_the_pilot_saved_after
     assert_eq!(game.showing(), Showing::Flight, "off the workshop");
     fly_the_road(&mut game, "verge/spur-road", 1);
     let raiders = arrive_among_the_raiders(&mut game, &data);
-    heard.take(&game);
-    let mark = heard.mark();
-    let raider_fight = fight(&mut game, &raiders, RAIDER_FIGHT_FRAMES, true);
-    heard.take(&game);
+    let raider_fight = fight(&mut game, &mut heard, &raiders, RAIDER_FIGHT_FRAMES, true);
     assert!(raider_fight.fired, "the player's shots flew");
     assert!(
         raider_fight.turned,
         "the raiders' word turned them on the player"
     );
-    assert_weapon_and_explosion_heard(&heard, mark, &data, &game_ids, &raider_fight.hulls);
+    assert_weapon_and_explosion_heard(&heard, &raider_fight, &data, &game_ids);
     fly_the_road(&mut game, "spur/verge-road", 2);
     // 5. Down at the workshop until the side road closes, then the road.
     wait_for_the_side_road(&mut game);
     take_the_road(&mut game);
     let guards = off_the_camp_among_the_guards(&mut game, &data, &game_ids);
     assert_eq!(system_murk(&game), verge_murk, "in the Verge's nebula");
-    let guards_fight = fight(&mut game, &guards, GUARDS_FIGHT_FRAMES, false);
+    let guards_fight = fight(&mut game, &mut heard, &guards, GUARDS_FIGHT_FRAMES, false);
     assert!(guards_fight.fired, "the player's shots flew");
+    assert_the_player_s_fire_heard(&heard, &guards_fight, &data, &game_ids);
     assert!(
         guards_fight.murky,
         "the guards' fight is in the Verge's nebula"
@@ -418,6 +425,11 @@ impl Heard {
     fn since(&self, mark: usize, sound: SoundId) -> bool {
         self.0[mark..].contains(&sound)
     }
+
+    /// Whether `sound` was played between two marks.
+    fn within(&self, marks: Range<usize>, sound: SoundId) -> bool {
+        self.0[marks].contains(&sound)
+    }
 }
 
 /// A sound role `game.md` fills.
@@ -448,25 +460,35 @@ fn assert_landing_heard(heard: &Heard, mark: usize, data: &GameData, game: &NewG
     assert_eq!(resolved(data, landed), Some(samples_of(game, &clip)));
 }
 
-/// Criterion 3, the weapon and the explosion: after `mark`, the mass
-/// driver's sound played as it fired, and the explosion each of `hulls`,
-/// the hulls destroyed, sets off, which resolves to the clip `game.md`
-/// names as the explosion's.
-fn assert_weapon_and_explosion_heard(
-    heard: &Heard,
-    mark: usize,
-    data: &GameData,
-    game: &NewGame,
-    hulls: &[nova_sim::ShipId],
-) {
+/// Criterion 3, the weapon fired: in `fought`, the player's shots flew
+/// before any other ship's did, and the mass driver's sound played in
+/// those frames, so it is the player's fire that raised it, not that of a
+/// hostile carrying the same gun.
+#[track_caller]
+fn assert_the_player_s_fire_heard(heard: &Heard, fought: &Fought, data: &GameData, game: &NewGame) {
+    let alone = (fought.alone.clone()).expect("the player fired before any other ship");
     let fired = mass_driver_sound(data, game);
     assert!(
-        heard.since(mark, fired),
-        "the mass driver's snd {}",
+        heard.within(alone, fired),
+        "the mass driver's snd {}, before any other ship fired",
         fired.0
     );
+}
+
+/// Criterion 3, the weapon and the explosion: the player's mass driver
+/// heard ([`assert_the_player_s_fire_heard`]), and, over `fought`, the
+/// explosion each hull destroyed sets off, which resolves to the clip
+/// `game.md` names as the explosion's.
+fn assert_weapon_and_explosion_heard(
+    heard: &Heard,
+    fought: &Fought,
+    data: &GameData,
+    game: &NewGame,
+) {
+    assert_the_player_s_fire_heard(heard, fought, data, game);
+    let mark = fought.start;
     let clip = role_clip(game, Role::Explosion);
-    for hull in hulls {
+    for hull in &fought.hulls {
         let blast = Explosion::decode(record::<Ship>(data, hull.0).explode2).expect("an explosion");
         let boom = data
             .boom_look(blast.boom)
@@ -575,6 +597,14 @@ struct Fought {
     hulls: Vec<nova_sim::ShipId>,
     /// Whether a shot of the player's was ever in flight.
     fired: bool,
+    /// The mark of [`Heard`] at the fight's start.
+    start: usize,
+    /// The marks of what [`Heard`] gathered over the frames in which only
+    /// the player had fired: from the fight's start up to, and not
+    /// including, the first frame after which another ship's shot is in
+    /// flight (or to the fight's end, if none ever is). `None` if no shot
+    /// of the player's was in flight in those frames.
+    alone: Option<Range<usize>>,
     /// Whether one of the hostiles ever targeted the player.
     turned: bool,
     /// Whether the system stayed under its murk throughout.
@@ -582,18 +612,30 @@ struct Fought {
 }
 
 /// Holds Space down and targets with R, then Tab, until every one of
-/// `hostiles` has broken up and gone, for at most `frames` frames. Each
-/// frame the player is still flying, and every ship seen breaking up is
-/// one of `hostiles`; when `closed`, no ship comes into the system
-/// meanwhile either.
-fn fight(game: &mut Harness, hostiles: &[NpcId], frames: u32, closed: bool) -> Fought {
+/// `hostiles` has broken up and gone, for at most `frames` frames,
+/// gathering into `heard` what each frame plays. Each frame the player is
+/// still flying, and every ship seen breaking up is one of `hostiles`;
+/// when `closed`, no ship comes into the system meanwhile either.
+fn fight(
+    game: &mut Harness,
+    heard: &mut Heard,
+    hostiles: &[NpcId],
+    frames: u32,
+    closed: bool,
+) -> Fought {
     let murk = system_murk(game);
+    heard.take(game);
+    let start = heard.mark();
     let mut fought = Fought {
         hulls: Vec::new(),
         fired: false,
+        start,
+        alone: None,
         turned: false,
         murky: true,
     };
+    // Whether another ship's shot has been seen in flight yet.
+    let mut answered = false;
     let mut dying: BTreeSet<NpcId> = BTreeSet::new();
     let mut tabs = 0;
     let mut tried_r = false;
@@ -634,6 +676,7 @@ fn fight(game: &mut Harness, hostiles: &[NpcId], frames: u32, closed: bool) -> F
             wait = KEY_FRAMES;
         }
         game.frame();
+        heard.take(game);
         let session = flight_session(game);
         assert_eq!(
             session.player_fate(),
@@ -644,6 +687,17 @@ fn fight(game: &mut Harness, hostiles: &[NpcId], frames: u32, closed: bool) -> F
             .shots()
             .iter()
             .any(|shot| shot.firer == ShipRef::Player);
+        // A shot is put in flight in the step that raises its firing,
+        // which this frame then hears: until another ship's shot is in
+        // flight, the frames heard only the player's fire. The frame that
+        // first shows one is left out, as it heard that firing: the window
+        // stays as the frame before it left it.
+        if !answered {
+            answered = (session.shots().iter()).any(|shot| shot.firer != ShipRef::Player);
+            if !answered {
+                fought.alone = fought.fired.then(|| start..heard.mark());
+            }
+        }
         fought.murky &= system_murk(game) == murk;
         for npc in session.npcs() {
             if closed {
