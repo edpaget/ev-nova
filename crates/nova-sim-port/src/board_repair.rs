@@ -26,34 +26,9 @@
 //! ([`Recovery::message`]) for 250 ticks with `_beepSnd[4]`
 //! (`nova_sim::SimSound::EscortRepaired`).
 
-use nova_sim_combat::message::SimMessage;
 use nova_sim_combat::self_repair::FormerKind;
 
-/// Which own-ship path a board takes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Recovery {
-    /// "Escort repaired." (`STR#` 2002 #127, @0x65cff): the ship rejoins
-    /// the fleet.
-    EscortRepaired,
-    /// "Fighter repaired." (#128, @0x65af6, @0x65e29): the player's own
-    /// fighter docks in its bay.
-    FighterRepaired,
-    /// "Fighter captured." (#129, @0x65e29): a ship of a type the player's
-    /// bays carry docks in its bay.
-    FighterCaptured,
-}
-
-impl Recovery {
-    /// What the player is told.
-    #[must_use]
-    pub fn message(self) -> SimMessage {
-        match self {
-            Self::EscortRepaired => SimMessage::EscortRepaired,
-            Self::FighterRepaired => SimMessage::FighterRepaired,
-            Self::FighterCaptured => SimMessage::FighterCaptured,
-        }
-    }
-}
+pub use nova_sim_state::shown::board_repair::Recovery;
 
 /// Who flies the ship boarded, as the own-ship paths test it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -240,21 +215,5 @@ mod tests {
             );
             assert_eq!(recovery(FlownBy::NoPerson, None, fleet, false), None);
         }
-    }
-
-    #[test]
-    fn each_recovery_says_its_line() {
-        assert_eq!(
-            Recovery::EscortRepaired.message(),
-            SimMessage::EscortRepaired
-        );
-        assert_eq!(
-            Recovery::FighterRepaired.message(),
-            SimMessage::FighterRepaired
-        );
-        assert_eq!(
-            Recovery::FighterCaptured.message(),
-            SimMessage::FighterCaptured
-        );
     }
 }

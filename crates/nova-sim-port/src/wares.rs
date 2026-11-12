@@ -25,48 +25,11 @@ pub use crate::cron::requirement_met;
 use crate::pilot::Pilot;
 use crate::rank;
 
+pub use nova_sim_state::shown::wares::{ShownTons, TonUnit};
+
 /// The `BuyRandom` or `HireRandom` from which an item is always on offer:
 /// the original's loader clamps above it to it (`_LoadObjectData`).
 pub const ALWAYS_RANDOM: i16 = 100;
-
-/// The unit a shop's info box puts after a number of tons, as
-/// `_LoadStrings` loads them @0x71ce0-0x71d15.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TonUnit {
-    /// `_tonString` (`STR#` 2002 #1, "ton").
-    Ton,
-    /// `_tonsString` (`STR#` 2002 #2, "tons").
-    Tons,
-}
-
-impl TonUnit {
-    /// The unit after `tons`: [`TonUnit::Ton`] at exactly 1, else
-    /// [`TonUnit::Tons`].
-    #[must_use]
-    pub fn of(tons: i64) -> Self {
-        if tons == 1 { Self::Ton } else { Self::Tons }
-    }
-}
-
-/// A number of tons as a shop's info box shows it, with its unit.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ShownTons {
-    /// The number shown.
-    pub tons: i64,
-    /// The unit after it.
-    pub unit: TonUnit,
-}
-
-impl ShownTons {
-    /// `tons` with the unit [`TonUnit::of`] picks for it.
-    #[must_use]
-    pub fn of(tons: i64) -> Self {
-        Self {
-            tons,
-            unit: TonUnit::of(tons),
-        }
-    }
-}
 
 /// An item's roll for the day, by its `BuyRandom` or `HireRandom`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -332,21 +295,6 @@ mod tests {
     use crate::cron::CronState;
     use nova_sim_base::fixture::Scripted;
     use nova_sim_catalog::fixture::{catalog, cron, outfit, planet, rank};
-
-    #[test]
-    fn a_ton_count_takes_the_singular_unit_at_exactly_one() {
-        assert_eq!(TonUnit::of(1), TonUnit::Ton);
-        for tons in [0, 2, -1] {
-            assert_eq!(TonUnit::of(tons), TonUnit::Tons, "{tons}");
-        }
-        assert_eq!(
-            ShownTons::of(1),
-            ShownTons {
-                tons: 1,
-                unit: TonUnit::Ton
-            }
-        );
-    }
 
     /// Tech level 4, with special tech 6 and 55.
     fn site() -> LandingSite {

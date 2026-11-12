@@ -41,18 +41,12 @@ use crate::player_info::ordinal_number;
 use crate::rulebook::RuleSource;
 use crate::text_tags::comma_number;
 
-/// `STR#` 2002 #167: a captured escort's title.
-pub const CAPTURED_ESCORT: &str = "Captured Escort";
-/// `STR#` 2002 #292.
-pub const WILL_BE_UPGRADED: &str = "Will be upgraded at next shipyard";
-/// `STR#` 2002 #293.
-pub const UPGRADE_COST: &str = "Upgrade Cost:";
-/// `STR#` 2002 #294.
-pub const CANNOT_BE_UPGRADED: &str = "This ship class cannot be upgraded.";
-/// `STR#` 2002 #295.
-pub const WILL_BE_SOLD: &str = "Will be sold off at next shipyard";
-/// `STR#` 2002 #296.
-pub const SELL_PRICE: &str = "Sell Price:";
+pub use nova_sim_state::shown::escort_dialog::{
+    CANCEL_SALE, CANCEL_UPGRADE, CANNOT_BE_UPGRADED, CAPTURED_ESCORT, CREDIT, CREDITS,
+    EscortButton, EscortDialogView, RELEASE, SELL_ESCORT, SELL_PRICE, SaleLine, UPGRADE_COST,
+    UPGRADE_ESCORT, UpgradeLine, WILL_BE_SOLD, WILL_BE_UPGRADED,
+};
+
 /// `STR#` 2002 #298: after a count of one.
 pub const ESCORT_WAS: &str = "escort was";
 /// `STR#` 2002 #299: after any other count.
@@ -61,21 +55,6 @@ pub const ESCORTS_WERE: &str = "escorts were";
 pub const SOLD_FOR: &str = "sold for a profit of";
 /// `STR#` 2002 #301.
 pub const UPGRADED_FOR: &str = "upgraded at a cost of";
-/// `_creditCString`, `STR#` 2002 #32: the report's unit for 1 or less
-/// (@0x4068f).
-pub const CREDIT: &str = "credit";
-/// `_creditsCString`, `STR#` 2002 #33: the report's unit above 1.
-pub const CREDITS: &str = "credits";
-/// `STR#` 150 #32: the Release button.
-pub const RELEASE: &str = "Release";
-/// `STR#` 150 #52.
-pub const UPGRADE_ESCORT: &str = "Upgrade Escort";
-/// `STR#` 150 #53: the Upgrade button while the upgrade mark stands.
-pub const CANCEL_UPGRADE: &str = "Cancel Upgrade";
-/// `STR#` 150 #54.
-pub const SELL_ESCORT: &str = "Sell Escort";
-/// `STR#` 150 #55: the Sell button while the sell mark stands.
-pub const CANCEL_SALE: &str = "Cancel Sale";
 
 /// Whether `escort` can be sold: only one not hired, a captured one
 /// (`_canSellEscort`, +0xbb 0, @0x952e4).
@@ -112,80 +91,25 @@ pub fn toggle(mark: Option<EscortMark>, pressed: EscortMark, allowed: bool) -> O
     (mark != Some(pressed)).then_some(pressed)
 }
 
-/// A button of the escort dialog, its item (`_EscortFilter` @0x950e9).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EscortButton {
-    /// Item 1, "Close Channel": the dialog closes.
-    Close,
-    /// Item 2, "Release": the escort is released at once, and the dialog
-    /// closes.
-    Release,
-    /// Item 3, "Upgrade Escort" or "Cancel Upgrade".
-    Upgrade,
-    /// Item 4, "Sell Escort" or "Cancel Sale".
-    Sell,
+/// [`EscortDialogView::of`](EscortDialogViewOf::of): the view's
+/// constructor, which reads the fleet's [`Escort`] combat keeps, so it
+/// lives here, beside the dialog's rules, while the view itself is the
+/// state layer's.
+pub trait EscortDialogViewOf {
+    /// The view of `escort`, of class `record`, which can be upgraded when
+    /// `can_upgrade` says so ([`can_upgrade`]), its pay line `pay` when
+    /// hired.
+    #[must_use]
+    fn of(escort: &Escort, record: &ShipRecord, can_upgrade: bool, pay: Option<ShownWage>) -> Self;
 }
 
-/// The escort dialog's upgrade line (@0x94d0d-0x94e0e).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UpgradeLine {
-    /// "Will be upgraded at next shipyard", in light grey.
-    Marked,
-    /// "Upgrade Cost:" in medium grey, then the cost in white.
-    Cost(ShownWage),
-    /// "This ship class cannot be upgraded.", in light grey.
-    Cannot,
-}
-
-/// The escort dialog's sale line (@0x94e13-0x94f15).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SaleLine {
-    /// "Will be sold off at next shipyard", in light grey.
-    Marked,
-    /// "Sell Price:" in medium grey, then the price in white.
-    Price(ShownWage),
-}
-
-/// What the escort dialog shows of an escort (see the module docs).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EscortDialogView {
-    /// Its ship class, whose picture the dialog shows (class +0xa0a).
-    pub ship: ShipId,
-    /// Whether it was hired: the title's "Hired Escort", else "Captured
-    /// Escort".
-    pub hired: bool,
-    /// Its class's `CommName`, the title's second line.
-    pub comm_name: String,
-    /// Its class's `Subtitle`, the title's third line; none when empty.
-    pub subtitle: Option<String>,
-    /// The upgrade line.
-    pub upgrade: UpgradeLine,
-    /// The sale line; none for an escort that can't be sold.
-    pub sale: Option<SaleLine>,
-    /// A hired escort's pay line; none for any other.
-    pub pay: Option<ShownWage>,
-    /// Whether the Upgrade button is enabled.
-    pub can_upgrade: bool,
-    /// Whether the Sell button is enabled.
-    pub can_sell: bool,
-    /// Its mark, which names the buttons "Cancel Upgrade" or "Cancel
-    /// Sale".
-    pub mark: Option<EscortMark>,
-}
-
-impl EscortDialogView {
+impl EscortDialogViewOf for EscortDialogView {
     /// The view of `escort`, of class `record`, which can be upgraded when
     /// `can_upgrade` says so ([`can_upgrade`]), its pay line `pay` when
     /// hired. The cost and price show as [`ShownWage::kept`]: "credit" at
     /// exactly 1, the integer test `_EscortDialogUpdate` makes
     /// (@0x94dd5).
-    #[must_use]
-    pub fn of(
-        escort: &Escort,
-        record: &ShipRecord,
-        can_upgrade: bool,
-        pay: Option<ShownWage>,
-    ) -> Self {
+    fn of(escort: &Escort, record: &ShipRecord, can_upgrade: bool, pay: Option<ShownWage>) -> Self {
         let can_sell = can_sell(escort);
         let upgrade = match (can_upgrade, escort.mark) {
             (false, _) => UpgradeLine::Cannot,
