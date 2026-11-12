@@ -249,13 +249,8 @@ fn trail_of(rush: Point, scale: f32, logical: LogicalSize) -> Point {
         return Point::new(0.0, 0.0);
     }
     let (x, y) = (rush.x * scale, rush.y * scale);
-    let fit = |reach: f32, along: f32| {
-        if along.abs() > reach {
-            reach / along.abs()
-        } else {
-            1.0
-        }
-    };
+    // At no trail the share is infinite, which the cap takes to 1.
+    let fit = |reach: f32, along: f32| (reach / along.abs()).min(1.0);
     let cut = fit(logical.w as f32, x).min(fit(logical.h as f32, y));
     Point::new(x * cut, y * cut)
 }
@@ -916,6 +911,54 @@ mod tests {
             assert!(all.iter().filter(outside).count() > 0, "{rush:?}");
             for star in &all {
                 assert!(reaches_in(star, LOGICAL), "{rush:?}: {star:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_rushing_sky_keeps_every_star_whose_streak_reaches_into_the_view() {
+        // The same sky seen over a view grown far past any trail, its
+        // stars taken back to this view's coordinates.
+        const GROWN: f32 = 512.0;
+        let eye = (250.0, -90.0);
+        let big = LogicalSize {
+            w: LOGICAL.w + 2 * GROWN as u32,
+            h: LOGICAL.h + 2 * GROWN as u32,
+        };
+        let wide = SkyPose::new(
+            4,
+            Point::new(eye.0, eye.1),
+            Point::new(512.0 + GROWN, 384.0 + GROWN),
+            32,
+        );
+        for rush in [
+            Point::new(120.0, 72.0),
+            Point::new(-400.0, 90.0),
+            Point::new(60.0, -300.0),
+        ] {
+            let seen = pose(4, eye, 32).with_rush(rush);
+            for (layer, sky_layer) in LAYERS.iter().enumerate() {
+                let scale = parallax(sky_layer.depth);
+                let trail = Point::new(rush.x * scale, rush.y * scale);
+                let kept = layer_stars(&seen, layer, LOGICAL, FINE);
+                let expected: Vec<StarInstance> = layer_stars(&wide, layer, big, FINE)
+                    .into_iter()
+                    .map(|star| StarInstance {
+                        centre: Point::new(star.centre.x - GROWN, star.centre.y - GROWN),
+                        trail,
+                        ..star
+                    })
+                    .filter(|star| reaches_in(star, LOGICAL))
+                    .collect();
+                assert!(!expected.is_empty(), "{rush:?} layer {layer}");
+                for star in &expected {
+                    assert!(
+                        kept.iter()
+                            .any(|other| (other.centre.x - star.centre.x).abs() < 1e-2
+                                && (other.centre.y - star.centre.y).abs() < 1e-2),
+                        "{rush:?} layer {layer}: {star:?} lost"
+                    );
+                }
             }
         }
     }
