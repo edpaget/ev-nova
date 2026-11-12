@@ -32,28 +32,11 @@ use nova_sim_catalog::storylines::Storylines;
 use super::state::StoryState;
 use crate::catalog::SystemId;
 use crate::gate_lanes::GateLanes;
+pub use nova_sim_state::shown::storylines::news::HeardNews;
 
 /// The days news takes to cross one gate lane: engine tuning, as the
 /// format leaves news's speed open.
 pub const NEWS_DAYS_PER_LANE: u32 = 1;
-
-/// A news item a system has heard.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HeardNews {
-    /// Its id.
-    pub id: String,
-    /// Its headline.
-    pub headline: String,
-    /// The news as told.
-    pub text: String,
-    /// The system where it broke.
-    pub from: SystemId,
-    /// How many days ago the system heard it.
-    pub age: u32,
-    /// Whether the pilot has read it ([`StoryState::read`]), here or in
-    /// any other system.
-    pub read: bool,
-}
 
 /// How many lanes news from `from` crosses to reach each system it
 /// reaches, `from` itself at 0: a breadth-first walk over `lanes`' open

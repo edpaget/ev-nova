@@ -2111,6 +2111,7 @@ dependencies = [
  "nova-data",
  "nova-sim-base",
  "nova-sim-catalog",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

@@ -116,6 +116,7 @@ use crate::market::{self, ActiveEvent};
 use crate::rulebook::{RuleKey, Rulebook};
 use crate::rules::{Context, Value};
 use crate::text_tags::TagNames;
+pub use nova_sim_state::shown::news::{DEFAULT_NEWS_PICTURE, MISC_STRINGS, News};
 
 /// The lowest `NewsGovt` that names a government; below it a slot is
 /// unused (@0x7d8dd).
@@ -124,8 +125,6 @@ pub const FIRST_GOVT: i16 = 128;
 pub const COMMERCIALS: i16 = 8100;
 /// `STR#` 8101 "Generic News": the story with no other (@0x48763).
 pub const GENERIC_NEWS: i16 = 8101;
-/// `STR#` 2002, the miscellaneous strings the fallbacks come from.
-pub const MISC_STRINGS: i16 = 2002;
 /// `STR#` 2002 #190 (1-based) "Today's top news:": the commercial line
 /// when `STR#` 8100 is empty (@0x48294).
 pub const TOP_NEWS: usize = 190;
@@ -145,21 +144,6 @@ pub const ON: usize = 60;
 /// `STR#` 4001: the cargo names, lower case (`_lcCargoName`, from
 /// `_LoadStrings` @0x71ba4), which the `öops` story and `<CT>` read.
 pub const CARGO_NAMES: i16 = 4001;
-
-/// The `PICT` the news is drawn over at an independent stellar, under a
-/// government whose `NewsPic` is -1, or when the picture asked for is
-/// missing (`_DoNewsDialog` @0x47f4a, @0x47f66, @0x47f98).
-pub const DEFAULT_NEWS_PICTURE: i16 = 9000;
-
-/// A bar visit's news: the commercial line and the story, raw, their
-/// tags not filled.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct News {
-    /// The commercial line.
-    pub commercial: String,
-    /// The story.
-    pub story: String,
-}
 
 /// `record`'s used news slots, each a government (`NewsGovt` of
 /// [`FIRST_GOVT`] or above) with its `GovtNewsStr` raw: the engine's load
@@ -492,7 +476,7 @@ mod tests {
             news_pic: -1,
             ..govt(130)
         };
-        assert_eq!(news_picture(Some(&unpictured)), 9000);
+        assert_eq!(news_picture(Some(&unpictured)), DEFAULT_NEWS_PICTURE);
     }
 
     #[test]
@@ -1088,11 +1072,14 @@ mod tests {
         misc[191] = "has";
         misc[192] = "raised";
         misc[193] = "lowered";
-        assert_eq!(StoryWords::read(&Lists(vec![(2002, misc)])), words());
+        assert_eq!(
+            StoryWords::read(&Lists(vec![(MISC_STRINGS, misc)])),
+            words()
+        );
         let mut short = vec!["x"; 193];
         short[189] = "Top:";
         assert_eq!(
-            StoryWords::read(&Lists(vec![(2002, short)])),
+            StoryWords::read(&Lists(vec![(MISC_STRINGS, short)])),
             StoryWords {
                 top_news: "Top:".to_owned(),
                 has: "x".to_owned(),
