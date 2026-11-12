@@ -185,4 +185,15 @@ mod tests {
         let backdrop = read("sky: {backdrop: {haze: 1}}\n").unwrap_err();
         assert!(backdrop.contains("unknown field `haze`"), "{backdrop}");
     }
+
+    #[test]
+    fn a_star_density_schema_is_named_and_a_number_from_0_to_2() {
+        assert_eq!(StarDensity::schema_name(), "StarDensity");
+        let schema = StarDensity::json_schema(&mut SchemaGenerator::default()).to_value();
+        assert_eq!(schema["type"], "number");
+        assert_eq!(
+            (schema["minimum"].as_u64(), schema["maximum"].as_u64()),
+            (Some(0), Some(2))
+        );
+    }
 }
