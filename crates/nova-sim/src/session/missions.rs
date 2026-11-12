@@ -70,6 +70,8 @@
 //! refused for want of room for the cargo. A deadline missed in flight
 //! raises [`SimMessage::DeadlineMissed`] unless the mission is hidden.
 
+pub use nova_sim_frame::missions::{AbortError, NotOffered, RefuseShown};
+
 use crate::pilot::Pilot;
 use std::collections::BTreeMap;
 
@@ -87,11 +89,10 @@ use crate::mission::aux_ships::AuxShips;
 use crate::mission::goals::{ShipGoal, met_at_return};
 use crate::mission::screens::HIDDEN;
 use crate::mission::{
-    self, AbortFacts, AbortRefusal, AcceptError, AcceptFacts, AcceptRefusal, ActiveMission,
-    AvailFacts, FailedBy, IdentityRules, Offer, PayEffect, Player, Refusal, Room, SLOTS, Stop,
-    Venue, Visit, World, abort_checks, abort_penalty, accept_charge, accept_checks,
-    auto_aborts_at_accept, cleaned, failure_records, fined, pay_effect, placements, stellars_of,
-    success_records,
+    self, AbortFacts, AcceptError, AcceptFacts, AcceptRefusal, ActiveMission, AvailFacts, FailedBy,
+    IdentityRules, Offer, PayEffect, Player, Refusal, Room, SLOTS, Stop, Venue, Visit, World,
+    abort_checks, abort_penalty, accept_charge, accept_checks, auto_aborts_at_accept, cleaned,
+    failure_records, fined, pay_effect, placements, stellars_of, success_records,
 };
 use crate::news::CARGO_NAMES;
 use crate::rulebook::{RuleKey, RuleSource};
@@ -166,35 +167,6 @@ pub const fn slot_hook(slot: u8, hook: u8) -> SubscriptionId {
         record: slot as i16,
         hook,
     }
-}
-
-/// The mission is not offered on the visit under way: there is no such
-/// offer, or the ship is not docked.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("the mission is not offered here")]
-pub struct NotOffered;
-
-/// What a refusal from the offer dialog left shown
-/// ([`Session::refuse_mission`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RefuseShown {
-    /// Whether the offer dialog was hidden: only when the mission's
-    /// `RefuseText` is not -1 (`_OfferOneMission` @0xa2e70-0xa2e8e). One
-    /// not hidden stays drawn, answered, under the texts the refusal
-    /// queued and the after-movie, until they have all closed
-    /// (`DisposeDialogNoFlash` @0xa361e).
-    pub offer_hidden: bool,
-}
-
-/// Why [`Session::abort_mission`] aborted nothing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum AbortError {
-    /// The slot holds no mission.
-    #[error("no mission is in that slot")]
-    NotActive,
-    /// An abort check refused it: its `CanAbort` is 0.
-    #[error("the mission cannot be aborted")]
-    Refused(AbortRefusal),
 }
 
 /// The record a mission's lifecycle reads for `id` when the session has
@@ -1855,26 +1827,6 @@ mod tests {
         let mut asked = vec![100; ROLLED];
         asked.extend_from_slice(more);
         asked
-    }
-
-    #[test]
-    fn a_refused_accept_or_abort_reads_plainly() {
-        assert_eq!(
-            AcceptError::Refused(AcceptRefusal::SlotsFull).to_string(),
-            "the mission cannot be accepted: every mission slot is taken"
-        );
-        assert_eq!(
-            AcceptError::NotOffered.to_string(),
-            "the mission is not offered here"
-        );
-        assert_eq!(
-            AbortError::Refused(AbortRefusal::CannotAbort).to_string(),
-            "the mission cannot be aborted"
-        );
-        assert_eq!(
-            AbortError::NotActive.to_string(),
-            "no mission is in that slot"
-        );
     }
 
     #[test]

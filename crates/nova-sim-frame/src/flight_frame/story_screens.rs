@@ -1,19 +1,18 @@
 //! What the new game's own landed screens read of its storylines: the
 //! active missions the mission info key lists beside the stock ones
-//! ([`StoryRow`], on [`MissionInfo::story`](crate::MissionInfo::story)),
+//! ([`StoryRow`], on [`MissionInfo::story`](crate::mission_screens::MissionInfo::story)),
 //! and the refusal of an accept for want of room ([`RoomRefusal`], raised
-//! as [`FlightEvent::RoomRefused`](super::FlightEvent::RoomRefused)), and
-//! the story a bar hosts under [`RuleKey::BarStory`](crate::RuleKey::BarStory)'s
+//! as `nova_sim::flight_frame::FlightEvent::RoomRefused`), and
+//! the story a bar hosts under [`RuleKey::BarStory`](nova_sim_base::RuleKey::BarStory)'s
 //! other reading ([`BarStory`], answered to
-//! [`ScreenAsk::BarStory`](super::ScreenAsk::BarStory)). Each is plain data
+//! `nova_sim::flight_frame::ScreenAsk::BarStory`). Each is plain data
 //! the session builds from its own reads, borrowing nothing of the
 //! session's. A session whose data holds no storylines (the stock game's)
 //! never raises one.
 
+use nova_sim_catalog::catalog::StellarId;
 use nova_sim_catalog::storylines::{MissionGiver, MissionStoryline};
-
-use crate::catalog::StellarId;
-use crate::storylines::news::HeardNews;
+use nova_sim_state::shown::storylines::news::HeardNews;
 
 /// One active storyline mission, as the new game's missions log lists it
 /// (`Statics::story_rows`): by catalog id, with no slot.
@@ -80,9 +79,9 @@ pub struct RoomRefusal {
 }
 
 /// The story the landed stellar's bar hosts, under
-/// [`RuleKey::BarStory`](crate::RuleKey::BarStory)'s other reading: the
+/// [`RuleKey::BarStory`](nova_sim_base::RuleKey::BarStory)'s other reading: the
 /// scenes it lists, which the player opens from it
-/// ([`Converse::OpenListed`](super::Converse::OpenListed), by index into
+/// (`nova_sim::flight_frame::Converse::OpenListed`, by index into
 /// [`BarStory::scenes`]), and the news heard in the system, which its News
 /// lists in place of the drawn news.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

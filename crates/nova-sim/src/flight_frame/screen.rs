@@ -29,8 +29,8 @@
 //! flight's chance and keep them, as the original keeps each day's, so
 //! asked again they answer from the rolls kept.
 
+use super::BarStory;
 use super::port_screens::{BarNews, PortShops};
-use super::story_screens::BarStory;
 use crate::capture_naming::CaptureNaming;
 use crate::catalog::{ShipId, SystemId};
 use crate::galaxy_map::{GalaxyShown, MapDrawing, MapMarks};

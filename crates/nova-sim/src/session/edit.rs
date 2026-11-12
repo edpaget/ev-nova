@@ -50,14 +50,15 @@
 //!   stats give (fuel regeneration among them). It is not damage nor a
 //!   repair, so the ship's condition stays as it was.
 
+pub use nova_sim_frame::edit::DeskReading;
+
 use super::Session;
 use super::entry::{Arrival, Entry, NoTraffic, Placement, ShipPlacement};
 use crate::catalog::{PilotCatalog, StellarId, SystemId};
 use crate::chance::NeverFires;
-use crate::control::Bit;
 use crate::date::GameDate;
 use crate::landing::is_dockable;
-use crate::reserves::{Reserve, Reserves};
+use crate::reserves::Reserve;
 
 /// Why [`Session::relocate`] refused to move the pilot, or
 /// [`Session::land_at`] to land it.
@@ -76,28 +77,6 @@ pub enum RelocateRefusal {
     /// The stellar is a hypergate or wormhole, or cannot be landed on.
     #[error("that stellar cannot be landed on")]
     NotLandable,
-}
-
-/// The pilot flying as the developer tools' desk reads it
-/// ([`Session::desk_reading`]): plain values, which the desk names.
-#[derive(Clone, Debug, PartialEq)]
-pub struct DeskReading {
-    /// The pilot's name.
-    pub name: String,
-    /// Its cash.
-    pub credits: i64,
-    /// The ship's shield, armour and fuel.
-    pub reserves: Reserves,
-    /// The date.
-    pub date: GameDate,
-    /// The date as the game writes it ([`Session::date_text`]).
-    pub date_text: String,
-    /// The system the pilot is in.
-    pub system: SystemId,
-    /// The stellar it is landed on; none in flight.
-    pub landed: Option<StellarId>,
-    /// The control bits set, ascending.
-    pub bits: Vec<Bit>,
 }
 
 impl Session {

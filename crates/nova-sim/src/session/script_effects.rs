@@ -226,6 +226,8 @@
 //! as the original docks there; only
 //! a gate or a stellar without the can-land flag leaves it on none.
 
+pub use nova_sim_frame::script_effects::{Departure, Settled};
+
 use super::entry::{Placement, ShipPlacement};
 use super::{MissionRun, Outbox, Session, Setup};
 use crate::catalog::{PilotCatalog, SoundId, StellarId, SystemId, TrafficCatalog};
@@ -307,28 +309,6 @@ pub(super) struct Queued {
     left_with: Option<String>,
     /// The mission sound a `P` holds to the next flight tick.
     pub(super) sound: Option<SoundId>,
-}
-
-/// What [`Session::settle_script`] did.
-#[must_use]
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Settled {
-    /// The system the last move applied went to, if any did.
-    pub moved: Option<SystemId>,
-    /// The message a `Q` in flight shows, if it has one. A landed `Q` is
-    /// held for the take-off instead ([`Session::leave_due`]).
-    pub message: Option<String>,
-}
-
-/// What [`Session::leave_port`] did: the stellar taken off from, and what
-/// settling the take-off did.
-#[must_use]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Departure {
-    /// The stellar the ship took off from.
-    pub stellar: StellarId,
-    /// What settling the take-off's events did.
-    pub settled: Settled,
 }
 
 impl Session {

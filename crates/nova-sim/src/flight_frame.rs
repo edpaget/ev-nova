@@ -23,12 +23,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod port_screens;
 mod screen;
-mod story_screens;
 
 pub use crate::key_fade::{FadeKey, KeyFades};
+pub use nova_sim_frame::flight_frame::{BarScene, BarStory, RoomRefusal, StoryObjective, StoryRow};
 pub use port_screens::{BarNews, EmptyServices, PortShops};
 pub use screen::{FloatingMap, GateEntry, MapOpen, MapScreen, MarksFrom, ScreenAnswer, ScreenAsk};
-pub use story_screens::{BarScene, BarStory, RoomRefusal, StoryObjective, StoryRow};
 
 use crate::asteroid::Asteroid;
 use crate::bay::FighterNote;

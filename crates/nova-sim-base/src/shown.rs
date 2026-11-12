@@ -7,6 +7,8 @@
 //! [`slot_pool::SlotPool`]), and keeps the behaviour that reads the state
 //! above.
 //!
+//! - [`person`]: how long a person's hail quote shows, from
+//!   `nova_sim_story::person`.
 //! - [`slot_pool`]: the pool whose items take the first free slot, from
 //!   `nova_sim_ai::slot_pool`.
 //! - [`text_tags`]: a number as the original writes it, from
@@ -14,6 +16,7 @@
 //! - [`traffic`]: how opaque a ship coming out of or going into a gate
 //!   is drawn, from `nova_sim_ai::traffic`.
 
+pub mod person;
 pub mod slot_pool;
 pub mod text_tags;
 pub mod traffic;

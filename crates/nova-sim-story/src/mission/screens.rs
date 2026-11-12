@@ -8,14 +8,10 @@ use crate::rulebook::RuleSource;
 pub use crate::warp::MAC_TICKS_PER_SECOND;
 pub use nova_sim_state::shown::mission::screens::{
     ABORT_LABEL, ACCEPT_LABEL, ACTIVE_MISSIONS, AVAILABLE_HERE, BAR, FAILED_MARK,
-    FIRST_OFFER_TICKS, NO_ACTIVE_MISSIONS, NO_HOLDS_TO_ACCEPT, NO_SPACE_TO_ACCEPT, OUTFITTER,
-    OfferLabels, OfferPrompt, SHIPYARD, SLOTS_FULL_AFTER, SLOTS_FULL_BEFORE, SPACEPORT,
-    TRADE_CENTER, VenueOffer, mac_ticks,
+    FIRST_OFFER_TICKS, NO_ACTIVE_MISSIONS, NO_HOLDS_TO_ACCEPT, NO_MISSIONS_HERE,
+    NO_SPACE_TO_ACCEPT, OUTFITTER, OfferLabels, OfferPrompt, SHIPYARD, SLOTS_FULL_AFTER,
+    SLOTS_FULL_BEFORE, SPACEPORT, TRADE_CENTER, VenueOffer, mac_ticks,
 };
-
-/// `STR#` 2002 #353: what the mission computer says with no offer
-/// available.
-pub const NO_MISSIONS_HERE: &str = "There are no missions available here.";
 
 /// `STR#` 150 #27: a blank accept label, on a mission that cannot be
 /// refused.
@@ -144,11 +140,7 @@ mod tests {
     }
 
     #[test]
-    fn the_originals_strings() {
-        assert_eq!(
-            NO_MISSIONS_HERE, "There are no missions available here.",
-            "STR# 2002 #353"
-        );
+    fn the_originals_blank_labels() {
         assert_eq!(
             [OKAY_LABEL, YES_LABEL, NO_LABEL],
             ["Okay", "Yes", "No"],

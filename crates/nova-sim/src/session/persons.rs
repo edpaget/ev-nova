@@ -44,7 +44,7 @@
 //! message line free, whatever shows on it (`_HandleShip`
 //! @0x33f42-0x33f4b reads `_commCount`, the session's
 //! [`CommLine`](crate::CommLine); see the `comm_calls` module): a hail
-//! quote holds it for [`QUOTE_SHOWN_TICKS`], and any other line for its
+//! quote holds it for [`QUOTE_SHOWN_TICKS`](crate::person::QUOTE_SHOWN_TICKS), and any other line for its
 //! own time. A person's quote state is never saved, and "once" is once
 //! for its stay.
 //!
@@ -85,6 +85,8 @@
 //! module) carries no person: its death leaves the person alive and the
 //! player's hits give it no grudge.
 
+pub use nova_sim_frame::persons::PersonQuote;
+
 use crate::pilot::Pilot;
 use std::rc::Rc;
 
@@ -98,8 +100,8 @@ use crate::flight_frame::RaisedLine;
 use crate::hail::likes_player;
 use crate::person::{
     ESCAPE_POD, Eligible, GRUDGE, HAIL_QUOTES, PersonRules, QUOTE_GAP_TICKS, QUOTE_IF_MISSION,
-    QUOTE_ODDS, QUOTE_SHOWN_TICKS, QuoteTags, QuoteView, expand_tags, hail_quote_patch_id,
-    hail_quote_text, quote_eligible,
+    QUOTE_ODDS, QuoteTags, QuoteView, expand_tags, hail_quote_patch_id, hail_quote_text,
+    quote_eligible,
 };
 use crate::sound::SimSound;
 use crate::text_tags::TagRules;
@@ -128,25 +130,6 @@ fn checks_mission(
         && flying
         && !player_jumping
         && seen
-}
-
-/// A person's hail quote said, for the flight's message line.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PersonQuote {
-    /// The NPC that said it.
-    pub npc: NpcId,
-    /// Its words, its tags read.
-    pub text: String,
-}
-
-impl PersonQuote {
-    /// How long the quote shows: [`QUOTE_SHOWN_TICKS`] (@0x4464d), the
-    /// one count the session sets the message line to and the flight
-    /// shows it for.
-    #[must_use]
-    pub fn ticks(&self) -> u16 {
-        QUOTE_SHOWN_TICKS
-    }
 }
 
 /// The hail quotes' clock: the quote ticks so far, in place of the
@@ -427,7 +410,7 @@ impl Session {
     /// @0x445e1), an empty line for one out of range
     /// ([`hail_quote_text`]); with `_beepSnd[4]`
     /// ([`SimSound::HailQuote`](crate::SimSound::HailQuote), @0x44586-0x445ad),
-    /// shown for [`QUOTE_SHOWN_TICKS`] (@0x4464d), in which no random
+    /// shown for [`QUOTE_SHOWN_TICKS`](crate::person::QUOTE_SHOWN_TICKS) (@0x4464d), in which no random
     /// quote is said, raised on the line as `_DisplayComm` takes it
     /// ([`Space::raise_line`]). It is quoted (+0xbc); the time of its last quote is
     /// its caller's to keep. An NPC gone, or flying no person, says
@@ -686,7 +669,7 @@ mod tests {
     use crate::chance::{Chance, NeverFires};
     use crate::control::Test;
     use crate::control::{ControlBits, PilotFacts};
-    use crate::person::{PersonRoll, PersonRules};
+    use crate::person::{PersonRoll, PersonRules, QUOTE_SHOWN_TICKS};
     use crate::pilot::Pilot;
     use crate::rulebook::RuleSource;
     use crate::rulebook::{RuleKey, Rulebook};
@@ -739,15 +722,6 @@ mod tests {
         let after = session.space.npc(trader).expect("stays");
         assert_eq!((after.goal, after.target), (Goal::Idle, None));
         assert!((after.provoked - 10.0).abs() < f32::EPSILON, "kept");
-    }
-
-    #[test]
-    fn a_quote_shows_for_420_ticks() {
-        let quote = PersonQuote {
-            npc: NpcId(0),
-            text: String::new(),
-        };
-        assert_eq!(quote.ticks(), 420);
     }
 
     /// System 130 has no traffic of its own (`AvgShips` `avg_ships`) and

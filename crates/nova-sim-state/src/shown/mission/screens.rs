@@ -19,6 +19,10 @@ pub const SLOTS_FULL_BEFORE: &str = "You're already on";
 pub const SLOTS_FULL_AFTER: &str =
     "missions - you'll have to abort or finish one before you can accept another.";
 
+/// `STR#` 2002 #353: what the mission computer says with no offer
+/// available.
+pub const NO_MISSIONS_HERE: &str = "There are no missions available here.";
+
 /// `STR#` 2002 #354: what the in-flight mission info key says on the
 /// flight message line with no mission to show (`_HandlePlayer`
 /// @0x7055c-0x705a8).
@@ -187,6 +191,14 @@ mod tests {
     #[test]
     fn the_bar_first_offers_15_ticks_after_it_opens() {
         assert_eq!(FIRST_OFFER_TICKS, 15);
+    }
+
+    #[test]
+    fn with_no_offer_the_computer_says_the_originals_words() {
+        assert_eq!(
+            NO_MISSIONS_HERE, "There are no missions available here.",
+            "STR# 2002 #353"
+        );
     }
 
     #[test]

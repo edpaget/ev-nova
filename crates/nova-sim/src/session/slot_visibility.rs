@@ -115,6 +115,8 @@
 //! `_PlayGame`'s frozen `_DoPlayGameWork(1)` at entry (@0x457f3-0x4580c)
 //! is the `priming_passes` module's.
 
+pub use nova_sim_frame::slot_visibility::HoverPlace;
+
 use super::player_led::slot_of;
 use super::prepare_frames::PreparedSlot;
 use super::{Session, Setup, Space};
@@ -123,22 +125,6 @@ use crate::combat::ShipRef;
 use crate::geometry::Vec2;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::ship_layer::{ShipLayer, Slot};
-
-/// Where a ship's hover and click box is ([`Session::hover_place`]).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum HoverPlace {
-    /// Where the ship is drawn, or would be when hidden.
-    Own,
-    /// At this whole-pixel offset from where the player is drawn: where
-    /// its slot was last laid out, by another ship.
-    Stale(Vec2),
-    /// At the window's top-left, the sprite world's (0, 0): its slot has
-    /// not been laid out this run, so its rect is where `_InitSprites`'
-    /// clone left it (`_SWCloneSprite` @0x1f135 copies the unlocated
-    /// master's rect, @0xa9462). Sized by a frame of the frames its slot
-    /// holds ([`Session::framed_by`]).
-    Cloned,
-}
 
 impl Session {
     /// Notes `slot`'s display of `ship`: shown, it is displayed from now;

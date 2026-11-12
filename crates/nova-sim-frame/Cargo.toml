@@ -19,6 +19,9 @@ nova-sim-catalog.workspace = true
 # nova-sim stack: `deny.toml` bans the way up to combat, the ai, the
 # story, the port, the save layer and the session.
 nova-sim-state.workspace = true
+# The `Error` derive of the mission refusals (`missions::AbortError`,
+# `missions::NotOffered`).
+thiserror.workspace = true
 
 [dev-dependencies]
 # The scripted blink rolls (`fixture::blink::ScriptedRolls`) the glow
@@ -27,6 +30,13 @@ nova-sim-base = { workspace = true, features = ["fixture"] }
 # The government record builder (`fixture::govt`) the border tests build
 # from.
 nova-sim-catalog = { workspace = true, features = ["fixture"] }
+
+[features]
+# Test support for other crates' tests: `nav::SavedNav::of`, a saved nav
+# built without a session to take it from, which nova-sim's `fixture`
+# turns on for the view's tests. This crate's own unit tests reach it
+# through `cfg(test)`.
+fixture = []
 
 [lints]
 workspace = true

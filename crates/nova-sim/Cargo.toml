@@ -70,6 +70,9 @@ nova-sim-ai = { workspace = true, features = ["fixture"] }
 # `testkit` re-exports, and the dialog port's fake the conversation tests
 # open.
 nova-sim-story = { workspace = true, features = ["fixture"] }
+# The view vocabulary's test support: `SavedNav::of`, which the frame
+# and screen tests build a saved nav with.
+nova-sim-frame = { workspace = true, features = ["fixture"] }
 # The save layer's test support: the pilot store's fake, `MemoryPilots`,
 # which `fixture` re-exports and the unit tests save through.
 nova-sim-save = { workspace = true, features = ["fixture"] }
@@ -86,10 +89,12 @@ nova-sim-save = { workspace = true, features = ["fixture"] }
 # it re-exports as `fixture::chance`; and the story layer's, whose dialog
 # fake (`dialog::fake`) the game's router tests hand a session; and the
 # save layer's, whose `MemoryPilots` and `pilot_store` contract it
-# re-exports.
+# re-exports; and the view vocabulary's, whose `SavedNav::of` the view's
+# tests build a saved nav with.
 fixture = [
     "nova-sim-base/fixture",
     "nova-sim-catalog/fixture",
+    "nova-sim-frame/fixture",
     "nova-sim-ai/fixture",
     "nova-sim-story/fixture",
     "nova-sim-save/fixture",

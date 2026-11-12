@@ -109,6 +109,7 @@ pub use crate::traffic::persons::{
     derelict_armor, fit, turns_with_quote,
 };
 pub use crate::traffic::{COMM_QUOTES, GRUDGE, QUOTE_ON_ATTACK};
+pub use nova_sim_base::shown::person::QUOTE_SHOWN_TICKS;
 
 /// `Flags`: it uses an escape pod, so it survives its ship (@0x2dc9b).
 pub const ESCAPE_POD: u16 = 0x0002;
@@ -213,9 +214,6 @@ pub fn hail_quote_text(hail_quote: i16, patch: StringPatch, lines: &[String]) ->
 pub const NO_RANK: &str = "captain";
 /// `Rand(140)` (0x8c @0x33f31): a hail quote said now and then.
 pub const QUOTE_ODDS: u32 = 140;
-/// How long a hail quote shows, and keeps any other from being said at
-/// random, in ticks (420 frames, 0x1a4 @0x4464d).
-pub const QUOTE_SHOWN_TICKS: u16 = 420;
 /// How long a person waits after its quote before it says it again at
 /// random, in ticks (2700 Mac ticks, 45 s, 0xa8c @0x33f5b).
 pub const QUOTE_GAP_TICKS: u64 = 1350;
@@ -1330,7 +1328,7 @@ mod tests {
             );
         }
         assert_eq!([QUOTE_ODDS, HAIL_QUOTES as u32], [140, 7101]);
-        assert_eq!([u64::from(QUOTE_SHOWN_TICKS), QUOTE_GAP_TICKS], [420, 1350]);
+        assert_eq!(QUOTE_GAP_TICKS, 1350);
     }
 
     /// A flying person of `QUOTE_ON_ATTACK` (and `more`), idle.
