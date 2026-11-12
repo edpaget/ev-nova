@@ -41,7 +41,8 @@
 //!   player not drawn in full draws nothing, as before. Only a class with
 //!   no model draws its outline, unfaded, as it always did.
 //! - **Colour**: a model takes none of the sprite's colorize (the murk,
-//!   the ion tint, the gate's white wash), faded or not.
+//!   the ion tint, the gate's white wash), faded or not
+//!   (rdm:phase/rendering-3d/phase-15-model-colorize-like-its-sprite).
 
 use std::rc::Rc;
 
