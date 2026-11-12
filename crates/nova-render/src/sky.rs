@@ -79,6 +79,10 @@ use nova_view::{Point, SkyPose};
 
 use crate::viewport::LogicalSize;
 
+mod look;
+
+pub use look::{BackdropLook, SkyLook, SkyLooks};
+
 /// How high above the play plane the eye is, in world units.
 pub const EYE_HEIGHT: f32 = 1000.0;
 
@@ -289,8 +293,20 @@ fn reaches(from: Point, trail: Point, lo: Point, hi: Point) -> bool {
 /// leaves every star as it is.
 #[must_use]
 pub fn stars(pose: &SkyPose, logical: LogicalSize, texels_per_unit: f32) -> Vec<StarInstance> {
+    stars_of(pose, &SkyLook::default(), logical, texels_per_unit)
+}
+
+/// The stars of [`stars`], in a system of look `look`: its star density
+/// and tint ([`look`]).
+#[must_use]
+pub fn stars_of(
+    pose: &SkyPose,
+    look: &SkyLook,
+    logical: LogicalSize,
+    texels_per_unit: f32,
+) -> Vec<StarInstance> {
     (0..LAYERS.len())
-        .flat_map(|layer| layer_stars(pose, layer, logical, texels_per_unit))
+        .flat_map(|layer| layer_stars_of(pose, layer, look, logical, texels_per_unit))
         .collect()
 }
 
@@ -299,6 +315,19 @@ pub fn stars(pose: &SkyPose, logical: LogicalSize, texels_per_unit: f32) -> Vec<
 pub fn layer_stars(
     pose: &SkyPose,
     layer: usize,
+    logical: LogicalSize,
+    texels_per_unit: f32,
+) -> Vec<StarInstance> {
+    layer_stars_of(pose, layer, &SkyLook::default(), logical, texels_per_unit)
+}
+
+/// Layer `layer`'s stars, as [`stars_of`] gives them in a system of look
+/// `look`.
+#[must_use]
+pub fn layer_stars_of(
+    pose: &SkyPose,
+    layer: usize,
+    look: &SkyLook,
     logical: LogicalSize,
     texels_per_unit: f32,
 ) -> Vec<StarInstance> {
@@ -334,7 +363,7 @@ pub fn layer_stars(
     // many cells before (cx0, cy0), none without a rush.
     let back = |edge: f64, grow: f32| (first(edge - f64::from(grow.max(0.0))) - first(edge)) as i64;
     let (back_x, back_y) = (back(left, trail.x), back(top, trail.y));
-    let per_cell = sky_layer.density * CELL * CELL / DENSITY_AREA;
+    let per_cell = sky_layer.density * CELL * CELL / DENSITY_AREA * look.star_density();
     let lo = Point::new(-MARGIN, -MARGIN);
     let hi = Point::new(logical.w as f32 + MARGIN, logical.h as f32 + MARGIN);
     let min_radius = if texels_per_unit.is_finite() && texels_per_unit > 0.0 {
@@ -355,7 +384,7 @@ pub fn layer_stars(
                 let y = corner_y + (j as f32 + draws.unit()) * CELL;
                 let radius = between(sky_layer.radius, draws.unit());
                 let brightness = between(sky_layer.brightness, draws.unit());
-                let tint = tint(draws.next());
+                let tint = look.tinted(tint(draws.next()));
                 if !reaches(Point::new(x, y), trail, lo, hi) {
                     continue;
                 }
