@@ -3,6 +3,7 @@
 
 use nova_sim::combat::SpriteLoad;
 
+use crate::render_scale::RenderScale;
 use crate::scaling::Scaling;
 use crate::sound::SoundPrefs;
 use crate::video_mode::FullscreenKind;
@@ -11,8 +12,8 @@ use crate::video_mode::FullscreenKind;
 /// sound preferences, whether a hyperspace jump plays its white fades,
 /// whether a `dësc`'s movie plays, whether shots trail and smoke, whether
 /// ships show their weapon glow, animate, glow and show their running
-/// lights, how the game runs fullscreen, and how it is enlarged onto the
-/// window.
+/// lights, how the game runs fullscreen, how it is enlarged onto the
+/// window, and the size its world is drawn at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)] // One field per on-off preference.
 pub struct Prefs {
@@ -71,6 +72,9 @@ pub struct Prefs {
     /// upscaler or a load-time enlargement ([`Scaling::sites`]). Not the
     /// original's: its dialog has no such control.
     pub scaling: Scaling,
+    /// The size flight's world layer is drawn at, before the Scaling
+    /// enlarges it. Not the original's: its dialog has no such control.
+    pub render_scale: RenderScale,
 }
 
 impl Default for Prefs {
@@ -83,7 +87,8 @@ impl Default for Prefs {
     /// as YES (@0xce96a-0xce993); `ShipAnimations`, `EngineGlows` and
     /// `RunningLights` as YES, each a box bound with no transformer, so
     /// checked means on; and `ParallaxStarfield` on when the key is
-    /// missing (@0xcecee). Fullscreen borderless, and Scaling native.
+    /// missing (@0xcecee). Fullscreen borderless, Scaling native, and the
+    /// render scale Auto.
     fn default() -> Self {
         Self {
             sound: SoundPrefs::default(),
@@ -97,6 +102,7 @@ impl Default for Prefs {
             parallax_starfield: true,
             fullscreen: FullscreenKind::Borderless,
             scaling: Scaling::Native,
+            render_scale: RenderScale::Auto,
         }
     }
 }
@@ -163,6 +169,7 @@ mod tests {
                 parallax_starfield: true,
                 fullscreen: FullscreenKind::Borderless,
                 scaling: Scaling::Native,
+                render_scale: RenderScale::Auto,
             }
         );
     }

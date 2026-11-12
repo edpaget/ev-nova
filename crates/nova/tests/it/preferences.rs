@@ -526,9 +526,9 @@ fn the_preferences_over_the_main_menu_set_the_music_playing_there() {
     harness.press(Key::KeyP);
     assert_eq!(harness.showing(), Showing::Preferences);
     // Past Ship Animations, Engine Glows, Running Lights, Weapon Effects,
-    // Smoke Trails, Parallax Starfield, the display picker and the Scaling
-    // list to the music volume.
-    for _ in 0..14 {
+    // Smoke Trails, Parallax Starfield, the render-scale list, the display
+    // picker and the Scaling list to the music volume.
+    for _ in 0..15 {
         harness.press(Key::Tab);
     }
     harness.press(Key::ArrowDown);
@@ -975,7 +975,7 @@ impl Harness {
     /// for each `true`, Up for each `false`) and presses Return.
     fn pick(&mut self, steps: &[bool]) {
         self.command_comma();
-        for _ in 0..11 {
+        for _ in 0..12 {
             self.press(Key::Tab);
         }
         for &down in steps {
@@ -1110,7 +1110,7 @@ impl Harness {
     fn step_scaling_by(&mut self, key: Key, times: usize) {
         self.command_comma();
         assert_eq!(self.showing(), Showing::Preferences);
-        for _ in 0..12 {
+        for _ in 0..13 {
             self.press(Key::Tab);
         }
         for _ in 0..times {

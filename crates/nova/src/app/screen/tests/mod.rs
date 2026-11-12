@@ -1155,17 +1155,25 @@ fn yes_no_template() -> DialogTemplate {
 /// Music (8) and Sound (20) check boxes, Key Settings (16), the
 /// QuickTime Movies (9), Smoke Trails (10), Ship Animations (12), Engine
 /// Glows (13), Running Lights (14), Weapon Effects (15) and Parallax
-/// Starfield (18) check boxes down the left column, and the Hyperspace
-/// Effects check box (21).
+/// Starfield (18) check boxes down the left column, the render-scale
+/// list's row (22, "Check For Updates") under them, clear of every other
+/// item, and the Hyperspace Effects check box (21).
 fn prefs_template() -> DialogTemplate {
     let item = |x, y, w, h, kind| ItemTemplate {
         bounds: Bounds::at(Point::new(x, y), w, h),
         enabled: true,
         kind,
     };
-    let mut items: Vec<ItemTemplate> = (0..21)
+    let mut items: Vec<ItemTemplate> = (0..22)
         .map(|_| item(0.0, 300.0, 10.0, 10.0, ItemSpec::User))
         .collect();
+    items[21] = item(
+        10.0,
+        160.0,
+        100.0,
+        18.0,
+        ItemSpec::CheckBox("Check For Updates".into()),
+    );
     items[0] = item(200.0, 230.0, 70.0, 20.0, ItemSpec::Button("OK".into()));
     items[1] = item(150.0, 40.0, 100.0, 18.0, ItemSpec::User);
     items[3] = item(

@@ -13,6 +13,7 @@ use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::input::Input;
 use crate::keymap::{Command, CommandInput, SharedBindings, UiCommand, contexts};
+use crate::render_scale::RenderScale;
 use crate::scaling::Scaling;
 use crate::video_mode::FullscreenKind;
 
@@ -92,6 +93,13 @@ impl PickerEntry for Scaling {
     /// "Scaling: " and the scaling's name.
     fn label(&self) -> String {
         Scaling::label(*self).to_owned()
+    }
+}
+
+impl PickerEntry for RenderScale {
+    /// "Render Scale: " and Auto or its percentage.
+    fn label(&self) -> String {
+        RenderScale::label(*self)
     }
 }
 
@@ -444,6 +452,9 @@ mod tests {
             assert_eq!(PickerEntry::label(&scaling), scaling.label());
         }
         assert_eq!(PickerEntry::label(&Scaling::SuperXbr), "Scaling: Super-xBR");
+        for scale in RenderScale::list(RenderScale::Percent(60)) {
+            assert_eq!(PickerEntry::label(&scale), scale.label());
+        }
         assert_eq!(
             PickerEntry::label(&FullscreenKind::Borderless),
             "Borderless"

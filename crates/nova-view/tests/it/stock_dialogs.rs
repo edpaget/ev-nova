@@ -30,8 +30,8 @@ use nova_view::ui::note::{
 };
 use nova_view::ui::prefs::{
     HYPERSPACE_EFFECTS_ITEM, HYPERSPACE_EFFECTS_LABEL, KEY_SETTINGS_ITEM, MUSIC_ITEM, NOTICE_AREA,
-    OK_ITEM, PREFS_DIALOG, SCALING_ITEM, SOUND_ITEM, VOLUME_DOWN_ITEM, VOLUME_LABEL_ITEM,
-    VOLUME_UP_ITEM, VOLUME_VALUE_ITEM,
+    OK_ITEM, PREFS_DIALOG, RENDER_SCALE_ITEM, SCALING_ITEM, SOUND_ITEM, VOLUME_DOWN_ITEM,
+    VOLUME_LABEL_ITEM, VOLUME_UP_ITEM, VOLUME_VALUE_ITEM,
 };
 use nova_view::ui::{
     ButtonImages, ButtonSkin, ButtonStyle, DescDialog, DescriptionSource, Dialog, DialogEvent,
@@ -479,6 +479,12 @@ fn new_prefs_dialog_has_the_items_the_preferences_dialog_is_built_from() {
             ItemSpec::CheckBox(HYPERSPACE_EFFECTS_LABEL.into()),
             "{name}"
         );
+        // The render-scale list is built from this one, in both builds.
+        assert_eq!(
+            item(RENDER_SCALE_ITEM).kind,
+            ItemSpec::CheckBox("Check For Updates".into()),
+            "{name}"
+        );
     }
 }
 
@@ -539,11 +545,11 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
         }
         assert_eq!(
             prefs.inert().len(),
-            1,
-            "{name}: only Check For Updates is greyed: QuickTime Movies, Smoke Trails, \
-             Weapon Effects, Ship Animations, Engine Glows, Running Lights and Parallax \
-             Starfield work, Run in a window is the display picker and Share Processor \
-             Time the Scaling list"
+            0,
+            "{name}: no box is greyed: QuickTime Movies, Smoke Trails, Weapon Effects, \
+             Ship Animations, Engine Glows, Running Lights and Parallax Starfield work, \
+             Run in a window is the display picker, Share Processor Time the Scaling \
+             list and Check For Updates the render-scale list"
         );
         assert!(
             prefs.inert().iter().all(|toggle| {
@@ -659,6 +665,83 @@ fn the_preferences_dialogs_scaling_list_fills_share_processor_times_row() {
     }
 }
 
+/// The render-scale list fills "Check For Updates"'s own area, clear of
+/// every other part and of the relaunch notice's area, inside the dialog,
+/// in each build (nova-render's label test checks the widest label fits it
+/// under the real text metrics).
+#[test]
+fn the_preferences_dialogs_render_scale_list_fills_check_for_updates_row() {
+    for (_, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(PREFS_DIALOG)
+            .expect("converts");
+        let prefs = PrefsDialog::new(
+            &template,
+            Prefs::default(),
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+        .expect("builds");
+        let dialog = prefs.dialog();
+        let name = path.display();
+        let ok = dialog.item_bounds(OK_ITEM).expect("OK");
+        let keys = dialog.item_bounds(KEY_SETTINGS_ITEM).expect("Key Settings");
+        let list = prefs.render_scale().rects().bounds();
+        let row = dialog
+            .item_bounds(RENDER_SCALE_ITEM)
+            .expect("Check For Updates");
+        assert_eq!(
+            (list.min.x, list.min.y, list.max.x, list.max.y),
+            (row.min.x + 1.0, row.min.y, row.max.x, row.max.y),
+            "{name}"
+        );
+        assert!(dialog.bounds().contains(list.min) && dialog.bounds().contains(list.max));
+        let (left, top, right, bottom) = NOTICE_AREA;
+        let origin = dialog.bounds().min;
+        let notice = Bounds {
+            min: Point::new(origin.x + left, origin.y + top),
+            max: Point::new(origin.x + right, origin.y + bottom),
+        };
+        let effects = prefs.effects_volume().rects();
+        for rect in prefs
+            .inert()
+            .iter()
+            .chain([
+                prefs.music(),
+                prefs.sound(),
+                prefs.hyperspace_effects(),
+                prefs.quicktime_movies(),
+                prefs.smoke_trails(),
+                prefs.weapon_effects(),
+                prefs.ship_animations(),
+                prefs.engine_glows(),
+                prefs.running_lights(),
+                prefs.parallax_starfield(),
+            ])
+            .map(nova_view::ui::toggle::Toggle::rect)
+            .chain([
+                effects.label,
+                effects.bounds(),
+                prefs.music_volume().rects().bounds(),
+                prefs.display().rects().bounds(),
+                prefs.scaling().rects().bounds(),
+                notice,
+                ok,
+                keys,
+            ])
+        {
+            let apart = rect.max.x <= list.min.x
+                || rect.min.x >= list.max.x
+                || rect.max.y <= list.min.y
+                || rect.min.y >= list.max.y;
+            assert!(
+                apart,
+                "{name}: {rect:?} under the render-scale list {list:?}"
+            );
+        }
+    }
+}
+
 /// The relaunch notice's area, under "Check For Updates", is clear of
 /// every part the dialog draws, inside the dialog, in each build.
 #[test]
@@ -706,6 +789,7 @@ fn the_preferences_dialogs_relaunch_notice_has_its_area_to_itself() {
                 prefs.music_volume().rects().bounds(),
                 prefs.display().rects().bounds(),
                 prefs.scaling().rects().bounds(),
+                prefs.render_scale().rects().bounds(),
                 ok,
                 keys,
             ])

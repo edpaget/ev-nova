@@ -42,18 +42,23 @@ fn the_pads_first_focus_is_what_step_1_found() {
 }
 
 #[test]
-fn the_shoulders_step_the_twenty_targets_in_the_keyboards_order() {
+fn the_shoulders_step_the_twenty_two_targets_in_the_keyboards_order() {
     let mut dialog = prefs();
     dialog.input(&told(PAD));
     let mut parts = Vec::new();
-    for _ in 0..20 {
+    for _ in 0..22 {
         tap(&mut dialog, PadButton::RightShoulder);
         parts.push(dialog.pad_target().expect("focused"));
     }
     assert_eq!(parts[0], PrefsTarget::Part(Focus::Music), "OK wraps round");
-    assert_eq!(parts[10], PrefsTarget::Arrow(Focus::Display, Arrow::Up));
-    assert_eq!(parts[11], PrefsTarget::Arrow(Focus::Display, Arrow::Down));
-    assert_eq!(parts[19], PrefsTarget::Part(Focus::Ok));
+    assert_eq!(parts[10], PrefsTarget::Arrow(Focus::RenderScale, Arrow::Up));
+    assert_eq!(
+        parts[11],
+        PrefsTarget::Arrow(Focus::RenderScale, Arrow::Down)
+    );
+    assert_eq!(parts[12], PrefsTarget::Arrow(Focus::Display, Arrow::Up));
+    assert_eq!(parts[13], PrefsTarget::Arrow(Focus::Display, Arrow::Down));
+    assert_eq!(parts[21], PrefsTarget::Part(Focus::Ok));
     let mut keyed = parts.iter().map(|target| target.part()).collect::<Vec<_>>();
     keyed.dedup();
     let mut next = Focus::Music;
@@ -71,7 +76,7 @@ fn the_shoulders_step_the_twenty_targets_in_the_keyboards_order() {
 #[test]
 fn the_left_stick_steps_the_focused_stepper_as_the_arrow_keys_do() {
     let mut keyed = prefs();
-    for _ in 0..13 {
+    for _ in 0..14 {
         keyed.input(&key(Key::Tab));
     }
     assert_eq!(keyed.focus(), Some(Focus::EffectsVolume));
@@ -275,6 +280,105 @@ fn south_on_a_volume_arrow_reports_the_change() {
 }
 
 #[test]
+fn the_render_scales_arrows_are_where_its_picker_draws_them() {
+    let dialog = prefs();
+    let rects = dialog.render_scale().rects();
+    let targets = dialog.pad_targets();
+    let at = |arrow| {
+        targets
+            .iter()
+            .find(|target| target.id == PrefsTarget::Arrow(Focus::RenderScale, arrow))
+            .expect("a target")
+            .bounds
+    };
+    assert_eq!(at(Arrow::Up), rects.up);
+    assert_eq!(at(Arrow::Down), rects.down);
+    assert_eq!(targets.len(), 22);
+}
+
+#[test]
+fn south_on_a_render_scale_arrow_steps_it_and_reports_the_change_at_once() {
+    use crate::render_scale::RenderScale;
+    let mut dialog = prefs();
+    dialog.input(&told(PAD));
+    reach(
+        &mut dialog,
+        PrefsTarget::Arrow(Focus::RenderScale, Arrow::Down),
+    );
+    dialog.input(&Input::PadButton {
+        button: PadButton::South,
+        pressed: true,
+        repeat: false,
+    });
+    assert!(dialog.render_scale().pressed(Arrow::Down), "drawn pressed");
+    assert_eq!(dialog.take_change(), None, "on the release");
+    dialog.input(&Input::PadButton {
+        button: PadButton::South,
+        pressed: false,
+        repeat: false,
+    });
+    assert_eq!(
+        dialog.take_change().map(|prefs| prefs.render_scale),
+        Some(RenderScale::Percent(100))
+    );
+    assert_eq!(dialog.prefs().sound, prefs().prefs().sound, "nothing else");
+    assert!(!dialog.closed(), "with the dialog still open");
+    reach(
+        &mut dialog,
+        PrefsTarget::Arrow(Focus::RenderScale, Arrow::Up),
+    );
+    tap(&mut dialog, PadButton::South);
+    assert_eq!(
+        dialog.take_change().map(|prefs| prefs.render_scale),
+        Some(RenderScale::Auto)
+    );
+    tap(&mut dialog, PadButton::South);
+    assert_eq!(dialog.take_change(), None, "Auto is the top");
+}
+
+#[test]
+fn the_left_stick_steps_the_focused_render_scale() {
+    use crate::render_scale::RenderScale;
+    let mut dialog = prefs();
+    dialog.input(&told(PAD));
+    reach(
+        &mut dialog,
+        PrefsTarget::Arrow(Focus::RenderScale, Arrow::Up),
+    );
+    tap(&mut dialog, PadButton::LeftStickDown);
+    tap(&mut dialog, PadButton::LeftStickDown);
+    assert_eq!(
+        dialog.take_change().map(|prefs| prefs.render_scale),
+        Some(RenderScale::Percent(75))
+    );
+    tap(&mut dialog, PadButton::LeftStickUp);
+    assert_eq!(dialog.prefs().render_scale, RenderScale::Percent(100));
+}
+
+#[test]
+fn a_focus_move_drops_a_press_held_on_a_render_scale_arrow() {
+    let mut dialog = prefs();
+    dialog.input(&told(PAD));
+    reach(
+        &mut dialog,
+        PrefsTarget::Arrow(Focus::RenderScale, Arrow::Down),
+    );
+    dialog.input(&Input::PadButton {
+        button: PadButton::South,
+        pressed: true,
+        repeat: false,
+    });
+    tap(&mut dialog, PadButton::RightShoulder);
+    assert!(!dialog.render_scale().pressed(Arrow::Down));
+    dialog.input(&Input::PadButton {
+        button: PadButton::South,
+        pressed: false,
+        repeat: false,
+    });
+    assert_eq!(dialog.take_change(), None);
+}
+
+#[test]
 fn south_on_the_display_and_scaling_arrows_picks_as_a_click_does() {
     use crate::video_mode::FullscreenKind;
     let mut dialog = offered();
@@ -335,7 +439,7 @@ fn holding_the_left_stick_up_steps_the_effects_volume_as_a_held_up_arrow_does() 
         repeat,
     };
     let mut keyed = prefs();
-    for _ in 0..13 {
+    for _ in 0..14 {
         keyed.input(&key(Key::Tab));
     }
     assert_eq!(keyed.focus(), Some(Focus::EffectsVolume));
