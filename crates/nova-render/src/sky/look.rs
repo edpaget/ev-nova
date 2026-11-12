@@ -364,3 +364,91 @@ mod tests {
         assert_eq!(looks.len(), 1);
     }
 }
+
+/// How the [`Renderer`](crate::Renderer) draws a sky in its look.
+#[cfg(test)]
+mod batch_tests {
+    use nova_view::{DrawList, Point, SkyPose};
+
+    use super::super::instances;
+    use super::*;
+    use crate::Renderer;
+    use crate::gpu::{Batch, Frame};
+    use crate::recording::{NoImages, RecordingGpu};
+    use crate::viewport::{LogicalSize, Viewport};
+
+    const SMALL: LogicalSize = LogicalSize { w: 256, h: 192 };
+
+    /// Half a pixel a unit, so the target draws at 0.5 texels a unit.
+    fn viewport() -> Viewport {
+        Viewport::new(SMALL, (128, 96), 0.5)
+    }
+
+    fn sky(seed: u64) -> SkyPose {
+        SkyPose::new(seed, Point::new(40.0, -70.0), Point::new(128.0, 96.0), 32)
+    }
+
+    fn frame_of(renderer: &mut Renderer<NoImages>, seed: u64) -> Frame {
+        let mut list = DrawList::new();
+        list.sky(sky(seed));
+        let mut gpu = RecordingGpu::new();
+        renderer.render(&list, &viewport(), &mut gpu);
+        gpu.submits()
+            .last()
+            .map(|frame| (*frame).clone())
+            .expect("a frame")
+    }
+
+    /// A look unlike the default in every field.
+    fn red_and_sparse() -> SkyLook {
+        SkyLook {
+            stars: 0.5,
+            tint: Some([0.0, 0.0, 1.0]),
+            backdrop: BackdropLook {
+                color: Some([1.0, 0.0, 0.0]),
+                amount: Some(1.0),
+            },
+        }
+    }
+
+    #[test]
+    fn a_look_registered_for_the_poses_seed_is_the_one_drawn() {
+        let mut renderer = Renderer::new(NoImages);
+        let mut looks = SkyLooks::new();
+        looks.insert(21, red_and_sparse());
+        renderer.set_sky_looks(looks);
+        let expected = instances(&sky(21), &red_and_sparse(), SMALL, 0.5);
+        assert_ne!(
+            expected,
+            instances(&sky(21), &SkyLook::default(), SMALL, 0.5)
+        );
+        assert_eq!(frame_of(&mut renderer, 21).batches, [Batch::Sky(expected)]);
+    }
+
+    #[test]
+    fn another_seeds_look_is_not_drawn() {
+        let mut renderer = Renderer::new(NoImages);
+        let mut looks = SkyLooks::new();
+        looks.insert(22, red_and_sparse());
+        renderer.set_sky_looks(looks);
+        let expected = instances(&sky(21), &SkyLook::default(), SMALL, 0.5);
+        assert_eq!(frame_of(&mut renderer, 21).batches, [Batch::Sky(expected)]);
+    }
+
+    #[test]
+    fn a_look_that_draws_nothing_is_no_batch() {
+        let mut renderer = Renderer::new(NoImages);
+        let mut looks = SkyLooks::new();
+        let nothing = SkyLook {
+            stars: 0.0,
+            tint: None,
+            backdrop: BackdropLook {
+                color: None,
+                amount: Some(0.0),
+            },
+        };
+        looks.insert(21, nothing);
+        renderer.set_sky_looks(looks);
+        assert_eq!(frame_of(&mut renderer, 21).batches, []);
+    }
+}

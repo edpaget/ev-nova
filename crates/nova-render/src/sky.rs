@@ -1167,14 +1167,25 @@ mod batch_tests {
 
     #[test]
     fn the_texels_these_tests_draw_at_give_different_stars() {
-        let [half, whole, eighth] = [0.5, 1.0, 0.125].map(|t| stars(&sky(), SMALL, t));
+        let [half, whole, eighth] = [0.5, 1.0, 0.125].map(|t| drawn(SMALL, t));
         assert_ne!(half, whole);
         assert_ne!(half, eighth);
         assert_ne!(whole, eighth);
     }
 
     fn sky() -> SkyPose {
-        SkyPose::new(21, Point::new(40.0, -70.0), Point::new(128.0, 96.0), 32)
+        SkyPose::new(12, Point::new(40.0, -70.0), Point::new(128.0, 96.0), 32)
+    }
+
+    /// The core's whole sky for [`sky`] with no look set: its seeded
+    /// backdrop, then its stars.
+    fn drawn(logical: LogicalSize, texels_per_unit: f32) -> Vec<StarInstance> {
+        instances(&sky(), &SkyLook::default(), logical, texels_per_unit)
+    }
+
+    #[test]
+    fn with_no_look_set_these_tests_sky_draws_its_seeded_backdrop() {
+        assert!(!backdrop(&sky(), &SkyLook::default(), SMALL).is_empty());
     }
 
     fn frame_of(
@@ -1202,7 +1213,7 @@ mod batch_tests {
             &list,
             &mut RecordingGpu::new(),
         );
-        let expected = stars(&sky(), SMALL, 0.5);
+        let expected = drawn(SMALL, 0.5);
         assert!(!expected.is_empty());
         assert_eq!(frame.batches, [Batch::Sky(expected.clone())]);
         // An overlay sky keeps the target's texels whatever the world's.
@@ -1220,20 +1231,20 @@ mod batch_tests {
         let mut gpu = RecordingGpu::answering(WorldResolution::Logical);
         let frame = frame_of(&mut Renderer::new(NoImages), &list, &mut gpu);
         assert_eq!(frame.world, [0]);
-        assert_eq!(frame.batches, [Batch::Sky(stars(&sky(), SMALL, 1.0))]);
+        assert_eq!(frame.batches, [Batch::Sky(drawn(SMALL, 1.0))]);
         // At a quarter of the 128-wide backing, a 32-texel world: an
         // eighth of a texel a unit.
         let mut renderer = Renderer::new(NoImages);
         renderer.set_render_scale(RenderScale::Percent(25));
         let frame = frame_of(&mut renderer, &list, &mut RecordingGpu::new());
-        assert_eq!(frame.batches, [Batch::Sky(stars(&sky(), SMALL, 0.125))]);
+        assert_eq!(frame.batches, [Batch::Sky(drawn(SMALL, 0.125))]);
         // Drawn at the target's resolution, a world sky has its texels.
         let frame = frame_of(
             &mut Renderer::new(NoImages),
             &list,
             &mut RecordingGpu::new(),
         );
-        assert_eq!(frame.batches, [Batch::Sky(stars(&sky(), SMALL, 0.5))]);
+        assert_eq!(frame.batches, [Batch::Sky(drawn(SMALL, 0.5))]);
     }
 
     #[test]
@@ -1248,10 +1259,7 @@ mod batch_tests {
         let frame = frame_of(&mut Renderer::new(NoImages), &list, &mut gpu);
         assert_eq!(
             frame.batches,
-            [
-                Batch::Sky(stars(&sky(), SMALL, 1.0)),
-                Batch::Sky(stars(&sky(), SMALL, 0.5))
-            ]
+            [Batch::Sky(drawn(SMALL, 1.0)), Batch::Sky(drawn(SMALL, 0.5))]
         );
     }
 
@@ -1274,9 +1282,9 @@ mod batch_tests {
             } else {
                 (across, down)
             };
-            let expected = stars(&sky(), logical, smaller);
+            let expected = drawn(logical, smaller);
             assert!(!expected.is_empty());
-            assert_ne!(expected, stars(&sky(), logical, larger));
+            assert_ne!(expected, drawn(logical, larger));
             let mut list = DrawList::new();
             list.sky(sky());
             list.world(|list| {
@@ -1374,7 +1382,7 @@ mod batch_tests {
             .map(|frame| (*frame).clone())
             .expect("a frame");
         assert_eq!(kinds(&frame), ["planets", "sky", "sprites"]);
-        assert_eq!(frame.batches[1], Batch::Sky(stars(&sky(), SMALL, 0.5)));
+        assert_eq!(frame.batches[1], Batch::Sky(drawn(SMALL, 0.5)));
     }
 
     #[test]
@@ -1403,6 +1411,6 @@ mod batch_tests {
             &clipped,
             &mut RecordingGpu::new(),
         );
-        assert_eq!(frame.batches, [Batch::Sky(stars(&sky(), SMALL, 0.5))]);
+        assert_eq!(frame.batches, [Batch::Sky(drawn(SMALL, 0.5))]);
     }
 }

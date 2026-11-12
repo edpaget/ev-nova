@@ -23,7 +23,7 @@ use crate::planet_source::LoadedPlanet;
 use crate::planets::Planets;
 use crate::quickdraw_stretch;
 use crate::render_scale::RenderScale;
-use crate::sky;
+use crate::sky::{self, SkyLooks};
 use crate::streams::{Owner, Streams};
 use crate::upscale::world_space;
 use crate::viewport::{LogicalSize, PixelRect, Viewport};
@@ -90,6 +90,9 @@ pub struct Renderer<S> {
     models: Models,
     /// The planets planets are drawn as ([`Renderer::add_planet`]).
     planets: Planets,
+    /// Each system's own sky look, by its sky's seed
+    /// ([`Renderer::set_sky_looks`]).
+    skies: SkyLooks,
     /// The size the world layer is drawn at
     /// ([`Renderer::set_render_scale`]).
     render_scale: RenderScale,
@@ -118,6 +121,7 @@ impl<S: ImageSource> Renderer<S> {
             stretches: HashMap::new(),
             models: Models::default(),
             planets: Planets::default(),
+            skies: SkyLooks::new(),
             render_scale: RenderScale::Auto,
         }
     }
@@ -137,6 +141,13 @@ impl<S: ImageSource> Renderer<S> {
     /// [`PlanetId`](crate::gpu::PlanetId).
     pub fn add_planet(&mut self, key: PlanetKey, planet: LoadedPlanet) {
         self.planets.add(key, planet);
+    }
+
+    /// Draws each sky ([`DrawCommand::Sky`]) in the look `looks` holds
+    /// for its seed from the next frame on, in place of any looks before;
+    /// a seed it holds none for draws the default look.
+    pub fn set_sky_looks(&mut self, looks: SkyLooks) {
+        self.skies = looks;
     }
 
     /// The image source.
@@ -224,10 +235,11 @@ impl<S: ImageSource> Renderer<S> {
     /// ([`RenderReport::missing_planets`]).
     ///
     /// A sky ([`DrawCommand::Sky`]) is a [`Batch::Sky`] of its own, the
-    /// core's stars ([`crate::sky::stars`]) for the logical size and the
-    /// texels a unit is in the canvas it draws into: the world texture's
-    /// for a world sky drawn into one, the window's otherwise. A sky with
-    /// no stars is no batch.
+    /// core's backdrop puffs then stars ([`crate::sky::instances`]) in the
+    /// look set for its seed ([`Renderer::set_sky_looks`]), for the
+    /// logical size and the texels a unit is in the canvas it draws into:
+    /// the world texture's for a world sky drawn into one, the window's
+    /// otherwise. A sky that draws nothing is no batch.
     ///
     /// A frame drawn after [`Renderer::set_enlarger`] first starts the
     /// atlas afresh, the stream pages with it; a zero-area viewport leaves
@@ -499,7 +511,8 @@ impl<S: ImageSource> Renderer<S> {
             }
             // Drawn uncut by a clip, as a model is, in a batch of its own.
             DrawCommand::Sky { ref sky } => {
-                let stars = sky::stars(sky, logical, texels);
+                let look = self.skies.look(sky.seed);
+                let stars = sky::instances(sky, &look, logical, texels);
                 if !stars.is_empty() {
                     batches.push(Batch::Sky(stars));
                 }

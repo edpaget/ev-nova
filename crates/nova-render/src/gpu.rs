@@ -274,10 +274,10 @@ pub enum Batch {
         /// The planets, in draw order.
         planets: Vec<PlanetInstance>,
     },
-    /// The layered sky's stars ([`nova_view::DrawCommand::Sky`]), far
-    /// layer first (see [`crate::sky`]): each adds its colour, by the
-    /// core's falloff, to what is beneath. They test no depth and write
-    /// none.
+    /// The layered sky ([`nova_view::DrawCommand::Sky`]): its distant
+    /// backdrop's puffs, then its stars, far layer first (see
+    /// [`crate::sky`]). Each adds its colour, by the core's falloff, to
+    /// what is beneath. They test no depth and write none.
     Sky(Vec<StarInstance>),
 }
 

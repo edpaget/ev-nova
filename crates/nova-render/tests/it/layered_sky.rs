@@ -11,9 +11,18 @@
 //! Logical 512 × 512 in a 512 × 512 target: a logical unit is a pixel.
 //! Needs a GPU adapter; skips, passing, without one. Native only, but for
 //! the render scale's world texture.
+//!
+//! These tests are about the stars, so the renderer draws their sky
+//! (seed 77) in a look with no backdrop ([`starry`]): a puff beneath
+//! would add to the pixels each prediction sums from the stars alone, and
+//! to the lit pixels the streak tests count. The backdrop drawn with the
+//! stars is `sky_backdrop`'s.
 
 use nova_render::fonts::FontFaces;
-use nova_render::sky::{LAYERS, StarInstance, layer_stars, parallax, stars, streak_coverage};
+use nova_render::sky::{
+    BackdropLook, LAYERS, SkyLook, SkyLooks, StarInstance, layer_stars, parallax, stars,
+    streak_coverage,
+};
 use nova_render::{LogicalSize, RenderReport, RenderScale, Renderer, Viewport};
 use nova_view::geometry::Bounds;
 use nova_view::{Color, DrawCommand, DrawList, Point, SkyPose};
@@ -43,10 +52,25 @@ fn moved() -> (f32, f32) {
     (EYE.0 + DELTA.0, EYE.1 + DELTA.1)
 }
 
+/// The looks these tests draw in: their sky's stars, and no backdrop.
+fn starry() -> SkyLooks {
+    let mut looks = SkyLooks::new();
+    let look = SkyLook {
+        backdrop: BackdropLook {
+            color: None,
+            amount: Some(0.0),
+        },
+        ..SkyLook::default()
+    };
+    looks.insert(pose(EYE, 32).seed, look);
+    looks
+}
+
 /// `list` drawn at `scale`, read back; `None` with no adapter.
 fn drawn(list: &DrawList, scale: RenderScale) -> Option<Vec<u8>> {
     let mut gpu = gpu_with(SIDE, SIDE, &FontFaces::bundled())?;
     let mut renderer = Renderer::new(Images);
+    renderer.set_sky_looks(starry());
     renderer.set_render_scale(scale);
     let viewport = Viewport::new(LOGICAL, (SIDE, SIDE), 1.0);
     let report = renderer.render(list, &viewport, &mut gpu);
