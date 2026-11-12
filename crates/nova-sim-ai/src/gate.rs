@@ -98,6 +98,8 @@ use crate::hyperspace::StarMap;
 pub use crate::landing::{GateKind, HYPERGATE, WORMHOLE};
 use crate::rulebook::RuleSource;
 
+pub use nova_sim_state::shown::gate::{GateRefusal, next_gate_pick};
+
 /// The fraction of its top speed a ship leaves a gate at: the original's
 /// 0.5 (the float at 0xdd694).
 pub const EXIT_SPEED_FRACTION: f32 = 0.5;
@@ -107,23 +109,6 @@ pub const EXIT_SPEED_FRACTION: f32 = 0.5;
 /// stellar index (ID - 128) is below 0x800.
 const FIRST_STELLAR: i16 = 128;
 const STELLARS: i16 = 0x800;
-
-/// Why entering a hypergate or wormhole took the ship nowhere.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GateRefusal {
-    /// No entry is pending: the land key has not just been pressed over a
-    /// gate of that kind, cleared, or a tick has passed since.
-    NotAtGate,
-    /// The hypergate has no links (`_StellarNumHyperLinks` is 0): the
-    /// original says nothing.
-    NoLinks,
-    /// No system was picked on the map, or none the hypergate's links lead
-    /// to (`STR#` 2002 #50, "Hypergate jump cancelled.").
-    Cancelled,
-    /// The wormhole leads nowhere (`STR#` 2002 #84 and #86, "the radiation
-    /// levels are too extreme").
-    NoExit,
-}
 
 /// Where a ship comes out of a hypergate or wormhole.
 ///
@@ -276,30 +261,6 @@ pub fn hypergate_cycle(
         .filter(|&&link| counts(link))
         .map(|&link| find(link))
         .collect()
-}
-
-/// The hypergate map's next pick from `selected`, the map's selection, on
-/// Tab or `\`, as `_MapFilter` steps through the `cycle`
-/// ([`hypergate_cycle`], @0x13db5-0x13f0a): from the first entry equal
-/// to `selected` (`None` matching a `None` entry, as −1 matches −1), the
-/// one before it with Shift (`back`), the first wrapping to the last, and
-/// otherwise the one after it, the last wrapping to the first; from a
-/// selection not in the cycle, the first entry either way. So a
-/// destination listed twice keeps a plain press on its second copy. With
-/// an empty cycle, `None`: nothing changes (@0x13dac).
-#[must_use]
-pub fn next_gate_pick(
-    cycle: &[Option<SystemId>],
-    selected: Option<SystemId>,
-    back: bool,
-) -> Option<Option<SystemId>> {
-    let last = cycle.len().checked_sub(1)?;
-    let next = match cycle.iter().position(|&entry| entry == selected) {
-        None => 0,
-        Some(at) if back => at.checked_sub(1).unwrap_or(last),
-        Some(at) => (at + 1) % cycle.len(),
-    };
-    Some(cycle[next])
 }
 
 /// Where a ship comes out of a wormhole ([`wormhole_exit`]).
@@ -496,49 +457,6 @@ mod tests {
     }
 
     #[test]
-    fn the_next_gate_pick_steps_on_and_shift_steps_back_each_wrapping() {
-        let (a, b) = (Some(SystemId(131)), Some(SystemId(132)));
-        let cycle = [a, None, b];
-        assert_eq!(next_gate_pick(&cycle, a, false), Some(None));
-        assert_eq!(
-            next_gate_pick(&cycle, None, false),
-            Some(b),
-            "-1 is found too"
-        );
-        assert_eq!(next_gate_pick(&cycle, b, false), Some(a), "wraps");
-        assert_eq!(next_gate_pick(&cycle, b, true), Some(None));
-        assert_eq!(next_gate_pick(&cycle, a, true), Some(b), "wraps back");
-    }
-
-    #[test]
-    fn the_next_gate_pick_from_a_selection_not_listed_is_the_first_either_way() {
-        let cycle = [Some(SystemId(131)), Some(SystemId(132))];
-        for back in [false, true] {
-            assert_eq!(
-                next_gate_pick(&cycle, Some(SystemId(130)), back),
-                Some(Some(SystemId(131))),
-                "{back}"
-            );
-            assert_eq!(
-                next_gate_pick(&cycle, None, back),
-                Some(Some(SystemId(131))),
-                "{back}"
-            );
-        }
-    }
-
-    #[test]
-    fn the_next_gate_pick_steps_on_from_the_first_copy_of_a_repeat() {
-        let (a, b) = (Some(SystemId(131)), Some(SystemId(132)));
-        assert_eq!(
-            next_gate_pick(&[a, a, b], a, false),
-            Some(a),
-            "stuck on 131"
-        );
-        assert_eq!(next_gate_pick(&[b, a, a], a, true), Some(b));
-    }
-
-    #[test]
     fn the_hypergate_cycle_lists_each_counted_link_in_slot_order_unresolved_or_not() {
         let mut links = [None; 8];
         links[0] = Some(StellarId(130));
@@ -552,13 +470,6 @@ mod tests {
             "127 doesn't count; 129 no system lists"
         );
         assert_eq!(hypergate_cycle(&[None; 8], find), []);
-    }
-
-    #[test]
-    fn no_next_gate_pick_from_an_empty_cycle() {
-        for back in [false, true] {
-            assert_eq!(next_gate_pick(&[], Some(SystemId(131)), back), None);
-        }
     }
 
     /// The links in `ids`, in slots from the first, the rest unused.

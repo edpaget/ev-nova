@@ -50,11 +50,12 @@
 //! (frame +0x2e-+0x34), as ours has no trimmed frame bounds and uses the
 //! whole sprite.
 
-use crate::catalog::StellarId;
 use crate::cloak::Area;
 use crate::geometry::Vec2;
 use crate::speed_mult::SpeedMult;
-use crate::traffic::npc::{Npc, NpcId};
+use crate::traffic::npc::Npc;
+
+pub use nova_sim_state::shown::brackets::{NavBrackets, Standing, TargetBrackets};
 
 /// How far out a selection starts the brackets (0x43800000).
 pub const FLY_IN_START: f32 = 256.0;
@@ -124,19 +125,6 @@ impl FlyIn {
     }
 }
 
-/// How a ship target stands towards the player, for its brackets' frame.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Standing {
-    /// A threat to the player: red.
-    Hostile,
-    /// Any other ship: yellow.
-    Neutral,
-    /// The player's escort, or a ship one leads: green.
-    Escort,
-    /// Disabled or breaking up: grey.
-    Disabled,
-}
-
 /// How `npc`, led by `leader` (the ship its [`leader`](Npc::leader)
 /// names, if it is in the system), among `npcs`, stands for its
 /// brackets, in `_HandleWeapTargetSprites`'s order (@0x2ffac-0x30021):
@@ -169,32 +157,6 @@ pub fn sprite_in_area(area: Area, at: Vec2, width: f32, height: f32) -> bool {
     Area::centred(at, width, height).overlaps(area)
 }
 
-/// The brackets round the nav target.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct NavBrackets {
-    /// The stellar bracketed.
-    pub stellar: StellarId,
-    /// The stellar's spöb position (+0x4/+0x6), where the brackets are
-    /// drawn whether its system shows it or not (`_HandleNavTargetSprites`
-    /// @0x2fd9f-0x2fdda).
-    pub position: Vec2,
-    /// How far out they are ([`FlyIn::expand`]).
-    pub expand: f32,
-    /// Whether the stellar is dominated: the green frames.
-    pub dominated: bool,
-}
-
-/// The brackets round the ship target.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TargetBrackets {
-    /// The ship bracketed.
-    pub npc: NpcId,
-    /// How far out they are ([`FlyIn::expand`]).
-    pub expand: f32,
-    /// How it stands towards the player: the frames.
-    pub standing: Standing,
-}
-
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
@@ -205,6 +167,7 @@ mod tests {
     use crate::escort::{EscortDuty, FormationSlot};
     use crate::stats::ShipStats;
     use crate::traffic::fixture::npc;
+    use crate::traffic::npc::NpcId;
 
     /// The expand drawn after each of `steps` steps.
     fn steps(fly_in: &mut FlyIn, steps: usize) -> Vec<f32> {

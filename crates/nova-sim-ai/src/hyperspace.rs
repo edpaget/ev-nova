@@ -101,16 +101,8 @@ use crate::geometry::Vec2;
 use crate::navigation::next_after;
 use crate::rulebook::RuleSource;
 pub use crate::stats::{MIN_JUMP_DISTANCE, base_jump_days};
+pub use nova_sim_state::shown::hyperspace::{JUMP_FUEL, JumpReadiness, JumpRefusal, max_jumps};
 
-/// The fuel a jump uses (the Bible: "100 is one jump").
-pub const JUMP_FUEL: f32 = 100.0;
-
-/// How many whole jumps `fuel` holds: none for no fuel or less.
-#[must_use]
-pub fn max_jumps(fuel: f32) -> u32 {
-    // `as` saturates a float into an integer: a negative becomes 0.
-    (fuel / JUMP_FUEL).floor() as u32
-}
 /// How far outside its no-jump zone, in pixels, a ship arrives, so that
 /// rounding in the bearing it arrives on can never leave it inside.
 pub const ARRIVAL_MARGIN: f32 = 1.0;
@@ -274,49 +266,6 @@ pub enum RouteError {
     Unknown,
     /// No chain of hyperlinks reaches the destination.
     Unreachable,
-}
-
-/// Whether the ship can jump to the next system on its course, as the
-/// nav area shows it (`_DrawStatusNav` @0x49f43-0x4a451 draws the
-/// destination dim unless the ship is clear or a jump is under way).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum JumpReadiness {
-    /// J would be refused now, for any [`JumpRefusal`].
-    Blocked,
-    /// J would be accepted.
-    Clear,
-    /// J has been accepted: the ship is braking and turning before the
-    /// jump, or is in hyperspace.
-    Underway,
-}
-
-/// Why the ship cannot jump.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum JumpRefusal {
-    /// The ship has landed: it must take off first. The
-    /// `nova_sim::Session` gives this before [`check_jump`] is
-    /// asked.
-    Landed,
-    /// The ship is disabled, breaking up or destroyed. The
-    /// `nova_sim::Session` gives this before [`check_jump`] is
-    /// asked. The player is never told of it: the original's J skips the
-    /// jump block for a disabled ship (`_HandlePlayer` @0x6b0f5 →
-    /// 0x6bada), with no message and no beep.
-    Disabled,
-    /// No destination has been chosen, or it has been reached.
-    NoDestination,
-    /// The ship is nearer the system's centre than its jump distance.
-    TooClose {
-        /// How far from the centre it is.
-        distance: f32,
-    },
-    /// The ship has less fuel than [`JUMP_FUEL`].
-    NoFuel {
-        /// How much it has.
-        fuel: f32,
-    },
-    /// Another ship holds it in a tractor beam ([`hold_jump`]).
-    Tractored,
 }
 
 /// One system on the map.
@@ -1011,17 +960,6 @@ mod tests {
         for (multi_jump, hops) in [(0, 1), (1, 2), (10, 11), (u32::MAX, u32::MAX)] {
             assert_eq!(hops_per_jump(multi_jump, PerHop), hops, "{multi_jump}");
         }
-    }
-
-    #[test]
-    fn the_jumps_fuel_holds_are_whole_jumps_of_it() {
-        assert_eq!(max_jumps(300.0), 3);
-        assert_eq!(max_jumps(199.9), 1);
-        assert_eq!(max_jumps(100.0), 1);
-        assert_eq!(max_jumps(99.9), 0);
-        assert_eq!(max_jumps(0.0), 0);
-        assert_eq!(max_jumps(-250.0), 0, "none below none");
-        assert_eq!(max_jumps(f32::MAX), u32::MAX, "saturating");
     }
 
     fn system(id: i16, links: &[i16]) -> StarSystem {
@@ -1918,7 +1856,6 @@ mod tests {
     #[test]
     fn the_named_values_are_pinned() {
         assert_eq!(MIN_JUMP_DISTANCE, 1000.0);
-        assert_eq!(JUMP_FUEL, 100.0);
         assert_eq!(ARRIVAL_MARGIN, 1.0);
         assert_eq!(ARRIVAL_DISTANCE, 1001.0);
     }

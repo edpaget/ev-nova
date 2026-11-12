@@ -70,27 +70,7 @@ use crate::combat::hull::Condition;
 use crate::geometry::Vec2;
 use crate::traffic::npc::{Npc, NpcId};
 
-/// How a target command picks.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TargetPick {
-    /// The candidate nearest the player.
-    Nearest,
-    /// The candidate nearest the player that threatens it or a ship it
-    /// leads (`_IsThreatToPlayer` @0x7f572-0x7f590,
-    /// [`Npc::threatens_player_or_led`]).
-    NearestThreat,
-    /// The next candidate after the target ([`next`]): Tab.
-    Next,
-    /// The next ship of the escort class after the target (the player's
-    /// hired escorts and the unmarked ships they lead, such as their
-    /// fighters; [`next_escort`]), cloaked or not: Option-Tab.
-    NextEscort,
-    /// The candidate before the target ([`previous`]): Shift-Tab.
-    Previous,
-    /// The ship of the escort class before the target
-    /// ([`previous_escort`]), cloaked or not: Shift-Option-Tab.
-    PreviousEscort,
-}
+pub use nova_sim_state::shown::targeting::TargetPick;
 
 /// Whether `npc` is there to be targeted at all, whatever its cloak: it
 /// is intact or disabled, and not emerging from a gate
