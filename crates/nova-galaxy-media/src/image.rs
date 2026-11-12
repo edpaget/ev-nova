@@ -18,6 +18,16 @@
 //! model's own `kib` already counts its images' bytes
 //! ([`Scene::disk_bytes`](crate::scene::Scene::disk_bytes)).
 //!
+//! The size checked is the size decoded. A file's author chooses its
+//! bytes, so a header read one way to size the image and another way to
+//! decode it could pass the limits as a small image and decode as a large
+//! one. A PNG's header is its first chunk, at a fixed place, for this
+//! module and for its decoder alike. A JPEG's frame header is wherever
+//! its segments put it, so its decoder alone reads it: the decoder reads
+//! the headers, gives the size, and after the checks goes on to the
+//! pixels from where it stopped. Either way, pixels that aren't the
+//! header's width by its height are refused.
+//!
 //! A PNG of any colour type and bit depth decodes to RGBA8, as a texture
 //! asset's does ([`texture`](crate::texture) decodes through this
 //! module). A JPEG decodes to RGBA8 with every alpha 255, strictly: one
@@ -70,7 +80,8 @@ pub enum NoImage {
         most: u32,
     },
     /// It starts as a PNG or a JPEG does but doesn't decode: its header
-    /// gives no size, or its data is cut short or corrupt. Why.
+    /// gives no size, its data is cut short or corrupt, or it decodes to
+    /// another size than its header's. Why.
     Undecodable(String),
 }
 
@@ -99,13 +110,33 @@ pub fn format(bytes: &[u8]) -> Option<Format> {
 /// side are checked from the first bytes and the header, before the image
 /// is decoded (see the [module docs](self)).
 pub fn read_image(bytes: &[u8], limits: &Limits, max_side: u32) -> Result<Pixels, NoImage> {
-    let format = format(bytes).ok_or(NoImage::Unknown)?;
-    let header = match format {
-        Format::Png => png_size(bytes),
-        Format::Jpeg => jpeg_size(bytes),
-    };
-    let (width, height) =
-        header.ok_or_else(|| NoImage::Undecodable("its header gives no size".to_owned()))?;
+    match format(bytes).ok_or(NoImage::Unknown)? {
+        Format::Png => {
+            let (width, height) =
+                png_size(bytes).ok_or_else(|| NoImage::Undecodable(NO_SIZE.to_owned()))?;
+            affordable(width, height, limits, max_side)?;
+            let rgba = decode_png(bytes).map_err(|e| NoImage::Undecodable(e.to_string()))?;
+            pixels(width, height, rgba)
+        }
+        Format::Jpeg => {
+            let (mut jpeg, (width, height)) = jpeg_headers(bytes)
+                .map_err(|why| NoImage::Undecodable(format!("{NO_SIZE}: {why}")))?;
+            affordable(width, height, limits, max_side)?;
+            let rgba = jpeg
+                .decode()
+                .map_err(|e| NoImage::Undecodable(e.to_string()))?;
+            pixels(width, height, rgba)
+        }
+    }
+}
+
+/// Why an image whose header doesn't size it doesn't decode. A JPEG's
+/// adds its decoder's reason after it.
+const NO_SIZE: &str = "its header gives no size";
+
+/// Holds an image `width` by `height`, as its header sizes it, to
+/// `limits`' `side`, then to `max_side`.
+fn affordable(width: u32, height: u32, limits: &Limits, max_side: u32) -> Result<(), NoImage> {
     let side = width.max(height);
     // No bytes: the model's `kib` counts them, so only `side` can be over.
     let over = over_budget(limits, Cost::texture(0, side));
@@ -118,11 +149,19 @@ pub fn read_image(bytes: &[u8], limits: &Limits, max_side: u32) -> Result<Pixels
             most: max_side,
         });
     }
-    let rgba = match format {
-        Format::Png => decode_png(bytes).map_err(|e| e.to_string()),
-        Format::Jpeg => decode_jpeg(bytes).map_err(|e| e.to_string()),
+    Ok(())
+}
+
+/// `rgba` as the pixels of the image its header sized `width` by
+/// `height`. Refused when it isn't four bytes for each of them: what
+/// decoded is some other size than the one the limits were checked for.
+fn pixels(width: u32, height: u32, rgba: Vec<u8>) -> Result<Pixels, NoImage> {
+    if u64::from(width) * u64::from(height) * 4 != rgba.len() as u64 {
+        return Err(NoImage::Undecodable(format!(
+            "it decoded to {} bytes, not the {width} by {height} pixels its header gives",
+            rgba.len()
+        )));
     }
-    .map_err(NoImage::Undecodable)?;
     Ok(Pixels {
         width,
         height,
@@ -172,48 +211,35 @@ pub(crate) fn decode_png(bytes: &[u8]) -> Result<Vec<u8>, png::DecodingError> {
     })
 }
 
-/// The width and height a JPEG's frame header gives, found by walking its
-/// segments from the start of the image to the first start-of-frame
-/// marker; `None` when the scan or the end comes first, or `bytes` runs
-/// out.
-fn jpeg_size(bytes: &[u8]) -> Option<(u32, u32)> {
-    let be = |at: usize| {
-        let pair = bytes.get(at..at + 2)?.try_into().ok()?;
-        Some(u16::from_be_bytes(pair))
-    };
-    // Past the start-of-image marker.
-    let mut at = 2;
-    loop {
-        // A marker: 0xFF, any fill 0xFFs, then its code.
-        if *bytes.get(at)? != 0xFF {
-            return None;
-        }
-        while *bytes.get(at)? == 0xFF {
-            at += 1;
-        }
-        let code = bytes[at];
-        at += 1;
-        match code {
-            // The scan or the end of the image, with no frame before it.
-            0xD9 | 0xDA => return None,
-            // A start of frame (0xC4, 0xC8 and 0xCC are tables and an
-            // extension): its length, its precision, then its height and
-            // its width.
-            0xC0..=0xCF if !matches!(code, 0xC4 | 0xC8 | 0xCC) => {
-                return Some((u32::from(be(at + 5)?), u32::from(be(at + 3)?)));
-            }
-            // Any other segment: skipped by its length.
-            _ => at += usize::from(be(at)?),
-        }
-    }
-}
+/// A JPEG's decoder over its bytes.
+type Jpeg<'a> = JpegDecoder<ZCursor<&'a [u8]>>;
 
-/// `bytes`, a whole JPEG, as 8-bit RGBA, every alpha 255.
-fn decode_jpeg(bytes: &[u8]) -> Result<Vec<u8>, zune_jpeg::errors::DecodeErrors> {
+/// The decoder of `bytes`, a JPEG, with its headers read as far as its
+/// scan and no pixel decoded, and the width and height its frame header
+/// gives; or why its headers don't read.
+///
+/// The decoder that sizes the image is the one that then decodes it
+/// ([`JpegDecoder::decode`] goes on from the scan, to 8-bit RGBA with
+/// every alpha 255), so the size the limits are checked for is the size
+/// decoded: no second reading of the headers can take another segment for
+/// the frame. The decoder refuses a second frame header, so the size
+/// can't change after it is checked either.
+///
+/// The decoder's own largest width and height are raised to the most a
+/// frame header can declare, so that a large image is refused by the
+/// caller's limits, with their reasons, not as one that doesn't read.
+fn jpeg_headers(bytes: &[u8]) -> Result<(Jpeg<'_>, (u32, u32)), String> {
+    let most = usize::from(u16::MAX);
     let options = DecoderOptions::default()
         .set_strict_mode(true)
-        .jpeg_set_out_colorspace(ColorSpace::RGBA);
-    JpegDecoder::new_with_options(ZCursor::new(bytes), options).decode()
+        .jpeg_set_out_colorspace(ColorSpace::RGBA)
+        .set_max_width(most)
+        .set_max_height(most);
+    let mut decoder = JpegDecoder::new_with_options(ZCursor::new(bytes), options);
+    decoder.decode_headers().map_err(|e| e.to_string())?;
+    let (width, height) = decoder.dimensions().ok_or("it has no frame")?;
+    let size = u32::try_from(width).ok().zip(u32::try_from(height).ok());
+    Ok((decoder, size.ok_or("its frame is too large")?))
 }
 
 #[cfg(test)]
@@ -383,6 +409,38 @@ mod tests {
         assert!(read_image(&rgba_png(2, 1, &RGBA), &Limits::default(), 2).is_ok());
     }
 
+    /// [`JPEG`] with a decoy frame header declaring 1 by 1 hidden before
+    /// its own. After the start of the image comes `FF 00`, which a
+    /// decoder takes for a stuffed byte and reads past, to the `APP0`
+    /// segment that follows: 512 bytes long, the decoy inside it, and
+    /// after it the rest of the fixture with its real 4 by 2 frame. A
+    /// walk that took `FF 00` for a marker would skip by the "length"
+    /// after it (`00 FF`, 255) and land on the decoy at offset 259.
+    fn jpeg_with_a_decoy_frame() -> Vec<u8> {
+        let mut bytes = vec![0xFF, 0xD8, 0xFF, 0x00, 0x00, 0xFF, 0xE0, 0x02, 0x00];
+        // The segment runs 512 bytes from its length, at offset 7.
+        bytes.resize(7 + 0x200, 0);
+        bytes[259..268].copy_from_slice(&[0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x01, 0x00, 0x01]);
+        bytes.extend_from_slice(&JPEG[2..]);
+        bytes
+    }
+
+    #[test]
+    fn a_jpeg_is_held_to_the_frame_it_decodes_not_to_a_decoy_before_it() {
+        let bytes = jpeg_with_a_decoy_frame();
+        // The decoy's 1 by 1 is within each limit; the frame's 4 by 2 is
+        // over them.
+        assert_eq!(read_image(&bytes, &side(3), u32::MAX), Err(over(4, 3)));
+        assert_eq!(
+            read_image(&bytes, &Limits::default(), 3),
+            Err(NoImage::TooLarge { side: 4, most: 3 })
+        );
+        // Within them, it is the size it decodes to.
+        let pixels = read_image(&bytes, &side(4), 4).unwrap();
+        assert_eq!((pixels.width, pixels.height), JPEG_SIZE);
+        assert_eq!(pixels.rgba.len(), 4 * 2 * 4);
+    }
+
     #[test]
     fn the_budget_is_checked_before_the_caller_s_side() {
         assert_eq!(
@@ -400,11 +458,105 @@ mod tests {
         assert_eq!(read_image(&headless, &Limits::default(), u32::MAX), no_size);
         // The fixture's stub: a signature and the start of a header.
         assert_eq!(read_image(PNG, &Limits::default(), u32::MAX), no_size);
-        // A JPEG that ends before its frame header.
+    }
+
+    /// Why `bytes`, a JPEG, has no size: its decoder's reason, after
+    /// "its header gives no size".
+    #[track_caller]
+    fn jpeg_no_size(bytes: &[u8]) -> String {
+        let Err(NoImage::Undecodable(why)) = read_image(bytes, &Limits::default(), u32::MAX) else {
+            panic!("its headers read");
+        };
+        let reason = why.strip_prefix("its header gives no size: ");
+        let reason = reason.unwrap_or_else(|| panic!("it was sized, and then: {why}"));
+        assert!(!reason.is_empty());
+        reason.to_owned()
+    }
+
+    /// Where [`JPEG`]'s frame header (`SOF0`) starts, and its length with
+    /// its marker.
+    fn frame_header() -> (usize, usize) {
+        let at = JPEG
+            .windows(2)
+            .position(|pair| pair == [0xFF, 0xC0])
+            .expect("a baseline frame header");
+        let length = u16::from_be_bytes([JPEG[at + 2], JPEG[at + 3]]);
+        (at, 2 + usize::from(length))
+    }
+
+    #[test]
+    fn a_jpeg_whose_headers_do_not_read_has_no_size_and_says_why() {
+        // The start of the image and no more.
+        jpeg_no_size(&[0xFF, 0xD8, 0xFF]);
+        // Cut before its frame header, and inside it.
+        let (at, length) = frame_header();
+        jpeg_no_size(&JPEG[..at]);
+        jpeg_no_size(&JPEG[..at + length - 1]);
+        // Cut after its frame header, before its scan: the frame's size
+        // was read, and the headers still don't.
+        jpeg_no_size(&JPEG[..at + length]);
+        // No frame header before its scan.
+        let frameless = [&JPEG[..at], &JPEG[at + length..]].concat();
+        jpeg_no_size(&frameless);
+        // A kind of frame the decoder doesn't decode (lossless, `SOF3`)
+        // is no frame to it, so it isn't one to size the image by.
+        let mut lossless = JPEG.to_vec();
+        lossless[at + 1] = 0xC3;
+        jpeg_no_size(&lossless);
+    }
+
+    #[test]
+    fn a_jpeg_with_a_second_frame_header_is_refused_before_it_decodes() {
+        // The fixture's frame header twice over, the second declaring a
+        // larger frame: the size checked can't be the first's and the
+        // size decoded the second's.
+        let (at, length) = frame_header();
+        let mut second = JPEG[at..at + length].to_vec();
+        second[5..9].copy_from_slice(&[0x10, 0x00, 0x10, 0x00]);
+        let bytes = [&JPEG[..at + length], &second[..], &JPEG[at + length..]].concat();
+        assert!(jpeg_no_size(&bytes).contains("Two Start of Frame"));
+    }
+
+    #[test]
+    fn a_jpeg_of_any_size_its_header_can_declare_is_held_to_the_caller_s_limits() {
+        // Larger than the decoder's own default allows: still the
+        // budget's and the caller's to refuse, with their reasons.
+        for bytes in [jpeg_declaring(u16::MAX, 2), jpeg_declaring(2, u16::MAX)] {
+            assert_eq!(
+                read_image(&bytes, &side(64), u32::MAX),
+                Err(over(65_535, 64))
+            );
+            assert_eq!(
+                read_image(&bytes, &Limits::default(), 8_192),
+                Err(NoImage::TooLarge {
+                    side: 65_535,
+                    most: 8_192,
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn pixels_that_are_not_their_header_s_size_are_refused() {
         assert_eq!(
-            read_image(&JPEG[..40], &Limits::default(), u32::MAX),
-            no_size
+            pixels(4, 2, vec![7; 32]),
+            Ok(Pixels {
+                width: 4,
+                height: 2,
+                rgba: vec![7; 32],
+            })
         );
+        // The decoy's case: sized 1 by 1, decoded 4 by 2.
+        for (width, height, bytes) in [(1, 1, 32), (4, 2, 31), (4, 2, 33), (2, 4, 8), (4, 2, 0)] {
+            let Err(NoImage::Undecodable(why)) = pixels(width, height, vec![7; bytes]) else {
+                panic!("{width} by {height} took {bytes} bytes");
+            };
+            assert!(
+                why.contains(&format!("{bytes} bytes"))
+                    && why.contains(&format!("{width} by {height}")),
+                "{why}"
+            );
+        }
     }
 
     #[test]
@@ -420,76 +572,6 @@ mod tests {
             assert_ne!(why, "its header gives no size");
             assert!(!why.is_empty());
         }
-    }
-
-    /// A JPEG's start, then `segments`.
-    fn jpeg_of(segments: &[&[u8]]) -> Vec<u8> {
-        let mut bytes = vec![0xFF, 0xD8];
-        for segment in segments {
-            bytes.extend_from_slice(segment);
-        }
-        bytes
-    }
-
-    /// A start-of-frame segment of marker `code`, 0x0102 wide and 0x0304
-    /// tall.
-    fn frame(code: u8) -> Vec<u8> {
-        vec![0xFF, code, 0x00, 0x08, 0x08, 0x03, 0x04, 0x01, 0x02, 0x01]
-    }
-
-    /// A segment of marker `code` holding `body`.
-    fn segment(code: u8, body: &[u8]) -> Vec<u8> {
-        let length = u16::try_from(body.len() + 2).unwrap().to_be_bytes();
-        [&[0xFF, code][..], &length, body].concat()
-    }
-
-    #[test]
-    fn a_jpeg_s_size_is_its_first_frame_header_s_width_then_height() {
-        assert_eq!(jpeg_size(JPEG), Some((4, 2)));
-        let size = Some((0x0102, 0x0304));
-        // Baseline, progressive, and the last frame marker.
-        for code in [0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xCF] {
-            assert_eq!(jpeg_size(&jpeg_of(&[&frame(code)])), size, "{code:#x}");
-        }
-        // After other segments, each skipped by its length: a Huffman
-        // table (0xC4), an arithmetic conditioning (0xCC) and the JPEG
-        // extension (0xC8) are no frame, though numbered among them.
-        for code in [0xE0, 0xDB, 0xC4, 0xC8, 0xCC, 0xFE] {
-            let before = segment(code, &[0xFF, 0xC0, 9, 9, 9, 9, 9, 9, 9]);
-            let bytes = jpeg_of(&[&before, &frame(0xC0)]);
-            assert_eq!(jpeg_size(&bytes), size, "{code:#x}");
-        }
-        // Fill bytes before a marker's code.
-        let filled = jpeg_of(&[&[0xFF, 0xFF], &frame(0xC2)]);
-        assert_eq!(jpeg_size(&filled), size);
-    }
-
-    #[test]
-    fn a_jpeg_with_no_frame_header_before_its_scan_has_no_size() {
-        // The scan, then a frame: too late.
-        let scan = jpeg_of(&[&segment(0xDA, &[1, 2]), &frame(0xC0)]);
-        assert_eq!(jpeg_size(&scan), None);
-        let ended = jpeg_of(&[&[0xFF, 0xD9], &frame(0xC0)]);
-        assert_eq!(jpeg_size(&ended), None);
-        // Not a marker where one must be.
-        assert_eq!(jpeg_size(&jpeg_of(&[&[0x00], &frame(0xC0)])), None);
-        // Cut short: in a marker, in a segment's length, in the frame.
-        assert_eq!(jpeg_size(&[0xFF, 0xD8]), None);
-        assert_eq!(jpeg_size(&[0xFF, 0xD8, 0xFF]), None);
-        assert_eq!(jpeg_size(&[0xFF, 0xD8, 0xFF, 0xE0, 0x00]), None);
-        let whole = jpeg_of(&[&frame(0xC0)]);
-        assert_eq!(jpeg_size(&whole[..whole.len() - 2]), None);
-        assert_eq!(jpeg_size(&whole[..whole.len() - 1]), size_of_whole());
-        // A segment whose length runs past the end.
-        assert_eq!(jpeg_size(&jpeg_of(&[&[0xFF, 0xE0, 0x00, 0x40]])), None);
-        // A length of nothing never loops: what follows is no marker.
-        assert_eq!(jpeg_size(&jpeg_of(&[&[0xFF, 0xE0, 0x00, 0x00]])), None);
-    }
-
-    /// The size [`frame`] declares.
-    #[allow(clippy::unnecessary_wraps)]
-    fn size_of_whole() -> Option<(u32, u32)> {
-        Some((0x0102, 0x0304))
     }
 
     #[test]
