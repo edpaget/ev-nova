@@ -9,12 +9,12 @@
 //! error, not a default.
 //!
 //! The course and its start are always saved. Whether a load keeps them
-//! is [`RuleKey::LoadedCourse`](crate::RuleKey::LoadedCourse)'s: by the
+//! is [`RuleKey::LoadedCourse`](nova_sim_base::rulebook::RuleKey::LoadedCourse)'s: by the
 //! engine's reading `Session::load` drops them, as the original's open
 //! clears `_hyperRoute`.
 //!
 //! The system last jumped from is always saved too. Whether a load keeps
-//! it is [`RuleKey::LoadedJumpedFrom`](crate::RuleKey::LoadedJumpedFrom)'s:
+//! it is [`RuleKey::LoadedJumpedFrom`](nova_sim_base::rulebook::RuleKey::LoadedJumpedFrom)'s:
 //! by the engine's reading `Session::load` forgets it, as the original's
 //! open sets player +0x94 to -1.
 //!
@@ -28,7 +28,7 @@
 //! - Version 4: adds the outfits the ship carries. An older save's ship
 //!   carried its class's default items, which only the game data knows,
 //!   so the upgrade saves them as `null`, "the ship's default items", and
-//!   flying the pilot reads them ([`Session::fly`](crate::Session::fly));
+//!   flying the pilot reads them (`nova_sim::Session::fly`);
 //!   the next save lists them. An outfit whose record no longer exists is
 //!   kept as saved.
 //! - Version 5: adds the escorts, none in an older save.
@@ -45,14 +45,14 @@
 //! - Version 12: adds the ship's paint, unpainted in an older save.
 //! - Version 13: adds the ship's name. An older save's ship was never
 //!   named, so the upgrade saves `null`, and flying the pilot names it
-//!   after its class ([`Session::fly`](crate::Session::fly)). The next
+//!   after its class (`nova_sim::Session::fly`). The next
 //!   save keeps that name.
 //! - Version 14: a ship's stock weapons and their `AmmoLoad` are outfits
 //!   it owns. An older save's ship mounted its class's stock weapons
 //!   beside its outfits, which only the game data knows, so the upgrade
 //!   marks them not fitted (`stock_weapons_fitted`), and flying the pilot
 //!   adds them to the outfits saved
-//!   ([`Session::fly`](crate::Session::fly)); the next save lists them.
+//!   (`nova_sim::Session::fly`); the next save lists them.
 //! - Version 15: adds the stellar each event under way is at, kept from
 //!   the day it starts, as the original keeps and saves it. An older
 //!   save's events were all at their record's `Stellar`, which only the
@@ -75,7 +75,7 @@
 //!   each its `system` and `record`, or `null` until derived). An older
 //!   save kept only the record with each government, so the upgrade
 //!   saves `null`, and flying the pilot derives each system's
-//!   ([`Session::fly`](crate::Session::fly)).
+//!   (`nova_sim::Session::fly`).
 //! - Version 22: adds each active mission's special ships (`ships`) and
 //!   auxiliary ships (`aux`: their `countdown`, how many `arrived` and
 //!   how many are `left` to come). An older save kept none of their
@@ -102,7 +102,7 @@
 //!   drawn angle until the next jump.
 //! - Version 28: adds whether each active mission's goals-met moment has
 //!   come (`ship_done` in its `ships`), read by the other reading of
-//!   [`RuleKey::ShipDoneOnce`](crate::RuleKey::ShipDoneOnce). An older
+//!   [`RuleKey::ShipDoneOnce`](nova_sim_base::rulebook::RuleKey::ShipDoneOnce). An older
 //!   save kept none, and the upgrade can't read a mission's `ShipGoal` to
 //!   tell goals met by the moment from an escort goal's met at its
 //!   return with none, so it gives `false` to every mission.
@@ -141,7 +141,7 @@
 //! - Version 34: adds each escort's mark for the next shipyard (`mark`,
 //!   `upgrade`, `sell` or `null`), the original's pilot `+0xe82e[i]` and
 //!   `+0xe8ae[i]` (`_LoadPilotData` @0x75a75-0x75ad3), set in the escort
-//!   dialog (see [`escort_dialog`](crate::escort_dialog)). No older
+//!   dialog (see `nova_sim::escort_dialog`). No older
 //!   save could mark one, so the upgrade gives `null`.
 //! - Version 35: adds each overlaid stellar's domination (`dominated` on
 //!   each `galaxy.stellars` entry), the original's +0x46 that
@@ -227,7 +227,7 @@
 //! countdown (`{"days_left": 3}`), else `null`; and `nebulae`, each its
 //! `nëbu` ID and whether it is `active`; whether a nebula is explored
 //! is never saved, as the original's load forgets it (`_ResetPlayer`
-//! @0x1da86; see the [`nebula`](crate::nebula) module). A `visible` or `govt` of `null`
+//! @0x1da86; see the [`nebula`](nova_sim_story::nebula) module). A `visible` or `govt` of `null`
 //! changes nothing; a `govt` override is `{"govt": id}`, or `{"govt":
 //! null}` for independent (`{"system": 131, "visible": false, "govt":
 //! {"govt": 128}}`). A system's `visible` is written as the overlay holds
@@ -264,7 +264,7 @@
 //! (`_LoadPilotData` @0x75fbc-0x76025), so an entry of -1 and -1 is an
 //! inactive crön, and a save leaves the inactive ones out. One whose
 //! record is gone is kept as saved, and flying the pilot drops it
-//! ([`Session::fly`](crate::Session::fly)).
+//! (`nova_sim::Session::fly`).
 //!
 //! The active ranks (`ranks`) are their `ränk` IDs, ascending, as the
 //! original saves one flag for each rank (`_WritePilotData` @0x72910).
@@ -285,24 +285,26 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::catalog::{
+use nova_sim_ai::escort::EscortOrder;
+use nova_sim_ai::traffic::stellar_defence::DefenceShips;
+use nova_sim_base::reserves::{Gauge, Reserves};
+use nova_sim_catalog::catalog::{
     CronId, DisasterId, GovtId, JunkId, MissionId, NebulaId, OutfitId, PersonId, RankId, ShipId,
     StellarId, SystemId,
 };
-use crate::control::Bit;
-use crate::cron::CronState;
-use crate::date::GameDate;
-use crate::escort::EscortOrder;
-use crate::fleet::{EscortMark, OrderWord};
-use crate::market::{ActiveEvent, Good};
-use crate::mission::aux_ships::AuxShips;
-use crate::mission::{ActiveMission, ActiveMissions, FailedBy, ShipSystem, SpecialShips, Stop};
-use crate::outfit_effects::Rgb15;
-use crate::pilot::{Escort, Gender, Pilot};
-use crate::reserves::{Gauge, Reserves};
-use crate::story::{Consumer, Countdown, GalaxyOverlay, SubscriptionId};
-use crate::traffic::stellar_defence::DefenceShips;
-use crate::voice::VoiceVariant;
+use nova_sim_catalog::control::Bit;
+use nova_sim_catalog::voice::VoiceVariant;
+use nova_sim_combat::fleet::{EscortMark, OrderWord};
+use nova_sim_state::cron::CronState;
+use nova_sim_state::date::GameDate;
+use nova_sim_state::market::{ActiveEvent, Good};
+use nova_sim_state::outfit_effects::Rgb15;
+use nova_sim_story::mission::aux_ships::AuxShips;
+use nova_sim_story::mission::{
+    ActiveMission, ActiveMissions, FailedBy, ShipSystem, SpecialShips, Stop,
+};
+use nova_sim_story::pilot::{Escort, Gender, Pilot};
+use nova_sim_story::story::{Consumer, Countdown, GalaxyOverlay, SubscriptionId};
 use story_state::{SavedDialogState, dialogs_of, flags_of, saved_dialogs, saved_flags};
 use storylines::{SavedStory, saved_story, story_of};
 
@@ -1487,10 +1489,10 @@ fn charted(save: &mut Value) {
 /// Version 27 to 28: no active mission's goals-met moment has come. The
 /// upgrade reads no `mïsn`, so it can't tell goals met by a moment from
 /// an escort goal's met at its return with none
-/// ([`met_at_return`](crate::mission::goals::met_at_return)); giving
+/// ([`met_at_return`](nova_sim_story::mission::goals::met_at_return)); giving
 /// `false` never holds back a `ShipDone` still to run, and at most lets
 /// one already run run once more, and only under the other reading of
-/// [`RuleKey::ShipDoneOnce`](crate::RuleKey::ShipDoneOnce).
+/// [`RuleKey::ShipDoneOnce`](nova_sim_base::rulebook::RuleKey::ShipDoneOnce).
 fn ship_done(save: &mut Value) {
     let Some(entries) = save.get_mut("missions").and_then(Value::as_array_mut) else {
         return;
@@ -1872,18 +1874,18 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::*;
-    use crate::catalog::{
+    use nova_sim_ai::escort::EscortOrder;
+    use nova_sim_base::reserves::{Gauge, Reserves};
+    use nova_sim_catalog::catalog::{
         DisasterId, GovtId, JunkId, NebulaId, OutfitId, PersonId, RankId, ShipId, StellarId,
         SystemId,
     };
-    use crate::control::ControlBitSet;
-    use crate::date::GameDate;
-    use crate::escort::EscortOrder;
-    use crate::fleet::OrderWord;
-    use crate::market::Good;
-    use crate::pilot::{Escort, ExploredLevel};
-    use crate::reserves::{Gauge, Reserves};
-    use crate::story::{Consumer, Countdown, GalaxyOverlay, SubscriptionId};
+    use nova_sim_catalog::control::ControlBitSet;
+    use nova_sim_combat::fleet::OrderWord;
+    use nova_sim_state::date::GameDate;
+    use nova_sim_state::market::Good;
+    use nova_sim_story::pilot::{Escort, ExploredLevel};
+    use nova_sim_story::story::{Consumer, Countdown, GalaxyOverlay, SubscriptionId};
 
     /// An event under way with `days` left, at `stellar`.
     fn active(days: u16, stellar: Option<StellarId>) -> ActiveEvent {
@@ -2037,10 +2039,10 @@ mod tests {
             ranks: BTreeSet::from([RankId(140), RankId(128)]),
             seen_intro: true,
             nickname: String::new(),
-            defence_ships: crate::traffic::stellar_defence::DefenceShips::default(),
-            flags: crate::flags::WorldFlags::default(),
-            dialogs: crate::dialog::states::DialogStates::default(),
-            story: crate::storylines::state::StoryState::default(),
+            defence_ships: nova_sim_ai::traffic::stellar_defence::DefenceShips::default(),
+            flags: nova_sim_story::flags::WorldFlags::default(),
+            dialogs: nova_sim_story::dialog::states::DialogStates::default(),
+            story: nova_sim_story::storylines::state::StoryState::default(),
         }
     }
 

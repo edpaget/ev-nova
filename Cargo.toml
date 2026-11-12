@@ -29,6 +29,7 @@ nova-sim-state = { path = "crates/nova-sim-state" }
 nova-sim-combat = { path = "crates/nova-sim-combat" }
 nova-sim-ai = { path = "crates/nova-sim-ai" }
 nova-sim-story = { path = "crates/nova-sim-story" }
+nova-sim-save = { path = "crates/nova-sim-save" }
 nova-sim-port = { path = "crates/nova-sim-port" }
 nova-ink = { path = "crates/nova-ink" }
 nova-audio = { path = "crates/nova-audio" }

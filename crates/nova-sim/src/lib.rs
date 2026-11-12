@@ -4,11 +4,12 @@
 //!
 //! This crate is the session layer and the facade over the layered
 //! crates below it, bottom to top: `nova-sim-base`, `nova-sim-catalog`,
-//! `nova-sim-state`, `nova-sim-combat`, `nova-sim-ai`, `nova-sim-story` and
-//! `nova-sim-port`. Each of their modules is re-exported here at its old
+//! `nova-sim-state`, `nova-sim-combat`, `nova-sim-ai`, `nova-sim-story`,
+//! then `nova-sim-port` and `nova-sim-save` (both on the story layer).
+//! Each of their modules is re-exported here at its old
 //! path, so a `nova_sim::…` path doesn't depend on which crate holds the
 //! code. The crate's own modules are the session layer's: [`session`],
-//! [`save`], [`saves`], [`course`], [`flight_frame`], [`galaxy_map`], [`glow`],
+//! [`course`], [`flight_frame`], [`galaxy_map`], [`glow`],
 //! [`key_fade`], [`map_borders`], [`map_panel`], [`map_route`], [`map_search`], [`pre_jump`], [`rating`],
 //! [`red_alert`], [`status_cargo`], [`target_panel`] and [`top_speed`],
 //! with the test support in `fixture`.
@@ -518,6 +519,10 @@ pub use nova_sim_story::rank;
 pub mod rating;
 pub use nova_sim_port::recharge;
 pub mod red_alert;
+pub use nova_sim_ai::dock_scan;
+pub use nova_sim_ai::scan;
+pub use nova_sim_ai::scoop;
+pub use nova_sim_ai::slot_pool;
 pub use nova_sim_base::reserves;
 pub use nova_sim_base::rule_values;
 pub use nova_sim_base::rulebook;
@@ -527,13 +532,9 @@ pub use nova_sim_base::speed_cap;
 pub use nova_sim_combat::player_cloak;
 pub use nova_sim_combat::sabotage;
 pub use nova_sim_combat::self_destruct;
-pub mod save;
-pub mod saves;
-pub use nova_sim_ai::dock_scan;
-pub use nova_sim_ai::scan;
-pub use nova_sim_ai::scoop;
-pub use nova_sim_ai::slot_pool;
 pub use nova_sim_combat::self_repair;
+pub use nova_sim_save::save;
+pub use nova_sim_save::saves;
 pub mod session;
 pub use nova_sim_catalog::sound;
 pub use nova_sim_combat::ship_layer;

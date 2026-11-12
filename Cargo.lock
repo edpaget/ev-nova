@@ -2025,9 +2025,9 @@ dependencies = [
  "nova-sim-catalog",
  "nova-sim-combat",
  "nova-sim-port",
+ "nova-sim-save",
  "nova-sim-state",
  "nova-sim-story",
- "serde",
  "serde_json",
  "thiserror 2.0.21",
 ]
@@ -2087,6 +2087,21 @@ dependencies = [
  "nova-sim-combat",
  "nova-sim-state",
  "nova-sim-story",
+]
+
+[[package]]
+name = "nova-sim-save"
+version = "0.1.0"
+dependencies = [
+ "nova-sim-ai",
+ "nova-sim-base",
+ "nova-sim-catalog",
+ "nova-sim-combat",
+ "nova-sim-state",
+ "nova-sim-story",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

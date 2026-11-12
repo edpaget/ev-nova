@@ -29,14 +29,15 @@
 //! contract re-exported so the crates above reach it through this facade.
 
 mod builder;
-mod memory_pilots;
-pub mod pilot_store;
 mod walker;
 
 pub use nova_sim_base::fixture::chance;
 
 pub use builder::SessionBuilder;
-pub use memory_pilots::MemoryPilots;
+
+/// The pilot store port's fake and contract, from the save layer's test
+/// support.
+pub use nova_sim_save::fixture::{MemoryPilots, pilot_store};
 
 /// The catalog crate's canned pilot catalog, for a test above that needs a
 /// session started on a catalog it doesn't build itself.

@@ -1,7 +1,7 @@
 //! The new game's story state in a save, from version 40 (`story`): the
 //! day of the game, where each mission is, the jump points play has
 //! changed and the day each news item broke, and from version 41 the news
-//! items the pilot has read (see [`storylines`](crate::storylines)).
+//! items the pilot has read (see [`storylines`](nova_sim_story::storylines)).
 //!
 //! Everything is keyed by the data's ids, as text, each list ascending:
 //!
@@ -36,9 +36,9 @@
 use serde::{Deserialize, Serialize};
 
 use super::SaveError;
-use crate::catalog::SystemId;
-use crate::storylines::state::{MissionState, PointChange, StoryState};
+use nova_sim_catalog::catalog::SystemId;
 use nova_sim_catalog::storylines::PointStability;
+use nova_sim_story::storylines::state::{MissionState, PointChange, StoryState};
 
 /// The story state, as a save keeps it.
 #[derive(Serialize, Deserialize)]
@@ -231,7 +231,7 @@ mod tests {
     use super::super::tests::seasoned;
     use super::super::{CURRENT, decode, encode, news_read_41, story_state_40};
     use super::*;
-    use crate::pilot::Pilot;
+    use nova_sim_story::pilot::Pilot;
 
     /// [`seasoned`] on day 9 with a mission in each state, two points
     /// changed and two news items, each added out of order.
@@ -379,8 +379,8 @@ mod tests {
         pilot.story.reach.insert(
             "closed".to_owned(),
             std::collections::BTreeMap::from([
-                (crate::catalog::SystemId(131), 1),
-                (crate::catalog::SystemId(130), 0),
+                (nova_sim_catalog::catalog::SystemId(131), 1),
+                (nova_sim_catalog::catalog::SystemId(130), 0),
             ]),
         );
         pilot

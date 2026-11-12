@@ -13,8 +13,8 @@
 
 use std::io;
 
-use crate::pilot::Pilot;
 use crate::save::{SaveError, decode, encode};
+use nova_sim_story::pilot::Pilot;
 
 /// Why a pilot could not be opened ([`PilotKeeper::open`]), each with a
 /// message naming the pilot and where the pilots are, which `Display`
@@ -346,7 +346,7 @@ impl<S: PilotStore> PilotKeeper<S> {
 mod tests {
     use super::*;
     use crate::fixture::MemoryPilots;
-    use crate::testkit::catalog;
+    use nova_sim_catalog::fixture::catalog;
 
     #[test]
     fn a_pilots_key_is_its_name_trimmed() {

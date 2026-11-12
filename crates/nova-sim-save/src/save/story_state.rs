@@ -9,9 +9,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::dialog::SavedDialog;
-use crate::dialog::states::DialogStates;
-use crate::flags::WorldFlags;
+use nova_sim_story::dialog::SavedDialog;
+use nova_sim_story::dialog::states::DialogStates;
+use nova_sim_story::flags::WorldFlags;
 
 /// One Ink file's story state, as a save keeps it.
 #[derive(Serialize, Deserialize)]
@@ -55,7 +55,7 @@ mod tests {
     use super::super::tests::seasoned;
     use super::super::{CURRENT, SaveError, decode, encode, flags_and_dialogs};
     use super::*;
-    use crate::pilot::Pilot;
+    use nova_sim_story::pilot::Pilot;
 
     /// [`seasoned`] with two flags set and two files' story states kept,
     /// each added out of order.
