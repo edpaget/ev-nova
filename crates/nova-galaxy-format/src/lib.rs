@@ -3,7 +3,8 @@
 //!
 //! This crate holds what the engine and the checking tool both need: the
 //! ids and value types ([`id`]), one type per kind of content file
-//! ([`model`], [`fleet`], [`goods`], [`traffic`], [`asset`], [`sound`]), the one file about the
+//! ([`model`], [`fleet`], [`goods`], [`traffic`], [`asset`], [`sound`]), a
+//! system's sky look ([`sky`]), the one file about the
 //! game as a whole, `game.md` ([`game`]), front-matter parsing
 //! ([`frontmatter`]), the loader ([`load`]) and the [`source::Source`]
 //! port it reads through, the JSON Schemas generated from the types
@@ -52,6 +53,7 @@ pub mod load;
 pub mod media;
 pub mod model;
 pub mod schema;
+pub mod sky;
 pub mod sound;
 pub mod source;
 pub mod traffic;

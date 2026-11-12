@@ -213,6 +213,56 @@ mod tests {
     }
 
     #[test]
+    fn the_system_schema_describes_its_sky_with_its_bounds() {
+        let system = value("system.schema.json");
+        let described = |object: &serde_json::Value, field: &str| {
+            assert!(
+                object["properties"][field]["description"]
+                    .as_str()
+                    .is_some_and(|d| !d.is_empty()),
+                "{field}: {object}"
+            );
+        };
+        described(&system, "sky");
+        let required = system["required"].as_array().expect("required");
+        assert!(!required.contains(&"sky".into()), "{required:?}");
+        // A `$ref` (alone, or the one entry of an `anyOf` for an `Option`)
+        // resolved to its definition.
+        let definition = |field: &serde_json::Value| {
+            let reference = field["$ref"]
+                .as_str()
+                .or_else(|| {
+                    (field["anyOf"].as_array()?.iter()).find_map(|one| one["$ref"].as_str())
+                })
+                .unwrap_or_else(|| panic!("a reference: {field}"));
+            let name = reference.rsplit('/').next().expect("a name");
+            system["definitions"][name].clone()
+        };
+        let sky = definition(&system["properties"]["sky"]);
+        for field in ["stars", "tint", "backdrop"] {
+            described(&sky, field);
+        }
+        let stars = definition(&sky["properties"]["stars"]);
+        assert_eq!(
+            (stars["minimum"].as_u64(), stars["maximum"].as_u64()),
+            (Some(0), Some(2)),
+            "{stars}"
+        );
+        let backdrop = definition(&sky["properties"]["backdrop"]);
+        for field in ["color", "amount"] {
+            described(&backdrop, field);
+        }
+        let amount = definition(&backdrop["properties"]["amount"]);
+        assert_eq!(
+            (amount["minimum"].as_u64(), amount["maximum"].as_u64()),
+            (Some(0), Some(1)),
+            "{amount}"
+        );
+        assert_eq!(sky["additionalProperties"], false);
+        assert_eq!(backdrop["additionalProperties"], false);
+    }
+
+    #[test]
     fn the_mission_schema_lists_the_outfit_effects() {
         let (_, mission) = &schema("mission.schema.json");
         let value: serde_json::Value = serde_json::from_str(mission).unwrap();
