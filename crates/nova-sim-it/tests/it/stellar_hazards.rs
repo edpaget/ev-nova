@@ -6,15 +6,15 @@
 
 use nova_sim::SpeedMult;
 use nova_sim::deadly_stellar::DEADLY_STELLAR;
+use nova_sim::fixture::{FakePilotCatalog, pilot_catalog};
 use nova_sim::gravity::pull;
 use nova_sim::{LandingSite, PlayerFate, Session, SystemId, Vec2};
-use nova_sim_catalog::fixture::{FakePilotCatalog, catalog};
 
 /// The fixture catalog, whose ship starts over planet 128 at (30, -40) in
 /// system 130, with `change` made to that system's stellars: 128, then
 /// 129 at (2000, 0).
 fn with(change: impl Fn(&mut [LandingSite])) -> FakePilotCatalog {
-    let mut catalog = catalog();
+    let mut catalog = pilot_catalog();
     let (_, sites) = catalog
         .sites
         .iter_mut()
@@ -40,7 +40,7 @@ fn a_gravity_stellar_from_the_catalog_pulls_the_player_on_each_fight_pass() {
 
 #[test]
 fn a_plain_system_has_no_gravity_source_and_pulls_nothing() {
-    let catalog = catalog();
+    let catalog = pilot_catalog();
     let mut session = Session::start(&catalog).expect("starts");
     assert!(!session.gravity_sources_present());
     let was = session.player().velocity;

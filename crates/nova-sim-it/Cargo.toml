@@ -23,8 +23,6 @@ nova-data = { workspace = true, features = ["fixture"] }
 nova-rsrc = { workspace = true, features = ["fixture"] }
 # The `Chance` mocks (`Draws`, `Ranged`) the tests draw on.
 nova-sim-base = { workspace = true, features = ["fixture"] }
-# The catalog's fakes (`FakePilotCatalog`, `catalog`).
-nova-sim-catalog = { workspace = true, features = ["fixture"] }
 # `Combat::shots_mut`, which a stock test calls; nova-sim's `fixture`
 # doesn't turn combat's on.
 nova-sim-combat = { workspace = true, features = ["fixture"] }
