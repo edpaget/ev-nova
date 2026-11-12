@@ -7,6 +7,9 @@
 //! when it is given one, from the interface file (`Nova-DF.rsrc` or
 //! `Nova.rez`): its `PICT`s, as [`ImageKind::InterfacePict`].
 //!
+//! An icon is whatever the store's [`GameData::icon`] answers: its own
+//! `cicn` at that ID, or, with none, an icon a new game built.
+//!
 //! The two files never answer for each other. An interface picture is
 //! looked up only in the interface file, so a game-data `PICT` with the
 //! same ID never stands in for it, and [`ImageKind::Pict`] never reads the
@@ -23,8 +26,8 @@ use std::borrow::Borrow;
 use std::rc::Rc;
 
 use nova_data::graphics::{
-    CICN, ClipCut, DeepImage, EightBitReading, Image, PICT, PPAT, PixelDepth, RLED, RledReadings,
-    ThirtyTwoBitReading, apply_mask, decode_cicn, decode_pict, decode_pict_deep, decode_ppat,
+    ClipCut, DeepImage, EightBitReading, Image, PICT, PPAT, PixelDepth, RLED, RledReadings,
+    ThirtyTwoBitReading, apply_mask, decode_pict, decode_pict_deep, decode_ppat,
     decode_rled_clipped, decode_rled_with,
 };
 use nova_data::{
@@ -214,7 +217,7 @@ impl<D: Borrow<GameData>> ImageSource for GameImages<D> {
                     .ok_or(ImageError::Missing)?
             }
             ImageKind::Pattern => vec![decode_ppat(bytes(PPAT, id)?)?],
-            ImageKind::Icon => vec![decode_cicn(bytes(CICN, id)?)?],
+            ImageKind::Icon => vec![self.data.borrow().icon(id).ok_or(ImageError::Missing)??],
             ImageKind::SpinSheet => self.spin_frames(id)?,
             ImageKind::ShipSheet { image } => self.ship_frames(id, image)?,
             ImageKind::StockShip { image, scale } => self.stock_frames(id, image, scale)?,
@@ -254,7 +257,7 @@ impl ImageSource for GameData {
 mod tests {
 
     use nova_data::Record;
-    use nova_data::graphics::GraphicsError;
+    use nova_data::graphics::{CICN, GraphicsError};
     use std::rc::Rc;
 
     use nova_data::ShipImage;
@@ -398,6 +401,20 @@ mod tests {
         );
         assert_eq!(
             data.frames(ImageKind::Pict, 18000),
+            Err(ImageError::Missing)
+        );
+    }
+
+    /// The adapter answers what the store's `GameData::icon` answers; which
+    /// of a `cïcn` and a built icon wins is the store's, pinned there.
+    #[test]
+    fn an_icon_the_store_built_is_its_one_frame() {
+        let built = Image::from_rgba(1, 1, vec![0, 0, 255, 255]).expect("one pixel");
+        let data =
+            GameData::default().with_built_icons(std::iter::once((18000, built.clone())).collect());
+        assert_eq!(data.frames(ImageKind::Icon, 18000), Ok(vec![built]));
+        assert_eq!(
+            data.frames(ImageKind::Icon, 18001),
             Err(ImageError::Missing)
         );
     }
