@@ -1,0 +1,29 @@
+[package]
+name = "nova-view-it"
+description = "nova-view's integration tests, in a crate of their own so nova-view's unit-test build doesn't wait on its own library"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# No dependencies: the crate has no code of its own, only `tests/it`.
+
+[dev-dependencies]
+# The crate under test, with its `fixture` module: the text-metrics mock
+# (`text::fixture::MonoMetrics`) and the flight port's contract
+# (`flight::sim_port::fixture::check_contract`).
+nova-view = { workspace = true, features = ["fixture"] }
+# The flight simulation the seam tests start (`Session`), with its
+# `fixture` module: `set_player_condition` and the fake catalogs.
+nova-sim = { workspace = true, features = ["fixture"] }
+# The game data loader the stock tests read, and its fixtures
+# (`store::fixture`, `graphics::fixture`).
+nova-data = { workspace = true, features = ["fixture"] }
+# Synthetic resource forks (`fixture`) and `ResType`.
+nova-rsrc = { workspace = true, features = ["fixture"] }
+# The resource browser's record view, checked by parsing its JSON.
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -1,4 +1,4 @@
-//! nova-view's integration tests, built as one test binary.
+//! nova-view's integration tests, built as one test binary in nova-view-it.
 //!
 //! Each file under `tests/it/` is a module of this binary. Add new
 //! integration tests as a module here, not as a new `tests/*.rs` file:

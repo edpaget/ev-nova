@@ -2118,6 +2118,16 @@ dependencies = [
  "nova-data",
  "nova-rsrc",
  "nova-sim",
+ "serde_json",
+]
+
+[[package]]
+name = "nova-view-it"
+version = "0.1.0"
+dependencies = [
+ "nova-data",
+ "nova-rsrc",
+ "nova-sim",
  "nova-view",
  "serde_json",
 ]

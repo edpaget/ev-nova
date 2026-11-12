@@ -50,6 +50,7 @@ local crates = List(
 // with arguments, so the list names `<x>` and the step adds `-it`.
 local tested = List(
     "nova-sim",
+    "nova-view",
 )
 
 // The pre-commit gate: fmt, then clippy and nextest over each crate with

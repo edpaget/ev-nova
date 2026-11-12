@@ -62,8 +62,9 @@ deny = [
     # nova-bundle). The leaf tools nova-dump (on nova-rsrc and nova-data),
     # nova-bundle (on nova-winres) and nova-disasm (no workspace
     # dependencies) have no dependents, so no entry. Nor do the
-    # integration-test crates (`nova-sim-it`): each dev-depends on the crate
-    # it tests and its fixtures, and nothing depends on it.
+    # integration-test crates (`nova-sim-it`, `nova-view-it`): each
+    # dev-depends on the crate it tests and its fixtures, and nothing depends
+    # on it.
     #
     # Each entry's `wrappers` is exactly the crate's direct dependents
     # (normal, dev and build, on every target), including the crate itself
@@ -73,11 +74,11 @@ deny = [
     # adding the dependent to the list; a removed edge means deleting it
     # (`mise run deny` makes an unused wrapper an error). A new crate gets
     # its own entry and is added to the `wrappers` of every crate it uses.
-    { crate = "nova-rsrc", wrappers = ["nova", "nova-audio", "nova-data", "nova-dump", "nova-render", "nova-rsrc", "nova-sim-catalog", "nova-sim-it", "nova-view"], reason = "the resource-fork reader sits at the bottom and is reached only by the crates that read the game's files" },
+    { crate = "nova-rsrc", wrappers = ["nova", "nova-audio", "nova-data", "nova-dump", "nova-render", "nova-rsrc", "nova-sim-catalog", "nova-sim-it", "nova-view", "nova-view-it"], reason = "the resource-fork reader sits at the bottom and is reached only by the crates that read the game's files" },
     { crate = "nova-galaxy-format", wrappers = ["nova-data", "nova-galaxy-media", "nova-render"], reason = "the new game's data format sits at the bottom, below the game data store and the renderer's model adapter; game-bible's galaxy tool reaches it by git" },
     { crate = "nova-galaxy-media", wrappers = ["nova-data", "nova-render"], reason = "the new game's media reading sits on the format, below the game data store and the renderer's model adapter; game-bible's galaxy tool may reach it by git" },
-    { crate = "nova-data", wrappers = ["nova", "nova-audio", "nova-data", "nova-dump", "nova-render", "nova-sim-catalog", "nova-sim-it", "nova-sim-state", "nova-view"], reason = "the game data sits on nova-rsrc, below the nova-sim layers and everything above them" },
-    { crate = "nova-view", wrappers = ["nova", "nova-audio", "nova-movie", "nova-render", "nova-view"], reason = "the view sits on the nova-sim facade, below the renderer, the audio and the game" },
+    { crate = "nova-data", wrappers = ["nova", "nova-audio", "nova-data", "nova-dump", "nova-render", "nova-sim-catalog", "nova-sim-it", "nova-sim-state", "nova-view", "nova-view-it"], reason = "the game data sits on nova-rsrc, below the nova-sim layers and everything above them" },
+    { crate = "nova-view", wrappers = ["nova", "nova-audio", "nova-movie", "nova-render", "nova-view-it"], reason = "the view sits on the nova-sim facade, below the renderer, the audio and the game; nova-view-it holds its integration tests" },
     { crate = "nova-render", wrappers = ["nova", "nova-render"], reason = "only the game draws through the renderer" },
     { crate = "nova-audio", wrappers = ["nova", "nova-audio"], reason = "only the game plays sound through the audio crate" },
     { crate = "nova-movie", wrappers = ["nova"], reason = "only the game plays movies through the decoder" },
@@ -109,7 +110,7 @@ deny = [
     # API, and that only by the movie decoder.
     { crate = "ffmpeg-next", wrappers = ["nova-movie"], reason = "FFmpeg is reached only through the movie decoder" },
     { crate = "ffmpeg-sys-next", wrappers = ["ffmpeg-next"], reason = "FFmpeg's bindings are reached only through ffmpeg-next" },
-    { crate = "nova-sim", wrappers = ["nova", "nova-sim-it", "nova-view"], reason = "a layered nova-sim crate must never depend on the facade above it" },
+    { crate = "nova-sim", wrappers = ["nova", "nova-sim-it", "nova-view", "nova-view-it"], reason = "a layered nova-sim crate must never depend on the facade above it" },
     { crate = "nova-sim-base", wrappers = ["nova-sim", "nova-sim-ai", "nova-sim-catalog", "nova-sim-combat", "nova-sim-it", "nova-sim-port", "nova-sim-state", "nova-sim-story"], reason = "the foundation sits below every nova-sim crate and is reached through the nova-sim facade" },
     { crate = "nova-sim-catalog", wrappers = ["nova-sim", "nova-sim-ai", "nova-sim-combat", "nova-sim-port", "nova-sim-state", "nova-sim-story"], reason = "the catalog layer sits below every nova-sim crate but the foundation and is reached through the nova-sim facade" },
     { crate = "nova-sim-state", wrappers = ["nova-sim", "nova-sim-ai", "nova-sim-combat", "nova-sim-port", "nova-sim-story"], reason = "the state layer sits on the foundation and the catalog, below every other nova-sim crate, and is reached through the nova-sim facade" },
