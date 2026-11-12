@@ -128,6 +128,8 @@ use crate::govt::Governments;
 use crate::rulebook::RuleSource;
 use crate::traffic::destination::{self, Admit};
 
+pub use nova_sim_base::shown::traffic::emerge::{FADE_TICKS, FULL_LEVEL, emerge_level};
+
 /// How many ticks a ship coming out of a gate waits there, hidden and
 /// still (the timer's 60.0, @0x89518).
 pub const EMERGE_TICKS: f32 = 60.0;
@@ -136,9 +138,6 @@ pub const EMERGE_TICKS: f32 = 60.0;
 pub const ESCORT_EMERGE_EXTRA: u32 = 5;
 /// `Rand(15)`: the spread of a fleet escort's wait.
 pub const ESCORT_EMERGE_SPREAD: u32 = 15;
-/// For how many of its last ticks a ship coming out of a gate fades in
-/// (the 16.0 at 0xdd048).
-pub const FADE_TICKS: f32 = 16.0;
 /// A ship's speed, in pixels a tick, on the first tick it leaves a gate
 /// (-30.0, @0x895aa).
 pub const EXIT_SPEED: f32 = 30.0;
@@ -152,8 +151,6 @@ pub const LED_EXIT_SPEED: f32 = 15.0;
 /// +0x30 (@0x851f1) in the AI pass that follows the emerge in the same
 /// frame, and sets it to -1.165 before every tick of the burst.
 pub const EXIT_SLOWING: f32 = crate::traffic::spawn::JUMP_IN_SLOWING;
-/// The opacity [`emerge_level`] counts in: 32nds.
-pub const FULL_LEVEL: u8 = 32;
 
 /// The readings an arrival's gate pick goes by (see the module docs).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -209,29 +206,6 @@ pub fn exit_speed(led: bool, tick: u32) -> f32 {
     let start = if led { LED_EXIT_SPEED } else { EXIT_SPEED };
     EXIT_SLOWING.mul_add(-(tick as f32), start)
 }
-
-/// How opaque a ship coming out of a gate with `ticks_left` of its wait
-/// is drawn, in 32nds: `None` while it is hidden, above [`FADE_TICKS`] (or
-/// a NaN wait, `ucomiss`/`jb` @0x2c0aa-0x2c0ad), then twice its frames in,
-/// clamp(trunc(16.0 - +0x4c), 0, 16) in floats (`subss`, `cvttss2si`,
-/// @0x2c0c8-0x2c0e2), as `_HandleShipDisplay` writes its fade as 32 less
-/// twice those (@0x2c0e5-0x2c0f1): `32 - 2 * ticks_left` at a whole wait, rising to
-/// full; a fractional one truncates its frames in (7.3 and 7.5 both draw
-/// at 16).
-#[must_use]
-pub fn emerge_level(ticks_left: f32) -> Option<u8> {
-    #[allow(clippy::neg_cmp_op_on_partial_ord)]
-    if !(ticks_left <= FADE_TICKS) {
-        return None;
-    }
-    #[allow(clippy::cast_possible_truncation)]
-    let frames_in = ((FADE_TICKS - ticks_left) as i32).clamp(0, FADE_FRAMES);
-    u8::try_from(2 * frames_in).ok()
-}
-
-/// The most frames in its fade a ship coming out of a gate counts, 16
-/// (`cmpw $0x11`, @0x2c0d9-0x2c0e2).
-const FADE_FRAMES: i32 = 16;
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
@@ -604,26 +578,5 @@ mod tests {
         assert_eq!(exit_speed(false, 0), 30.0);
         assert!((exit_speed(false, 1) - 28.835).abs() < 1e-4);
         assert!((exit_speed(false, 10) - 18.35).abs() < 1e-4);
-    }
-
-    #[test]
-    fn an_emerging_ship_is_hidden_above_16_ticks_then_fades_in() {
-        assert_eq!(emerge_level(60.0), None);
-        assert_eq!(emerge_level(17.0), None);
-        assert_eq!(emerge_level(16.0), Some(0));
-        assert_eq!(emerge_level(8.0), Some(16));
-        assert_eq!(emerge_level(1.0), Some(30));
-        assert_eq!(emerge_level(0.0), Some(FULL_LEVEL));
-    }
-
-    #[test]
-    fn a_fractional_wait_emerging_truncates_its_frames_in_and_hides_past_16() {
-        // 16 - 7.3 = 8.7 and 16 - 7.5 = 8.5: both 8 frames in.
-        assert_eq!(emerge_level(7.3), Some(16));
-        assert_eq!(emerge_level(7.5), Some(16));
-        assert_eq!(emerge_level(16.0), Some(0), "at 16: shown, unfaded in");
-        assert_eq!(emerge_level(16.25), None, "past 16: hidden");
-        assert_eq!(emerge_level(0.25), Some(30), "15.75: 15 frames in");
-        assert_eq!(emerge_level(f32::NAN), None, "a NaN wait hides it");
     }
 }

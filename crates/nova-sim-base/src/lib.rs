@@ -46,6 +46,9 @@
 //!   [`Rulebook`]) or drawing on the chance in rule order, and each
 //!   described by a [`Descriptor`](rules::Descriptor) tools list without
 //!   running it.
+//! - [`shown`]: the view vocabulary the layers above build that needs
+//!   nothing above this crate (a slot pool, the gate fades), moved down
+//!   from the ai.
 //! - [`skill`]: an NPC's skill rolled at spawn, its government's
 //!   `SkillMult` factor and the `shïp` `Flags` bit that holds a class
 //!   still.
@@ -82,6 +85,7 @@ pub mod reserves;
 pub mod rule_values;
 pub mod rulebook;
 pub mod rules;
+pub mod shown;
 pub mod skill;
 pub mod speed_cap;
 pub mod speed_mult;

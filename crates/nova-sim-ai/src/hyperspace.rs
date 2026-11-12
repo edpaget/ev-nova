@@ -91,7 +91,6 @@
 //!   it follows.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::ops::Bound::{Excluded, Unbounded};
 
 use crate::catalog::{GovtId, LandingSite, StarSystem, SystemId};
 use crate::flight::{ShipState, heading_of};
@@ -101,7 +100,10 @@ use crate::geometry::Vec2;
 use crate::navigation::next_after;
 use crate::rulebook::RuleSource;
 pub use crate::stats::{MIN_JUMP_DISTANCE, base_jump_days};
-pub use nova_sim_state::shown::hyperspace::{JUMP_FUEL, JumpReadiness, JumpRefusal, max_jumps};
+use nova_sim_state::shown::hyperspace::place;
+pub use nova_sim_state::shown::hyperspace::{
+    JUMP_FUEL, JumpReadiness, JumpRefusal, link_pairs, max_jumps, system_links,
+};
 
 /// How far outside its no-jump zone, in pixels, a ship arrives, so that
 /// rounding in the bearing it arrives on can never leave it inside.
@@ -360,11 +362,6 @@ pub struct Places {
     hidden: BTreeSet<SystemId>,
     /// Which visible system stands for a place two share.
     colocated: CoLocated,
-}
-
-/// `position`'s exact coordinates: a place.
-fn place(position: Vec2) -> (u32, u32) {
-    (position.x.to_bits(), position.y.to_bits())
 }
 
 impl Places {
@@ -669,19 +666,16 @@ impl StarMap {
     }
 
     /// Every hyperlink once, as (lower ID, higher ID), sorted: the links
-    /// the galaxy map draws.
+    /// the galaxy map draws, normalised by [`link_pairs`]. For the map of
+    /// [`StarMap::new`] they are [`system_links`] of its systems.
     #[must_use]
     pub fn links(&self) -> Vec<(SystemId, SystemId)> {
-        self.nodes
-            .iter()
-            .flat_map(|(&from, node)| {
-                // Each link is listed by both its systems: keep it from the
-                // lower one only.
-                node.links
-                    .range((Excluded(from), Unbounded))
-                    .map(move |&to| (from, to))
-            })
-            .collect()
+        link_pairs(
+            self.nodes
+                .iter()
+                .flat_map(|(&from, node)| node.links.iter().map(move |&to| (from, to))),
+            |id| self.nodes.contains_key(&id),
+        )
     }
 
     /// Every system linked with `id`, whichever of the two lists the link,
@@ -1005,16 +999,18 @@ mod tests {
 
     #[test]
     fn the_links_are_each_link_once_lower_id_first_sorted() {
-        let map = StarMap::new(vec![
+        let systems = vec![
             system(5, &[1]),       // one-way, listed by the higher ID
             system(1, &[2, 2, 9]), // repeated, and to a missing system
             system(2, &[1, 2]),    // listed by both, and to itself
             system(3, &[4]),
             system(4, &[3, 3]),
             system(6, &[]),
-        ]);
+        ];
+        let map = StarMap::new(systems.clone());
         let pair = |a, b| (SystemId(a), SystemId(b));
         assert_eq!(map.links(), vec![pair(1, 2), pair(1, 5), pair(3, 4)]);
+        assert_eq!(map.links(), system_links(&systems), "the catalog's links");
         assert_eq!(StarMap::new(vec![]).links(), vec![]);
         assert_eq!(StarMap::default().links(), vec![]);
     }
@@ -1246,7 +1242,12 @@ mod tests {
         systems.push(system_at(5, (50.0, 50.0), &[]));
         let none = BTreeSet::new();
         let lowest = StarMap::with_hidden(systems.clone(), &none, CoLocated::Lowest);
-        let itself = StarMap::with_hidden(systems, &none, CoLocated::Itself);
+        let itself = StarMap::with_hidden(systems.clone(), &none, CoLocated::Itself);
+        assert_eq!(
+            lowest.links(),
+            system_links(&systems),
+            "the catalog's links"
+        );
         assert_eq!(jumps(&lowest, 1, Engine), ids(&[2]));
         assert_eq!(jumps(&itself, 1, Engine), ids(&[2, 3, 5]));
         for map in [&lowest, &itself] {
