@@ -917,10 +917,20 @@ mod tests {
 
     #[test]
     fn a_rushing_sky_keeps_every_star_whose_streak_reaches_into_the_view() {
+        // Eyes that put the view's edges at many places in their cells, so
+        // some trails reach back over a cell's edge and some don't.
+        for step in 0..16 {
+            let along = step as f32 * 37.0;
+            keeps_every_reaching_star((250.0 + along, -90.0 - along * 1.3));
+        }
+    }
+
+    /// Seen from `eye`, a rushing sky keeps every star whose streak reaches
+    /// into the view, each layer.
+    fn keeps_every_reaching_star(eye: (f32, f32)) {
         // The same sky seen over a view grown far past any trail, its
         // stars taken back to this view's coordinates.
         const GROWN: f32 = 512.0;
-        let eye = (250.0, -90.0);
         let big = LogicalSize {
             w: LOGICAL.w + 2 * GROWN as u32,
             h: LOGICAL.h + 2 * GROWN as u32,
@@ -956,7 +966,7 @@ mod tests {
                         kept.iter()
                             .any(|other| (other.centre.x - star.centre.x).abs() < 1e-2
                                 && (other.centre.y - star.centre.y).abs() < 1e-2),
-                        "{rush:?} layer {layer}: {star:?} lost"
+                        "{eye:?} {rush:?} layer {layer}: {star:?} lost"
                     );
                 }
             }
