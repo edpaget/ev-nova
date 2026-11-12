@@ -305,10 +305,12 @@ pub fn layer_stars(
     let Some(&sky_layer) = LAYERS.get(layer) else {
         return Vec::new();
     };
-    // An eye or anchor that is not finite needs no test of its own: it
-    // places every star at a point that is not finite, which the view's
-    // bounds below leave out.
-    if pose.level == 0 {
+    // An eye or anchor that is not finite places every star at a point
+    // that is not finite. It is turned away here: a trail's bounds test
+    // ([`reaches`]) cannot be trusted to leave such a star out, as a NaN
+    // slab leaves the segment's span unnarrowed.
+    let finite = |point: Point| point.x.is_finite() && point.y.is_finite();
+    if pose.level == 0 || !(finite(pose.eye) && finite(pose.anchor)) {
         return Vec::new();
     }
     let level = f32::from(pose.level.min(32)) / 32.0;
@@ -663,16 +665,18 @@ mod tests {
 
     #[test]
     fn a_sky_seen_from_or_drawn_at_no_finite_point_draws_nothing() {
-        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-            let mut seen = pose(1, (bad, 0.0), 32);
-            assert!(stars(&seen, LOGICAL, FINE).is_empty());
-            seen.eye = Point::new(0.0, bad);
-            assert!(stars(&seen, LOGICAL, FINE).is_empty());
-            seen.eye = Point::new(0.0, 0.0);
-            seen.anchor = Point::new(bad, 0.0);
-            assert!(stars(&seen, LOGICAL, FINE).is_empty());
-            seen.anchor = Point::new(0.0, bad);
-            assert!(stars(&seen, LOGICAL, FINE).is_empty());
+        for rush in [(0.0, 0.0), (30.0, 18.0), (-30.0, -18.0)] {
+            for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                let mut seen = pose(1, (bad, 0.0), 32).with_rush(Point::new(rush.0, rush.1));
+                assert!(stars(&seen, LOGICAL, FINE).is_empty(), "{rush:?} {bad}");
+                seen.eye = Point::new(0.0, bad);
+                assert!(stars(&seen, LOGICAL, FINE).is_empty(), "{rush:?} {bad}");
+                seen.eye = Point::new(0.0, 0.0);
+                seen.anchor = Point::new(bad, 0.0);
+                assert!(stars(&seen, LOGICAL, FINE).is_empty(), "{rush:?} {bad}");
+                seen.anchor = Point::new(0.0, bad);
+                assert!(stars(&seen, LOGICAL, FINE).is_empty(), "{rush:?} {bad}");
+            }
         }
     }
 
