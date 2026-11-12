@@ -16,6 +16,8 @@ pub use crate::atlas::{PageId, Uv};
 use crate::camera::Light;
 use crate::model::Mesh;
 pub use crate::model::MeshId;
+use crate::model_texture::ModelTexture;
+pub use crate::model_texture::ModelTextureId;
 pub use crate::sky::StarInstance;
 use crate::upscale::{Upscaler, WorldResolution};
 use crate::viewport::{LogicalSize, PixelRect};
@@ -37,12 +39,24 @@ pub trait Gpu {
     /// Drops every page, atlas and stream pages alike, for an atlas started
     /// afresh: the next page created is page 0 again.
     fn clear_pages(&mut self);
+    /// Holds `data` as model texture `texture`, for the sections of the
+    /// meshes that name it to sample ([`Gpu::upload_mesh`]): its mip
+    /// chain as given, sampled trilinear and repeating past its edges.
+    /// The renderer uploads a texture once, before the first mesh that
+    /// names it, however many meshes hold it. Model textures are not
+    /// pages: [`Gpu::clear_pages`] keeps them.
+    fn upload_model_texture(&mut self, texture: ModelTextureId, data: &ModelTexture);
     /// Holds `data` as mesh `mesh`, replacing any mesh of that id, for
-    /// [`Batch::Models`] to draw. The renderer uploads a mesh the first
-    /// frame that draws it, and again after it is replaced
-    /// ([`crate::Renderer::add_model`]); it never hands over one with no
-    /// triangles. Meshes are not pages: [`Gpu::clear_pages`] keeps them.
-    fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh);
+    /// [`Batch::Models`] to draw. `textures` are the numbers its textures
+    /// ([`Mesh::textures`]) were uploaded under
+    /// ([`Gpu::upload_model_texture`]), one for each in the mesh's order,
+    /// so a [`Section`](crate::model::Section) that names texture `i`
+    /// draws with `textures[i]`; each was uploaded before this call. The
+    /// renderer uploads a mesh the first frame that draws it, and again
+    /// after it is replaced ([`crate::Renderer::add_model`]); it never
+    /// hands over one with no triangles. Meshes are not pages:
+    /// [`Gpu::clear_pages`] keeps them.
+    fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh, textures: &[ModelTextureId]);
     /// Holds `textures` as planet `planet`'s, replacing any it had, for
     /// [`Batch::Planets`] to draw. The renderer uploads a planet's textures
     /// the first frame that draws it, and again after it is replaced

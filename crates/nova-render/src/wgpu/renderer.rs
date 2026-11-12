@@ -22,8 +22,11 @@ use super::planets::{PlanetData, Planets};
 use super::sky::{Sky, StarData};
 use super::upscale::{Upscale, abilities, upscale_for};
 use crate::fonts::FontFaces;
-use crate::gpu::{Batch, Frame, PageId, PlanetId, PlanetTextures, TextRun, WorldSpace};
+use crate::gpu::{
+    Batch, Frame, ModelTextureId, PageId, PlanetId, PlanetTextures, TextRun, WorldSpace,
+};
 use crate::model::{Mesh, MeshId};
+use crate::model_texture::ModelTexture;
 use crate::upscale::{Abilities, Upscaler, WorldResolution, offered};
 use crate::viewport::PixelRect;
 
@@ -426,8 +429,13 @@ impl WgpuRenderer {
         self.pages.clear();
     }
 
-    /// Holds `data` as mesh `mesh`, replacing any mesh of that id.
-    pub fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh) {
+    /// Holds `data` as model texture `texture`.
+    #[allow(clippy::unused_self, reason = "the models pass samples it next")]
+    pub fn upload_model_texture(&mut self, _texture: ModelTextureId, _data: &ModelTexture) {}
+
+    /// Holds `data` as mesh `mesh`, replacing any mesh of that id, its
+    /// textures those uploaded as `textures`.
+    pub fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh, _textures: &[ModelTextureId]) {
         self.models.upload(&self.device, mesh, data);
     }
 
@@ -2735,7 +2743,7 @@ mod tests {
         gpu.create_page(PageId(0), 16);
         let blends = every_blend_frame();
         assert_builds_no_pipeline(&mut gpu, made, &blends, "a frame of every blend");
-        gpu.upload_mesh(MeshId(0), &Mesh::cube([Color::WHITE; 6]));
+        gpu.upload_mesh(MeshId(0), &Mesh::cube([Color::WHITE; 6]), &[]);
         let with_models = models_frame();
         assert_builds_no_pipeline(&mut gpu, made, &with_models, "a frame of models");
         let sky = frame_of(vec![Batch::Sky(vec![crate::sky::StarInstance {
@@ -2824,7 +2832,7 @@ mod tests {
                 return;
             };
             gpu.set_upscaler(upscaler);
-            gpu.upload_mesh(MeshId(3), &Mesh::cube(faces));
+            gpu.upload_mesh(MeshId(3), &Mesh::cube(faces), &[]);
             gpu.submit(&Frame {
                 world_space,
                 ..frame.clone()
@@ -2873,7 +2881,7 @@ mod tests {
         let drawn = |upscaler| {
             let mut gpu = crate::wgpu::OffscreenGpu::new(64, 64, &FontFaces::bundled()).ok()?;
             gpu.set_upscaler(upscaler);
-            gpu.upload_mesh(MeshId(3), &Mesh::cube([Color::WHITE; 6]));
+            gpu.upload_mesh(MeshId(3), &Mesh::cube([Color::WHITE; 6]), &[]);
             gpu.submit(&frame);
             Some(gpu.read_pixels().expect("read back"))
         };

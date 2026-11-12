@@ -10,8 +10,9 @@ use super::overlay::{OverlayGpu, OverlayPainter, PaintTarget};
 use super::upscale::{Upscale, upscale_for};
 use super::{InitError, WgpuRenderer, acquire};
 use crate::fonts::FontFaces;
-use crate::gpu::{Frame, Gpu, PageId, PlanetId, PlanetTextures};
+use crate::gpu::{Frame, Gpu, ModelTextureId, PageId, PlanetId, PlanetTextures};
 use crate::model::{Mesh, MeshId};
+use crate::model_texture::ModelTexture;
 use crate::upscale::{Abilities, Upscaler, UpscalerProbe, WorldResolution};
 use crate::viewport::PixelRect;
 
@@ -204,8 +205,12 @@ impl Gpu for OffscreenGpu {
         self.renderer.clear_pages();
     }
 
-    fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh) {
-        self.renderer.upload_mesh(mesh, data);
+    fn upload_model_texture(&mut self, texture: ModelTextureId, data: &ModelTexture) {
+        self.renderer.upload_model_texture(texture, data);
+    }
+
+    fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh, textures: &[ModelTextureId]) {
+        self.renderer.upload_mesh(mesh, data, textures);
     }
 
     fn upload_planet(&mut self, planet: PlanetId, textures: &PlanetTextures) {

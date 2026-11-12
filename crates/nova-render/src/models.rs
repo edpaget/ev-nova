@@ -9,6 +9,11 @@
 //! its next draw. Meshes are not atlas pages, so a new enlarger
 //! (`Renderer::set_enlarger`) leaves them where they are.
 //!
+//! A mesh's textures are uploaded just before it
+//! ([`Gpu::upload_model_texture`]), each once however many meshes hold
+//! its pointer (`crate::model_texture::Resident`), and the mesh is
+//! uploaded with the numbers they took. An untextured mesh uploads none.
+//!
 //! Consecutive models share one [`Batch::Models`], lit by
 //! [`Light::STANDARD`]. Once a frame's batches are settled, each models
 //! batch's instances get their depth bands ([`camera::band`]).
@@ -27,8 +32,9 @@ use std::collections::{HashMap, HashSet};
 use nova_view::{ModelKey, ModelPose, Mounting};
 
 use crate::camera::{self, Light};
-use crate::gpu::{Batch, Gpu, ModelInstance};
+use crate::gpu::{Batch, Gpu, ModelInstance, ModelTextureId};
 use crate::model::{Mesh, MeshId};
+use crate::model_texture::Resident;
 use crate::viewport::LogicalSize;
 
 /// A mesh the renderer was given, and whether the GPU holds it as it is.
@@ -47,6 +53,8 @@ pub(crate) struct Models {
     next: u32,
     /// The keys with no mesh already reported.
     reported: HashSet<ModelKey>,
+    /// The textures of the meshes uploaded so far, as the GPU holds them.
+    textures: Resident,
     /// The model the parts drawn next mount on, while nothing else has
     /// been drawn since it.
     group: Option<Group>,
@@ -164,7 +172,8 @@ impl Models {
     }
 
     /// The mesh `key` draws with and its radius, uploaded through `gpu`
-    /// first if the GPU doesn't hold it yet. `None` for a mesh with no
+    /// first if the GPU doesn't hold it yet, after each of its textures
+    /// the GPU doesn't hold yet. `None` for a mesh with no
     /// triangles, which is never uploaded, and for a key with no mesh,
     /// pushed onto `missing` the first time it is asked for.
     pub(crate) fn resident(
@@ -183,7 +192,10 @@ impl Models {
             return None;
         }
         if !held.uploaded {
-            gpu.upload_mesh(held.id, &held.mesh);
+            let textures: Vec<ModelTextureId> = (held.mesh.textures().iter())
+                .map(|texture| self.textures.id(texture, gpu))
+                .collect();
+            gpu.upload_mesh(held.id, &held.mesh, &textures);
             held.uploaded = true;
         }
         Some((held.id, held.mesh.radius()))
@@ -223,10 +235,14 @@ mod tests {
         Color, DrawCommand, DrawList, ImageKey, ImageKind, ModelPose, Mounting, Orientation, Point,
     };
 
+    use std::sync::Arc;
+
     use super::*;
     use crate::enlarge::NativeDetail;
-    use crate::gpu::Frame;
+    use crate::gpu::{Frame, ModelTextureId};
     use crate::images::{ImageError, ImageSource};
+    use crate::model::Section;
+    use crate::model_texture::ModelTexture;
     use crate::recording::{GpuCall, RecordingGpu};
     use crate::viewport::{LogicalSize, Viewport};
     use crate::{Renderer, camera};
@@ -318,7 +334,8 @@ mod tests {
             gpu.calls[0],
             GpuCall::UploadMesh {
                 mesh: MeshId(0),
-                data: cube()
+                data: cube(),
+                textures: Vec::new(),
             }
         );
         let second = frame_of(&mut renderer, &list, &mut gpu);
@@ -493,11 +510,13 @@ mod tests {
             [
                 &GpuCall::UploadMesh {
                     mesh: MeshId(0),
-                    data: cube()
+                    data: cube(),
+                    textures: Vec::new(),
                 },
                 &GpuCall::UploadMesh {
                     mesh: MeshId(0),
-                    data: red
+                    data: red,
+                    textures: Vec::new(),
                 }
             ]
         );
@@ -573,6 +592,194 @@ mod tests {
         );
         assert_eq!(uploads(&gpu), [MeshId(0)], "the mesh stays");
         assert_eq!(frame.batches[1].kind(), "models");
+    }
+
+    fn one_texel(shade: u8) -> Arc<ModelTexture> {
+        Arc::new(ModelTexture::new(1, 1, vec![shade, shade, shade, 255]).expect("one texel"))
+    }
+
+    /// The cube holding `textures`, a face on each in order and the rest
+    /// of it untextured.
+    fn skinned(textures: &[Arc<ModelTexture>]) -> Mesh {
+        let cube = cube();
+        let faces = textures.len() as u32;
+        let mut sections: Vec<Section> = (0..faces)
+            .map(|face| Section {
+                indices: face * 6..face * 6 + 6,
+                texture: Some(face as usize),
+            })
+            .collect();
+        sections.push(Section {
+            indices: faces * 6..36,
+            texture: None,
+        });
+        Mesh::textured(
+            cube.vertices().to_vec(),
+            cube.indices().to_vec(),
+            textures.to_vec(),
+            sections,
+        )
+        .expect("the cube in sections")
+    }
+
+    /// The texture and mesh uploads `gpu` received, in order: each
+    /// texture's id, and each mesh's id with its textures' ids.
+    fn model_uploads(
+        gpu: &RecordingGpu,
+    ) -> Vec<Result<ModelTextureId, (MeshId, Vec<ModelTextureId>)>> {
+        gpu.calls
+            .iter()
+            .filter_map(|call| match call {
+                GpuCall::UploadModelTexture { texture, .. } => Some(Ok(*texture)),
+                GpuCall::UploadMesh { mesh, textures, .. } => Some(Err((*mesh, textures.clone()))),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A list drawing each of `keys` once.
+    fn drawing(keys: &[ModelKey]) -> DrawList {
+        let mut list = DrawList::new();
+        for key in keys {
+            list.model(*key, pose(12.0, 12.0));
+        }
+        list
+    }
+
+    #[test]
+    fn a_textured_model_uploads_its_texture_then_its_mesh_naming_it_once() {
+        let texture = one_texel(9);
+        let mesh = skinned(std::slice::from_ref(&texture));
+        let mut renderer = Renderer::new(OneSprite);
+        renderer.add_model(CUBE, mesh.clone());
+        let mut gpu = RecordingGpu::new();
+        let list = drawing(&[CUBE]);
+
+        renderer.render(&list, &viewport(), &mut gpu);
+        assert_eq!(
+            gpu.calls[..2],
+            [
+                GpuCall::UploadModelTexture {
+                    texture: ModelTextureId(0),
+                    data: (*texture).clone(),
+                },
+                GpuCall::UploadMesh {
+                    mesh: MeshId(0),
+                    data: mesh,
+                    textures: vec![ModelTextureId(0)],
+                },
+            ]
+        );
+        renderer.render(&list, &viewport(), &mut gpu);
+        assert_eq!(
+            model_uploads(&gpu),
+            [
+                Ok(ModelTextureId(0)),
+                Err((MeshId(0), vec![ModelTextureId(0)]))
+            ],
+            "neither again the next frame"
+        );
+    }
+
+    #[test]
+    fn a_mesh_names_each_of_its_textures_in_its_own_order() {
+        let (first, second) = (one_texel(1), one_texel(2));
+        let mut renderer = Renderer::new(OneSprite);
+        // Mesh 0 holds the second texture alone, so it is numbered first.
+        renderer.add_model(CUBE, skinned(std::slice::from_ref(&second)));
+        renderer.add_model(PART, skinned(&[first, second]));
+        let mut gpu = RecordingGpu::new();
+        renderer.render(&drawing(&[CUBE, PART]), &viewport(), &mut gpu);
+        assert_eq!(
+            model_uploads(&gpu),
+            [
+                Ok(ModelTextureId(0)),
+                Err((MeshId(0), vec![ModelTextureId(0)])),
+                Ok(ModelTextureId(1)),
+                Err((MeshId(1), vec![ModelTextureId(1), ModelTextureId(0)])),
+            ]
+        );
+    }
+
+    #[test]
+    fn two_keys_sharing_a_texture_upload_it_once_and_both_meshes_name_it() {
+        let texture = one_texel(9);
+        let mut renderer = Renderer::new(OneSprite);
+        renderer.add_model(CUBE, skinned(std::slice::from_ref(&texture)));
+        renderer.add_model(PART, skinned(std::slice::from_ref(&texture)));
+        let mut gpu = RecordingGpu::new();
+        renderer.render(&drawing(&[CUBE, PART]), &viewport(), &mut gpu);
+        assert_eq!(
+            model_uploads(&gpu),
+            [
+                Ok(ModelTextureId(0)),
+                Err((MeshId(0), vec![ModelTextureId(0)])),
+                Err((MeshId(1), vec![ModelTextureId(0)])),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_key_added_again_uploads_its_mesh_again_and_not_the_texture_it_still_shares() {
+        let (kept, new) = (one_texel(1), one_texel(2));
+        let mut renderer = Renderer::new(OneSprite);
+        renderer.add_model(CUBE, skinned(std::slice::from_ref(&kept)));
+        let mut gpu = RecordingGpu::new();
+        let list = drawing(&[CUBE]);
+        renderer.render(&list, &viewport(), &mut gpu);
+
+        renderer.add_model(CUBE, skinned(&[kept, new]));
+        renderer.render(&list, &viewport(), &mut gpu);
+        assert_eq!(
+            model_uploads(&gpu),
+            [
+                Ok(ModelTextureId(0)),
+                Err((MeshId(0), vec![ModelTextureId(0)])),
+                Ok(ModelTextureId(1)),
+                Err((MeshId(0), vec![ModelTextureId(0), ModelTextureId(1)])),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_untextured_model_uploads_no_texture_and_names_none() {
+        let mut gpu = RecordingGpu::new();
+        renderer().render(&drawing(&[CUBE]), &viewport(), &mut gpu);
+        assert_eq!(model_uploads(&gpu), [Err((MeshId(0), Vec::new()))]);
+    }
+
+    #[test]
+    fn a_textured_model_that_is_never_drawn_uploads_nothing() {
+        let mut renderer = renderer();
+        renderer.add_model(PART, skinned(&[one_texel(3)]));
+        let mut gpu = RecordingGpu::new();
+        renderer.render(&drawing(&[CUBE]), &viewport(), &mut gpu);
+        assert_eq!(model_uploads(&gpu), [Err((MeshId(0), Vec::new()))]);
+    }
+
+    #[test]
+    fn set_enlarger_keeps_model_textures_resident() {
+        let mut renderer = Renderer::new(OneSprite);
+        renderer.add_model(CUBE, skinned(&[one_texel(9)]));
+        let mut gpu = RecordingGpu::new();
+        let mut list = DrawList::new();
+        list.sprite(ImageKey::sprite(1, 0), Point::new(4.0, 4.0), Color::WHITE)
+            .model(CUBE, pose(12.0, 12.0));
+        renderer.render(&list, &viewport(), &mut gpu);
+        renderer.set_enlarger(Box::new(NativeDetail));
+        renderer.render(&list, &viewport(), &mut gpu);
+        assert!(
+            gpu.calls.contains(&GpuCall::ClearPages),
+            "the atlas restarted"
+        );
+        assert_eq!(
+            model_uploads(&gpu),
+            [
+                Ok(ModelTextureId(0)),
+                Err((MeshId(0), vec![ModelTextureId(0)]))
+            ],
+            "the texture and the mesh stay"
+        );
     }
 
     const PART: ModelKey = ModelKey(3);

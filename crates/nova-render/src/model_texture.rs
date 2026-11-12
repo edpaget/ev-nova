@@ -12,9 +12,25 @@
 //! A mesh holds its textures behind shared pointers, and a model painted
 //! in two liveries ([`crate::livery::painted`]) shares them between its
 //! two meshes.
+//!
+//! # Which textures the GPU holds
+//!
+//! `Resident` is the renderer's table of the textures it has uploaded,
+//! by pointer: a texture is numbered ([`ModelTextureId`]) and uploaded
+//! the first time a mesh that holds its pointer is, and every later mesh
+//! holding the same pointer names the same number. Two textures with the
+//! same pixels behind two pointers are two uploads: nothing is hashed or
+//! compared, at load or on a frame. Textures are not atlas pages, so a
+//! new enlarger leaves them where they are, as it leaves meshes. A
+//! texture no mesh holds any more stays on the GPU: the port has no call
+//! that drops one, as it has none that drops a mesh.
+
+use std::collections::HashMap;
+use std::sync::{Arc, Weak};
 
 use nova_galaxy_media::planet::Image;
 
+use crate::gpu::Gpu;
 use crate::planet;
 
 /// Which model texture the GPU holds, as the renderer numbers them.
@@ -94,9 +110,105 @@ impl ModelTexture {
     }
 }
 
+/// The model textures the GPU holds, by pointer (see the
+/// [module docs](self)).
+#[derive(Debug, Default)]
+pub(crate) struct Resident {
+    /// Each texture uploaded, by its pointer's address, with the number
+    /// it took. The weak pointer keeps the address its own: an address is
+    /// not handed to another texture while any pointer to its first
+    /// holder, weak or strong, is alive.
+    held: HashMap<usize, (Weak<ModelTexture>, ModelTextureId)>,
+    /// The number the next new texture takes.
+    next: u32,
+}
+
+impl Resident {
+    /// The number `texture` is uploaded under, uploading it through `gpu`
+    /// first if this pointer hasn't been.
+    pub(crate) fn id(&mut self, texture: &Arc<ModelTexture>, gpu: &mut impl Gpu) -> ModelTextureId {
+        let address = Arc::as_ptr(texture) as usize;
+        if let Some((_, id)) = self.held.get(&address) {
+            return *id;
+        }
+        let id = ModelTextureId(self.next);
+        self.next += 1;
+        gpu.upload_model_texture(id, texture);
+        self.held.insert(address, (Arc::downgrade(texture), id));
+        id
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::recording::{GpuCall, RecordingGpu};
+
+    fn one_texel(shade: u8) -> Arc<ModelTexture> {
+        Arc::new(ModelTexture::new(1, 1, vec![shade, shade, shade, 255]).expect("one texel"))
+    }
+
+    /// The texture uploads `gpu` received, in order.
+    fn uploads(gpu: &RecordingGpu) -> Vec<(ModelTextureId, ModelTexture)> {
+        gpu.calls
+            .iter()
+            .filter_map(|call| match call {
+                GpuCall::UploadModelTexture { texture, data } => Some((*texture, data.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_texture_is_numbered_and_uploaded_the_first_time_and_only_then() {
+        let mut resident = Resident::default();
+        let mut gpu = RecordingGpu::new();
+        let (first, second) = (one_texel(1), one_texel(2));
+        assert_eq!(resident.id(&first, &mut gpu), ModelTextureId(0));
+        assert_eq!(resident.id(&second, &mut gpu), ModelTextureId(1));
+        // Asked again, by the same pointer or a clone of it.
+        assert_eq!(resident.id(&first, &mut gpu), ModelTextureId(0));
+        assert_eq!(
+            resident.id(&Arc::clone(&second), &mut gpu),
+            ModelTextureId(1)
+        );
+        assert_eq!(
+            uploads(&gpu),
+            [
+                (ModelTextureId(0), (*first).clone()),
+                (ModelTextureId(1), (*second).clone())
+            ]
+        );
+        assert_eq!(gpu.calls.len(), 2, "nothing but the two uploads");
+    }
+
+    #[test]
+    fn two_pointers_to_the_same_pixels_are_two_textures() {
+        let mut resident = Resident::default();
+        let mut gpu = RecordingGpu::new();
+        let (one, other) = (one_texel(7), one_texel(7));
+        assert_eq!(*one, *other);
+        assert_eq!(resident.id(&one, &mut gpu), ModelTextureId(0));
+        assert_eq!(resident.id(&other, &mut gpu), ModelTextureId(1));
+        assert_eq!(uploads(&gpu).len(), 2);
+    }
+
+    #[test]
+    fn a_dropped_texture_s_number_is_never_another_texture_s() {
+        let mut resident = Resident::default();
+        let mut gpu = RecordingGpu::new();
+        // Each texture is dropped before the next is made, so without the
+        // table keeping its address, the next could be given the same one.
+        for expected in 0..8 {
+            let texture = one_texel(expected as u8);
+            assert_eq!(resident.id(&texture, &mut gpu), ModelTextureId(expected));
+        }
+        let shades: Vec<u8> = uploads(&gpu)
+            .iter()
+            .map(|(_, texture)| texture.levels()[0].rgba[0])
+            .collect();
+        assert_eq!(shades, [0, 1, 2, 3, 4, 5, 6, 7]);
+    }
 
     /// A 4 by 2 image: its left half red, its right half blue, the bottom
     /// row at half the alpha.

@@ -67,8 +67,8 @@ use nova_render::recording::RecordingGpu;
 use nova_render::upscale::{Upscaler, WorldResolution};
 use nova_render::wgpu::{GlyphonMetrics, InitError, OffscreenGpu};
 use nova_render::{
-    FontFaces, Frame, Gpu, ImageError, ImageSource, Mesh, MeshId, PageId, PixelRect, PlanetId,
-    PlanetTextures, UpscalerProbe,
+    FontFaces, Frame, Gpu, ImageError, ImageSource, Mesh, MeshId, ModelTexture, ModelTextureId,
+    PageId, PixelRect, PlanetId, PlanetTextures, UpscalerProbe,
 };
 use nova_sim::fixture::MemoryPilots;
 use nova_sim::flight::{heading_of, shortest_turn};
@@ -184,8 +184,12 @@ impl<G: Gpu> Gpu for TimedGpu<G> {
         self.inner.clear_pages();
     }
 
-    fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh) {
-        self.inner.upload_mesh(mesh, data);
+    fn upload_model_texture(&mut self, texture: ModelTextureId, data: &ModelTexture) {
+        self.inner.upload_model_texture(texture, data);
+    }
+
+    fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh, textures: &[ModelTextureId]) {
+        self.inner.upload_mesh(mesh, data, textures);
     }
 
     fn upload_planet(&mut self, planet: PlanetId, textures: &PlanetTextures) {

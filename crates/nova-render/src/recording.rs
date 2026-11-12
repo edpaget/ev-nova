@@ -13,6 +13,7 @@ use nova_view::ImageKind;
 use crate::gpu::{Frame, Gpu, PageId, PlanetId, PlanetTextures};
 use crate::images::{ImageError, ImageSource};
 use crate::model::{Mesh, MeshId};
+use crate::model_texture::{ModelTexture, ModelTextureId};
 use crate::upscale::{Upscaler, UpscalerProbe, WorldResolution, resolution_of};
 use crate::viewport::PixelRect;
 
@@ -53,12 +54,21 @@ pub enum GpuCall {
     },
     /// [`Gpu::clear_pages`].
     ClearPages,
+    /// [`Gpu::upload_model_texture`].
+    UploadModelTexture {
+        /// The texture's id.
+        texture: ModelTextureId,
+        /// The texture.
+        data: ModelTexture,
+    },
     /// [`Gpu::upload_mesh`].
     UploadMesh {
         /// The mesh's id.
         mesh: MeshId,
         /// The mesh.
         data: Mesh,
+        /// The ids its textures were uploaded under, in the mesh's order.
+        textures: Vec<ModelTextureId>,
     },
     /// [`Gpu::upload_planet`].
     UploadPlanet {
@@ -184,10 +194,18 @@ impl Gpu for RecordingGpu {
         self.calls.push(GpuCall::ClearPages);
     }
 
-    fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh) {
+    fn upload_model_texture(&mut self, texture: ModelTextureId, data: &ModelTexture) {
+        self.calls.push(GpuCall::UploadModelTexture {
+            texture,
+            data: data.clone(),
+        });
+    }
+
+    fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh, textures: &[ModelTextureId]) {
         self.calls.push(GpuCall::UploadMesh {
             mesh,
             data: data.clone(),
+            textures: textures.to_vec(),
         });
     }
 
@@ -274,15 +292,30 @@ mod tests {
     }
 
     #[test]
-    fn recording_gpu_records_a_mesh_upload() {
+    fn recording_gpu_records_a_mesh_upload_and_its_textures_ids() {
         let mut gpu = RecordingGpu::new();
         let cube = Mesh::cube([nova_view::Color::WHITE; 6]);
-        gpu.upload_mesh(MeshId(3), &cube);
+        gpu.upload_mesh(MeshId(3), &cube, &[ModelTextureId(4), ModelTextureId(1)]);
         assert_eq!(
             gpu.calls,
             [GpuCall::UploadMesh {
                 mesh: MeshId(3),
-                data: cube
+                data: cube,
+                textures: vec![ModelTextureId(4), ModelTextureId(1)],
+            }]
+        );
+    }
+
+    #[test]
+    fn recording_gpu_records_a_model_texture_upload() {
+        let mut gpu = RecordingGpu::new();
+        let texture = ModelTexture::new(2, 1, vec![1, 2, 3, 4, 5, 6, 7, 8]).expect("two texels");
+        gpu.upload_model_texture(ModelTextureId(6), &texture);
+        assert_eq!(
+            gpu.calls,
+            [GpuCall::UploadModelTexture {
+                texture: ModelTextureId(6),
+                data: texture,
             }]
         );
     }
