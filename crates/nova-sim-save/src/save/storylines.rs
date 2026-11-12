@@ -229,7 +229,8 @@ fn stability_of(text: &str) -> Option<PointStability> {
 #[cfg(test)]
 mod tests {
     use super::super::tests::seasoned;
-    use super::super::{CURRENT, decode, encode, news_read_41, story_state_40};
+    use super::super::upgrade::{news_read_41, story_state_40};
+    use super::super::{CURRENT, decode, encode};
     use super::*;
     use nova_sim_story::pilot::Pilot;
 

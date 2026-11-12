@@ -53,7 +53,8 @@ pub(super) fn dialogs_of(saved: Vec<SavedDialogState>) -> DialogStates {
 #[cfg(test)]
 mod tests {
     use super::super::tests::seasoned;
-    use super::super::{CURRENT, SaveError, decode, encode, flags_and_dialogs};
+    use super::super::upgrade::flags_and_dialogs;
+    use super::super::{CURRENT, SaveError, decode, encode};
     use super::*;
     use nova_sim_story::pilot::Pilot;
 
