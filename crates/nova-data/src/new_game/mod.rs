@@ -44,6 +44,7 @@
 //! | (placeholder) | `ïntf` 128 ([`records::default_interface`]) | "Default status bar": a radar over the shield, armour and fuel gauges and the nav, weapon, target and cargo readouts, no background picture |
 //! | (placeholder) | `STR#` 128, 134, 138, 1100, 2002, 3000, 3001, 3002 and 5003 ([`strings`]) | the engine's own strings, in plain English, at the IDs and indices the engine reads: comm replies, messages, prompts and labels, default names, legal statuses, combat ratings and the stellar type label; each only at an ID no mapped `STR#` holds |
 //! | (placeholder) | the dialogs ([`interface::default_dialogs`]) | a `DLOG` and its items, titled "Default spaceport" and so on, for each dialog the view has no built-in layout for: the spaceport and every screen it opens, the text, note and question dialogs, the player info and the preferences; each fits the 640 x 480 view, with no art; the app reads them when the folder has no interface file (`nova::interface`) |
+//! | (placeholder) | `cïcn` 10000-10023 ([`brackets`], [`GameData::icon`]) | the nav, dominated and four ship-standing bracket corners: an L per corner, 16 x 16, one placeholder colour per set; a store whose data holds its own `cïcn` at an ID keeps it |
 //! | `outfits/` | `oütf` ([`outfits`]) | its `name`, as `ShortName` and lower-cased as `LCName`, and `Cost` from `price`; massless, with no `Max`; its `mount`'s bit as `Require`, with `Flags` `HIDE_UNLESS_REQUIRED`, so it is listed only for a ship with a hardpoint of that mount; sold at the stellars its `sold_at` names, as a `TechLevel` from [`yards::SOLD_TECH_FIRST`] that only their `SpecialTech` slots hold and `BuyRandom` 100 ([`yards`]); with no `sold_at`, never for sale (`TechLevel` 0x7fff, `BuyRandom` 0); a weapon (`damage` above 0 on a `fixed`, `turret` or `launcher` mount, or a `bay` launching fighters) a `ModType` 1 naming its `wëap`, `Flags` gun, turret or (a bay) neither; a launcher's ammunition a `ModType` 3 naming its rounds' `wëap`; any other doing nothing; `stays_with_pilot: true` adds `Flags` 0x0004, persistent, so a ship purchase keeps it and the trade-in leaves it out; `model` goes to the mounts, below |
 //! | a weapon outfit | `wëap` ([`outfits`]) | pinned by, and numbered in, outfit id order; `damage`, `range` and `reload` as damage, life and `Reload` at a placeholder speed; unguided, turreted for a turret, a fighter bay (99) for a bay; its mount's `ExitType`, the centre for a bay; drawn as the placeholder box, with no explosion |
 //! | `sounds/` | the store's sound files ([`sounds`], [`GameData::sound_files`]) | each clip a weapon or a role needs, read once and checked as a WAV file of at least one frame, its bytes at every `snd ` ID it fills; every other ID silent |
@@ -89,7 +90,8 @@
 //! kept too ([`GameData::ship_line`]), for the opt-in stock look, which
 //! draws a hull in stock sprites from the player's own data instead
 //! ([`crate::stock_look`]). Nor is there a star sheet: the stars draw as stand-in dots
-//! ([`GameData::star_dots`]).
+//! ([`GameData::star_dots`]); nor is there bracket art: the corners are
+//! built ([`brackets`]).
 //!
 //! # Problems
 //!
@@ -216,6 +218,10 @@
 //!   placeholder with no art ([`records::default_interface`]).
 //! - The dialogs: the bible authors no interface file either, so each
 //!   dialog is a placeholder with no art ([`interface::default_dialogs`]).
+//! - The bracket art: the bible authors no interface art, so the corners
+//!   round the nav and ship targets are placeholders built in code
+//!   ([`brackets`]); authored art would come by
+//!   rdm:task/map-authored-status-bar's route.
 //! - The engine's strings: the bible authors no string lists, so the
 //!   engine's own are placeholders in plain English ([`strings`]); the
 //!   lists only a person, a fleet, a buoy, a government's hail or the
@@ -303,6 +309,7 @@
 //! other record and a pilot saved before keeps its place ([`ids`]).
 
 pub mod blockades;
+pub mod brackets;
 mod descriptions;
 pub mod dialogs;
 #[cfg(any(test, feature = "fixture"))]
@@ -396,8 +403,9 @@ pub fn open(dir: &Path) -> Result<NewGame, ListError> {
 /// the format's loader, the ID table ([`pins`]), the LFS check over its
 /// media, the mapping under the table's pins, then the stand-ins
 /// ([`looks`]) and the mounts ([`mounts`]), whose models are read from
-/// `source` too, each once, the sounds' clips ([`sounds`]), each once, and
-/// the music ([`music`]). It never writes the table.
+/// `source` too, each once, the sounds' clips ([`sounds`]), each once, the
+/// music ([`music`]), and the built bracket corners ([`brackets`]). It
+/// never writes the table.
 pub fn load(source: &impl Source, dir: &Path) -> NewGame {
     let (galaxy, mut problems) = nova_galaxy_format::load::load(source);
     let pins = pins::read(source, &mut problems);
@@ -435,7 +443,8 @@ pub fn load(source: &impl Source, dir: &Path) -> NewGame {
         .with_gate_fuels(gate_fuels)
         .with_mounts(mounted.mounts)
         .with_muzzle_reaches(mounted.muzzle_reaches)
-        .with_sound_files(sound_files);
+        .with_sound_files(sound_files)
+        .with_built_icons(brackets::corners());
     NewGame {
         data: match soundtrack {
             Some(track) => data.with_soundtrack(track.into()),
