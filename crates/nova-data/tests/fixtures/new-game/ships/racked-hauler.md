@@ -2,6 +2,7 @@
 name: Racked hauler
 base: hauler
 mods: [cargo-racks]
+stats: {hull: 400, shields: 800}
 hardpoints:
   - id: nose
     mount: turret
