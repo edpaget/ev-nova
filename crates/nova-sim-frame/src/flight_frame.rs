@@ -25,6 +25,23 @@
 //! view the same way: J's [`Answer::GatePilot`], and the frame's
 //! [`FlightFrame::gate_pilot`] with the press it asks the view to send
 //! ([`GatePilotShown`]).
+//!
+//! # Where an addition goes
+//!
+//! - A new frame field, command variant, event variant or screen ask and
+//!   its answer is a type here, in this module or the `screen`,
+//!   `port_screens` or `story_screens` module, beside what it carries.
+//! - The `Session` code that fills or answers it goes in nova-sim (its
+//!   `session/frame`, `session/apply`, `session/flight_events` and
+//!   `session/screen` modules), never here: this crate names nothing above
+//!   the state layer.
+//! - A value type a screen carries goes in this crate, in the module named
+//!   for the `nova_sim::session` module that builds it, or, when a layer
+//!   crate builds it, in `nova_sim_state::shown` (or `nova_sim_base::shown`),
+//!   which that crate re-exports at its own path.
+//! - A constructor that reads combat's or the ai's state is a method of an
+//!   extension trait in `nova_sim::flight_frame` (`FrameShotOf`,
+//!   `FrameBeamOf`, `FrameBoxOf`, `FrameAsteroidOf`, `GateFadeOf`).
 
 use std::collections::{BTreeMap, BTreeSet};
 

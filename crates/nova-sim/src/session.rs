@@ -434,6 +434,12 @@
 //!   which the view asks, keeps the pod from docking or jumping.
 //! - The stragglers `red_alert`, `tutorial` and `load_repaired`, which
 //!   stay on `Session`.
+//!
+//! The plain values the session's modules hand the view (the saved nav
+//! `SavedNav`, `SessionEvent`, the mission screens' rows, `StellarPick`
+//! and `LandPress`, …) are defined in `nova_sim_frame`, each in the module
+//! named for the `session/` module that builds it, and re-exported by that
+//! module; the code that builds them stays here.
 
 mod afterburner;
 mod afterburner_roll;

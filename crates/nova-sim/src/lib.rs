@@ -11,9 +11,21 @@
 //! path, so a `nova_sim::…` path doesn't depend on which crate holds the
 //! code. The view models come from `nova-sim-frame`: [`glow`],
 //! [`key_fade`], [`map_borders`], [`map_panel`], [`map_search`],
-//! [`pilot_panel`], [`red_alert`], [`status_cargo`] and [`target_panel`].
-//! The crate's own modules are the session layer's: [`session`],
-//! [`course`], [`flight_frame`], [`galaxy_map`], [`map_route`],
+//! [`pilot_panel`], [`red_alert`], [`status_cargo`] and [`target_panel`]
+//! whole, and the types and pure rules of [`flight_frame`],
+//! [`galaxy_map`], [`map_lanes`] and [`viewer_lanes`], whose modules
+//! here add the builders that read the session's layers (`draw_map`,
+//! `lane_look`, `gate_links`, and the extension traits that build a
+//! frame's values from combat's and the ai's state:
+//! [`GalaxyShownOf`](galaxy_map::GalaxyShownOf),
+//! [`FrameShotOf`](flight_frame::FrameShotOf),
+//! [`GateFadeOf`](flight_frame::GateFadeOf) and their kin). The plain
+//! values the session's modules hand the view ([`SavedNav`],
+//! [`SessionEvent`], [`MissionShown`], …) are `nova-sim-frame`'s too,
+//! re-exported by those modules; the view vocabulary the layer crates
+//! build is `nova_sim_state::shown`'s (or `nova_sim_base::shown`'s),
+//! re-exported by each layer at its own path. The crate's own modules are
+//! the session layer's: [`session`], [`course`], [`map_route`],
 //! [`pre_jump`], [`rating`] and [`top_speed`], with the test support in
 //! `fixture`.
 //!

@@ -6,7 +6,13 @@
 //! once ([`FlightSim::drain`]), and what a screen draws from, asked as it
 //! opens or as its input changes ([`FlightSim::screen`]). The values it
 //! carries are `nova_sim`'s ([`flight_frame`](nova_sim::flight_frame)), so
-//! the session can build them.
+//! the session can build them. They are defined in `nova_sim_frame`, the
+//! view vocabulary below the layer crates (`nova_sim_frame::flight_frame`
+//! and its siblings), and `nova_sim` re-exports each at the path named
+//! here, while the session code that fills and answers them stays in
+//! `nova_sim`. Every other name of `nova_sim` the view's code reaches,
+//! but the adapter's, is re-exported by `nova_sim_frame` at the same
+//! path.
 //!
 //! [`SessionFlight`](super::sim_adapter::SessionFlight) is the adapter
 //! over a real `nova_sim::Session`, and the edge builds it
@@ -134,6 +140,24 @@
 //! variant of nova-sim's, answered and pinned on nova-sim's side, and
 //! each adapter forward stays one `Session` call. nova-sim's `session`
 //! module is private, so its paths here are inline code.
+//!
+//! Where each half goes:
+//!
+//! - The type itself (a new frame field, command variant, event variant
+//!   or screen ask and its answer) is defined in nova-sim-frame, in
+//!   `nova-sim-frame/src/flight_frame.rs` or a module under
+//!   `nova-sim-frame/src/flight_frame/`, beside the types it carries;
+//!   `nova_sim::flight_frame` re-exports it.
+//! - The `Session` code that fills or answers it goes in nova-sim, in the
+//!   `session/` modules below.
+//! - A value type a screen carries goes in nova-sim-frame too, in the
+//!   module named for the `session/` module that builds it, or, when a
+//!   layer crate (combat, the ai, the story or the port) builds it, in
+//!   `nova_sim_state::shown` (or `nova_sim_base::shown`), re-exported by
+//!   that crate at its own path. A type there never names a crate above
+//!   it, so a constructor that reads a layer's state is an extension
+//!   trait in the module that builds it (`nova_sim::galaxy_map::GalaxyShownOf`,
+//!   `nova_sim::flight_frame::GateFadeOf`).
 //!
 //! - **A readout** is a [`FlightFrame`] field, filled in nova-sim's
 //!   `session/frame.rs` (or a module under `session/frame/`) and pinned by
