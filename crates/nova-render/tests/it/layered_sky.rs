@@ -3,15 +3,17 @@
 //! the core's own stars (`nova_render::sky`), placed by its projection
 //! and lit by its falloff, never retyped: the stars draw where the core
 //! says, each layer moves by its depth's parallax as the eye moves, the
-//! murk level dims them, what is drawn after the sky covers it, and every
-//! layer still shows at the lowest render scale.
+//! murk level dims them, what is drawn after the sky covers it, every
+//! layer still shows at the lowest render scale, and through a jump's
+//! rush each star is drawn as its streak by depth, near ones longer, the
+//! same sky at rest round.
 //!
 //! Logical 512 × 512 in a 512 × 512 target: a logical unit is a pixel.
 //! Needs a GPU adapter; skips, passing, without one. Native only, but for
 //! the render scale's world texture.
 
 use nova_render::fonts::FontFaces;
-use nova_render::sky::{LAYERS, StarInstance, coverage, layer_stars, parallax, stars};
+use nova_render::sky::{LAYERS, StarInstance, layer_stars, parallax, stars, streak_coverage};
 use nova_render::{LogicalSize, RenderReport, RenderScale, Renderer, Viewport};
 use nova_view::geometry::Bounds;
 use nova_view::{Color, DrawCommand, DrawList, Point, SkyPose};
@@ -72,13 +74,14 @@ fn pixel_of(p: Point) -> (u32, u32) {
 }
 
 /// The colour the core predicts at pixel `at`'s centre from `stars`, in
-/// 8 bits: the sum of each star's colour × its falloff there.
+/// 8 bits: the sum of each star's colour × its streak's falloff there
+/// (a round star's at no trail).
 fn predicted(stars: &[StarInstance], (x, y): (u32, u32)) -> [f32; 3] {
     let centre = (x as f32 + 0.5, y as f32 + 0.5);
     let mut sum = [0.0; 3];
     for star in stars {
-        let distance = (centre.0 - star.centre.x).hypot(centre.1 - star.centre.y);
-        let lit = coverage(distance / star.radius);
+        let offset = Point::new(centre.0 - star.centre.x, centre.1 - star.centre.y);
+        let lit = streak_coverage(offset, star.trail, star.radius);
         for (channel, c) in sum.iter_mut().zip(star.color) {
             *channel += c * lit;
         }
@@ -257,6 +260,104 @@ fn what_is_drawn_after_the_sky_covers_it() {
         return;
     };
     assert_eq!(rgb(&pixels, pixel_of(star.centre)), [30, 90, 160]);
+}
+
+/// The rush along a jump heading, down and to the right.
+const RUSH: Point = Point::new(80.0, 40.0);
+
+/// The rush's heading, a unit long.
+fn heading() -> Point {
+    let length = RUSH.x.hypot(RUSH.y);
+    Point::new(RUSH.x / length, RUSH.y / length)
+}
+
+/// The pixel `k` units along the heading from `star`'s centre.
+fn along(star: &StarInstance, k: u32) -> (u32, u32) {
+    let k = k as f32;
+    pixel_of(Point::new(
+        star.centre.x + heading().x * k,
+        star.centre.y + heading().y * k,
+    ))
+}
+
+/// A star of layer `layer` of the rushing sky `all` whose line along the
+/// heading, from its centre `reach` units on, is well inside the view
+/// and lit by no other star.
+fn clear_streak(layer: usize, sky: &SkyPose, all: &[StarInstance], reach: u32) -> StarInstance {
+    let inside = |(x, y): (u32, u32)| {
+        let inner = 40..SIDE - 40;
+        inner.contains(&x) && inner.contains(&y)
+    };
+    layer_stars(sky, layer, LOGICAL, 1.0)
+        .into_iter()
+        .find(|star| {
+            let others: Vec<StarInstance> =
+                all.iter().filter(|other| *other != star).copied().collect();
+            (0..=reach).all(|k| {
+                let at = along(star, k);
+                inside(at) && predicted(&others, at).iter().all(|&c| c <= 0.0)
+            })
+        })
+        .unwrap_or_else(|| panic!("a clear streak in layer {layer}"))
+}
+
+/// How many units along the heading from `star`'s centre are lit before
+/// the first dark pixel, up to `reach`.
+fn lit_run(pixels: &[u8], star: &StarInstance, reach: u32) -> u32 {
+    (0..=reach)
+        .find(|&k| rgb(pixels, along(star, k)) == [0, 0, 0])
+        .unwrap_or(reach + 1)
+}
+
+#[test]
+fn through_the_rush_each_star_is_drawn_as_its_streak_near_ones_longer() {
+    let sky = pose(EYE, 32).with_rush(RUSH);
+    let Some(pixels) = sky_drawn(sky) else {
+        return;
+    };
+    let all = stars(&sky, LOGICAL, 1.0);
+    let near_trail = RUSH.x.hypot(RUSH.y) * parallax(LAYERS[NEAR].depth);
+    let reach = near_trail.ceil() as u32 + 8;
+    let near = clear_streak(NEAR, &sky, &all, reach);
+    let far = clear_streak(FAR, &sky, &all, reach);
+    // Along the near streak, its centre, middle and tail are lit as the
+    // core predicts.
+    let length = near.trail.x.hypot(near.trail.y);
+    for share in [0.0, 0.5, 1.0] {
+        let at = along(&near, (length * share) as u32);
+        assert_near(&pixels, &all, at, &format!("the near streak at {share}"));
+        assert!(rgb(&pixels, at).iter().any(|&c| c > 0), "lit at {share}");
+    }
+    // The near streak runs its trail's length, the far one barely past its
+    // own.
+    let (near_run, far_run) = (
+        lit_run(&pixels, &near, reach),
+        lit_run(&pixels, &far, reach),
+    );
+    let far_length = far.trail.x.hypot(far.trail.y);
+    assert!(near_run as f32 >= length - 1.0, "{near_run} for {length}");
+    assert!(
+        far_run as f32 <= far_length + far.radius + 2.0,
+        "{far_run} for {far_length}"
+    );
+    assert!(near_run > far_run + 20, "{near_run} then {far_run}");
+}
+
+#[test]
+fn the_same_sky_not_rushing_draws_round_stars() {
+    let rushing = pose(EYE, 32).with_rush(RUSH);
+    let (Some(streaked), Some(round)) = (sky_drawn(rushing), sky_drawn(pose(EYE, 32))) else {
+        return;
+    };
+    let all = stars(&rushing, LOGICAL, 1.0);
+    let near_trail = RUSH.x.hypot(RUSH.y) * parallax(LAYERS[NEAR].depth);
+    let reach = near_trail.ceil() as u32 + 8;
+    let near = clear_streak(NEAR, &rushing, &all, reach);
+    let middle = along(&near, (near_trail / 2.0) as u32);
+    assert!(rgb(&streaked, middle).iter().any(|&c| c > 0));
+    assert_eq!(rgb(&round, middle), [0, 0, 0], "no streak at rest");
+    assert!(rgb(&round, pixel_of(near.centre)).iter().any(|&c| c > 0));
+    assert_ne!(streaked, round);
 }
 
 #[test]
