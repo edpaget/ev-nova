@@ -121,7 +121,12 @@ pub fn world_assets_from(
         if let Some(key) = keys.key(&request, ship_livery(&game.galaxy, id)) {
             #[allow(clippy::cast_possible_truncation, reason = "a metre's pixels")]
             let scale = PX_PER_METRE as f32;
-            table.ships.insert(ship, ShipModel { key, scale });
+            let model = ShipModel {
+                key,
+                scale,
+                base_transp: 0,
+            };
+            table.ships.insert(ship, model);
         }
     }
     for asset in shown_assets(&table) {

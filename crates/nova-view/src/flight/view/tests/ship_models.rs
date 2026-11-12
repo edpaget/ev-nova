@@ -62,7 +62,11 @@ fn mount(hardpoint: &str, turns: bool, asset: &str) -> Mount {
 /// Ship 128, the player's, with a fixed gun on its nose and a turret on
 /// the [`BED`] kit; ship 130, an NPC's, built with the bed.
 fn table() -> WorldModels {
-    let model = |key| ShipModel { key, scale: SCALE };
+    let model = |key| ShipModel {
+        key,
+        scale: SCALE,
+        base_transp: 0,
+    };
     WorldModels {
         ships: BTreeMap::from([
             (ShipId(128), model(PLAYER_HULL)),

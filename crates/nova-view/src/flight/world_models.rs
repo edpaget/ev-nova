@@ -33,6 +33,11 @@ pub struct ShipModel {
     /// metres, drawn at the pixels a metre spans
     /// (`nova_data::new_game::fleet::PX_PER_METRE`).
     pub scale: f32,
+    /// How translucent its hull is, in 32nds as a sheet's `BaseTransp`: 0
+    /// opaque, 32 or more unseen. A class drawn as a model has no sheet to
+    /// read it from, so the edge fills it from the data
+    /// (`nova_galaxy_format`'s `fleet::Ship::translucency`), 0 by default.
+    pub base_transp: i16,
 }
 
 /// What a stellar draws in 3D.
@@ -138,6 +143,7 @@ mod tests {
                 ShipModel {
                     key: HULL,
                     scale: 1.0,
+                    base_transp: 6,
                 },
             )]),
             built_kits: BTreeMap::from([(ShipId(129), vec![BED])]),
@@ -173,7 +179,8 @@ mod tests {
             table.ship(ShipId(128)),
             Some(ShipModel {
                 key: HULL,
-                scale: 1.0
+                scale: 1.0,
+                base_transp: 6,
             })
         );
         assert_eq!(table.ship(ShipId(129)), None);
