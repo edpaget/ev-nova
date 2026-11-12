@@ -22,7 +22,10 @@
 //!   world layer ([`nova_view::DrawLayer`]) apart from the overlay: no
 //!   batch holds both.
 //! - [`model`]: the [`Mesh`]es 3D models ([`nova_view::DrawCommand::Model`])
-//!   are drawn with, checked when they are made, and [`Mesh::cube`].
+//!   are drawn with, in sections that each take one texture or none,
+//!   checked when they are made, and [`Mesh::cube`].
+//! - [`model_texture`]: a model's base-colour texture ([`ModelTexture`]),
+//!   decoded pixels with their mip chain built at load.
 //! - [`model_source`]: the [`ModelSource`] port, the new game's models by
 //!   asset id ([`ModelRequest`]) as [`LoadedModel`]s, placed and scaled
 //!   on the view's model axes, with their materials and textures, or why
@@ -159,6 +162,7 @@ pub mod images;
 pub mod livery;
 pub mod model;
 pub mod model_source;
+pub mod model_texture;
 mod models;
 pub mod new_game_world;
 pub mod planet;
@@ -190,8 +194,9 @@ pub use gpu::{
 };
 pub use images::{ImageError, ImageSource};
 pub use livery::{Livery, PaintSlot, painted};
-pub use model::{Mesh, MeshError, MeshId, Vertex};
+pub use model::{Mesh, MeshError, MeshId, Section, Vertex};
 pub use model_source::{LoadedModel, ModelError, ModelRequest, ModelSource};
+pub use model_texture::{ModelTexture, ModelTextureError, ModelTextureId};
 pub use new_game_world::{WorldAssets, world_assets, world_assets_from, world_assets_in};
 pub use planet_source::{LoadedPlanet, PlanetError, PlanetRequest, PlanetSource};
 pub use present::{AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action};

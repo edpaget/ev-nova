@@ -334,6 +334,8 @@ pub fn part(
             position: view_axes(*p),
             normal: view_axes(*n),
             color,
+            uv: [0.0; 2],
+            unlit: false,
         })
         .collect();
     Ok(Part {
@@ -660,6 +662,8 @@ mod tests {
                 position: *p,
                 normal: [0.0, 0.0, 1.0],
                 color: [1.0; 4],
+                uv: [0.0; 2],
+                unlit: false,
             })
             .collect();
         LoadedModel {

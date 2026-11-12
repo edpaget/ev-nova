@@ -229,6 +229,8 @@ mod tests {
             position: [1.0, 2.0, 3.0],
             normal: [4.0, 5.0, 6.0],
             color: [0.1, 0.2, 0.3, 0.4],
+            uv: [0.0; 2],
+            unlit: false,
         });
         let floats: &[f32] = bytemuck::cast_slice(std::slice::from_ref(&vertex));
         assert_eq!(floats, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 0.1, 0.2, 0.3, 0.4]);

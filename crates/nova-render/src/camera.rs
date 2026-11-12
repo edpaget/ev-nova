@@ -33,6 +33,12 @@
 //! One directional light and an ambient term, Lambert's, in the gamma
 //! space every canvas blends in ([`shade`]). The shader computes the same
 //! formula per fragment from the interpolated normal.
+//!
+//! # A fragment
+//!
+//! [`fragment`] is the whole of what a model's fragment shows: its vertex
+//! colour times its texture's texel, lit unless its material is unlit.
+//! `models.wgsl` mirrors it.
 
 use nova_view::{ModelPose, Mounting};
 
@@ -77,6 +83,27 @@ pub fn shade(normal: [f32; 3], base: [f32; 4], light: Light) -> [f32; 4] {
     let lit = light.ambient + (1.0 - light.ambient) * facing;
     let [red, green, blue, alpha] = base;
     [red * lit, green * lit, blue * lit, alpha]
+}
+
+/// One fragment of a model: its vertex `color` times its section's
+/// `texel` (white where the section has no texture), each of the four
+/// channels, then lit by `light` on a surface facing `normal` ([`shade`])
+/// unless it is `unlit`, which draws the product as it is whatever the
+/// normal and the light.
+#[must_use]
+pub fn fragment(
+    normal: [f32; 3],
+    color: [f32; 4],
+    texel: [f32; 4],
+    unlit: bool,
+    light: Light,
+) -> [f32; 4] {
+    let base = [0, 1, 2, 3].map(|channel| color[channel] * texel[channel]);
+    if unlit {
+        base
+    } else {
+        shade(normal, base, light)
+    }
 }
 
 /// The instance that draws `mesh`, `radius` model units across at most
@@ -750,6 +777,93 @@ mod tests {
         assert_eq!(lit, RED);
         let dim = shade([0.0, 0.0, -1.0], RED, light);
         assert_eq!(dim, [0.5, 0.25, 0.125, 0.75]);
+    }
+
+    /// A texel apart from white in every channel.
+    const TEXEL: [f32; 4] = [0.5, 0.25, 0.75, 0.5];
+    const WHITE: [f32; 4] = [1.0; 4];
+
+    /// Normals and lights apart: facing the light, away from it, edge-on,
+    /// and none at all.
+    fn normals_and_lights() -> Vec<([f32; 3], Light)> {
+        let lights = [
+            Light::STANDARD,
+            Light {
+                direction: [0.0, 0.0, 1.0],
+                ambient: 0.5,
+            },
+            Light {
+                direction: [3.0, -1.0, 0.5],
+                ambient: 0.0,
+            },
+        ];
+        let normals = [
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+            [1.0, 0.0, 0.0],
+            [-0.4, 0.8, 0.2],
+            [0.0; 3],
+        ];
+        lights
+            .into_iter()
+            .flat_map(|light| normals.map(|normal| (normal, light)))
+            .collect()
+    }
+
+    #[test]
+    fn an_unlit_fragment_is_its_colour_times_its_texel_whatever_the_light() {
+        let product = [0.5, 0.125, 0.1875, 0.375];
+        for (normal, light) in normals_and_lights() {
+            assert_eq!(fragment(normal, RED, TEXEL, true, light), product);
+            // With a white texel, its vertex colour exactly.
+            assert_eq!(fragment(normal, RED, WHITE, true, light), RED);
+            // With a white vertex, its texel exactly.
+            assert_eq!(fragment(normal, WHITE, TEXEL, true, light), TEXEL);
+        }
+    }
+
+    #[test]
+    fn a_lit_fragment_is_the_product_shaded() {
+        let product = [0.5, 0.125, 0.1875, 0.375];
+        for (normal, light) in normals_and_lights() {
+            assert_eq!(
+                fragment(normal, RED, TEXEL, false, light),
+                shade(normal, product, light)
+            );
+            // With a white texel, a model with no texture as it was lit.
+            assert_eq!(
+                fragment(normal, RED, WHITE, false, light),
+                shade(normal, RED, light)
+            );
+        }
+        // Lit and unlit differ wherever the light is not full.
+        let dim = Light {
+            direction: [0.0, 0.0, 1.0],
+            ambient: 0.5,
+        };
+        let away = [0.0, 0.0, -1.0];
+        assert_eq!(
+            fragment(away, RED, TEXEL, false, dim),
+            [0.25, 0.0625, 0.09375, 0.375]
+        );
+        assert_ne!(
+            fragment(away, RED, TEXEL, false, dim),
+            fragment(away, RED, TEXEL, true, dim)
+        );
+    }
+
+    #[test]
+    fn a_fragment_s_alpha_is_its_colour_s_times_its_texel_s_lit_or_not() {
+        let light = Light {
+            direction: [0.0, 0.0, 1.0],
+            ambient: 0.5,
+        };
+        for unlit in [false, true] {
+            let faded = fragment([0.0, 0.0, -1.0], RED, TEXEL, unlit, light);
+            assert_eq!(faded[3], 0.75 * 0.5, "unlit {unlit}");
+            let clear = fragment([0.0, 0.0, 1.0], RED, [1.0, 1.0, 1.0, 0.0], unlit, light);
+            assert_eq!(clear[3], 0.0, "unlit {unlit}");
+        }
     }
 
     #[test]
