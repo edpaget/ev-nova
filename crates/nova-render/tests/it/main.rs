@@ -7,6 +7,7 @@
 mod common;
 
 mod enlarged_atlas;
+mod faded_models;
 mod flight_frame;
 mod floater_text;
 mod frame_cost;
