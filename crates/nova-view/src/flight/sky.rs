@@ -28,11 +28,13 @@ use crate::sky::SkyPose;
 /// negative murk.
 #[must_use]
 pub fn sky_pose(system: SystemId, eye: Point, anchor: Point, murk: i16) -> Option<SkyPose> {
-    (murk >= 0).then(|| SkyPose {
-        seed: u64::from(system.0.cast_unsigned()),
-        eye,
-        anchor,
-        level: murk_level(murk),
+    (murk >= 0).then(|| {
+        SkyPose::new(
+            u64::from(system.0.cast_unsigned()),
+            eye,
+            anchor,
+            murk_level(murk),
+        )
     })
 }
 
@@ -60,12 +62,12 @@ mod tests {
     fn a_clear_system_shows_its_sky_at_full_level_where_the_camera_is() {
         assert_eq!(
             pose(128, 0),
-            Some(SkyPose {
-                seed: 128,
-                eye: Point::new(10.0, -20.0),
-                anchor: Point::new(400.0, 384.0),
-                level: FULL_LEVEL,
-            })
+            Some(SkyPose::new(
+                128,
+                Point::new(10.0, -20.0),
+                Point::new(400.0, 384.0),
+                FULL_LEVEL,
+            ))
         );
     }
 

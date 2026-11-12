@@ -95,12 +95,12 @@ fn by_the_layered_reading_the_worlds_first_draw_is_the_systems_sky_from_the_came
     assert_eq!(
         list.iter().next(),
         Some(&DrawCommand::Sky {
-            sky: SkyPose {
-                seed: u64::from(view.frame.system.0.cast_unsigned()),
-                eye: camera.center(),
-                anchor: camera.anchor(),
-                level: 32,
-            }
+            sky: SkyPose::new(
+                u64::from(view.frame.system.0.cast_unsigned()),
+                camera.center(),
+                camera.anchor(),
+                32,
+            )
         })
     );
     assert_eq!(skies(&view).len(), 1);

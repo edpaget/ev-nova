@@ -27,12 +27,12 @@ const DELTA: (f32, f32) = (120.0, -80.0);
 
 /// The sky seen from `eye` at `level`.
 fn pose(eye: (f32, f32), level: u8) -> SkyPose {
-    SkyPose {
-        seed: 77,
-        eye: Point::new(eye.0, eye.1),
-        anchor: Point::new(256.0, 256.0),
+    SkyPose::new(
+        77,
+        Point::new(eye.0, eye.1),
+        Point::new(256.0, 256.0),
         level,
-    }
+    )
 }
 
 const EYE: (f32, f32) = (1000.0, -500.0);

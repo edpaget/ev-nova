@@ -1191,15 +1191,11 @@ mod tests {
         );
     }
 
-    /// Sky 9 looking from (100, -50), drawn at (`x`, `y`), at half murk.
+    /// Sky 9 looking from (100, -50), drawn at (`x`, `y`), at half murk,
+    /// rushing by (7, -3).
     fn sky_at(x: f32, y: f32) -> DrawCommand {
         DrawCommand::Sky {
-            sky: SkyPose {
-                seed: 9,
-                eye: at(100.0, -50.0),
-                anchor: at(x, y),
-                level: 16,
-            },
+            sky: SkyPose::new(9, at(100.0, -50.0), at(x, y), 16).with_rush(at(7.0, -3.0)),
         }
     }
 
@@ -1219,7 +1215,7 @@ mod tests {
     }
 
     #[test]
-    fn a_translated_sky_moves_its_anchor_and_not_its_eye() {
+    fn a_translated_sky_moves_its_anchor_and_not_its_eye_or_rush() {
         assert_eq!(
             sky_at(1.0, 2.0).translated(at(10.0, -4.0)),
             sky_at(11.0, -2.0)

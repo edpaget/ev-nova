@@ -313,12 +313,7 @@ mod tests {
     #[test]
     fn a_sky_clipped_to_the_map_area_is_wrapped_in_a_clip_as_a_model_is() {
         let sky = DrawCommand::Sky {
-            sky: crate::SkyPose {
-                seed: 3,
-                eye: at(0.0, 0.0),
-                anchor: at(225.0, 140.0),
-                level: 32,
-            },
+            sky: crate::SkyPose::new(3, at(0.0, 0.0), at(225.0, 140.0), 32),
         };
         let drawn = clipped(|map| {
             map.push(sky.clone());

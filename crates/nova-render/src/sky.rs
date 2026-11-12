@@ -337,12 +337,12 @@ mod tests {
     use crate::viewport::LOGICAL;
 
     fn pose(seed: u64, eye: (f32, f32), level: u8) -> SkyPose {
-        SkyPose {
+        SkyPose::new(
             seed,
-            eye: Point::new(eye.0, eye.1),
-            anchor: Point::new(512.0, 384.0),
+            Point::new(eye.0, eye.1),
+            Point::new(512.0, 384.0),
             level,
-        }
+        )
     }
 
     /// Plenty of texels per unit: no star is grown.
@@ -627,12 +627,7 @@ mod tests {
     #[test]
     fn a_cells_stars_stand_where_its_draws_put_them_on_the_layer() {
         // Eye and anchor at the origin: the layer's point u is drawn at u.
-        let seen = SkyPose {
-            seed: 3,
-            eye: Point::new(0.0, 0.0),
-            anchor: Point::new(0.0, 0.0),
-            level: 32,
-        };
+        let seen = SkyPose::new(3, Point::new(0.0, 0.0), Point::new(0.0, 0.0), 32);
         // The far layer: a few stars a cell.
         let layer = 0;
         let shown = layer_stars(&seen, layer, LOGICAL, FINE);
@@ -772,12 +767,7 @@ mod batch_tests {
     }
 
     fn sky() -> SkyPose {
-        SkyPose {
-            seed: 21,
-            eye: Point::new(40.0, -70.0),
-            anchor: Point::new(128.0, 96.0),
-            level: 32,
-        }
+        SkyPose::new(21, Point::new(40.0, -70.0), Point::new(128.0, 96.0), 32)
     }
 
     fn frame_of(

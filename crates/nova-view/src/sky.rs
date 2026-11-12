@@ -9,6 +9,13 @@
 //! (`nova_render::sky`), as a planet's look belongs to its bake. The same
 //! pose always draws the same sky.
 //!
+//! Through a jump's warp the pose also carries the rush
+//! ([`SkyPose::rush`]): how far the eye moved over the last step. The
+//! renderer draws each star as the streak it swept on screen over that
+//! step, the rush times its layer's depth parallax, so near layers streak
+//! long and far ones barely. Out of the warp the rush is zero and every
+//! star is round.
+//!
 //! Flight draws one under [`RuleKey::LayeredStarfield`]'s other reading
 //! (see [`crate::flight::sky`]).
 //!
@@ -34,4 +41,59 @@ pub struct SkyPose {
     /// [`crate::flight::stars::murk_level`]): 32 draws it at full
     /// brightness, 16 at half, and 0 draws nothing.
     pub level: u8,
+    /// How far the eye moved over the last step, in world units, while
+    /// the sky rushes (a jump's warp); zero otherwise. The renderer
+    /// streaks each star back along it by its layer's parallax (see the
+    /// module docs).
+    pub rush: Point,
+}
+
+impl SkyPose {
+    /// Sky `seed` seen from over world point `eye`, drawn at `anchor`, at
+    /// murk level `level`, not rushing.
+    #[must_use]
+    pub const fn new(seed: u64, eye: Point, anchor: Point, level: u8) -> Self {
+        Self {
+            seed,
+            eye,
+            anchor,
+            level,
+            rush: Point::new(0.0, 0.0),
+        }
+    }
+
+    /// This pose rushing by `rush`, the eye's move over the last step.
+    #[must_use]
+    pub const fn with_rush(self, rush: Point) -> Self {
+        Self { rush, ..self }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_new_pose_is_its_parts_and_no_rush() {
+        let pose = SkyPose::new(9, Point::new(1.0, 2.0), Point::new(3.0, 4.0), 16);
+        assert_eq!(pose.seed, 9);
+        assert_eq!(pose.eye, Point::new(1.0, 2.0));
+        assert_eq!(pose.anchor, Point::new(3.0, 4.0));
+        assert_eq!(pose.level, 16);
+        assert_eq!(pose.rush, Point::new(0.0, 0.0));
+    }
+
+    #[test]
+    fn a_rushing_pose_keeps_the_rest_and_takes_its_rush() {
+        let pose = SkyPose::new(9, Point::new(1.0, 2.0), Point::new(3.0, 4.0), 16);
+        let rushing = pose.with_rush(Point::new(-30.0, 12.5));
+        assert_eq!(rushing.rush, Point::new(-30.0, 12.5));
+        assert_eq!(
+            SkyPose {
+                rush: pose.rush,
+                ..rushing
+            },
+            pose
+        );
+    }
 }
