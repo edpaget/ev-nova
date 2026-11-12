@@ -9,6 +9,12 @@
 //! (`nova_render::sky`), as a planet's look belongs to its bake. The same
 //! pose always draws the same sky.
 //!
+//! A system's own sky look (its star density, its tint and its distant
+//! backdrop, from its data) is not on the pose either: the renderer looks
+//! it up by the seed (`nova_render::sky`), as it looks a planet up by its
+//! key, and a seed it holds no look for draws the default sky. Flight's
+//! seed rule is [`crate::flight::sky::sky_seed`].
+//!
 //! Through a jump's warp the pose also carries the rush
 //! ([`SkyPose::rush`]): how far the eye moved over the last step. The
 //! renderer draws each star as the streak it swept on screen over that

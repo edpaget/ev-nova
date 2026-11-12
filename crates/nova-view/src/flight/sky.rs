@@ -17,7 +17,10 @@
 //! streaks the stars by depth; out of the warp it is zero.
 //!
 //! What the sky looks like (its layers, depths, density and tints) is the
-//! renderer's (`nova_render::sky`).
+//! renderer's (`nova_render::sky`). A system's own look, set by its data
+//! (its star density, tint and distant backdrop), is the renderer's too:
+//! it looks the look up by the pose's seed, which [`sky_seed`] gives, so
+//! the pose carries no look.
 //!
 //! [`RuleKey::LayeredStarfield`]: nova_sim::RuleKey::LayeredStarfield
 
@@ -39,15 +42,16 @@ pub fn sky_pose(
     rush: Point,
     murk: i16,
 ) -> Option<SkyPose> {
-    (murk >= 0).then(|| {
-        SkyPose::new(
-            u64::from(system.0.cast_unsigned()),
-            eye,
-            anchor,
-            murk_level(murk),
-        )
-        .with_rush(rush)
-    })
+    (murk >= 0)
+        .then(|| SkyPose::new(sky_seed(system), eye, anchor, murk_level(murk)).with_rush(rush))
+}
+
+/// The seed of `system`'s sky ([`SkyPose::seed`]): its ID, so each system
+/// shows the same sky on every visit and another than its neighbours'.
+/// The renderer keys a system's own sky look by it.
+#[must_use]
+pub fn sky_seed(system: SystemId) -> u64 {
+    u64::from(system.0.cast_unsigned())
 }
 
 #[cfg(test)]
@@ -115,6 +119,16 @@ mod tests {
             assert_eq!(sky.level, murk_level(murk), "{murk}");
         }
         assert_eq!(pose(128, 8).map(|sky| sky.level), Some(7));
+    }
+
+    #[test]
+    fn a_systems_sky_is_seeded_by_its_seed_rule() {
+        for system in [128, 129, 1000, -2, 0, i16::MAX, i16::MIN] {
+            let pose = pose(system, 0).expect("a sky");
+            assert_eq!(pose.seed, sky_seed(SystemId(system)), "{system}");
+        }
+        assert_eq!(sky_seed(SystemId(128)), 128);
+        assert_ne!(sky_seed(SystemId(-1)), sky_seed(SystemId(1)));
     }
 
     #[test]
