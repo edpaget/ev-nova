@@ -2088,6 +2088,19 @@ pub(super) mod tests {
             (0, -1, left),
             "the timer spent, none counted (@0x4382c, @0x43971)"
         );
+        // The crowd goes once the timer is spent: with room, a timer that
+        // fired again would bring them, so room is never what keeps them
+        // out. The crowd's hulks are flying again after the due tick, and
+        // 300 ticks of 55 flying ships took seconds.
+        let hulks: Vec<_> = session
+            .npcs()
+            .iter()
+            .filter(|npc| npc.mission.is_none())
+            .map(|npc| npc.id)
+            .collect();
+        for hulk in hulks {
+            session.space.traffic.remove(hulk);
+        }
         ticks(&mut session, &catalog, 300);
         assert!(marked(&session).is_empty(), "not due again in this system");
         jump_to(&mut session, &catalog, 131);
