@@ -100,7 +100,6 @@ fn a_shot_of_count_3_counts_its_life_down_a_frame_a_visit_and_is_spent_on_its_th
     }
     assert_eq!(lives, [2.0, 1.0, SPENT]);
     assert_eq!(spent, [false, false, true]);
-    assert_eq!(SPENT, -1.0);
 }
 
 #[test]

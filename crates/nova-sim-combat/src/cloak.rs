@@ -969,7 +969,7 @@ mod tests {
         assert_eq!(full_fade_translucency(true, false), SEEN_AT_FULL_FADE);
         assert_eq!(full_fade_translucency(false, true), SEEN_AT_FULL_FADE);
         assert_eq!(full_fade_translucency(false, false), TRANSLUCENCY_STEPS);
-        assert_eq!((SEEN_AT_FULL_FADE, TRANSLUCENCY_STEPS), (0x1e, 0x40));
+        assert_eq!(SEEN_AT_FULL_FADE, 0x1e);
     }
 
     #[test]

@@ -94,6 +94,11 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_full_fade_is_0x40_translucency_steps() {
+        assert_eq!(TRANSLUCENCY_STEPS, 0x40);
+    }
+
+    #[test]
     fn an_area_is_centred_and_moved() {
         let area = Area::centred(Vec2::new(10.0, -20.0), 100.0, 60.0);
         assert_eq!(

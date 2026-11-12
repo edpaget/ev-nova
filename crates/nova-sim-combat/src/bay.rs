@@ -228,9 +228,7 @@ mod tests {
     }
 
     #[test]
-    fn the_strings_are_str_2002s() {
-        assert_eq!(ABANDONED_ONE, "fighter abandoned");
-        assert_eq!(ABANDONED_MANY, "fighters abandoned");
+    fn a_bay_is_guidance_99_and_its_fighters_are_ships_from_128() {
         assert_eq!((FIGHTER_BAY, FIRST_SHIP), (99, 128));
     }
 }

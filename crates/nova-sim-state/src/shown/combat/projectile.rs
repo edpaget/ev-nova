@@ -25,3 +25,15 @@ pub fn above<T: PartialOrd + Copy>(value: T, line: T) -> bool {
 pub fn whole_frames(frames: u32) -> f32 {
     frames as f32
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The pinned value is exact.
+    #[allow(clippy::float_cmp)]
+    #[test]
+    fn a_spent_shot_s_life_is_minus_one() {
+        assert_eq!(SPENT, -1.0);
+    }
+}

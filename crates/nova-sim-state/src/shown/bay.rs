@@ -14,3 +14,14 @@ pub enum FighterNote {
     /// This many fighters were abandoned as the player left the system.
     Abandoned(u32),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_strings_are_str_2002s() {
+        assert_eq!(ABANDONED_ONE, "fighter abandoned");
+        assert_eq!(ABANDONED_MANY, "fighters abandoned");
+    }
+}
