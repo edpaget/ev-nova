@@ -13,7 +13,7 @@ use nova_view::ui::PrefsDialog;
 use nova_view::ui::button::ButtonStyle;
 use nova_view::ui::prefs::fixture::stock_template;
 use nova_view::ui::volume::TEXT_SIZE;
-use nova_view::{Font, Scaling};
+use nova_view::{Font, RenderScale, Scaling};
 
 #[test]
 fn the_widest_scaling_label_fits_its_row() {
@@ -31,6 +31,32 @@ fn the_widest_scaling_label_fits_its_row() {
         assert!(
             width <= row.width(),
             "{scaling:?}: {width} in {}",
+            row.width()
+        );
+    }
+}
+
+/// The render-scale list's row is "Check For Updates"'s own area, narrower
+/// than the Scaling list's: every label it can show fits, the percentages
+/// it steps through and one the settings file holds between them.
+#[test]
+fn the_widest_render_scale_label_fits_its_row() {
+    let metrics = Rc::new(GlyphonMetrics::new(&FontFaces::bundled()));
+    let dialog = PrefsDialog::new(
+        &stock_template(),
+        Prefs::default(),
+        ButtonStyle::STOCK,
+        Rc::clone(&metrics) as Rc<dyn TextMetrics>,
+    )
+    .expect("builds");
+    let row = dialog.render_scale().rects().value;
+    let listed = RenderScale::list(RenderScale::Percent(88));
+    assert!(listed.contains(&RenderScale::Percent(RenderScale::MAX)));
+    for scale in listed {
+        let width = metrics.width(Font::Geneva, TEXT_SIZE, &scale.label());
+        assert!(
+            width > 0.0 && width <= row.width(),
+            "{scale:?}: {width} in {}",
             row.width()
         );
     }
