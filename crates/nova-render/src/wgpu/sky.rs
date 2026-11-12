@@ -233,6 +233,36 @@ mod tests {
     }
 
     #[test]
+    fn a_large_faint_puff_lights_every_pixel_as_the_cores_falloff_says() {
+        // A backdrop's puff: wider than the target, its centre near a
+        // corner so the target runs from its middle out past its edge.
+        let color = [0.06, 0.04, 0.02];
+        let puff = StarInstance {
+            centre: Point::new(2.0, 2.0),
+            radius: 36.0,
+            color,
+            trail: Point::new(0.0, 0.0),
+        };
+        let Some(pixels) = drawn_alone(puff) else {
+            return;
+        };
+        let mut lit = 0;
+        for (x, y) in (0..32).flat_map(|y| (0..32).map(move |x| (x, y))) {
+            let t = (x as f32 + 0.5 - 2.0).hypot(y as f32 + 0.5 - 2.0) / puff.radius;
+            let cover = crate::sky::coverage(t);
+            let seen = at(&pixels, x, y);
+            for (seen, c) in seen.into_iter().zip(color) {
+                let want = (c * cover * 255.0).round() as i32;
+                assert!((seen - want).abs() <= 1, "({x}, {y}): {seen} for {want}");
+            }
+            lit += usize::from(seen[0] > 0);
+        }
+        // The gradient reaches most of the target, and its far corner is dark.
+        assert!(lit > 600, "{lit}");
+        assert_eq!(at(&pixels, 31, 31), [0, 0, 0]);
+    }
+
+    #[test]
     fn a_star_adds_its_colour_and_keeps_the_alpha_beneath() {
         assert_eq!(ADD.color.src_factor, wgpu::BlendFactor::One);
         assert_eq!(ADD.color.dst_factor, wgpu::BlendFactor::One);
