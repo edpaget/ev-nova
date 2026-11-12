@@ -117,6 +117,14 @@
 //!   new upscaler is set on the GPU just before the next frame is drawn.
 //!   Switching between per-frame scalers changes no enlarger, so it never
 //!   rebuilds the atlas.
+//! - **The render scale.** Whatever the Scaling, the world layer is drawn
+//!   at the render scale the settings keep
+//!   ([`GameSettings::render_scale`]), set on the renderer at restore. The
+//!   dialog reports each step of its render-scale list as the
+//!   preferences' render scale, while it is still open; the app sets it
+//!   on the renderer at once and saves it with the other preferences, so
+//!   the next frame's world is drawn at it. Nothing is rebuilt and nothing
+//!   waits for a relaunch.
 //!
 //! # Display shapes
 //!
@@ -656,7 +664,8 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// is a switch when it is not the one running: a new enlarger is set
     /// on the renderer at once, a new upscaler on the GPU before the next
     /// frame is drawn, and the choice is saved with the rest; otherwise
-    /// the stored choice is kept as it is. A fullscreen
+    /// the stored choice is kept as it is. Its render scale is set on the
+    /// renderer at once and saved with the rest. A fullscreen
     /// kind the player picked ([`Screen::take_display_choice`]) is held, to
     /// be entered and saved once the event is handled, which has the
     /// window; then a galaxy map borders setting
@@ -688,6 +697,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             if self.pick_scaling(prefs.scaling) {
                 settings.frame_upscaler = ScalingSetting::from(prefs.scaling);
             }
+            self.pick_render_scale(settings.render_scale);
             if let Some(core) = &mut self.audio {
                 core.apply(settings.audio);
             }

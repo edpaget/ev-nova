@@ -1081,3 +1081,39 @@ fn the_question_preferences_and_player_info_open_through_the_app() {
         .expect("the player info");
     assert_eq!(info.problem(), None);
 }
+
+/// The new game's default preferences (`DLOG` 4003) build with the
+/// render-scale list, in their item 22's row, and a click on its arrow
+/// through the app steps the scale the screen keeps, the dialog still
+/// open.
+#[test]
+fn the_default_preferences_step_the_render_scale_through_the_app() {
+    use nova_view::ui::prefs::RENDER_SCALE_ITEM;
+    let store = MemoryPilots::new();
+    let mut game = new_pilot_flying(app(&store));
+    game.handle(WindowEvent::Menu(MenuCommand::Preferences));
+    game.frame();
+    let prefs = game.app.screen().preferences().expect("Preferences");
+    let before = prefs.prefs().render_scale;
+    assert_eq!(game.app.screen().prefs().render_scale, before);
+    let row = prefs
+        .dialog()
+        .item_bounds(RENDER_SCALE_ITEM)
+        .expect("the default dialog has the row");
+    let down = prefs.render_scale().rects().down;
+    assert!(
+        row.contains(down.min) && row.contains(down.max),
+        "{down:?} in {row:?}"
+    );
+    let label = prefs.render_scale().selected().label();
+    assert!(texts(&game.frame()).contains(&label), "{label}");
+
+    game.click_point(down.center());
+    game.frame();
+    let prefs = game.app.screen().preferences().expect("still open");
+    let stepped = prefs.render_scale().selected();
+    assert_ne!(stepped, before, "the click stepped it");
+    assert_eq!(game.app.screen().prefs().render_scale, stepped);
+    let label = stepped.label();
+    assert!(texts(&game.frame()).contains(&label), "{label}");
+}
