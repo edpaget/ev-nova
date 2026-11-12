@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+use nova_sim::galaxy_map::GalaxyShownOf;
 use nova_sim::story::{GalaxyOverlay, OverlaidGalaxy};
 
 use super::*;

@@ -88,6 +88,7 @@ mod tests {
     use crate::galaxy::model::star_system;
     use crate::galaxy::place::MapPlace;
     use crate::galaxy::testkit::{galaxy, system};
+    use nova_sim::galaxy_map::GalaxyShownOf;
     use nova_sim::story::{GalaxyOverlay, OverlaidGalaxy};
 
     fn ids(list: &[i16]) -> Vec<SystemId> {

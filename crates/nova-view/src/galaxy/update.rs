@@ -59,6 +59,7 @@ pub enum MapUpdate {
 mod tests {
     use std::rc::Rc;
 
+    use nova_sim::galaxy_map::GalaxyShownOf;
     use nova_sim::story::{GalaxyOverlay, OverlaidGalaxy};
 
     use super::*;

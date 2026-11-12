@@ -2336,6 +2336,7 @@ mod tests {
     const HELP: &str = "Arrows or drag: pan   +/-: zoom   Click: select   Return: enter   S: find";
     /// The Enter button's label under the default keys.
     const ENTER_LABEL: &str = "Enter system (Return)";
+    use nova_sim::galaxy_map::GalaxyShownOf;
     use nova_sim::story::{GalaxyOverlay, OverlaidGalaxy};
 
     fn at(x: f32, y: f32) -> Point {

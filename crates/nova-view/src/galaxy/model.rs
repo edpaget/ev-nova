@@ -368,6 +368,7 @@ mod tests {
     use super::*;
     use crate::galaxy::catalog::{NebulaId, NebulaPicture};
     use crate::galaxy::view::{MAP_CENTER, MapView, SCALES};
+    use nova_sim::galaxy_map::GalaxyShownOf;
     use nova_sim::story::{GalaxyOverlay, OverlaidGalaxy};
 
     fn at(x: f32, y: f32) -> Point {

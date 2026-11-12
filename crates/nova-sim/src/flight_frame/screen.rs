@@ -50,8 +50,9 @@ use crate::{HireList, MissionId, MissionInfo, Outfitter, PlunderView, ShipNaming
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ScreenAsk {
     /// What the course map's model shows of the galaxy
-    /// ([`GalaxyShown::of`]), asked as the view opens and at each
-    /// `SessionEvent::GalaxyChanged`: [`ScreenAnswer::Galaxy`].
+    /// ([`GalaxyShown::of`](crate::galaxy_map::GalaxyShownOf::of)), asked
+    /// as the view opens and at each `SessionEvent::GalaxyChanged`:
+    /// [`ScreenAnswer::Galaxy`].
     Galaxy,
     /// Everything the course map reads as it opens, its marks taken as
     /// `marks` says: [`ScreenAnswer::MapOpening`].

@@ -14,8 +14,11 @@
 //!
 //! - [`flight_frame`]: the values the flight view's port carries, as far
 //!   as they have moved down: the new game's storyline screens.
-//! - [`galaxy_map`]: what a map marks beside the mission systems
-//!   ([`MapMarks`](galaxy_map::MapMarks)).
+//! - [`galaxy_map`]: what the galaxy map draws
+//!   ([`MapDrawing`](galaxy_map::MapDrawing)), the hypergate arrows'
+//!   heads, what its model shows of the galaxy
+//!   ([`GalaxyShown`](galaxy_map::GalaxyShown)) and what a map marks
+//!   beside the mission systems ([`MapMarks`](galaxy_map::MapMarks)).
 //! - [`glow`]: how bright a ship's engine glow is: its base level, which
 //!   thrust ramps up and coasting down ([`ramp_glow`](glow::ramp_glow)),
 //!   and the level drawn at a tick, flickering on the blink chance
@@ -27,6 +30,8 @@
 //!   `_AddSystemInfluenceToMap` and `_RecalcMapInfluence` work them out: a
 //!   grid of screen cells of four slots each ([`map_borders::grid`]), and
 //!   the coarse and fine passes over it ([`map_borders::passes`]).
+//! - [`map_lanes`]: how a drawn link looks by the new game's lane style
+//!   ([`LaneLook`](map_lanes::LaneLook)).
 //! - [`map_panel`]: what the galaxy map's two info panels say about the
 //!   system selected, as `_MapDialogUpdate` decides it: the ports, the
 //!   hazards, the title, and the explored level's goods and services
@@ -43,6 +48,8 @@
 //!   target at its bottom: its
 //!   [`TargetStatus`](target_panel::TargetStatus) and its
 //!   [`TargetTag`](target_panel::TargetTag).
+//! - [`viewer_lanes`]: the links the developer galaxy viewer draws, picked
+//!   by the rulebook ([`viewer_links`](viewer_lanes::viewer_links)).
 //!
 //! The session's value types, each module named for the `nova_sim::session`
 //! module that builds them:
@@ -74,6 +81,7 @@ pub mod glow;
 pub mod key_fade;
 pub mod map_borders;
 pub mod map_click;
+pub mod map_lanes;
 pub mod map_panel;
 pub mod map_search;
 pub mod mission_screens;
@@ -89,3 +97,4 @@ pub mod slot_visibility;
 pub mod status_cargo;
 pub mod stellar_pick;
 pub mod target_panel;
+pub mod viewer_lanes;
