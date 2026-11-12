@@ -312,7 +312,7 @@ impl WgpuRenderer {
             max_pipeline,
             solid_pipeline,
             blit_pipeline,
-            models: Models::new(device),
+            models: Models::new(device, queue),
             planets: Planets::new(device, &globals_layout),
             sky: Sky::new(device, &globals_layout),
             page_layout,
@@ -429,14 +429,15 @@ impl WgpuRenderer {
         self.pages.clear();
     }
 
-    /// Holds `data` as model texture `texture`.
-    #[allow(clippy::unused_self, reason = "the models pass samples it next")]
-    pub fn upload_model_texture(&mut self, _texture: ModelTextureId, _data: &ModelTexture) {}
+    /// Holds `data` as model texture `texture`, replacing any of that id.
+    pub fn upload_model_texture(&mut self, texture: ModelTextureId, data: &ModelTexture) {
+        (self.models).upload_texture(&self.device, &self.queue, texture, data);
+    }
 
     /// Holds `data` as mesh `mesh`, replacing any mesh of that id, its
     /// textures those uploaded as `textures`.
-    pub fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh, _textures: &[ModelTextureId]) {
-        self.models.upload(&self.device, mesh, data);
+    pub fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh, textures: &[ModelTextureId]) {
+        self.models.upload(&self.device, mesh, data, textures);
     }
 
     /// Holds `textures` as planet `planet`'s, replacing any it had.
@@ -2746,6 +2747,30 @@ mod tests {
         gpu.upload_mesh(MeshId(0), &Mesh::cube([Color::WHITE; 6]), &[]);
         let with_models = models_frame();
         assert_builds_no_pipeline(&mut gpu, made, &with_models, "a frame of models");
+        // The same mesh again, half of it on a texture: uploading the
+        // texture and drawing with it builds nothing either.
+        let texture = ModelTexture::new(2, 2, vec![128; 16]).expect("four texels");
+        gpu.upload_model_texture(ModelTextureId(0), &texture);
+        let cube = Mesh::cube([Color::WHITE; 6]);
+        let sections = vec![
+            crate::model::Section {
+                indices: 0..18,
+                texture: Some(0),
+            },
+            crate::model::Section {
+                indices: 18..36,
+                texture: None,
+            },
+        ];
+        let skinned = Mesh::textured(
+            cube.vertices().to_vec(),
+            cube.indices().to_vec(),
+            vec![std::sync::Arc::new(texture)],
+            sections,
+        )
+        .expect("the cube in two sections");
+        gpu.upload_mesh(MeshId(0), &skinned, &[ModelTextureId(0)]);
+        assert_builds_no_pipeline(&mut gpu, made, &with_models, "a frame of textured models");
         let sky = frame_of(vec![Batch::Sky(vec![crate::sky::StarInstance {
             centre: Point::new(16.0, 16.0),
             radius: 2.0,

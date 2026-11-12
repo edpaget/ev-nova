@@ -172,8 +172,9 @@ impl Planets {
 }
 
 /// A texture of `levels`, a mip chain (one level for a ring's row),
-/// uploaded on `queue`.
-fn texture(
+/// uploaded on `queue`: a planet's, or a model's
+/// (`super::models`).
+pub(super) fn texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     label: &str,

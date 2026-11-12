@@ -69,9 +69,16 @@
 //! other pipeline meets a depth attachment. Each canvas, the scene or the
 //! world's, makes its depth texture the first frame that draws models into
 //! it. The model pipeline (`models.wgsl`) multiplies each vertex by the
-//! core's transforms and lights each fragment by
-//! [`camera::shade`](crate::camera::shade)'s formula; each mesh's buffers
-//! are made when it is uploaded ([`Gpu::upload_mesh`](crate::Gpu::upload_mesh)).
+//! core's transforms and colours each fragment as
+//! [`camera::fragment`](crate::camera::fragment) defines: the vertex
+//! colour times its section's texel, lit by
+//! [`camera::shade`](crate::camera::shade)'s formula unless it is unlit.
+//! Each mesh's buffers are made when it is uploaded
+//! ([`Gpu::upload_mesh`](crate::Gpu::upload_mesh)), and each texture's
+//! bind group when it is
+//! ([`Gpu::upload_model_texture`](crate::Gpu::upload_model_texture)); a
+//! section with no texture samples one white texel made with the
+//! pipeline, and a mesh is one draw per section.
 //!
 //! A planets batch ([`Batch::Planets`](crate::Batch::Planets)) draws in
 //! an ordinary pass, with no depth: one square per planet, its fragments
