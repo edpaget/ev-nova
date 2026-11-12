@@ -816,6 +816,7 @@ pub(super) mod tests {
     use crate::flight::Controls;
     use crate::geometry::Vec2;
     use crate::handling::ShipFields;
+    use crate::outfitter::OutfitterRules;
     use crate::pilot::{Escort, Pilot};
     use crate::reserves::Reserves;
     use crate::rulebook::Rulebook;

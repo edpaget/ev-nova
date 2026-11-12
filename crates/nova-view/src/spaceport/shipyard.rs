@@ -174,7 +174,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::shipyard::SHIP_NAME_CHARS;
+use nova_sim::shipyard::{SHIP_NAME_CHARS, ShipyardRules};
 use nova_sim::{
     MissionId, OfferPrompt, Rating, RuleSource, ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard,
     StockLine,

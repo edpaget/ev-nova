@@ -338,60 +338,10 @@ pub const HIDE_BITS: HideBits = HideBits {
 /// `Cost`: see the module's evidence.
 pub const TRADE_IN_PERCENT: i64 = 25;
 
-/// Why a ship cannot be bought.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ShipRefusal {
-    /// There is no shipyard: the ship is not landed, or the stellar has
-    /// none.
-    NoShipyard,
-    /// The shipyard does not list the ship.
-    NotListed,
-    /// The ship is the class the player flies: `_CalcShipCanBuy` refuses
-    /// it (@0x4f6f5-0x4f6fc), whatever the ship is named.
-    AlreadyFlown,
-    /// The ship is listed but cannot be bought here: its `Require` is not
-    /// met, or its `Availability` does not hold.
-    NotForSale,
-    /// Its final price, at least none, is more than the cash: with the
-    /// cash below 0, whatever the trade-in (`_CalcShipCanBuy`
-    /// @0x4f7d8-0x4f7eb).
-    CannotAfford,
-}
-
-/// One ship class in a stellar's shipyard.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ShipRow {
-    /// The ship class.
-    pub id: ShipId,
-    /// Its name.
-    pub name: String,
-    /// Its `ShortName`, raw.
-    pub short_name: String,
-    /// Its price.
-    pub price: i64,
-    /// What the shipyard's Info shows of it.
-    pub specs: ShipSpecs,
-    /// What the shipyard's rules read about the class, settled when the
-    /// shipyard was built.
-    pub facts: ShipFacts,
-}
-
-/// What the shipyard's rules read about one ship class, settled when the
-/// shipyard is built: whatever needs the gate or the day's roll is worked
-/// out then, so the rules answer from these alone.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ShipFacts {
-    /// Whether it can be bought here at all: for sale here today (its
-    /// tech level, the day's roll and `HideHigher` as listed), its
-    /// `Require` met and its `Availability` holding (see the module docs).
-    /// A relisting ([`Yard::relisted`]) takes the class's tech, roll and
-    /// `HideHigher` as the opening listed them and reads `Require` and
-    /// `Availability` now, as `_CalcShipCanBuy` does at each draw
-    /// (`_ShipyardFilter` @0x6047b, @0x60829, @0x60c48).
-    pub buyable: bool,
-}
-
-pub use nova_sim_state::shown::shipyard::{Rating, ShipSpecs, StockLine};
+pub use nova_sim_state::shown::shipyard::{
+    Rating, SHIP_NAME_CHARS, ShipFacts, ShipNaming, ShipPurchase, ShipRefusal, ShipRow, ShipSpecs,
+    Shipyard, StockLine,
+};
 
 /// The specs of class `ship`, its Space and stock-weapons list worked
 /// out from its stock in `arsenal` and `outfits`, its Space weighed
@@ -418,33 +368,23 @@ pub(crate) fn ship_specs(
     }
 }
 
-/// A stellar's shipyard, as the player sees it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Shipyard {
-    /// The ships listed, highest `DispWeight` first, then by ID.
-    pub rows: Vec<ShipRow>,
-    /// What the player's ship trades in for, whichever is bought.
-    pub trade_in: i64,
-    /// The player's credits.
-    pub cash: i64,
-    /// The ship class flown.
-    pub current: ShipId,
-    /// The rule set the shipyard was built by, which its questions read.
-    pub rules: Rulebook,
-}
-
-impl Shipyard {
-    /// `ship`'s row, if it is listed.
-    #[must_use]
-    pub fn row(&self, ship: ShipId) -> Option<&ShipRow> {
-        self.rows.iter().find(|row| row.id == ship)
-    }
-
+/// [`Shipyard`]'s buy checks: they run the shipyard's rules over a listed
+/// class, which live here with the rules, while the shipyard itself is the
+/// state layer's.
+pub trait ShipyardRules {
     /// Whether `ship` can be bought now, or why not: a class not listed
     /// is [`ShipRefusal::NotListed`]; a listed one is refused by the first
     /// of the buy checks that refuses it (the class flown, for sale, then
     /// the cash; see the module docs).
-    pub fn can(&self, ship: ShipId) -> Result<(), ShipRefusal> {
+    fn can(&self, ship: ShipId) -> Result<(), ShipRefusal>;
+
+    /// Whether `ship` can be bought now, or why not: the same as
+    /// [`can`](Self::can).
+    fn check(&self, ship: ShipId) -> Result<(), ShipRefusal>;
+}
+
+impl ShipyardRules for Shipyard {
+    fn can(&self, ship: ShipId) -> Result<(), ShipRefusal> {
         let row = self.row(ship).ok_or(ShipRefusal::NotListed)?;
         refusal(
             &can_buy(),
@@ -455,29 +395,8 @@ impl Shipyard {
         )
     }
 
-    /// Whether `ship` can be bought now, or why not: the same as
-    /// [`can`](Self::can).
-    pub fn check(&self, ship: ShipId) -> Result<(), ShipRefusal> {
+    fn check(&self, ship: ShipId) -> Result<(), ShipRefusal> {
         self.can(ship)
-    }
-
-    /// What buying `row`'s ship costs after the trade-in: negative when
-    /// the player is paid. The purchase settles this, unclamped; the cash
-    /// check and the info box read
-    /// [`final_price_clamped`](Self::final_price_clamped).
-    #[must_use]
-    pub fn final_price(&self, row: &ShipRow) -> i64 {
-        row.price.saturating_sub(self.trade_in)
-    }
-
-    /// The final price, none when the trade-in exceeds the price: what the
-    /// buy's cash check (`_CalcShipCanBuy` `cmovs` @0x4f7e2) and the info
-    /// box's "Final Price:" line (`_ShipyardDialogUpdate` @0x594cf-0x594d8)
-    /// read. The purchase itself settles the unclamped
-    /// [`final_price`](Self::final_price).
-    #[must_use]
-    pub fn final_price_clamped(&self, row: &ShipRow) -> i64 {
-        self.final_price(row).max(0)
     }
 }
 
@@ -489,12 +408,6 @@ struct RowShip<'a> {
     shipyard: &'a Shipyard,
     /// The row: its price and facts.
     row: &'a ShipRow,
-}
-
-impl Context for Shipyard {
-    fn rulebook(&self) -> &Rulebook {
-        &self.rules
-    }
 }
 
 impl Context for RowShip<'_> {
@@ -1145,23 +1058,6 @@ pub const NAME_PROMPT_LIST: i16 = 2002;
 /// "Please name your new" in the stock data.
 pub const NAME_PROMPT_INDEX: usize = 120;
 
-/// The longest name the original's name prompt takes, in characters
-/// (`_EVTextInputDialog`'s most, 0x40 @0x5eb5d, checked @0x554b3).
-pub const SHIP_NAME_CHARS: usize = 64;
-
-/// The prompt for naming a ship about to be bought.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ShipNaming {
-    /// The ship class to buy.
-    pub ship: ShipId,
-    /// The prompt's text: [`NAME_PROMPT_LIST`] #[`NAME_PROMPT_INDEX`]
-    /// (empty when missing), a space, the class's `LongName`, then ": ".
-    pub prompt: String,
-    /// The name the prompt opens with: the class's name, a space and three
-    /// digits from 1 to 9.
-    pub default: String,
-}
-
 /// The prompt for naming a new ship of class `record`, its opening words
 /// read from `strings` and its default's digits drawn on `chance`, as the
 /// module says.
@@ -1197,26 +1093,6 @@ pub fn cull_name(name: &str) -> String {
         Some(head) if head.eq_ignore_ascii_case("the ") => name[4..].to_owned(),
         _ => name.to_owned(),
     }
-}
-
-/// What buying a ship did.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ShipPurchase {
-    /// The new ship's price.
-    pub price: i64,
-    /// What the old ship traded in for.
-    pub trade_in: i64,
-    /// The persistent outfits that did not carry over, each with how many,
-    /// sold back, by the other reading of
-    /// [`RuleKey::PurchaseCarry`](crate::RuleKey::PurchaseCarry); empty by
-    /// the engine.
-    pub sold_back: BTreeMap<OutfitId, u16>,
-    /// What they were sold back for, credited, by the other reading of
-    /// [`RuleKey::PurchaseCarry`](crate::RuleKey::PurchaseCarry); 0 by the
-    /// engine.
-    pub refund: i64,
-    /// The cargo that did not fit, each good with its tons, left behind.
-    pub left_behind: BTreeMap<Good, u32>,
 }
 
 /// The price and trade-in a purchase settles at.

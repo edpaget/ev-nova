@@ -56,7 +56,7 @@ mod tests {
     use crate::chance::NeverFires;
     use crate::control::Gate;
     use crate::landing::StellarFlags;
-    use crate::shipyard::ShipRefusal;
+    use crate::shipyard::{ShipRefusal, ShipyardRules};
     use crate::wares::DayRolls;
     use nova_sim_catalog::fixture::{AllowAll, RefuseBits, outfit};
 

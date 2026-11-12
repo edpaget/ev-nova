@@ -1,4 +1,6 @@
 use super::*;
+use nova_sim::outfitter::OutfitterRules;
+use nova_sim::shipyard::ShipyardRules;
 
 // Landing.
 

@@ -1,12 +1,21 @@
-//! What the Shipyard Info panel shows of a ship class ([`ShipSpecs`],
-//! [`StockLine`], [`Rating`]), from `nova_sim_port::shipyard`, which
-//! re-exports them and keeps the specs' building from the class's stock.
+//! A stellar's shipyard as the player sees it ([`Shipyard`], [`ShipRow`],
+//! [`ShipFacts`]), why a ship can't be bought ([`ShipRefusal`]), what the
+//! Shipyard Info panel shows of a class ([`ShipSpecs`], [`StockLine`],
+//! [`Rating`]), the name prompt ([`ShipNaming`], [`SHIP_NAME_CHARS`]) and
+//! what a purchase did ([`ShipPurchase`]), from `nova_sim_port::shipyard`,
+//! which re-exports them and keeps the shipyard's building, its buy checks
+//! (`nova_sim_port::shipyard::ShipyardRules`) and the purchase.
+
+use std::collections::BTreeMap;
 
 use nova_sim_base::handling::ShipFields;
 use nova_sim_base::reserves::shield_points;
-use nova_sim_base::rulebook::RuleSource;
+use nova_sim_base::rulebook::{RuleSource, Rulebook};
+use nova_sim_base::rules::Context;
+use nova_sim_catalog::catalog::{OutfitId, ShipId};
 
 use super::wares::ShownTons;
+use crate::market::Good;
 
 /// A rating word on the Shipyard Info panel's Accel and Turn lines:
 /// `STR#` 2002 #245-250, "Excellent" to "Terrible", or "N/A" (#396) for
@@ -242,6 +251,145 @@ impl ShipSpecs {
     pub fn mass_shown(&self) -> ShownTons {
         ShownTons::of(i64::from(self.fields.mass))
     }
+}
+
+/// Why a ship cannot be bought.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShipRefusal {
+    /// There is no shipyard: the ship is not landed, or the stellar has
+    /// none.
+    NoShipyard,
+    /// The shipyard does not list the ship.
+    NotListed,
+    /// The ship is the class the player flies: `_CalcShipCanBuy` refuses
+    /// it (@0x4f6f5-0x4f6fc), whatever the ship is named.
+    AlreadyFlown,
+    /// The ship is listed but cannot be bought here: its `Require` is not
+    /// met, or its `Availability` does not hold.
+    NotForSale,
+    /// Its final price, at least none, is more than the cash: with the
+    /// cash below 0, whatever the trade-in (`_CalcShipCanBuy`
+    /// @0x4f7d8-0x4f7eb).
+    CannotAfford,
+}
+
+/// One ship class in a stellar's shipyard.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShipRow {
+    /// The ship class.
+    pub id: ShipId,
+    /// Its name.
+    pub name: String,
+    /// Its `ShortName`, raw.
+    pub short_name: String,
+    /// Its price.
+    pub price: i64,
+    /// What the shipyard's Info shows of it.
+    pub specs: ShipSpecs,
+    /// What the shipyard's rules read about the class, settled when the
+    /// shipyard was built.
+    pub facts: ShipFacts,
+}
+
+/// What the shipyard's rules read about one ship class, settled when the
+/// shipyard is built: whatever needs the gate or the day's roll is worked
+/// out then, so the rules answer from these alone.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ShipFacts {
+    /// Whether it can be bought here at all: for sale here today (its tech
+    /// level, the day's roll and `HideHigher` as listed), its `Require` met and
+    /// its `Availability` holding (see the module docs). A relisting
+    /// (`nova_sim_port::shipyard::Yard::relisted`) takes the class's tech, roll
+    /// and `HideHigher` as the opening listed them and reads `Require` and
+    /// `Availability` now, as `_CalcShipCanBuy` does at each draw
+    /// (`_ShipyardFilter` @0x6047b, @0x60829, @0x60c48).
+    pub buyable: bool,
+}
+
+/// A stellar's shipyard, as the player sees it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Shipyard {
+    /// The ships listed, highest `DispWeight` first, then by ID.
+    pub rows: Vec<ShipRow>,
+    /// What the player's ship trades in for, whichever is bought.
+    pub trade_in: i64,
+    /// The player's credits.
+    pub cash: i64,
+    /// The ship class flown.
+    pub current: ShipId,
+    /// The rule set the shipyard was built by, which its questions read.
+    pub rules: Rulebook,
+}
+
+impl Shipyard {
+    /// `ship`'s row, if it is listed.
+    #[must_use]
+    pub fn row(&self, ship: ShipId) -> Option<&ShipRow> {
+        self.rows.iter().find(|row| row.id == ship)
+    }
+
+    /// What buying `row`'s ship costs after the trade-in: negative when
+    /// the player is paid. The purchase settles this, unclamped; the cash
+    /// check and the info box read
+    /// [`final_price_clamped`](Self::final_price_clamped).
+    #[must_use]
+    pub fn final_price(&self, row: &ShipRow) -> i64 {
+        row.price.saturating_sub(self.trade_in)
+    }
+
+    /// The final price, none when the trade-in exceeds the price: what the
+    /// buy's cash check (`_CalcShipCanBuy` `cmovs` @0x4f7e2) and the info
+    /// box's "Final Price:" line (`_ShipyardDialogUpdate` @0x594cf-0x594d8)
+    /// read. The purchase itself settles the unclamped
+    /// [`final_price`](Self::final_price).
+    #[must_use]
+    pub fn final_price_clamped(&self, row: &ShipRow) -> i64 {
+        self.final_price(row).max(0)
+    }
+}
+
+impl Context for Shipyard {
+    fn rulebook(&self) -> &Rulebook {
+        &self.rules
+    }
+}
+
+/// The longest name the original's name prompt takes, in characters
+/// (`_EVTextInputDialog`'s most, 0x40 @0x5eb5d, checked @0x554b3).
+pub const SHIP_NAME_CHARS: usize = 64;
+
+/// The prompt for naming a ship about to be bought.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShipNaming {
+    /// The ship class to buy.
+    pub ship: ShipId,
+    /// The prompt's text: `nova_sim_port::shipyard::NAME_PROMPT_LIST`
+    /// #`nova_sim_port::shipyard::NAME_PROMPT_INDEX` (empty when missing), a
+    /// space, the class's `LongName`, then ": ".
+    pub prompt: String,
+    /// The name the prompt opens with: the class's name, a space and three
+    /// digits from 1 to 9.
+    pub default: String,
+}
+
+/// What buying a ship did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShipPurchase {
+    /// The new ship's price.
+    pub price: i64,
+    /// What the old ship traded in for.
+    pub trade_in: i64,
+    /// The persistent outfits that did not carry over, each with how many,
+    /// sold back, by the other reading of
+    /// [`RuleKey::PurchaseCarry`](crate::RuleKey::PurchaseCarry); empty by
+    /// the engine.
+    pub sold_back: BTreeMap<OutfitId, u16>,
+    /// What they were sold back for, credited, by the other reading of
+    /// [`RuleKey::PurchaseCarry`](crate::RuleKey::PurchaseCarry); 0 by the
+    /// engine.
+    pub refund: i64,
+    /// The cargo that did not fit, each good with its tons, left behind.
+    pub left_behind: BTreeMap<Good, u32>,
 }
 
 #[cfg(test)]

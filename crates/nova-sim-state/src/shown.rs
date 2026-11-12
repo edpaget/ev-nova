@@ -61,12 +61,21 @@
 //! - [`navigation`]: the player's nav mode and a sprite slot's rect,
 //!   from `nova_sim_ai::navigation`.
 //! - [`news`]: a bar visit's news, from `nova_sim_story::news`.
+//! - [`order_loop`]: what an order loop did and where it stopped, from
+//!   `nova_sim_port::order_loop`.
+//! - [`outfitter`]: a stellar's outfitter as the player sees it, an
+//!   order and what it did, and the ship's guns and turrets, from
+//!   `nova_sim_port::outfitter`.
 //! - [`pilot`]: how far a system is explored, from
 //!   `nova_sim_story::pilot`.
 //! - [`planet_comm`]: the planet comm dialog's view, from
 //!   `nova_sim_ai::planet_comm`.
 //! - [`player_fate`]: the player's lifecycle and what each stage allows,
 //!   from `nova_sim_combat::player_fate`.
+//! - [`player_info`]: what the player info screen shows, its words and
+//!   cheat mode's numbers, from `nova_sim_port::player_info`.
+//! - [`recharge`]: why the ship can't be recharged and whether a
+//!   stellar sells fuel, from `nova_sim_port::recharge`.
 //! - [`self_repair`]: what a former escort was, from
 //!   `nova_sim_combat::self_repair`.
 //! - [`ship_layer`]: the layer a ship is drawn in, from
@@ -75,6 +84,8 @@
 //!   from `nova_sim_port::shipyard`.
 //! - [`sprite_layer`]: the order the flight world's layers are drawn in,
 //!   from `nova_sim_combat::sprite_layer`.
+//! - [`stellar_frames`]: a stellar's animation fields and frames, from
+//!   `nova_sim_port::stellar_frames`.
 //! - [`story`]: which sheet a stellar shown draws, from
 //!   `nova_sim_story::story`.
 //! - [`storylines`]: a news item a system has heard, from
@@ -112,13 +123,18 @@ pub mod message;
 pub mod mission;
 pub mod navigation;
 pub mod news;
+pub mod order_loop;
+pub mod outfitter;
 pub mod pilot;
 pub mod planet_comm;
 pub mod player_fate;
+pub mod player_info;
+pub mod recharge;
 pub mod self_repair;
 pub mod ship_layer;
 pub mod shipyard;
 pub mod sprite_layer;
+pub mod stellar_frames;
 pub mod story;
 pub mod storylines;
 pub mod targeting;
