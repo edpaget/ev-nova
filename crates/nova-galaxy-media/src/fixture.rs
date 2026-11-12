@@ -10,7 +10,10 @@
 //! and a primitive that isn't triangles.
 //!
 //! [`png`] encodes a real PNG from pixels, for the texture reader
-//! ([`texture`](crate::texture)).
+//! ([`texture`](crate::texture)) and the image reader
+//! ([`image`](crate::image)), and [`JPEG`] is a real JPEG. A [`Builder`]'s
+//! image holds the stub [`PNG`] unless it is given real bytes
+//! ([`Builder::image_bytes`]).
 
 /// A box `[x, y, z]` wide, deep and tall, centred on the origin, as six
 /// faces of two triangles each, with the vertex positions and indices it
@@ -126,8 +129,46 @@ pub enum ImageAt {
 }
 
 /// A PNG's signature and the start of its header: the bytes a test
-/// model's image holds. Nothing here decodes it.
+/// model's image holds unless it is given others
+/// ([`Builder::image_bytes`]). It doesn't decode.
 pub const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
+
+/// A real baseline JPEG, [`JPEG_SIZE`] big, every pixel [`JPEG_RGB`].
+///
+/// Made once with Pillow 12.3 and pasted here, so no test needs an
+/// encoder:
+/// `Image.new("RGB", (4, 2), (200, 100, 50)).save(out, "JPEG", quality=95,
+/// subsampling=0, optimize=True)`. It holds a JFIF header, two
+/// quantisation tables, a baseline frame header (`SOF0`), four Huffman
+/// tables and one scan.
+pub const JPEG: &[u8] = &[
+    0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01,
+    0x00, 0x01, 0x00, 0x00, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x02, 0x01, 0x01, 0x01, 0x01, 0x01, 0x02,
+    0x01, 0x01, 0x01, 0x02, 0x02, 0x02, 0x02, 0x02, 0x04, 0x03, 0x02, 0x02, 0x02, 0x02, 0x05, 0x04,
+    0x04, 0x03, 0x04, 0x06, 0x05, 0x06, 0x06, 0x06, 0x05, 0x06, 0x06, 0x06, 0x07, 0x09, 0x08, 0x06,
+    0x07, 0x09, 0x07, 0x06, 0x06, 0x08, 0x0b, 0x08, 0x09, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x06, 0x08,
+    0x0b, 0x0c, 0x0b, 0x0a, 0x0c, 0x09, 0x0a, 0x0a, 0x0a, 0xff, 0xdb, 0x00, 0x43, 0x01, 0x02, 0x02,
+    0x02, 0x02, 0x02, 0x02, 0x05, 0x03, 0x03, 0x05, 0x0a, 0x07, 0x06, 0x07, 0x0a, 0x0a, 0x0a, 0x0a,
+    0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a,
+    0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a,
+    0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0xff, 0xc0,
+    0x00, 0x11, 0x08, 0x00, 0x02, 0x00, 0x04, 0x03, 0x01, 0x11, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11,
+    0x01, 0xff, 0xc4, 0x00, 0x14, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0xff, 0xc4, 0x00, 0x14, 0x10, 0x01, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xc4, 0x00,
+    0x14, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x08, 0xff, 0xc4, 0x00, 0x14, 0x11, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xda, 0x00, 0x0c, 0x03, 0x01, 0x00,
+    0x02, 0x11, 0x03, 0x11, 0x00, 0x3f, 0x00, 0x3c, 0x57, 0x36, 0x1f, 0xff, 0xd9,
+];
+
+/// The width and height of [`JPEG`]: wider than tall, so a test sees the
+/// two swapped.
+pub const JPEG_SIZE: (u32, u32) = (4, 2);
+
+/// The red, green and blue every pixel of [`JPEG`] decodes to, give or
+/// take a decoder's rounding.
+pub const JPEG_RGB: [u8; 3] = [200, 100, 50];
 
 /// A real, decodable PNG `width` by `height`, 8-bit RGBA, from `rgba`
 /// (four bytes a pixel, row by row): a test texture, made in code.
@@ -164,6 +205,8 @@ pub struct Builder {
     texcoords: bool,
     lines: bool,
     image: Option<ImageAt>,
+    image_bytes: Vec<u8>,
+    spare: Option<Vec<u8>>,
 }
 
 impl Builder {
@@ -178,6 +221,8 @@ impl Builder {
             texcoords: false,
             lines: false,
             image: None,
+            image_bytes: PNG.to_vec(),
+            spare: None,
         }
     }
 
@@ -224,10 +269,29 @@ impl Builder {
         self
     }
 
-    /// Gives the model one image ([`PNG`]), at `at`, as texture 0.
+    /// Gives the model one image, at `at`, as texture 0: [`PNG`], unless
+    /// [`image_bytes`](Self::image_bytes) gives it others.
     #[must_use]
     pub fn image(mut self, at: ImageAt) -> Self {
         self.image = Some(at);
+        self
+    }
+
+    /// Makes the model's image ([`image`](Self::image)) hold `bytes`: a
+    /// real PNG ([`png`]) or JPEG ([`JPEG`]), say. One embedded is given
+    /// the MIME type of what it holds.
+    #[must_use]
+    pub fn image_bytes(mut self, bytes: &[u8]) -> Self {
+        self.image_bytes = bytes.to_vec();
+        self
+    }
+
+    /// Embeds a second image holding `bytes`, which no texture and so no
+    /// material names, before the model's own: the model's own image is
+    /// then image 1, still texture 0.
+    #[must_use]
+    pub fn spare_image(mut self, bytes: &[u8]) -> Self {
+        self.spare = Some(bytes.to_vec());
         self
     }
 
@@ -342,27 +406,37 @@ impl Builder {
         if self.materials.iter().any(|m| m.unlit) {
             json["extensionsUsed"] = json!(["KHR_materials_unlit"]);
         }
-        if let Some(images) = images {
-            json["images"] = images;
-            json["textures"] = json!([{ "source": 0 }]);
+        if !images.is_empty() {
+            if self.image.is_some() {
+                json["textures"] = json!([{ "source": images.len() - 1 }]);
+            }
+            json["images"] = images.into();
         }
         (json.to_string(), bin)
     }
 
-    /// The images' JSON, if the model has its image, which an embedded
-    /// image writes to `bin` through a new view.
+    /// The images' JSON: the spare one, if any, then the model's own, if
+    /// it has one. An embedded image is written to `bin` through a new
+    /// view.
     fn images_json(
         &self,
         bin: &mut Vec<u8>,
         views: &mut Vec<serde_json::Value>,
-    ) -> Option<serde_json::Value> {
-        self.image.as_ref().map(|at| match at {
-            ImageAt::Embedded => {
-                let view = push_view(bin, views, PNG);
-                serde_json::json!([{ "bufferView": view, "mimeType": "image/png" }])
-            }
-            ImageAt::Uri(uri) => serde_json::json!([{ "uri": uri }]),
-        })
+    ) -> Vec<serde_json::Value> {
+        let mut embedded = |bytes: &[u8]| {
+            let view = push_view(bin, views, bytes);
+            serde_json::json!({ "bufferView": view, "mimeType": mime_of(bytes) })
+        };
+        let mut images = Vec::new();
+        if let Some(spare) = &self.spare {
+            images.push(embedded(spare));
+        }
+        match &self.image {
+            Some(ImageAt::Embedded) => images.push(embedded(&self.image_bytes)),
+            Some(ImageAt::Uri(uri)) => images.push(serde_json::json!({ "uri": uri })),
+            None => {}
+        }
+        images
     }
 
     /// The materials' JSON.
@@ -415,6 +489,16 @@ impl Builder {
             })
             .collect();
         (roots, nodes)
+    }
+}
+
+/// The MIME type an embedded image holding `bytes` is given: a JPEG's by
+/// how it starts, and a PNG's otherwise.
+fn mime_of(bytes: &[u8]) -> &'static str {
+    if bytes.starts_with(&[0xFF, 0xD8]) {
+        "image/jpeg"
+    } else {
+        "image/png"
     }
 }
 
@@ -534,6 +618,59 @@ mod tests {
         assert_eq!(parsed.images().count(), 1);
         let (json, _) = builder.image(ImageAt::Uri("skin.png".into())).gltf("a.bin");
         assert!(gltf::Gltf::from_slice(json.as_bytes()).is_ok());
+    }
+
+    /// The images of `glb`, as the scene reader hands them on.
+    fn images(glb: &[u8]) -> Vec<crate::scene::Image> {
+        crate::scene::read_scene("p/hull.glb", glb, |_| None)
+            .expect("a model that reads")
+            .images
+    }
+
+    #[test]
+    fn a_builder_s_image_holds_the_bytes_it_is_given_and_the_stub_otherwise() {
+        let builder = Builder::new([1.0; 3]).image(ImageAt::Embedded);
+        let stub = images(&builder.glb());
+        assert_eq!(stub[0].bytes, PNG);
+        assert_eq!(stub[0].mime.as_deref(), Some("image/png"));
+
+        let real = png(2, 1, &[1, 2, 3, 4, 5, 6, 7, 8]);
+        let given = images(&builder.clone().image_bytes(&real).glb());
+        assert_eq!(given[0].bytes, real);
+        assert_eq!(given[0].mime.as_deref(), Some("image/png"));
+
+        let jpeg = images(&builder.image_bytes(JPEG).glb());
+        assert_eq!(jpeg[0].bytes, JPEG);
+        assert_eq!(jpeg[0].mime.as_deref(), Some("image/jpeg"));
+    }
+
+    #[test]
+    fn a_spare_image_comes_first_and_the_material_names_the_model_s_own() {
+        let real = png(2, 1, &[1, 2, 3, 4, 5, 6, 7, 8]);
+        let builder = Builder::new([1.0; 3])
+            .texcoords()
+            .material(Mat {
+                textured: true,
+                ..Mat::new("hull", [1.0; 4])
+            })
+            .image(ImageAt::Embedded)
+            .image_bytes(&real);
+        let own = |glb: &[u8]| {
+            crate::scene::read_scene("p/hull.glb", glb, |_| None)
+                .expect("a model that reads")
+                .materials[0]
+                .base_color_texture
+        };
+        assert_eq!(own(&builder.glb()), Some(0));
+        let spared = builder.spare_image(JPEG).glb();
+        let held = images(&spared);
+        assert_eq!(held.len(), 2);
+        assert_eq!(held[0].bytes, JPEG);
+        assert_eq!(held[1].bytes, real);
+        assert_eq!(own(&spared), Some(1));
+        // With no image of its own, the spare is the model's only one.
+        let alone = Builder::new([1.0; 3]).spare_image(PNG).glb();
+        assert_eq!(images(&alone).len(), 1);
     }
 
     /// The `NORMAL`s and `TEXCOORD_0`s a box `size` big writes, as stored.

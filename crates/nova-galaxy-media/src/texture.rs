@@ -8,15 +8,15 @@
 //! largest texture). Then it checks the shape the engine draws, whatever
 //! the budgets say: twice as wide as tall, each side a power of two (so
 //! its mip chain halves exactly). Only then is the image decoded, whatever
-//! its colour type or bit depth, to RGBA8.
-
-use std::io::Cursor;
+//! its colour type or bit depth, to RGBA8. The header and the pixels are
+//! read as [`image`](crate::image) reads any PNG.
 
 use nova_galaxy_format::asset::Asset;
 use nova_galaxy_format::media::is_lfs_pointer;
 use nova_galaxy_format::source::Source;
 
 use crate::budget::{Cost, Limits, Overrun, over_budget};
+use crate::image::{decode_png, png_size};
 
 /// A texture's pixels, as read.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -113,7 +113,7 @@ pub fn read_texture(
     if is_lfs_pointer(&bytes) {
         return Err(NoTexture::Pointer);
     }
-    let (width, height) = header_size(&bytes).ok_or_else(|| unreadable(&"not a PNG"))?;
+    let (width, height) = png_size(&bytes).ok_or_else(|| unreadable(&"not a PNG"))?;
     let disk_bytes = bytes.len() as u64;
     let over = over_budget(limits, Cost::texture(disk_bytes, width.max(height)));
     if !over.is_empty() {
@@ -133,58 +133,13 @@ pub fn read_texture(
             height,
         });
     }
-    let rgba = decode(&bytes).map_err(|e| unreadable(&e))?;
+    let rgba = decode_png(&bytes).map_err(|e| unreadable(&e))?;
     Ok(Texture {
         file: path.to_owned(),
         width,
         height,
         disk_bytes,
         rgba,
-    })
-}
-
-/// The PNG signature.
-const SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
-
-/// The width and height a PNG's header gives, read from its first chunk
-/// (`IHDR`) alone; `None` when `bytes` doesn't start as a PNG does.
-fn header_size(bytes: &[u8]) -> Option<(u32, u32)> {
-    let be = |at: usize| Some(u32::from_be_bytes(bytes.get(at..at + 4)?.try_into().ok()?));
-    if !bytes.starts_with(SIGNATURE) || bytes.get(12..16) != Some(b"IHDR") {
-        return None;
-    }
-    Some((be(16)?, be(20)?))
-}
-
-/// `bytes`, a whole PNG of any colour type and depth, as 8-bit RGBA.
-fn decode(bytes: &[u8]) -> Result<Vec<u8>, png::DecodingError> {
-    let mut decoder = png::Decoder::new(Cursor::new(bytes));
-    decoder.set_transformations(png::Transformations::normalize_to_color8());
-    let mut reader = decoder.read_info()?;
-    let size = reader
-        .output_buffer_size()
-        .ok_or(png::DecodingError::LimitsExceeded)?;
-    let mut pixels = vec![0; size];
-    let info = reader.next_frame(&mut pixels)?;
-    pixels.truncate(info.buffer_size());
-    Ok(match info.color_type {
-        png::ColorType::Rgba => pixels,
-        png::ColorType::Rgb => pixels
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .flat_map(|[r, g, b]| [*r, *g, *b, u8::MAX])
-            .collect(),
-        png::ColorType::GrayscaleAlpha => pixels
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .flat_map(|[g, a]| [*g, *g, *g, *a])
-            .collect(),
-        // Grey; a palette is expanded to RGB or RGBA before it gets here.
-        png::ColorType::Grayscale | png::ColorType::Indexed => {
-            pixels.iter().flat_map(|g| [*g, *g, *g, u8::MAX]).collect()
-        }
     })
 }
 

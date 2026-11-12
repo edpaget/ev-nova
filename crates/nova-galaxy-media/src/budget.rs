@@ -3,7 +3,8 @@
 //!
 //! Ported from game-bible's `galaxy` tool (`check/art.rs` `limits`,
 //! `tighten` and `over_budget`): [`limits`] works out what a model or
-//! texture asset may cost, [`measure`] what a read model costs,
+//! texture asset may cost ([`texture_limits`] what any texture may, for
+//! the images a model holds), [`measure`] what a read model costs,
 //! [`Cost::texture`] what a texture costs, and [`over_budget`] each limit
 //! the cost breaks.
 //!
@@ -153,16 +154,10 @@ fn budget_file(budget: &Id) -> String {
 pub fn limits(galaxy: &Galaxy, asset: &Id) -> Limits {
     let mut limits = Limits::default();
     let budgets = &galaxy.budgets;
-    let default = budgets.iter().find(|(_, b)| b.data.roles.is_empty());
+    let default = default_budget(galaxy);
     match galaxy.assets.get(asset).map(|a| a.data.kind) {
         Some(AssetKind::Model) => {}
-        Some(AssetKind::Texture) => {
-            if let Some((id, texture)) = default.and_then(|(id, b)| Some((id, b.data.texture?))) {
-                tighten(&mut limits.kib, texture.kib, id);
-                tighten(&mut limits.side, texture.side, id);
-            }
-            return limits;
-        }
+        Some(AssetKind::Texture) => return texture_limits(galaxy),
         None => return limits,
     }
     let for_role = |role: Option<Role>| {
@@ -192,6 +187,29 @@ pub fn limits(galaxy: &Galaxy, asset: &Id) -> Limits {
             tighten(&mut limits.triangles, model.triangles, id);
             tighten(&mut limits.kib, model.kib, id);
         }
+    }
+    limits
+}
+
+/// The default budget of `galaxy`: the one that names no role.
+fn default_budget(galaxy: &Galaxy) -> Option<(&Id, &Doc<Budget>)> {
+    galaxy.budgets.iter().find(|(_, b)| b.data.roles.is_empty())
+}
+
+/// What a texture may cost in `galaxy`: the default budget's `texture`
+/// limits, `kib` and `side`, whatever the role budgets say; none when the
+/// default budget gives no `texture`, or there is no default budget.
+///
+/// A texture asset takes them ([`limits`]). So does an image a model
+/// holds, for its `side` alone ([`crate::image::read_image`]).
+#[must_use]
+pub fn texture_limits(galaxy: &Galaxy) -> Limits {
+    let mut limits = Limits::default();
+    if let Some((id, texture)) =
+        default_budget(galaxy).and_then(|(id, b)| Some((id, b.data.texture?)))
+    {
+        tighten(&mut limits.kib, texture.kib, id);
+        tighten(&mut limits.side, texture.side, id);
     }
     limits
 }
@@ -469,6 +487,44 @@ mod tests {
             "---\nmodel: {triangles: 20000, kib: 4096}\n---\n",
         );
         assert_eq!(limits_in(&source, "surface"), Limits::default());
+    }
+
+    #[test]
+    fn the_default_budget_s_texture_limits_need_no_asset() {
+        let source = galaxy()
+            .with(
+                "budgets/default.md",
+                "---\nmodel: {triangles: 20000, kib: 9000}\ntexture: {kib: 512, side: 2048}\n---\n",
+            )
+            .with(
+                "budgets/small-craft.md",
+                "---\nroles: [shuttle]\nmodel: {triangles: 30000, kib: 8000}\n\
+                 texture: {kib: 1, side: 1}\n---\n",
+            );
+        let default = Limits {
+            triangles: None,
+            kib: limit(512, "default"),
+            side: limit(2048, "default"),
+        };
+        assert_eq!(texture_limits(&load(&source).0), default);
+        // What a texture asset takes.
+        assert_eq!(limits_in(&source, "surface"), default);
+    }
+
+    #[test]
+    fn with_no_default_texture_budget_there_are_no_texture_limits() {
+        let no_texture = galaxy().with(
+            "budgets/default.md",
+            "---\nmodel: {triangles: 20000, kib: 4096}\n---\n",
+        );
+        assert_eq!(texture_limits(&load(&no_texture).0), Limits::default());
+        // A role budget's `texture` is nobody's.
+        let role_only = galaxy().without("budgets/default.md").with(
+            "budgets/small-craft.md",
+            "---\nroles: [shuttle]\nmodel: {triangles: 30000, kib: 8000}\n\
+             texture: {kib: 1, side: 1}\n---\n",
+        );
+        assert_eq!(texture_limits(&load(&role_only).0), Limits::default());
     }
 
     #[test]

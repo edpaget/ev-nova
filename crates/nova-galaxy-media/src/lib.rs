@@ -26,7 +26,11 @@
 //! ship space by its front and length
 //! ([`Placement::ship_point_3d`]), and works out which art budget
 //! covers it and each limit it breaks ([`budget`], a port of `galaxy`'s
-//! `check/art.rs` budget rule, for models and textures).
+//! `check/art.rs` budget rule, for models and textures). A model's images
+//! reach the adapter as stored, and it has each one a base colour names
+//! decoded ([`image`](mod@image): a PNG or a JPEG, sniffed from its first
+//! bytes, held to the default budget's `texture` side from its header,
+//! then decoded to RGBA8).
 //!
 //! For drawing planets (the renderer's planet adapter,
 //! `nova_render::GalaxyPlanets`), it reads a planet's or moon's texture
@@ -44,7 +48,8 @@
 //! the format alone: the crate depends on no other workspace crate, only
 //! on `nova-galaxy-format` and crates.io crates, so a git dependency
 //! builds it alone, as it builds the format. Only this crate decodes
-//! models (`deny.toml` bans `gltf` everywhere else).
+//! models and their JPEG images (`deny.toml` bans `gltf` and `zune-jpeg`
+//! everywhere else).
 //!
 //! Nothing here touches the filesystem: media are read through the
 //! format's [`Source`](nova_galaxy_format::source::Source) port, and the
@@ -54,6 +59,7 @@
 pub mod budget;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
+pub mod image;
 pub mod model;
 pub mod mount;
 pub mod outline;
@@ -63,6 +69,7 @@ pub mod planet;
 pub mod scene;
 pub mod texture;
 
+pub use image::{NoImage, read_image};
 pub use model::{Bounds, Face, Model, NoModel, model, read_model};
 pub use outline::{BARE, Outline, Triangle, painted, rgb, silhouette, size_box, top_down};
 pub use paint::{Slot, slot_of};
