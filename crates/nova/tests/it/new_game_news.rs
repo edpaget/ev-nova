@@ -57,7 +57,7 @@ fn plate_news() -> Vec<String> {
 }
 
 /// News item `id`'s headline.
-fn headline(id: &str) -> String {
+pub(crate) fn headline(id: &str) -> String {
     opened_from(&folder()).storylines().news[id]
         .headline
         .clone()

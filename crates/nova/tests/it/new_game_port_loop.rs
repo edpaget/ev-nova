@@ -108,7 +108,7 @@ fn plate_tons() -> u32 {
 }
 
 /// The fixture's outfit `id`, loose or a kit.
-fn outfit(id: &str) -> OutfitId {
+pub(crate) fn outfit(id: &str) -> OutfitId {
     let ids = &fixture().ids;
     let table = if ids.kits.keys().any(|kit| kit.as_str() == id) {
         &ids.kits
@@ -120,7 +120,7 @@ fn outfit(id: &str) -> OutfitId {
 
 /// The fuel a gate passage costs the racked hauler, as the opened data
 /// gives it (see the module docs).
-fn racked_fare() -> f32 {
+pub(crate) fn racked_fare() -> f32 {
     let fare = opened_from(&folder())
         .gate_fuel(ship("racked-hauler"))
         .expect("the racked hauler's gate fuel");
@@ -147,7 +147,7 @@ fn a_new_pilot_plays_the_port_loop_and_the_pilot_saved_after_it_loads_equal() {
 }
 
 /// Step 2: Hearth Dock, every service laid out.
-fn land_at_hearth_dock(game: &mut Harness) {
+pub(crate) fn land_at_hearth_dock(game: &mut Harness) {
     land_at(game, "hearth-dock");
     let port = spaceport(game);
     assert_eq!(port.problem(), None, "laid out");
@@ -169,7 +169,7 @@ fn land_at_hearth_dock(game: &mut Harness) {
 
 /// Step 3: the dock job: its offer opens by itself; deferred, it is taken
 /// from the bar, putting the plate aboard and lending a Dock pass.
-fn take_the_dock_job(game: &mut Harness) {
+pub(crate) fn take_the_dock_job(game: &mut Harness) {
     let before = pilot(game);
     let page = drawn(game);
     assert!(page.contains(&OFFER_OPENS.to_owned()), "{page:?}");
@@ -214,7 +214,7 @@ fn grain_price(game: &Harness) -> i64 {
 }
 
 /// Step 4: Grain bought and sold back at the Trade Center.
-fn buy_and_sell_back_grain(game: &mut Harness) {
+pub(crate) fn buy_and_sell_back_grain(game: &mut Harness) {
     let grain = good("grain");
     let before = pilot(game);
     open_exchange(game);
@@ -233,7 +233,7 @@ fn buy_and_sell_back_grain(game: &mut Harness) {
 /// Step 5a: the racked hauler, bought from the shipyard, the hauler traded
 /// in: the plate stays aboard, and so does the lent pass (see the module
 /// docs).
-fn buy_the_racked_hauler(game: &mut Harness) {
+pub(crate) fn buy_the_racked_hauler(game: &mut Harness) {
     let before = pilot(game);
     let racked = ship("racked-hauler");
     let trade_in = buy_ship(game, racked);
@@ -263,7 +263,7 @@ fn buy_the_racked_hauler(game: &mut Harness) {
 /// Step 5b and 5c: a kit fitted to the bought hull, the turret ring, adding
 /// a turret hardpoint beside the nose's; then an outfit bought onto it, a
 /// second mass driver.
-fn fit_the_turret_ring_and_a_mass_driver(game: &mut Harness) {
+pub(crate) fn fit_the_turret_ring_and_a_mass_driver(game: &mut Harness) {
     let before = pilot(game);
     let ring = outfit("turret-ring");
     open_outfitter(game);
@@ -284,7 +284,7 @@ fn fit_the_turret_ring_and_a_mass_driver(game: &mut Harness) {
 }
 
 /// Step 5d: Grain bought to hold.
-fn buy_grain_to_hold(game: &mut Harness) {
+pub(crate) fn buy_grain_to_hold(game: &mut Harness) {
     let grain = good("grain");
     let before = pilot(game);
     open_exchange(game);
@@ -298,7 +298,7 @@ fn buy_grain_to_hold(game: &mut Harness) {
 
 /// Step 6a: take-off: the stay's days pass, a ship bought and outfits
 /// traded, and the side road is still open.
-fn take_off(game: &mut Harness, start: &Pilot) {
+pub(crate) fn take_off(game: &mut Harness, start: &Pilot) {
     click_port_item(game, LEAVE_ITEM);
     assert_eq!(game.showing(), Showing::Flight, "taken off");
     let stay = Stay {
@@ -317,7 +317,7 @@ fn take_off(game: &mut Harness, start: &Pilot) {
 /// Step 6b: the course to the Verge, clicked on the map and flown on the
 /// gate autopilot: it comes out at the side road's far gate, on the same
 /// day, its fuel down by the racked hauler's fare.
-fn fly_to_the_verge(game: &mut Harness) {
+pub(crate) fn fly_to_the_verge(game: &mut Harness) {
     let before = pilot(game);
     let verge = system("verge");
     plot_course_to(game, verge);
@@ -340,7 +340,7 @@ fn fly_to_the_verge(game: &mut Harness) {
 
 /// Step 7: Verge Camp: the delivery's completion, first; then the camp's
 /// greeting and the news its success releases.
-fn deliver_the_plate(game: &mut Harness) {
+pub(crate) fn deliver_the_plate(game: &mut Harness) {
     let before = pilot(game);
     assert_eq!(before.owned(outfit("dock-pass")), 1, "lent, still held");
     land_at_verge_camp(game);
@@ -378,7 +378,7 @@ fn deliver_the_plate(game: &mut Harness) {
 /// Step 8: off the camp and down at Verge Workshop, which sells fuel:
 /// Recharge refills what the side road's passage spent, at its price a
 /// unit.
-fn recharge_at_verge_workshop(game: &mut Harness) {
+pub(crate) fn recharge_at_verge_workshop(game: &mut Harness) {
     click_port_item(game, LEAVE_ITEM);
     assert_eq!(game.showing(), Showing::Flight, "off the camp");
     land_at(game, "verge-workshop");
@@ -458,7 +458,7 @@ fn save_and_load(mut game: Harness, store: &MemoryPilots) {
 
 /// Asserts that `got` is `want`, field by field, then whole: each field
 /// the loop changed with its own message, then every field.
-fn assert_same(got: &Pilot, want: &Pilot, how: &str) {
+pub(crate) fn assert_same(got: &Pilot, want: &Pilot, how: &str) {
     assert_eq!(got.name, want.name, "{how}: name");
     assert_eq!(
         (got.ship, &got.ship_name),
@@ -480,14 +480,27 @@ fn assert_same(got: &Pilot, want: &Pilot, how: &str) {
         "{how}: the dock job"
     );
     assert_eq!(got.story.day, want.story.day, "{how}: day");
+    assert_eq!(
+        got.story.missions, want.story.missions,
+        "{how}: the storylines' missions"
+    );
+    assert_eq!(
+        got.story.points, want.story.points,
+        "{how}: the points' changes"
+    );
     assert_eq!(got.story.read, want.story.read, "{how}: the news read");
+    assert_eq!(
+        (&got.legal, &got.system_legal),
+        (&want.legal, &want.system_legal),
+        "{how}: the legal records"
+    );
     assert_eq!(got.flags, want.flags, "{how}: flags");
     assert_eq!(got.dialogs, want.dialogs, "{how}: dialogs");
     assert_eq!(got, want, "{how}: the whole pilot");
 }
 
 /// The session in flight.
-fn flight_session(game: &Harness) -> &Session {
+pub(crate) fn flight_session(game: &Harness) -> &Session {
     game.app
         .screen()
         .flight_view()
@@ -511,7 +524,7 @@ fn side_road_exit() -> Vec2 {
 
 /// Puts the ship over Verge Camp, an ungoverned outpost, and lands with
 /// one L.
-fn land_at_verge_camp(game: &mut Harness) {
+pub(crate) fn land_at_verge_camp(game: &mut Harness) {
     let camp = position_of("verge-camp");
     game.app
         .screen_mut()
@@ -525,7 +538,7 @@ fn land_at_verge_camp(game: &mut Harness) {
 }
 
 /// The fixture's system `id`.
-fn system(id: &str) -> SystemId {
+pub(crate) fn system(id: &str) -> SystemId {
     SystemId(nova_of(&fixture().ids.systems, id))
 }
 
@@ -680,7 +693,7 @@ fn close_exchange(game: &mut Harness) {
 }
 
 /// The fixture's hull `id`.
-fn ship(id: &str) -> ShipId {
+pub(crate) fn ship(id: &str) -> ShipId {
     ShipId(nova_of(&fixture().ids.ships, id))
 }
 

@@ -43,14 +43,14 @@ fn flying(store: &MemoryPilots) -> Harness {
 }
 
 /// What the app draws next, as commands.
-fn commands(game: &Harness) -> Vec<DrawCommand> {
+pub(crate) fn commands(game: &Harness) -> Vec<DrawCommand> {
     let mut list = DrawList::new();
     game.app.screen().draw(&mut list);
     list.iter().cloned().collect()
 }
 
 /// The first text `dialog_screen` draws on its own.
-fn first_text(dialog_screen: &dyn Screen) -> DrawCommand {
+pub(crate) fn first_text(dialog_screen: &dyn Screen) -> DrawCommand {
     let mut list = DrawList::new();
     dialog_screen.draw(&mut list);
     list.iter()
@@ -59,18 +59,37 @@ fn first_text(dialog_screen: &dyn Screen) -> DrawCommand {
         .expect("the dialog draws a text")
 }
 
-/// Asserts that `drawn` holds the flight, then `dialog`'s backing over
-/// its bounds, then `text`, in that order.
+/// Where `drawn` draws `dialog`'s backing over its bounds: the first of
+/// the backing's own fills.
 #[track_caller]
-fn assert_backed_between(drawn: &[DrawCommand], dialog: &Dialog, text: &DrawCommand) {
+fn backing_at(drawn: &[DrawCommand], dialog: &Dialog) -> usize {
     let backing = dialog.backing().expect("the dialog is backed");
     let mut fill = DrawList::new();
     backing.draw(&mut fill, dialog.bounds());
     let fill = fill.iter().next().cloned().expect("a fill");
-    let backed = drawn
+    drawn
         .iter()
         .position(|command| *command == fill)
-        .expect("the backing's fill over the dialog is drawn");
+        .expect("the backing's fill over the dialog is drawn")
+}
+
+/// Asserts that `drawn` holds `dialog`'s backing over its bounds, then
+/// `text`, in that order: a dialog with no flight under it, as the
+/// port's screens are.
+#[track_caller]
+pub(crate) fn assert_backed_under(drawn: &[DrawCommand], dialog: &Dialog, text: &DrawCommand) {
+    let backed = backing_at(drawn, dialog);
+    assert!(
+        drawn[backed..].iter().any(|command| command == text),
+        "the dialog's text is drawn over its backing"
+    );
+}
+
+/// Asserts that `drawn` holds the flight, then `dialog`'s backing over
+/// its bounds, then `text`, in that order.
+#[track_caller]
+pub(crate) fn assert_backed_between(drawn: &[DrawCommand], dialog: &Dialog, text: &DrawCommand) {
+    let backed = backing_at(drawn, dialog);
     let flight = drawn[..backed]
         .iter()
         .rposition(|command| {

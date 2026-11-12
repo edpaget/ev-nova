@@ -60,12 +60,12 @@ pub(crate) fn clip_bytes(game: &NewGame, sound: &str) -> Vec<u8> {
 }
 
 /// The samples of the fixture's sound `sound`, decoded from its file.
-fn samples_of(game: &NewGame, sound: &str) -> Pcm {
+pub(crate) fn samples_of(game: &NewGame, sound: &str) -> Pcm {
     decode_wav(&clip_bytes(game, sound)).expect("a clip the fixture plays")
 }
 
 /// What `bank` plays at `id`, decoded.
-fn resolved(bank: &dyn SoundBank, id: SoundId) -> Option<Pcm> {
+pub(crate) fn resolved(bank: &dyn SoundBank, id: SoundId) -> Option<Pcm> {
     let clip = bank
         .clip(id)
         .unwrap_or_else(|| panic!("snd {} is missing", id.0));
@@ -86,7 +86,7 @@ fn mass_driver_sound_name(game: &NewGame) -> String {
 
 /// The `snd ` the mass driver fires, as the view's weapon look reads it
 /// from the opened data.
-fn mass_driver_sound(data: &GameData, game: &NewGame) -> SoundId {
+pub(crate) fn mass_driver_sound(data: &GameData, game: &NewGame) -> SoundId {
     let weapon = WeaponId(nova_of(&game.ids.weapons, "mass-driver"));
     data.weapon_look(weapon)
         .expect("the mass driver's look")
@@ -95,7 +95,7 @@ fn mass_driver_sound(data: &GameData, game: &NewGame) -> SoundId {
 }
 
 /// The cue `sound` plays.
-fn cue(sound: SimSound) -> SoundId {
+pub(crate) fn cue(sound: SimSound) -> SoundId {
     sound.cue().expect("a cue").sound
 }
 
