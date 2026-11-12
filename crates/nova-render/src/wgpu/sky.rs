@@ -192,31 +192,43 @@ mod tests {
 
     #[test]
     fn a_streaked_star_lights_its_trail_whole_and_nothing_well_past_its_ends() {
-        let star = StarInstance {
-            centre: Point::new(6.5, 16.5),
-            radius: 2.0,
-            color: [0.8, 0.4, 0.2],
-            trail: Point::new(18.0, 0.0),
-        };
-        let Some(pixels) = drawn_alone(star) else {
-            return;
-        };
-        // The centre, the trail's middle and its end are each on the
-        // segment: whole coverage.
-        for x in [6, 15, 24] {
-            assert_lit_whole(at(&pixels, x, 16), &format!("({x}, 16)"));
-        }
-        // Beside the segment and well past either end: dark.
-        for (x, y) in [(15, 12), (15, 20), (2, 16), (29, 16)] {
-            assert_eq!(at(&pixels, x, y), [0, 0, 0], "({x}, {y})");
-        }
-        // Each lit pixel is what the core's streak gives there.
-        for x in 0..32 {
-            let offset = Point::new(x as f32 + 0.5 - 6.5, 17.5 - 16.5);
-            let lit = crate::sky::streak_coverage(offset, star.trail, star.radius);
-            let want = (0.8 * lit * 255.0).round() as i32;
-            let seen = at(&pixels, x, 17)[0];
-            assert!((seen - want).abs() <= 2, "({x}, 17): {seen} for {want}");
+        // Trails heading right, left, up and right, and down and left, so
+        // the quad is sized round the segment whichever way it points.
+        let streaks = [
+            ((6.5, 16.5), (18.0, 0.0)),
+            ((24.5, 16.5), (-18.0, 0.0)),
+            ((8.5, 24.5), (14.0, -14.0)),
+            ((24.5, 6.5), (-12.0, 16.0)),
+        ];
+        for ((cx, cy), (tx, ty)) in streaks {
+            let star = StarInstance {
+                centre: Point::new(cx, cy),
+                radius: 2.0,
+                color: [0.8, 0.4, 0.2],
+                trail: Point::new(tx, ty),
+            };
+            let Some(pixels) = drawn_alone(star) else {
+                return;
+            };
+            // The centre, the trail's middle and its end are each on the
+            // segment (each a pixel's centre): whole coverage.
+            for along in [0.0, 0.5, 1.0] {
+                let (x, y) = (cx + tx * along, cy + ty * along);
+                let what = format!("trail ({tx}, {ty}) at {along}");
+                assert_lit_whole(at(&pixels, x as usize, y as usize), &what);
+            }
+            // Every pixel, lit or dark, is what the core's streak gives
+            // there: dark beside the segment and well past either end.
+            for (x, y) in (0..32).flat_map(|y| (0..32).map(move |x| (x, y))) {
+                let offset = Point::new(x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
+                let lit = crate::sky::streak_coverage(offset, star.trail, star.radius);
+                let want = (0.8 * lit * 255.0).round() as i32;
+                let seen = at(&pixels, x, y)[0];
+                assert!(
+                    (seen - want).abs() <= 2,
+                    "trail ({tx}, {ty}) at ({x}, {y}): {seen} for {want}"
+                );
+            }
         }
     }
 
