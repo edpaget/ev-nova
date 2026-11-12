@@ -57,7 +57,9 @@
 //!   layers at depth, the perspective that gives them parallax, the stars
 //!   generated in the cells the view overlaps, their murk and the least
 //!   size a texel lets them be drawn at, and the falloff the sky shader
-//!   mirrors.
+//!   mirrors; a system's own look ([`sky::SkyLook`], `sky::look`), its
+//!   star density and tint, and the distant nebula backdrop drawn under
+//!   the stars (`sky::backdrop`).
 //! - `models`: the [`Renderer`]'s meshes by [`nova_view::ModelKey`]
 //!   ([`Renderer::add_model`]), uploaded the first frame that draws them
 //!   ([`Gpu::upload_mesh`]) after their textures, each once
@@ -104,7 +106,10 @@
 //!   bake and texture reading and its art budgets; it needs no GPU.
 //! - [`new_game_world`]: [`world_assets`], the new game's world models at
 //!   the program's edge: the flight's table of keys and the meshes and
-//!   planets they name, for the app to register; it needs no GPU.
+//!   planets they name, for the app to register, with the systems' sky
+//!   looks; it needs no GPU.
+//! - [`new_game_sky`]: [`sky_looks`], each new-game system's own sky look
+//!   from its data, keyed by its sky's seed; it needs no GPU.
 //! - [`present`]: what a window surface does before each frame.
 //!
 //! The adapter, [`wgpu`], is the only module that names `wgpu` or
@@ -172,6 +177,7 @@ pub mod model;
 pub mod model_source;
 pub mod model_texture;
 mod models;
+pub mod new_game_sky;
 pub mod new_game_world;
 pub mod planet;
 pub mod planet_source;
@@ -205,6 +211,7 @@ pub use livery::{Livery, PaintSlot, painted};
 pub use model::{Mesh, MeshError, MeshId, Section, Vertex};
 pub use model_source::{LoadedModel, ModelError, ModelRequest, ModelSource};
 pub use model_texture::{ModelTexture, ModelTextureError, ModelTextureId};
+pub use new_game_sky::sky_looks;
 pub use new_game_world::{WorldAssets, world_assets, world_assets_from, world_assets_in};
 pub use planet_source::{LoadedPlanet, PlanetError, PlanetRequest, PlanetSource};
 pub use present::{AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action};

@@ -24,6 +24,9 @@
 //!   didn't read for the loader) has none.
 //! - **Planets and moons**: each [`GalaxyPlanets`] answers with a planet,
 //!   one key each.
+//! - **Skies**: each system's own sky look, from its `sky` block, keyed
+//!   by its sky's seed ([`sky_looks`]), for the app to hand the renderer
+//!   ([`Renderer::set_sky_looks`](crate::Renderer::set_sky_looks)).
 //!
 //! Each (asset, length) is read once and each livery painted once; keys
 //! count up from 1 in a stable order (bible id order: ships, then
@@ -57,7 +60,9 @@ use crate::galaxy_planets::GalaxyPlanets;
 use crate::livery::{Livery, painted};
 use crate::model::Mesh;
 use crate::model_source::{LoadedModel, ModelError, ModelRequest, ModelSource};
+use crate::new_game_sky::sky_looks;
 use crate::planet_source::{LoadedPlanet, PlanetError, PlanetRequest, PlanetSource};
+use crate::sky::SkyLooks;
 
 /// The table the flight draws by, and what its keys name (see the module
 /// docs).
@@ -69,6 +74,8 @@ pub struct WorldAssets {
     pub meshes: Vec<(ModelKey, Mesh)>,
     /// Each planet key's planet, by ascending key.
     pub planets: Vec<(PlanetKey, LoadedPlanet)>,
+    /// Each system's own sky look, by its sky's seed ([`sky_looks`]).
+    pub skies: SkyLooks,
     /// What failed that is news, each a line ready to report.
     pub problems: Vec<String>,
 }
@@ -166,6 +173,7 @@ pub fn world_assets_from(
         models: table,
         meshes,
         planets: planet_list,
+        skies: sky_looks(game),
         problems: model_problems,
     }
 }
