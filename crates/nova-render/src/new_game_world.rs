@@ -11,9 +11,11 @@
 //! - **Ships**: each ship class with a model ([`ship_request`]) takes the
 //!   key of its (asset, length, livery), painted in its livery
 //!   ([`ship_livery`], [`painted`]); two classes sharing all three share
-//!   a key. It is drawn at [`PX_PER_METRE`]. Its kits as built are its
-//!   resolved `mods` (`nova_galaxy_format::fleet::resolve`), root base
-//!   first, each that is a kit.
+//!   a key. It is drawn at [`PX_PER_METRE`], as see-through as its
+//!   resolved `translucency` (its `BaseTransp`, 0 when none gives one).
+//!   Its kits as built are its resolved `mods`
+//!   (`nova_galaxy_format::fleet::resolve`), root base first, each that
+//!   is a kit.
 //! - **Outfits**: each outfit model a mount shows, keyed by (asset) at a
 //!   metre a unit, unpainted.
 //! - **Stations and outposts**: each whose `visual` is a model, keyed as
@@ -124,7 +126,7 @@ pub fn world_assets_from(
             let model = ShipModel {
                 key,
                 scale,
-                base_transp: 0,
+                base_transp: translucency(game, id),
             };
             table.ships.insert(ship, model);
         }
@@ -197,6 +199,13 @@ fn built_kits(game: &NewGame, id: &Id) -> Vec<OutfitId> {
                 .collect()
         },
     )
+}
+
+/// How see-through ship `id`'s hull is, in 32nds as a sheet's
+/// `BaseTransp`: its resolved `translucency`, 0 when none in its chain
+/// gives one or it doesn't resolve.
+fn translucency(game: &NewGame, id: &Id) -> i16 {
+    resolve(&game.galaxy, id).map_or(0, |resolved| i16::from(resolved.translucency))
 }
 
 /// Every outfit model asset a mount in `table` shows.
@@ -415,6 +424,27 @@ mod tests {
         #[allow(clippy::cast_possible_truncation)]
         let px = PX_PER_METRE as f32;
         assert!((scale - px).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_class_s_model_carries_its_chain_s_translucency_as_its_base_transp() {
+        let source = modelled_sample_3d()
+            .with(
+                "ships/ghost-freighter.md",
+                "---\nname: Ghost freighter\nbase: light-freighter\ntranslucency: 10\n---\n",
+            )
+            .with(
+                "ships/pale-freighter.md",
+                "---\nname: Pale freighter\nbase: ghost-freighter\n---\n",
+            );
+        let (game, assets) = built(&source);
+        let base_transp = |name| {
+            let model = assets.models.ship(ship(&game, name)).expect("a model");
+            model.base_transp
+        };
+        assert_eq!(base_transp("ghost-freighter"), 10);
+        assert_eq!(base_transp("pale-freighter"), 10, "inherited");
+        assert_eq!(base_transp("light-freighter"), 0);
     }
 
     #[test]
