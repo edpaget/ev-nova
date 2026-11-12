@@ -29,18 +29,28 @@
 //!   an NPC's its class's as built ([`WorldModels::built_kits`]).
 //! - **Turrets**: every turning mount faces the ship's
 //!   [`FrameShip::turret_facing`], or the nose with none.
-//! - **Faded ships**: a model has no translucent path, so only a ship
-//!   drawn opaque and in full draws one. An NPC cloaked or fading at a
-//!   gate, and a player not drawn in full or cloaked, keeps its 2D path;
-//!   a hidden one draws nothing, as before.
+//! - **Faded ships**: a ship its cloak, a gate or its class's `BaseTransp`
+//!   ([`ShipModel::base_transp`]) fades draws its model faded, at the
+//!   alpha [`model_alpha`] gives (the new game's reading of the 2D hull's
+//!   fade; see the `model_fade` module), its outfits fading with it
+//!   ([`DrawCommand::Model`](crate::DrawCommand::Model)), and moved by
+//!   the jitter its cloak moves its hull by
+//!   ([`CloakDraw::offset`]). A ship whose hull its cloak or gate hides
+//!   (a full fade unseen, waiting at the gate it comes out of), or whose
+//!   alpha comes out 0, draws nothing, outfits and outline included; a
+//!   player not drawn in full draws nothing, as before. Only a class with
+//!   no model draws its outline, unfaded, as it always did.
+//! - **Colour**: a model takes none of the sprite's colorize (the murk,
+//!   the ion tint, the gate's white wash), faded or not.
 
 use std::rc::Rc;
 
 use nova_sim::OutfitId;
-use nova_sim::cloak::CloakShown;
 use nova_sim::flight_frame::{FrameShip, GateFade};
 
 use crate::flight::catalog::ShipSprites;
+use crate::flight::cloak_fade::CloakDraw;
+use crate::flight::model_fade::model_alpha;
 use crate::flight::mounted_outfits;
 use crate::flight::ship_layers::Place;
 use crate::flight::ship_model::ship_orientation;
@@ -64,65 +74,72 @@ impl<C: ShipSprites, S: FlightSim> FlightView<C, S> {
 }
 
 impl<C, S: FlightSim> FlightView<C, S> {
-    /// The player's ship's model, when it draws one: its class has a model
-    /// and it is drawn opaque and in full (see the module docs). Asked
-    /// only once its sheet can't be read.
+    /// The player's ship's class's model, when it has one. Asked only once
+    /// its sheet can't be read and it is drawn in full.
     pub(super) fn player_model(&self) -> Option<ShipModel> {
-        let player = self.drawn().player();
-        let opaque = player.cloak == CloakShown::Opaque && player.shown == nova_sim::Drawn::Full;
-        self.world_models.ship(player.class).filter(|_| opaque)
+        self.world_models.ship(self.drawn().player().class)
     }
 
-    /// NPC `npc`'s model, when it draws one: its class has a model and it
-    /// is drawn opaque, neither cloaked nor fading at a gate (see the
-    /// module docs). Asked only once its sheet can't be read.
+    /// NPC `npc`'s class's model, when it has one. Asked only once its
+    /// sheet can't be read and its hull is drawn at all.
     pub(super) fn npc_model(&self, npc: &FrameShip) -> Option<ShipModel> {
-        let opaque = npc.cloak == CloakShown::Opaque && npc.gate == GateFade::None;
-        self.world_models.ship(npc.class).filter(|_| opaque)
+        self.world_models.ship(npc.class)
     }
 
     /// Draws the player's ship as `model`, where `place` centres its
-    /// outline ([`FlightView::draw_ship_model`]).
+    /// outline, faded and jittered as its cloak `cloak` draws its hull
+    /// ([`FlightView::draw_ship_model`]). A player's ship takes no gate's
+    /// fade, as its sprite takes none.
     pub(super) fn draw_player_model(
         &self,
         list: &mut DrawList,
         place: Place<'_>,
-        model: ShipModel,
+        (model, cloak): (ShipModel, Option<CloakDraw>),
     ) {
         let frame = self.drawn();
+        let player = frame.player();
         let centre = model_centre(place, self.outline.as_ref());
-        let shown = (&frame.player(), centre, self.shown_heading());
-        self.draw_ship_model(list, shown, model, &frame.player_kits);
+        let shown = (&player, centre, self.shown_heading());
+        let fade = (GateFade::None, cloak);
+        self.draw_ship_model(list, shown, (model, fade), &frame.player_kits);
     }
 
     /// Draws NPC `npc` as `model`, facing `heading`, where `place` centres
-    /// its outline ([`FlightView::draw_ship_model`]).
+    /// its outline, faded and jittered as its cloak `cloak` and its gate
+    /// draw its hull ([`FlightView::draw_ship_model`]).
     pub(super) fn draw_npc_model(
         &self,
         list: &mut DrawList,
         npc: &FrameShip,
         place: Place<'_>,
-        (model, heading): (ShipModel, f32),
+        (model, heading, cloak): (ShipModel, f32, Option<CloakDraw>),
     ) {
         let centre = model_centre(place, self.npc_outlines.get(&npc.class));
         let kits = self.world_models.built_kits(npc.class);
-        self.draw_ship_model(list, (npc, centre, heading), model, kits);
+        let fade = (npc.gate, cloak);
+        self.draw_ship_model(list, (npc, centre, heading), (model, fade), kits);
     }
 
     /// Draws `ship`, shown at `centre` facing `heading`, as its class's
     /// `model` with the outfits of its class and `kits` on their mounts,
-    /// each turret facing its record's turret facing (see the module
-    /// docs).
+    /// each turret facing its record's turret facing, at the alpha its
+    /// cloak, `gate` and the model's `BaseTransp` give it ([`model_alpha`])
+    /// and moved by its cloak's jitter (see the module docs); nothing at
+    /// all, its outfits included, when that draws nothing.
     fn draw_ship_model(
         &self,
         list: &mut DrawList,
         (ship, centre, heading): (&FrameShip, Point, f32),
-        model: ShipModel,
+        (model, (gate, cloak)): (ShipModel, (GateFade, Option<CloakDraw>)),
         kits: &[OutfitId],
     ) {
+        let Some(alpha) = model_alpha(ship.cloak, ship.paint, gate, model.base_transp) else {
+            return;
+        };
+        let jitter = cloak.map_or(Point::new(0.0, 0.0), |cloak| cloak.offset);
         let turn = self.drawn().hull_turn;
         let pose = ModelPose {
-            center: centre,
+            center: Point::new(centre.x + jitter.x, centre.y + jitter.y),
             orientation: ship_orientation(&ship.frames, heading, turn),
             scale: model.scale,
         };
@@ -133,7 +150,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             self.world_models.outfit(asset)
         });
         for command in commands {
-            list.push(command);
+            list.push(command.at_alpha(alpha));
         }
     }
 }

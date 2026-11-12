@@ -418,6 +418,17 @@ impl DrawCommand {
         Self::Model { model, pose, alpha }
     }
 
+    /// The command with a [`DrawCommand::Model`]'s alpha set to `alpha`;
+    /// any other command as it is, a part ([`DrawCommand::Mounted`])
+    /// included, since it fades with its model.
+    #[must_use]
+    pub fn at_alpha(mut self, alpha: f32) -> Self {
+        if let Self::Model { alpha: drawn, .. } = &mut self {
+            *drawn = alpha;
+        }
+        self
+    }
+
     /// The command moved by `by` ([`DrawList::extend_translated`]).
     #[must_use]
     pub fn translated(&self, by: Point) -> Self {
@@ -1309,6 +1320,23 @@ mod tests {
             DrawCommand::model(ModelKey(7), pose_at(1.0, 2.0)),
             DrawCommand::faded_model(ModelKey(7), pose_at(1.0, 2.0), 1.0)
         );
+    }
+
+    #[test]
+    fn at_alpha_sets_a_models_alpha_and_leaves_any_other_command() {
+        assert_eq!(
+            model_at(1.0, 2.0).at_alpha(0.25),
+            DrawCommand::faded_model(ModelKey(7), pose_at(1.0, 2.0), 0.25)
+        );
+        assert_eq!(
+            DrawCommand::faded_model(ModelKey(7), pose_at(1.0, 2.0), 0.25).at_alpha(1.0),
+            model_at(1.0, 2.0)
+        );
+        let part = DrawCommand::Mounted {
+            model: ModelKey(8),
+            mounting: mounting(),
+        };
+        assert_eq!(part.clone().at_alpha(0.25), part);
     }
 
     #[test]
