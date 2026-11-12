@@ -2877,6 +2877,80 @@ mod tests {
     }
 
     #[test]
+    fn a_section_samples_the_texture_uploaded_under_its_id_and_white_without_one() {
+        use crate::gpu::Gpu;
+        // The white cube straight on, so only +z shows: that face a
+        // section on the mesh's one texture, a single green texel.
+        const GREEN: [u8; 4] = [40, 200, 60, 255];
+        let logical = LogicalSize { w: 32, h: 24 };
+        let pose = nova_view::ModelPose {
+            center: Point::new(16.0, 12.0),
+            orientation: nova_view::Orientation::IDENTITY,
+            scale: 12.0,
+        };
+        let instance = crate::camera::instance(logical, &pose, MeshId(3), 0.9).expect("drawable");
+        let frame = Frame {
+            viewport: PixelRect {
+                x: 0,
+                y: 8,
+                w: 64,
+                h: 48,
+            },
+            logical,
+            world: vec![0],
+            ..frame_of(vec![Batch::Models {
+                light: Light::STANDARD,
+                models: vec![instance],
+            }])
+        };
+        let texture = ModelTexture::new(1, 1, GREEN.to_vec()).expect("one texel");
+        let cube = Mesh::cube([Color::WHITE; 6]);
+        let section = |indices, texture| crate::model::Section { indices, texture };
+        let skinned = Mesh::textured(
+            cube.vertices().to_vec(),
+            cube.indices().to_vec(),
+            vec![std::sync::Arc::new(texture.clone())],
+            vec![
+                section(0..24, None),
+                section(24..30, Some(0)),
+                section(30..36, None),
+            ],
+        )
+        .expect("the cube in three sections");
+        // The middle pixel with the mesh's texture uploaded as `uploaded`
+        // and the mesh told it is `named`.
+        let middle = |uploaded: Option<ModelTextureId>, named: &[ModelTextureId]| {
+            let mut gpu = crate::wgpu::OffscreenGpu::new(64, 64, &FontFaces::bundled()).ok()?;
+            if let Some(id) = uploaded {
+                gpu.upload_model_texture(id, &texture);
+            }
+            gpu.upload_mesh(MeshId(3), &skinned, named);
+            gpu.submit(&frame);
+            Some(pixel_at(&gpu.read_pixels().expect("read back"), 32, 32))
+        };
+        let id = ModelTextureId(5);
+        let (Some(textured), Some(unnamed), Some(absent)) = (
+            middle(Some(id), &[id]),
+            middle(Some(id), &[]),
+            middle(None, &[id]),
+        ) else {
+            return;
+        };
+        let lit = |base: [u8; 4]| {
+            let base = base.map(f32::from);
+            crate::camera::shade([0.0, 0.0, 1.0], base, Light::STANDARD).map(|c| c.round() as u8)
+        };
+        let near = |got: [u8; 4], want: [u8; 4]| (0..3).all(|c| got[c].abs_diff(want[c]) <= 2);
+        assert!(near(textured, lit(GREEN)), "{textured:?} is not lit green");
+        // Told no id for its texture, or one the GPU doesn't hold, the
+        // section draws its vertex colour alone: white, lit.
+        for (what, got) in [("unnamed", unnamed), ("absent", absent)] {
+            assert!(near(got, lit([255; 4])), "{what}: {got:?} is not lit white");
+        }
+        assert!(!near(lit(GREEN), lit([255; 4])));
+    }
+
+    #[test]
     fn the_native_upscaler_enlarges_a_texture_world_with_sharp_bilinear() {
         use crate::gpu::Gpu;
         // A white-faced cube a little off centre, in a world texture half
