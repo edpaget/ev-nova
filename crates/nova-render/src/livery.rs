@@ -14,10 +14,11 @@
 //! index and texture coordinate; the parts' order; and every part it
 //! doesn't paint as it was. A part with no material, or whose material
 //! has no slot, isn't painted. A painted material with a texture keeps
-//! it, so once textures are sampled (glTF multiplies the factor by the
-//! texture) the livery tints the texture as the data's "keeps its
-//! textures" asks; until then it draws flat in the livery's colour, as an
-//! unpainted textured material draws flat in its own.
+//! it, by the same shared pointer, so one hull in two liveries uploads
+//! its texture once. The texture is sampled and multiplied by the vertex
+//! colour ([`crate::camera::fragment`]), so the livery tints the texture
+//! as the data's "keeps its textures" asks, as an unpainted textured
+//! material's own factor tints its own.
 //!
 //! Which slot a material is in is the source's reading of the model's
 //! `paint`. The galaxy adapter takes it from `nova_galaxy_media::slot_of`,
@@ -143,8 +144,11 @@ fn recolored(mesh: &Mesh, color: [f32; 4]) -> Mesh {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::model_source::{Part, Texture};
+    use crate::model_texture::ModelTexture;
 
     /// Three liveries' colours apart in every slot and channel.
     const LEAGUE: Livery = Livery {
@@ -202,8 +206,7 @@ mod tests {
             parts,
             materials,
             textures: vec![Texture {
-                bytes: b"png".to_vec(),
-                mime: Some("image/png".into()),
+                image: Arc::new(ModelTexture::new(1, 1, vec![9, 9, 9, 255]).unwrap()),
                 path: None,
             }],
         }
@@ -314,6 +317,17 @@ mod tests {
                 assert_eq!((p.position, p.normal), (o.position, o.normal));
                 assert_eq!(p.color[3], 0.5, "alpha kept");
             }
+        }
+        // Merged, the painted model draws the same texture, by the same
+        // pointer, so the two liveries share one upload; and stays unlit.
+        let (merged, own) = (painted.mesh(), model.mesh());
+        assert_eq!(merged.sections(), own.sections());
+        assert_eq!(merged.sections()[0].texture, Some(0));
+        assert!(Arc::ptr_eq(&merged.textures()[0], &model.textures[0].image));
+        assert!(Arc::ptr_eq(&merged.textures()[0], &own.textures()[0]));
+        assert!(merged.vertices().iter().all(|v| v.unlit));
+        for (p, o) in merged.vertices().iter().zip(own.vertices()) {
+            assert_eq!(p.uv, o.uv);
         }
     }
 

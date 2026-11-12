@@ -4,7 +4,11 @@
 //!
 //! It only chains decisions made elsewhere: which file is the model and
 //! how it is read (`nova_galaxy_media::scene`), which budget covers it and
-//! what it breaks (`nova_galaxy_media::budget`), how it sits on a ship
+//! what it breaks (`nova_galaxy_media::budget`), how each image a
+//! material's base colour names is sniffed, held to the default budget's
+//! `texture` side and to the renderer's largest
+//! ([`MAX_TEXTURE_SIDE`]) and decoded (`nova_galaxy_media::image`), how
+//! its mip chain is built ([`ModelTexture::new`]), how it sits on a ship
 //! (`nova_galaxy_media::Placement`), which livery slot the asset's `paint`
 //! puts each material in ([`nova_galaxy_media::slot_of`], the rule the
 //! top-down silhouettes use too), and how a placed primitive becomes a
@@ -21,21 +25,26 @@
 //! colour's bytes as the format reads them
 //! ([`Color::rgb`](nova_galaxy_format::id::Color::rgb)).
 
+use std::collections::BTreeSet;
+use std::sync::Arc;
+
 use nova_galaxy_format::asset::{AssetKind, Paint};
 use nova_galaxy_format::fleet::resolve;
 use nova_galaxy_format::id::Id;
 use nova_galaxy_format::load::Galaxy;
 use nova_galaxy_format::source::Source;
-use nova_galaxy_media::budget::{self, limits, measure, over_budget};
+use nova_galaxy_media::budget::{self, Limits, limits, measure, over_budget, texture_limits};
 use nova_galaxy_media::scene::{Scene, read_asset_scene};
-use nova_galaxy_media::{NoModel, Placement, Slot, slot_of};
+use nova_galaxy_media::{NoImage, NoModel, Placement, Slot, read_image, slot_of};
 
+use crate::gpu::MAX_TEXTURE_SIDE;
 use crate::livery::Livery;
 use crate::model::MeshError;
 use crate::model_source::{
-    self, LoadedModel, Material, Measure, ModelError, ModelRequest, ModelSource, Overrun,
+    self, ImageRef, LoadedModel, Material, Measure, ModelError, ModelRequest, ModelSource, Overrun,
     PaintSlot, Texture,
 };
+use crate::model_texture::ModelTexture;
 
 /// The new game's models: the asset manifest and budgets of `galaxy`, the
 /// files read through `source`.
@@ -80,10 +89,91 @@ impl<S: Source> ModelSource for GalaxyModels<'_, S> {
                 .ok_or_else(|| ModelError::NoDepth(name.clone()))?,
             None => Placement::unscaled_bounds(scene.bounds, front),
         };
-        loaded(&scene, &placement, asset.paint.as_ref()).map_err(|error| ModelError::Mesh {
-            asset: name.clone(),
-            error,
+        let textures = textures(name, &scene, &texture_limits(self.galaxy))?;
+        loaded(&scene, &placement, asset.paint.as_ref(), textures).map_err(|error| {
+            ModelError::Mesh {
+                asset: name.clone(),
+                error,
+            }
         })
+    }
+}
+
+/// A scene's base-colour textures, decoded, and which of them each of the
+/// scene's images became (`None` for an image no base colour names).
+type Textures = (Vec<Texture>, Vec<Option<usize>>);
+
+/// The textures of `asset`'s `scene`: each image a material's base colour
+/// names, in the images' order, read by `nova_galaxy_media::read_image`
+/// held to `limits` (the default budget's `texture`) and to the largest
+/// side the renderer draws ([`MAX_TEXTURE_SIDE`]). An image nothing's base
+/// colour names is not decoded, so it can't refuse the model.
+fn textures(asset: &str, scene: &Scene, limits: &Limits) -> Result<Textures, ModelError> {
+    let named: BTreeSet<usize> = scene
+        .materials
+        .iter()
+        .filter_map(|m| m.base_color_texture)
+        .collect();
+    let mut textures = Vec::new();
+    let mut places = vec![None; scene.images.len()];
+    for at in named {
+        let Some(image) = scene.images.get(at) else {
+            continue;
+        };
+        let which = || {
+            image
+                .path
+                .clone()
+                .map_or(ImageRef::Embedded(at), ImageRef::File)
+        };
+        let pixels = read_image(&image.bytes, limits, MAX_TEXTURE_SIDE)
+            .map_err(|why| no_image(asset, which(), why))?;
+        let texture =
+            ModelTexture::new(pixels.width, pixels.height, pixels.rgba).map_err(|error| {
+                ModelError::TextureUndecodable {
+                    asset: asset.to_owned(),
+                    image: which(),
+                    why: error.to_string(),
+                }
+            })?;
+        places[at] = Some(textures.len());
+        textures.push(Texture {
+            image: Arc::new(texture),
+            path: image.path.clone(),
+        });
+    }
+    Ok((textures, places))
+}
+
+/// Why `asset`'s `image` has no pixels, as the port says it.
+///
+/// - Neither a PNG nor a JPEG, a header that gives no size, and data that
+///   doesn't decode are all [`ModelError::TextureUndecodable`], never
+///   [`ModelError::Unreadable`]: the model itself read, and nothing
+///   before this adapter decodes its images, so nobody has reported it.
+/// - Over the budget's `side` is [`ModelError::OverBudget`], as the
+///   model's own overruns are.
+/// - Over the renderer's largest side is
+///   [`ModelError::TextureTooLarge`].
+fn no_image(asset: &str, image: ImageRef, why: NoImage) -> ModelError {
+    let asset = asset.to_owned();
+    match why {
+        NoImage::Unknown => ModelError::TextureUndecodable {
+            asset,
+            image,
+            why: "it is neither a PNG nor a JPEG".to_owned(),
+        },
+        NoImage::Undecodable(why) => ModelError::TextureUndecodable { asset, image, why },
+        NoImage::OverBudget(over) => ModelError::OverBudget {
+            asset,
+            over: over.iter().map(overrun).collect(),
+        },
+        NoImage::TooLarge { side, most } => ModelError::TextureTooLarge {
+            asset,
+            image,
+            side,
+            most,
+        },
     }
 }
 
@@ -153,11 +243,13 @@ pub(crate) fn overrun(over: &budget::Overrun) -> Overrun {
 }
 
 /// `scene` placed by `placement`, its materials in the slots `paint`
-/// puts them in, as the port hands it over.
+/// puts them in and naming their base colours' textures among
+/// `textures`, as the port hands it over.
 fn loaded(
     scene: &Scene,
     placement: &Placement,
     paint: Option<&Paint>,
+    (textures, places): Textures,
 ) -> Result<LoadedModel, MeshError> {
     #[allow(
         clippy::cast_possible_truncation,
@@ -208,18 +300,12 @@ fn loaded(
                 metallic: m.metallic,
                 roughness: m.roughness,
                 unlit: m.unlit,
-                base_color_texture: m.base_color_texture,
+                base_color_texture: m
+                    .base_color_texture
+                    .and_then(|image| places.get(image).copied().flatten()),
             })
             .collect(),
-        textures: scene
-            .images
-            .iter()
-            .map(|i| Texture {
-                bytes: i.bytes.clone(),
-                mime: i.mime.clone(),
-                path: i.path.clone(),
-            })
-            .collect(),
+        textures,
     })
 }
 
@@ -229,7 +315,7 @@ mod tests {
     use nova_galaxy_format::fixture::{CC0, galaxy};
     use nova_galaxy_format::load::load;
     use nova_galaxy_format::source::MemSource;
-    use nova_galaxy_media::fixture::{Builder, ImageAt, Mat, PNG, glb};
+    use nova_galaxy_media::fixture::{Builder, ImageAt, JPEG, JPEG_SIZE, Mat, PNG, glb, png};
 
     use super::*;
     use crate::model_source::{PaintSlot, check_contract, vertex_color};
@@ -483,39 +569,63 @@ mod tests {
         assert_eq!(ship_livery(&galaxy, &id("nothing")), None, "no such ship");
     }
 
-    #[test]
-    fn a_gltf_with_its_bin_and_image_loads() {
-        let (json, bin) = Builder::new([1.0; 3])
-            .texcoords()
-            .material(Mat {
-                textured: true,
-                unlit: true,
-                metallic: 0.25,
-                roughness: 0.5,
-                ..Mat::new("hull", [1.0; 4])
-            })
+    /// A 2 by 2 image: red, green, blue and half-clear white.
+    const SKIN: [u8; 16] = [
+        255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 128,
+    ];
+
+    /// The file a `.gltf` hull's image is.
+    const SKIN_FILE: &str = "media/export/pack/skin.png";
+
+    /// A box with texture coordinates in one textured, unlit material.
+    fn skinned() -> Builder {
+        Builder::new([1.0; 3]).texcoords().material(Mat {
+            textured: true,
+            unlit: true,
+            metallic: 0.25,
+            roughness: 0.5,
+            ..Mat::new("hull", [1.0; 4])
+        })
+    }
+
+    /// The test galaxy with `hull` the `.gltf` of `builder`, its buffer
+    /// beside it and its image, `image`, at [`SKIN_FILE`].
+    fn with_gltf_hull(builder: Builder, image: &[u8]) -> MemSource {
+        let (json, bin) = builder
             .image(ImageAt::Uri("skin.png".into()))
             .gltf("hull.bin");
-        let source = galaxy()
+        galaxy()
             .with(
                 "assets/hull.md",
                 &format!(
                     "---\nkind: model\nplaceholder: false\nfiles: [media/export/pack/hull.gltf, \
-                     media/export/pack/hull.bin, media/export/pack/skin.png]\n{CC0}---\n"
+                     media/export/pack/hull.bin, {SKIN_FILE}]\n{CC0}---\n"
                 ),
             )
             .with("media/export/pack/hull.gltf", &json)
             .with_bytes("media/export/pack/hull.bin", &bin)
-            .with_bytes("media/export/pack/skin.png", PNG);
+            .with_bytes(SKIN_FILE, image)
+    }
+
+    /// The test galaxy with `hull` the `.glb` of `builder`, `image`
+    /// embedded in it.
+    fn with_glb_hull(builder: Builder, image: &[u8]) -> MemSource {
+        with_hull(&builder.image(ImageAt::Embedded).image_bytes(image).glb())
+    }
+
+    /// The first level of `model`'s texture `at`: its size and pixels.
+    fn first_level(model: &LoadedModel, at: usize) -> (u32, u32, &[u8]) {
+        let level = &model.textures[at].image.levels()[0];
+        (level.width, level.height, &level.rgba)
+    }
+
+    #[test]
+    fn a_gltf_with_its_bin_and_image_loads_its_image_decoded() {
+        let source = with_gltf_hull(skinned(), &png(2, 2, &SKIN));
         let model = ask(&source, "hull", Some(8.0)).unwrap();
-        assert_eq!(
-            model.textures,
-            [Texture {
-                bytes: PNG.to_vec(),
-                mime: None,
-                path: Some("media/export/pack/skin.png".into()),
-            }]
-        );
+        assert_eq!(model.textures.len(), 1);
+        assert_eq!(first_level(&model, 0), (2, 2, &SKIN[..]));
+        assert_eq!(model.textures[0].path.as_deref(), Some(SKIN_FILE));
         assert_eq!(
             model.materials,
             [Material {
@@ -534,6 +644,189 @@ mod tests {
             part.uv.as_ref().map(Vec::len),
             Some(part.mesh.vertices().len())
         );
+        // The merged mesh draws it: one section on the texture, unlit.
+        let mesh = model.mesh();
+        assert_eq!(mesh.sections().len(), 1);
+        assert_eq!(mesh.sections()[0].texture, Some(0));
+        assert!(mesh.vertices().iter().all(|v| v.unlit));
+    }
+
+    #[test]
+    fn a_glb_s_embedded_image_loads_decoded_png_or_jpeg() {
+        let model = ask(&with_glb_hull(skinned(), &png(2, 2, &SKIN)), "hull", None).unwrap();
+        assert_eq!(first_level(&model, 0), (2, 2, &SKIN[..]));
+        assert_eq!(model.textures[0].path, None);
+
+        let model = ask(&with_glb_hull(skinned(), JPEG), "hull", None).unwrap();
+        let (width, height, rgba) = first_level(&model, 0);
+        assert_eq!((width, height), JPEG_SIZE);
+        assert_eq!(rgba.len(), (width * height * 4) as usize);
+    }
+
+    #[test]
+    fn an_image_no_base_colour_names_is_not_decoded() {
+        // The stub doesn't decode, and nothing asks it to.
+        let plain = Builder::new([1.0; 3])
+            .texcoords()
+            .material(Mat::new("hull", [1.0; 4]));
+        for source in [
+            with_glb_hull(plain.clone(), PNG),
+            with_gltf_hull(plain, PNG),
+        ] {
+            let model = ask(&source, "hull", None).unwrap();
+            assert_eq!(model.textures, []);
+            assert_eq!(model.materials[0].base_color_texture, None);
+        }
+    }
+
+    #[test]
+    fn the_textures_are_only_the_images_named_and_each_material_names_its_own() {
+        // A spare image first, which doesn't decode: the model's own is
+        // image 1, and the model's only texture.
+        let builder = skinned()
+            .material(Mat::new("plain", [1.0; 4]))
+            .material(Mat {
+                textured: true,
+                ..Mat::new("again", [1.0; 4])
+            })
+            .spare_image(PNG);
+        let model = ask(&with_glb_hull(builder, &png(2, 2, &SKIN)), "hull", None).unwrap();
+        assert_eq!(model.textures.len(), 1);
+        assert_eq!(first_level(&model, 0), (2, 2, &SKIN[..]));
+        let named: Vec<_> = model
+            .materials
+            .iter()
+            .map(|m| m.base_color_texture)
+            .collect();
+        assert_eq!(named, [Some(0), None, Some(0)]);
+    }
+
+    /// A real PNG whose header is rewritten to declare `width` by
+    /// `height`: its size reads, and it doesn't decode.
+    fn declaring(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = png(2, 2, &SKIN);
+        bytes[16..20].copy_from_slice(&width.to_be_bytes());
+        bytes[20..24].copy_from_slice(&height.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn an_image_over_the_default_budget_s_side_is_over_budget_naming_it() {
+        let budget = |side: u32| {
+            format!(
+                "---\nmodel: {{triangles: 20000, kib: 4096}}\n\
+                 texture: {{kib: 1, side: {side}}}\n---\n"
+            )
+        };
+        let source = with_glb_hull(skinned(), &png(2, 2, &SKIN));
+        let over = source.clone().with("budgets/default.md", &budget(1));
+        assert_eq!(
+            ask(&over, "hull", None),
+            Err(ModelError::OverBudget {
+                asset: "hull".into(),
+                over: vec![Overrun {
+                    measure: Measure::Side,
+                    used: 2,
+                    most: 1,
+                    budget: "budgets/default.md".into(),
+                }],
+            })
+        );
+        // At the limit it loads.
+        let at_the_limit = source.with("budgets/default.md", &budget(2));
+        assert!(ask(&at_the_limit, "hull", None).is_ok());
+    }
+
+    #[test]
+    fn an_image_that_does_not_decode_is_its_own_error_naming_the_asset_and_the_image() {
+        // The stub: a PNG's signature, with no header to size it by.
+        assert_eq!(
+            ask(&with_gltf_hull(skinned(), PNG), "hull", None),
+            Err(ModelError::TextureUndecodable {
+                asset: "hull".into(),
+                image: ImageRef::File(SKIN_FILE.into()),
+                why: "its header gives no size".into(),
+            })
+        );
+        // Embedded after a spare image, it is named by its index.
+        let spared = skinned().spare_image(&png(2, 2, &SKIN));
+        assert_eq!(
+            ask(&with_glb_hull(spared, PNG), "hull", None),
+            Err(ModelError::TextureUndecodable {
+                asset: "hull".into(),
+                image: ImageRef::Embedded(1),
+                why: "its header gives no size".into(),
+            })
+        );
+        // A header that reads, over data that doesn't.
+        let Err(ModelError::TextureUndecodable { asset, image, why }) =
+            ask(&with_glb_hull(skinned(), &declaring(4, 4)), "hull", None)
+        else {
+            panic!("it decoded");
+        };
+        assert_eq!((asset.as_str(), image), ("hull", ImageRef::Embedded(0)));
+        assert_ne!(why, "its header gives no size");
+    }
+
+    #[test]
+    fn bytes_that_are_no_image_on_a_textured_material_do_not_decode() {
+        for source in [
+            with_glb_hull(skinned(), b"GIF89a, or anything else"),
+            with_glb_hull(skinned(), b""),
+        ] {
+            let error = ask(&source, "hull", None).unwrap_err();
+            assert_eq!(
+                error,
+                ModelError::TextureUndecodable {
+                    asset: "hull".into(),
+                    image: ImageRef::Embedded(0),
+                    why: "it is neither a PNG nor a JPEG".into(),
+                }
+            );
+            // Never the error a caller takes as already reported.
+            assert!(!matches!(error, ModelError::Unreadable { .. }));
+        }
+    }
+
+    #[test]
+    fn an_image_larger_than_the_renderer_draws_is_refused_with_no_side_budget() {
+        // A default budget that gives textures no limits at all.
+        let unlimited = "---\nmodel: {triangles: 20000, kib: 4096}\n---\n";
+        let source = |side: u32| {
+            with_gltf_hull(skinned(), &declaring(side, 2)).with("budgets/default.md", unlimited)
+        };
+        assert_eq!(
+            ask(&source(MAX_TEXTURE_SIDE + 1), "hull", None),
+            Err(ModelError::TextureTooLarge {
+                asset: "hull".into(),
+                image: ImageRef::File(SKIN_FILE.into()),
+                side: MAX_TEXTURE_SIDE + 1,
+                most: MAX_TEXTURE_SIDE,
+            })
+        );
+        // At the most it is within it: it fails only when it decodes.
+        assert!(matches!(
+            ask(&source(MAX_TEXTURE_SIDE), "hull", None),
+            Err(ModelError::TextureUndecodable { .. })
+        ));
+        // Under the test galaxy's own budget, its side limit comes first.
+        let budgeted = with_gltf_hull(skinned(), &declaring(MAX_TEXTURE_SIDE + 1, 2));
+        assert!(matches!(
+            ask(&budgeted, "hull", None),
+            Err(ModelError::OverBudget { .. })
+        ));
+    }
+
+    #[test]
+    fn the_model_s_own_budget_is_checked_before_its_images_are_decoded() {
+        let source = with_glb_hull(skinned(), PNG).with(
+            "budgets/default.md",
+            "---\nmodel: {triangles: 11, kib: 4096}\n---\n",
+        );
+        assert!(matches!(
+            ask(&source, "hull", None),
+            Err(ModelError::OverBudget { .. })
+        ));
     }
 
     #[test]
@@ -683,5 +976,15 @@ mod tests {
         let models = GalaxyModels::new(&galaxy, &source);
         check_contract(&models, &ModelRequest::new("hull", Some(8.0)), "nothing");
         check_contract(&models, &ModelRequest::new("hull", None), "nothing");
+        // Textured and unlit, a `.glb` and a `.gltf`.
+        for source in [
+            with_glb_hull(skinned(), &png(2, 2, &SKIN)),
+            with_gltf_hull(skinned(), &png(2, 2, &SKIN)),
+        ] {
+            let (galaxy, _) = load(&source);
+            let models = GalaxyModels::new(&galaxy, &source);
+            check_contract(&models, &ModelRequest::new("hull", Some(8.0)), "nothing");
+            check_contract(&models, &ModelRequest::new("hull", None), "nothing");
+        }
     }
 }

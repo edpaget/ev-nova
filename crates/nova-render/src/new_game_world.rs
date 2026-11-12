@@ -30,7 +30,9 @@
 //! outfits, then stations; planets on their own count). A model or planet
 //! that fails keeps its stand-in, with no key. A failure only this
 //! builder finds is a problem, once: over its budget, no depth, no mesh,
-//! not a model; for a planet, a texture that doesn't read or fails its
+//! not a model, a base-colour image that doesn't decode or is larger than
+//! the renderer draws (the loader decodes no image, so it can't have
+//! reported one); for a planet, a texture that doesn't read or fails its
 //! budget or its shape. A model that doesn't read is not: the loader read
 //! it first and reported it in [`NewGame::problems`]. Nor is a
 //! placeholder, a missing file or a Git LFS pointer: the loader's
@@ -502,6 +504,40 @@ mod tests {
             "{:?}",
             assets.problems
         );
+    }
+
+    #[test]
+    fn a_model_refused_for_its_texture_keeps_its_stand_in_and_is_reported_once() {
+        use crate::model_source::{FakeModels, ImageRef};
+        // Two classes share the light freighter's model.
+        let source = with_a_plain_freighter();
+        let game = load(&source, Path::new("sample"));
+        let refusals = [
+            ModelError::TextureUndecodable {
+                asset: "light-freighter".into(),
+                image: ImageRef::Embedded(0),
+                why: "it is neither a PNG nor a JPEG".into(),
+            },
+            ModelError::TextureTooLarge {
+                asset: "light-freighter".into(),
+                image: ImageRef::File("media/export/skin.png".into()),
+                side: 16_384,
+                most: 8_192,
+            },
+        ];
+        for refusal in refusals {
+            let said = refusal.to_string();
+            let models = FakeModels::default().with_error("light-freighter", refusal);
+            let planets = GalaxyPlanets::new(&game.galaxy, &source).baked_at(SMALL);
+            let assets = world_assets_from(&game, &models, &planets);
+            for name in ["light-freighter", "plain-freighter"] {
+                assert_eq!(assets.models.ship(ship(&game, name)), None, "{name}");
+            }
+            assert_eq!(
+                assets.problems,
+                [format!("{said}; what shows it draws its stand-in")]
+            );
+        }
     }
 
     /// The 3D sample with a ship on each kind of model that doesn't load.
