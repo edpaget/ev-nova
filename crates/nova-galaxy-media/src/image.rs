@@ -5,7 +5,7 @@
 //! base colour names). It checks what the image may cost before it
 //! decodes it, in [`read_texture`](crate::texture::read_texture)'s order:
 //!
-//! 1. which format it is, sniffed from its first bytes ([`format`]), not
+//! 1. which format it is, sniffed from its first bytes ([`format()`]), not
 //!    taken from a MIME type or a file name: a `.gltf` image named by URI
 //!    may give neither;
 //! 2. its size, from its header alone;

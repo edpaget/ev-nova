@@ -5,8 +5,15 @@
 //! scene an asset's files hold ([`read_asset_scene`]).
 //!
 //! Images are read, not decoded: an image's bytes are handed on as the
-//! file holds them. Non-triangle primitives (points, lines, strips) are
-//! skipped, as [`model`](crate::model::model) skips them.
+//! file holds them, and the caller decodes the ones it draws
+//! ([`read_image`](crate::image::read_image)). Non-triangle primitives
+//! (points, lines, strips) are skipped, as
+//! [`model`](crate::model::model) skips them.
+//!
+//! Of a material's textures only the base colour's is read, as the image
+//! it names. A sampler's wrap and filter modes, a `texCoord` set other
+//! than 0, `KHR_texture_transform`, and the metallic-roughness, normal,
+//! occlusion and emissive textures are not.
 
 use gltf::Gltf;
 use gltf::mesh::Mode;

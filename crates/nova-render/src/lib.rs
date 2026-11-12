@@ -28,9 +28,11 @@
 //!   decoded pixels with their mip chain built at load.
 //! - [`model_source`]: the [`ModelSource`] port, the new game's models by
 //!   asset id ([`ModelRequest`]) as [`LoadedModel`]s, placed and scaled
-//!   on the view's model axes, with their materials and textures, or why
-//!   not ([`ModelError`]); its fake and contract check behind the
-//!   `recording` feature.
+//!   on the view's model axes, with their materials and their base-colour
+//!   textures decoded, or why not ([`ModelError`]); what of a material is
+//!   drawn (its base colour and texture, and `unlit`) and what is only
+//!   carried (metallic, roughness); its fake and contract check behind
+//!   the `recording` feature.
 //! - `planets`: the [`Renderer`]'s planets by [`nova_view::PlanetKey`]
 //!   ([`Renderer::add_planet`]), their textures uploaded the first frame
 //!   that draws them ([`Gpu::upload_planet`]), and the [`Batch::Planets`]
@@ -42,8 +44,10 @@
 //!   `recording` feature.
 //! - [`camera`]: the models' orthographic camera, which puts a model where
 //!   a sprite at its centre goes at the 2D view's scale, their depth
-//!   bands, each later model of a batch nearer, and the [`Light`] they are
-//!   shaded by ([`camera::shade`]).
+//!   bands, each later model of a batch nearer, the [`Light`] they are
+//!   shaded by ([`camera::shade`]), and a fragment's whole colour: its
+//!   vertex colour times its texel, lit unless unlit
+//!   ([`camera::fragment`]).
 //! - [`planet`]: the geometry planets ([`nova_view::DrawCommand::Planet`])
 //!   are drawn with, which the planet shader mirrors: the square a planet
 //!   covers, where a fragment meets its globe, rings and atmosphere,
@@ -56,8 +60,9 @@
 //!   mirrors.
 //! - `models`: the [`Renderer`]'s meshes by [`nova_view::ModelKey`]
 //!   ([`Renderer::add_model`]), uploaded the first frame that draws them
-//!   ([`Gpu::upload_mesh`]), and the [`Batch::Models`] a list's models
-//!   become.
+//!   ([`Gpu::upload_mesh`]) after their textures, each once
+//!   ([`Gpu::upload_model_texture`]), and the [`Batch::Models`] a list's
+//!   models become.
 //! - [`streams`]: the movie frames ([`nova_view::DrawCommand::MovieFrame`])
 //!   the [`Renderer`] streams onto pages of their own, numbered down from
 //!   the top so they never take an atlas page's id, and uploads again only
@@ -91,8 +96,9 @@
 //!   a masked picture its alpha) that needs no GPU.
 //! - [`galaxy_models`]: [`ModelSource`] for the new game's data,
 //!   [`GalaxyModels`], a thin adapter over `nova_galaxy_media`'s glTF
-//!   reading, placement and art budgets, read through the format's
-//!   `Source` port; it needs no GPU, and `gltf` is never named here.
+//!   reading, image decoding, placement and art budgets, read through the
+//!   format's `Source` port; it needs no GPU, and `gltf` is never named
+//!   here.
 //! - [`galaxy_planets`]: [`PlanetSource`] for the new game's data,
 //!   [`GalaxyPlanets`], a thin adapter over `nova_galaxy_media`'s planet
 //!   bake and texture reading and its art budgets; it needs no GPU.
@@ -109,9 +115,11 @@
 //! copy of the rectangle the core says it covers, in the pixels of the
 //! canvas it draws into ([`Frame::pixels_covered`]), and a models batch
 //! draws in a pass of its own with a depth attachment, multiplying by the
-//! transforms the core worked out and lighting each fragment as
-//! [`camera::shade`] does, so sprites, placeholders and models mix in one
-//! frame in the list's order. The renderer draws the
+//! transforms the core worked out and colouring each fragment as
+//! [`camera::fragment`] does (the vertex colour times the section's
+//! texel, lit as [`camera::shade`] does unless unlit), so sprites,
+//! placeholders and models mix in one frame in the list's order. The
+//! renderer draws the
 //! world with an upscaler ([`wgpu::Upscale`]): native draws it straight
 //! into the scene in the frame's order, as before there were layers, and
 //! [`wgpu::SharpBilinear`] draws it into a texture of the logical size

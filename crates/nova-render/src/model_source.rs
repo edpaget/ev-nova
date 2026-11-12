@@ -63,8 +63,7 @@
 //! - Something more read from the model: a field of [`Part`],
 //!   [`Material`] or [`Texture`], filled by the adapter
 //!   ([`crate::galaxy_models`]) from the media crate's reading.
-//! - Something more drawn of a part: a field of
-//!   [`Vertex`](crate::model::Vertex) or of a mesh's
+//! - Something more drawn of a part: a field of [`Vertex`] or of a mesh's
 //!   [`Section`], written by [`LoadedModel::mesh`] alone (a part's own
 //!   mesh carries neither texture coordinates nor the unlit flag), its
 //!   effect on a fragment defined by [`crate::camera::fragment`] and
