@@ -44,9 +44,6 @@ nova-sim-story.workspace = true
 nova-sim-port.workspace = true
 
 [dev-dependencies]
-# Synthetic resource forks for the GameData adapter tests under `tests/`.
-nova-data = { workspace = true, features = ["fixture"] }
-nova-rsrc = { workspace = true, features = ["fixture"] }
 # The `Chance` mocks (`Scripted`, `Draws`, `Ranged`) the unit tests draw on.
 nova-sim-base = { workspace = true, features = ["fixture"] }
 # The catalog's record builders and control-bit mocks, which `testkit`
@@ -66,10 +63,6 @@ nova-sim-ai = { workspace = true, features = ["fixture"] }
 # `testkit` re-exports, and the dialog port's fake the conversation tests
 # open.
 nova-sim-story = { workspace = true, features = ["fixture"] }
-# This crate's own `fixture` module, for its integration tests under
-# `tests/`, which build the library without `cfg(test)`: the storyline
-# walker the stock tests drive.
-nova-sim = { workspace = true, features = ["fixture"] }
 
 [features]
 # Exposes the test support in `fixture` (the in-memory pilot store, the

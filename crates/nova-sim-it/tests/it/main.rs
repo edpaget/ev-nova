@@ -1,4 +1,4 @@
-//! nova-sim's integration tests, built as one test binary.
+//! nova-sim's integration tests, built as one test binary in nova-sim-it.
 //!
 //! Each file under `tests/it/` is a module of this binary. Add new
 //! integration tests as a module here, not as a new `tests/*.rs` file:

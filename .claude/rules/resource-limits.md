@@ -37,7 +37,8 @@ Each rung runs only when the one below passes and the work has reached it.
 3. **Before needs-review, once, one at a time**:
    - the full gate, `mise run ci`, once;
    - the stock tests of the crates the change touches, one crate at a time
-     (`NOVA_DATA=... cargo nextest run -p <crate> -E 'test(/stock_/)'`);
+     (`NOVA_DATA=... cargo nextest run -p <crate> -E 'test(/^stock(_|::)/)'`,
+     or every crate's at once with `NOVA_DATA=... mise run stock`);
    - mutants once over the phase's own commits
      (`--in-diff <(git diff <previous commit>...HEAD)`, `.claude/rules/mutants.md`).
    Run these one after another, never alongside each other. Rerun only the

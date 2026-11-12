@@ -9,10 +9,11 @@ local ci = new Mapping<String, Step> {
     }
 }
 
-// Every crate under crates/, each directory named after its package. hk's
-// built-in Pkl evaluator has no `read*`, so a new crate is added here by hand.
-// The `unlisted-crate` step fails the pre-commit hook when a staged file lies
-// under a crates/ directory missing from this list, naming hk.pkl.
+// Every crate under crates/ but the `<x>-it` crates (listed in `tested`
+// below), each directory named after its package. hk's built-in Pkl
+// evaluator has no `read*`, so a new crate is added here by hand. The
+// `unlisted-crate` step fails the pre-commit hook when a staged file lies
+// under a crates/ directory missing from both lists, naming hk.pkl.
 local crates = List(
     "nova",
     "nova-appkit",
@@ -41,13 +42,26 @@ local crates = List(
     "nova-winres",
 )
 
+// The crates whose integration tests live in a sibling `<x>-it` crate
+// (crates/<x>-it), moved out of `<x>` so that `<x>`'s unit-test build
+// doesn't wait on a second, `fixture`-on build of its own library
+// (faster-builds). Each gets an `<x>-it` step below, which a commit to
+// either crate runs. hk's built-in evaluator can't call a string method
+// with arguments, so the list names `<x>` and the step adds `-it`.
+local tested = List(
+    "nova-sim",
+)
+
 // The pre-commit gate: fmt, then clippy and nextest over each crate with
 // staged changes, one `-p` at a time. A single `-p <crate>` keeps one
 // feature-resolved build of each crate warm; a combined `-p a -p b` would
 // build a new variant for every combination. `exclusive` runs the crates
 // one after another rather than contending for the target-dir lock.
 // Dependent crates, the dev-tools legs and doctests are left to the full
-// gate (`hk check`, `mise run ci`), run before review and on landing.
+// gate (`hk check`, `mise run ci`), run before review and on landing. The
+// one exception is an `<x>-it` crate: it holds `<x>`'s own integration
+// tests, not a dependent's, so a commit to `<x>` runs them as it did when
+// they lived in `<x>`. Every other dependent still waits for the full gate.
 local changed = new Mapping<String, Step> {
     ["fmt"] {
         glob = List("**/*.rs")
@@ -61,11 +75,18 @@ local changed = new Mapping<String, Step> {
             exclusive = true
         }
     }
+    for (t in tested) {
+        ["\(t)-it"] {
+            glob = List("crates/\(t)-it/**", "crates/\(t)/**")
+            check = "cargo clippy -p \(t)-it --all-targets --locked -- -D warnings && cargo nextest run -p \(t)-it --locked --no-tests=pass"
+            exclusive = true
+        }
+    }
     // Fails when a staged file sits in a crate this list doesn't name, so a
     // new crate can't silently get fmt only.
     ["unlisted-crate"] {
         glob = List("crates/**")
-        exclude = crates.map((c) -> "crates/\(c)/**")
+        exclude = crates.map((c) -> "crates/\(c)/**") + tested.map((t) -> "crates/\(t)-it/**")
         check = "echo 'error: {{files}} is in a crate missing from the crates list in hk.pkl; add the crate there' >&2; exit 1"
         exclusive = true
     }

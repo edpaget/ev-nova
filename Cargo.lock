@@ -2020,9 +2020,6 @@ dependencies = [
 name = "nova-sim"
 version = "0.1.0"
 dependencies = [
- "nova-data",
- "nova-rsrc",
- "nova-sim",
  "nova-sim-ai",
  "nova-sim-base",
  "nova-sim-catalog",
@@ -2066,6 +2063,19 @@ dependencies = [
  "nova-sim-base",
  "nova-sim-catalog",
  "nova-sim-state",
+]
+
+[[package]]
+name = "nova-sim-it"
+version = "0.1.0"
+dependencies = [
+ "nova-data",
+ "nova-rsrc",
+ "nova-sim",
+ "nova-sim-base",
+ "nova-sim-catalog",
+ "nova-sim-combat",
+ "serde_json",
 ]
 
 [[package]]

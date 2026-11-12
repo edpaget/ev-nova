@@ -59,6 +59,16 @@ run = [
   "cargo test --doc --workspace --locked",
 ]
 
+# The stock-data tests skip, passing, without NOVA_DATA, so neither the hook
+# nor `ci` (which has no data) runs them. This leg runs them on purpose. The
+# `get_env` without a default makes mise refuse the task when NOVA_DATA is
+# unset, and nextest's default `--no-tests=fail` fails a filter that selects
+# nothing, so the leg can't pass by running nothing.
+[tasks.stock]
+description = "The stock-data tests (every crate's stock and stock_* modules) over the Nova Files folder NOVA_DATA names; fails when NOVA_DATA is unset"
+env = { NOVA_DATA = "{{ get_env(name='NOVA_DATA') }}" }
+run = "cargo nextest run --workspace --locked -E 'test(/^stock(_|::)/)'"
+
 # The dev-tools tasks build nova with the `dev-tools` feature (egui) into
 # their own target directories, so the default build in `target/debug` is
 # never rebuilt with egui, and its cache never thrashed, by a parallel task
