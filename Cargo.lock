@@ -2070,6 +2070,7 @@ dependencies = [
 name = "nova-sim-frame"
 version = "0.1.0"
 dependencies = [
+ "nova-data",
  "nova-sim-base",
  "nova-sim-catalog",
  "nova-sim-state",

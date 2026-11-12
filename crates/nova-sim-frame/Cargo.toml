@@ -19,6 +19,9 @@ nova-sim-catalog.workspace = true
 # nova-sim stack: `deny.toml` bans the way up to combat, the ai, the
 # story, the port, the save layer and the session.
 nova-sim-state.workspace = true
+# The game data's ids and control bits the facade re-exports at nova-sim's
+# root names (`BoomId`, `ShipId`, `Bit`, …).
+nova-data.workspace = true
 # The `Error` derive of the mission refusals (`missions::AbortError`,
 # `missions::NotOffered`).
 thiserror.workspace = true
