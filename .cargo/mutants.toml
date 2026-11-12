@@ -726,16 +726,16 @@ exclude_re = [
     # The fold steps only with a direction (`fold.dir == 0` is the other
     # arm), so its tests of `dir > 0` and `dir < 0` read the same as
     # `>= 0` and `<= 0` there.
-    "nova-sim-combat/src/combat/ship_frames\\.rs:429:29: replace > with >= in ShipFrames::fold$",
-    "nova-sim-combat/src/combat/ship_frames\\.rs:432:36: replace < with <= in ShipFrames::fold$",
+    "nova-sim-combat/src/combat/ship_frames\\.rs:274:29: replace > with >= in ShipFrames::fold$",
+    "nova-sim-combat/src/combat/ship_frames\\.rs:277:36: replace < with <= in ShipFrames::fold$",
     # A shield layer of exactly a turn's frames gives the hull's frame mod a
     # turn, its rotation, either way; and one of a single frame gives 0
     # either way.
-    "nova-sim-combat/src/combat/ship_frames\\.rs:(308:37|310:32): replace > with >= in FrameSpec::shield_frame$",
+    "nova-sim-state/src/shown/combat/ship_frames\\.rs:[0-9]+:[0-9]+: replace > with >= in FrameSpec::shield_frame$",
     # A frame-angle entry at exactly 270 points along x, so the up or down
     # compression's y factor changes nothing and the x factor not its
     # angle.
-    "nova-sim-combat/src/combat/ship_frames\\.rs:162:41: replace > with >= in FrameTable::angle$",
+    "nova-sim-state/src/shown/combat/ship_frames\\.rs:[0-9]+:[0-9]+: replace > with >= in FrameTable::angle$",
     # The reverse turn's sign is read only off a turn already beyond the
     # turn rate, never 0.
     "nova-sim-ai/src/traffic/ship_display\\.rs:243:27: replace > with >= in record$",

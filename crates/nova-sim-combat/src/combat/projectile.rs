@@ -121,7 +121,8 @@ use crate::ship_layer::Slot;
 use crate::speed_mult::SpeedMult;
 use crate::trig;
 
-pub use nova_sim_state::shown::combat::projectile::ShotId;
+pub use nova_sim_state::shown::combat::projectile::{SPENT, ShotId};
+pub(super) use nova_sim_state::shown::combat::projectile::{above, whole_frames};
 
 /// A freefall bomb's share of its firer's velocity at launch.
 pub const BOMB_LAUNCH: f32 = 0.8;
@@ -168,21 +169,6 @@ pub const INTERFERENCE_ROLL: u32 = 100;
 /// frames at full gain: the 30.0 @0xdd638 times the frame's gain, tested
 /// "> 30 × g" (@0x35669, @0x35796).
 pub const LOCK_AGE: u32 = 30;
-/// The life a shot is put at on the visit that takes its life to 0 or
-/// below, NaN included (`_HandleShot` @0x356bb-0x356c1).
-pub const SPENT: f32 = -1.0;
-
-/// Whether `value` is above `line`: false for a NaN, as the original's
-/// `ucomiss`/`ucomisd` and `jbe` read it, so its negation holds for one.
-pub(super) fn above<T: PartialOrd + Copy>(value: T, line: T) -> bool {
-    value > line
-}
-
-/// `frames` as a float, as `_SpawnShot` converts a `Count` (@0x3e7fd).
-#[allow(clippy::cast_precision_loss)]
-pub(super) fn whole_frames(frames: u32) -> f32 {
-    frames as f32
-}
 
 /// A ship a shot or beam might hit.
 #[derive(Clone, Copy, Debug, PartialEq)]

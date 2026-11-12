@@ -1,14 +1,19 @@
 //! The fight's vocabulary, from `nova_sim_combat::combat`, which
 //! re-exports each item at its old path: the ids of ships and shots, the
-//! [`CombatEvent`]s a fight raises for the view, and the hull, sprite and
-//! report types of its submodules.
+//! [`CombatEvent`]s a fight raises for the view, and the hull, sprite,
+//! frame, shot and report types of its submodules.
 
+pub mod exits;
 pub mod hull;
 pub mod hull_turn;
 pub mod ion_tint;
 pub mod projectile;
 pub mod report;
+pub mod ship_frames;
+pub mod shot_fade;
+pub mod shot_layer;
 pub mod sprite_load;
+pub mod weapon;
 
 use nova_sim_base::geometry::Vec2;
 use nova_sim_catalog::catalog::{Explosion, ShipId, StellarId, WeaponId};

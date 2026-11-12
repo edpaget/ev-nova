@@ -80,9 +80,9 @@ use crate::rulebook::RuleSource;
 use super::hull_turn::{HullTurn, hull_angle};
 use super::ship_frames::FrameTable;
 
-/// The frames in a turn of a `shän` whose `FramesPer` is 0
-/// (`_LoadExtendedShipSprites` @0x2274c).
-pub const DEFAULT_FRAMES: u16 = 36;
+pub use nova_sim_state::shown::combat::exits::{
+    DEFAULT_FRAMES, compression, drawn_frame, frame_angle,
+};
 
 /// The exits of each kind.
 const EXITS: usize = 4;
@@ -189,22 +189,6 @@ pub struct ExitPoints {
     /// built from these frames and compressions, which picks the frame it
     /// is drawn on.
     angle_table: bool,
-}
-
-/// A `shän`'s up and down compressions, `raw`'s, each its percent over
-/// 100 and any at or below 0 counting as 100
-/// (`_LoadExtendedShipSprites` @0x23d45-0x23e07).
-#[must_use]
-pub fn compression(raw: &ShipExits) -> (Vec2, Vec2) {
-    let factor = |pct: i16| {
-        if pct > 0 {
-            (f64::from(pct) * PERCENT) as f32
-        } else {
-            1.0
-        }
-    };
-    let compress = |(x, y): (i16, i16)| Vec2::new(factor(x), factor(y));
-    (compress(raw.up_compress), compress(raw.down_compress))
 }
 
 impl ExitPoints {
@@ -344,9 +328,6 @@ impl ExitPoints {
     }
 }
 
-/// A percent as a factor (0.01 @0xdd098).
-const PERCENT: f64 = 0.01;
-
 /// The degrees-to-radians factor `_BuildTrigTable` builds its table with
 /// (0.01745329 @0xdd4e0, a little short of pi / 180).
 const TABLE_RADIANS_PER_DEGREE: f64 = 0.017_453_29;
@@ -360,37 +341,6 @@ fn table_trig(angle: f32) -> (f32, f32) {
     let degree = normalized(angle.trunc()).trunc();
     let radians = f64::from((f64::from(degree) * TABLE_RADIANS_PER_DEGREE) as f32);
     (radians.sin() as f32, radians.cos() as f32)
-}
-
-/// The rotation frame a ship facing `heading` is drawn on, of `frames` a
-/// turn: `trunc(heading × frames / 360)`, frame 0 facing up and the frames
-/// turning clockwise (`_HandleShipDisplay` @0x2b7a6-0x2b7d0,
-/// @0x2bbee-0x2bbff); or, for a class of `shän` `Flags` 0x0100 with its
-/// frame-angle `table`, the frame the table picks (@0x2bba2-0x2bbe5,
-/// [`FrameTable::frame`]). The view draws it (nova-view's
-/// `rotation_frame`), and the exit points turn with it, reading it mod
-/// `FramesPer` (`_ModifyShotStartPosition` @0x73c7-0x73d7): it is the
-/// rotation alone, whatever set the ship is drawn on.
-#[must_use]
-pub fn drawn_frame(heading: f32, frames: NonZeroU16, table: Option<&FrameTable>) -> u16 {
-    if let Some(table) = table {
-        return table.frame(heading);
-    }
-    let count = frames.get();
-    let per_degree = f32::from(count) / 360.0;
-    let frame = (normalized(heading) * per_degree).trunc() as u16;
-    // Just short of a full turn can round up to `count`: frame 0 again.
-    frame % count
-}
-
-/// The angle, in whole degrees, at which a ship's exit points stand on
-/// rotation `frame` of `frames` a turn: `trunc(frame × (360 / frames))` in
-/// doubles (@0x739e-0x73f5, `_HandleBeams` @0x303bb-0x3042e).
-#[must_use]
-pub fn frame_angle(frame: u16, frames: NonZeroU16) -> f32 {
-    let count = frames.get();
-    let step = 360.0 / f64::from(count);
-    (f64::from(frame % count) * step).trunc() as f32
 }
 
 /// A ship's cursor for each `ExitType` (+0xc8fe-+0xc905): the exit its
@@ -575,18 +525,6 @@ mod tests {
     }
 
     #[test]
-    fn the_drawn_frame_truncates_the_heading() {
-        let at = |heading| drawn_frame(heading, frames(36), None);
-        assert_eq!(
-            [at(0.0), at(9.9), at(10.0), at(15.0), at(359.9)],
-            [0, 0, 1, 1, 35]
-        );
-        assert_eq!(drawn_frame(-10.0, frames(36), None), 35, "wrapped");
-        assert_eq!(drawn_frame(370.0, frames(36), None), 1, "wrapped");
-        assert_eq!(drawn_frame(5.7, frames(64), None), 1);
-    }
-
-    #[test]
     fn a_frame_angle_table_picks_the_drawn_frame_and_the_exits_turn_with_it() {
         // Squashed vertically below the horizon: frame 3 shows nearer 90
         // than 135, so a heading of 125 is past it.
@@ -618,15 +556,6 @@ mod tests {
             125.0,
             "continuously the heading itself, table or not"
         );
-    }
-
-    #[test]
-    fn a_frames_angle_is_a_whole_degree() {
-        assert_eq!(frame_angle(0, frames(36)), 0.0);
-        assert_eq!(frame_angle(9, frames(36)), 90.0);
-        assert_eq!(frame_angle(1, frames(64)), 5.0, "5.625, truncated");
-        assert_eq!(frame_angle(3, frames(64)), 16.0, "16.875, truncated");
-        assert_eq!(frame_angle(1, frames(48)), 7.0, "7.5, truncated");
     }
 
     #[test]

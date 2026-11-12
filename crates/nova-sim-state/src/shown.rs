@@ -8,8 +8,22 @@
 //! above: here are only the types, their own methods and the pure rules
 //! they are read by.
 //!
+//! - [`bay`]: what became of the player's fighters, from
+//!   `nova_sim_combat::bay`.
+//! - [`cloak`]: how a cloak lets a ship be shown, and the area a view
+//!   shows, from `nova_sim_combat::cloak`.
 //! - [`combat`]: the fight's ids, refs and events, a hull's
-//!   [`Condition`](combat::hull::Condition), and the sprite and report
-//!   types the flight frame draws by, from `nova_sim_combat::combat`.
+//!   [`Condition`](combat::hull::Condition), a class's display
+//!   ([`FrameSpec`](combat::ship_frames::FrameSpec)), a shot's layer and
+//!   fade, and the sprite and report types the flight frame draws by,
+//!   from `nova_sim_combat::combat`.
+//! - [`ship_layer`]: the layer a ship is drawn in, from
+//!   `nova_sim_combat::ship_layer`.
+//! - [`sprite_layer`]: the order the flight world's layers are drawn in,
+//!   from `nova_sim_combat::sprite_layer`.
 
+pub mod bay;
+pub mod cloak;
 pub mod combat;
+pub mod ship_layer;
+pub mod sprite_layer;
