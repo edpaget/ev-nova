@@ -543,19 +543,12 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
                 || rect.min.y >= music.max.y;
             assert!(apart, "{name}: {}", toggle.label());
         }
-        assert_eq!(
-            prefs.inert().len(),
-            0,
+        assert!(
+            prefs.inert().is_empty(),
             "{name}: no box is greyed: QuickTime Movies, Smoke Trails, Weapon Effects, \
              Ship Animations, Engine Glows, Running Lights and Parallax Starfield work, \
              Run in a window is the display picker, Share Processor Time the Scaling \
              list and Check For Updates the render-scale list"
-        );
-        assert!(
-            prefs.inert().iter().all(|toggle| {
-                toggle.label() != "Run in a window" && toggle.label() != "Share Processor Time"
-            }),
-            "{name}"
         );
         // The display picker fills "Run in a window"'s row, clear of every
         // other part, inside the dialog.
