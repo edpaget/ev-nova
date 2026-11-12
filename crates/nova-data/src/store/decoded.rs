@@ -24,7 +24,8 @@ use crate::registry::AnyRecord;
 
 impl GameData {
     /// The store of `records`, decoded elsewhere and all read from `dir`,
-    /// with no stand-ins ([`GameData::with_stand_ins`] adds them).
+    /// with no stand-ins ([`GameData::with_stand_ins`] adds them) or built
+    /// icons ([`GameData::with_built_icons`] adds those).
     ///
     /// Each record's type is its [`AnyRecord::res_type`]. A later record
     /// with the same type and ID replaces an earlier one. The store has one
@@ -73,6 +74,7 @@ impl GameData {
             muzzle_reaches: BTreeMap::new(),
             sound_files: None,
             soundtrack: None,
+            built_icons: BTreeMap::new(),
         }
     }
 

@@ -211,6 +211,7 @@ use crate::error::{DecodeError, DecodeWarning};
 use crate::expr::{ParseError, SetExpr, TestExpr};
 use crate::registry::{AnyDecoded, AnyRecord, Registered, decode_any};
 
+mod built_icons;
 mod collision_radii;
 mod decoded;
 mod dialogs;
@@ -444,6 +445,9 @@ pub struct GameData {
     /// ([`GameData::with_soundtrack`]); none in a stock store, whose
     /// music is the loose `Nova Music.mp3` ([`crate::music`]).
     soundtrack: Option<Arc<[u8]>>,
+    /// The icons a new game builds, by the `cïcn` ID each stands for
+    /// ([`GameData::with_built_icons`]); none in a stock store.
+    built_icons: BTreeMap<i16, crate::graphics::Image>,
 }
 
 /// A test expression parsed once and shared: its tree, or why it did not
@@ -506,6 +510,7 @@ impl GameData {
             muzzle_reaches: BTreeMap::new(),
             sound_files: None,
             soundtrack: None,
+            built_icons: BTreeMap::new(),
         })
     }
 
