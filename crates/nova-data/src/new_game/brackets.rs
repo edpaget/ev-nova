@@ -42,15 +42,18 @@ pub struct BracketSet {
 
 /// The six sets in `cïcn` order from [`FIRST`]: the nav target, a
 /// dominated stellar, then a targeted ship that is hostile, neutral, an
-/// escort or disabled. Their colours are placeholders.
+/// escort or disabled. Their colours are placeholders, each the hue the
+/// stock art's set is drawn in where it has one: blue round the nav
+/// target, green round a dominated stellar, red round a hostile ship and
+/// yellow round a neutral one.
 pub const SETS: [BracketSet; 6] = [
     BracketSet {
         meaning: "nav target",
-        rgb: [224, 224, 224],
+        rgb: [64, 160, 255],
     },
     BracketSet {
         meaning: "dominated stellar",
-        rgb: [128, 255, 128],
+        rgb: [96, 255, 64],
     },
     BracketSet {
         meaning: "hostile ship",
