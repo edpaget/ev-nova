@@ -148,6 +148,11 @@ pub struct ModelInstance {
     /// that instance's depth band ([`crate::camera::band`]). The core
     /// reads it when it settles the bands; the adapter needn't.
     pub shares_band: bool,
+    /// How opaque it draws, above 0 to 1: its fragments' alpha times this
+    /// ([`crate::camera::faded`]). A part takes its model's. The core
+    /// settles which runs of a batch draw faded
+    /// ([`crate::models::draw_runs`]); the adapter draws them as told.
+    pub alpha: f32,
 }
 
 /// Which planet's textures a [`PlanetInstance`] draws with: numbered by
@@ -904,6 +909,7 @@ mod tests {
             clip_from_model: [[0.0; 4]; 4],
             normal_from_model: [[0.0; 3]; 3],
             shares_band: false,
+            alpha: 1.0,
         };
         let planet = PlanetInstance {
             planet: PlanetId(0),

@@ -38,7 +38,9 @@
 //!
 //! [`fragment`] is the whole of what a model's fragment shows: its vertex
 //! colour times its texture's texel, lit unless its material is unlit.
-//! `models.wgsl` mirrors it.
+//! A model drawn faded ([`ModelInstance::alpha`], the command's alpha as
+//! [`alpha`] takes it) shows [`faded`] of it: its alpha times the model's,
+//! blended straight over what is beneath. `models.wgsl` mirrors both.
 
 use nova_view::{ModelPose, Mounting};
 
@@ -217,7 +219,27 @@ fn placed(
         clip_from_model: [0, 1, 2, 3].map(|col| rows.map(|row| row[col])),
         normal_from_model: [0, 1, 2].map(|col| r.map(|row| row[col])),
         shares_band,
+        alpha: 1.0,
     })
+}
+
+/// The alpha a model drawn at `alpha` ([`nova_view::DrawCommand::Model`])
+/// draws at: `alpha` held to 1, or `None`, drawing nothing, when it isn't
+/// finite or is 0 or less.
+#[must_use]
+pub fn alpha(alpha: f32) -> Option<f32> {
+    (alpha.is_finite() && alpha > 0.0).then(|| alpha.min(1.0))
+}
+
+/// A fragment of a model drawn at `alpha` (its [`ModelInstance::alpha`]):
+/// `fragment`, as [`fragment`] gives it, with its alpha times `alpha` and
+/// its colour as it is, blended straight over what is beneath. The
+/// adapter draws only the model's nearest surface so (see the `models`
+/// module), so nothing of the model shows through itself.
+#[must_use]
+pub fn faded(fragment: [f32; 4], alpha: f32) -> [f32; 4] {
+    let [red, green, blue, own] = fragment;
+    [red, green, blue, own * alpha]
 }
 
 /// Gives each of `models`, one batch's in draw order, its band of the
@@ -314,6 +336,39 @@ mod tests {
 
     fn made(logical: LogicalSize, pose: &ModelPose) -> ModelInstance {
         instance(logical, pose, MESH, 1.0).expect("drawable")
+    }
+
+    #[test]
+    fn an_instance_and_a_part_draw_whole_until_faded() {
+        let pose = pose(12.0, 6.0, Orientation::IDENTITY, 5.0);
+        assert_eq!(made(LOGICAL, &pose).alpha, 1.0);
+        let still = Mounting {
+            at: [0.0; 3],
+            turn: 0.0,
+        };
+        let part = part(LOGICAL, &pose, &still, MESH, 1.0).expect("drawable");
+        assert_eq!(part.alpha, 1.0);
+    }
+
+    #[test]
+    fn a_drawable_alpha_is_finite_and_above_0_and_held_to_1() {
+        for drawn in [0.25, 1.0, f32::MIN_POSITIVE] {
+            assert_eq!(alpha(drawn), Some(drawn), "{drawn}");
+        }
+        assert_eq!(alpha(1.5), Some(1.0));
+        assert_eq!(alpha(f32::MAX), Some(1.0));
+        for refused in [0.0, -0.0, -0.5, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(alpha(refused), None, "{refused}");
+        }
+    }
+
+    #[test]
+    fn a_faded_fragment_keeps_its_colour_and_multiplies_its_alpha() {
+        assert_eq!(
+            faded([0.5, 0.25, 1.0, 0.8], 0.5),
+            [0.5, 0.25, 1.0, 0.8 * 0.5]
+        );
+        assert_eq!(faded([0.5, 0.25, 1.0, 0.8], 1.0), [0.5, 0.25, 1.0, 0.8]);
     }
 
     #[test]

@@ -27,6 +27,7 @@ use crate::gpu::{
 };
 use crate::model::{Mesh, MeshId};
 use crate::model_texture::ModelTexture;
+use crate::models::{ModelRun, draw_runs};
 use crate::upscale::{Abilities, Upscaler, WorldResolution, offered};
 use crate::viewport::PixelRect;
 
@@ -94,10 +95,12 @@ enum Draw {
     Text {
         renderer: usize,
     },
-    /// Models: the instances, and the mesh of each, in order.
+    /// Models: the instances, the mesh of each, in order, and the runs the
+    /// core settled for them ([`draw_runs`]), by their place in the batch.
     Models {
         instances: Range<u32>,
         meshes: Vec<MeshId>,
+        runs: Vec<ModelRun>,
     },
     /// Planets: the instances, and the textures of each, in order.
     Planets {
@@ -695,10 +698,13 @@ impl WgpuRenderer {
                         pass,
                     );
                 }
-                Draw::Models { instances, meshes } => {
+                Draw::Models {
+                    instances,
+                    meshes,
+                    runs,
+                } => {
                     set_viewport(pass, content);
-                    self.models
-                        .encode(pass, model_buffer, instances.clone(), meshes);
+                    (self.models).encode(pass, model_buffer, (instances.start, meshes), runs);
                 }
                 Draw::Planets { instances, planets } => {
                     set_viewport(pass, content);
@@ -1229,6 +1235,7 @@ impl<'a> Layout<'a> {
                 Draw::Models {
                     instances: start..self.models.len() as u32,
                     meshes: models.iter().map(|model| model.mesh).collect(),
+                    runs: draw_runs(models),
                 }
             }
             Batch::Planets { light, planets } => {
@@ -2394,6 +2401,7 @@ mod tests {
             clip_from_model: [[f; 4]; 4],
             normal_from_model: [[f; 3]; 3],
             shares_band: false,
+            alpha: 1.0,
         }
     }
 
@@ -2439,6 +2447,7 @@ mod tests {
             Draw::Models {
                 instances: 0..2,
                 meshes: vec![MeshId(3), MeshId(5)],
+                runs: draw_runs(&[model(3), model(5)]),
             }
         );
         assert_eq!(
@@ -2446,6 +2455,7 @@ mod tests {
             Draw::Models {
                 instances: 2..3,
                 meshes: vec![MeshId(7)],
+                runs: draw_runs(&[model(7)]),
             }
         );
         let data: Vec<ModelData> = [3, 5, 7]
@@ -2453,6 +2463,29 @@ mod tests {
             .to_vec();
         assert_eq!(layout.models, data);
         assert_eq!(layout.instances, [SpriteInstance::from(&quad(1.0))]);
+    }
+
+    #[test]
+    fn a_models_draw_carries_the_runs_the_core_settles_for_its_batch() {
+        let faded = ModelInstance {
+            alpha: 0.5,
+            ..model(4)
+        };
+        let batch = vec![model(3), faded, model(5)];
+        let frame = frame_of(vec![
+            models(&[1]),
+            sprites(Blend::Normal, vec![quad(1.0)]),
+            Batch::Models {
+                light: Light::STANDARD,
+                models: batch.clone(),
+            },
+        ]);
+        let layout = lay_out(&frame);
+        let Draw::Models { runs, .. } = &layout.draws[2] else {
+            panic!("{:?}", layout.draws);
+        };
+        assert_eq!(*runs, draw_runs(&batch));
+        assert!(runs.iter().any(|run| run.faded));
     }
 
     #[test]
@@ -2510,6 +2543,7 @@ mod tests {
             [&Draw::Models {
                 instances: 0..1,
                 meshes: vec![MeshId(2)],
+                runs: draw_runs(&[model(2)]),
             }]
         );
         assert_eq!(depths(&layout, &layout.passes), [false]);

@@ -1,7 +1,9 @@
 // 3D models: each vertex through its instance's clip_from_model, each
 // fragment as `nova_render::camera::fragment` defines: the vertex colour
 // times the section's texel, lit as `nova_render::camera::shade` defines
-// from the interpolated normal on the view's axes, unless it is unlit.
+// from the interpolated normal on the view's axes, unless it is unlit;
+// then, as `nova_render::camera::faded` defines, its alpha times the
+// instance's.
 
 // The section's base-colour texture, or one opaque white texel for a
 // section with none.
@@ -9,7 +11,9 @@
 @group(0) @binding(1) var base_sampler: sampler;
 
 struct ModelOut {
-    @builtin(position) position: vec4<f32>,
+    // Invariant, so a faded model's colour pass lands on exactly the depths
+    // its depth pass wrote, through another pipeline.
+    @builtin(position) @invariant position: vec4<f32>,
     @location(0) normal: vec3<f32>,
     @location(1) color: vec4<f32>,
     // The batch's light: toward it, then the ambient.
@@ -18,6 +22,8 @@ struct ModelOut {
     // 1 when the vertex is unlit, 0 when it is lit: the same for every
     // vertex of a triangle.
     @location(4) @interpolate(flat) unlit: f32,
+    // The instance's alpha.
+    @location(5) @interpolate(flat) alpha: f32,
 };
 
 @vertex
@@ -35,6 +41,7 @@ fn model_vs(
     @location(10) n1: vec4<f32>,
     @location(11) n2: vec4<f32>,
     @location(12) light: vec4<f32>,
+    @location(13) alpha: f32,
 ) -> ModelOut {
     let clip_from_model = mat4x4<f32>(c0, c1, c2, c3);
     let normal_from_model = mat3x3<f32>(n0.xyz, n1.xyz, n2.xyz);
@@ -45,6 +52,7 @@ fn model_vs(
     out.light = light;
     out.uv = uv;
     out.unlit = unlit;
+    out.alpha = alpha;
     return out;
 }
 
@@ -55,12 +63,13 @@ fn unit(v: vec3<f32>) -> vec3<f32> {
 }
 
 // The colour times the texel, all four channels; then, unless unlit, its
-// red, green and blue times `ambient + (1 − ambient) · max(0, n · l)`.
+// red, green and blue times `ambient + (1 − ambient) · max(0, n · l)`; and
+// its alpha times the instance's.
 @fragment
 fn model_fs(in: ModelOut) -> @location(0) vec4<f32> {
     let base = in.color * textureSample(base_color, base_sampler, in.uv);
     let facing = max(dot(unit(in.normal), unit(in.light.xyz)), 0.0);
     let lit = in.light.w + (1.0 - in.light.w) * facing;
     let shown = select(lit, 1.0, in.unlit > 0.5);
-    return vec4<f32>(base.rgb * shown, base.a);
+    return vec4<f32>(base.rgb * shown, base.a * in.alpha);
 }

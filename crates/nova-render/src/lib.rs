@@ -47,7 +47,8 @@
 //!   bands, each later model of a batch nearer, the [`Light`] they are
 //!   shaded by ([`camera::shade`]), and a fragment's whole colour: its
 //!   vertex colour times its texel, lit unless unlit
-//!   ([`camera::fragment`]).
+//!   ([`camera::fragment`]), its alpha times a faded model's
+//!   ([`camera::faded`]).
 //! - [`planet`]: the geometry planets ([`nova_view::DrawCommand::Planet`])
 //!   are drawn with, which the planet shader mirrors: the square a planet
 //!   covers, where a fragment meets its globe, rings and atmosphere,
@@ -63,8 +64,9 @@
 //! - `models`: the [`Renderer`]'s meshes by [`nova_view::ModelKey`]
 //!   ([`Renderer::add_model`]), uploaded the first frame that draws them
 //!   ([`Gpu::upload_mesh`]) after their textures, each once
-//!   ([`Gpu::upload_model_texture`]), and the [`Batch::Models`] a list's
-//!   models become.
+//!   ([`Gpu::upload_model_texture`]), the [`Batch::Models`] a list's
+//!   models become, and the runs the adapter draws them in: a faded
+//!   model's depth first, then its colour.
 //! - [`streams`]: the movie frames ([`nova_view::DrawCommand::MovieFrame`])
 //!   the [`Renderer`] streams onto pages of their own, numbered down from
 //!   the top so they never take an atlas page's id, and uploads again only

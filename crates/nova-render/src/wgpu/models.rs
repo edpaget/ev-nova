@@ -6,12 +6,23 @@
 //! triangles take which texture from the mesh's sections
 //! ([`crate::model::Section`]).
 //!
-//! The pipeline draws into [`SCENE_FORMAT`] with a [`DEPTH_FORMAT`]
-//! attachment, compares `Less` and writes depth, culls nothing (the depth
-//! test hides a model's far faces) and blends as a normal sprite does.
-//! `models.wgsl` mirrors [`crate::camera::fragment`]: the vertex colour
-//! times the texel, lit by [`crate::camera::shade`]'s formula unless the
-//! vertex is unlit.
+//! The pipelines draw into [`SCENE_FORMAT`] with a [`DEPTH_FORMAT`]
+//! attachment, cull nothing (the depth test hides a model's far faces)
+//! and blend as a normal sprite does. Each draws a run the core settled
+//! ([`crate::models::draw_runs`]):
+//!
+//! - an opaque run, in one pass that compares `Less` and writes depth;
+//! - a faded run (one model below an alpha of 1 and its parts), first in
+//!   depth alone (no colour written, `Less`, depth written), then in
+//!   colour where its depth is the nearest written (`LessEqual`, no depth
+//!   written), so only its nearest surface shows, at its alpha. Both
+//!   passes run the one vertex shader, whose clip position is
+//!   `@invariant`, so the colour pass's depths equal the depth pass's.
+//!
+//! `models.wgsl` mirrors [`crate::camera::fragment`] and
+//! [`crate::camera::faded`]: the vertex colour times the texel, lit by
+//! [`crate::camera::shade`]'s formula unless the vertex is unlit, its
+//! alpha times the instance's.
 //!
 //! Each texture is one bind group, a texture with its mip chain and the
 //! one sampler (repeating, trilinear), made when the texture is uploaded.
@@ -33,6 +44,7 @@ use crate::camera::Light;
 use crate::gpu::{ModelInstance, ModelTextureId, PlanetImage};
 use crate::model::{Mesh, MeshId, Vertex};
 use crate::model_texture::ModelTexture;
+use crate::models::ModelRun;
 
 /// The depth attachment's format.
 pub(super) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -66,8 +78,8 @@ impl From<&Vertex> for MeshVertex {
 }
 
 /// One model as the model shader reads it, per instance: its transforms
-/// by columns (the normal's padded to four floats a column) and its
-/// batch's light, the direction then the ambient.
+/// by columns (the normal's padded to four floats a column), its batch's
+/// light, the direction then the ambient, and its alpha.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub(super) struct ModelData {
@@ -77,6 +89,8 @@ pub(super) struct ModelData {
     pub normal: [[f32; 4]; 3],
     /// The light's direction and its ambient.
     pub light: [f32; 4],
+    /// The alpha it draws at ([`ModelInstance::alpha`]).
+    pub alpha: f32,
 }
 
 impl ModelData {
@@ -87,8 +101,21 @@ impl ModelData {
             clip: model.clip_from_model,
             normal: model.normal_from_model.map(|[a, b, c]| [a, b, c, 0.0]),
             light: [x, y, z, light.ambient],
+            alpha: model.alpha,
         }
     }
+}
+
+/// How a pipeline draws a model's fragments.
+#[derive(Clone, Copy)]
+enum Drawing {
+    /// In colour and depth at once, compared `Less`: an opaque run.
+    Whole,
+    /// In depth alone, compared `Less`: a faded run's first pass.
+    DepthOnly,
+    /// In colour alone, where its depth equals the nearest written
+    /// (`LessEqual`): a faded run's second pass.
+    Faded,
 }
 
 /// One draw of a mesh: a run of its indices, and the texture it samples,
@@ -117,9 +144,13 @@ struct GpuMesh {
     draws: Vec<SectionDraw>,
 }
 
-/// The model pipeline, the meshes it draws and the textures they sample.
+/// The model pipelines, the meshes they draw and the textures they sample.
 pub(super) struct Models {
     pipeline: wgpu::RenderPipeline,
+    /// A faded run's depth pass.
+    depth_only: wgpu::RenderPipeline,
+    /// A faded run's colour pass.
+    faded: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     /// What a section with no texture samples: one opaque white texel.
@@ -155,7 +186,9 @@ impl Models {
             std::slice::from_ref(&white),
         );
         Self {
-            pipeline: pipeline(device, &layout),
+            pipeline: pipeline(device, &layout, Drawing::Whole),
+            depth_only: pipeline(device, &layout, Drawing::DepthOnly),
+            faded: pipeline(device, &layout, Drawing::Faded),
             layout,
             sampler,
             white,
@@ -211,21 +244,39 @@ impl Models {
         );
     }
 
-    /// Encodes the models `instances` of `buffer`, mesh `meshes[i]` for
-    /// the i-th, into `pass`: one indexed draw for each of the mesh's
-    /// sections, its texture bound, or the white one for a section with
-    /// none (or with one the GPU doesn't hold). A mesh the GPU doesn't
-    /// hold is skipped.
+    /// Encodes a batch's models into `pass`, the i-th its instance
+    /// `first + i` of `buffer` and its mesh `meshes[i]`, run by run as the core
+    /// settled `runs`: an opaque run drawn whole, a faded run in depth
+    /// alone and then in colour, each through [`Models::encode_run`].
     pub(super) fn encode(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         buffer: &wgpu::Buffer,
-        instances: Range<u32>,
-        meshes: &[MeshId],
+        (first, meshes): (u32, &[MeshId]),
+        runs: &[ModelRun],
     ) {
-        pass.set_pipeline(&self.pipeline);
         pass.set_vertex_buffer(1, buffer.slice(..));
-        for (instance, mesh) in instances.zip(meshes) {
+        for run in runs {
+            let Some(meshes) = meshes.get(run.instances.clone()) else {
+                continue;
+            };
+            let start = first + u32::try_from(run.instances.start).unwrap_or(u32::MAX);
+            let (faded, whole) = ([&self.depth_only, &self.faded], [&self.pipeline]);
+            let passes: &[&wgpu::RenderPipeline] = if run.faded { &faded } else { &whole };
+            for pipeline in passes {
+                pass.set_pipeline(pipeline);
+                self.encode_run(pass, start, meshes);
+            }
+        }
+    }
+
+    /// Encodes the models of instances `start` on, mesh `meshes[i]` for
+    /// the i-th, into `pass` through its pipeline: one indexed draw for
+    /// each of the mesh's sections, its texture bound, or the white one
+    /// for a section with none (or with one the GPU doesn't hold). A mesh
+    /// the GPU doesn't hold is skipped.
+    fn encode_run(&self, pass: &mut wgpu::RenderPass<'_>, start: u32, meshes: &[MeshId]) {
+        for (instance, mesh) in (start..).zip(meshes) {
             let Some(mesh) = self.meshes.get(mesh) else {
                 continue;
             };
@@ -314,10 +365,14 @@ pub(super) fn depth_view(device: &wgpu::Device, size: (u32, u32)) -> wgpu::Textu
         .create_view(&wgpu::TextureViewDescriptor::default())
 }
 
-/// The model pipeline: mesh vertices in slot 0, [`ModelData`] per
-/// instance in slot 1, and a section's texture (`texture`'s layout) as
-/// group 0.
-fn pipeline(device: &wgpu::Device, texture: &wgpu::BindGroupLayout) -> wgpu::RenderPipeline {
+/// A model pipeline drawing as `drawing` says: mesh vertices in slot 0,
+/// [`ModelData`] per instance in slot 1, and a section's texture
+/// (`texture`'s layout) as group 0.
+fn pipeline(
+    device: &wgpu::Device,
+    texture: &wgpu::BindGroupLayout,
+    drawing: Drawing,
+) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::include_wgsl!("models.wgsl"));
     let layout = pipeline_layout(device, "nova models", &[texture]);
     let vertex = wgpu::vertex_attr_array![
@@ -326,7 +381,21 @@ fn pipeline(device: &wgpu::Device, texture: &wgpu::BindGroupLayout) -> wgpu::Ren
     let instance = wgpu::vertex_attr_array![
         5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4,
         9 => Float32x4, 10 => Float32x4, 11 => Float32x4, 12 => Float32x4,
+        13 => Float32,
     ];
+    let (depth_write, depth_compare, write_mask) = match drawing {
+        Drawing::Whole => (true, wgpu::CompareFunction::Less, wgpu::ColorWrites::ALL),
+        Drawing::DepthOnly => (
+            true,
+            wgpu::CompareFunction::Less,
+            wgpu::ColorWrites::empty(),
+        ),
+        Drawing::Faded => (
+            false,
+            wgpu::CompareFunction::LessEqual,
+            wgpu::ColorWrites::ALL,
+        ),
+    };
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("nova models"),
         layout: Some(&layout),
@@ -351,8 +420,8 @@ fn pipeline(device: &wgpu::Device, texture: &wgpu::BindGroupLayout) -> wgpu::Ren
         primitive: wgpu::PrimitiveState::default(),
         depth_stencil: Some(wgpu::DepthStencilState {
             format: DEPTH_FORMAT,
-            depth_write_enabled: Some(true),
-            depth_compare: Some(wgpu::CompareFunction::Less),
+            depth_write_enabled: Some(depth_write),
+            depth_compare: Some(depth_compare),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
@@ -364,7 +433,7 @@ fn pipeline(device: &wgpu::Device, texture: &wgpu::BindGroupLayout) -> wgpu::Ren
             targets: &[Some(wgpu::ColorTargetState {
                 format: SCENE_FORMAT,
                 blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                write_mask: wgpu::ColorWrites::ALL,
+                write_mask,
             })],
         }),
         multiview_mask: None,
@@ -440,7 +509,7 @@ mod tests {
     }
 
     #[test]
-    fn a_model_becomes_its_columns_then_its_light() {
+    fn a_model_becomes_its_columns_then_its_light_then_its_alpha() {
         let model = ModelInstance {
             mesh: MeshId(2),
             clip_from_model: [
@@ -451,6 +520,7 @@ mod tests {
             ],
             normal_from_model: [[17.0, 18.0, 19.0], [20.0, 21.0, 22.0], [23.0, 24.0, 25.0]],
             shares_band: false,
+            alpha: 0.375,
         };
         let light = Light {
             direction: [26.0, 27.0, 28.0],
@@ -462,6 +532,7 @@ mod tests {
             .map(|n| n as f32)
             .chain([17.0, 18.0, 19.0, 0.0, 20.0, 21.0, 22.0, 0.0])
             .chain([23.0, 24.0, 25.0, 0.0, 26.0, 27.0, 28.0, 0.5])
+            .chain([0.375])
             .collect();
         assert_eq!(floats, expected.as_slice());
     }

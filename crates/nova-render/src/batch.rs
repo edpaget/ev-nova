@@ -501,10 +501,12 @@ impl<S: ImageSource> Renderer<S> {
             }
             // Drawn uncut by a clip, as a line or a triangle is.
             DrawCommand::Model {
-                model, ref pose, ..
+                model,
+                ref pose,
+                alpha,
             } => {
                 let missing = &mut report.missing_models;
-                (self.models).draw_model(model, pose, logical, batches, gpu, missing);
+                (self.models).draw_model(model, (pose, alpha), logical, batches, gpu, missing);
             }
             // Drawn uncut by a clip, as a model is.
             DrawCommand::Planet { planet, ref pose } => {

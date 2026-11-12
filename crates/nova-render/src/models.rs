@@ -26,8 +26,18 @@
 //! band. Any other command ([`Models::end_group`]), a model that draws
 //! nothing, a new layer's run or a new frame, each starting with no
 //! batch, leaves the next part nothing to mount on.
+//!
+//! A model drawn at an alpha ([`nova_view::DrawCommand::Model`]) carries
+//! it on its instance, held as [`camera::alpha`] holds it, and its parts
+//! take the same; one at an alpha that draws nothing draws nothing, its
+//! parts with it. How the adapter draws a batch's instances is settled
+//! here too ([`draw_runs`]): each faded model with its parts a run of its
+//! own, drawn depth first so only its nearest surface shows, and the
+//! opaque models between them in runs drawn as before. Bands and the
+//! batch's order are unchanged by it.
 
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 
 use nova_view::{ModelKey, ModelPose, Mounting};
 
@@ -71,18 +81,21 @@ struct Group {
     /// Where its model's instance is in the last batch, its parts' after
     /// it.
     start: usize,
+    /// The alpha the model and its parts draw at.
+    alpha: f32,
 }
 
 impl Models {
-    /// Draws model `key` at `pose` onto `batches` in the `logical` space:
-    /// its instance, uploaded first through `gpu` if need be, and a key
-    /// with no mesh pushed onto `missing` once. It is the model the
-    /// parts drawn next mount on, or, drawing nothing, leaves them
-    /// nothing to mount on.
+    /// Draws model `key` at `pose` and `alpha` onto `batches` in the
+    /// `logical` space: its instance, uploaded first through `gpu` if need
+    /// be, and a key with no mesh pushed onto `missing` once. It is the
+    /// model the parts drawn next mount on, at its alpha, or, drawing
+    /// nothing (an alpha [`camera::alpha`] refuses among the rest), leaves
+    /// them nothing to mount on.
     pub(crate) fn draw_model(
         &mut self,
         key: ModelKey,
-        pose: &ModelPose,
+        (pose, alpha): (&ModelPose, f32),
         logical: LogicalSize,
         batches: &mut Vec<Batch>,
         gpu: &mut impl Gpu,
@@ -92,16 +105,20 @@ impl Models {
         let Some((mesh, radius)) = self.resident(key, gpu, missing) else {
             return;
         };
+        let Some(alpha) = camera::alpha(alpha) else {
+            return;
+        };
         let Some(instance) = camera::instance(logical, pose, mesh, radius) else {
             return;
         };
-        push(batches, instance);
+        push(batches, ModelInstance { alpha, ..instance });
         if let Some(Batch::Models { models, .. }) = batches.last() {
             self.group = Some(Group {
                 pose: *pose,
                 hull: (mesh, radius),
                 parts: Vec::new(),
                 start: models.len() - 1,
+                alpha,
             });
         }
     }
@@ -140,8 +157,9 @@ impl Models {
         let Some(placed) = placed else {
             return;
         };
+        let alpha = group.alpha;
         models.truncate(group.start);
-        models.extend(placed);
+        models.extend(placed.into_iter().map(|at| ModelInstance { alpha, ..at }));
         group.parts.push((mesh, radius, *mounting));
     }
 
@@ -212,6 +230,40 @@ pub(crate) fn push(batches: &mut Vec<Batch>, model: ModelInstance) {
             models: vec![model],
         });
     }
+}
+
+/// A run of a models batch's instances the adapter draws in one go
+/// ([`draw_runs`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ModelRun {
+    /// The instances, by their place in the batch.
+    pub(crate) instances: Range<usize>,
+    /// Whether they are one faded model and its parts: drawn first into
+    /// depth alone and then in colour where their depth is nearest, so
+    /// only their nearest surface shows, at their alpha. An opaque run is
+    /// drawn as every model always was, in colour and depth at once.
+    pub(crate) faded: bool,
+}
+
+/// How the adapter draws `models`, one settled batch's instances: each
+/// model drawn below an alpha of 1 with its parts after it
+/// ([`ModelInstance::shares_band`]) a faded run of its own, and every
+/// stretch of opaque models between them one opaque run. Each faded
+/// model takes its own run, so its depth pass hides none of an earlier
+/// faded model's colour.
+pub(crate) fn draw_runs(models: &[ModelInstance]) -> Vec<ModelRun> {
+    let mut runs: Vec<ModelRun> = Vec::new();
+    for (at, model) in models.iter().enumerate() {
+        let faded = model.alpha < 1.0;
+        match runs.last_mut() {
+            Some(run) if model.shares_band || (!faded && !run.faded) => run.instances.end = at + 1,
+            _ => runs.push(ModelRun {
+                instances: at..at + 1,
+                faded,
+            }),
+        }
+    }
+    runs
 }
 
 /// Gives each models batch of `batches`, a frame's settled batches, its
@@ -1011,6 +1063,87 @@ mod tests {
         let mut part = DrawList::new();
         part.mounted(PART, on([0.0; 3], 0.0));
         assert_eq!(frame_of(&mut renderer, &part, &mut gpu).batches, []);
+    }
+
+    /// `instances` each at `alpha`.
+    fn at_alpha(instances: Vec<ModelInstance>, alpha: f32) -> Vec<ModelInstance> {
+        (instances.into_iter())
+            .map(|instance| ModelInstance { alpha, ..instance })
+            .collect()
+    }
+
+    #[test]
+    fn a_faded_model_and_its_parts_carry_its_alpha() {
+        let part = on([0.0, 0.0, 0.5], 0.0);
+        let mut list = DrawList::new();
+        list.faded_model(CUBE, pose(12.0, 12.0), 0.5)
+            .mounted(PART, part)
+            .model(CUBE, pose(30.0, 20.0));
+        let frame = frame_of(&mut with_part(), &list, &mut RecordingGpu::new());
+        let mut expected = at_alpha(group(&pose(12.0, 12.0), &[part]), 0.5);
+        expected.push(instance(&pose(30.0, 20.0)));
+        assert_eq!(models_of(&frame), banded(expected));
+    }
+
+    #[test]
+    fn a_model_faded_to_nothing_or_no_number_draws_nothing_nor_its_parts() {
+        let part = on([0.0, 0.0, 0.5], 0.0);
+        let mut list = DrawList::new();
+        for alpha in [0.0, -0.5, f32::NAN, f32::INFINITY] {
+            list.faded_model(CUBE, pose(12.0, 12.0), alpha)
+                .mounted(PART, part);
+        }
+        assert_eq!(batches(with_part(), &list), []);
+    }
+
+    #[test]
+    fn a_model_faded_past_1_draws_whole() {
+        let mut over = DrawList::new();
+        over.faded_model(CUBE, pose(12.0, 12.0), 1.5);
+        let mut whole = DrawList::new();
+        whole.model(CUBE, pose(12.0, 12.0));
+        assert_eq!(batches(renderer(), &over), batches(renderer(), &whole));
+    }
+
+    fn run(instances: std::ops::Range<usize>, faded: bool) -> ModelRun {
+        ModelRun { instances, faded }
+    }
+
+    #[test]
+    fn a_faded_hull_and_its_parts_draw_in_a_run_of_their_own_between_opaque_runs() {
+        let part = on([0.0, 0.0, 0.5], 0.0);
+        let mut list = DrawList::new();
+        list.model(CUBE, pose(12.0, 12.0))
+            .faded_model(CUBE, pose(20.0, 12.0), 0.5)
+            .mounted(PART, part)
+            .model(CUBE, pose(30.0, 20.0))
+            .mounted(PART, part)
+            .model(CUBE, pose(40.0, 20.0));
+        let frame = frame_of(&mut with_part(), &list, &mut RecordingGpu::new());
+        assert_eq!(
+            draw_runs(&models_of(&frame)),
+            [run(0..1, false), run(1..3, true), run(3..6, false)]
+        );
+    }
+
+    #[test]
+    fn each_faded_hull_takes_its_own_run_and_opaque_models_one_together() {
+        let mut list = DrawList::new();
+        list.faded_model(CUBE, pose(12.0, 12.0), 0.5)
+            .faded_model(CUBE, pose(20.0, 12.0), 0.25);
+        let frame = frame_of(&mut renderer(), &list, &mut RecordingGpu::new());
+        assert_eq!(
+            draw_runs(&models_of(&frame)),
+            [run(0..1, true), run(1..2, true)]
+        );
+        let mut opaque = DrawList::new();
+        opaque
+            .model(CUBE, pose(12.0, 12.0))
+            .model(CUBE, pose(20.0, 12.0))
+            .model(CUBE, pose(30.0, 12.0));
+        let frame = frame_of(&mut renderer(), &opaque, &mut RecordingGpu::new());
+        assert_eq!(draw_runs(&models_of(&frame)), [run(0..3, false)]);
+        assert_eq!(draw_runs(&[]), []);
     }
 
     #[test]
