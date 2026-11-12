@@ -593,6 +593,8 @@ mod tests {
     };
     use super::super::*;
     use super::*;
+    use nova_sim_catalog::catalog::MissionId;
+
     use nova_sim_ai::escort::EscortOrder;
     use nova_sim_base::reserves::{Gauge, Reserves};
     use nova_sim_catalog::catalog::{
@@ -602,6 +604,9 @@ mod tests {
     use nova_sim_combat::fleet::OrderWord;
     use nova_sim_state::date::GameDate;
     use nova_sim_state::market::Good;
+    use nova_sim_story::mission::aux_ships::AuxShips;
+    use nova_sim_story::mission::{ActiveMissions, ShipSystem, SpecialShips};
+    use nova_sim_story::pilot::Gender;
     use nova_sim_story::pilot::{Escort, ExploredLevel};
     use nova_sim_story::story::{Consumer, Countdown, GalaxyOverlay};
 
