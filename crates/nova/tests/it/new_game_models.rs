@@ -9,7 +9,9 @@
 //! frame draws its class's hull, the traffic's included; and a pilot
 //! carrying the gun mount draws its turret on its hull, facing the nose
 //! until its first turret shot and then as the view's `mounted_outfits`
-//! turns it for the frame's turret facing. Flown under the stock ruleset's
+//! turns it for the frame's turret facing. A class the data gives a
+//! `translucency` draws its hulls at the view's `model_alpha` of it, and
+//! every other model whole. Flown under the stock ruleset's
 //! readings over the same data, the player's hull, the station hub and
 //! the planet still draw as their models: the data picks a model, not a
 //! rulebook key.
@@ -36,9 +38,11 @@ use nova_data::GameData;
 use nova_data::new_game::{self, NewGame};
 use nova_render::recording::GpuCall;
 use nova_render::{WorldAssets, world_assets};
+use nova_sim::cloak::CloakShown;
 use nova_sim::fixture::{MemoryPilots, place, put_player_at};
-use nova_sim::flight_frame::FlightFrame;
+use nova_sim::flight_frame::{FlightFrame, GateFade};
 use nova_sim::{OutfitId, SetExpr, ShipId, StellarId, TargetPick, Vec2};
+use nova_view::flight::model_fade::model_alpha;
 use nova_view::flight::{StellarModel, mounted_outfits};
 use nova_view::{DrawCommand, DrawLayer, DrawList, Key, ModelKey, Screen};
 
@@ -482,6 +486,98 @@ fn every_ship_in_the_frame_draws_its_class_s_model() {
     want.sort_unstable();
     assert!(want.len() > 1, "keyed traffic: {want:?}");
     assert_eq!(drawn, want, "one hull each, its class's");
+}
+
+/// The 3D sample with the light freighter, the player's start, given a
+/// `translucency` of `n`, edited into its front matter here.
+fn translucent_sample(n: u8) -> (NewGame, WorldAssets) {
+    let file = Path::new("ships").join("light-freighter.md");
+    let text = std::fs::read_to_string(new_game::fixture::sample_folder().join(&file))
+        .expect("the sample's freighter");
+    let edited = text.replacen("---\n", &format!("---\ntranslucency: {n}\n"), 1);
+    assert_ne!(edited, text);
+    let source = new_game::fixture::modelled_sample_3d().with("ships/light-freighter.md", &edited);
+    let game = new_game::load(&source, Path::new("sample"));
+    let assets = world_assets(&game, &source);
+    assert_eq!(assets.problems, Vec::<String>::new());
+    (game, assets)
+}
+
+/// Each model the world layer draws, with its alpha, once the app flying
+/// `game` with `assets` has filled its system with traffic, each ship on
+/// screen.
+fn drawn_alphas(game: NewGame, data: &GameData, assets: &WorldAssets) -> Vec<(ModelKey, f32)> {
+    let pilots = MemoryPilots::new();
+    let mut harness = flying(game, assets, &pilots);
+    harness
+        .app
+        .screen_mut()
+        .flight_view_mut()
+        .expect("flying")
+        .change_sim(|sim| {
+            let session = sim.session_mut().expect("a session");
+            for seed in 0..200 {
+                if !session.npcs().is_empty() {
+                    break;
+                }
+                session.populate(data, &mut SplitMix::new(seed));
+            }
+            put_player_at(session, Vec2::ZERO);
+            let ids: Vec<_> = session.npcs().iter().map(|npc| npc.id).collect();
+            for (i, id) in ids.into_iter().enumerate() {
+                #[allow(clippy::cast_precision_loss)]
+                let x = 60.0 * i as f32 - 120.0;
+                place(session, id, Vec2::new(x, -120.0));
+            }
+        });
+    draw(&mut harness);
+    world(&harness)
+        .iter()
+        .filter_map(|command| match command {
+            DrawCommand::Model { model, alpha, .. } => Some((*model, *alpha)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_translucent_class_draws_its_hulls_at_its_base_alpha_and_the_rest_whole() {
+    let (game, assets) = translucent_sample(10);
+    let freighter = ShipId(nova_id(&game.ids.ships, "light-freighter"));
+    let faint = assets.models.ship(freighter).expect("a model").key;
+    assert_eq!(
+        assets.models.ship(freighter).map(|model| model.base_transp),
+        Some(10)
+    );
+    // The same data again, to fill the system from.
+    let data = translucent_sample(10).0.data;
+    let alphas = drawn_alphas(game, &data, &assets);
+    let want = model_alpha(CloakShown::Opaque, None, GateFade::None, 10).expect("seen");
+    assert!(want < 1.0);
+    let hulls = alphas.iter().filter(|(model, _)| *model == faint).count();
+    assert!(hulls > 1, "the player's and the traffic's: {alphas:?}");
+    assert!(
+        alphas.iter().any(|&(model, _)| model != faint),
+        "{alphas:?}"
+    );
+    for &(model, alpha) in &alphas {
+        let expected = if model == faint { want } else { 1.0 };
+        assert!(
+            (alpha - expected).abs() < f32::EPSILON,
+            "{model:?}: {alpha} in {alphas:?}"
+        );
+    }
+    // The sample as it is draws every model whole.
+    let (plain, assets) = sample();
+    let data = sample().0.data;
+    let alphas = drawn_alphas(plain, &data, &assets);
+    assert!(alphas.iter().any(|&(model, _)| model == faint));
+    assert!(
+        alphas
+            .iter()
+            .all(|&(_, alpha)| (alpha - 1.0).abs() < f32::EPSILON),
+        "{alphas:?}"
+    );
 }
 
 /// Presses (`held`) or lets go of the fire key.
