@@ -327,11 +327,22 @@ pub enum DrawCommand {
     /// orientation is zero or not finite, whose mesh has no triangles, or
     /// whose key has no mesh draws nothing; the renderer reports a key
     /// with no mesh once.
+    ///
+    /// It draws at `alpha`: 1 opaque ([`DrawList::model`]), less faded
+    /// ([`DrawList::faded_model`]), a cloaking or gating ship's. A faded
+    /// model shows only its nearest surface over what is beneath it, as an
+    /// opaque model would composited at `alpha`; its own back faces and
+    /// its parts inside it never show through it. The parts mounted on it
+    /// ([`DrawCommand::Mounted`]) fade with it at the same alpha. An alpha
+    /// that isn't finite or is 0 or less draws nothing, its parts with it;
+    /// one above 1 draws as 1.
     Model {
         /// Which model.
         model: ModelKey,
         /// Where it goes, how it is turned and how big it is.
         pose: ModelPose,
+        /// How opaque it draws, 0 to 1 (straight alpha), its parts with it.
+        alpha: f32,
     },
     /// A planet: the globe registered under `planet`, with its clouds,
     /// rings and atmosphere, centred at `pose`'s centre at its radius and
@@ -395,6 +406,18 @@ pub enum DrawCommand {
 }
 
 impl DrawCommand {
+    /// A [`DrawCommand::Model`]: `model` drawn whole (alpha 1) at `pose`.
+    #[must_use]
+    pub fn model(model: ModelKey, pose: ModelPose) -> Self {
+        Self::faded_model(model, pose, 1.0)
+    }
+
+    /// A [`DrawCommand::Model`]: `model` drawn at `pose` at `alpha`.
+    #[must_use]
+    pub fn faded_model(model: ModelKey, pose: ModelPose, alpha: f32) -> Self {
+        Self::Model { model, pose, alpha }
+    }
+
     /// The command moved by `by` ([`DrawList::extend_translated`]).
     #[must_use]
     pub fn translated(&self, by: Point) -> Self {
@@ -857,9 +880,15 @@ impl DrawList {
         self.push(DrawCommand::Triangle { corners, color })
     }
 
-    /// Appends a [`DrawCommand::Model`]: `model` drawn at `pose`.
+    /// Appends a [`DrawCommand::Model`]: `model` drawn whole at `pose`.
     pub fn model(&mut self, model: ModelKey, pose: ModelPose) -> &mut Self {
-        self.push(DrawCommand::Model { model, pose })
+        self.push(DrawCommand::model(model, pose))
+    }
+
+    /// Appends a [`DrawCommand::Model`]: `model` drawn at `pose`, faded to
+    /// `alpha`, the parts mounted after it with it.
+    pub fn faded_model(&mut self, model: ModelKey, pose: ModelPose, alpha: f32) -> &mut Self {
+        self.push(DrawCommand::faded_model(model, pose, alpha))
     }
 
     /// Appends a [`DrawCommand::Planet`]: `planet` drawn at `pose`.
@@ -1117,21 +1146,21 @@ mod tests {
 
     /// Model 7 at (`x`, `y`), turned a little about z, at scale 3.
     fn model_at(x: f32, y: f32) -> DrawCommand {
-        DrawCommand::Model {
-            model: ModelKey(7),
-            pose: ModelPose {
+        DrawCommand::model(
+            ModelKey(7),
+            ModelPose {
                 center: at(x, y),
                 orientation: Orientation::about([0.0, 0.0, 1.0], 0.5),
                 scale: 3.0,
             },
-        }
+        )
     }
 
     #[test]
     fn a_model_pushed_alone_is_overlay() {
         let mut list = DrawList::new();
         let model_at_origin = model_at(1.0, 2.0);
-        let DrawCommand::Model { model, pose } = model_at_origin.clone() else {
+        let DrawCommand::Model { model, pose, .. } = model_at_origin.clone() else {
             unreachable!()
         };
         list.model(model, pose);
@@ -1144,7 +1173,7 @@ mod tests {
     #[test]
     fn a_model_inside_world_is_world() {
         let mut list = DrawList::new();
-        let DrawCommand::Model { model, pose } = model_at(1.0, 2.0) else {
+        let DrawCommand::Model { model, pose, .. } = model_at(1.0, 2.0) else {
             unreachable!()
         };
         list.world(|list| {
@@ -1230,6 +1259,67 @@ mod tests {
         );
     }
 
+    /// The pose [`model_at`] draws at (`x`, `y`).
+    fn pose_at(x: f32, y: f32) -> ModelPose {
+        let DrawCommand::Model { pose, .. } = model_at(x, y) else {
+            unreachable!()
+        };
+        pose
+    }
+
+    #[test]
+    fn model_pushes_a_model_drawn_whole() {
+        let mut list = DrawList::new();
+        list.model(ModelKey(7), pose_at(1.0, 2.0));
+        assert_eq!(
+            list.iter().collect::<Vec<_>>(),
+            [&DrawCommand::Model {
+                model: ModelKey(7),
+                pose: pose_at(1.0, 2.0),
+                alpha: 1.0,
+            }]
+        );
+    }
+
+    #[test]
+    fn faded_model_pushes_a_model_at_its_alpha() {
+        let mut list = DrawList::new();
+        list.faded_model(ModelKey(7), pose_at(1.0, 2.0), 0.375);
+        assert_eq!(
+            list.iter().collect::<Vec<_>>(),
+            [&DrawCommand::faded_model(
+                ModelKey(7),
+                pose_at(1.0, 2.0),
+                0.375
+            )]
+        );
+        assert_eq!(
+            DrawCommand::faded_model(ModelKey(7), pose_at(1.0, 2.0), 0.375),
+            DrawCommand::Model {
+                model: ModelKey(7),
+                pose: pose_at(1.0, 2.0),
+                alpha: 0.375,
+            }
+        );
+    }
+
+    #[test]
+    fn the_model_constructor_draws_whole() {
+        assert_eq!(
+            DrawCommand::model(ModelKey(7), pose_at(1.0, 2.0)),
+            DrawCommand::faded_model(ModelKey(7), pose_at(1.0, 2.0), 1.0)
+        );
+    }
+
+    #[test]
+    fn a_translated_faded_model_keeps_its_alpha() {
+        assert_eq!(
+            DrawCommand::faded_model(ModelKey(7), pose_at(1.0, 2.0), 0.25)
+                .translated(at(10.0, -4.0)),
+            DrawCommand::faded_model(ModelKey(7), pose_at(11.0, -2.0), 0.25)
+        );
+    }
+
     fn mounting() -> Mounting {
         Mounting {
             at: [0.5, -1.0, 2.0],
@@ -1240,7 +1330,7 @@ mod tests {
     #[test]
     fn mounted_pushes_a_part_on_the_model_before_it() {
         let mut list = DrawList::new();
-        let DrawCommand::Model { model, pose } = model_at(1.0, 2.0) else {
+        let DrawCommand::Model { model, pose, .. } = model_at(1.0, 2.0) else {
             unreachable!()
         };
         list.model(model, pose).mounted(ModelKey(8), mounting());

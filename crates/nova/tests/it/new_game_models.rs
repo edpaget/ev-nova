@@ -308,7 +308,7 @@ fn player_as_mounted(
         .iter()
         .rev()
         .find_map(|command| match command {
-            DrawCommand::Model { model, pose } if *model == hull => Some(*pose),
+            DrawCommand::Model { model, pose, .. } if *model == hull => Some(*pose),
             _ => None,
         })
         .expect("the player's hull");

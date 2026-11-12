@@ -137,14 +137,14 @@ fn a_station_with_a_model_draws_it_unturned_at_its_stand_ins_centre_and_reach() 
     let view = view_of(table());
     let list = commands(&world_list(&view));
     let centre = stand_in_centre(&view, STATION);
-    let model = DrawCommand::Model {
-        model: HUB,
-        pose: ModelPose {
+    let model = DrawCommand::model(
+        HUB,
+        ModelPose {
             center: centre,
             orientation: Orientation::IDENTITY,
             scale: UNKNOWN_STELLAR_RADIUS / REACH,
         },
-    };
+    );
     assert_eq!(list.iter().filter(|c| **c == model).count(), 1, "{list:?}");
     let outline = stand_in_at(&StellarStandIn::Outline(hub_from_above()), centre);
     assert!(
@@ -191,14 +191,14 @@ fn a_station_whose_model_reaches_a_little_draws_it_scaled_up() {
     let reach = 1e-30;
     let view = view_of(reaching(reach));
     let list = commands(&world_list(&view));
-    let model = DrawCommand::Model {
-        model: HUB,
-        pose: ModelPose {
+    let model = DrawCommand::model(
+        HUB,
+        ModelPose {
             center: stand_in_centre(&view, STATION),
             orientation: Orientation::IDENTITY,
             scale: UNKNOWN_STELLAR_RADIUS / reach,
         },
-    };
+    );
     assert_eq!(list.iter().filter(|c| **c == model).count(), 1, "{list:?}");
 }
 

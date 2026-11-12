@@ -541,13 +541,7 @@ mod tests {
             max: Point::new(13.0, 13.0),
         };
         let mut clipped = DrawList::new();
-        clipped.clipped(
-            clip,
-            DrawCommand::Model {
-                model: CUBE,
-                pose: pose(12.0, 12.0),
-            },
-        );
+        clipped.clipped(clip, DrawCommand::model(CUBE, pose(12.0, 12.0)));
         let mut plain = DrawList::new();
         plain.model(CUBE, pose(12.0, 12.0));
         let a = frame_of(&mut renderer(), &clipped, &mut RecordingGpu::new());
@@ -971,13 +965,7 @@ mod tests {
         let part = on([0.3, 0.0, 0.5], 0.4);
         let mut clipped = DrawList::new();
         clipped
-            .clipped(
-                clip,
-                DrawCommand::Model {
-                    model: CUBE,
-                    pose: pose(12.0, 12.0),
-                },
-            )
+            .clipped(clip, DrawCommand::model(CUBE, pose(12.0, 12.0)))
             .clipped(
                 clip,
                 DrawCommand::Mounted {

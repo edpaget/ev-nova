@@ -250,7 +250,9 @@ fn player_orientation(view: &Faked) -> crate::model::Orientation {
     models(&list)
         .iter()
         .find_map(|c| match c {
-            DrawCommand::Model { model, pose } if *model == PLAYER_HULL => Some(pose.orientation),
+            DrawCommand::Model { model, pose, .. } if *model == PLAYER_HULL => {
+                Some(pose.orientation)
+            }
             _ => None,
         })
         .expect("the player's hull")

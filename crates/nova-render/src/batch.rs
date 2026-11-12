@@ -500,7 +500,9 @@ impl<S: ImageSource> Renderer<S> {
                 }
             }
             // Drawn uncut by a clip, as a line or a triangle is.
-            DrawCommand::Model { model, ref pose } => {
+            DrawCommand::Model {
+                model, ref pose, ..
+            } => {
                 let missing = &mut report.missing_models;
                 (self.models).draw_model(model, pose, logical, batches, gpu, missing);
             }

@@ -268,14 +268,14 @@ mod tests {
 
     #[test]
     fn a_model_clipped_to_the_map_area_is_wrapped_in_a_clip() {
-        let model = DrawCommand::Model {
-            model: crate::ModelKey(3),
-            pose: crate::ModelPose {
+        let model = DrawCommand::model(
+            crate::ModelKey(3),
+            crate::ModelPose {
                 center: at(225.0, 140.0),
                 orientation: crate::Orientation::IDENTITY,
                 scale: 20.0,
             },
-        };
+        );
         let drawn = clipped(|map| {
             map.push(model.clone());
         });
@@ -329,14 +329,14 @@ mod tests {
 
     #[test]
     fn a_part_clipped_to_the_map_area_is_wrapped_in_a_clip_as_its_model_is() {
-        let model = DrawCommand::Model {
-            model: crate::ModelKey(3),
-            pose: crate::ModelPose {
+        let model = DrawCommand::model(
+            crate::ModelKey(3),
+            crate::ModelPose {
                 center: at(225.0, 140.0),
                 orientation: crate::Orientation::IDENTITY,
                 scale: 20.0,
             },
-        };
+        );
         let part = DrawCommand::Mounted {
             model: crate::ModelKey(4),
             mounting: crate::Mounting {
