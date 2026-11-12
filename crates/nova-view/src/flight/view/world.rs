@@ -270,7 +270,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 let starfield = (&self.stars, &self.looks);
                 stars::draw(list, starfield, source, camera, self.alpha);
             }
-            None => sky::draw(list, self.drawn(), camera, self.sky_shift),
+            None => sky::draw(list, self.drawn(), self.previous, camera, self.sky_shift),
         }
         if self.message().is_some() {
             let background = message_background(self.drawn().system_background);

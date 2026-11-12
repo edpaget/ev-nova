@@ -181,7 +181,19 @@ fn a_murky_systems_sky_is_dimmed_and_a_negative_murks_is_not_drawn() {
 /// Runs a step of `view` from the ship at `from` to `to`, `wrap` run at
 /// its head, and shows its end.
 fn flown(view: &mut Faked, from: Vec2, to: Vec2, wrap: Option<PlayerWrap>) {
-    let mut moved = view.frame.clone();
+    let shown = view.frame.clone();
+    flown_showing(view, shown, from, to, wrap);
+}
+
+/// [`flown`], the flight then showing `shown` with the ship at `to`.
+fn flown_showing(
+    view: &mut Faked,
+    shown: FlightFrame,
+    from: Vec2,
+    to: Vec2,
+    wrap: Option<PlayerWrap>,
+) {
+    let mut moved = shown;
     moved.ships[0].position = to;
     view.sim.set_frame(moved);
     let run = StepRun {
@@ -233,4 +245,110 @@ fn a_carried_wrap_leaves_the_skys_eye_moving_by_the_ships_step() {
             && (after.y - (before.y + MOVE.y)).abs() < 1e-3,
         "{before:?} to {after:?}: the ship's step, not the wrap's"
     );
+}
+
+/// `view`'s frame with its jump under way, `warping` or still braking
+/// and turning for it.
+fn jumping(view: &Faked, warping: bool) -> FlightFrame {
+    FlightFrame {
+        jump_under_way: true,
+        warping,
+        ..view.frame.clone()
+    }
+}
+
+/// The rush on the sky `view`'s world draws.
+fn rush(view: &Faked) -> Point {
+    the_sky(view).rush
+}
+
+const STILL: Point = Point::new(0.0, 0.0);
+
+#[test]
+fn flying_out_of_a_jump_the_sky_does_not_rush() {
+    let draws = Rc::new(Cell::new(0));
+    let start = Vec2::new(100.0, 200.0);
+    let mut view = faked(&layered(), start, 0, &draws);
+    caught_up(&mut view);
+    assert_eq!(rush(&view), STILL);
+    flown(&mut view, start, Vec2::new(130.0, 180.0), None);
+    assert_eq!(rush(&view), STILL, "moving, but not warping");
+}
+
+#[test]
+fn braking_and_turning_for_a_jump_the_sky_does_not_rush() {
+    let draws = Rc::new(Cell::new(0));
+    let start = Vec2::new(100.0, 200.0);
+    let mut view = faked(&layered(), start, 0, &draws);
+    caught_up(&mut view);
+    let braking = jumping(&view, false);
+    flown_showing(&mut view, braking, start, Vec2::new(104.0, 198.0), None);
+    assert!(view.frame.jump_under_way && !view.frame.warping);
+    assert_eq!(rush(&view), STILL);
+}
+
+#[test]
+fn warping_the_sky_rushes_by_the_ships_move_over_the_step() {
+    let draws = Rc::new(Cell::new(0));
+    let start = Vec2::new(100.0, 200.0);
+    let mut view = faked(&layered(), start, 0, &draws);
+    caught_up(&mut view);
+    let warp = jumping(&view, true);
+    let next = Vec2::new(125.0, 190.0);
+    flown_showing(&mut view, warp.clone(), start, next, None);
+    assert_eq!(rush(&view), Point::new(25.0, -10.0));
+    // Part way between the steps, the rush is still the whole step's.
+    view.alpha = 0.5;
+    assert_eq!(rush(&view), Point::new(25.0, -10.0));
+    let last = Vec2::new(165.0, 174.0);
+    flown_showing(&mut view, warp, next, last, None);
+    assert_eq!(rush(&view), Point::new(40.0, -16.0));
+}
+
+#[test]
+fn a_wrap_in_the_warp_leaves_the_rush_at_the_ships_own_move() {
+    let draws = Rc::new(Cell::new(0));
+    let mut view = faked(&layered(), STOOD, 0, &draws);
+    caught_up(&mut view);
+    let warp = jumping(&view, true);
+    flown_showing(&mut view, warp, STOOD, STOOD + SHIFT + MOVE, Some(wrap()));
+    let rush = rush(&view);
+    assert!(
+        (rush.x - MOVE.x).abs() < 1e-3 && (rush.y - MOVE.y).abs() < 1e-3,
+        "{rush:?}: the ship's step, not the wrap's"
+    );
+}
+
+#[test]
+fn once_arrived_the_sky_no_longer_rushes() {
+    let draws = Rc::new(Cell::new(0));
+    let start = Vec2::new(100.0, 200.0);
+    let mut view = faked(&layered(), start, 0, &draws);
+    caught_up(&mut view);
+    let warp = jumping(&view, true);
+    let next = Vec2::new(150.0, 200.0);
+    flown_showing(&mut view, warp, start, next, None);
+    assert_ne!(rush(&view), STILL);
+    let arrived = FlightFrame {
+        system: nova_sim::SystemId(131),
+        jump_under_way: false,
+        warping: false,
+        ..view.frame.clone()
+    };
+    flown_showing(&mut view, arrived, next, Vec2::new(152.0, 200.0), None);
+    assert!(!view.frame.warping);
+    assert_eq!(rush(&view), STILL);
+}
+
+#[test]
+fn by_the_engines_reading_a_warp_draws_no_sky_and_steps_the_stars() {
+    let draws = Rc::new(Cell::new(0));
+    let start = Vec2::new(100.0, 200.0);
+    let mut view = faked(&Rulebook::default(), start, 0, &draws);
+    caught_up(&mut view);
+    let before = view.stars.stars();
+    let warp = jumping(&view, true);
+    flown_showing(&mut view, warp, start, Vec2::new(150.0, 180.0), None);
+    assert!(skies(&view).is_empty());
+    assert_ne!(view.stars.stars(), before, "the stars stepped");
 }
