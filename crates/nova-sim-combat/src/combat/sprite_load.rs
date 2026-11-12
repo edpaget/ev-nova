@@ -52,24 +52,7 @@
 use super::armament::Fold;
 use super::ship_frames::{FrameSpec, ShipFrames};
 
-/// What of each ship's sprites loads (see the module docs). The default
-/// loads everything, as the original's preferences are registered.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SpriteLoad {
-    /// The `ShipAnimations` preference: a class's sets all load.
-    pub ship_animations: bool,
-    /// The `RunningLights` preference: a class's lights sprite loads.
-    pub running_lights: bool,
-}
-
-impl Default for SpriteLoad {
-    fn default() -> Self {
-        Self {
-            ship_animations: true,
-            running_lights: true,
-        }
-    }
-}
+pub use nova_sim_state::shown::combat::sprite_load::SpriteLoad;
 
 impl FrameSpec {
     /// This class's display as `load` loads its sprites (see the module

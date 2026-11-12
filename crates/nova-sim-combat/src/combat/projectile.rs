@@ -121,6 +121,8 @@ use crate::ship_layer::Slot;
 use crate::speed_mult::SpeedMult;
 use crate::trig;
 
+pub use nova_sim_state::shown::combat::projectile::ShotId;
+
 /// A freefall bomb's share of its firer's velocity at launch.
 pub const BOMB_LAUNCH: f32 = 0.8;
 /// The share of its velocity a rocket keeps each tick.
@@ -546,10 +548,6 @@ pub(super) fn nearest_contact<T>(
         .min_by(|(a, _), (b, _)| a.total_cmp(b))
         .map(|(t, item)| (item, from + (to - from) * t))
 }
-
-/// A shot's number in its fight, never reused.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ShotId(pub u32);
 
 /// What launched a shot, as `_ShotCanHitShip` reads its source slot
 /// (+0x2c).

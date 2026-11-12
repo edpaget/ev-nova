@@ -24,29 +24,11 @@
 use std::num::NonZeroU16;
 
 use crate::flight::normalized;
-use crate::rulebook::RuleSource;
 
 use super::exits::{drawn_frame, frame_angle};
 use super::ship_frames::FrameTable;
 
-/// How a ship's hull turns with its heading (see the module docs).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum HullTurn {
-    /// The original's: by the frame its sprite is drawn on.
-    #[default]
-    ByFrame,
-    /// The new game's: with the heading itself.
-    Continuous,
-}
-
-impl From<RuleSource> for HullTurn {
-    fn from(source: RuleSource) -> Self {
-        match source {
-            RuleSource::Engine => Self::ByFrame,
-            RuleSource::Bible => Self::Continuous,
-        }
-    }
-}
+pub use nova_sim_state::shown::combat::hull_turn::HullTurn;
 
 /// The angle, in degrees clockwise from up, at which the hull of a ship
 /// facing `heading`, of `frames` a turn and its frame-angle `table` if it
@@ -114,12 +96,5 @@ mod tests {
         assert_eq!(at(-10.0), 350.0);
         assert_eq!(at(370.0), 10.0);
         assert_eq!(at(97.3), 97.3);
-    }
-
-    #[test]
-    fn the_engine_reads_by_frame_and_the_other_reading_continuously() {
-        assert_eq!(HullTurn::from(RuleSource::Engine), HullTurn::ByFrame);
-        assert_eq!(HullTurn::from(RuleSource::Bible), HullTurn::Continuous);
-        assert_eq!(HullTurn::default(), HullTurn::ByFrame);
     }
 }

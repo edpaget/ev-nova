@@ -57,6 +57,10 @@
 //!   its `shïp`'s fields and the outfits it carries: the one place its
 //!   handling, reserve capacities, fuel, shield and armour regeneration
 //!   and cargo space come from.
+//! - [`shown`]: the view vocabulary the layers above build, moved down
+//!   from combat, the ai, the story and the port so that the view's own
+//!   crate can sit below them: the types and their own methods, each
+//!   re-exported at its old path by the module it came from.
 //! - [`trade_dialog`]: what the exchange's dialog shows beside its
 //!   prices: the header's hold or fleet, each row's price marker and the
 //!   cargo summary, in `STR#` 2002's words.
@@ -85,5 +89,6 @@ pub mod landing;
 pub mod legal;
 pub mod market;
 pub mod outfit_effects;
+pub mod shown;
 pub mod stats;
 pub mod trade_dialog;
