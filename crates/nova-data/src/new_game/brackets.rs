@@ -194,6 +194,51 @@ pub(crate) mod tests {
         assert_squares_with_ink(&corners());
     }
 
+    /// Whether `image`'s pixel at (`x`, `y`) is inked, for every pixel.
+    fn ink(image: &Image) -> Vec<Vec<bool>> {
+        (0..SIDE)
+            .map(|y| (0..SIDE).map(|x| alpha(image, x, y) > 0).collect())
+            .collect()
+    }
+
+    /// Each set's top-right, bottom-right and bottom-left corners are its
+    /// top-left mirrored, and the top-left's L is two arms `ARM` long and
+    /// `THICKNESS` thick, sharing the square at the vertex.
+    #[test]
+    fn each_corner_is_the_top_left_mirrored() {
+        let icons = corners();
+        let far = SIDE - 1;
+        let mirrored = |image: &Image, flip_x: bool, flip_y: bool| -> Vec<Vec<bool>> {
+            (0..SIDE)
+                .map(|y| {
+                    (0..SIDE)
+                        .map(|x| {
+                            let x = if flip_x { far - x } else { x };
+                            let y = if flip_y { far - y } else { y };
+                            alpha(image, x, y) > 0
+                        })
+                        .collect()
+                })
+                .collect()
+        };
+        for first in ids().step_by(4) {
+            let top_left = &icons[&first];
+            let inked = ink(top_left).concat().iter().filter(|&&i| i).count();
+            assert_eq!(
+                inked as u32,
+                2 * ARM * THICKNESS - THICKNESS * THICKNESS,
+                "{first}: two arms"
+            );
+            assert!(
+                alpha(top_left, ARM - 1, THICKNESS - 1) > 0,
+                "{first}: arm's end"
+            );
+            assert_eq!(ink(&icons[&(first + 1)]), mirrored(top_left, true, false));
+            assert_eq!(ink(&icons[&(first + 2)]), mirrored(top_left, true, true));
+            assert_eq!(ink(&icons[&(first + 3)]), mirrored(top_left, false, true));
+        }
+    }
+
     #[test]
     fn each_corner_is_an_l_at_its_outer_corner() {
         let icons = corners();
