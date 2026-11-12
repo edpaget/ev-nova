@@ -442,6 +442,61 @@ fn a_seen_full_fade_npc_and_a_cloaked_player_draw_their_models_at_their_alphas()
     assert_eq!(models(&world_list(&view)), want);
 }
 
+/// A paint whose channels fade apart, so its share is not the unpainted one.
+const PAINT: nova_sim::Rgb15 = nova_sim::Rgb15 { r: 31, g: 16, b: 4 };
+
+/// The alpha a model of `BaseTransp` 0 painted [`PAINT`] draws at under
+/// `cloak`, and that it is not the unpainted alpha.
+fn painted_alpha(cloak: CloakShown) -> f32 {
+    let alpha = model_alpha(cloak, Some(PAINT), GateFade::None, 0).expect("drawn");
+    assert_ne!(alpha, alpha_of(cloak, GateFade::None), "paint changes it");
+    alpha
+}
+
+#[test]
+fn a_painted_npc_fading_under_a_cloak_draws_its_model_at_its_painted_alpha() {
+    let cloak = CloakShown::Fading(21.5);
+    let view = view_of(
+        frame(0.0, HullTurn::Continuous, |ships| {
+            ships[1].cloak = cloak;
+            ships[1].paint = Some(PAINT);
+        }),
+        table(),
+    );
+    let jitter = CloakDraw::of(cloak, Some(PAINT), tick(&view), &cloak_rolls(NpcId(0)))
+        .expect("cloaked")
+        .offset;
+    let mut want = faded(
+        expected_npc(&view, HullTurn::Continuous),
+        jitter,
+        painted_alpha(cloak),
+    );
+    want.extend(expected_player(&view, HullTurn::Continuous));
+    assert_eq!(models(&world_list(&view)), want);
+}
+
+#[test]
+fn a_painted_player_fading_under_a_cloak_draws_its_model_at_its_painted_alpha() {
+    let cloak = CloakShown::Fading(12.0);
+    let view = view_of(
+        frame(0.0, HullTurn::Continuous, |ships| {
+            ships[0].cloak = cloak;
+            ships[0].paint = Some(PAINT);
+        }),
+        table(),
+    );
+    let jitter = CloakDraw::of(cloak, Some(PAINT), tick(&view), &player_cloak_rolls())
+        .expect("cloaked")
+        .offset;
+    let mut want = expected_npc(&view, HullTurn::Continuous);
+    want.extend(faded(
+        expected_player(&view, HullTurn::Continuous),
+        jitter,
+        painted_alpha(cloak),
+    ));
+    assert_eq!(models(&world_list(&view)), want);
+}
+
 #[test]
 fn a_hidden_npc_and_one_waiting_at_its_gate_draw_no_model_and_no_outline() {
     type Edit = fn(&mut [FrameShip]);
