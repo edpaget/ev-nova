@@ -12,6 +12,10 @@
 //! latched at a scattering; murk does not change within a system, so the
 //! two agree.
 //!
+//! Through a jump's warp the pose carries the rush the view gives it
+//! ([`SkyPose::rush`]), the eye's move over the step, so the renderer
+//! streaks the stars by depth; out of the warp it is zero.
+//!
 //! What the sky looks like (its layers, depths, density and tints) is the
 //! renderer's (`nova_render::sky`).
 //!
@@ -24,10 +28,17 @@ use crate::geometry::Point;
 use crate::sky::SkyPose;
 
 /// The sky the flight shows in `system` of `Murk` `murk` as loaded, the
-/// eye over world point `eye`, drawn at `anchor`; `None` in a system of
-/// negative murk.
+/// eye over world point `eye`, drawn at `anchor`, rushing by `rush` (the
+/// eye's move over the last step through a jump's warp, zero otherwise);
+/// `None` in a system of negative murk.
 #[must_use]
-pub fn sky_pose(system: SystemId, eye: Point, anchor: Point, murk: i16) -> Option<SkyPose> {
+pub fn sky_pose(
+    system: SystemId,
+    eye: Point,
+    anchor: Point,
+    rush: Point,
+    murk: i16,
+) -> Option<SkyPose> {
     (murk >= 0).then(|| {
         SkyPose::new(
             u64::from(system.0.cast_unsigned()),
@@ -35,6 +46,7 @@ pub fn sky_pose(system: SystemId, eye: Point, anchor: Point, murk: i16) -> Optio
             anchor,
             murk_level(murk),
         )
+        .with_rush(rush)
     })
 }
 
@@ -48,6 +60,7 @@ mod tests {
             SystemId(system),
             Point::new(10.0, -20.0),
             Point::new(400.0, 384.0),
+            Point::new(0.0, 0.0),
             murk,
         )
     }
@@ -56,6 +69,30 @@ mod tests {
     fn a_system_of_negative_murk_shows_no_sky() {
         assert_eq!(pose(128, -1), None);
         assert_eq!(pose(128, i16::MIN), None);
+        let rushing = |murk| {
+            sky_pose(
+                SystemId(128),
+                Point::new(0.0, 0.0),
+                Point::new(0.0, 0.0),
+                Point::new(25.0, -9.0),
+                murk,
+            )
+        };
+        assert_eq!(rushing(-1), None, "not even rushing");
+    }
+
+    #[test]
+    fn the_rush_given_comes_back_on_the_pose() {
+        let rush = Point::new(25.0, -9.0);
+        let sky = sky_pose(
+            SystemId(128),
+            Point::new(10.0, -20.0),
+            Point::new(400.0, 384.0),
+            rush,
+            0,
+        );
+        assert_eq!(sky, pose(128, 0).map(|sky| sky.with_rush(rush)));
+        assert_eq!(sky.map(|sky| sky.rush), Some(rush));
     }
 
     #[test]

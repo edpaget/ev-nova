@@ -84,7 +84,8 @@ impl SkyShift {
 /// of negative murk.
 pub(super) fn draw(list: &mut DrawList, frame: &FlightFrame, camera: &Camera, shift: SkyShift) {
     let eye = shift.eye(camera.center());
-    if let Some(sky) = sky_pose(frame.system, eye, camera.anchor(), frame.system_murk) {
+    let rush = Point::new(0.0, 0.0);
+    if let Some(sky) = sky_pose(frame.system, eye, camera.anchor(), rush, frame.system_murk) {
         list.sky(sky);
     }
 }
