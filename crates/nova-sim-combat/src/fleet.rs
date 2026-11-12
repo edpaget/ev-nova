@@ -10,6 +10,8 @@ use nova_sim_catalog::voice::VoiceVariant;
 use crate::catalog::{PersonId, ShipId};
 use crate::reserves::Reserves;
 
+pub use nova_sim_state::shown::fleet::{EscortMark, EscortOrder};
+
 /// A ship in the player's fleet: its class, its shield, armour and fuel,
 /// and the standing order it follows. In flight the session flies it as
 /// an NPC beside the player (`nova_sim::Session`); the record keeps
@@ -61,16 +63,6 @@ pub struct Escort {
     pub berth: Option<u32>,
 }
 
-/// What an escort is marked for at the next shipyard (`_DoEscortLand`
-/// @0x4031f settles it).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EscortMark {
-    /// Upgraded to its class's `UpgradeTo` for its `EscUpgrdCost`.
-    Upgrade,
-    /// Sold for its class's `EscSellValue`.
-    Sell,
-}
-
 impl Escort {
     /// Whether it was hired in the bar: it has a wage, even of none.
     #[must_use]
@@ -85,22 +77,6 @@ impl Escort {
     pub fn saved_voice(&self) -> Option<VoiceVariant> {
         self.voice.filter(|_| self.carried)
     }
-}
-
-/// A standing order an escort follows. An escort with none keeps
-/// formation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EscortOrder {
-    /// 1: it defends the player.
-    Defend,
-    /// 2: it attacks the player's target.
-    Attack,
-    /// 4: it holds position.
-    Hold,
-    /// 3: Return to Hangar: a carried fighter flies back and docks with
-    /// its carrier (see [`bay`](crate::bay)); any other escort keeps
-    /// formation.
-    Dock,
 }
 
 /// The order word an NPC holds, the original's +0xc90a: -1

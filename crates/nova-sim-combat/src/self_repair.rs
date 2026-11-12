@@ -45,6 +45,8 @@ use crate::message::SimMessage;
 use crate::reserves::Reserves;
 use crate::speed_mult::SpeedMult;
 
+pub use nova_sim_state::shown::self_repair::FormerKind;
+
 /// The range of a disabled ship's repair draw at the frame's `gain`
 /// (`_ShipCanSelfRepair` @0x913c-0x916f): `trunc(500.0 / g)` while g >
 /// 0.0 (`ucomisd g, 0.0` / `jbe`, @0x9148-0x9150), the compare the
@@ -175,24 +177,20 @@ impl Default for RepairInhibit {
     }
 }
 
-/// What a former escort was, as `_DamageShip` sets +0xc8de: 0, 1 or 2.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FormerKind {
-    /// 0: a fighter the player launched (AI type 5).
-    Fighter,
-    /// 1: an escort hired in the bar (the hired flag +0xbb).
-    Hired,
-    /// 2: any other escort: captured, the old ship kept after "Use As My
-    /// Ship", or a person enlisted by a hail, which the original never
-    /// marks hired.
-    Captured,
+/// Reads a [`FormerKind`] off an escort's record, as `FormerKind::of(..)`:
+/// a constructor that reads the [`Escort`] this crate keeps, so it lives
+/// here, beside the self-repair, while the kind itself is the state
+/// layer's.
+pub trait FormerKindOf {
+    /// What the escort of `record` is.
+    #[must_use]
+    fn of(record: &Escort) -> Self;
 }
 
-impl FormerKind {
+impl FormerKindOf for FormerKind {
     /// What the escort of `record` is: a carried fighter, else hired
     /// when it has a wage, else captured.
-    #[must_use]
-    pub fn of(record: &Escort) -> Self {
+    fn of(record: &Escort) -> Self {
         if record.carried {
             Self::Fighter
         } else if record.hired() {

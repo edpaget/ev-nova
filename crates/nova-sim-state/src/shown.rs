@@ -17,13 +17,28 @@
 //!   ([`FrameSpec`](combat::ship_frames::FrameSpec)), a shot's layer and
 //!   fade, and the sprite and report types the flight frame draws by,
 //!   from `nova_sim_combat::combat`.
+//! - [`fleet`]: an escort's shipyard mark and standing order, from
+//!   `nova_sim_combat::fleet`.
+//! - [`message`]: the messages a flight session raises, from
+//!   `nova_sim_combat::message`.
+//! - [`player_fate`]: the player's lifecycle and what each stage allows,
+//!   from `nova_sim_combat::player_fate`.
+//! - [`self_repair`]: what a former escort was, from
+//!   `nova_sim_combat::self_repair`.
 //! - [`ship_layer`]: the layer a ship is drawn in, from
 //!   `nova_sim_combat::ship_layer`.
 //! - [`sprite_layer`]: the order the flight world's layers are drawn in,
 //!   from `nova_sim_combat::sprite_layer`.
+//! - [`tutorial`]: a first-flight tutorial hint, from
+//!   `nova_sim_combat::tutorial`.
 
 pub mod bay;
 pub mod cloak;
 pub mod combat;
+pub mod fleet;
+pub mod message;
+pub mod player_fate;
+pub mod self_repair;
 pub mod ship_layer;
 pub mod sprite_layer;
+pub mod tutorial;

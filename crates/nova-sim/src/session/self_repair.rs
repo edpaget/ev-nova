@@ -177,7 +177,7 @@ mod tests {
     use crate::pilot::{Escort, Pilot};
     use crate::reserves::{Gauge, Reserves};
     use crate::self_repair::REPAIR_ODDS;
-    use crate::self_repair::{FormerKind, MOD_REPAIR};
+    use crate::self_repair::{FormerKind, FormerKindOf, MOD_REPAIR};
     use crate::testkit::{Draws, FAST, FakePilotCatalog, catalog, hull, jump, outfit, ship};
     use crate::testkit::{Passive, work, work_with};
 
