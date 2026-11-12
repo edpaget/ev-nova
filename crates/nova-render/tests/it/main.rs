@@ -32,6 +32,7 @@ mod stock_super_xbr;
 mod stock_super_xbr_cost;
 mod text_hinting;
 mod text_layout;
+mod textured_models;
 mod wgpu_offscreen;
 mod world_layer;
 mod world_models;
