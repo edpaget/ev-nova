@@ -103,6 +103,10 @@ deny = [
     # into silhouettes and 3D scenes as data; nova-render's model adapter
     # reaches them through it, never naming gltf.
     { crate = "gltf", wrappers = ["nova-galaxy-media"], reason = "only nova-galaxy-media decodes the new game's models" },
+    # A model's JPEG images are decoded only there too, to RGBA the
+    # renderer's model adapter is handed.
+    { crate = "zune-jpeg", wrappers = ["nova-galaxy-media"], reason = "only nova-galaxy-media decodes a model's JPEG images" },
+    { crate = "zune-core", wrappers = ["zune-jpeg"], reason = "zune-core is reached only through zune-jpeg" },
     # FFmpeg's unsafe bindings are reached only through ffmpeg-next's safe
     # API, and that only by the movie decoder.
     { crate = "ffmpeg-next", wrappers = ["nova-movie"], reason = "FFmpeg is reached only through the movie decoder" },

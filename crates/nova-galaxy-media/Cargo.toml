@@ -17,6 +17,8 @@ nova-galaxy-format.workspace = true
 # A texture asset's PNG, decoded to RGBA8 (and encoded by the `fixture`
 # builders, so tests make their PNGs in code).
 png.workspace = true
+# A model's JPEG image, decoded to RGBA8.
+zune-jpeg.workspace = true
 # The `fixture` builders write the test models' glTF JSON.
 serde_json = { workspace = true, optional = true }
 
