@@ -14,6 +14,7 @@ mod new_game;
 mod new_game_3d;
 mod new_game_ids;
 mod new_game_mounts;
+mod new_game_sky;
 mod sample_galaxy;
 mod sound;
 mod stock;

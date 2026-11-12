@@ -149,6 +149,12 @@
 //! [`modelled_sample`] with a station model on both stations and a
 //! generated planet in the start system, for the 3D flight screen:
 //! [`modelled_sample_3d`]'s docs say what each is.
+//!
+//! # `sky_sample()`
+//!
+//! [`modelled_sample`] with a `sky` block on the start system, Luyten
+//! Crossing ([`SKY_SAMPLE_BLOCK`]), so its layered sky draws the data's
+//! look: [`sky_sample`]'s docs say what it is.
 
 use std::path::{Path, PathBuf};
 
@@ -400,6 +406,39 @@ pub fn modelled_sample_3d() -> MemSource {
              ---\n\nA banded giant the crossing's traffic steers around.\n",
         )
         .with("nova-ids.json", &pinned)
+}
+
+/// The `sky` block [`sky_sample`] gives Luyten Crossing, a front-matter
+/// fragment: no stars, a warm tint, and red clouds in every backdrop
+/// cell, a look no seed gives, so a test can tell the data's look from
+/// the seeded one.
+pub const SKY_SAMPLE_BLOCK: &str = "sky:\n  stars: 0\n  tint: \"#ffb070\"\n  \
+                                    backdrop: {color: \"#ff0000\", amount: 1}\n";
+
+/// [`modelled_sample`], with a `sky` block ([`SKY_SAMPLE_BLOCK`]) in the
+/// front matter of `luyten-crossing`, the start system: its sky draws no
+/// stars, a tint of `#ffb070` and a red backdrop in every cell. The other
+/// two systems, `brightwater` and `marrow` (in its `nebula`), have none,
+/// so they draw the seeded default.
+///
+/// [`modelled_sample`] stays as it is, so the tests over it keep their
+/// meaning.
+///
+/// # Panics
+///
+/// When the sample folder can't be read.
+#[must_use]
+pub fn sky_sample() -> MemSource {
+    let file = "systems/luyten-crossing.md";
+    let text = std::fs::read_to_string(sample_folder().join(file)).expect("a sample file");
+    let (front, body) = text
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.split_once("\n---\n"))
+        .expect("front matter");
+    modelled_sample().with(
+        file,
+        &format!("---\n{front}\n{SKY_SAMPLE_BLOCK}---\n{body}"),
+    )
 }
 
 /// Every file under `dir`, by its path from `dir` with `/` between its
