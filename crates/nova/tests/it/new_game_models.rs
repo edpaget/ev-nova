@@ -32,6 +32,7 @@ use nova::rulebook::ruleset_rulebook;
 use nova::ruleset::Ruleset;
 use nova_audio::SettingsStore;
 use nova_audio::recording::MemorySettings;
+use nova_data::GameData;
 use nova_data::new_game::{self, NewGame};
 use nova_render::recording::GpuCall;
 use nova_render::{WorldAssets, world_assets};
@@ -76,7 +77,17 @@ fn flying_under(
     assets: &WorldAssets,
     pilots: &MemoryPilots,
 ) -> Harness {
-    let data = Rc::new(game.data);
+    flying_over(ruleset, &Rc::new(game.data), assets, pilots)
+}
+
+/// The app flying the start of the new game `data` under `ruleset`'s
+/// readings, wired with its world models `assets` as `main` wires them.
+pub(crate) fn flying_over(
+    ruleset: Ruleset,
+    data: &Rc<GameData>,
+    assets: &WorldAssets,
+    pilots: &MemoryPilots,
+) -> Harness {
     let rules = ruleset_rulebook(None, ruleset.profile().readings).0;
     let (keeper, warning) = nova::settings::SettingsKeeper::open(
         Box::new(MemorySettings::new()) as Box<dyn SettingsStore>
@@ -84,7 +95,7 @@ fn flying_under(
     assert_eq!(warning, None);
     let table = Rc::new(assets.models.clone());
     fly_new_pilot_modelled(
-        &data,
+        data,
         pilots,
         keeper,
         |screen: AppScreen| screen.with_rulebook(&rules).with_world_models(table),
@@ -93,7 +104,7 @@ fn flying_under(
 }
 
 /// The world layer of the view's frame drawn now.
-fn world(game: &Harness) -> Vec<DrawCommand> {
+pub(crate) fn world(game: &Harness) -> Vec<DrawCommand> {
     let view = game.app.screen().flight_view().expect("flying");
     let mut list = DrawList::new();
     view.draw(&mut list);
@@ -104,7 +115,7 @@ fn world(game: &Harness) -> Vec<DrawCommand> {
 }
 
 /// The session's frame now.
-fn frame(game: &Harness) -> FlightFrame {
+pub(crate) fn frame(game: &Harness) -> FlightFrame {
     let mut frame = FlightFrame::default();
     game.app
         .screen()
