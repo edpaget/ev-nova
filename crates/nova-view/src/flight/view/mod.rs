@@ -847,7 +847,7 @@ fn shown_heading(from: ShipPlace, to: ShipPlace, alpha: f32) -> f32 {
 /// crossfaded at (32 − t)/32, which this alpha draws. An NPC gets no
 /// screen flash, as the player's own gate arrival does (see
 /// [`jump`](super::jump)).
-fn npc_tint(gate: GateFade) -> Option<Color> {
+pub(crate) fn npc_tint(gate: GateFade) -> Option<Color> {
     let level = match gate {
         GateFade::Emerging { ticks_left } => emerge_level(ticks_left)?,
         GateFade::Entering { ticks_left } => enter_level(ticks_left),

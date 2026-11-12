@@ -91,6 +91,7 @@ pub mod hud;
 pub mod ion_tint;
 pub mod jump;
 pub mod lightning;
+pub mod model_fade;
 pub mod mounted_outfits;
 pub mod murk;
 pub mod paint;
