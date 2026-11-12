@@ -2,10 +2,10 @@
 //! active missions the mission info key lists beside the stock ones
 //! ([`StoryRow`], on [`MissionInfo::story`](crate::mission_screens::MissionInfo::story)),
 //! and the refusal of an accept for want of room ([`RoomRefusal`], raised
-//! as `nova_sim::flight_frame::FlightEvent::RoomRefused`), and
+//! as [`FlightEvent::RoomRefused`](super::FlightEvent::RoomRefused)), and
 //! the story a bar hosts under [`RuleKey::BarStory`](nova_sim_base::RuleKey::BarStory)'s
 //! other reading ([`BarStory`], answered to
-//! `nova_sim::flight_frame::ScreenAsk::BarStory`). Each is plain data
+//! [`ScreenAsk::BarStory`](super::ScreenAsk::BarStory)). Each is plain data
 //! the session builds from its own reads, borrowing nothing of the
 //! session's. A session whose data holds no storylines (the stock game's)
 //! never raises one.
@@ -81,7 +81,7 @@ pub struct RoomRefusal {
 /// The story the landed stellar's bar hosts, under
 /// [`RuleKey::BarStory`](nova_sim_base::RuleKey::BarStory)'s other reading: the
 /// scenes it lists, which the player opens from it
-/// (`nova_sim::flight_frame::Converse::OpenListed`, by index into
+/// ([`Converse::OpenListed`](super::Converse::OpenListed), by index into
 /// [`BarStory::scenes`]), and the news heard in the system, which its News
 /// lists in place of the drawn news.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

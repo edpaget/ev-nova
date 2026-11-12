@@ -6,7 +6,10 @@
 //! Each is plain data the session builds from its own reads, borrowing
 //! nothing of the session's.
 
-use crate::{Market, News, Outfitter, Shipyard};
+use nova_sim_state::market::Market;
+use nova_sim_state::shown::news::News;
+use nova_sim_state::shown::outfitter::Outfitter;
+use nova_sim_state::shown::shipyard::Shipyard;
 
 /// What the spaceport reads of its shops, asked with no command between
 /// the reads ([`ScreenAsk::Shops`](super::ScreenAsk::Shops)): as it opens
@@ -18,31 +21,31 @@ use crate::{Market, News, Outfitter, Shipyard};
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PortShops {
     /// The exchange of the stellar landed on
-    /// ([`Session::market`](crate::Session::market)).
+    /// (`nova_sim::Session::market`).
     pub market: Option<Market>,
     /// The outfitter of the stellar landed on, the day's rolls not drawn
     /// yet drawn on the flight's chance
-    /// ([`Session::outfitter`](crate::Session::outfitter)).
+    /// (`nova_sim::Session::outfitter`).
     pub outfitter: Option<Outfitter>,
     /// The shipyard of the stellar landed on, built afresh: the classes
     /// bought or declined since its last build redrawn first, and the
     /// day's rolls not drawn yet drawn on the flight's chance
-    /// ([`Session::shipyard`](crate::Session::shipyard)).
+    /// (`nova_sim::Session::shipyard`).
     pub shipyard: Option<Shipyard>,
     /// Whether the bar's hire screen may hire escorts now
-    /// ([`Session::can_hire_escorts`](crate::Session::can_hire_escorts),
+    /// (`nova_sim::Session::can_hire_escorts`,
     /// `_CanHireEscorts`), which the bar is told as it opens.
     pub can_hire_escorts: bool,
     /// Which services have nothing to list, for the spaceport and its bar
     /// to grey ([`EmptyServices`]), read after the shipyard on the same
     /// chance; [`EmptyServices::default`] by the engine reading of
-    /// [`RuleKey::EmptyServices`](crate::rulebook::RuleKey::EmptyServices),
+    /// [`RuleKey::EmptyServices`](nova_sim_base::rulebook::RuleKey::EmptyServices),
     /// drawing nothing. Unlike the room, it is read again at each refresh.
     pub empty: EmptyServices,
 }
 
 /// Which of the port's services have nothing to list, for the view to
-/// grey ([`RuleKey::EmptyServices`](crate::rulebook::RuleKey::EmptyServices)).
+/// grey ([`RuleKey::EmptyServices`](nova_sim_base::rulebook::RuleKey::EmptyServices)).
 /// By the engine reading (the default) neither is ever set: the Mission
 /// BBS of every inhabited stellar stays enabled (`_DrawPlanetButtons`
 /// @0x2968d) and answers #353 with nothing available, and Hire Escort is
@@ -64,9 +67,9 @@ pub struct EmptyServices {
 /// The news of the bar visit under way as it was drawn, and the picture
 /// it is drawn over ([`ScreenAsk::News`](super::ScreenAsk::News)): a copy
 /// of the visit's kept news, its tags unfilled
-/// ([`Session::news`](crate::Session::news)), and the `PICT` of the
+/// (`nova_sim::Session::news`), and the `PICT` of the
 /// stellar docked at, read as News is pressed
-/// ([`Session::news_picture`](crate::Session::news_picture)), so a change
+/// (`nova_sim::Session::news_picture`), so a change
 /// of owner since the bar opened shows.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BarNews {

@@ -10,7 +10,8 @@ use crate::catalog::{MaskSheet, StellarId};
 use crate::combat::ShipRef;
 use crate::combat::projectile::Shot;
 use crate::flight_frame::{
-    FrameAsteroid, FrameBeam, FrameBox, FrameShip, FrameShot, FrameStellar, GateFade,
+    FrameAsteroid, FrameAsteroidOf, FrameBeam, FrameBeamOf, FrameBox, FrameBoxOf, FrameShip,
+    FrameShot, FrameShotOf, FrameStellar, GateFade, GateFadeOf,
 };
 use crate::glow::drawn_base;
 use crate::iff::ShipIff;

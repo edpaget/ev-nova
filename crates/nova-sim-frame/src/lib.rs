@@ -12,8 +12,12 @@
 //!
 //! The view models:
 //!
-//! - [`flight_frame`]: the values the flight view's port carries, as far
-//!   as they have moved down: the new game's storyline screens.
+//! - [`flight_frame`]: the values the flight view's port carries: the
+//!   frame, the commands and their answers, the events, a frame's steps
+//!   and what a screen asks
+//!   ([`FlightFrame`](flight_frame::FlightFrame),
+//!   [`FlightCommand`](flight_frame::FlightCommand),
+//!   [`ScreenAsk`](flight_frame::ScreenAsk)).
 //! - [`galaxy_map`]: what the galaxy map draws
 //!   ([`MapDrawing`](galaxy_map::MapDrawing)), the hypergate arrows'
 //!   heads, what its model shows of the galaxy

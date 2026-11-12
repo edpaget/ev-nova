@@ -3,7 +3,7 @@
 //! (@0x38427-0x3844a). `_PlayGame` clears it once a frame (@0x45b3b),
 //! and `_HandlePlayer` writes it from its key blocks, each past its own
 //! gates. The 29 writes come down to the [`FadeKey`] rows, and a pass's
-//! answer is a [`KeyFades`] (`nova_sim::flight_frame::FlightFrame::key_fades`),
+//! answer is a [`KeyFades`] ([`FlightFrame::key_fades`](crate::flight_frame::FlightFrame::key_fades)),
 //! decided by [`KeyFades::of`] from the plain [`KeyFacts`] the session
 //! gathers. Which physical key reads which row is the view's.
 //!
@@ -108,9 +108,9 @@ impl KeyFacts {
 }
 
 /// The [`FadeKey`]s that fade the cursor now, and whether it fades with
-/// no key at all, as a set (`nova_sim::flight_frame::FlightFrame::key_fades`).
+/// no key at all, as a set ([`FlightFrame::key_fades`](crate::flight_frame::FlightFrame::key_fades)).
 /// The default is [`KeyFades::EVERY`], as a flight that failed to start
-/// takes everything (`nova_sim::flight_frame::Gates`).
+/// takes everything ([`Gates`](crate::flight_frame::Gates)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeyFades(u16);
 

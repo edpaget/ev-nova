@@ -1,7 +1,7 @@
 //! The screen query's values: what a screen of the flight view asks the
 //! session when it opens or when its input changes ([`ScreenAsk`]), and
 //! the plain-data snapshot it draws from ([`ScreenAnswer`]), which
-//! [`Session::screen`](crate::Session::screen) answers. Nothing here is
+//! `nova_sim::Session::screen` answers. Nothing here is
 //! asked per frame: a per-frame read is a frame field
 //! ([`FlightFrame`](super::FlightFrame)).
 //!
@@ -21,7 +21,7 @@
 //! ([`ScreenAsk::HeardNews`]), answered empty for a session whose data
 //! holds no storylines, and the story the landed stellar's bar hosts
 //! ([`ScreenAsk::BarStory`]), answered only under
-//! [`RuleKey::BarStory`](crate::RuleKey::BarStory)'s other reading.
+//! [`RuleKey::BarStory`](nova_sim_base::rulebook::RuleKey::BarStory)'s other reading.
 //!
 //! An ask is a read: asked twice in a row, it answers the same, but for
 //! one that draws afresh at each ask ([`ScreenAsk::draws_afresh`]). The
@@ -31,26 +31,31 @@
 
 use super::BarStory;
 use super::port_screens::{BarNews, PortShops};
-use crate::capture_naming::CaptureNaming;
-use crate::catalog::{ShipId, SystemId};
+use nova_sim_catalog::catalog::{MissionId, ShipId, SystemId};
+use nova_sim_state::shown::board::PlunderView;
+use nova_sim_state::shown::capture_naming::CaptureNaming;
+use nova_sim_state::shown::gamble::GambleOpening;
+use nova_sim_state::shown::hail::HailView;
+use nova_sim_state::shown::hire::HireList;
+use nova_sim_state::shown::outfitter::Outfitter;
+use nova_sim_state::shown::shipyard::{ShipNaming, ShipRefusal};
+use nova_sim_state::shown::storylines::news::HeardNews;
+
 use crate::galaxy_map::{GalaxyShown, MapDrawing, MapMarks};
-use crate::gamble::GambleOpening;
-use crate::hail::HailView;
 use crate::map_borders::BorderSources;
 use crate::map_panel::MapPanel;
 use crate::map_search::SearchOutcome;
+use crate::mission_screens::MissionInfo;
+use crate::nav::SavedNav;
 use crate::pilot_panel::PilotPanel;
-use crate::session::SavedNav;
-use crate::storylines::news::HeardNews;
-use crate::{HireList, MissionId, MissionInfo, Outfitter, PlunderView, ShipNaming, ShipRefusal};
 
 /// What a screen asks the session as it opens or as its input changes
-/// ([`Session::screen`](crate::Session::screen)), answered by the
+/// (`nova_sim::Session::screen`), answered by the
 /// [`ScreenAnswer`] of its kind.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ScreenAsk {
     /// What the course map's model shows of the galaxy
-    /// ([`GalaxyShown::of`](crate::galaxy_map::GalaxyShownOf::of)), asked
+    /// (`nova_sim::galaxy_map::GalaxyShownOf::of`), asked
     /// as the view opens and at each `SessionEvent::GalaxyChanged`:
     /// [`ScreenAnswer::Galaxy`].
     Galaxy,
@@ -195,7 +200,7 @@ pub enum ScreenAsk {
     /// The story the landed stellar's bar hosts, asked as the bar opens
     /// and after each conversation opened from it closes
     /// ([`ScreenAnswer::BarStory`]). Answered nothing under
-    /// [`RuleKey::BarStory`](crate::RuleKey::BarStory)'s engine reading,
+    /// [`RuleKey::BarStory`](nova_sim_base::rulebook::RuleKey::BarStory)'s engine reading,
     /// in flight, or at a stellar with no bar; under the other reading at a
     /// bar, answered even when it lists nothing, so the view knows the bar
     /// hosts the story.
@@ -234,16 +239,16 @@ pub enum MarksFrom {
     /// map, the bar's and the port screens', or the briefing's own.
     Given(MapMarks),
     /// An offer of the mission
-    /// ([`Session::offer_map_marks`](crate::Session::offer_map_marks)).
+    /// (`nova_sim::Session::offer_map_marks`).
     Offer(MissionId),
     /// The mission computer, with its selected row's offer
-    /// ([`Session::computer_map_marks`](crate::Session::computer_map_marks)).
+    /// (`nova_sim::Session::computer_map_marks`).
     Computer(Option<MissionId>),
     /// Mission info, with its selected mission's slot
     /// (`Session::mission_info_map_marks`).
     MissionInfo(Option<u8>),
     /// The new game's story log, with its selected mission's index in
-    /// [`MissionInfo::story`](crate::MissionInfo::story) as the session
+    /// [`MissionInfo::story`](crate::mission_screens::MissionInfo::story) as the session
     /// listed it (`Chart::story_map_marks`). An index, not the mission's
     /// id, so this stays `Copy`: it is stable for the log's life, as
     /// nothing changes the story while the log is open (flight is paused
@@ -276,7 +281,7 @@ pub struct MapOpen {
     /// The map's marks, as [`MarksFrom`] said.
     pub marks: MapMarks,
     /// What the borders are painted from
-    /// ([`Session::map_border_sources`](crate::Session::map_border_sources)).
+    /// (`nova_sim::Session::map_border_sources`).
     pub borders: BorderSources,
     /// The system the map selects as it opens
     /// (`Session::map_preselection`).
@@ -290,7 +295,7 @@ pub struct MapOpen {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MapScreen {
     /// What it draws
-    /// ([`Session::map_drawing`](crate::Session::map_drawing)).
+    /// (`nova_sim::Session::map_drawing`).
     pub drawing: MapDrawing,
     /// The systems drawing it makes known, for the view to mark known
     /// (`FlightCommand::MarkKnown`) right after it shows the drawing, as
@@ -304,7 +309,7 @@ pub struct MapScreen {
     /// the mark.
     pub borders: BorderSources,
     /// Its info panels for the system selected
-    /// ([`Session::map_panel`](crate::Session::map_panel)).
+    /// (`nova_sim::Session::map_panel`).
     pub panel: MapPanel,
 }
 
@@ -511,7 +516,7 @@ mod tests {
         vec![
             ScreenAnswer::Galaxy(GalaxyShown::default()),
             ScreenAnswer::MapOpening(MapOpen {
-                nav: SavedNav::of(crate::navigation::NavMode::Off),
+                nav: SavedNav::of(nova_sim_state::shown::navigation::NavMode::Off),
                 marks: MapMarks::NONE,
                 borders: BorderSources::default(),
                 preselection: None,
@@ -539,7 +544,7 @@ mod tests {
                 rows: Vec::new(),
                 cash: 0,
                 room: false,
-                rules: crate::rulebook::Rulebook::default(),
+                rules: nova_sim_base::rulebook::Rulebook::default(),
             })),
             ScreenAnswer::ShipNaming(Err(ShipRefusal::NoShipyard)),
             ScreenAnswer::CaptureNaming(None),
@@ -550,7 +555,7 @@ mod tests {
             ScreenAnswer::RefusableOffer(false),
             ScreenAnswer::OfferText(String::new()),
             ScreenAnswer::Hail(Box::new(HailView {
-                npc: crate::NpcId(0),
+                npc: nova_sim_state::shown::combat::NpcId(0),
                 ship: ShipId(129),
                 first: None,
                 reply: String::new(),
@@ -564,7 +569,7 @@ mod tests {
                 portrait: None,
             })),
             ScreenAnswer::Boarding(PlunderView {
-                npc: crate::NpcId(0),
+                npc: nova_sim_state::shown::combat::NpcId(0),
                 ship: ShipId(129),
                 credits: 0,
                 cargo: None,
