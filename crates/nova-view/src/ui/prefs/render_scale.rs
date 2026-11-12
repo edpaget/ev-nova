@@ -51,6 +51,7 @@ mod tests {
     use crate::ui::button::ButtonStyle;
     use crate::ui::picker::PickerRects;
     use crate::ui::toggle::Toggle;
+    use crate::ui::volume::Arrow;
 
     const AUTO: RenderScale = RenderScale::Auto;
     const P: fn(u8) -> RenderScale = RenderScale::Percent;
@@ -284,7 +285,12 @@ mod tests {
         let mut dialog = prefs();
         let down = dialog.render_scale().rects().down.center();
         dialog.input(&button(true, down));
+        assert!(dialog.render_scale().pressed(Arrow::Down), "held");
         dialog.cancel_pointer();
+        assert!(
+            !dialog.render_scale().pressed(Arrow::Down),
+            "the cancel lets the arrow go"
+        );
         dialog.input(&button(false, down));
         assert_eq!(dialog.render_scale().selected(), AUTO);
         assert_eq!(dialog.take_change(), None);
