@@ -920,4 +920,10 @@ exclude_re = [
     # lawless kit's bit 0, so the two never overlap and `^` gives the same
     # mask as `|`.
     "nova-data/src/new_game/law\\.rs:[0-9]+:[0-9]+: replace \\| with \\^ in govt_law$",
+    # A puff is kept when its square reaches into the view. A square that
+    # only touches the view's edge (`x + r == 0`) lights no pixel, as the
+    # falloff is 0 at a radius from the centre, so `>=` / `<=` keep only
+    # puffs that add nothing.
+    "nova-render/src/sky/backdrop\\.rs:[0-9]+:[0-9]+: replace > with >= in backdrop$",
+    "nova-render/src/sky/backdrop\\.rs:[0-9]+:[0-9]+: replace < with <= in backdrop$",
 ]

@@ -362,6 +362,9 @@ mod tests {
         looks.insert(77, with_stars(1.5));
         assert_eq!(looks.look(77), with_stars(1.5));
         assert_eq!(looks.len(), 1);
+        looks.insert(78, sparse);
+        assert_eq!(looks.len(), 2);
+        assert_eq!(SkyLooks::new().len(), 0);
     }
 }
 

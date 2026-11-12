@@ -253,8 +253,10 @@ fn between((lo, hi): (f32, f32), t: f32) -> f32 {
 /// backdrop. The rush leaves it as it is.
 #[must_use]
 pub fn backdrop(pose: &SkyPose, look: &SkyLook, logical: LogicalSize) -> Vec<StarInstance> {
-    let finite = |point: Point| point.x.is_finite() && point.y.is_finite();
-    if pose.level == 0 || !(finite(pose.eye) && finite(pose.anchor)) {
+    // An eye or anchor that is not finite needs no check of its own: it
+    // puts every cell's corner at a NaN, so no puff passes the view test
+    // below.
+    if pose.level == 0 {
         return Vec::new();
     }
     let Some(Backdrop { color, amount }) = resolved(&look.backdrop, pose.seed) else {
@@ -511,6 +513,7 @@ mod tests {
     #[test]
     fn each_cloud_has_its_puffs_round_its_centre_and_lies_in_its_cell() {
         let mut counts = Vec::new();
+        let mut closest = f32::MAX;
         for cy in -20..20 {
             for cx in -20..20 {
                 let cloud = cloud(3, 1.0, cx, cy).expect("a cloud");
@@ -523,6 +526,14 @@ mod tests {
                     (CLOUD_LIGHT.0..=CLOUD_LIGHT.1).contains(&cloud.light),
                     "{cloud:?}"
                 );
+                // The centre lies a cloud's farthest reach inside its cell
+                // or more, and the clouds use all the room that leaves.
+                let reach = (PUFF_SPREAD + PUFF_RADIUS.1) * e;
+                for at in [cloud.centre.x, cloud.centre.y] {
+                    let (near, far) = (at - reach, BACKDROP_CELL - reach - at);
+                    assert!(near >= -1e-3 && far >= -1e-3, "{cloud:?}");
+                    closest = closest.min(near.min(far));
+                }
                 let shrink = (PUFFS.0 as f32 / n as f32).sqrt();
                 for puff in &cloud.puffs {
                     assert!(puff.offset.x.abs() <= PUFF_SPREAD * e, "{puff:?}");
@@ -540,6 +551,7 @@ mod tests {
                 }
             }
         }
+        assert!(closest < 2.0, "{closest}");
         counts.sort_unstable();
         counts.dedup();
         assert_eq!(counts, [3, 4, 5]);
