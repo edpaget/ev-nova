@@ -6,9 +6,22 @@
 //! ship. Under the stock ruleset's readings the same flight draws the
 //! dots and no sky.
 //!
+//! Wired as `main` wires the world assets (`nova_render::world_assets`
+//! over the source, its sky looks handed to the renderer), the frame's
+//! sky batch is the system's look: with no `sky` block
+//! (`fixture::modelled_sample`) the seeded backdrop under the stars, and
+//! with one (`fixture::sky_sample`) the data's red clouds and no stars.
+//! Under the stock readings the looks registered draw nothing.
+//!
 //! Wiring only: the layered sky's rule is nova-view's (`flight::sky` and
-//! the view's `sky` module), its look nova-render's (`sky`), each pinned
-//! there; this pins that the ruleset, the router and the view meet.
+//! the view's `sky` module), its look nova-render's (`sky`, and
+//! `new_game_sky` for the data's), the seed nova-view's
+//! (`flight::sky::sky_seed`), each pinned there; this pins that the
+//! ruleset, the data, the edge, the router, the view and the renderer
+//! meet.
+
+use std::path::Path;
+use std::rc::Rc;
 
 use nova::app::screen::AppScreen;
 use nova::app::{Control, WindowEvent};
@@ -17,11 +30,16 @@ use nova::ruleset::Ruleset;
 use nova_audio::SettingsStore;
 use nova_audio::recording::MemorySettings;
 use nova_data::new_game;
+use nova_render::gpu::Batch;
+use nova_render::recording::GpuCall;
+use nova_render::sky::{SkyLook, StarInstance, backdrop};
+use nova_render::{LogicalSize, WorldAssets, world_assets};
 use nova_sim::Vec2;
 use nova_sim::fixture::MemoryPilots;
 use nova_view::{DrawCommand, DrawLayer, DrawList, Key, Screen, SkyPose};
 
 use crate::common::{draw, fly_new_pilot_wired};
+use crate::new_game_models::flying_over;
 use crate::pilots::Harness;
 
 /// The app flying the sample's start under `ruleset`'s readings.
@@ -152,4 +170,106 @@ fn the_new_game_s_sky_moves_with_the_ship() {
     );
     let camera = game.app.screen().flight_view().expect("flying").camera();
     assert_eq!(after, camera.center(), "over the camera's centre");
+}
+
+/// The new game in the in-memory folder `$source` loaded, and its world
+/// assets built over it, as `main` builds them.
+macro_rules! loaded {
+    ($source:expr) => {{
+        let source = $source;
+        let game = new_game::load(&source, Path::new("sample"));
+        let assets = world_assets(&game, &source);
+        (game, assets)
+    }};
+}
+
+/// The app flying `game`'s start under `ruleset`'s readings, wired with
+/// its world `assets`, sky looks included, as `main` wires them; and those
+/// assets.
+fn flying_with_looks(
+    (game, assets): (new_game::NewGame, WorldAssets),
+    ruleset: Ruleset,
+    pilots: &MemoryPilots,
+) -> (Harness, WorldAssets) {
+    assert_eq!(
+        game.problems
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        Vec::<String>::new()
+    );
+    assert_eq!(assets.problems, Vec::<String>::new());
+    let harness = flying_over(ruleset, &Rc::new(game.data), &assets, pilots);
+    (harness, assets)
+}
+
+/// The sky batches of the frame drawn next, and its logical size.
+fn sky_batches(game: &mut Harness) -> (Vec<Vec<StarInstance>>, LogicalSize) {
+    draw(game);
+    let frame = (game.gpu_calls().iter().rev())
+        .find_map(|call| match call {
+            GpuCall::Submit(frame) => Some(frame.clone()),
+            _ => None,
+        })
+        .expect("a frame submitted");
+    let skies = frame
+        .batches
+        .into_iter()
+        .filter_map(|batch| match batch {
+            Batch::Sky(drawn) => Some(drawn),
+            _ => None,
+        })
+        .collect();
+    (skies, frame.logical)
+}
+
+#[test]
+fn a_system_with_no_sky_block_draws_its_seeded_backdrop_under_its_stars() {
+    let pilots = MemoryPilots::new();
+    let loaded = loaded!(new_game::fixture::modelled_sample());
+    let (mut game, assets) = flying_with_looks(loaded, Ruleset::NewGame, &pilots);
+    assert!(assets.skies.is_empty(), "no system sets a look");
+    let (batches, logical) = sky_batches(&mut game);
+    let pose = skies(&game)[0];
+    let [drawn] = &batches[..] else {
+        panic!("one sky batch: {batches:?}");
+    };
+    // The backdrop's puffs don't hang on the texels, so the world
+    // texture's needn't be known.
+    let puffs = backdrop(&pose, &SkyLook::default(), logical);
+    assert!(!puffs.is_empty(), "the start view shows a cloud");
+    assert_eq!(drawn[..puffs.len()], puffs[..], "the backdrop first");
+    assert!(drawn.len() > puffs.len() + 100, "stars after it");
+}
+
+#[test]
+fn a_system_s_sky_block_draws_its_own_look() {
+    let pilots = MemoryPilots::new();
+    let loaded = loaded!(new_game::fixture::sky_sample());
+    let (mut game, assets) = flying_with_looks(loaded, Ruleset::NewGame, &pilots);
+    let (batches, logical) = sky_batches(&mut game);
+    let pose = skies(&game)[0];
+    let look = assets.skies.look(pose.seed);
+    assert_ne!(look, SkyLook::default(), "the start system's own look");
+    let [drawn] = &batches[..] else {
+        panic!("one sky batch: {batches:?}");
+    };
+    // No stars: the backdrop alone, red, a cloud in every cell.
+    assert_eq!(*drawn, backdrop(&pose, &look, logical));
+    assert!(!drawn.is_empty());
+    for puff in drawn {
+        let [r, g, b] = puff.color;
+        assert!(r > 0.0 && g == 0.0 && b == 0.0, "{puff:?}");
+    }
+}
+
+#[test]
+fn the_stock_readings_draw_no_sky_with_looks_registered() {
+    let pilots = MemoryPilots::new();
+    let loaded = loaded!(new_game::fixture::sky_sample());
+    let (mut game, assets) = flying_with_looks(loaded, Ruleset::Stock, &pilots);
+    assert_eq!(assets.skies.len(), 1, "a look registered");
+    let (batches, _) = sky_batches(&mut game);
+    assert_eq!(batches, Vec::<Vec<StarInstance>>::new());
+    assert_eq!(skies(&game), []);
 }

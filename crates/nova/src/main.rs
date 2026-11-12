@@ -476,7 +476,7 @@ fn main() -> ExitCode {
     let runner = with_gamepads(Runner::new(images, screen, fonts), &report)
         .with_diagnostics(Box::new(std::io::stderr()))
         .with_report(Rc::clone(&report))
-        .with_world_assets(world.meshes, world.planets);
+        .with_world_assets(world.meshes, world.planets, world.skies);
     let runner = match audio {
         Some(core) => runner.with_audio(core.with_settings(settings.audio)),
         None => runner,
