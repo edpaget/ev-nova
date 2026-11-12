@@ -151,8 +151,10 @@ fn textures(asset: &str, scene: &Scene, limits: &Limits) -> Result<Textures, Mod
 ///   doesn't decode are all [`ModelError::TextureUndecodable`], never
 ///   [`ModelError::Unreadable`]: the model itself read, and nothing
 ///   before this adapter decodes its images, so nobody has reported it.
-/// - Over the budget's `side` is [`ModelError::OverBudget`], as the
-///   model's own overruns are.
+/// - Over the budget's `side` is [`ModelError::TextureOverBudget`],
+///   naming the image as the others do, not the model's own
+///   [`ModelError::OverBudget`]: the author has to know which image to
+///   shrink.
 /// - Over the renderer's largest side is
 ///   [`ModelError::TextureTooLarge`].
 fn no_image(asset: &str, image: ImageRef, why: NoImage) -> ModelError {
@@ -164,8 +166,9 @@ fn no_image(asset: &str, image: ImageRef, why: NoImage) -> ModelError {
             why: "it is neither a PNG nor a JPEG".to_owned(),
         },
         NoImage::Undecodable(why) => ModelError::TextureUndecodable { asset, image, why },
-        NoImage::OverBudget(over) => ModelError::OverBudget {
+        NoImage::OverBudget(over) => ModelError::TextureOverBudget {
             asset,
+            image,
             over: over.iter().map(overrun).collect(),
         },
         NoImage::TooLarge { side, most } => ModelError::TextureTooLarge {
@@ -718,23 +721,40 @@ mod tests {
                  texture: {{kib: 1, side: {side}}}\n---\n"
             )
         };
-        let source = with_glb_hull(skinned(), &png(2, 2, &SKIN));
+        let side = || {
+            vec![Overrun {
+                measure: Measure::Side,
+                used: 2,
+                most: 1,
+                budget: "budgets/default.md".into(),
+            }]
+        };
+        // Embedded after a spare image, it is named by its index.
+        let spared = skinned().spare_image(&png(2, 2, &SKIN));
+        let source = with_glb_hull(spared, &png(2, 2, &SKIN));
         let over = source.clone().with("budgets/default.md", &budget(1));
         assert_eq!(
             ask(&over, "hull", None),
-            Err(ModelError::OverBudget {
+            Err(ModelError::TextureOverBudget {
                 asset: "hull".into(),
-                over: vec![Overrun {
-                    measure: Measure::Side,
-                    used: 2,
-                    most: 1,
-                    budget: "budgets/default.md".into(),
-                }],
+                image: ImageRef::Embedded(1),
+                over: side(),
             })
         );
         // At the limit it loads.
         let at_the_limit = source.with("budgets/default.md", &budget(2));
         assert!(ask(&at_the_limit, "hull", None).is_ok());
+        // Beside a `.gltf`, it is named by its file.
+        let beside =
+            with_gltf_hull(skinned(), &png(2, 2, &SKIN)).with("budgets/default.md", &budget(1));
+        assert_eq!(
+            ask(&beside, "hull", None),
+            Err(ModelError::TextureOverBudget {
+                asset: "hull".into(),
+                image: ImageRef::File(SKIN_FILE.into()),
+                over: side(),
+            })
+        );
     }
 
     #[test]
@@ -813,7 +833,7 @@ mod tests {
         let budgeted = with_gltf_hull(skinned(), &declaring(MAX_TEXTURE_SIDE + 1, 2));
         assert!(matches!(
             ask(&budgeted, "hull", None),
-            Err(ModelError::OverBudget { .. })
+            Err(ModelError::TextureOverBudget { .. })
         ));
     }
 

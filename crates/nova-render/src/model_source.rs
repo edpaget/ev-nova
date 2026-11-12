@@ -329,13 +329,25 @@ pub enum ModelError {
         /// Why, naming the file.
         why: String,
     },
-    /// The model is over its art budget: its triangles or its files, or
-    /// one of its base-colour images' longest side ([`Measure::Side`]).
+    /// The model is over its art budget: its triangles or its files.
     #[error("asset `{asset}` is over its art budget: {}", list(over))]
     OverBudget {
         /// The asset.
         asset: String,
         /// Every limit it breaks.
+        over: Vec<Overrun>,
+    },
+    /// One of its base-colour images is over the art budget for a
+    /// texture: its longest side ([`Measure::Side`]). It is not
+    /// [`OverBudget`](Self::OverBudget), which says nothing of which
+    /// image to shrink.
+    #[error("asset `{asset}`'s {image} {}", list(over))]
+    TextureOverBudget {
+        /// The asset.
+        asset: String,
+        /// The image.
+        image: ImageRef,
+        /// Every limit the image breaks.
         over: Vec<Overrun>,
     },
     /// One of its base-colour images doesn't decode: it is neither a PNG
@@ -1178,6 +1190,16 @@ mod tests {
         assert_eq!(
             undecodable.to_string(),
             "asset `hub`'s image `media/export/p/skin.png` doesn't decode: cut short"
+        );
+        let over_side = ModelError::TextureOverBudget {
+            asset: "hub".into(),
+            image: beside,
+            over: vec![side],
+        };
+        assert_eq!(
+            over_side.to_string(),
+            "asset `hub`'s image `media/export/p/skin.png` is 8192 pixels on its longest side, \
+             over the 4096 pixel budget in `budgets/default.md`"
         );
         let too_large = ModelError::TextureTooLarge {
             asset: "hub".into(),

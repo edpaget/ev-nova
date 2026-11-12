@@ -508,11 +508,21 @@ mod tests {
 
     #[test]
     fn a_model_refused_for_its_texture_keeps_its_stand_in_and_is_reported_once() {
-        use crate::model_source::{FakeModels, ImageRef};
+        use crate::model_source::{FakeModels, ImageRef, Measure, Overrun};
         // Two classes share the light freighter's model.
         let source = with_a_plain_freighter();
         let game = load(&source, Path::new("sample"));
         let refusals = [
+            ModelError::TextureOverBudget {
+                asset: "light-freighter".into(),
+                image: ImageRef::Embedded(1),
+                over: vec![Overrun {
+                    measure: Measure::Side,
+                    used: 4_096,
+                    most: 2_048,
+                    budget: "budgets/default.md".into(),
+                }],
+            },
             ModelError::TextureUndecodable {
                 asset: "light-freighter".into(),
                 image: ImageRef::Embedded(0),
