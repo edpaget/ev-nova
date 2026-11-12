@@ -804,7 +804,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// truncated alone ([`Camera::nav_centre`]), the ship target's at the
     /// [whole point](Camera::whole_point) of its ship as drawn, with no size
     /// in it, so the same offset as its hull's. A stellar whose sheet can't
-    /// be read is bracketed as one with no sprite; a ship's as its crossed
+    /// be read is bracketed round its stand-in's frame if it draws one,
+    /// else as one with no sprite
+    /// ([`SceneStellar::bracket_size`](crate::system::scene::SceneStellar::bracket_size)); a
+    /// ship's as its crossed
     /// box, sized by the frames its slot holds ([`FrameShip::framed`]), as
     /// `_HandleWeapTargetSprites` reads the slot's hull sprite
     /// (@0x30089-0x300dc) and [`FlightView::drawn_boxes`] boxes it.
@@ -827,7 +830,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 .iter()
                 .find(|s| s.id == nav.stellar)
                 .map_or((super::point(nav.position), None), |stellar| {
-                    (stellar.position, stellar.slot_size())
+                    (stellar.position, stellar.bracket_size())
                 });
             let at = camera.nav_centre(position);
             brackets::draw_nav(list, at, sprite, nav.expand, nav.dominated);

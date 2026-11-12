@@ -188,6 +188,21 @@ impl SceneStellar {
         Some((sheet.frame_width, sheet.frame_height))
     }
 
+    /// The size its brackets are drawn round: its [`slot_size`](Self::slot_size),
+    /// or, when its sheet can't be read and it draws its stand-in instead,
+    /// the stand-in's frame, as wide as its landing reach. The stand-in is
+    /// the sprite a new game draws, and the original brackets a sprite by
+    /// its frame (@0x2fe00-0x2fe34). `None` when it draws neither: a stock
+    /// stellar has no stand-in, so one whose sheet can't be read is still
+    /// bracketed as one with no sprite.
+    #[must_use]
+    pub fn bracket_size(&self) -> Option<(u32, u32)> {
+        self.slot_size().or_else(|| {
+            let stands_in = matches!(self.drawn(), Some(Err(_))) && self.stand_in.is_some();
+            stands_in.then_some(STAND_IN_FRAME)
+        })
+    }
+
     /// The edge facts of the sheet drawn ([`StellarSheet::image_size`],
     /// [`StellarSheet::clip_quirks`]), if it can be read.
     fn edge(&self) -> Option<SheetEdge> {

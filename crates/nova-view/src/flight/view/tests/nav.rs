@@ -3,6 +3,8 @@ use super::faked_hud::{
 };
 use super::faked_world::world;
 use super::*;
+use crate::flight::brackets::NO_SPRITE_HALF;
+use crate::outline::{Outline, OutlineTriangle, StellarStandIn};
 use nova_sim::flight_frame::FrameShip;
 use nova_sim::status_cargo::StatusCargo;
 use nova_sim::{AlertIcon, JumpReadiness};
@@ -210,6 +212,88 @@ fn a_stellar_whose_sprite_cannot_be_read_is_bracketed_at_half_64() {
     assert_eq!(
         faked_nav_icons(&mut view, Some(nav_at(131, (100.0, 0.0), 0.0))),
         corners_at(10000, broken, 64.0)
+    );
+}
+
+/// The half-size of the box round the triangles `list` draws in `color`.
+fn half_of_drawn(list: &DrawList, color: Color) -> f32 {
+    let points: Vec<Point> = list
+        .iter()
+        .filter_map(|command| match command {
+            DrawCommand::Triangle { corners, color: c } if *c == color => Some(*corners),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert!(!points.is_empty(), "drawn in {color:?}");
+    let span = |coord: fn(&Point) -> f32| {
+        let (low, high) = points
+            .iter()
+            .map(coord)
+            .fold((f32::MAX, f32::MIN), |(l, h), v| (l.min(v), h.max(v)));
+        high - low
+    };
+    span(|p| p.x).max(span(|p| p.y)) / 2.0
+}
+
+/// A stellar the new game draws as its stand-in, its sheet unread, is
+/// bracketed round the stand-in: the stand-in is the sprite it draws,
+/// and the original brackets a sprite by its frame (@0x2fe00-0x2fe34).
+/// A disc and a ring fill the frame; an outline is fitted inside the
+/// same frame, so it is bracketed as they are.
+#[test]
+fn a_stellar_drawn_as_its_stand_in_is_bracketed_round_its_stand_in() {
+    let tan = Color::rgba(201, 163, 107, 255);
+    let grey = Color::rgba(184, 188, 196, 255);
+    let hull = Outline {
+        triangles: vec![OutlineTriangle {
+            corners: [at(0.0, -4.0), at(3.0, 2.0), at(-3.0, 2.0)],
+            color: Color::rgba(200, 200, 200, 255),
+        }],
+    };
+    let standing_in = |stand_in: StellarStandIn| -> (Faked, Point) {
+        let drawn = StellarContents {
+            sprite: Err("no spïn".to_owned()),
+            stand_in: Some(stand_in),
+            ..stellar(131, "Stand-in", (100, 0), 1)
+        };
+        let mut frame = in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]);
+        frame.stellars.push(record::stellar(StellarId(131)));
+        let view = super::faked_world::world(
+            FakeCatalog {
+                sol_more: vec![drawn],
+                ..catalog()
+            },
+            frame,
+        );
+        let centre = faked_on_screen(&view, (100.0, 0.0));
+        (view, centre)
+    };
+    let mut halves = Vec::new();
+    for (stand_in, color) in [
+        (StellarStandIn::Disc(tan), tan),
+        (StellarStandIn::Ring(grey), grey),
+    ] {
+        let (mut view, centre) = standing_in(stand_in);
+        let half = half_of_drawn(&super::faked_world::world_list(&view), color);
+        assert!(half < NO_SPRITE_HALF, "{half}: smaller than no sprite's");
+        assert_eq!(
+            faked_nav_icons(&mut view, Some(nav_at(131, (100.0, 0.0), 0.0))),
+            corners_at(10000, centre, half),
+            "{color:?}"
+        );
+        assert_eq!(
+            faked_nav_icons(&mut view, Some(nav_at(131, (100.0, 0.0), 20.0))),
+            corners_at(10000, centre, half + 20.0),
+            "{color:?} flying in"
+        );
+        halves.push(half);
+    }
+    let (mut view, centre) = standing_in(StellarStandIn::Outline(hull));
+    assert_eq!(
+        faked_nav_icons(&mut view, Some(nav_at(131, (100.0, 0.0), 0.0))),
+        corners_at(10000, centre, halves[0]),
+        "the outline's frame"
     );
 }
 
