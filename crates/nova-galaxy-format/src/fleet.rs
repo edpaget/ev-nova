@@ -6,7 +6,9 @@
 //! kits, so a modified civilian is a base hull plus kits. [`resolve`]
 //! works out the finished ship.
 
-use schemars::JsonSchema;
+use std::borrow::Cow;
+
+use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::Deserialize;
 
 use crate::id::{Color, Id};
@@ -71,6 +73,48 @@ pub struct Ship {
     /// a small explosion and no escape pods.
     #[serde(default)]
     pub wreck: Wreck,
+    /// How see-through its hull always is, in 32nds, from 0 (opaque) to
+    /// 32 (unseen): a ghostly hull, before any cloak. Left out, it takes
+    /// its base's, else 0.
+    #[serde(default)]
+    pub translucency: Option<Translucency>,
+}
+
+/// How see-through a ship's hull is, in 32nds, from 0 (opaque) to 32
+/// (unseen).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(try_from = "u8")]
+pub struct Translucency(u8);
+
+impl TryFrom<u8> for Translucency {
+    type Error = String;
+    fn try_from(n: u8) -> Result<Self, String> {
+        if n <= 32 {
+            Ok(Self(n))
+        } else {
+            Err(format!("{n} is outside 0 to 32"))
+        }
+    }
+}
+
+impl Translucency {
+    /// The value, 0 to 32.
+    #[must_use]
+    pub fn get(self) -> u8 {
+        self.0
+    }
+}
+
+impl JsonSchema for Translucency {
+    fn schema_name() -> Cow<'static, str> {
+        "Translucency".into()
+    }
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "integer", "minimum": 0, "maximum": 32,
+            "description": "How see-through the hull is, in 32nds: 0 opaque, 32 unseen"
+        })
+    }
 }
 
 /// A ship's design language. See `mechanics/ships.md`.
@@ -441,6 +485,9 @@ pub struct Resolved<'a> {
     pub livery: Option<&'a Id>,
     /// The nearest `size` in the chain.
     pub size: Option<Size>,
+    /// The nearest `translucency` in the chain, in 32nds; 0 when no ship
+    /// in it gives one.
+    pub translucency: u8,
     /// Every mod kit fitted, from the root base down. A kit that doesn't
     /// exist is listed but adds nothing.
     pub mods: Vec<Id>,
@@ -645,6 +692,9 @@ pub fn resolve<'a>(galaxy: &'a Galaxy, id: &Id) -> Result<Resolved<'a>, ResolveE
         model: nearest(&|s| s.model.is_some()).and_then(|s| s.model.as_ref()),
         livery: nearest(&|s| s.livery.is_some()).and_then(|s| s.livery.as_ref()),
         size: nearest(&|s| s.size.is_some()).and_then(|s| s.size),
+        translucency: nearest(&|s| s.translucency.is_some())
+            .and_then(|s| s.translucency)
+            .map_or(0, Translucency::get),
         mods,
         hardpoints,
         stats,
@@ -685,6 +735,36 @@ mod tests {
         assert_eq!(ship.stats.speed, None);
         assert_eq!(ship.hardpoints[0].mount, Mount::Fixed);
         assert!(ship.base.is_none() && ship.mods.is_empty());
+    }
+
+    #[test]
+    fn a_ship_reads_its_translucency_from_0_to_32() {
+        for n in [0, 10, 32] {
+            let ship: Ship = read(&format!("name: Wisp\ntranslucency: {n}\n")).unwrap();
+            assert_eq!(ship.translucency.map(Translucency::get), Some(n));
+        }
+        let ship: Ship = read("name: Wisp\n").unwrap();
+        assert_eq!(ship.translucency, None, "left out");
+        for bad in ["33", "-1", "2.5"] {
+            let read = read::<Ship>(&format!("name: Wisp\ntranslucency: {bad}\n"));
+            assert!(read.is_err(), "{bad}: {read:?}");
+        }
+        let over = read::<Ship>("name: Wisp\ntranslucency: 40\n").unwrap_err();
+        assert!(over.contains("outside 0 to 32"), "{over}");
+    }
+
+    #[test]
+    fn a_translucency_schema_is_named_and_an_integer_from_0_to_32() {
+        use schemars::SchemaGenerator;
+        assert_eq!(Translucency::schema_name(), "Translucency");
+        let schema = Translucency::json_schema(&mut SchemaGenerator::default()).to_value();
+        assert_eq!(schema["type"], "integer");
+        assert_eq!(
+            (schema["minimum"].as_u64(), schema["maximum"].as_u64()),
+            (Some(0), Some(32))
+        );
+        let description = schema["description"].as_str().unwrap_or_default();
+        assert!(description.contains("32nds"), "{schema}");
     }
 
     #[test]
@@ -934,6 +1014,29 @@ mod tests {
 
         fn id(s: &str) -> Id {
             Id::try_from(s.to_string()).unwrap()
+        }
+
+        #[test]
+        fn a_ship_s_translucency_is_its_nearest_in_the_chain_or_0() {
+            let galaxy = galaxy_with(&[
+                (
+                    "ships/ghost-skiff.md",
+                    "---\nname: Ghost skiff\nbase: skiff\ntranslucency: 10\n---\n",
+                ),
+                (
+                    "ships/pale-skiff.md",
+                    "---\nname: Pale skiff\nbase: ghost-skiff\n---\n",
+                ),
+                (
+                    "ships/solid-skiff.md",
+                    "---\nname: Solid skiff\nbase: ghost-skiff\ntranslucency: 0\n---\n",
+                ),
+            ]);
+            let translucency = |ship| resolve(&galaxy, &id(ship)).unwrap().translucency;
+            assert_eq!(translucency("skiff"), 0, "none given");
+            assert_eq!(translucency("ghost-skiff"), 10);
+            assert_eq!(translucency("pale-skiff"), 10, "inherited");
+            assert_eq!(translucency("solid-skiff"), 0, "overridden");
         }
 
         #[test]

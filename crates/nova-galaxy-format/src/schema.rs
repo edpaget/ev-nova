@@ -336,6 +336,23 @@ mod tests {
     }
 
     #[test]
+    fn the_ship_schema_offers_an_optional_translucency() {
+        let ship = value("ship.schema.json");
+        let translucency = &ship["properties"]["translucency"];
+        let name = translucency["anyOf"]
+            .as_array()
+            .and_then(|options| options.iter().find_map(|o| o["$ref"].as_str()))
+            .or_else(|| translucency["$ref"].as_str())
+            .and_then(|r| r.rsplit('/').next())
+            .unwrap_or_else(|| panic!("a translucency definition: {translucency}"));
+        let definition = &ship["definitions"][name];
+        assert_eq!(definition["type"], "integer", "{definition}");
+        assert_eq!(definition["maximum"], 32, "{definition}");
+        let required = ship["required"].as_array().expect("required");
+        assert!(!required.contains(&"translucency".into()), "{required:?}");
+    }
+
+    #[test]
     fn the_ship_schema_describes_its_wreck_and_its_two_explosions() {
         let ship = value("ship.schema.json");
         let wreck = &ship["properties"]["wreck"];
