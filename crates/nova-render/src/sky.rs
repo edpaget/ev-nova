@@ -55,6 +55,25 @@
 //! a star is drawn at least one texel in radius, its brightness lowered so
 //! it gives the same light ([`stars`]). The shader adds `colour ×
 //! coverage(distance / radius)` ([`coverage`]) to what is beneath.
+//!
+//! # The rush
+//!
+//! Through a jump's warp the pose carries the rush ([`SkyPose::rush`]),
+//! the eye's move over the last step. Each star is then drawn as the
+//! streak it swept on screen over that step: from where it is now back
+//! to where it was, the rush times its layer's parallax
+//! ([`StarInstance::trail`]). Near layers streak long, far ones barely.
+//! The streak keeps the star's radius and colour along its length: the
+//! shader adds `colour × coverage(distance to the segment / radius)`
+//! ([`streak_coverage`]), which is the round star's light at no trail.
+//!
+//! A trail is cut down along its heading to reach at most across the
+//! view each way, and a rush that is not finite draws round stars. Stars
+//! are generated and kept by where their streak reaches, not their
+//! centre, so a streak whose head is off the view but whose tail crosses
+//! into it still shows; the extra cells keep the work within
+//! [`rushing_cell_bound`]. With no rush every star is round and exactly
+//! as it is without one.
 
 use nova_view::{Point, SkyPose};
 
@@ -141,6 +160,10 @@ pub struct StarInstance {
     pub radius: f32,
     /// The light it adds at its centre, RGB 0 to 1.
     pub color: [f32; 3],
+    /// Where it was drawn a step ago, from its centre, in logical units:
+    /// it is drawn as the streak from its centre to there
+    /// ([`streak_coverage`]). Zero for a round star.
+    pub trail: Point,
 }
 
 /// How much of a layer at `depth` behind the play plane moves with the
@@ -174,19 +197,90 @@ pub fn coverage(t: f32) -> f32 {
     inside * inside
 }
 
+/// How much of a streak's light lands at `offset` from its centre, the
+/// streak running from the centre along `trail`, `radius` wide each side:
+/// [`coverage`] of the distance from the segment, in radii. With no trail
+/// it is a round star's.
+#[must_use]
+pub fn streak_coverage(offset: Point, trail: Point, radius: f32) -> f32 {
+    let length = trail.x * trail.x + trail.y * trail.y;
+    let along = if length > 0.0 {
+        ((offset.x * trail.x + offset.y * trail.y) / length).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let (dx, dy) = (offset.x - trail.x * along, offset.y - trail.y * along);
+    coverage(dx.hypot(dy) / radius)
+}
+
 /// The most cells a layer generates for a view of `logical` size: the
 /// cells the view, grown by [`MARGIN`] each way, can overlap.
 #[must_use]
 pub fn cell_bound(logical: LogicalSize) -> usize {
-    let (nx, ny) = cell_span(logical);
+    let (nx, ny) = cell_span(logical, Point::new(0.0, 0.0));
+    nx * ny
+}
+
+/// The most cells a layer generates for a view of `logical` size with
+/// any rush: the cells the view, grown by [`MARGIN`] each way and by the
+/// longest trail ([`trail_of`]), the view's own size, can overlap.
+#[must_use]
+pub fn rushing_cell_bound(logical: LogicalSize) -> usize {
+    let longest = Point::new(logical.w as f32, logical.h as f32);
+    let (nx, ny) = cell_span(logical, longest);
     nx * ny
 }
 
 /// The cells across and down a view of `logical` size overlaps, grown
-/// by [`MARGIN`] each way.
-fn cell_span(logical: LogicalSize) -> (usize, usize) {
-    let span = |extent: u32| ((extent as f32 + 2.0 * MARGIN) / CELL).ceil() as usize + 1;
-    (span(logical.w), span(logical.h))
+/// by [`MARGIN`] each way and by `trail` on its side.
+fn cell_span(logical: LogicalSize, trail: Point) -> (usize, usize) {
+    let span = |extent: u32, trail: f32| {
+        ((extent as f32 + 2.0 * MARGIN + trail.abs()) / CELL).ceil() as usize + 1
+    };
+    (span(logical.w, trail.x), span(logical.h, trail.y))
+}
+
+/// The trail a layer of parallax `scale` streaks by in a view of
+/// `logical` size, rushing by `rush`: the rush times the parallax, cut
+/// down along its heading to reach at most across the view each way,
+/// and none for a rush that is not finite.
+fn trail_of(rush: Point, scale: f32, logical: LogicalSize) -> Point {
+    if !(rush.x.is_finite() && rush.y.is_finite()) {
+        return Point::new(0.0, 0.0);
+    }
+    let (x, y) = (rush.x * scale, rush.y * scale);
+    let fit = |reach: f32, along: f32| {
+        if along.abs() > reach {
+            reach / along.abs()
+        } else {
+            1.0
+        }
+    };
+    let cut = fit(logical.w as f32, x).min(fit(logical.h as f32, y));
+    Point::new(x * cut, y * cut)
+}
+
+/// Whether the segment from `from` along `trail` reaches into the box
+/// from `lo` to `hi`: with no trail, whether `from` is in it, its far
+/// edges left out.
+fn reaches(from: Point, trail: Point, lo: Point, hi: Point) -> bool {
+    if trail == Point::new(0.0, 0.0) {
+        return (lo.x..hi.x).contains(&from.x) && (lo.y..hi.y).contains(&from.y);
+    }
+    // Liang–Barsky: narrow the segment's span [enter, leave] by each slab.
+    let (mut enter, mut leave) = (0.0_f32, 1.0_f32);
+    for (start, step, lo, hi) in [(from.x, trail.x, lo.x, hi.x), (from.y, trail.y, lo.y, hi.y)] {
+        if step == 0.0 {
+            if !(lo..hi).contains(&start) {
+                return false;
+            }
+            continue;
+        }
+        let (a, b) = ((lo - start) / step, (hi - start) / step);
+        enter = enter.max(a.min(b));
+        leave = leave.min(a.max(b));
+    }
+    enter <= leave
 }
 
 /// The sky `pose` sees in a view of `logical` size, drawn into a target
@@ -224,7 +318,8 @@ pub fn layer_stars(
     }
     let level = f32::from(pose.level.min(32)) / 32.0;
     let scale = parallax(sky_layer.depth);
-    let (nx, ny) = cell_span(logical);
+    let trail = trail_of(pose.rush, scale, logical);
+    let (nx, ny) = cell_span(logical, trail);
     // The layer's own coordinates, in logical units: the eye's point on
     // it, then the view's top-left corner (grown by the margin).
     let left = f64::from(pose.eye.x) * f64::from(scale) - f64::from(pose.anchor.x);
@@ -233,22 +328,28 @@ pub fn layer_stars(
     let cell = f64::from(CELL);
     let first = |edge: f64| (edge / cell).floor();
     let (cx0, cy0) = (first(left), first(top));
-    // Where cell (cx0, cy0)'s corner is drawn, in logical units.
+    // Where cell (cx0, cy0)'s corner is drawn, in logical units. Every
+    // star is placed from it, so a rush moves no star.
     let corner_x = (cx0 * cell - left) as f32 - MARGIN;
     let corner_y = (cy0 * cell - top) as f32 - MARGIN;
+    // A star whose trail reaches back into the view is kept, so the
+    // cells start further out on the side the trail reaches from: this
+    // many cells before (cx0, cy0), none without a rush.
+    let back = |edge: f64, grow: f32| (first(edge - f64::from(grow.max(0.0))) - first(edge)) as i64;
+    let (back_x, back_y) = (back(left, trail.x), back(top, trail.y));
     let per_cell = sky_layer.density * CELL * CELL / DENSITY_AREA;
-    let (lo_x, hi_x) = (-MARGIN, logical.w as f32 + MARGIN);
-    let (lo_y, hi_y) = (-MARGIN, logical.h as f32 + MARGIN);
+    let lo = Point::new(-MARGIN, -MARGIN);
+    let hi = Point::new(logical.w as f32 + MARGIN, logical.h as f32 + MARGIN);
     let min_radius = if texels_per_unit.is_finite() && texels_per_unit > 0.0 {
         1.0 / texels_per_unit
     } else {
         0.0
     };
     let mut out = Vec::new();
-    for j in 0..ny {
-        for i in 0..nx {
-            let cx = (cx0 as i64).wrapping_add(i as i64);
-            let cy = (cy0 as i64).wrapping_add(j as i64);
+    for j in (0..ny as i64).map(|j| j + back_y) {
+        for i in (0..nx as i64).map(|i| i + back_x) {
+            let cx = (cx0 as i64).wrapping_add(i);
+            let cy = (cy0 as i64).wrapping_add(j);
             let mut draws = Draws::new(pose.seed, layer, cx, cy);
             let whole = per_cell.floor();
             let count = whole as u32 + u32::from(draws.unit() < per_cell - whole);
@@ -258,7 +359,7 @@ pub fn layer_stars(
                 let radius = between(sky_layer.radius, draws.unit());
                 let brightness = between(sky_layer.brightness, draws.unit());
                 let tint = tint(draws.next());
-                if !(lo_x..hi_x).contains(&x) || !(lo_y..hi_y).contains(&y) {
+                if !reaches(Point::new(x, y), trail, lo, hi) {
                     continue;
                 }
                 let (radius, brightness) = if radius < min_radius {
@@ -272,6 +373,7 @@ pub fn layer_stars(
                     centre: Point::new(x, y),
                     radius,
                     color: tint.map(|c| c * light),
+                    trail,
                 });
             }
         }
@@ -518,7 +620,7 @@ mod tests {
     #[test]
     fn a_wide_view_generates_no_more_cells_than_the_bound() {
         let wide = LogicalSize { w: 4096, h: 768 };
-        let (nx, ny) = cell_span(wide);
+        let (nx, ny) = cell_span(wide, STILL);
         assert_eq!(cell_bound(wide), nx * ny);
         // 4104 / 128 → 33, plus one; 776 / 128 → 7, plus one.
         assert_eq!((nx, ny), (34, 8));
@@ -719,12 +821,202 @@ mod tests {
     #[test]
     fn the_cells_a_view_spans_count_its_margin_both_ways() {
         // 121 + 8 is just over a cell: two, plus one.
-        assert_eq!(cell_span(LogicalSize { w: 121, h: 120 }), (3, 2));
+        assert_eq!(cell_span(LogicalSize { w: 121, h: 120 }, STILL), (3, 2));
+        // A trail grows the span by its length on its own axis.
+        assert_eq!(
+            cell_span(LogicalSize { w: 121, h: 120 }, Point::new(-128.0, 9.0)),
+            (4, 3)
+        );
     }
 
     #[test]
     fn no_layer_past_the_last_has_stars() {
         assert!(layer_stars(&pose(1, (0.0, 0.0), 32), LAYERS.len(), LOGICAL, FINE).is_empty());
+    }
+
+    const STILL: Point = Point::new(0.0, 0.0);
+
+    /// A rush along a jump heading, down and to the right.
+    const RUSH: Point = Point::new(30.0, 18.0);
+
+    #[test]
+    fn a_sky_that_does_not_rush_has_round_stars() {
+        let seen = pose(4, (250.0, -90.0), 32);
+        assert_eq!(seen.rush, STILL);
+        let all = stars(&seen, LOGICAL, FINE);
+        assert!(!all.is_empty());
+        assert!(all.iter().all(|star| star.trail == STILL));
+        assert_eq!(stars(&seen.with_rush(STILL), LOGICAL, FINE), all);
+    }
+
+    #[test]
+    fn each_stars_trail_is_the_rush_by_its_layers_parallax_near_ones_longer() {
+        let seen = pose(4, (250.0, -90.0), 32).with_rush(RUSH);
+        let mut lengths = Vec::new();
+        for (layer, sky_layer) in LAYERS.iter().enumerate() {
+            let scale = parallax(sky_layer.depth);
+            let shown = layer_stars(&seen, layer, LOGICAL, FINE);
+            assert!(!shown.is_empty(), "layer {layer}");
+            for star in &shown {
+                assert_eq!(
+                    star.trail,
+                    Point::new(RUSH.x * scale, RUSH.y * scale),
+                    "layer {layer}"
+                );
+            }
+            lengths.push(shown[0].trail.x.hypot(shown[0].trail.y));
+        }
+        assert!(
+            lengths.windows(2).all(|pair| pair[0] < pair[1]),
+            "{lengths:?}"
+        );
+    }
+
+    #[test]
+    fn a_rushing_sky_keeps_every_round_skys_star_and_streaks_it() {
+        let still = pose(4, (250.0, -90.0), 32);
+        let rushing = stars(&still.with_rush(RUSH), LOGICAL, FINE);
+        for star in stars(&still, LOGICAL, FINE) {
+            assert!(
+                rushing.iter().any(|other| other.centre == star.centre
+                    && other.radius == star.radius
+                    && other.color == star.color
+                    && other.trail != STILL),
+                "{star:?}"
+            );
+        }
+    }
+
+    /// Whether the segment from `star`'s centre along its trail reaches
+    /// into the view of `logical` size grown by the margin.
+    fn reaches_in(star: &StarInstance, logical: LogicalSize) -> bool {
+        let (right, bottom) = (logical.w as f32 + MARGIN, logical.h as f32 + MARGIN);
+        (0..=1000).any(|step| {
+            let along = step as f32 / 1000.0;
+            let at = Point::new(
+                star.centre.x + star.trail.x * along,
+                star.centre.y + star.trail.y * along,
+            );
+            (-MARGIN..=right).contains(&at.x) && (-MARGIN..=bottom).contains(&at.y)
+        })
+    }
+
+    #[test]
+    fn a_streak_entering_from_off_the_view_is_kept_and_none_lies_wholly_outside() {
+        for rush in [
+            Point::new(120.0, 72.0),
+            Point::new(-400.0, 90.0),
+            Point::new(0.0, -700.0),
+        ] {
+            let all = stars(&pose(4, (250.0, -90.0), 32).with_rush(rush), LOGICAL, FINE);
+            let outside = |star: &&StarInstance| {
+                !(-MARGIN..LOGICAL.w as f32 + MARGIN).contains(&star.centre.x)
+                    || !(-MARGIN..LOGICAL.h as f32 + MARGIN).contains(&star.centre.y)
+            };
+            assert!(all.iter().filter(outside).count() > 0, "{rush:?}");
+            for star in &all {
+                assert!(reaches_in(star, LOGICAL), "{rush:?}: {star:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_rushing_sky_generates_no_more_cells_than_the_rushing_bound() {
+        let wide = LogicalSize { w: 4096, h: 768 };
+        assert!(rushing_cell_bound(wide) > cell_bound(wide));
+        for (layer, sky_layer) in LAYERS.iter().enumerate() {
+            let per_cell = (sky_layer.density * CELL * CELL / DENSITY_AREA).ceil() as usize;
+            for rush in [RUSH, Point::new(-1e6, 3e5), Point::new(f32::MAX, -f32::MAX)] {
+                let seen = pose(2, (63.9, 64.1), 32).with_rush(rush);
+                let count = layer_stars(&seen, layer, wide, FINE).len();
+                assert!(
+                    count <= rushing_cell_bound(wide) * per_cell,
+                    "{layer} {rush:?}"
+                );
+                assert!(count > 0, "{layer} {rush:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_trail_reaches_at_most_across_the_view_along_the_rush() {
+        let seen = pose(2, (0.0, 0.0), 32).with_rush(Point::new(-1e9, 5e8));
+        for star in stars(&seen, LOGICAL, FINE) {
+            assert!(star.trail.x.abs() <= LOGICAL.w as f32 + 1e-3, "{star:?}");
+            assert!(star.trail.y.abs() <= LOGICAL.h as f32 + 1e-3, "{star:?}");
+            assert!(star.trail.x < 0.0 && star.trail.y > 0.0, "{star:?}");
+            assert!((star.trail.x / star.trail.y + 2.0).abs() < 1e-3, "{star:?}");
+        }
+    }
+
+    #[test]
+    fn a_rush_that_is_not_finite_gives_round_stars() {
+        let seen = pose(4, (250.0, -90.0), 32);
+        let round = stars(&seen, LOGICAL, FINE);
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            for rush in [Point::new(bad, 1.0), Point::new(1.0, bad)] {
+                assert_eq!(
+                    stars(&seen.with_rush(rush), LOGICAL, FINE),
+                    round,
+                    "{rush:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_rushing_stars_radius_still_grows_to_a_texel() {
+        let seen = pose(6, (12.0, 34.0), 32).with_rush(RUSH);
+        let coarse = stars(&seen, LOGICAL, 0.25);
+        assert!(!coarse.is_empty());
+        assert!(coarse.iter().all(|star| star.radius * 0.25 >= 1.0 - 1e-6));
+    }
+
+    #[test]
+    fn a_streak_with_no_trail_is_lit_as_a_round_star() {
+        for (x, y) in [(0.0, 0.0), (1.0, 0.5), (-2.0, 1.5), (3.0, 3.0)] {
+            let offset = Point::new(x, y);
+            assert_eq!(
+                streak_coverage(offset, STILL, 2.5),
+                coverage(x.hypot(y) / 2.5),
+                "{offset:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_streak_is_lit_along_its_trail_and_not_past_its_ends() {
+        let trail = Point::new(20.0, 0.0);
+        let radius = 2.0;
+        // Wholly lit along the segment, its ends included.
+        for x in [0.0, 5.0, 10.0, 20.0] {
+            assert_eq!(
+                streak_coverage(Point::new(x, 0.0), trail, radius),
+                1.0,
+                "{x}"
+            );
+        }
+        // Off the segment by its distance, beside it or past an end.
+        assert_eq!(
+            streak_coverage(Point::new(10.0, 1.0), trail, radius),
+            coverage(0.5)
+        );
+        assert_eq!(
+            streak_coverage(Point::new(-1.0, 0.0), trail, radius),
+            coverage(0.5)
+        );
+        assert_eq!(
+            streak_coverage(Point::new(21.0, 0.0), trail, radius),
+            coverage(0.5)
+        );
+        for off in [
+            Point::new(-2.0, 0.0),
+            Point::new(22.5, 0.0),
+            Point::new(10.0, 2.0),
+            Point::new(10.0, -3.0),
+        ] {
+            assert_eq!(streak_coverage(off, trail, radius), 0.0, "{off:?}");
+        }
     }
 }
 

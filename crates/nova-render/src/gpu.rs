@@ -943,6 +943,7 @@ mod tests {
                     centre: Point::new(0.0, 0.0),
                     radius: 1.0,
                     color: [1.0; 3],
+                    trail: Point::new(0.0, 0.0),
                 };
                 8
             ]),

@@ -128,6 +128,7 @@ mod tests {
             centre: Point::new(1.0, 2.0),
             radius: 3.0,
             color: [0.25, 0.5, 0.75],
+            trail: Point::new(0.0, 0.0),
         };
         let data = StarData::from(&star);
         let floats: &[f32] = bytemuck::cast_slice(std::slice::from_ref(&data));
@@ -147,6 +148,7 @@ mod tests {
             centre: Point::new(16.5, 16.5),
             radius: 4.0,
             color: [0.8, 0.4, 0.2],
+            trail: Point::new(0.0, 0.0),
         };
         gpu.submit(&Frame {
             target: (32, 32),

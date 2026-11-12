@@ -2775,6 +2775,7 @@ mod tests {
             centre: Point::new(16.0, 16.0),
             radius: 2.0,
             color: [1.0; 3],
+            trail: Point::new(0.0, 0.0),
         }])]);
         assert_builds_no_pipeline(&mut gpu, made, &sky, "a frame of sky");
         // A native world drawn below 100% is a texture, enlarged with
