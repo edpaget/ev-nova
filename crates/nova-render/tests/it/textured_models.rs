@@ -8,9 +8,12 @@
 //! - Offscreen: a quad facing the camera in a 2 by 2 texture of four
 //!   colours shows each texel in its quadrant as
 //!   [`fragment`](nova_render::camera::fragment) gives it, lit and unlit,
-//!   under a white factor and a tinted one; and a cube whose two visible
-//!   faces the light shades apart draws both at their own colours when
-//!   unlit. These need a GPU adapter; they skip, passing, without one.
+//!   under a white factor and a tinted one; the sampler repeats the
+//!   texture for coordinates outside 0 to 1 and filters across the seam;
+//!   a fine texture on a small quad shows its mip levels, not its first;
+//!   and a cube whose two visible faces the light shades apart draws both
+//!   at their own colours when unlit. These need a GPU adapter; they
+//!   skip, passing, without one.
 
 use std::f32::consts::FRAC_PI_6;
 use std::sync::Arc;
@@ -164,9 +167,9 @@ fn a_textured_unlit_model_from_data_uploads_its_texture_then_its_mesh_and_draws(
 }
 
 /// A quad facing the camera, a unit a side, in a material of the linear
-/// `base` colour on [`SKIN`]: the texture's top-left texel at its top
-/// left.
-fn quad(base: [f32; 4], unlit: bool) -> LoadedModel {
+/// `base` colour on `texture`, its texture coordinates running from
+/// `from` at its top left to `to` at its bottom right, each way.
+fn quad_on(texture: Texture, (from, to): (f32, f32), base: [f32; 4], unlit: bool) -> LoadedModel {
     let color = vertex_color(base);
     let corners = [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)];
     let vertices = corners
@@ -179,7 +182,10 @@ fn quad(base: [f32; 4], unlit: bool) -> LoadedModel {
             unlit: false,
         })
         .collect();
-    let uv = corners.iter().map(|&(x, y)| [x + 0.5, y + 0.5]).collect();
+    let uv = corners
+        .iter()
+        .map(|&(x, y)| [x + 0.5, y + 0.5].map(|across| from + across * (to - from)))
+        .collect();
     LoadedModel {
         parts: vec![Part {
             mesh: Mesh::new(vertices, vec![0, 1, 2, 0, 2, 3]).expect("two triangles"),
@@ -187,8 +193,14 @@ fn quad(base: [f32; 4], unlit: bool) -> LoadedModel {
             uv: Some(uv),
         }],
         materials: vec![material(base, unlit, true)],
-        textures: vec![skin()],
+        textures: vec![texture],
     }
+}
+
+/// The quad on [`SKIN`], once across it: the texture's top-left texel at
+/// its top left.
+fn quad(base: [f32; 4], unlit: bool) -> LoadedModel {
+    quad_on(skin(), (0.0, 1.0), base, unlit)
 }
 
 /// The quads' side, in logical units: 18 pixels, so each quadrant's
@@ -198,29 +210,36 @@ const SIDE: f32 = 9.0;
 const LIT_AT: (f32, f32) = (6.5, 12.5);
 const UNLIT_AT: (f32, f32) = (22.5, 12.5);
 
-/// The lit and the unlit quad of `base`, side by side, drawn offscreen
-/// and read back; `None` with no adapter.
-fn quads_drawn(base: [f32; 4]) -> Option<Vec<u8>> {
-    const LIT: ModelKey = ModelKey(1);
-    const UNLIT: ModelKey = ModelKey(2);
+/// Each of `quads` (a model, its centre and its side in logical units)
+/// drawn offscreen facing the camera, and read back; `None` with no
+/// adapter.
+fn drawn(quads: &[(LoadedModel, (f32, f32), f32)]) -> Option<Vec<u8>> {
     let mut gpu = gpu_with(SIZE, SIZE, &FontFaces::bundled())?;
     let mut renderer = Renderer::new(Images);
-    renderer.add_model(LIT, quad(base, false).mesh());
-    renderer.add_model(UNLIT, quad(base, true).mesh());
     let mut list = DrawList::new();
-    for (key, (x, y)) in [(LIT, LIT_AT), (UNLIT, UNLIT_AT)] {
+    for (key, (model, (x, y), side)) in (1..).map(ModelKey).zip(quads) {
+        renderer.add_model(key, model.mesh());
         list.model(
             key,
             ModelPose {
-                center: Point::new(x, y),
+                center: Point::new(*x, *y),
                 orientation: Orientation::IDENTITY,
-                scale: SIDE,
+                scale: *side,
             },
         );
     }
     let report = renderer.render(&list, &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0), &mut gpu);
     assert_eq!(report, RenderReport::default());
     Some(gpu.read_pixels().expect("read back"))
+}
+
+/// The lit and the unlit quad of `base`, side by side, drawn offscreen
+/// and read back; `None` with no adapter.
+fn quads_drawn(base: [f32; 4]) -> Option<Vec<u8>> {
+    drawn(&[
+        (quad(base, false), LIT_AT, SIDE),
+        (quad(base, true), UNLIT_AT, SIDE),
+    ])
 }
 
 /// What a fragment of `color` shows over the black the frame is cleared
@@ -287,6 +306,100 @@ fn a_tinted_factor_multiplies_the_texture() {
     let (x, y) = UNLIT_AT;
     let [red, _, _] = color_at(&pixels, x - SIDE / 4.0, y - SIDE / 4.0);
     assert!(red < 200, "{red}");
+}
+
+#[test]
+fn texture_coordinates_outside_zero_to_one_repeat_the_texture() {
+    let white = [1.0; 4];
+    // The lit quad a whole turn past the texture, the unlit one a whole
+    // turn before it: each quadrant still shows its own texel, where a
+    // clamping sampler would smear an edge texel over the quad.
+    let Some(pixels) = drawn(&[
+        (quad_on(skin(), (1.0, 2.0), white, false), LIT_AT, SIDE),
+        (quad_on(skin(), (-1.0, 0.0), white, true), UNLIT_AT, SIDE),
+    ]) else {
+        return;
+    };
+    assert_quadrants(&pixels, white);
+
+    // Across the seam the sampler filters the first texel with the last,
+    // wrapped round. Two texels cover the quad's 18 pixels, so the centre
+    // of its leftmost pixel is 1/18 of a texel past the seam: 5/9 of the
+    // first texel and 4/9 of the last. Read on the top quadrants' middle
+    // row, where only the top row of texels is sampled.
+    let (first, last) = (texel(0, 0), texel(1, 0));
+    let blend = [0, 1, 2, 3].map(|c| (5.0 * first[c] + 4.0 * last[c]) / 9.0);
+    let expected = over_black(blend);
+    let (x, y) = UNLIT_AT;
+    let got = color_at(&pixels, x - SIDE / 2.0 + 0.25, y - SIDE / 4.0);
+    assert!(
+        within(got, expected, FILTERED),
+        "the seam's blend: {got:?}, not {expected:?}"
+    );
+    for alone in [first, last] {
+        assert!(
+            !within(got, over_black(alone), 40),
+            "one texel alone: {got:?}"
+        );
+    }
+}
+
+/// How far a channel filtered between two texels may be from the blend
+/// worked out here: a GPU keeps a filter's weights to a few bits.
+const FILTERED: u8 = 4;
+
+/// Whether each channel of `a` is within `tolerance` of `b`'s.
+fn within(a: [u8; 3], b: [u8; 3], tolerance: u8) -> bool {
+    a.iter().zip(&b).all(|(p, q)| p.abs_diff(*q) <= tolerance)
+}
+
+/// The two colours of [`checker`], which average to (120, 40, 120).
+const CHECKS: [[u8; 4]; 2] = [[240, 40, 0, 255], [0, 40, 240, 255]];
+
+/// An 8 by 8 texture of one-texel checks in [`CHECKS`].
+fn checker() -> Texture {
+    let rgba = (0..8)
+        .flat_map(|row| (0..8).flat_map(move |column| CHECKS[(row + column) % 2]))
+        .collect();
+    Texture {
+        image: Arc::new(ModelTexture::new(8, 8, rgba).expect("64 texels")),
+        path: None,
+    }
+}
+
+#[test]
+fn a_fine_texture_on_a_small_quad_shows_its_mips_average() {
+    // Two pixels a side over eight texels: four texels a pixel, which
+    // the 2 by 2 mip level answers. Every level under the first is the
+    // checks' average all over.
+    const SMALL: f32 = 1.0;
+    const AT: (f32, f32) = (16.0, 12.0);
+    let texture = checker();
+    let levels = texture.image.levels();
+    assert_eq!(levels.len(), 4);
+    let average = [120, 40, 120];
+    for level in &levels[1..] {
+        for texel in level.rgba.as_chunks::<4>().0 {
+            assert_eq!(*texel, [120, 40, 120, 255], "level {}", level.width);
+        }
+    }
+    // Half a texel along, each pixel's centre is a texel's centre in the
+    // first level: read from it alone, the pixel would be one check.
+    let half = 1.0 / 16.0;
+    let quad = quad_on(texture, (half, 1.0 + half), [1.0; 4], true);
+    let Some(pixels) = drawn(&[(quad, AT, SMALL)]) else {
+        return;
+    };
+    for (dx, dy) in [(-0.25, -0.25), (0.25, -0.25), (-0.25, 0.25), (0.25, 0.25)] {
+        let at = (AT.0 + dx, AT.1 + dy);
+        assert_near(&pixels, at, average, "the checks' average");
+        let got = color_at(&pixels, at.0, at.1);
+        for [red, green, blue, _] in CHECKS {
+            assert!(!within(got, [red, green, blue], 40), "one check: {got:?}");
+        }
+    }
+    // Beside the quad, nothing.
+    assert_eq!(color_at(&pixels, AT.0 + 0.75, AT.1), [0, 0, 0]);
 }
 
 /// The cube's faces' colours, in `Mesh::cube`'s order: +x, −x, +y, −y,
