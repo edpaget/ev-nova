@@ -11,7 +11,10 @@
 //! sky batch is the system's look: with no `sky` block
 //! (`fixture::modelled_sample`) the seeded backdrop under the stars, and
 //! with one (`fixture::sky_sample`) the data's red clouds and no stars.
-//! Under the stock readings the looks registered draw nothing.
+//! Under the stock readings the looks registered draw nothing. A system
+//! whose data lists decorations (`fixture::decorated_sample`) draws them
+//! as one sky-images batch after its stars, each image uploaded once, and
+//! under the stock readings none.
 //!
 //! Wiring only: the layered sky's rule is nova-view's (`flight::sky` and
 //! the view's `sky` module), its look nova-render's (`sky`, and
@@ -32,8 +35,10 @@ use nova_audio::recording::MemorySettings;
 use nova_data::new_game;
 use nova_render::gpu::Batch;
 use nova_render::recording::GpuCall;
-use nova_render::sky::{SkyLook, StarInstance, backdrop};
-use nova_render::{LogicalSize, WorldAssets, world_assets};
+use nova_render::sky::{Placement, SkyLook, StarInstance, backdrop, placed};
+use nova_render::{
+    Frame, LogicalSize, SkyImage, SkyImageInstance, WorldAssets, WorldSpace, world_assets,
+};
 use nova_sim::Vec2;
 use nova_sim::fixture::MemoryPilots;
 use nova_view::{DrawCommand, DrawLayer, DrawList, Key, Screen, SkyPose};
@@ -203,15 +208,20 @@ fn flying_with_looks(
     (harness, assets)
 }
 
-/// The sky batches of the frame drawn next, and its logical size.
-fn sky_batches(game: &mut Harness) -> (Vec<Vec<StarInstance>>, LogicalSize) {
+/// The frame drawn next.
+fn frame_drawn(game: &mut Harness) -> Frame {
     draw(game);
-    let frame = (game.gpu_calls().iter().rev())
+    (game.gpu_calls().iter().rev())
         .find_map(|call| match call {
             GpuCall::Submit(frame) => Some(frame.clone()),
             _ => None,
         })
-        .expect("a frame submitted");
+        .expect("a frame submitted")
+}
+
+/// The sky batches of the frame drawn next, and its logical size.
+fn sky_batches(game: &mut Harness) -> (Vec<Vec<StarInstance>>, LogicalSize) {
+    let frame = frame_drawn(game);
     let skies = frame
         .batches
         .into_iter()
@@ -271,5 +281,93 @@ fn the_stock_readings_draw_no_sky_with_looks_registered() {
     assert_eq!(assets.skies.len(), 1, "a look registered");
     let (batches, _) = sky_batches(&mut game);
     assert_eq!(batches, Vec::<Vec<StarInstance>>::new());
+    assert_eq!(skies(&game), []);
+}
+
+/// The texels a logical unit is in the canvas `frame`'s world is drawn
+/// into: the smaller axis's, as the renderer hands the sky.
+fn world_texels(frame: &Frame) -> f32 {
+    let (width, height) = match frame.world_space {
+        WorldSpace::Texture { size } => size,
+        WorldSpace::Target => (frame.viewport.w, frame.viewport.h),
+    };
+    let across = width as f32 / frame.logical.w as f32;
+    let down = height as f32 / frame.logical.h as f32;
+    across.min(down)
+}
+
+/// The sky-image batches of `frame`, each with the index of the batch
+/// before it that is a sky's stars, if the one before it is.
+fn sky_image_batches(frame: &Frame) -> Vec<(Option<usize>, Vec<SkyImageInstance>)> {
+    (frame.batches.iter().enumerate())
+        .filter_map(|(at, batch)| match batch {
+            Batch::SkyImages(images) => {
+                let after_sky = at
+                    .checked_sub(1)
+                    .filter(|before| matches!(frame.batches[*before], Batch::Sky(_)));
+                Some((after_sky, images.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The sky images uploaded to `game`'s GPU so far, in order.
+fn sky_image_uploads(game: &Harness) -> Vec<SkyImage> {
+    (game.gpu_calls().iter())
+        .filter_map(|call| match call {
+            GpuCall::UploadSkyImage { data, .. } => Some(data.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_system_that_lists_decorations_draws_them_after_its_stars() {
+    let pilots = MemoryPilots::new();
+    let loaded = loaded!(new_game::fixture::decorated_sample());
+    let (mut game, assets) = flying_with_looks(loaded, Ruleset::NewGame, &pilots);
+    let frame = frame_drawn(&mut game);
+    let pose = skies(&game)[0];
+    let list = assets.skies.decorations(pose.seed).expect("its list");
+    assert_eq!(list.len(), 2, "the start system's two");
+    // What the renderer's core places for the view's pose and the
+    // assets' decorations, in its order.
+    let expected = placed(&pose, list, frame.logical, world_texels(&frame));
+    assert_eq!(expected.len(), 2, "both show from the start");
+    let [(after_sky, images)] = &sky_image_batches(&frame)[..] else {
+        panic!("one sky-images batch: {:?}", sky_image_batches(&frame));
+    };
+    assert!(after_sky.is_some(), "after the sky's own batch");
+    let drawn: Vec<Placement> = images.iter().map(|image| image.placement).collect();
+    let placements: Vec<Placement> = expected.iter().map(|(_, placement)| *placement).collect();
+    assert_eq!(drawn, placements);
+    // Each image uploaded once, in the order drawn, however many frames
+    // draw it.
+    frame_drawn(&mut game);
+    let images: Vec<SkyImage> = (expected.iter())
+        .map(|(index, _)| (*list[*index].image).clone())
+        .collect();
+    assert_eq!(sky_image_uploads(&game), images);
+}
+
+#[test]
+fn the_stock_readings_draw_no_decorations_with_them_registered() {
+    let pilots = MemoryPilots::new();
+    let loaded = loaded!(new_game::fixture::decorated_sample());
+    let (mut game, assets) = flying_with_looks(loaded, Ruleset::Stock, &pilots);
+    let listing = (new_game::load(&new_game::fixture::decorated_sample(), Path::new("sample")))
+        .ids
+        .systems
+        .values()
+        .filter(|&&nova| {
+            let seed = nova_view::flight::sky::sky_seed(nova_sim::SystemId(nova));
+            assets.skies.decorations(seed).is_some()
+        })
+        .count();
+    assert_eq!(listing, 1, "a system's decorations registered");
+    let frame = frame_drawn(&mut game);
+    assert_eq!(sky_image_batches(&frame), []);
+    assert_eq!(sky_image_uploads(&game), []);
     assert_eq!(skies(&game), []);
 }

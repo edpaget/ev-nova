@@ -40,7 +40,10 @@
 //!   planet is read and decoded here, where a failure can be reported.
 //! - **Skies**: each system's own sky look, from its `sky` block, keyed
 //!   by its sky's seed ([`sky_looks`]), for the app to hand the renderer
-//!   ([`Renderer::set_sky_looks`](crate::Renderer::set_sky_looks)).
+//!   ([`Renderer::set_sky_looks`](crate::Renderer::set_sky_looks)); and
+//!   beside it the decorations the block lists
+//!   ([`sky_decorations`]), each distinct image read and decoded here,
+//!   once, where a failure can be reported.
 //!
 //! Each model file is read once, by the loader: [`world_assets`] builds
 //! from the scenes it kept ([`NewGame::scenes`], through
@@ -83,6 +86,7 @@ use crate::livery::{Livery, painted, takes_paint};
 use crate::model::Mesh;
 use crate::model_source::{LoadedModel, ModelError, ModelRequest, ModelSource};
 use crate::new_game_sky::sky_looks;
+use crate::new_game_sky_images::{SkyDecorations, sky_decorations};
 use crate::planet_source::{LoadedPlanet, PlanetError, PlanetRequest, PlanetSource};
 use crate::sky::SkyLooks;
 
@@ -96,7 +100,8 @@ pub struct WorldAssets {
     pub meshes: Vec<(ModelKey, Mesh)>,
     /// Each planet key's planet, by ascending key.
     pub planets: Vec<(PlanetKey, LoadedPlanet)>,
-    /// Each system's own sky look, by its sky's seed ([`sky_looks`]).
+    /// Each system's own sky look, by its sky's seed ([`sky_looks`]),
+    /// and the decorations its data lists ([`sky_decorations`]).
     pub skies: SkyLooks,
     /// What failed that is news, each a line ready to report.
     pub problems: Vec<String>,
@@ -106,11 +111,17 @@ pub struct WorldAssets {
 /// scenes the loader read ([`NewGame::scenes`]), so no model file is read
 /// again, and its planets' textures read through `source`.
 pub fn world_assets(game: &NewGame, source: &impl Source) -> WorldAssets {
-    world_assets_from(
+    let mut assets = world_assets_from(
         game,
         &GalaxyModels::new(&game.galaxy, source).reading(&game.scenes),
         &GalaxyPlanets::new(&game.galaxy, source),
-    )
+    );
+    let SkyDecorations { lists, problems } = sky_decorations(game, source);
+    for (seed, list) in lists {
+        assets.skies.set_decorations(seed, list);
+    }
+    assets.problems.extend(problems);
+    assets
 }
 
 /// [`world_assets`] over the folder `dir` that `game` was opened from,
@@ -121,7 +132,9 @@ pub fn world_assets_in(game: &NewGame, dir: &std::path::Path) -> WorldAssets {
 }
 
 /// [`world_assets`] with its models and planets from `models` and
-/// `planets`: the planets baked smaller in tests, say.
+/// `planets`: the planets baked smaller in tests, say. It takes no
+/// source to read images through, so it leaves the skies' decorations
+/// out: its skies hold the looks alone.
 pub fn world_assets_from(
     game: &NewGame,
     models: &impl ModelSource,

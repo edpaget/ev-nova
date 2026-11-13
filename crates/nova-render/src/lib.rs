@@ -120,9 +120,12 @@
 //! - [`new_game_world`]: [`world_assets`], the new game's world models at
 //!   the program's edge: the flight's table of keys and the meshes and
 //!   planets they name, for the app to register, with the systems' sky
-//!   looks; it needs no GPU.
+//!   looks and their skies' decorations; it needs no GPU.
 //! - [`new_game_sky`]: [`sky_looks`], each new-game system's own sky look
 //!   from its data, keyed by its sky's seed; it needs no GPU.
+//! - [`new_game_sky_images`]: [`sky_decorations`], each new-game system's
+//!   sky decorations from its data, their images read as pictures of any
+//!   shape, each distinct asset once, with what failed; it needs no GPU.
 //! - [`present`]: what a window surface does before each frame.
 //!
 //! The adapter, [`wgpu`], is the only module that names `wgpu` or
@@ -192,6 +195,7 @@ pub mod model_source;
 pub mod model_texture;
 mod models;
 pub mod new_game_sky;
+pub mod new_game_sky_images;
 pub mod new_game_world;
 pub mod planet;
 pub mod planet_source;
@@ -229,6 +233,7 @@ pub use model_sampler::ModelSampler;
 pub use model_source::{LoadedModel, ModelError, ModelRequest, ModelSource};
 pub use model_texture::{ModelTexture, ModelTextureError, ModelTextureId};
 pub use new_game_sky::sky_looks;
+pub use new_game_sky_images::{SkyDecorations, sky_decorations};
 pub use new_game_world::{WorldAssets, world_assets, world_assets_from, world_assets_in};
 pub use planet_source::{LoadedPlanet, PlanetError, PlanetRequest, PlanetSource};
 pub use present::{AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action};
