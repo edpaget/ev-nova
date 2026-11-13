@@ -6,16 +6,64 @@
 //! strings, the manifest's settings) are nova-winres's tests.
 
 use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use object::LittleEndian as LE;
 use object::pe;
 use object::read::pe::{ImageNtHeaders, ImageOptionalHeader, PeFile64, ResourceDirectoryTable};
 
+/// `nova.exe`, built from the current source by this test process.
+///
+/// Cargo sets `CARGO_BIN_EXE_nova` only for the integration tests of the
+/// package that owns the bin, and artifact dependencies are unstable, so
+/// the test asks cargo for the exe itself: the `CARGO` that built the test
+/// (nextest and cargo set it), in the same target dir, which cargo's lock
+/// serialises. It is a second feature variant of nova and the crates whose
+/// features the tests' dev-dependencies change, so the first run on a cold
+/// target dir compiles them; later runs find it fresh.
+fn nova_exe() -> &'static Path {
+    static EXE: OnceLock<PathBuf> = OnceLock::new();
+    EXE.get_or_init(|| {
+        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| env!("CARGO").into());
+        let mut build = Command::new(cargo);
+        build.args([
+            "build",
+            "-p",
+            "nova",
+            "--bin",
+            "nova",
+            "--locked",
+            "--message-format=json-render-diagnostics",
+        ]);
+        if !cfg!(debug_assertions) {
+            build.arg("--release");
+        }
+        let output = build
+            .stderr(Stdio::inherit())
+            .output()
+            .expect("cargo starts");
+        assert!(output.status.success(), "cargo build: {}", output.status);
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|message| {
+                message["reason"] == "compiler-artifact"
+                    && message["target"]["name"] == "nova"
+                    && message["target"]["kind"]
+                        .as_array()
+                        .is_some_and(|kinds| kinds.iter().any(|kind| *kind == "bin"))
+            })
+            .find_map(|message| message["executable"].as_str().map(PathBuf::from))
+            .expect("cargo's build messages name nova's executable")
+    })
+}
+
 /// The built `nova.exe`.
 fn exe() -> Vec<u8> {
-    std::fs::read(env!("CARGO_BIN_EXE_nova")).expect("nova.exe")
+    std::fs::read(nova_exe()).expect("nova.exe")
 }
 
 /// The entry of `table` with the id `id`.
@@ -134,7 +182,7 @@ fn nova_exe_embeds_its_manifest_version_and_icon() {
 #[test]
 fn a_usage_error_with_stderr_redirected_prints_there_and_shows_no_box() {
     let home = tempfile::tempdir().expect("a temporary directory");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_nova"))
+    let mut child = Command::new(nova_exe())
         .args(["a", "b"])
         .env_remove("NOVA_DATA")
         // Its startup log and settings in a directory of the test's own.
