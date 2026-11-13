@@ -38,11 +38,23 @@
 //!
 //! [`fragment`] is the whole of what a model's fragment shows: its vertex
 //! colour times its texture's texel, lit unless its material is unlit.
-//! A model drawn faded ([`ModelInstance::alpha`], the command's alpha as
-//! [`alpha`] takes it) shows [`faded`] of it: its alpha times the model's,
-//! blended straight over what is beneath. `models.wgsl` mirrors both.
+//! A model drawn colorized (the command's colorize: a ship's murk, its
+//! ion tint, a gate's wash) shows [`colorized`] of it: its colour mixed
+//! toward the colorize's as a sprite's texel is, on 5-bit channels. A
+//! model drawn faded ([`ModelInstance::alpha`], the command's alpha as
+//! [`alpha`] takes it) shows [`faded`] of that: its alpha times the
+//! model's, blended straight over what is beneath. So the order is
+//! `faded(colorized(fragment(..), colorize), alpha)`:
+//!
+//! - the colorize after the light, since a sprite colorizes the texel it
+//!   would otherwise show and a model would otherwise show its lit
+//!   fragment, and so an unlit fragment the same;
+//! - the alpha after the colorize, as a sprite's tint applies to its
+//!   mixed texel; the mix keeps the fragment's own alpha.
+//!
+//! `models.wgsl` mirrors all three.
 
-use nova_view::{ModelPose, Mounting};
+use nova_view::{Color, Colorize, ModelPose, Mounting};
 
 use crate::gpu::ModelInstance;
 use crate::model::MeshId;
@@ -242,6 +254,38 @@ pub fn faded(fragment: [f32; 4], alpha: f32) -> [f32; 4] {
     [red, green, blue, own * alpha]
 }
 
+/// A fragment of a model drawn colorized (its
+/// [`ModelInstance::colorize`]): `fragment`, as [`fragment`] gives it,
+/// mixed toward `colorize`'s colour as a sprite's texel is, its alpha
+/// kept. Each colour channel is held to 0 to 1, rounded to its nearest
+/// 8-bit value and narrowed to its top 5 bits, mixed
+/// ([`Colorize::mix`]: the kept share and the colour's each floored, then
+/// OR-ed), and widened back by bit replication
+/// ([`nova_view::Color::from_rgb555`]). A level of 32 is the colour
+/// exactly, whatever the fragment and so whatever the light. A colorize
+/// that doesn't mix ([`Colorize::mixes`]) leaves the fragment as it is,
+/// unnarrowed.
+///
+/// `shader.wgsl` mixes a sprite's texel so (`texel_mixed`), and
+/// `models.wgsl` mirrors this.
+#[must_use]
+pub fn colorized(fragment: [f32; 4], colorize: Colorize) -> [f32; 4] {
+    if !colorize.mixes() {
+        return fragment;
+    }
+    let [red, green, blue, alpha] = fragment;
+    let s5 = [red, green, blue].map(|channel| {
+        // Held to 0 to 255 before it is cast. Halves round to even, as
+        // WGSL's `round` does.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let c8 = (channel.clamp(0.0, 1.0) * 255.0).round_ties_even() as u8;
+        c8 >> 3
+    });
+    let mixed = Color::from_rgb555(colorize.mix(s5));
+    let [red, green, blue] = [mixed.r, mixed.g, mixed.b].map(|channel| f32::from(channel) / 255.0);
+    [red, green, blue, alpha]
+}
+
 /// Gives each of `models`, one batch's in draw order, its band of the
 /// depth range: the i-th of n bands takes `[FAR · (n − i − 1) / n,
 /// FAR · (n − i) / n]`, so each later band is nearer than every point of
@@ -291,7 +335,7 @@ fn unit(v: [f32; 3]) -> [f32; 3] {
 mod tests {
     use std::f32::consts::{FRAC_PI_2, PI};
 
-    use nova_view::{Mounting, Orientation, Point};
+    use nova_view::{Colorize, Mounting, Orientation, Point};
 
     use super::*;
 
@@ -919,6 +963,156 @@ mod tests {
             let clear = fragment([0.0, 0.0, 1.0], RED, [1.0, 1.0, 1.0, 0.0], unlit, light);
             assert_eq!(clear[3], 0.0, "unlit {unlit}");
         }
+    }
+
+    /// A fragment whose colour sits mid-way in the 5-bit steps `s5`, at
+    /// `alpha`.
+    fn of_steps(s5: [u8; 3], alpha: f32) -> [f32; 4] {
+        let [r, g, b] = s5.map(|c| (f32::from(c) * 8.0 + 4.0) / 255.0);
+        [r, g, b, alpha]
+    }
+
+    /// The 5-bit colour `rgb5` as the fragment that shows it, at `alpha`.
+    fn widened(rgb5: [u8; 3], alpha: f32) -> [f32; 4] {
+        let shown = nova_view::Color::from_rgb555(rgb5);
+        let [r, g, b] = [shown.r, shown.g, shown.b].map(|c| f32::from(c) / 255.0);
+        [r, g, b, alpha]
+    }
+
+    #[test]
+    fn a_colorized_fragment_mixes_each_5_bit_channel_and_keeps_its_alpha() {
+        let tint = Colorize {
+            level: 14,
+            rgb5: [5, 0, 31],
+        };
+        let mixed = tint.mix([7, 31, 0]);
+        assert_eq!(mixed, [3, 17, 13], "the sprite's arithmetic");
+        assert_eq!(
+            colorized(of_steps([7, 31, 0], 0.4), tint),
+            widened(mixed, 0.4)
+        );
+        // Widened by bit replication: 3 is 24 | 0, 17 is 136 | 4, 13 is
+        // 104 | 3.
+        assert_eq!(
+            colorized(of_steps([7, 31, 0], 0.4), tint),
+            [24.0 / 255.0, 140.0 / 255.0, 107.0 / 255.0, 0.4]
+        );
+    }
+
+    #[test]
+    fn the_halves_are_ored_not_added() {
+        let half = Colorize {
+            level: 16,
+            rgb5: [31, 0, 21],
+        };
+        // Red: 15 | 15 is 15, where adding would give 30. 15 widens to 123.
+        let grey = 123.0 / 255.0;
+        assert_eq!(
+            colorized(of_steps([31, 31, 10], 1.0), half),
+            [grey, grey, grey, 1.0]
+        );
+    }
+
+    #[test]
+    fn level_32_is_the_colour_whatever_the_fragment() {
+        let full = Colorize {
+            level: 32,
+            rgb5: [3, 17, 30],
+        };
+        for fragment in [
+            [0.0, 0.0, 0.0, 0.5],
+            [1.0, 1.0, 1.0, 0.5],
+            [0.9, 0.1, 0.4, 0.5],
+        ] {
+            assert_eq!(colorized(fragment, full), widened([3, 17, 30], 0.5));
+        }
+    }
+
+    #[test]
+    fn a_colorize_that_does_not_mix_leaves_the_fragment_untouched() {
+        // Off every 5-bit step, so narrowing it would show.
+        let fragment = [0.3, 0.7, 0.123, 0.4];
+        for level in [0, 33, 200] {
+            let none = Colorize {
+                level,
+                rgb5: [3, 17, 30],
+            };
+            assert_eq!(colorized(fragment, none), fragment, "{level}");
+        }
+        let least = Colorize {
+            level: 1,
+            rgb5: [3, 17, 30],
+        };
+        assert_ne!(colorized(fragment, least), fragment, "level 1 mixes");
+    }
+
+    #[test]
+    fn a_channel_narrows_from_its_nearest_8_bit_value() {
+        // At level 1 toward black a step s shows as s × 31 >> 5, so steps
+        // 2, 3 and 31 show apart: 1, 2 and 30.
+        let barely = Colorize {
+            level: 1,
+            rgb5: [0, 0, 0],
+        };
+        // 23.4 rounds to 23, step 2; 23.6 to 24, step 3; 247.6 to 248,
+        // step 31.
+        let fragment = [23.4 / 255.0, 23.6 / 255.0, 247.6 / 255.0, 1.0];
+        assert_eq!(colorized(fragment, barely), widened([1, 2, 30], 1.0));
+        assert_eq!(barely.mix([2, 3, 31]), [1, 2, 30]);
+    }
+
+    #[test]
+    fn a_channel_outside_0_to_1_is_held_before_it_narrows() {
+        let barely = Colorize {
+            level: 1,
+            rgb5: [0, 0, 0],
+        };
+        // Above 1 is step 31 and below 0 step 0, as 1 and 0 are.
+        assert_eq!(
+            colorized([1.5, -0.25, 300.0, 0.75], barely),
+            colorized([1.0, 0.0, 1.0, 0.75], barely)
+        );
+        assert_eq!(
+            colorized([1.5, -0.25, 300.0, 0.75], barely),
+            widened([30, 0, 30], 0.75)
+        );
+    }
+
+    #[test]
+    fn an_unlit_fragment_is_colorized_as_a_lit_one() {
+        let half = Colorize {
+            level: 16,
+            rgb5: [0, 4, 31],
+        };
+        let dim = Light {
+            direction: [0.0, 0.0, 1.0],
+            ambient: 0.5,
+        };
+        let away = [0.0, 0.0, -1.0];
+        // RED × TEXEL is (0.5, 0.125, 0.1875), steps 16, 4 and 6; lit at
+        // a half, (0.25, 0.0625, 0.09375), steps 8, 2 and 3.
+        assert_eq!(
+            colorized(fragment(away, RED, TEXEL, true, dim), half),
+            widened(half.mix([16, 4, 6]), 0.375)
+        );
+        assert_eq!(
+            colorized(fragment(away, RED, TEXEL, false, dim), half),
+            widened(half.mix([8, 2, 3]), 0.375)
+        );
+        assert_ne!(half.mix([16, 4, 6]), half.mix([8, 2, 3]));
+    }
+
+    #[test]
+    fn a_colorized_fragment_fades_by_its_alpha_after_it_mixes() {
+        let half = Colorize {
+            level: 16,
+            rgb5: [0, 4, 31],
+        };
+        let [r, g, b, _] = widened(half.mix([31, 10, 7]), 1.0);
+        assert_eq!(
+            faded(colorized(of_steps([31, 10, 7], 0.8), half), 0.5),
+            [r, g, b, 0.8 * 0.5]
+        );
     }
 
     #[test]
