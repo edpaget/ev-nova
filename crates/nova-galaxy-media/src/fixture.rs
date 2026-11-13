@@ -1194,6 +1194,10 @@ mod tests {
         );
         assert_eq!(model["extensionsUsed"], json!(["KHR_texture_basisu"]));
         assert_eq!(model.get("extensionsRequired"), None);
+        // The `gltf` crate takes it, as a GLB and as a `.gltf`.
+        let parsed = gltf::Gltf::from_slice(&builder.glb()).expect("a valid GLB");
+        assert_eq!(parsed.textures().count(), 4);
+        assert!(gltf::Gltf::from_slice(text.as_bytes()).is_ok());
         // Required too, it is still listed as used once.
         let (text, _) = builder.requires("KHR_texture_basisu").gltf("a.bin");
         let model: serde_json::Value = serde_json::from_str(&text).unwrap();

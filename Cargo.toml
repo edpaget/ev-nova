@@ -75,7 +75,12 @@ serde-saphyr = { version = "2.0.0", default-features = false, features = ["deser
 # `KHR_materials_unlit` reads a material's unlit flag for the 3D models.
 # `KHR_texture_transform` reads a texture's offset, rotation and scale, and
 # lets a model that requires the extension load.
-gltf = { version = "1.4.1", default-features = false, features = ["utils", "names", "KHR_materials_unlit", "KHR_texture_transform"] }
+# `allow_empty_texture` lets a texture with no `source` (its image given
+# only through `KHR_texture_basisu`, `EXT_texture_webp` or
+# `MSFT_texture_dds`) load, and a model requiring one of those three: its
+# material draws untextured in its base colour instead of the whole model
+# being refused.
+gltf = { version = "1.4.1", default-features = false, features = ["utils", "names", "KHR_materials_unlit", "KHR_texture_transform", "allow_empty_texture"] }
 # Decodes a glTF model's JPEG images to RGBA (nova-galaxy-media only, as
 # `deny.toml` bans it elsewhere); its PNG ones go through `png`.
 zune-jpeg = "0.5.15"

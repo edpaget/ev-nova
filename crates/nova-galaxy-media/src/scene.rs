@@ -27,6 +27,17 @@
 //! ([`Primitive::uvs`] is `None`) and draws untextured, in its
 //! material's base colour. Set 0 is never used in its place. The rest of
 //! the model reads as it would otherwise.
+//!
+//! A base-colour texture that gives its image only through
+//! `KHR_texture_basisu`, `EXT_texture_webp` or `MSFT_texture_dds`, with
+//! no `source`, is no texture: its material's
+//! [`base_color_texture`](Material::base_color_texture) is `None`, and it
+//! draws untextured in its base colour. A model that requires one of
+//! those three extensions reads; its image is kept as stored and never
+//! decoded. A texture that names a PNG or JPEG `source` as a fallback
+//! beside such an extension reads the fallback. Any other required
+//! extension the reader doesn't know (`KHR_draco_mesh_compression`, say)
+//! still makes the model unreadable.
 
 use std::collections::BTreeMap;
 
@@ -169,7 +180,7 @@ pub fn read_scene(
                 metallic: pbr.metallic_factor(),
                 roughness: pbr.roughness_factor(),
                 unlit: m.unlit(),
-                base_color_texture: pbr.base_color_texture().map(|t| texture_ref(&t)),
+                base_color_texture: pbr.base_color_texture().and_then(|t| texture_ref(&t)),
             }
         })
         .collect();
@@ -344,7 +355,7 @@ fn read_primitive(
         .material()
         .pbr_metallic_roughness()
         .base_color_texture()
-        .map(|t| texture_ref(&t));
+        .and_then(|t| texture_ref(&t));
     let (set, transform) = sampled.map_or((0, None), |t| (t.tex_coord, t.transform));
     let uvs: Option<Vec<[f32; 2]>> = reader
         .read_tex_coords(set)
@@ -1090,14 +1101,89 @@ mod tests {
         }
     }
 
+    /// `builder` read as a GLB, and as a `.gltf` with its buffer beside it.
+    fn both_ways(builder: &Builder) -> [Result<Scene, String>; 2] {
+        let (json, bin) = builder.gltf("m.bin");
+        let read = |path: &str| (path == "m.bin").then(|| bin.clone());
+        [
+            read_scene("m.glb", &builder.glb(), no_files),
+            read_scene("m.gltf", json.as_bytes(), read),
+        ]
+    }
+
+    /// A material like [`skin`], of a colour that isn't white, whose
+    /// texture names the image only through `extension`.
+    fn only_through(extension: &'static str) -> Mat {
+        Mat {
+            metallic: 0.25,
+            roughness: 0.75,
+            unlit: true,
+            textured: true,
+            only_through: Some(extension),
+            ..Mat::new("basis", [0.5, 0.25, 0.125, 1.0])
+        }
+    }
+
     #[test]
-    fn a_texture_with_no_source_makes_the_model_unreadable() {
-        let through = Mat {
-            only_through: Some("KHR_texture_basisu"),
-            ..skin()
-        };
-        let err = read_scene("m.glb", &sampled(&[through]).glb(), no_files).unwrap_err();
-        assert!(err.starts_with("not a readable glTF model"), "{err}");
+    fn a_texture_with_no_source_leaves_its_material_untextured() {
+        let builder = sampled(&[only_through("KHR_texture_basisu"), skin()]);
+        let ordinary = scene(&sampled(&[skin(), skin()]));
+        for read in both_ways(&builder) {
+            let read = read.expect("a model that reads");
+            assert_eq!(
+                read.materials[0],
+                Material {
+                    name: Some("basis".into()),
+                    base_color: [0.5, 0.25, 0.125, 1.0],
+                    metallic: 0.25,
+                    roughness: 0.75,
+                    unlit: true,
+                    base_color_texture: None,
+                }
+            );
+            assert_eq!(
+                read.materials[1].base_color_texture,
+                Some(TextureRef::image(0))
+            );
+            // Its primitive reads set 0 untransformed, as any primitive
+            // whose material samples no texture does.
+            assert_set(&read.primitives[0], 0);
+            assert_eq!(read.primitives[1], ordinary.primitives[1]);
+            assert_eq!(read.images.len(), 1);
+            assert_eq!(read.images[0].bytes, PNG);
+        }
+    }
+
+    #[test]
+    fn a_model_requiring_a_texture_format_extension_reads() {
+        for extension in ["KHR_texture_basisu", "EXT_texture_webp", "MSFT_texture_dds"] {
+            let builder = sampled(&[only_through(extension)]).requires(extension);
+            for read in both_ways(&builder) {
+                let read = read.unwrap_or_else(|e| panic!("{extension}: {e}"));
+                assert_eq!(read.materials[0].base_color_texture, None, "{extension}");
+            }
+        }
+        let draco = sampled(&[skin()]).requires("KHR_draco_mesh_compression");
+        for read in both_ways(&draco) {
+            let err = read.unwrap_err();
+            assert!(err.starts_with("not a readable glTF model"), "{err}");
+        }
+    }
+
+    #[test]
+    fn a_texture_with_a_fallback_source_reads_the_fallback() {
+        let (json, bin) = sampled(&[skin()]).gltf("m.bin");
+        let mut model: serde_json::Value = serde_json::from_str(&json).unwrap();
+        model["textures"][0]["extensions"] =
+            serde_json::json!({ "KHR_texture_basisu": { "source": 0 } });
+        model["extensionsUsed"] = serde_json::json!(["KHR_texture_basisu"]);
+        let read = |path: &str| (path == "m.bin").then(|| bin.clone());
+        let read = read_scene("m.gltf", model.to_string().as_bytes(), read).unwrap();
+        assert_eq!(
+            read.materials[0].base_color_texture,
+            Some(TextureRef::image(0))
+        );
+        assert_set(&read.primitives[0], 0);
     }
 
     #[test]

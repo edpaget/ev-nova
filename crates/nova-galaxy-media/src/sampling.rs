@@ -152,7 +152,9 @@ impl Transform {
     }
 }
 
-/// The texture a material's base colour takes, as read.
+/// The texture a material's base colour takes, as read. A texture with no
+/// image (no `source`) reads as none: its material has no
+/// [`TextureRef`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextureRef {
     /// The image, as an index into
@@ -183,10 +185,14 @@ impl TextureRef {
     }
 }
 
-/// `info` as a [`TextureRef`].
-pub(crate) fn texture_ref(info: &gltf::texture::Info<'_>) -> TextureRef {
+/// `info` as a [`TextureRef`]; `None` when its texture has no image, as
+/// one that gives its image only through `KHR_texture_basisu`,
+/// `EXT_texture_webp` or `MSFT_texture_dds` has none: its material then
+/// draws untextured.
+pub(crate) fn texture_ref(info: &gltf::texture::Info<'_>) -> Option<TextureRef> {
     use gltf::texture::{MagFilter, MinFilter, WrappingMode};
     let texture = info.texture();
+    let image = texture.source()?.index();
     let sampler = texture.sampler();
     let wrap = |mode| match mode {
         WrappingMode::Repeat => Wrap::Repeat,
@@ -208,8 +214,8 @@ pub(crate) fn texture_ref(info: &gltf::texture::Info<'_>) -> TextureRef {
         None => (Sampler::DEFAULT.min, Sampler::DEFAULT.mip),
     };
     let transform = info.texture_transform();
-    TextureRef {
-        image: texture.source().index(),
+    Some(TextureRef {
+        image,
         sampler: Sampler {
             wrap_s: wrap(sampler.wrap_s()),
             wrap_t: wrap(sampler.wrap_t()),
@@ -226,7 +232,7 @@ pub(crate) fn texture_ref(info: &gltf::texture::Info<'_>) -> TextureRef {
             rotation: t.rotation(),
             scale: t.scale(),
         }),
-    }
+    })
 }
 
 /// `uvs` as a primitive is sampled by them: under `transform`, if there
