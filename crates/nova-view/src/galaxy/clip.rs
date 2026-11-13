@@ -28,7 +28,8 @@ use crate::geometry::{Bounds, Point, intersection, lerp, span_in};
 /// - each text, sprite, picture (blended or not), movie frame and OR fill
 ///   wrapped in [`DrawCommand::Clipped`] with `area`, which the renderer
 ///   crops, and each model and each part mounted on one wrapped so too
-///   (the renderer draws a clipped model or part uncut);
+///   (the renderer cuts a clipped model, and its parts, at the clip's
+///   pixels);
 /// - each command already clipped re-clipped to the two clips' overlap,
 ///   and dropped when they share none.
 pub fn clip_opaque(map: &DrawList, area: Bounds, out: &mut DrawList) {

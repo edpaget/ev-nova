@@ -21,14 +21,15 @@
 //!   radius ([`ShipModel::radius`]) to reach [`FIT`] of half the shorter
 //!   side, so no pose can take it out of the rectangle: the projection is
 //!   orthographic, so nothing is drawn further from the centre than its
-//!   3D distance. A model is drawn uncut by a clip
-//!   ([`DrawCommand::Clipped`]), so this fitting is what keeps it inside.
+//!   3D distance. A picture fits its model rather than clipping it
+//!   ([`DrawCommand::Clipped`], which would cut it at the edge), so this
+//!   fitting is what keeps it inside, whole.
 //! - **A stellar** draws as flight draws it ([`draw_stellar_model`]): a
 //!   station's model unturned, seen from above as its stand-in is, a
 //!   planet's globe turned by a clock, at a radius the screen gives. A
 //!   planet's rings and atmosphere reach beyond that radius, so a picture
 //!   divides its room by their reach ([`StellarModel::overhang`]) to keep
-//!   the whole planet inside: a planet is drawn uncut by a clip too.
+//!   the whole planet inside, fitted rather than clipped as a model is.
 //!
 //! Each screen tries its own picture first (a `PICT`, a sheet's frame),
 //! so stock data, which has no models and so an empty table, draws as it

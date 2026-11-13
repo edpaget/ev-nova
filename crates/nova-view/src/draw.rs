@@ -361,7 +361,8 @@ pub enum DrawCommand {
     /// turned to its time (see [`crate::planet`]). It is drawn in list
     /// order, as a sprite is: a model drawn after it covers it, and it
     /// covers a model drawn before it. A part
-    /// ([`DrawCommand::Mounted`]) after it has no model to sit on.
+    /// ([`DrawCommand::Mounted`]) after it has no model to sit on. It is
+    /// cut by a clip ([`DrawCommand::Clipped`]) as a model is.
     ///
     /// A planet whose radius is not a positive, finite number, whose
     /// centre or time is not finite, or whose key has no planet draws
@@ -377,7 +378,7 @@ pub enum DrawCommand {
     /// layer drifting by its depth's parallax and all dimmed to its level
     /// (see [`crate::sky`]). What the layers look like is the renderer's.
     /// The stars add their light to what is beneath them; anything drawn
-    /// after the sky covers it. Like a model, it is drawn uncut by a clip.
+    /// after the sky covers it. It is drawn uncut by a clip, as a line is.
     ///
     /// A sky at level 0, or whose eye or anchor is not finite, draws
     /// nothing.
@@ -406,9 +407,13 @@ pub enum DrawCommand {
     },
     /// `command` drawn only inside `clip`: a text run cut to it, a
     /// sprite's, picture's or movie frame's quad cropped to it with its
-    /// texture coordinates, a tiled picture's or OR fill's area cut to it. A
-    /// line, a dot, a triangle or a model is drawn as it is, uncut. The
-    /// floating map clips its names and arrows to its frame so.
+    /// texture coordinates, a tiled picture's or OR fill's area cut to it.
+    /// A model and the parts mounted on it, and a planet, are cut at the
+    /// clip's pixel edges, rounded as a crop's, so they end on the column a
+    /// cropped sprite does; a part is cut by its model's clip, whatever its
+    /// own. A line, a dot, a triangle or a sky is drawn as it is, uncut. A
+    /// clip with no area draws nothing at all. The floating map clips its
+    /// names and arrows to its frame so.
     Clipped {
         /// Where it may draw.
         clip: Bounds,

@@ -419,8 +419,8 @@ impl PlanetCommDialog {
 /// [`FIT`] of half the item's shorter side if that is less, a planet at
 /// time 0. A planet's globe takes the flight's radius only while its rings
 /// and atmosphere ([`StellarModel::overhang`]) fit that fit, and shrinks
-/// so their outer edge reaches it when they don't. It is fitted, not cut:
-/// a model or a planet is drawn uncut by a clip.
+/// so their outer edge reaches it when they don't. It is fitted, not cut
+/// by a clip, so it shows whole.
 fn draw_model(list: &mut DrawList, model: StellarModel, at: Bounds) {
     let centre = Point::new(
         f32::midpoint(at.min.x, at.max.x).trunc(),
