@@ -10,6 +10,24 @@
 //! next draw. Planets are not atlas pages, so a new enlarger leaves them
 //! where they are.
 //!
+//! # A planet is made ready at its first draw
+//!
+//! A planet may be added unbaked ([`LoadedPlanet::unbaked`]): the new
+//! game adds every generated planet of its galaxy that way at start-up,
+//! and a bake takes tens of milliseconds. Adding costs nothing. The first
+//! frame whose draw list commands the planet with a pose that draws
+//! ([`planet::quad`]) bakes it, builds its mips and uploads it, all before
+//! that frame is submitted, so the frame draws it: nothing is ever drawn
+//! as nothing while it waits. It is baked once, and holds its surface
+//! from then on. A planet never commanded is never baked.
+//!
+//! So what a screen commands decides when the pause falls. The flight
+//! commands every stellar of its system each frame, on screen or off
+//! (`nova_view`'s `stellar_models`), so a system's planets are all made
+//! ready in the first frame drawn there, which after a jump is drawn
+//! under the arrival's white. A screen that culled its planets would move
+//! each bake to the frame the planet scrolls into view.
+//!
 //! Consecutive planets share one [`Batch::Planets`], lit by
 //! [`PLANET_LIGHT`]; any other batch between them splits it, so the list's
 //! order holds: planets test no depth and write none, and a models batch
@@ -21,13 +39,14 @@ use nova_view::{PlanetKey, PlanetPose};
 
 use crate::gpu::{Batch, Gpu, PlanetId, PlanetInstance};
 use crate::planet::{self, PLANET_LIGHT};
-use crate::planet_source::{LoadedPlanet, Surface};
+use crate::planet_source::LoadedPlanet;
 
 /// A planet the renderer was given, and whether the GPU holds it as it is.
 #[derive(Debug)]
 struct Held {
     id: PlanetId,
-    surface: Surface,
+    /// As it was given, until a frame draws it; baked from then on.
+    planet: LoadedPlanet,
     uploaded: bool,
 }
 
@@ -43,11 +62,11 @@ pub(crate) struct Planets {
 
 impl Planets {
     /// Gives `key` `planet`, replacing any planet it had: the replacement
-    /// keeps the old one's number and is uploaded at its next draw.
+    /// keeps the old one's number and is uploaded at its next draw. An
+    /// unbaked planet is kept unbaked.
     pub(crate) fn add(&mut self, key: PlanetKey, planet: LoadedPlanet) {
-        let surface = planet.into_surface();
         if let Some(held) = self.held.get_mut(&key) {
-            held.surface = surface;
+            held.planet = planet;
             held.uploaded = false;
             return;
         }
@@ -57,16 +76,17 @@ impl Planets {
             key,
             Held {
                 id,
-                surface,
+                planet,
                 uploaded: false,
             },
         );
     }
 
-    /// Draws planet `key` at `pose` onto `batches`: its instance, its
-    /// textures uploaded first through `gpu` if need be, and a key with no
-    /// planet pushed onto `missing` once. A pose [`planet::instance`]
-    /// refuses draws nothing, and uploads nothing.
+    /// Draws planet `key` at `pose` onto `batches`: its instance, the
+    /// planet baked first if it was added unbaked and its textures
+    /// uploaded through `gpu` if need be, and a key with no planet pushed
+    /// onto `missing` once. A pose [`planet::quad`] refuses draws nothing,
+    /// and bakes and uploads nothing.
     pub(crate) fn draw(
         &mut self,
         key: PlanetKey,
@@ -81,11 +101,17 @@ impl Planets {
             }
             return;
         };
-        let Some(instance) = planet::instance(held.id, &held.surface, pose) else {
+        // A pose that draws nothing is refused before the bake it would
+        // waste: the reach needs none.
+        if planet::quad(pose, held.planet.reach()).is_none() {
+            return;
+        }
+        let surface = held.planet.bake();
+        let Some(instance) = planet::instance(held.id, surface, pose) else {
             return;
         };
         if !held.uploaded {
-            gpu.upload_planet(held.id, &planet::textures(&held.surface));
+            gpu.upload_planet(held.id, &planet::textures(surface));
             held.uploaded = true;
         }
         push(batches, instance);
@@ -107,7 +133,8 @@ fn push(batches: &mut Vec<Batch>, planet: PlanetInstance) {
 #[cfg(test)]
 mod tests {
     use nova_data::graphics::Image;
-    use nova_galaxy_media::planet::Image as Layer;
+    use nova_galaxy_format::model::Look;
+    use nova_galaxy_media::planet::{Image as Layer, Sizes, Surface, bake};
     use nova_view::geometry::Bounds;
     use nova_view::{
         Color, DrawCommand, DrawList, ImageKey, ImageKind, ModelKey, ModelPose, Mounting,
@@ -240,6 +267,162 @@ mod tests {
         }];
         assert_eq!(first.batches, expected);
         assert_eq!(second.batches, expected);
+    }
+
+    /// Looks baked small, so the tests stay fast.
+    const SMALL: Sizes = Sizes {
+        surface: 32,
+        clouds: 16,
+        ring: 16,
+    };
+
+    /// A generated look of seed `seed`, with rings and an atmosphere.
+    fn look(seed: u32) -> Look {
+        use nova_galaxy_format::model::{Stellar, Visual};
+        let text = format!(
+            "---\nname: Verdance\nkind: planet\nsystem: alpha\nposition: [0, 0]\nvisual:\n\
+             \x20 generated:\n    type: garden\n    palette: [\"#3a7a3a\", \"#2a4a8a\"]\n\
+             \x20   clouds: 0.5\n    rings: {{inner: 1.4, outer: 2.3, color: \"#d8c8a8\"}}\n\
+             \x20   atmosphere: {{color: \"#f0e0c0\", thickness: 0.25}}\n    seed: {seed}\n---\n"
+        );
+        let stellar = nova_galaxy_format::frontmatter::parse::<Stellar>(&text).expect("a stellar");
+        match stellar.0.visual {
+            Some(Visual::Generated(look)) => look,
+            other => panic!("a generated look: {other:?}"),
+        }
+    }
+
+    /// The look of seed `seed`, not baked.
+    fn unbaked(seed: u32) -> LoadedPlanet {
+        LoadedPlanet::unbaked(look(seed), SMALL)
+    }
+
+    /// Whether the renderer holds the planet `key` baked.
+    fn is_baked(renderer: &Renderer<OneSprite>, key: PlanetKey) -> bool {
+        renderer.planets().held[&key].planet.baked().is_some()
+    }
+
+    #[test]
+    fn an_unbaked_planet_added_and_never_drawn_is_not_baked_and_uploads_nothing() {
+        let mut renderer = renderer();
+        renderer.add_planet(PlanetKey(2), unbaked(77));
+        let mut gpu = RecordingGpu::new();
+        let mut list = DrawList::new();
+        list.planet(GLOBE, pose(20.0, 20.0));
+        frame_of(&mut renderer, &list, &mut gpu);
+        let ids: Vec<PlanetId> = uploads(&gpu).into_iter().map(|(id, _)| id).collect();
+        assert_eq!(ids, [PlanetId(0)], "only the globe drawn");
+        assert!(!is_baked(&renderer, PlanetKey(2)));
+    }
+
+    #[test]
+    fn the_first_frame_that_draws_an_unbaked_planet_bakes_and_uploads_it_once() {
+        let mut renderer = renderer();
+        renderer.add_planet(PlanetKey(2), unbaked(77));
+        let mut gpu = RecordingGpu::new();
+        let mut list = DrawList::new();
+        list.planet(PlanetKey(2), pose(20.0, 20.0));
+        let first = frame_of(&mut renderer, &list, &mut gpu);
+        assert!(is_baked(&renderer, PlanetKey(2)));
+        let baked = bake(&look(77), SMALL);
+        assert_eq!(
+            uploads(&gpu),
+            [(PlanetId(1), planet::textures(&baked))],
+            "its bake's textures, before the frame that draws it"
+        );
+        assert!(matches!(gpu.calls[0], GpuCall::UploadPlanet { .. }));
+        // Its tilt, turns, rings and atmosphere are its bake's.
+        let instance = planet::instance(PlanetId(1), &baked, &pose(20.0, 20.0)).expect("drawable");
+        assert!(instance.rings[1] > 2.0 && instance.atmosphere[3] > 0.0);
+        let expected = vec![Batch::Planets {
+            light: PLANET_LIGHT,
+            planets: vec![instance],
+        }];
+        assert_eq!(first.batches, expected);
+        let second = frame_of(&mut renderer, &list, &mut gpu);
+        assert_eq!(second.batches, expected);
+        assert_eq!(uploads(&gpu).len(), 1, "the second frame uploads nothing");
+    }
+
+    #[test]
+    fn a_refused_pose_neither_bakes_nor_uploads_and_a_later_good_pose_does_once() {
+        let mut renderer = renderer();
+        renderer.add_planet(PlanetKey(2), unbaked(77));
+        let mut gpu = RecordingGpu::new();
+        let mut list = DrawList::new();
+        list.planet(
+            PlanetKey(2),
+            PlanetPose {
+                radius: 0.0,
+                ..pose(20.0, 20.0)
+            },
+        )
+        .planet(PlanetKey(2), pose(f32::NAN, 20.0));
+        let frame = frame_of(&mut renderer, &list, &mut gpu);
+        assert_eq!(frame.batches, []);
+        assert_eq!(uploads(&gpu), []);
+        assert!(!is_baked(&renderer, PlanetKey(2)), "nothing drew it");
+        let mut list = DrawList::new();
+        list.planet(PlanetKey(2), pose(20.0, 20.0));
+        for _ in 0..2 {
+            let frame = frame_of(&mut renderer, &list, &mut gpu);
+            assert_eq!(kinds(&frame), ["planets"]);
+        }
+        assert_eq!(
+            uploads(&gpu),
+            [(PlanetId(1), planet::textures(&bake(&look(77), SMALL)))]
+        );
+    }
+
+    #[test]
+    fn two_unbaked_planets_drawn_in_one_frame_are_both_drawn_in_it() {
+        let mut renderer = renderer();
+        renderer.add_planet(PlanetKey(2), unbaked(77));
+        renderer.add_planet(PlanetKey(3), unbaked(78));
+        let mut gpu = RecordingGpu::new();
+        let mut list = DrawList::new();
+        list.planet(PlanetKey(2), pose(20.0, 20.0))
+            .planet(PlanetKey(3), pose(40.0, 20.0));
+        let frame = frame_of(&mut renderer, &list, &mut gpu);
+        let (first, second) = (bake(&look(77), SMALL), bake(&look(78), SMALL));
+        assert_ne!(first, second, "two looks");
+        assert_eq!(
+            uploads(&gpu),
+            [
+                (PlanetId(1), planet::textures(&first)),
+                (PlanetId(2), planet::textures(&second))
+            ]
+        );
+        let instance = |id, surface, x| {
+            planet::instance(PlanetId(id), surface, &pose(x, 20.0)).expect("drawable")
+        };
+        assert_eq!(
+            frame.batches,
+            [Batch::Planets {
+                light: PLANET_LIGHT,
+                planets: vec![instance(1, &first, 20.0), instance(2, &second, 40.0)],
+            }]
+        );
+    }
+
+    #[test]
+    fn a_key_given_a_new_unbaked_planet_bakes_again_at_its_next_draw() {
+        let mut renderer = renderer();
+        renderer.add_planet(PlanetKey(2), unbaked(77));
+        let mut list = DrawList::new();
+        list.planet(PlanetKey(2), pose(20.0, 20.0));
+        frame_of(&mut renderer, &list, &mut RecordingGpu::new());
+        renderer.add_planet(PlanetKey(2), unbaked(78));
+        assert!(!is_baked(&renderer, PlanetKey(2)), "not until it is drawn");
+        let mut gpu = RecordingGpu::new();
+        for _ in 0..2 {
+            frame_of(&mut renderer, &list, &mut gpu);
+        }
+        assert_eq!(
+            uploads(&gpu),
+            [(PlanetId(1), planet::textures(&bake(&look(78), SMALL)))],
+            "the new look, under the same number, once"
+        );
     }
 
     #[test]

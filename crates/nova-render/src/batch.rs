@@ -135,12 +135,21 @@ impl<S: ImageSource> Renderer<S> {
     }
 
     /// Draws planet `key` ([`DrawCommand::Planet`]) as `planet` from the
-    /// next frame on, replacing any planet it had. Its textures are
-    /// uploaded ([`Gpu::upload_planet`]) the first frame that draws it,
-    /// and again after it is replaced, under the same
-    /// [`PlanetId`](crate::gpu::PlanetId).
+    /// next frame on, replacing any planet it had. Adding it costs
+    /// nothing: the first frame that draws it bakes it, if it came unbaked
+    /// ([`LoadedPlanet::unbaked`]), and uploads its textures
+    /// ([`Gpu::upload_planet`]), before that frame is submitted, so the
+    /// frame draws it. A planet replaced is baked and uploaded again at
+    /// its next draw, under the same [`PlanetId`](crate::gpu::PlanetId).
+    /// One never drawn is never baked.
     pub fn add_planet(&mut self, key: PlanetKey, planet: LoadedPlanet) {
         self.planets.add(key, planet);
+    }
+
+    /// The planets held, for the planets' own tests.
+    #[cfg(test)]
+    pub(crate) fn planets(&self) -> &Planets {
+        &self.planets
     }
 
     /// Draws each sky ([`DrawCommand::Sky`]) in the look `looks` holds
@@ -228,7 +237,8 @@ impl<S: ImageSource> Renderer<S> {
     /// A part ([`DrawCommand::Mounted`]) joins the model just before it,
     /// in its band ([`crate::models`]).
     ///
-    /// A planet ([`DrawCommand::Planet`]) uploads its textures the first
+    /// A planet ([`DrawCommand::Planet`]) is baked, if it was added
+    /// unbaked, and uploads its textures the first
     /// frame that draws it ([`Renderer::add_planet`]); consecutive planets
     /// share a [`Batch::Planets`] ([`crate::planets`]). A key with no
     /// planet draws nothing and is reported once

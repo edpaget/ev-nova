@@ -137,6 +137,19 @@ impl LoadedPlanet {
             Kind::Unbaked { look, sizes } => bake(&look, sizes),
         }
     }
+
+    /// What it draws with, baking its look in place the first time, so it
+    /// holds its surface from then on ([`baked`](Self::baked)) and bakes
+    /// no more.
+    pub fn bake(&mut self) -> &Surface {
+        if let Kind::Unbaked { look, sizes } = &self.kind {
+            self.kind = Kind::Surface(bake(look, *sizes));
+        }
+        match &self.kind {
+            Kind::Surface(surface) => surface,
+            Kind::Unbaked { .. } => unreachable!("baked just above"),
+        }
+    }
 }
 
 /// Why a stellar's planet can't be had. The caller keeps drawing its
@@ -498,6 +511,21 @@ mod tests {
             LoadedPlanet::unbaked(look.clone(), smaller).into_surface(),
             bake(&look, smaller)
         );
+    }
+
+    #[test]
+    fn baking_in_place_gives_the_bake_and_holds_it_from_then_on() {
+        let look = look(&format!("{RINGS}{ATMOSPHERE}"));
+        let mut planet = LoadedPlanet::unbaked(look.clone(), SMALL);
+        let baked = bake(&look, SMALL);
+        assert_eq!(planet.bake(), &baked);
+        assert_eq!(planet.baked(), Some(&baked));
+        assert_eq!(planet, LoadedPlanet::surface(baked.clone()));
+        assert_eq!(planet.bake(), &baked, "and again, the same");
+        // One holding its surface gives it as it is.
+        let mut held = self::planet();
+        assert_eq!(held.bake(), &surface());
+        assert_eq!(held, self::planet());
     }
 
     #[test]
