@@ -23,6 +23,12 @@ nova-sim = { workspace = true, features = ["fixture"] }
 # (`flight::fake_catalog`), the port's contract and `FakeFlight`
 # (`flight::sim_port::fixture`) and the text-metrics mock.
 nova-view = { workspace = true, features = ["fixture"] }
+# The game data the seam tests build in code (`records::fixture`) and the
+# stock tests read, with its fixtures.
+nova-data = { workspace = true, features = ["fixture"] }
+# Synthetic resource forks (`fixture`) for the seam tests' in-memory
+# stores.
+nova-rsrc = { workspace = true, features = ["fixture"] }
 
 [lints]
 workspace = true

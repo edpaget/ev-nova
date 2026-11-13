@@ -7,7 +7,7 @@
 //! ...) and the helpers generic over any [`FlightSim`]. No test here
 //! starts a real `nova_sim::Session` or imports a real-session type: the
 //! adapter's checks are nova-flight's `sim_adapter`'s, the edge's are
-//! its `edge::edge_checks`, and the integration set is `nova-view-it`'s
+//! its `edge::edge_checks`, and the integration set is nova-flight's
 //! `tests/it/flight_seam.rs` and its stock tests
 //! (rdm:phase/view-sim-seam/phase-15-integration-test-set).
 

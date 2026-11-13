@@ -77,12 +77,12 @@ deny = [
     # adding the dependent to the list; a removed edge means deleting it
     # (`mise run deny` makes an unused wrapper an error). A new crate gets
     # its own entry and is added to the `wrappers` of every crate it uses.
-    { crate = "nova-rsrc", wrappers = ["nova", "nova-audio", "nova-data", "nova-dump", "nova-render", "nova-rsrc", "nova-sim-catalog", "nova-sim-it", "nova-view", "nova-view-it"], reason = "the resource-fork reader sits at the bottom and is reached only by the crates that read the game's files" },
+    { crate = "nova-rsrc", wrappers = ["nova", "nova-audio", "nova-data", "nova-dump", "nova-flight", "nova-render", "nova-rsrc", "nova-sim-catalog", "nova-sim-it", "nova-view", "nova-view-it"], reason = "the resource-fork reader sits at the bottom and is reached only by the crates that read the game's files" },
     { crate = "nova-galaxy-format", wrappers = ["nova-data", "nova-galaxy-media", "nova-render"], reason = "the new game's data format sits at the bottom, below the game data store and the renderer's model adapter; game-bible's galaxy tool reaches it by git" },
     { crate = "nova-galaxy-media", wrappers = ["nova-data", "nova-render"], reason = "the new game's media reading sits on the format, below the game data store and the renderer's model adapter; game-bible's galaxy tool may reach it by git" },
-    { crate = "nova-data", wrappers = ["nova", "nova-audio", "nova-data", "nova-dump", "nova-render", "nova-sim-catalog", "nova-sim-frame", "nova-sim-it", "nova-sim-state", "nova-view", "nova-view-it"], reason = "the game data sits on nova-rsrc, below the nova-sim layers and everything above them" },
+    { crate = "nova-data", wrappers = ["nova", "nova-audio", "nova-data", "nova-dump", "nova-flight", "nova-render", "nova-sim-catalog", "nova-sim-frame", "nova-sim-it", "nova-sim-state", "nova-view", "nova-view-it"], reason = "the game data sits on nova-rsrc, below the nova-sim layers and everything above them" },
     { crate = "nova-view", wrappers = ["nova", "nova-audio", "nova-flight", "nova-movie", "nova-render", "nova-view-it"], reason = "the view sits on the nova-sim facade, below the flight's adapter, the renderer, the audio and the game; nova-view-it holds its integration tests" },
-    { crate = "nova-flight", wrappers = ["nova", "nova-view-it"], reason = "the flight's adapter over a real Session sits on the view and the nova-sim facade; only the game wires it" },
+    { crate = "nova-flight", wrappers = ["nova"], reason = "the flight's adapter over a real Session sits on the view and the nova-sim facade; only the game wires it" },
     { crate = "nova-render", wrappers = ["nova", "nova-render"], reason = "only the game draws through the renderer" },
     { crate = "nova-audio", wrappers = ["nova", "nova-audio"], reason = "only the game plays sound through the audio crate" },
     { crate = "nova-movie", wrappers = ["nova"], reason = "only the game plays movies through the decoder" },

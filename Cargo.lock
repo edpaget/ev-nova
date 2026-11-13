@@ -1941,6 +1941,8 @@ dependencies = [
 name = "nova-flight"
 version = "0.1.0"
 dependencies = [
+ "nova-data",
+ "nova-rsrc",
  "nova-sim",
  "nova-view",
 ]
@@ -2163,7 +2165,6 @@ name = "nova-view-it"
 version = "0.1.0"
 dependencies = [
  "nova-data",
- "nova-flight",
  "nova-rsrc",
  "nova-sim",
  "nova-view",
