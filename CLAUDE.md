@@ -334,8 +334,9 @@ points at a `Nova Files` folder. CI and `mise run ci` don't set it, so these
 tests can break without anyone noticing. The stock leg, `mise run stock`,
 runs every crate's stock tests on purpose; it refuses to run without
 `NOVA_DATA`. When a change touches anything those tests cover, run them with
-the data before review, for each crate the change touches, one crate at a
-time:
+the data before review, for each crate the change touches and its
+`<crate>-it` sibling, where a crate's moved integration tests live, one
+crate at a time:
 
 ```sh
 NOVA_DATA="/Users/edward/Projects/ev-nova/EV Nova.app/Contents/Resources/Nova Files" cargo nextest run -p <crate> -E 'test(/^stock(_|::)/)'
