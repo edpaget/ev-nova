@@ -641,6 +641,22 @@ fn the_app_starts_on_the_ship_browser_at_the_first_ship() {
 }
 
 #[test]
+fn the_world_models_reach_the_ship_browser() {
+    let models = Rc::new(nova_view::flight::WorldModels::default());
+    let screen = AppScreen::new(data()).with_world_models(Rc::clone(&models));
+    assert!(Rc::ptr_eq(screen.ship_browser().world_models(), &models));
+}
+
+#[test]
+fn the_ship_browser_keeps_the_world_models_through_new_bindings() {
+    let models = Rc::new(nova_view::flight::WorldModels::default());
+    let screen = AppScreen::new(data())
+        .with_world_models(Rc::clone(&models))
+        .with_bindings(nova_view::keymap::SharedBindings::default());
+    assert!(Rc::ptr_eq(screen.ship_browser().world_models(), &models));
+}
+
+#[test]
 fn a_tab_press_switches_screens_and_its_release_does_nothing() {
     use Showing::{GalaxyMap as Map, ShipBrowser as Ships};
     let mut screen = AppScreen::new(data());

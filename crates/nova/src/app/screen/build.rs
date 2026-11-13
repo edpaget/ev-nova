@@ -355,8 +355,9 @@ impl AppScreen {
     /// show one (the spaceport's shipyard, hire screen and landscape, the
     /// escort, comm and planet comm dialogs, the navigator's system
     /// viewer, the main menu's pilot panel) drawing it as its model
-    /// (`nova_view::model_picture`): an empty table, the default, until it
-    /// is given. The main menu takes it whether it is given before the
+    /// (`nova_view::model_picture`), and the ship browser turning a class
+    /// with no sprite sheet as its model ([`ShipBrowser::with_world_models`]):
+    /// an empty table, the default, until it is given. The main menu takes it whether it is given before the
     /// menu is built ([`AppScreen::with_pilots`]) or after, as `main`
     /// gives it. `main` gives the renderer the meshes and planets its keys
     /// name (`App::with_world_assets`).
@@ -367,6 +368,7 @@ impl AppScreen {
         }
         Self {
             galaxy: self.galaxy.with_world_models(Rc::clone(&models)),
+            ships: self.ships.with_world_models(Rc::clone(&models)),
             world_models: models,
             ..self
         }
