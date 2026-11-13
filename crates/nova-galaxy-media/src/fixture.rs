@@ -5,9 +5,11 @@
 //!
 //! [`Builder`] makes the same box with more of glTF in it, for the 3D
 //! reader ([`scene`](crate::scene)): normals, texture coordinates,
-//! materials with metallic, roughness, unlit and a texture ([`Mat`]), a
-//! tree of nodes ([`Node`]), an image embedded or beside it ([`ImageAt`]),
-//! and a primitive that isn't triangles.
+//! materials with metallic, roughness, unlit and a texture ([`Mat`]), that
+//! texture's sampler ([`SamplerCodes`]), `texCoord` set and
+//! `KHR_texture_transform` ([`TransformJson`]), a tree of nodes
+//! ([`Node`]), an image embedded or beside it ([`ImageAt`]), and a
+//! primitive that isn't triangles.
 //!
 //! [`png`] encodes a real PNG from pixels, for the texture reader
 //! ([`texture`](crate::texture)) and the image reader
@@ -60,8 +62,67 @@ pub struct Mat {
     pub roughness: f32,
     /// Whether it is unlit (`KHR_materials_unlit`).
     pub unlit: bool,
-    /// Whether its base colour takes the model's image (texture 0).
+    /// Whether its base colour takes the model's image: texture 0, or a
+    /// texture of its own on the same image when it has a
+    /// [`sampler`](Self::sampler).
     pub textured: bool,
+    /// The sampler its texture is given; `None` writes a texture with no
+    /// sampler.
+    pub sampler: Option<SamplerCodes>,
+    /// The `texCoord` its base colour names; 0 writes none.
+    pub tex_coord: u32,
+    /// The `KHR_texture_transform` its base colour is given, if any.
+    pub transform: Option<TransformJson>,
+}
+
+/// glTF's codes for a sampler's wrap and filter modes.
+pub mod code {
+    /// `wrapS` / `wrapT`: the image again.
+    pub const REPEAT: u32 = 10497;
+    /// `wrapS` / `wrapT`: the image again, turned over each time.
+    pub const MIRRORED_REPEAT: u32 = 33648;
+    /// `wrapS` / `wrapT`: the edge texel.
+    pub const CLAMP_TO_EDGE: u32 = 33071;
+    /// `magFilter` / `minFilter`: the nearest texel.
+    pub const NEAREST: u32 = 9728;
+    /// `magFilter` / `minFilter`: the nearest texels, blended.
+    pub const LINEAR: u32 = 9729;
+    /// `minFilter`: the nearest texel of the nearest mip level.
+    pub const NEAREST_MIPMAP_NEAREST: u32 = 9984;
+    /// `minFilter`: the nearest texels of the nearest mip level, blended.
+    pub const LINEAR_MIPMAP_NEAREST: u32 = 9985;
+    /// `minFilter`: the nearest texel of two mip levels, blended.
+    pub const NEAREST_MIPMAP_LINEAR: u32 = 9986;
+    /// `minFilter`: the nearest texels of two mip levels, blended.
+    pub const LINEAR_MIPMAP_LINEAR: u32 = 9987;
+}
+
+/// A sampler a [`Builder`] writes: glTF's own code ([`code`]) for each
+/// property, or `None` to leave the property out.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SamplerCodes {
+    /// `wrapS`.
+    pub wrap_s: Option<u32>,
+    /// `wrapT`.
+    pub wrap_t: Option<u32>,
+    /// `magFilter`.
+    pub mag: Option<u32>,
+    /// `minFilter`.
+    pub min: Option<u32>,
+}
+
+/// A `KHR_texture_transform` a [`Builder`] writes: each property, or
+/// `None` to leave it out.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TransformJson {
+    /// `offset`.
+    pub offset: Option<[f32; 2]>,
+    /// `rotation`, in radians.
+    pub rotation: Option<f32>,
+    /// `scale`.
+    pub scale: Option<[f32; 2]>,
+    /// `texCoord`, which overrides the base colour's own.
+    pub tex_coord: Option<u32>,
 }
 
 impl Mat {
@@ -76,6 +137,9 @@ impl Mat {
             roughness: 1.0,
             unlit: false,
             textured: false,
+            sampler: None,
+            tex_coord: 0,
+            transform: None,
         }
     }
 }
@@ -202,7 +266,8 @@ pub struct Builder {
     materials: Vec<Mat>,
     nodes: Vec<Node>,
     normals: bool,
-    texcoords: bool,
+    /// Whether it writes `TEXCOORD_0`, and `TEXCOORD_1`.
+    texcoords: [bool; 2],
     lines: bool,
     image: Option<ImageAt>,
     image_bytes: Vec<u8>,
@@ -219,7 +284,7 @@ impl Builder {
             materials: Vec::new(),
             nodes: vec![Node::at([0.0; 3])],
             normals: false,
-            texcoords: false,
+            texcoords: [false; 2],
             lines: false,
             image: None,
             image_bytes: PNG.to_vec(),
@@ -260,7 +325,16 @@ impl Builder {
     /// on the +z side, 0 otherwise.
     #[must_use]
     pub fn texcoords(mut self) -> Self {
-        self.texcoords = true;
+        self.texcoords[0] = true;
+        self
+    }
+
+    /// Writes a `TEXCOORD_1` per vertex, [`texcoords`](Self::texcoords)'
+    /// with u and v swapped: `[1, _]` on the +z side, `[_, 1]` on the +x
+    /// side, 0 otherwise. A texture drawn by it is the image transposed.
+    #[must_use]
+    pub fn texcoords1(mut self) -> Self {
+        self.texcoords[1] = true;
         self
     }
 
@@ -343,28 +417,7 @@ impl Builder {
             { "bufferView": position_view, "componentType": 5126, "count": positions.len(),
               "type": "VEC3", "min": min.collect::<Vec<_>>(), "max": max.collect::<Vec<_>>() }
         )];
-        let mut attributes = json!({ "POSITION": 0 });
-        if self.normals {
-            let normals = positions.iter().flat_map(|p| {
-                let length = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
-                p.map(|c| c / length)
-            });
-            let view = push_view(&mut bin, &mut views, &floats(&mut normals.into_iter()));
-            attributes["NORMAL"] = accessors.len().into();
-            accessors.push(json!(
-                { "bufferView": view, "componentType": 5126, "count": positions.len(), "type": "VEC3" }
-            ));
-        }
-        if self.texcoords {
-            let uvs = positions
-                .iter()
-                .flat_map(|p| [p[0], p[2]].map(|c| if c > 0.0 { 1.0 } else { 0.0 }));
-            let view = push_view(&mut bin, &mut views, &floats(&mut uvs.into_iter()));
-            attributes["TEXCOORD_0"] = accessors.len().into();
-            accessors.push(json!(
-                { "bufferView": view, "componentType": 5126, "count": positions.len(), "type": "VEC2" }
-            ));
-        }
+        let attributes = self.attributes_json(&positions, &mut bin, &mut views, &mut accessors);
 
         let parts = self.materials.len().max(1);
         let per = indices.len() / parts;
@@ -416,11 +469,123 @@ impl Builder {
         self.write_extensions(&mut json);
         if !images.is_empty() {
             if self.image.is_some() {
-                json["textures"] = json!([{ "source": images.len() - 1 }]);
+                let (textures, samplers) = self.textures_json(images.len() - 1);
+                json["textures"] = textures.into();
+                if !samplers.is_empty() {
+                    json["samplers"] = samplers.into();
+                }
             }
             json["images"] = images.into();
         }
         (json.to_string(), bin)
+    }
+
+    /// The primitives' attributes: `POSITION`, accessor 0, and each of
+    /// `NORMAL`, `TEXCOORD_0` and `TEXCOORD_1` the builder was asked for,
+    /// written to `bin` through a new view and a new accessor.
+    fn attributes_json(
+        &self,
+        positions: &[[f32; 3]],
+        bin: &mut Vec<u8>,
+        views: &mut Vec<serde_json::Value>,
+        accessors: &mut Vec<serde_json::Value>,
+    ) -> serde_json::Value {
+        use serde_json::json;
+        let mut attributes = json!({ "POSITION": 0 });
+        let mut write = |name: &str, kind: &str, values: Vec<f32>| {
+            let bytes: Vec<u8> = values.into_iter().flat_map(f32::to_le_bytes).collect();
+            let view = push_view(bin, views, &bytes);
+            attributes[name] = accessors.len().into();
+            accessors.push(json!(
+                { "bufferView": view, "componentType": 5126, "count": positions.len(), "type": kind }
+            ));
+        };
+        if self.normals {
+            let normals = positions.iter().flat_map(|p| {
+                let length = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
+                p.map(|c| c / length)
+            });
+            write("NORMAL", "VEC3", normals.collect());
+        }
+        let side = |c: f32| if c > 0.0 { 1.0 } else { 0.0 };
+        if self.texcoords[0] {
+            let uvs = positions.iter().flat_map(|p| [side(p[0]), side(p[2])]);
+            write("TEXCOORD_0", "VEC2", uvs.collect());
+        }
+        if self.texcoords[1] {
+            let uvs = positions.iter().flat_map(|p| [side(p[2]), side(p[0])]);
+            write("TEXCOORD_1", "VEC2", uvs.collect());
+        }
+        attributes
+    }
+
+    /// The textures' and the samplers' JSON, the model's own image being
+    /// image `source`: texture 0 on it with no sampler, then one more on
+    /// it for each textured material that has a sampler, in the
+    /// materials' order ([`texture_of`](Self::texture_of)).
+    fn textures_json(&self, source: usize) -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
+        use serde_json::json;
+        let mut textures = vec![json!({ "source": source })];
+        let mut samplers = Vec::new();
+        let sampled = self.materials.iter().filter(|m| m.textured);
+        for codes in sampled.filter_map(|m| m.sampler) {
+            let mut written = json!({});
+            for (name, code) in [
+                ("wrapS", codes.wrap_s),
+                ("wrapT", codes.wrap_t),
+                ("magFilter", codes.mag),
+                ("minFilter", codes.min),
+            ] {
+                if let Some(code) = code {
+                    written[name] = code.into();
+                }
+            }
+            textures.push(json!({ "source": source, "sampler": samplers.len() }));
+            samplers.push(written);
+        }
+        (textures, samplers)
+    }
+
+    /// The texture material `at`'s base colour names: its own, after
+    /// texture 0 and those of the sampled materials before it, when it
+    /// has a sampler; texture 0 otherwise.
+    fn texture_of(&self, at: usize) -> usize {
+        if self.materials[at].sampler.is_none() {
+            return 0;
+        }
+        let before = &self.materials[..at];
+        1 + before
+            .iter()
+            .filter(|m| m.textured && m.sampler.is_some())
+            .count()
+    }
+
+    /// Material `at`'s `baseColorTexture`: its texture, its `texCoord`
+    /// when not 0, and its transform, each property it gives.
+    fn base_color_json(&self, at: usize) -> serde_json::Value {
+        use serde_json::json;
+        let m = &self.materials[at];
+        let mut info = json!({ "index": self.texture_of(at) });
+        if m.tex_coord != 0 {
+            info["texCoord"] = m.tex_coord.into();
+        }
+        if let Some(transform) = m.transform {
+            let mut written = json!({});
+            if let Some(offset) = transform.offset {
+                written["offset"] = json!(offset);
+            }
+            if let Some(rotation) = transform.rotation {
+                written["rotation"] = json!(rotation);
+            }
+            if let Some(scale) = transform.scale {
+                written["scale"] = json!(scale);
+            }
+            if let Some(set) = transform.tex_coord {
+                written["texCoord"] = set.into();
+            }
+            info["extensions"] = json!({ "KHR_texture_transform": written });
+        }
+        info
     }
 
     /// Writes `extensionsUsed` (what the materials use, then what the
@@ -430,6 +595,9 @@ impl Builder {
         let mut used = Vec::new();
         if self.materials.iter().any(|m| m.unlit) {
             used.push("KHR_materials_unlit".to_owned());
+        }
+        if self.materials.iter().any(|m| m.transform.is_some()) {
+            used.push("KHR_texture_transform".to_owned());
         }
         for extension in &self.required {
             if !used.contains(extension) {
@@ -473,14 +641,15 @@ impl Builder {
         use serde_json::json;
         self.materials
             .iter()
-            .map(|m| {
+            .enumerate()
+            .map(|(at, m)| {
                 let mut pbr = json!({
                     "baseColorFactor": m.color,
                     "metallicFactor": m.metallic,
                     "roughnessFactor": m.roughness
                 });
                 if m.textured {
-                    pbr["baseColorTexture"] = json!({ "index": 0 });
+                    pbr["baseColorTexture"] = self.base_color_json(at);
                 }
                 let mut material = json!({ "pbrMetallicRoughness": pbr });
                 if !m.name.is_empty() {
@@ -649,6 +818,174 @@ mod tests {
         assert!(gltf::Gltf::from_slice(json.as_bytes()).is_ok());
     }
 
+    /// A box with both coordinate sets and three materials on its one
+    /// image: one sampled every way a sampler can say, through set 1 and
+    /// a transform; one plain; one with a sampler that says only its
+    /// wraps.
+    fn sampled() -> Builder {
+        Builder::new([1.0; 3])
+            .normals()
+            .texcoords()
+            .texcoords1()
+            .material(Mat {
+                textured: true,
+                sampler: Some(SamplerCodes {
+                    wrap_s: Some(code::CLAMP_TO_EDGE),
+                    wrap_t: Some(code::MIRRORED_REPEAT),
+                    mag: Some(code::NEAREST),
+                    min: Some(code::NEAREST_MIPMAP_LINEAR),
+                }),
+                tex_coord: 1,
+                transform: Some(TransformJson {
+                    offset: Some([0.5, 0.25]),
+                    rotation: Some(0.75),
+                    scale: Some([2.0, 3.0]),
+                    tex_coord: Some(0),
+                }),
+                ..Mat::new("a", [1.0; 4])
+            })
+            .material(Mat {
+                textured: true,
+                ..Mat::new("b", [1.0; 4])
+            })
+            .material(Mat {
+                textured: true,
+                sampler: Some(SamplerCodes {
+                    wrap_s: Some(code::REPEAT),
+                    ..SamplerCodes::default()
+                }),
+                transform: Some(TransformJson::default()),
+                ..Mat::new("c", [1.0; 4])
+            })
+    }
+
+    #[test]
+    fn a_builder_with_every_sampling_option_writes_a_valid_model() {
+        let glb = sampled().image(ImageAt::Embedded).glb();
+        let parsed = gltf::Gltf::from_slice(&glb).expect("a valid GLB");
+        assert_eq!(parsed.textures().count(), 3);
+        assert_eq!(parsed.samplers().count(), 2);
+        assert_eq!(parsed.images().count(), 1);
+        let (json, _) = sampled()
+            .requires("KHR_texture_transform")
+            .image(ImageAt::Uri("skin.png".into()))
+            .gltf("a.bin");
+        assert!(gltf::Gltf::from_slice(json.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn a_builder_writes_the_sampling_it_is_given_and_leaves_out_the_rest() {
+        use serde_json::json;
+        let (text, _) = sampled().image(ImageAt::Embedded).gltf("a.bin");
+        let model: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            model["samplers"],
+            json!([
+                { "wrapS": 33071, "wrapT": 33648, "magFilter": 9728, "minFilter": 9986 },
+                { "wrapS": 10497 }
+            ])
+        );
+        // Texture 0 has no sampler; each sampled material has its own
+        // texture on the one image.
+        assert_eq!(
+            model["textures"],
+            json!([
+                { "source": 0 },
+                { "source": 0, "sampler": 0 },
+                { "source": 0, "sampler": 1 }
+            ])
+        );
+        let base = |at: usize| &model["materials"][at]["pbrMetallicRoughness"]["baseColorTexture"];
+        assert_eq!(
+            *base(0),
+            json!({
+                "index": 1,
+                "texCoord": 1,
+                "extensions": { "KHR_texture_transform": {
+                    "offset": [0.5, 0.25], "rotation": 0.75, "scale": [2.0, 3.0], "texCoord": 0
+                } }
+            })
+        );
+        assert_eq!(*base(1), json!({ "index": 0 }));
+        assert_eq!(
+            *base(2),
+            json!({ "index": 2, "extensions": { "KHR_texture_transform": {} } })
+        );
+        assert_eq!(model["extensionsUsed"], json!(["KHR_texture_transform"]));
+        assert_eq!(model.get("extensionsRequired"), None);
+
+        // An untextured material's sampler writes nothing, and nothing
+        // sampled writes no samplers, no extension and no second set.
+        let plain = Builder::new([1.0; 3])
+            .texcoords()
+            .material(Mat {
+                sampler: Some(SamplerCodes::default()),
+                ..Mat::new("a", [1.0; 4])
+            })
+            .material(Mat {
+                textured: true,
+                ..Mat::new("b", [1.0; 4])
+            })
+            .image(ImageAt::Embedded);
+        let (text, _) = plain.gltf("a.bin");
+        let model: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(model.get("samplers"), None);
+        assert_eq!(model["textures"], json!([{ "source": 0 }]));
+        assert_eq!(model.get("extensionsUsed"), None);
+        let attributes = &model["meshes"][0]["primitives"][0]["attributes"];
+        assert!(attributes.get("TEXCOORD_0").is_some());
+        assert_eq!(attributes.get("TEXCOORD_1"), None);
+    }
+
+    #[test]
+    fn requiring_an_extension_lists_it_as_used_once() {
+        let (text, _) = sampled()
+            .material(Mat {
+                unlit: true,
+                ..Mat::new("d", [1.0; 4])
+            })
+            .requires("KHR_texture_transform")
+            .gltf("a.bin");
+        let model: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            model["extensionsUsed"],
+            serde_json::json!(["KHR_materials_unlit", "KHR_texture_transform"])
+        );
+        assert_eq!(
+            model["extensionsRequired"],
+            serde_json::json!(["KHR_texture_transform"])
+        );
+        let (text, _) = Builder::new([1.0; 3]).requires("EXT_other").gltf("a.bin");
+        let model: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(model["extensionsUsed"], serde_json::json!(["EXT_other"]));
+    }
+
+    #[test]
+    fn the_second_coordinate_set_is_the_first_with_u_and_v_swapped() {
+        let glb = Builder::new([2.0, 1.0, 4.0]).texcoords().texcoords1().glb();
+        let parsed = gltf::Gltf::from_slice(&glb).unwrap();
+        let blob = parsed.blob.clone().unwrap();
+        let primitive = parsed.meshes().next().unwrap().primitives().next().unwrap();
+        let reader = primitive.reader(|_| Some(blob.as_slice()));
+        let set = |n| -> Vec<[f32; 2]> { reader.read_tex_coords(n).unwrap().into_f32().collect() };
+        let (first, second) = (set(0), set(1));
+        assert_eq!(first.len(), 8);
+        for (a, b) in first.iter().zip(&second) {
+            assert_eq!([a[1], a[0]], *b);
+        }
+        // Corner 1 is (−x, −y, +z): v in set 0, u in set 1.
+        assert_eq!((first[1], second[1]), ([0.0, 1.0], [1.0, 0.0]));
+        assert_eq!((first[4], second[4]), ([1.0, 0.0], [0.0, 1.0]));
+        // Alone, set 1 is still attribute `TEXCOORD_1`.
+        let alone = Builder::new([2.0, 1.0, 4.0]).texcoords1().glb();
+        let parsed = gltf::Gltf::from_slice(&alone).unwrap();
+        let blob = parsed.blob.clone().unwrap();
+        let primitive = parsed.meshes().next().unwrap().primitives().next().unwrap();
+        let reader = primitive.reader(|_| Some(blob.as_slice()));
+        assert!(reader.read_tex_coords(0).is_none());
+        assert_eq!(reader.read_tex_coords(1).unwrap().into_f32().count(), 8);
+    }
+
     /// The images of `glb`, as the scene reader hands them on.
     fn images(glb: &[u8]) -> Vec<crate::scene::Image> {
         crate::scene::read_scene("p/hull.glb", glb, |_| None)
@@ -689,6 +1026,7 @@ mod tests {
                 .expect("a model that reads")
                 .materials[0]
                 .base_color_texture
+                .map(|texture| texture.image)
         };
         assert_eq!(own(&builder.glb()), Some(0));
         let spared = builder.spare_image(JPEG).glb();

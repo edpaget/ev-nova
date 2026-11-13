@@ -483,13 +483,33 @@ mod tests {
 
     #[test]
     fn a_scene_s_model_is_the_model_its_file_reads_as() {
-        use crate::fixture::{Builder, ImageAt, Mat, Node};
+        use crate::fixture::{Builder, ImageAt, Mat, Node, SamplerCodes, TransformJson, code};
         use crate::scene::read_scene;
 
         let named = || {
             Builder::new([2.0, 1.0, 4.0])
                 .material(Mat::new("hull", [1.0; 4]))
                 .material(Mat::new("glass", [0.2, 0.4, 0.8, 0.5]))
+        };
+        // A base colour with a sampler, the second coordinate set and a
+        // transform: none of it reaches the 2D model.
+        let sampled = || {
+            let skin = Mat {
+                textured: true,
+                sampler: Some(SamplerCodes {
+                    wrap_s: Some(code::CLAMP_TO_EDGE),
+                    mag: Some(code::NEAREST),
+                    ..SamplerCodes::default()
+                }),
+                tex_coord: 1,
+                transform: Some(TransformJson {
+                    rotation: Some(0.5),
+                    ..TransformJson::default()
+                }),
+                ..Mat::new("skin", [1.0; 4])
+            };
+            let builder = Builder::new([2.0, 1.0, 4.0]).texcoords().texcoords1();
+            builder.material(skin).image(ImageAt::Embedded)
         };
         let tree = vec![
             Node::group(&[1, 2]),
@@ -515,6 +535,7 @@ mod tests {
             ("with texture coordinates", named().texcoords().glb()),
             ("with lines", named().lines().glb()),
             ("an embedded image", named().image(ImageAt::Embedded).glb()),
+            ("a sampled texture", sampled().glb()),
         ];
         let (json, bin) = named()
             .image(ImageAt::Uri("skin.png".into()))
@@ -533,7 +554,8 @@ mod tests {
             assert!(!model.faces.is_empty(), "{shape}");
         }
         // The last names both its files, buffer first.
-        let scene = read_scene("media/export/pack/hull.gltf", &shapes[9].1, read).unwrap();
+        let last = &shapes.last().expect("the .gltf").1;
+        let scene = read_scene("media/export/pack/hull.gltf", last, read).unwrap();
         assert_eq!(
             Model::from_scene(&scene).external,
             ["media/export/pack/hull.bin", "media/export/pack/skin.png"]

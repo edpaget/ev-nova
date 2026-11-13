@@ -10,10 +10,16 @@
 //! (points, lines, strips) are skipped, as
 //! [`model`](crate::model::model) skips them.
 //!
-//! Of a material's textures only the base colour's is read, as the image
-//! it names. A sampler's wrap and filter modes, a `texCoord` set other
-//! than 0, `KHR_texture_transform`, and the metallic-roughness, normal,
-//! occlusion and emissive textures are not.
+//! Of a material's textures only the base colour's is read
+//! ([`TextureRef`], [`sampling`](crate::sampling)): the image it names,
+//! its sampler's wrap and filter modes, the `texCoord` set it is sampled
+//! by and its `KHR_texture_transform`. The set and the transform are
+//! resolved here, as each primitive is read: [`Primitive::uvs`] is the
+//! set its material's base colour names, transformed, so whoever draws
+//! applies neither. A transform that doesn't fit the extension's schema
+//! makes the model unreadable, as any malformed field does. The
+//! metallic-roughness, normal, occlusion and emissive textures are not
+//! read, with their samplers, sets and transforms.
 
 use std::collections::BTreeMap;
 
@@ -24,6 +30,7 @@ use nova_galaxy_format::id::Id;
 use nova_galaxy_format::source::Source;
 
 use crate::model::{Bounds, NoModel, beside, first_model};
+use crate::sampling::{TextureRef, resolved, texture_ref};
 
 /// One triangle primitive as one node draws it, in model space after
 /// the node's transforms.
@@ -34,7 +41,15 @@ pub struct Primitive {
     /// Each vertex's unit normal. A primitive the file gives no normals
     /// gets flat ones: each triangle's own, its vertices unwelded.
     pub normals: Vec<[f32; 3]>,
-    /// Each vertex's texture coordinates (`TEXCOORD_0`), if it has them.
+    /// Each vertex's texture coordinates, as its material's base colour
+    /// is sampled by them: the `TEXCOORD_n` set the base colour names
+    /// (set 0 for a primitive whose material has no base-colour texture,
+    /// or with no material), with the base colour's
+    /// `KHR_texture_transform` applied. `None` when the primitive has no
+    /// such set, the set isn't one coordinate per vertex, or the
+    /// transform leaves a coordinate that isn't finite: it then draws
+    /// untextured. A missing set is never replaced by set 0, whose
+    /// coordinates lay out a different image.
     pub uvs: Option<Vec<[f32; 2]>>,
     /// Indices into the vertices, three a triangle.
     pub indices: Vec<u32>,
@@ -55,9 +70,10 @@ pub struct Material {
     pub roughness: f32,
     /// Whether it is unlit (`KHR_materials_unlit`).
     pub unlit: bool,
-    /// The image its base colour takes, as an index into
-    /// [`Scene::images`].
-    pub base_color_texture: Option<usize>,
+    /// The texture its base colour takes: the image, its sampler, and
+    /// the coordinate set and transform it is sampled by, which
+    /// [`Primitive::uvs`] already has resolved.
+    pub base_color_texture: Option<TextureRef>,
 }
 
 /// An image a model holds or names, as stored: PNG or JPEG bytes, not
@@ -146,9 +162,7 @@ pub fn read_scene(
                 metallic: pbr.metallic_factor(),
                 roughness: pbr.roughness_factor(),
                 unlit: m.unlit(),
-                base_color_texture: pbr
-                    .base_color_texture()
-                    .map(|t| t.texture().source().index()),
+                base_color_texture: pbr.base_color_texture().map(|t| texture_ref(&t)),
             }
         })
         .collect();
@@ -317,10 +331,19 @@ fn read_primitive(
     if indices.iter().any(|&i| i as usize >= positions.len()) {
         return Err("a triangle names a vertex that does not exist".into());
     }
+    // The set its material's base colour is sampled by, and the transform
+    // on it: set 0 as it is, for a primitive that samples no texture.
+    let sampled = p
+        .material()
+        .pbr_metallic_roughness()
+        .base_color_texture()
+        .map(|t| texture_ref(&t));
+    let (set, transform) = sampled.map_or((0, None), |t| (t.tex_coord, t.transform));
     let uvs: Option<Vec<[f32; 2]>> = reader
-        .read_tex_coords(0)
+        .read_tex_coords(set)
         .map(|t| t.into_f32().collect())
-        .filter(|uvs: &Vec<[f32; 2]>| uvs.len() == positions.len());
+        .filter(|uvs: &Vec<[f32; 2]>| uvs.len() == positions.len())
+        .and_then(|uvs| resolved(uvs, transform.as_ref()));
     let normals: Option<Vec<[f32; 3]>> = reader
         .read_normals()
         .map(|n| n.map(|v| unit(turn_normal(matrix, v))).collect())
@@ -459,7 +482,8 @@ mod tests {
     use nova_galaxy_format::source::MemSource;
 
     use super::*;
-    use crate::fixture::{Builder, ImageAt, Mat, Node, PNG};
+    use crate::fixture::{Builder, ImageAt, Mat, Node, PNG, SamplerCodes, TransformJson, code};
+    use crate::sampling::{Filter, Mip, Sampler, Transform, Wrap};
 
     fn no_files(_: &str) -> Option<Vec<u8>> {
         None
@@ -614,7 +638,7 @@ mod tests {
                     metallic: 0.25,
                     roughness: 0.75,
                     unlit: true,
-                    base_color_texture: Some(0),
+                    base_color_texture: Some(TextureRef::image(0)),
                 },
                 Material {
                     name: None,
@@ -698,6 +722,366 @@ mod tests {
         // An extension the reader doesn't know is still refused.
         let unknown = Builder::new([1.0; 3]).requires("KHR_draco_mesh_compression");
         let err = read_scene("m.glb", &unknown.glb(), no_files).unwrap_err();
+        assert!(err.starts_with("not a readable glTF model"), "{err}");
+    }
+
+    /// A material on the model's image.
+    fn skin() -> Mat {
+        Mat {
+            textured: true,
+            ..Mat::new("skin", [1.0; 4])
+        }
+    }
+
+    /// A box 2 by 1 by 4 with normals and both coordinate sets, its
+    /// image embedded, in `materials`.
+    fn sampled(materials: &[Mat]) -> Builder {
+        let builder = Builder::new([2.0, 1.0, 4.0])
+            .normals()
+            .texcoords()
+            .texcoords1()
+            .image(ImageAt::Embedded);
+        materials
+            .iter()
+            .fold(builder, |b, material| b.material(material.clone()))
+    }
+
+    /// What the first material's base colour takes in a box in `material`.
+    fn base(material: Mat) -> TextureRef {
+        scene(&sampled(&[material])).materials[0]
+            .base_color_texture
+            .expect("a textured material")
+    }
+
+    /// The sampler read from one written as `codes`.
+    fn sampler(codes: SamplerCodes) -> Sampler {
+        base(Mat {
+            sampler: Some(codes),
+            ..skin()
+        })
+        .sampler
+    }
+
+    #[test]
+    fn a_texture_that_says_nothing_reads_the_default_sampler_set_0_and_no_transform() {
+        assert_eq!(base(skin()), TextureRef::image(0));
+        // A sampler that gives nothing is the default too.
+        assert_eq!(sampler(SamplerCodes::default()), Sampler::DEFAULT);
+        // One that gives its wraps alone keeps the default filters.
+        let wraps = sampler(SamplerCodes {
+            wrap_s: Some(code::CLAMP_TO_EDGE),
+            wrap_t: Some(code::MIRRORED_REPEAT),
+            ..SamplerCodes::default()
+        });
+        assert_eq!(
+            wraps,
+            Sampler {
+                wrap_s: Wrap::Clamp,
+                wrap_t: Wrap::Mirror,
+                ..Sampler::DEFAULT
+            }
+        );
+        // And one that gives its filters alone repeats.
+        let filters = sampler(SamplerCodes {
+            mag: Some(code::NEAREST),
+            min: Some(code::NEAREST),
+            ..SamplerCodes::default()
+        });
+        assert_eq!(
+            filters,
+            Sampler {
+                mag: Filter::Nearest,
+                min: Filter::Nearest,
+                mip: Mip::None,
+                ..Sampler::DEFAULT
+            }
+        );
+    }
+
+    #[test]
+    fn each_wrap_code_reads_its_wrap_on_its_own_axis() {
+        let wraps = [
+            (code::REPEAT, Wrap::Repeat),
+            (code::MIRRORED_REPEAT, Wrap::Mirror),
+            (code::CLAMP_TO_EDGE, Wrap::Clamp),
+        ];
+        for (s_code, s) in wraps {
+            for (t_code, t) in wraps {
+                let read = sampler(SamplerCodes {
+                    wrap_s: Some(s_code),
+                    wrap_t: Some(t_code),
+                    ..SamplerCodes::default()
+                });
+                assert_eq!((read.wrap_s, read.wrap_t), (s, t));
+            }
+        }
+    }
+
+    #[test]
+    fn each_filter_code_reads_its_filter_and_its_mips() {
+        for (min, filter, mip) in [
+            (code::NEAREST, Filter::Nearest, Mip::None),
+            (code::LINEAR, Filter::Linear, Mip::None),
+            (code::NEAREST_MIPMAP_NEAREST, Filter::Nearest, Mip::Nearest),
+            (code::LINEAR_MIPMAP_NEAREST, Filter::Linear, Mip::Nearest),
+            (code::NEAREST_MIPMAP_LINEAR, Filter::Nearest, Mip::Linear),
+            (code::LINEAR_MIPMAP_LINEAR, Filter::Linear, Mip::Linear),
+        ] {
+            let read = sampler(SamplerCodes {
+                min: Some(min),
+                ..SamplerCodes::default()
+            });
+            assert_eq!((read.min, read.mip), (filter, mip), "minFilter {min}");
+            assert_eq!(read.mag, Filter::Linear, "minFilter {min} alone");
+        }
+        for (mag, filter) in [
+            (code::NEAREST, Filter::Nearest),
+            (code::LINEAR, Filter::Linear),
+        ] {
+            let read = sampler(SamplerCodes {
+                mag: Some(mag),
+                ..SamplerCodes::default()
+            });
+            assert_eq!(read.mag, filter, "magFilter {mag}");
+            assert_eq!((read.min, read.mip), (Filter::Linear, Mip::Linear));
+        }
+    }
+
+    #[test]
+    fn two_materials_on_one_image_read_their_own_samplers() {
+        let clamped = Mat {
+            sampler: Some(SamplerCodes {
+                wrap_s: Some(code::CLAMP_TO_EDGE),
+                ..SamplerCodes::default()
+            }),
+            ..skin()
+        };
+        let sharp = Mat {
+            sampler: Some(SamplerCodes {
+                mag: Some(code::NEAREST),
+                ..SamplerCodes::default()
+            }),
+            ..skin()
+        };
+        let scene = scene(&sampled(&[clamped, skin(), sharp]));
+        let read: Vec<TextureRef> = scene
+            .materials
+            .iter()
+            .map(|m| m.base_color_texture.expect("textured"))
+            .collect();
+        assert_eq!(scene.images.len(), 1);
+        assert_eq!(read.iter().map(|t| t.image).collect::<Vec<_>>(), [0, 0, 0]);
+        assert_eq!(
+            read[0].sampler,
+            Sampler {
+                wrap_s: Wrap::Clamp,
+                ..Sampler::DEFAULT
+            }
+        );
+        assert_eq!(read[1].sampler, Sampler::DEFAULT);
+        assert_eq!(
+            read[2].sampler,
+            Sampler {
+                mag: Filter::Nearest,
+                ..Sampler::DEFAULT
+            }
+        );
+    }
+
+    /// The coordinates the fixture gives a vertex at `q`: set 0, and set
+    /// 1, which is set 0 with u and v swapped.
+    fn fixture_uv(q: [f32; 3], set: u32) -> [f32; 2] {
+        let side = |c: f32| if c > 0.0 { 1.0 } else { 0.0 };
+        if set == 0 {
+            [side(q[0]), side(q[2])]
+        } else {
+            [side(q[2]), side(q[0])]
+        }
+    }
+
+    /// Asserts each vertex of `p` carries the fixture's `set`, and that
+    /// the set shows: some vertex's coordinates differ from the other
+    /// set's.
+    #[track_caller]
+    fn assert_set(p: &Primitive, set: u32) {
+        let uvs = p.uvs.as_ref().expect("coordinates");
+        assert_eq!(uvs.len(), p.positions.len());
+        for (q, uv) in p.positions.iter().zip(uvs) {
+            assert_eq!(*uv, fixture_uv(*q, set), "{q:?}");
+        }
+        let other = p.positions.iter().map(|q| fixture_uv(*q, 1 - set));
+        assert!(other.zip(uvs).any(|(a, b)| a != *b), "the sets differ");
+    }
+
+    #[test]
+    fn a_base_colour_naming_the_second_set_is_sampled_by_it() {
+        let second = Mat {
+            tex_coord: 1,
+            ..skin()
+        };
+        let scene_of = |builder: &Builder| scene(builder);
+        // With the file's normals, and with flat ones, which unweld the
+        // vertices and carry their coordinates along.
+        let welded = scene_of(&sampled(std::slice::from_ref(&second)));
+        assert_eq!(welded.materials[0].base_color_texture.unwrap().tex_coord, 1);
+        assert_eq!(welded.primitives[0].positions.len(), 8);
+        assert_set(&welded.primitives[0], 1);
+        let flat = Builder::new([2.0, 1.0, 4.0])
+            .texcoords()
+            .texcoords1()
+            .image(ImageAt::Embedded)
+            .material(second.clone());
+        let flat = scene_of(&flat);
+        assert_eq!(flat.primitives[0].positions.len(), 36);
+        assert_set(&flat.primitives[0], 1);
+        // Each primitive by its own material's set: an untextured
+        // material's keeps set 0, as a primitive with no material does.
+        let mixed = scene_of(&sampled(&[second, Mat::new("plain", [1.0; 4]), skin()]));
+        assert_set(&mixed.primitives[0], 1);
+        assert_set(&mixed.primitives[1], 0);
+        assert_set(&mixed.primitives[2], 0);
+        let bare = Builder::new([2.0, 1.0, 4.0]).texcoords().texcoords1();
+        assert_set(&scene_of(&bare).primitives[0], 0);
+    }
+
+    #[test]
+    fn a_base_colour_naming_a_set_the_mesh_lacks_has_no_coordinates() {
+        // Set 2 isn't written; neither is set 1 on the second box. Set 0
+        // is there, and is not fallen back to.
+        let third = Mat {
+            tex_coord: 2,
+            ..skin()
+        };
+        let scene = scene(&sampled(&[third]));
+        assert_eq!(scene.primitives[0].uvs, None);
+        let second = Mat {
+            tex_coord: 1,
+            ..skin()
+        };
+        for normals in [true, false] {
+            let builder = Builder::new([2.0, 1.0, 4.0])
+                .texcoords()
+                .image(ImageAt::Embedded)
+                .material(second.clone());
+            let builder = if normals { builder.normals() } else { builder };
+            let scene = read_scene("m.glb", &builder.glb(), no_files).unwrap();
+            assert_eq!(scene.primitives[0].uvs, None, "normals {normals}");
+        }
+    }
+
+    #[test]
+    fn a_texture_transform_is_read_and_the_coordinates_are_transformed() {
+        let written = TransformJson {
+            offset: Some([0.5, 0.25]),
+            rotation: Some(0.75),
+            scale: Some([2.0, 3.0]),
+            tex_coord: None,
+        };
+        let material = Mat {
+            transform: Some(written),
+            ..skin()
+        };
+        let transform = Transform {
+            offset: [0.5, 0.25],
+            rotation: 0.75,
+            scale: [2.0, 3.0],
+        };
+        let read = scene(&sampled(&[material.clone(), skin()]));
+        assert_eq!(
+            read.materials[0].base_color_texture,
+            Some(TextureRef {
+                transform: Some(transform),
+                ..TextureRef::image(0)
+            })
+        );
+        let p = &read.primitives[0];
+        let uvs = p.uvs.as_ref().expect("coordinates");
+        let mut moved = 0;
+        for (q, uv) in p.positions.iter().zip(uvs) {
+            let plain = fixture_uv(*q, 0);
+            assert_eq!(*uv, transform.apply(plain), "{q:?}");
+            moved += usize::from(*uv != plain);
+        }
+        assert_eq!(moved, uvs.len(), "the offset moves every coordinate");
+        // The material beside it, on the same image, is not transformed.
+        assert_set(&read.primitives[1], 0);
+        // Flat normals carry the transformed coordinates.
+        let flat = Builder::new([2.0, 1.0, 4.0])
+            .texcoords()
+            .image(ImageAt::Embedded)
+            .material(material);
+        let flat = scene(&flat);
+        let p = &flat.primitives[0];
+        for (q, uv) in p.positions.iter().zip(p.uvs.as_ref().unwrap()) {
+            assert_eq!(*uv, transform.apply(fixture_uv(*q, 0)), "{q:?}");
+        }
+        // A transform that gives nothing is the identity.
+        let empty = base(Mat {
+            transform: Some(TransformJson::default()),
+            ..skin()
+        });
+        assert_eq!(empty.transform, Some(Transform::IDENTITY));
+    }
+
+    #[test]
+    fn a_transform_s_own_set_overrides_the_base_colour_s() {
+        for (info, own, expected) in [(1, Some(0), 0), (0, Some(1), 1), (1, None, 1)] {
+            let material = Mat {
+                tex_coord: info,
+                transform: Some(TransformJson {
+                    tex_coord: own,
+                    ..TransformJson::default()
+                }),
+                ..skin()
+            };
+            let scene = scene(&sampled(&[material]));
+            let read = scene.materials[0].base_color_texture.unwrap();
+            assert_eq!(read.tex_coord, expected, "{info}, {own:?}");
+            assert_set(&scene.primitives[0], expected);
+        }
+    }
+
+    #[test]
+    fn a_transform_that_overflows_leaves_the_primitive_no_coordinates() {
+        let huge = Mat {
+            transform: Some(TransformJson {
+                scale: Some([f32::MAX, f32::MAX]),
+                offset: Some([f32::MAX, f32::MAX]),
+                ..TransformJson::default()
+            }),
+            ..skin()
+        };
+        let scene = scene(&sampled(&[huge, skin()]));
+        assert_eq!(scene.primitives[0].uvs, None);
+        // The model still reads, and the material beside it is sampled.
+        assert_set(&scene.primitives[1], 0);
+    }
+
+    #[test]
+    fn a_malformed_texture_transform_makes_the_model_unreadable() {
+        let material = Mat {
+            transform: Some(TransformJson::default()),
+            ..skin()
+        };
+        let (json, bin) = sampled(&[material])
+            .image(ImageAt::Uri("skin.png".into()))
+            .gltf("m.bin");
+        let read = |path: &str| match path {
+            "m.bin" => Some(bin.clone()),
+            "skin.png" => Some(PNG.to_vec()),
+            _ => None,
+        };
+        assert!(read_scene("m.gltf", json.as_bytes(), read).is_ok());
+        let mut broken: serde_json::Value = serde_json::from_str(&json).unwrap();
+        broken["materials"][0]["pbrMetallicRoughness"]["baseColorTexture"]["extensions"]["KHR_texture_transform"]
+            ["offset"] = "left".into();
+        let err = read_scene("m.gltf", broken.to_string().as_bytes(), read).unwrap_err();
+        assert!(err.starts_with("not a readable glTF model"), "{err}");
+        // As a sampler with a code that isn't one of glTF's does.
+        let mut odd: serde_json::Value = serde_json::from_str(&json).unwrap();
+        odd["samplers"] = serde_json::json!([{ "wrapS": 1234 }]);
+        odd["textures"][0]["sampler"] = 0.into();
+        let err = read_scene("m.gltf", odd.to_string().as_bytes(), read).unwrap_err();
         assert!(err.starts_with("not a readable glTF model"), "{err}");
     }
 

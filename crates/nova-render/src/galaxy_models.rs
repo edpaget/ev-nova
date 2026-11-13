@@ -155,7 +155,7 @@ fn textures(asset: &str, scene: &Scene, limits: &Limits) -> Result<Textures, Mod
     let named: BTreeSet<usize> = scene
         .materials
         .iter()
-        .filter_map(|m| m.base_color_texture)
+        .filter_map(|m| m.base_color_texture.map(|texture| texture.image))
         .collect();
     let mut textures = Vec::new();
     let mut places = vec![None; scene.images.len()];
@@ -367,7 +367,7 @@ fn loaded(
                 unlit: m.unlit,
                 base_color_texture: m
                     .base_color_texture
-                    .and_then(|image| places.get(image).copied().flatten()),
+                    .and_then(|texture| places.get(texture.image).copied().flatten()),
             })
             .collect(),
         textures,

@@ -66,6 +66,7 @@ pub mod outline;
 pub mod paint;
 pub mod placement;
 pub mod planet;
+pub mod sampling;
 pub mod scene;
 pub mod texture;
 
@@ -74,5 +75,6 @@ pub use model::{Bounds, Face, Model, NoModel, model, read_model};
 pub use outline::{BARE, Outline, Triangle, painted, rgb, silhouette, size_box, top_down};
 pub use paint::{Slot, slot_of};
 pub use placement::Placement;
+pub use sampling::{Sampler, TextureRef};
 pub use scene::{AssetScenes, Scene, read_asset_scene, read_scene};
 pub use texture::{NoTexture, read_texture};
