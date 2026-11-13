@@ -202,7 +202,7 @@ pub use batch::{RenderReport, Renderer};
 pub use camera::Light;
 pub use enlarge::{Enlarger, NativeDetail, enlarger_for};
 pub use fonts::{FALLBACK_FONT, Face, FontFaces, Loaded, SERIF_FONT, face_for};
-pub use galaxy_models::{GalaxyModels, ship_livery, ship_request};
+pub use galaxy_models::{GalaxyModels, ship_livery, ship_request, station_livery};
 pub use galaxy_planets::GalaxyPlanets;
 pub use gpu::{
     Batch, Frame, Gpu, MAX_TEXTURE_SIDE, ModelInstance, PlanetId, PlanetImage, PlanetInstance,

@@ -20,12 +20,16 @@
 //!   once the outfits are keyed.
 //! - **Outfits**: each outfit model a mount shows, keyed by (asset) at a
 //!   metre a unit, unpainted.
-//! - **Stations and outposts**: each whose `visual` is a model, keyed as
-//!   an outfit is, with the reach of its stand-in outline (the model seen
-//!   from above, in its own units), so the view scales it to the
-//!   stand-in's size (one whose reach can't size it, the view draws as
-//!   its stand-in). One whose stand-in isn't its outline (the model
-//!   didn't read for the loader) has none.
+//! - **Stations and outposts**: each whose `visual` is a model, keyed by
+//!   (asset, livery) at a metre a unit, painted in its owner's livery
+//!   ([`station_livery`]): two stations of one owner share a key, and an
+//!   unowned one, or one whose owner no livery names, is unpainted. The
+//!   owner is the data's, painted once here: the new game's data has no
+//!   way to change a stellar's owner in play. Each carries the reach of
+//!   its stand-in outline (the model seen from above, in its own units),
+//!   so the view scales it to the stand-in's size (one whose reach can't
+//!   size it, the view draws as its stand-in). One whose stand-in isn't
+//!   its outline (the model didn't read for the loader) has none.
 //! - **Planets and moons**: each [`GalaxyPlanets`] answers with a planet,
 //!   one key each, with how far its rings and atmosphere reach in its
 //!   radii ([`planet::surface_reach`]), so a picture can fit the whole of
@@ -34,7 +38,9 @@
 //!   by its sky's seed ([`sky_looks`]), for the app to hand the renderer
 //!   ([`Renderer::set_sky_looks`](crate::Renderer::set_sky_looks)).
 //!
-//! Each (asset, length) is read once and each livery painted once; keys
+//! Each (asset, length) is read once and painted once in each livery it
+//! wears. A livery on a model with no part in a painted material paints
+//! nothing, so that model keeps its one unpainted key and mesh; keys
 //! count up from 1 in a stable order (bible id order: ships, then
 //! outfits, then stations; planets on their own count). A model or planet
 //! that fails keeps its stand-in, with no key. A failure only this
@@ -61,7 +67,7 @@ use nova_galaxy_format::source::Source;
 use nova_view::flight::{ShipModel, StellarModel, WorldModels};
 use nova_view::{ModelKey, PlanetKey};
 
-use crate::galaxy_models::{GalaxyModels, ship_livery, ship_request};
+use crate::galaxy_models::{GalaxyModels, ship_livery, ship_request, station_livery};
 use crate::galaxy_planets::GalaxyPlanets;
 use crate::livery::{Livery, painted};
 use crate::model::Mesh;
@@ -169,7 +175,7 @@ pub fn world_assets_from(
                 _ => continue,
             };
             let request = ModelRequest::new(asset.as_str(), None);
-            if let Some(key) = keys.key(&request, None) {
+            if let Some(key) = keys.key(&request, station_livery(&game.galaxy, id)) {
                 #[allow(clippy::cast_possible_truncation, reason = "a model's units")]
                 let reach = reach as f32;
                 table
@@ -303,9 +309,16 @@ impl<'a, M: ModelSource> Keyring<'a, M> {
     }
 
     /// The key of `request`'s model in `livery`, handing one out with its
-    /// mesh the first time; none when the model doesn't load.
+    /// mesh the first time; none when the model doesn't load. A livery on
+    /// a model that draws no part in a material with a slot paints
+    /// nothing, so it takes the unpainted key, and no copy of its mesh is
+    /// made.
     fn key(&mut self, request: &ModelRequest, livery: Option<Livery>) -> Option<ModelKey> {
         let length = request.length.map(f32::to_bits);
+        let read = (request.asset.clone(), length);
+        self.load(request, &read);
+        let model = self.loaded[&read].as_ref()?;
+        let livery = livery.filter(|_| takes_paint(model));
         let id: ModelId = (
             request.asset.clone(),
             length,
@@ -314,8 +327,18 @@ impl<'a, M: ModelSource> Keyring<'a, M> {
         if let Some(&key) = self.keys.get(&id) {
             return Some(key);
         }
-        let read = (request.asset.clone(), length);
-        if !self.loaded.contains_key(&read) {
+        let mesh = livery.map_or_else(|| model.mesh(), |livery| painted(model, &livery).mesh());
+        let key = ModelKey(next(self.meshes.len()));
+        self.keys.insert(id, key);
+        self.meshes.push((key, mesh));
+        Some(key)
+    }
+
+    /// Reads the model `request` names into [`Self::loaded`] under `read`
+    /// (its asset and length bits) the first time it is asked for, or
+    /// none when it doesn't load, reporting a failure that is news.
+    fn load(&mut self, request: &ModelRequest, read: &(String, Option<u32>)) {
+        if !self.loaded.contains_key(read) {
             let model = match self.models.model(request) {
                 Ok(model) => Some(model),
                 Err(error) => {
@@ -328,12 +351,6 @@ impl<'a, M: ModelSource> Keyring<'a, M> {
             };
             self.loaded.insert(read.clone(), model);
         }
-        let model = self.loaded[&read].as_ref()?;
-        let mesh = livery.map_or_else(|| model.mesh(), |livery| painted(model, &livery).mesh());
-        let key = ModelKey(next(self.meshes.len()));
-        self.keys.insert(id, key);
-        self.meshes.push((key, mesh));
-        Some(key)
     }
 
     /// The radius of the mesh `key` names, if it was handed out.
@@ -348,6 +365,16 @@ impl<'a, M: ModelSource> Keyring<'a, M> {
     fn finish(self) -> (Vec<(ModelKey, Mesh)>, Vec<String>) {
         (self.meshes, self.problems)
     }
+}
+
+/// Whether a livery would paint any of `model`: some part of it is drawn
+/// in a material with a slot.
+fn takes_paint(model: &LoadedModel) -> bool {
+    model.parts.iter().any(|part| {
+        part.material
+            .and_then(|at| model.materials.get(at))
+            .is_some_and(|material| material.paint.is_some())
+    })
 }
 
 /// Whether `error` is news to report (see the module docs). A model that
@@ -384,7 +411,8 @@ mod tests {
     use std::path::Path;
 
     use nova_data::new_game::fixture::{
-        LIGHT_FREIGHTER_GLB, STATION_HUB_GLB, TURRET_MOUNT_GLB, modelled_sample, modelled_sample_3d,
+        LIGHT_FREIGHTER_GLB, STATION_HUB_GLB, TURRET_MOUNT_GLB, liveried_stations_3d,
+        modelled_sample, modelled_sample_3d,
     };
     use nova_data::new_game::load;
     use nova_galaxy_format::source::{Listed, MemSource, SourceFile};
@@ -552,6 +580,130 @@ mod tests {
         assert_eq!(hubs[0], hubs[1], "one hub, one key");
         assert_ne!(hubs[0], turret);
         assert_eq!(assets.problems, Vec::<String>::new());
+    }
+
+    /// A station in Luyten Crossing named `name`, owned by `owner` (or by
+    /// nobody), drawing the hub.
+    fn hub_station(name: &str, owner: Option<&str>) -> String {
+        let owner = owner.map_or(String::new(), |owner| format!("owner: {owner}\n"));
+        format!(
+            "---\nname: {name}\nkind: station\nsystem: luyten-crossing\nposition: [300, 300]\n\
+             {owner}visual: {{asset: station-hub}}\n---\n"
+        )
+    }
+
+    /// The model key `name`'s table entry names.
+    fn station_key(game: &NewGame, assets: &WorldAssets, name: &str) -> ModelKey {
+        match assets.models.stellar(stellar(game, name)) {
+            Some(StellarModel::Model { key, .. }) => key,
+            other => panic!("{name}: {other:?}"),
+        }
+    }
+
+    /// The hub as its model source loads it, and as the commonwealth's
+    /// livery paints it, in `game`.
+    fn hubs(game: &NewGame, source: &impl Source) -> (Mesh, Mesh) {
+        let models = GalaxyModels::new(&game.galaxy, source);
+        let hub = models
+            .model(&ModelRequest::new("station-hub", None))
+            .expect("the hub loads");
+        let livery = station_livery(&game.galaxy, &id("luyten-exchange")).expect("a livery");
+        (hub.mesh(), painted(&hub, &livery).mesh())
+    }
+
+    #[test]
+    fn a_station_is_painted_in_its_owner_s_livery_and_one_whose_owner_has_none_is_not() {
+        let source = liveried_stations_3d();
+        let (game, assets) = built(&source);
+        let (plain, painted) = hubs(&game, &source);
+        assert_ne!(plain, painted, "the hub takes paint");
+        let exchange = station_key(&game, &assets, "luyten-exchange");
+        let yard = station_key(&game, &assets, "marrow-yard");
+        assert_eq!(mesh(&assets, exchange), &painted);
+        assert_eq!(mesh(&assets, yard), &plain, "the commons wear no livery");
+        assert_ne!(exchange, yard);
+        assert_eq!(assets.problems, Vec::<String>::new());
+    }
+
+    #[test]
+    fn stations_of_one_livery_share_one_painted_mesh_and_an_unowned_one_is_unpainted() {
+        let source = liveried_stations_3d()
+            .with(
+                "stellars/second-exchange.md",
+                &hub_station("Second Exchange", Some("commonwealth")),
+            )
+            .with(
+                "stellars/drifting-hub.md",
+                &hub_station("Drifting Hub", None),
+            );
+        let (game, assets) = built(&source);
+        let (plain, painted) = hubs(&game, &source);
+        let exchange = station_key(&game, &assets, "luyten-exchange");
+        assert_eq!(station_key(&game, &assets, "second-exchange"), exchange);
+        let drifting = station_key(&game, &assets, "drifting-hub");
+        assert_eq!(drifting, station_key(&game, &assets, "marrow-yard"));
+        assert_eq!(mesh(&assets, drifting), &plain);
+        let painted_hubs = assets.meshes.iter().filter(|(_, m)| *m == painted).count();
+        assert_eq!(painted_hubs, 1, "one painted hub");
+        assert_eq!(assets.problems, Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_livery_on_a_model_with_nothing_to_paint_keys_the_unpainted_mesh() {
+        // The commonwealth's livery, on the plain sample's unpainted hub.
+        let source = modelled_sample_3d().with(
+            "liveries/commonwealth-colours.md",
+            "---\nname: Commonwealth colours\nfaction: commonwealth\n\
+             palette: {primary: \"#ff8c00\", secondary: \"#718cff\", trim: \"#00ffff\"}\n---\n",
+        );
+        let (game, assets) = built(&source);
+        assert!(station_livery(&game.galaxy, &id("luyten-exchange")).is_some());
+        let exchange = station_key(&game, &assets, "luyten-exchange");
+        assert_eq!(exchange, station_key(&game, &assets, "marrow-yard"));
+        let (_, plain_assets) = built(&modelled_sample_3d());
+        assert_eq!(
+            assets.meshes.len(),
+            plain_assets.meshes.len(),
+            "no extra mesh"
+        );
+        assert_eq!(assets.problems, Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_liveried_ship_on_a_model_with_nothing_to_paint_shares_the_unpainted_key() {
+        // The light freighter's asset left without `paint`: the gunship's
+        // livery paints nothing, so it shares the freighter's mesh.
+        let source = modelled_sample_3d().with(
+            "assets/light-freighter.md",
+            &format!(
+                "---\nkind: model\nplaceholder: false\nfront: \"-z\"\n\
+                 files: [{LIGHT_FREIGHTER_GLB}]\nlicence: CC0-1.0\nauthor: test\n---\n"
+            ),
+        );
+        let (game, assets) = built(&source);
+        let key = |name| assets.models.ship(ship(&game, name)).expect("a model").key;
+        assert_eq!(key("light-freighter"), key("harrow-gunship"));
+        assert_eq!(assets.problems, Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_hub_is_read_once_for_both_its_liveries() {
+        let memory = liveried_stations_3d();
+        let game = load(&memory, Path::new("sample"));
+        let counting = Counting {
+            source: &memory,
+            reads: RefCell::default(),
+        };
+        let assets = world_assets_from(
+            &game,
+            &GalaxyModels::new(&game.galaxy, &counting),
+            &GalaxyPlanets::new(&game.galaxy, &counting).baked_at(SMALL),
+        );
+        assert_ne!(
+            station_key(&game, &assets, "luyten-exchange"),
+            station_key(&game, &assets, "marrow-yard")
+        );
+        assert_eq!(counting.reads.borrow().get(STATION_HUB_GLB), Some(&1));
     }
 
     #[test]
