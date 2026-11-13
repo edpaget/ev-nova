@@ -16,6 +16,7 @@ mod fsr1_reference;
 mod generated_planets;
 mod layered_sky;
 mod livery_paint;
+mod load_cost;
 mod message_line;
 mod metal_fx;
 mod mounted_outfits;
