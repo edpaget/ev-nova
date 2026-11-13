@@ -19,6 +19,7 @@ mod livery_paint;
 mod message_line;
 mod metal_fx;
 mod mounted_outfits;
+mod overlay_models;
 mod prefs_labels;
 mod render_scale;
 mod sample_models;
