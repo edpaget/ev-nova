@@ -8,8 +8,9 @@
 //! planet, each key it draws registered and uploaded; every ship in the
 //! frame draws its class's hull, the traffic's included; and a pilot
 //! carrying the gun mount draws its turret on its hull, facing the nose
-//! until its first turret shot and then as the view's `mounted_outfits`
-//! turns it for the frame's turret facing. A class the data gives a
+//! until its first turret shot, then swinging over the frames after to
+//! where the view's `mounted_outfits` turns it for the frame's turret
+//! facing (the view's `turret_swing` module). A class the data gives a
 //! `translucency` draws its hulls at the view's `model_alpha` of it, and
 //! every other model whole. Flown under the stock ruleset's
 //! readings over the same data, the player's hull, the station hub and
@@ -402,6 +403,14 @@ fn the_player_s_turret_turns_to_its_first_shot_s_aim() {
     let before = world(&harness);
     let nose = turret_turn(&before, freighter, turret);
     assert!(nose.abs() < f32::EPSILON, "the nose: {nose}");
+    // Flown two seconds unfiring, so the view has stepped a pass of the
+    // turret on the nose before it aims: the flight steps none of its
+    // first frames, and a ship no pass has shown stands at its readout.
+    for _ in 0..120 {
+        stand(&mut harness);
+        draw(&mut harness);
+    }
+    assert_eq!(frame(&harness).ships[0].turret_facing, None);
 
     // Space pressed again each frame until it takes, as the flight may
     // not step its first frames.
@@ -418,15 +427,35 @@ fn the_player_s_turret_turns_to_its_first_shot_s_aim() {
         frame(&harness).ships[0].turret_facing.is_some(),
         "the player fired its turret"
     );
-    let after = world(&harness);
-    let turn = turret_turn(&after, freighter, turret);
-    assert!(turn.abs() > 1e-3, "turned off the nose: {turn}");
-    let want = player_as_mounted(&harness, &assets, &after, freighter);
-    assert!(
-        after
+    // It swings to the aim over the frames after, well within the hold
+    // on the readout, rather than snapping to it.
+    let mut turns = Vec::new();
+    let mut settled = None;
+    for _ in 0..60 {
+        let after = world(&harness);
+        turns.push(turret_turn(&after, freighter, turret));
+        let want = player_as_mounted(&harness, &assets, &after, freighter);
+        if after
             .windows(want.len())
-            .any(|drawn| drawn == want.as_slice()),
-        "the hull and its turret as the view's function draws them: {want:?} in {after:?}"
+            .any(|drawn| drawn == want.as_slice())
+        {
+            settled = Some(turret_turn(&want, freighter, turret));
+            break;
+        }
+        stand(&mut harness);
+        draw(&mut harness);
+    }
+    assert!(
+        frame(&harness).ships[0].turret_facing.is_some(),
+        "still aimed"
+    );
+    let aim = settled.expect("the hull and its turret as the view's function draws them");
+    assert!(aim.abs() > 1e-3, "turned off the nose: {aim}");
+    assert!(
+        turns
+            .iter()
+            .any(|turn| turn * aim > 1e-6 && turn.abs() < aim.abs() - 1e-3),
+        "swung through a turn between the nose and {aim}: {turns:?}"
     );
 }
 
