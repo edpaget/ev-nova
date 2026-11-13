@@ -29,9 +29,11 @@
 //! That makes the public module paths, the item names and the `fixture`
 //! feature (`fixture::galaxy`, `fixture::CC0`, `source::TREE`,
 //! `source::check_contract`, `source::UNREADABLE`,
-//! `source::check_unreadable_contract`), and the `Source` port with its
-//! provided `listing` method and the `Listed` it returns, this crate's
-//! contract with the tool:
+//! `source::check_unreadable_contract`, `source::CountingSource`), and the
+//! `Source` port with its provided `listing` and `head` methods and the
+//! `Listed` `listing` returns, this crate's contract with the tool (a
+//! method added to the port is provided, so the tool's sources still
+//! build):
 //! renaming or removing one breaks its build. A type's doc comment is
 //! part of it too, as its JSON Schema's description: the tool fails when
 //! the schemas it commits differ from [`schema::schemas`].
