@@ -728,9 +728,16 @@ impl SpaceportView {
 
     /// The spaceport whose shipyard and hire screen draw a class with no
     /// `PICT` as its model from `models` (the shipyard's `picture`
-    /// module).
+    /// module), and whose landscape draws its stellar's model or planet
+    /// when it has no `PICT` ([`Landscape::with_model`]).
     #[must_use]
     pub fn with_world_models(mut self, models: Rc<WorldModels>) -> Self {
+        if let Ok(port) = &mut self.port {
+            port.landscape = port
+                .landscape
+                .clone()
+                .with_model(models.stellar(self.stellar));
+        }
         self.world_models = models;
         self
     }

@@ -1,7 +1,9 @@
 //! The spaceport given the world models
-//! ([`SpaceportView::with_world_models`]): the shipyard it opens draws a
-//! class with no `PICT` as its model (the shipyard's `picture` module);
-//! with an empty table it draws as before.
+//! ([`SpaceportView::with_world_models`]): the shipyard and the hire
+//! screen it opens draw a class with no `PICT` as its model (the
+//! shipyard's `picture` module), and its landscape draws its stellar's
+//! model in its stand-in's place (the `landscape` module); with an empty
+//! table each draws as before.
 
 use super::*;
 use crate::flight::world_models::{ShipModel, WorldModels};
@@ -54,6 +56,84 @@ fn the_hire_screen_its_bar_opens_draws_a_modelled_class_as_its_model() {
     view.open_hire(hirelings(2, true), None);
     assert!(view.open_bar().and_then(BarScreen::hire_screen).is_some());
     assert_eq!(model_keys(&drawn(&view)), [HEAVY], "ship 129's icon");
+}
+
+const HUB: ModelKey = ModelKey(32);
+
+/// Earth (140) with a disc stand-in and no landscape `PICT`, its model
+/// the hub, given `models` or not.
+fn modelled_earth(models: Option<Rc<WorldModels>>) -> SpaceportView {
+    let catalog = FakePort {
+        port: Ok(PortRecord {
+            stand_in: Some(crate::outline::StellarStandIn::Disc(Color::WHITE)),
+            ..catalog().port.expect("a record")
+        }),
+        pictures: Vec::new(),
+        ..catalog()
+    };
+    let view = view_of(&catalog);
+    match models {
+        Some(models) => view.with_world_models(models),
+        None => view,
+    }
+}
+
+fn hub() -> Rc<WorldModels> {
+    Rc::new(WorldModels {
+        stellars: [(
+            StellarId(140),
+            crate::flight::world_models::StellarModel::Model {
+                key: HUB,
+                reach: 4.0,
+            },
+        )]
+        .into(),
+        ..WorldModels::default()
+    })
+}
+
+#[test]
+fn a_modelled_stellar_s_landscape_draws_its_model_in_the_stand_in_s_place() {
+    let view = modelled_earth(Some(hub()));
+    let commands = drawn(&view);
+    let area = item(&view, LANDSCAPE_ITEM);
+    let models: Vec<(ModelKey, Point)> = commands
+        .iter()
+        .filter_map(|command| match command {
+            DrawCommand::Model { model, pose, .. } => Some((*model, pose.center)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(models, [(HUB, area.center())]);
+    assert!(
+        !commands
+            .iter()
+            .any(|command| matches!(command, DrawCommand::Triangle { .. })),
+        "no stand-in"
+    );
+    // Between the background and the name, where the stand-in was.
+    assert!(matches!(commands[1], DrawCommand::Model { .. }));
+    assert!(matches!(&commands[2], DrawCommand::Text { text, .. } if text == "Earth"));
+    assert_eq!(view.missing_landscape(), Some(10_003));
+}
+
+#[test]
+fn with_an_empty_table_the_landscape_draws_as_before() {
+    let before = modelled_earth(None);
+    let empty = modelled_earth(Some(Rc::default()));
+    assert_eq!(drawn(&empty), drawn(&before));
+    let other = modelled_earth(Some(Rc::new(WorldModels {
+        stellars: [(
+            StellarId(141),
+            crate::flight::world_models::StellarModel::Model {
+                key: HUB,
+                reach: 4.0,
+            },
+        )]
+        .into(),
+        ..WorldModels::default()
+    })));
+    assert_eq!(drawn(&other), drawn(&before), "another stellar's model");
 }
 
 #[test]
