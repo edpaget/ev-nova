@@ -346,6 +346,81 @@ mod tests {
     }
 
     #[test]
+    fn two_liveries_of_a_hull_with_an_unsampled_texture_share_the_sampled_one() {
+        use crate::recording::{GpuCall, NoImages, RecordingGpu};
+        use crate::viewport::{LogicalSize, Viewport};
+
+        // Texture 0 is named only by the material of a face with no
+        // coordinates; texture 1 by a painted material on the rest.
+        let skin = Material {
+            base_color_texture: Some(1),
+            ..material("metal", Some(PaintSlot::Primary))
+        };
+        let bare = Material {
+            base_color_texture: Some(0),
+            ..material("dark", None)
+        };
+        let mut model = cube(
+            vec![skin, bare],
+            [Some(1), Some(0), Some(0), Some(0), Some(0), Some(0)],
+        );
+        model.parts[0].uv = None;
+        model.textures.push(Texture {
+            image: Arc::new(ModelTexture::new(1, 1, vec![7, 7, 7, 255]).unwrap()),
+            path: None,
+        });
+        let meshes = [
+            model.mesh(),
+            painted(&model, &LEAGUE).mesh(),
+            painted(&model, &RAIDER).mesh(),
+        ];
+        assert_ne!(meshes[1], meshes[2], "painted apart");
+        for mesh in &meshes {
+            assert_eq!(mesh.textures().len(), 1);
+            assert!(Arc::ptr_eq(&mesh.textures()[0], &model.textures[1].image));
+            assert_eq!(mesh.sections().last().unwrap().texture, Some(0));
+        }
+
+        // Drawn, the three upload the one texture once and all name it.
+        let mut renderer = crate::Renderer::new(NoImages);
+        let mut list = nova_view::DrawList::new();
+        for (at, mesh) in meshes.into_iter().enumerate() {
+            let key = nova_view::ModelKey(at as u32 + 1);
+            renderer.add_model(key, mesh);
+            list.model(
+                key,
+                nova_view::ModelPose {
+                    center: nova_view::Point::new(12.0, 12.0),
+                    orientation: nova_view::Orientation::IDENTITY,
+                    scale: 10.0,
+                },
+            );
+        }
+        let viewport = Viewport::new(LogicalSize { w: 64, h: 48 }, (128, 96), 2.0);
+        let mut gpu = RecordingGpu::new();
+        renderer.render(&list, &viewport, &mut gpu);
+        let uploaded: Vec<_> = gpu
+            .calls
+            .iter()
+            .filter_map(|call| match call {
+                GpuCall::UploadModelTexture { texture, data } => Some((*texture, data.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(uploaded.len(), 1);
+        assert_eq!(uploaded[0].1, *model.textures[1].image);
+        let named: Vec<_> = gpu
+            .calls
+            .iter()
+            .filter_map(|call| match call {
+                GpuCall::UploadMesh { textures, .. } => Some(textures.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(named, vec![vec![uploaded[0].0]; 3]);
+    }
+
+    #[test]
     fn a_model_with_nothing_painted_paints_to_itself() {
         let model = cube(
             vec![material("dark", None), material("glass", None)],
