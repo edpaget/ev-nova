@@ -2,7 +2,8 @@
 //! ([`TurretSwings`](crate::flight::turret_swing::TurretSwings), whose own
 //! tests pin the swing), stepped once a pass the view shows: over
 //! several frames rather than in one, twice as far in a frame of two
-//! passes and not at all in a frame of none, back to the nose once the
+//! passes and not at all in a frame of none, as far for the same passes
+//! however frames group them, back to the nose once the
 //! readout drops, afresh after a change of system or a landing, at a
 //! faded ship's alpha, and with nothing the view sends to the flight
 //! changed. On [`FakeFlight`], with `ship_models`' hand-built table: each
@@ -129,6 +130,27 @@ fn a_frame_of_two_passes_swings_twice_as_far_and_one_of_none_not_at_all() {
     let steps = vec![step_of(&shown, 1), step_of(&shown, 1)];
     run(&mut view, shown, steps);
     assert!(near(npc_turn(&view), 48.0));
+}
+
+#[test]
+fn the_same_passes_swing_as_far_however_frames_group_them() {
+    // Three passes toward 200, shown as one frame of three, three frames of
+    // one, and a frame of two then one of one.
+    let swung = |grouping: &[usize]| {
+        let mut view = viewing(table());
+        frame_of(&mut view, aimed(None), 1);
+        for &passes in grouping {
+            frame_of(&mut view, aimed(Some(200.0)), passes);
+        }
+        npc_turn(&view)
+    };
+    let one_frame = swung(&[3]);
+    assert!(
+        one_frame > 0.0 && one_frame < 200.0 - HULL,
+        "partway: {one_frame}"
+    );
+    assert!(near(swung(&[1, 1, 1]), one_frame));
+    assert!(near(swung(&[2, 1]), one_frame));
 }
 
 #[test]

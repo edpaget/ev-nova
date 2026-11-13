@@ -381,32 +381,4 @@ mod tests {
         swings.clear();
         assert_eq!(swings, TurretSwings::default());
     }
-
-    #[test]
-    fn passes_stepped_one_by_one_swing_as_the_same_passes_in_any_grouping() {
-        // A frame's passes are stepped one at a time however many a frame
-        // holds, so a run's swing depends on its passes alone.
-        let passes = [
-            ship(CLASS, 0.0, None),
-            ship(CLASS, 5.0, Some(170.0)),
-            ship(CLASS, 10.0, Some(170.0)),
-            ship(CLASS, 15.0, Some(-60.0)),
-            ship(CLASS, 20.0, None),
-            ship(CLASS, 25.0, None),
-        ];
-        let run = |grouping: &[usize]| {
-            let mut swings = TurretSwings::default();
-            let mut left = passes.as_slice();
-            for &n in grouping {
-                let (frame, rest) = left.split_at(n);
-                for pass in frame {
-                    step(&mut swings, std::slice::from_ref(pass));
-                }
-                left = rest;
-            }
-            swings
-        };
-        assert_eq!(run(&[1, 1, 1, 1, 1, 1]), run(&[2, 2, 2]));
-        assert_eq!(run(&[1, 1, 1, 1, 1, 1]), run(&[3, 1, 2]));
-    }
 }
