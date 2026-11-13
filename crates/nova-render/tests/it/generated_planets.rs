@@ -24,6 +24,7 @@ use nova_render::planet::{
     Fragment, Frame, PLANET_LIGHT, VIEW_LEAN, fragment, globe, in_planet_shadow, lit, ring_hit,
     ring_shadow, surface_uv, turns,
 };
+use nova_render::planet_files::FakePlanetFiles;
 use nova_render::{
     GalaxyPlanets, Light, LoadedPlanet, LogicalSize, Mesh, PlanetError, PlanetRequest,
     PlanetSource, RenderReport, Renderer, Viewport,
@@ -127,7 +128,15 @@ fn answered(source: &MemSource, stellar: &str) -> LoadedPlanet {
 /// draws with: a look is baked here, since each test reads the surface to
 /// work out the pixels it expects ([`surface_of`]).
 fn loaded(source: &MemSource, stellar: &str) -> LoadedPlanet {
-    LoadedPlanet::surface(answered(source, stellar).into_surface())
+    LoadedPlanet::surface(made(&answered(source, stellar)))
+}
+
+/// What `planet` draws with, made as the renderer makes it: a look baked,
+/// a surface as it is.
+fn made(planet: &LoadedPlanet) -> Surface {
+    planet
+        .make(&FakePlanetFiles::default())
+        .unwrap_or_else(|e| panic!("made: {e}"))
 }
 
 /// What `planet` draws with. Every planet [`loaded`] or built here holds
@@ -404,7 +413,7 @@ fn the_same_seed_always_draws_the_same_planet() {
 fn a_planet_answered_unbaked_draws_the_pixels_its_bake_does() {
     let unbaked = answered(&sample(4417), "kestrel-reach");
     assert!(unbaked.baked().is_none(), "the adapter bakes nothing");
-    let baked = LoadedPlanet::surface(unbaked.clone().into_surface());
+    let baked = LoadedPlanet::surface(made(&unbaked));
     let Some(lazily) = alone(&unbaked, pose(CENTRE.0, CENTRE.1)) else {
         return;
     };
@@ -524,7 +533,7 @@ fn the_clouds_turn_on_their_own() {
     // A 32 s day: at `TIME` the surface has turned a quarter and the
     // clouds a half, so a cloud layer read at the surface's turn would
     // show a quarter turn out.
-    let mut surface = verdance().into_surface();
+    let mut surface = made(&verdance());
     surface.day = 32.0;
     surface.clouds = Some(ramped_clouds());
     let (turn, cloud_turn) = turns(TIME, surface.day);
@@ -584,7 +593,7 @@ fn the_rings_shadow_the_globe_where_its_ray_toward_the_light_crosses_them() {
     // Kestrel Reach's rings cast their faint inner edge on the globe only
     // by its southern limb, and cover what they shade; these, narrow,
     // close in and dense throughout, shade the sunlit globe beyond them.
-    let kestrel = loaded(&sample(4417), "kestrel-reach").into_surface();
+    let kestrel = made(&loaded(&sample(4417), "kestrel-reach"));
     let planet = LoadedPlanet::surface(Surface {
         rings: Some(RingBand {
             inner: 1.05,
@@ -629,7 +638,7 @@ fn the_globe_shadows_the_rings_behind_it_from_the_light() {
     // shadow on the rings shows beside it, off the disc.
     let tilted = Surface {
         tilt: 0.4,
-        ..loaded(&sample(4417), "kestrel-reach").into_surface()
+        ..made(&loaded(&sample(4417), "kestrel-reach"))
     };
     let frame = Frame::new(0.4, VIEW_LEAN);
     let rings = tilted.rings.clone().expect("ringed");

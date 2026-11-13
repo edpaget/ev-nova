@@ -898,7 +898,8 @@ mod tests {
             let [(key, planet)] = &assets.planets[..] else {
                 panic!("one planet: {:?}", assets.planets.len());
             };
-            let surface = &planet.clone().into_surface();
+            let surface = &(planet.make(&crate::planet_files::FakePlanetFiles::default()))
+                .expect("a look is made");
             #[allow(clippy::cast_possible_truncation, reason = "as the renderer reads it")]
             let reach = crate::planet::reach(
                 surface.atmosphere.as_ref().map(|a| a.thickness as f32),

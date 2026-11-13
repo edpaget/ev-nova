@@ -44,9 +44,15 @@
 //!   become.
 //! - [`planet_source`]: the [`PlanetSource`] port, the new game's planets
 //!   and moons by stellar ([`PlanetRequest`]) as [`LoadedPlanet`]s, a
-//!   texture asset read or a generated look left unbaked for its first
-//!   draw, or why not ([`PlanetError`]); its fake and contract check
-//!   behind the `recording` feature.
+//!   generated look left unbaked or a texture left unread for its first
+//!   draw, which makes it ([`LoadedPlanet::make`]), or why not
+//!   ([`PlanetError`]); its fake and contract check behind the
+//!   `recording` feature.
+//! - [`planet_files`]: the [`PlanetFiles`](planet_files::PlanetFiles)
+//!   port, which reads an unread texture's file
+//!   ([`TextureFile`](planet_files::TextureFile)) when the renderer first
+//!   draws its planet; its fake and contract check behind the `recording`
+//!   feature.
 //! - [`camera`]: the models' orthographic camera, which puts a model where
 //!   a sprite at its centre goes at the 2D view's scale, their depth
 //!   bands, each later model of a batch nearer, the [`Light`] they are
@@ -203,6 +209,7 @@ pub mod new_game_sky;
 pub mod new_game_sky_images;
 pub mod new_game_world;
 pub mod planet;
+pub mod planet_files;
 pub mod planet_source;
 mod planets;
 pub mod present;

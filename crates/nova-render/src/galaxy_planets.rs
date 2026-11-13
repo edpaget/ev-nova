@@ -155,6 +155,7 @@ mod tests {
 
     use super::*;
     use crate::model_source::{Measure, Overrun};
+    use crate::planet_files::FakePlanetFiles;
     use crate::planet_source::check_contract;
 
     const SMALL: Sizes = Sizes {
@@ -210,7 +211,10 @@ mod tests {
         let small = ask(&source, "kestrel-reach").expect("a planet");
         assert_eq!(small, LoadedPlanet::unbaked(look.clone(), SMALL));
         assert_eq!(small.baked(), None, "not baked here");
-        assert_eq!(small.into_surface(), bake(look, SMALL));
+        assert_eq!(
+            small.make(&FakePlanetFiles::default()),
+            Ok(bake(look, SMALL))
+        );
         // The engine's sizes, unless told otherwise.
         let engine = GalaxyPlanets::new(&galaxy, &source);
         assert_eq!(
@@ -234,7 +238,7 @@ mod tests {
     fn a_texture_planet_is_its_texture_with_no_extras() {
         let read = ask(&sample(), "alpha-prime").unwrap();
         assert!(read.baked().is_some(), "read at load, not left for later");
-        let planet = read.into_surface();
+        let planet = read.make(&FakePlanetFiles::default()).unwrap();
         let opaque: Vec<u8> = pattern()
             .chunks(4)
             .flat_map(|t| [t[0], t[1], t[2], 0])
@@ -419,7 +423,8 @@ mod tests {
         let (galaxy, _) = load(&source);
         let planets = GalaxyPlanets::new(&galaxy, &source).baked_at(SMALL);
         for stellar in ["kestrel-reach", "alpha-prime"] {
-            check_contract(&planets, &PlanetRequest::new(stellar), "nothing");
+            let files = FakePlanetFiles::default();
+            check_contract(&planets, &files, &PlanetRequest::new(stellar), "nothing");
         }
     }
 
@@ -442,7 +447,11 @@ mod tests {
             .with_bytes("media/export/pack/moon.png", &png(4, 2, &[50; 32]));
         let planet = ask(&source, "pale").unwrap();
         assert_eq!(
-            planet.into_surface().surface.rgba,
+            planet
+                .make(&FakePlanetFiles::default())
+                .unwrap()
+                .surface
+                .rgba,
             [50, 50, 50, 0].repeat(8)
         );
     }

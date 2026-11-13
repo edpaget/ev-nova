@@ -45,6 +45,7 @@ use nova_view::{PlanetKey, PlanetPose};
 
 use crate::gpu::{Batch, Gpu, PlanetId, PlanetInstance, Rect};
 use crate::planet::{self, PLANET_LIGHT};
+use crate::planet_files::NoFiles;
 use crate::planet_source::LoadedPlanet;
 
 /// A planet the renderer was given, and whether the GPU holds it as it is.
@@ -114,7 +115,16 @@ impl Planets {
         if planet::quad(pose, held.planet.reach()).is_none() {
             return;
         }
-        let surface = held.planet.bake();
+        if held.planet.baked().is_none() {
+            // Made in place, and held from then on.
+            let Ok(made) = held.planet.make(&NoFiles) else {
+                return;
+            };
+            held.planet = LoadedPlanet::surface(made);
+        }
+        let Some(surface) = held.planet.baked() else {
+            return;
+        };
         let Some(instance) = planet::instance(held.id, surface, pose) else {
             return;
         };

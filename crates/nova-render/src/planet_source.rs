@@ -6,15 +6,19 @@
 //! [`LoadedPlanet`] or a [`PlanetError`]. A loaded planet draws with one
 //! shape, a [`Surface`]: an equirectangular surface twice as wide as tall
 //! with power-of-two sides, and its clouds, rings, atmosphere, day and
-//! tilt. It holds either that surface already (a texture asset read,
-//! `nova_galaxy_media::texture`, or a look somebody baked) or a generated
-//! look not baked yet, with the sizes to bake it at
-//! (`nova_galaxy_media::planet::bake`). A bake is the slow part of a
-//! planet and can't fail, so a source may leave it to whoever draws the
-//! planet: the renderer bakes one the first frame that draws it
-//! (`crate::planets`). How far a planet reaches
-//! ([`LoadedPlanet::reach`]) needs no bake. Models have their own port
-//! ([`crate::model_source`]).
+//! tilt. It holds that surface already (a look somebody baked, or a
+//! texture somebody read), a generated look not baked yet, with the sizes
+//! to bake it at (`nova_galaxy_media::planet::bake`), or a texture
+//! checked from its header and not read yet, with its file
+//! ([`crate::planet_files::TextureFile`]). A bake or a read is the slow
+//! part of a planet, so a source may leave it to whoever draws the
+//! planet: the renderer makes one ([`LoadedPlanet::make`]) the first frame
+//! that draws it (`crate::planets`), a texture through its
+//! [`PlanetFiles`] port, and makes it again after it let it go. A bake
+//! can't fail and a read can, so a planet may carry the stand-in its
+//! stellar draws without it ([`LoadedPlanet::with_stand_in`]). How far a
+//! planet reaches ([`LoadedPlanet::reach`]) needs neither. Models have
+//! their own port ([`crate::model_source`]).
 //!
 //! # Where an addition goes
 //!
@@ -25,12 +29,14 @@
 //! - Something more a planet draws with: a field of
 //!   `nova_galaxy_media::planet::Surface`, baked or read there, and drawn
 //!   by the renderer's planets (`crate::planet`).
-//! - Another way a planet is handed over before it is ready to draw (a
-//!   texture read lazily, say): a kind of [`LoadedPlanet`], which stays
-//!   plain data, with its constructor, its turn in
-//!   [`LoadedPlanet::into_surface`] and a [`LoadedPlanet::reach`] it can
-//!   give without the work. `check_contract` checks what it makes. Its
-//!   shape is private, so nothing outside this module changes with it.
+//! - Another way a planet is handed over before it is ready to draw: a
+//!   kind of [`LoadedPlanet`], which stays plain data (so the renderer
+//!   can make it again), with its constructor, its turn in
+//!   [`LoadedPlanet::make`] and a [`LoadedPlanet::reach`] it can give
+//!   without the work. A collaborator that making it needs is a port
+//!   passed to `make`, as [`PlanetFiles`] is. `check_contract` checks
+//!   what it makes. Its shape is private, so nothing outside this module
+//!   changes with it.
 //!
 //! `FakePlanets` is the hand-written fake (with this crate's tests, or the
 //! `recording` feature), and `check_contract` the contract every source
@@ -42,9 +48,11 @@ use std::rc::Rc;
 use nova_galaxy_format::model::Look;
 pub use nova_galaxy_media::planet::Surface;
 use nova_galaxy_media::planet::{Sizes, bake};
+use nova_view::outline::StellarStandIn;
 
 use crate::model_source::Overrun;
 use crate::planet;
+use crate::planet_files::{PlanetFiles, TextureFile};
 
 /// A planet wanted: the stellar (`stellars/<id>.md`) it draws.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -64,15 +72,19 @@ impl PlanetRequest {
 }
 
 /// A planet, ready for the renderer
-/// ([`Renderer::add_planet`](crate::Renderer::add_planet)): either what it
-/// draws with ([`LoadedPlanet::surface`]) or a generated look not baked
-/// yet ([`LoadedPlanet::unbaked`]), which whoever draws it bakes
-/// ([`into_surface`](Self::into_surface)). How far it reaches is known
-/// either way ([`reach`](Self::reach)). Its shape is private, so build one
-/// with its constructors.
+/// ([`Renderer::add_planet`](crate::Renderer::add_planet)): what it draws
+/// with ([`LoadedPlanet::surface`]), a generated look not baked yet
+/// ([`LoadedPlanet::unbaked`]), or a texture checked and not read yet
+/// ([`LoadedPlanet::unread`]); whoever draws it makes it
+/// ([`make`](Self::make)), and can make it again. How far it reaches is
+/// known in each case ([`reach`](Self::reach)). It may carry the stand-in
+/// its stellar draws without it ([`with_stand_in`](Self::with_stand_in)),
+/// which the renderer draws in its place when it can't be made. Its shape
+/// is private, so build one with its constructors.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LoadedPlanet {
     kind: Kind,
+    stand_in: Option<StellarStandIn>,
 }
 
 /// What a [`LoadedPlanet`] holds.
@@ -82,15 +94,15 @@ enum Kind {
     Surface(Surface),
     /// A generated look, and the sizes to bake it at.
     Unbaked { look: Look, sizes: Sizes },
+    /// A texture's file, checked from its header and not read.
+    Unread(TextureFile),
 }
 
 impl LoadedPlanet {
     /// A planet that draws with `surface`.
     #[must_use]
     pub fn surface(surface: Surface) -> Self {
-        LoadedPlanet {
-            kind: Kind::Surface(surface),
-        }
+        Self::of(Kind::Surface(surface))
     }
 
     /// A planet that draws `look` baked at `sizes`, not baked yet: a bake
@@ -98,24 +110,56 @@ impl LoadedPlanet {
     /// frame that draws it.
     #[must_use]
     pub fn unbaked(look: Look, sizes: Sizes) -> Self {
+        Self::of(Kind::Unbaked { look, sizes })
+    }
+
+    /// A planet that draws the texture `texture` names, checked from its
+    /// header and not read yet: reading and decoding it is the slow part,
+    /// so it is left to the first frame that draws it, which reads it
+    /// through a [`PlanetFiles`].
+    #[must_use]
+    pub fn unread(texture: TextureFile) -> Self {
+        Self::of(Kind::Unread(texture))
+    }
+
+    fn of(kind: Kind) -> Self {
         LoadedPlanet {
-            kind: Kind::Unbaked { look, sizes },
+            kind,
+            stand_in: None,
         }
     }
 
+    /// The same planet, carrying `stand_in`: what its stellar draws
+    /// without it, which the renderer draws in its place if it can't be
+    /// made ([`make`](Self::make) fails).
+    #[must_use]
+    pub fn with_stand_in(self, stand_in: StellarStandIn) -> Self {
+        LoadedPlanet {
+            stand_in: Some(stand_in),
+            ..self
+        }
+    }
+
+    /// The stand-in it carries, if any ([`with_stand_in`](Self::with_stand_in)).
+    #[must_use]
+    pub fn stand_in(&self) -> Option<&StellarStandIn> {
+        self.stand_in.as_ref()
+    }
+
     /// What it draws with, when it holds that already; `None` for a look
-    /// not baked yet.
+    /// not baked yet or a texture not read yet.
     #[must_use]
     pub fn baked(&self) -> Option<&Surface> {
         match &self.kind {
             Kind::Surface(surface) => Some(surface),
-            Kind::Unbaked { .. } => None,
+            Kind::Unbaked { .. } | Kind::Unread(_) => None,
         }
     }
 
     /// How far it reaches, in its radii ([`planet::reach`]): from its
-    /// surface, or, unbaked, from its look's atmosphere and rings, which
-    /// is what its bake's surface reaches.
+    /// surface; unbaked, from its look's atmosphere and rings, which is
+    /// what its bake's surface reaches; unread, one radius, as a
+    /// texture's surface has no rings or atmosphere.
     #[must_use]
     pub fn reach(&self) -> f32 {
         match &self.kind {
@@ -125,29 +169,19 @@ impl LoadedPlanet {
                 look.atmosphere.as_ref().map(|a| a.thickness.get() as f32),
                 look.rings.as_ref().map(|r| r.outer as f32),
             ),
+            Kind::Unread(_) => planet::reach(None, None),
         }
     }
 
-    /// What it draws with: its surface, or its look baked at its sizes
-    /// (`nova_galaxy_media::planet::bake`, which can't fail).
-    #[must_use]
-    pub fn into_surface(self) -> Surface {
-        match self.kind {
-            Kind::Surface(surface) => surface,
-            Kind::Unbaked { look, sizes } => bake(&look, sizes),
-        }
-    }
-
-    /// What it draws with, baking its look in place the first time, so it
-    /// holds its surface from then on ([`baked`](Self::baked)) and bakes
-    /// no more.
-    pub fn bake(&mut self) -> &Surface {
-        if let Kind::Unbaked { look, sizes } = &self.kind {
-            self.kind = Kind::Surface(bake(look, *sizes));
-        }
+    /// What it draws with: its surface, its look baked at its sizes
+    /// (`nova_galaxy_media::planet::bake`, which can't fail and gives the
+    /// same pixels each time), or its texture read through `files`, which
+    /// can fail.
+    pub fn make(&self, files: &dyn PlanetFiles) -> Result<Surface, PlanetError> {
         match &self.kind {
-            Kind::Surface(surface) => surface,
-            Kind::Unbaked { .. } => unreachable!("baked just above"),
+            Kind::Surface(surface) => Ok(surface.clone()),
+            Kind::Unbaked { look, sizes } => Ok(bake(look, *sizes)),
+            Kind::Unread(texture) => files.read(texture),
         }
     }
 }
@@ -303,6 +337,7 @@ mod fake {
     use nova_galaxy_media::planet::Image;
 
     use super::{LoadedPlanet, PlanetError, PlanetRequest, PlanetSource};
+    use crate::planet_files::PlanetFiles;
 
     /// A hand-written [`PlanetSource`]: the planets it was given, by
     /// stellar. A stellar it wasn't given is [`PlanetError::NoStellar`].
@@ -358,8 +393,10 @@ mod fake {
     /// stellar it holds a planet for, and `absent`, one it doesn't:
     ///
     /// - `request` loads;
-    /// - what it draws with (its surface, or its look baked, which this
-    ///   check does) reaches as far as the answer said before any bake;
+    /// - it is made ([`LoadedPlanet::make`], with `files` for a texture
+    ///   left unread), and what it draws with (its surface, its look
+    ///   baked, or its texture read) reaches as far as the answer said
+    ///   before it was made;
     /// - its surface, and its clouds when it has them, are twice as wide
     ///   as tall with power-of-two sides, four bytes a texel;
     /// - its rings, when it has them, start outside the globe, end beyond
@@ -370,18 +407,25 @@ mod fake {
     ///   finite;
     /// - asking again gives an equal answer;
     /// - `absent` is [`PlanetError::NoStellar`].
-    pub fn check_contract(source: &impl PlanetSource, request: &PlanetRequest, absent: &str) {
+    pub fn check_contract(
+        source: &impl PlanetSource,
+        files: &dyn PlanetFiles,
+        request: &PlanetRequest,
+        absent: &str,
+    ) {
         let stellar = &request.stellar;
         let planet = source
             .planet(request)
             .unwrap_or_else(|e| panic!("`{stellar}` loads: {e}"));
-        let surface = &planet.clone().into_surface();
+        let surface = &planet
+            .make(files)
+            .unwrap_or_else(|e| panic!("`{stellar}` is made: {e}"));
         let reach = crate::planet::surface_reach(surface);
         // The same sizes through the same arithmetic: the same bits.
         assert_eq!(
             planet.reach().to_bits(),
             reach.to_bits(),
-            "`{stellar}` reaches {} before it is baked and {reach} after",
+            "`{stellar}` reaches {} before it is made and {reach} after",
             planet.reach()
         );
         check_layer(stellar, "surface", &surface.surface);
@@ -430,10 +474,13 @@ mod fake {
 
 #[cfg(test)]
 mod tests {
+    use nova_galaxy_media::budget::Limits;
     use nova_galaxy_media::planet::{Glow, Image, RingBand};
+    use nova_view::outline::StellarStandIn;
 
     use super::*;
     use crate::model_source::Measure;
+    use crate::planet_files::{FakePlanetFiles, TextureFile};
 
     /// A 4 by 2 surface with a ring and an atmosphere.
     fn surface() -> Surface {
@@ -495,39 +542,98 @@ mod tests {
         let planet = planet();
         assert_eq!(planet.baked(), Some(&surface()));
         assert!((planet.reach() - 2.0).abs() < f32::EPSILON, "its rings'");
-        assert_eq!(planet.into_surface(), surface());
+        assert_eq!(planet.make(&FakePlanetFiles::default()), Ok(surface()));
     }
 
     #[test]
     fn an_unbaked_planet_bakes_to_its_look_at_its_sizes() {
         let look = look(&format!("{RINGS}{ATMOSPHERE}"));
         let planet = LoadedPlanet::unbaked(look.clone(), SMALL);
+        let files = FakePlanetFiles::default();
         assert_eq!(planet.baked(), None);
-        assert_eq!(planet.clone().into_surface(), bake(&look, SMALL));
+        assert_eq!(planet.make(&files), Ok(bake(&look, SMALL)));
         let smaller = Sizes {
             surface: 16,
             ..SMALL
         };
         assert_ne!(planet, LoadedPlanet::unbaked(look.clone(), smaller));
         assert_eq!(
-            LoadedPlanet::unbaked(look.clone(), smaller).into_surface(),
-            bake(&look, smaller)
+            LoadedPlanet::unbaked(look.clone(), smaller).make(&files),
+            Ok(bake(&look, smaller))
+        );
+    }
+
+    /// The texture file `file` of stellar `pale`'s asset `moon-surface`.
+    fn texture(file: &str) -> TextureFile {
+        TextureFile {
+            stellar: "pale".into(),
+            asset: "moon-surface".into(),
+            file: file.into(),
+            limits: Limits::default(),
+        }
+    }
+
+    /// A 4 by 2 texture's surface, its texels `level`.
+    fn textured(level: u8) -> Surface {
+        Surface::from_texture(nova_galaxy_media::texture::Texture {
+            file: "media/export/pack/moon.png".into(),
+            width: 4,
+            height: 2,
+            disk_bytes: 0,
+            rgba: vec![level; 32],
+        })
+    }
+
+    #[test]
+    fn an_unread_texture_reaches_one_radius_and_holds_no_pixels() {
+        let planet = LoadedPlanet::unread(texture("media/export/pack/moon.png"));
+        assert_eq!(planet.baked(), None);
+        assert_eq!(
+            planet.reach().to_bits(),
+            crate::planet::surface_reach(&textured(7)).to_bits()
+        );
+        assert!((planet.reach() - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn making_a_planet_bakes_a_look_reads_a_file_or_gives_its_surface() {
+        let file = "media/export/pack/moon.png";
+        let files = FakePlanetFiles::default().with(file, textured(7));
+        let look = look(RINGS);
+        assert_eq!(
+            LoadedPlanet::unbaked(look.clone(), SMALL).make(&files),
+            Ok(bake(&look, SMALL))
+        );
+        assert_eq!(files.reads(file), 0, "a bake reads no file");
+        assert_eq!(
+            LoadedPlanet::unread(texture(file)).make(&files),
+            Ok(textured(7))
+        );
+        assert_eq!(files.reads(file), 1);
+        assert_eq!(planet().make(&files), Ok(surface()));
+        assert_eq!(files.reads(file), 1, "a surface reads no file");
+        let broken = PlanetError::Unreadable {
+            stellar: "pale".into(),
+            asset: "moon-surface".into(),
+            why: "`moon.png`: bad".into(),
+        };
+        let failing = FakePlanetFiles::default().with_error(file, broken.clone());
+        assert_eq!(
+            LoadedPlanet::unread(texture(file)).make(&failing),
+            Err(broken)
         );
     }
 
     #[test]
-    fn baking_in_place_gives_the_bake_and_holds_it_from_then_on() {
-        let look = look(&format!("{RINGS}{ATMOSPHERE}"));
-        let mut planet = LoadedPlanet::unbaked(look.clone(), SMALL);
-        let baked = bake(&look, SMALL);
-        assert_eq!(planet.bake(), &baked);
-        assert_eq!(planet.baked(), Some(&baked));
-        assert_eq!(planet, LoadedPlanet::surface(baked.clone()));
-        assert_eq!(planet.bake(), &baked, "and again, the same");
-        // One holding its surface gives it as it is.
-        let mut held = self::planet();
-        assert_eq!(held.bake(), &surface());
-        assert_eq!(held, self::planet());
+    fn a_planet_carries_the_stand_in_it_draws_if_it_cannot_be_made() {
+        let disc = StellarStandIn::Disc(nova_view::Color::rgba(10, 20, 30, 255));
+        let unread = LoadedPlanet::unread(texture("moon.png"));
+        assert_eq!(unread.stand_in(), None);
+        let carried = unread.clone().with_stand_in(disc.clone());
+        assert_eq!(carried.stand_in(), Some(&disc));
+        assert_ne!(carried, unread, "the stand-in is part of it");
+        assert_eq!(carried.reach().to_bits(), unread.reach().to_bits());
+        assert_eq!(planet().with_stand_in(disc.clone()).stand_in(), Some(&disc));
     }
 
     #[test]
@@ -551,7 +657,33 @@ mod tests {
         let unbaked = LoadedPlanet::unbaked(look(&format!("{RINGS}{ATMOSPHERE}")), SMALL);
         let fake = FakePlanets::default().with("verdance", unbaked.clone());
         assert_eq!(fake.planet(&PlanetRequest::new("verdance")), Ok(unbaked));
-        check_contract(&fake, &PlanetRequest::new("verdance"), "nothing");
+        check_contract(
+            &fake,
+            &FakePlanetFiles::default(),
+            &PlanetRequest::new("verdance"),
+            "nothing",
+        );
+    }
+
+    #[test]
+    fn an_unread_planet_meets_the_contract_made_with_its_files() {
+        let file = "media/export/pack/moon.png";
+        let fake = FakePlanets::default().with("pale", LoadedPlanet::unread(texture(file)));
+        let files = FakePlanetFiles::default().with(file, textured(7));
+        check_contract(&fake, &files, &PlanetRequest::new("pale"), "nothing");
+        assert_eq!(files.reads(file), 1, "made once");
+    }
+
+    #[test]
+    #[should_panic(expected = "`pale` is made")]
+    fn the_contract_fails_an_unread_planet_its_files_cannot_read() {
+        let fake = FakePlanets::default().with("pale", LoadedPlanet::unread(texture("moon.png")));
+        check_contract(
+            &fake,
+            &FakePlanetFiles::default(),
+            &PlanetRequest::new("pale"),
+            "nothing",
+        );
     }
 
     #[test]
@@ -584,7 +716,12 @@ mod tests {
     #[test]
     fn the_fake_meets_the_contract() {
         let fake = FakePlanets::default().with("kestrel-reach", planet());
-        check_contract(&fake, &PlanetRequest::new("kestrel-reach"), "nothing");
+        check_contract(
+            &fake,
+            &FakePlanetFiles::default(),
+            &PlanetRequest::new("kestrel-reach"),
+            "nothing",
+        );
     }
 
     #[test]
@@ -597,7 +734,12 @@ mod tests {
             rgba: vec![0; 16],
         };
         let fake = FakePlanets::default().with("p", LoadedPlanet::surface(square));
-        check_contract(&fake, &PlanetRequest::new("p"), "nothing");
+        check_contract(
+            &fake,
+            &FakePlanetFiles::default(),
+            &PlanetRequest::new("p"),
+            "nothing",
+        );
     }
 
     #[test]
@@ -610,7 +752,12 @@ mod tests {
             rgba: vec![0; 72],
         });
         let fake = FakePlanets::default().with("p", LoadedPlanet::surface(odd));
-        check_contract(&fake, &PlanetRequest::new("p"), "nothing");
+        check_contract(
+            &fake,
+            &FakePlanetFiles::default(),
+            &PlanetRequest::new("p"),
+            "nothing",
+        );
     }
 
     #[test]
@@ -621,7 +768,12 @@ mod tests {
             rings.inner = 0.5;
         }
         let fake = FakePlanets::default().with("p", LoadedPlanet::surface(low));
-        check_contract(&fake, &PlanetRequest::new("p"), "nothing");
+        check_contract(
+            &fake,
+            &FakePlanetFiles::default(),
+            &PlanetRequest::new("p"),
+            "nothing",
+        );
     }
 
     #[test]
@@ -630,7 +782,12 @@ mod tests {
         let mut still = surface();
         still.day = 0.0;
         let fake = FakePlanets::default().with("p", LoadedPlanet::surface(still));
-        check_contract(&fake, &PlanetRequest::new("p"), "nothing");
+        check_contract(
+            &fake,
+            &FakePlanetFiles::default(),
+            &PlanetRequest::new("p"),
+            "nothing",
+        );
     }
 
     /// A source that answers every stellar, so none is absent.
@@ -645,7 +802,12 @@ mod tests {
     #[test]
     #[should_panic(expected = "`nothing` is no stellar")]
     fn the_contract_fails_a_source_with_no_absent_stellar() {
-        check_contract(&Everything, &PlanetRequest::new("p"), "nothing");
+        check_contract(
+            &Everything,
+            &FakePlanetFiles::default(),
+            &PlanetRequest::new("p"),
+            "nothing",
+        );
     }
 
     #[test]
