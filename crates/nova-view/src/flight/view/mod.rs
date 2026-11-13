@@ -921,6 +921,13 @@ mod shared_chance_tests {
         assert_eq!(check_contract(&mut SharedChance::default()), Ok(()));
     }
 
+    #[test]
+    fn a_shared_chance_shares_only_with_its_copies() {
+        let chance = SharedChance::default();
+        assert!(chance.shares(&chance.clone()), "a copy");
+        assert!(!chance.shares(&SharedChance::default()), "another source");
+    }
+
     /// Fires every time, draws 0 and records each `n`, and rolls the last
     /// outcome.
     #[derive(Default)]
