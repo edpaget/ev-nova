@@ -336,10 +336,12 @@ runs every crate's stock tests on purpose; it refuses to run without
 `NOVA_DATA`. When a change touches anything those tests cover, run them with
 the data before review, for each crate the change touches and its
 `<crate>-it` sibling, where a crate's moved integration tests live, one
-crate at a time:
+crate at a time. A crate with no stock tests of its own (they moved to its
+`-it` sibling) selects nothing, and `--no-tests=warn` lets it pass with a
+warning instead of failing:
 
 ```sh
-NOVA_DATA="/Users/edward/Projects/ev-nova/EV Nova.app/Contents/Resources/Nova Files" cargo nextest run -p <crate> -E 'test(/^stock(_|::)/)'
+NOVA_DATA="/Users/edward/Projects/ev-nova/EV Nova.app/Contents/Resources/Nova Files" cargo nextest run -p <crate> --no-tests=warn -E 'test(/^stock(_|::)/)'
 ```
 
 Or run them all at once, as one heavy job:
