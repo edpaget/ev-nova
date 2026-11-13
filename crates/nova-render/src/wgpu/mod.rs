@@ -78,13 +78,18 @@
 //! bind group when it is
 //! ([`Gpu::upload_model_texture`](crate::Gpu::upload_model_texture)); a
 //! section with no texture samples one white texel made with the
-//! pipeline, and a mesh is one draw per section.
+//! pipeline, and a mesh is one draw per section. A clipped models batch
+//! is scissored to its batch's clip ([`Batch::clip`](crate::Batch::clip)),
+//! met with the world's, so its depth-only and colour runs are both cut
+//! there.
 //!
 //! A planets batch ([`Batch::Planets`](crate::Batch::Planets)) draws in
 //! an ordinary pass, with no depth: one square per planet, its fragments
 //! mirroring [`crate::planet`]'s functions (`planets.wgsl`), sampling the
 //! textures each planet uploads ([`Gpu::upload_planet`](crate::Gpu::upload_planet))
 //! with explicit gradients so no mip seam shows where the surface wraps.
+//! A clipped planets batch is scissored to its batch's clip, met with
+//! the world's, as a models batch is.
 //!
 //! A sky batch ([`Batch::Sky`](crate::Batch::Sky)) draws in an ordinary
 //! pass, with no depth: one square per star, its fragments adding the

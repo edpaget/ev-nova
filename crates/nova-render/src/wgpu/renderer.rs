@@ -1178,7 +1178,8 @@ struct Layout<'a> {
     /// The scissor each of `draws` is encoded with, index for index, in
     /// its canvas's pixels: [`Frame::world_scissor_in`] its canvas for a
     /// world draw of a clipped world, and the whole canvas for every other
-    /// draw.
+    /// draw; met with [`Frame::clip_scissor_in`] its canvas for a clipped
+    /// models or planets batch ([`Batch::clip`]).
     scissors: Vec<PixelRect>,
     /// For a world drawn into a texture of its own, the render passes its
     /// draws are split into, in order: the first clears the texture, and
@@ -1194,13 +1195,17 @@ struct Layout<'a> {
 impl<'a> Layout<'a> {
     /// Lays out the batch at `index` of `frame` at the end of `passes`,
     /// scissored to `scissors`' rect for its layer and the space it draws
-    /// in ([`Frame::space_of`]), opening a pass for an OR batch. It is left
+    /// in ([`Frame::space_of`]), met with its own clip's there when it has
+    /// one ([`Batch::clip`]), opening a pass for an OR batch. It is left
     /// out when its scissor is empty, and an OR batch is when it covers no
     /// pixel in that space.
     fn push(&mut self, frame: &'a Frame, index: usize, scissors: Scissors, passes: &mut Vec<Pass>) {
         let batch = &frame.batches[index];
         let space = frame.space_of(index);
         let scissor = scissors.for_draw(frame.layer(index), space);
+        let scissor = (batch.clip()).map_or(scissor, |clip| {
+            scissor.meet(frame.clip_scissor_in(space, clip))
+        });
         if scissor.w == 0 || scissor.h == 0 {
             return;
         }
@@ -1426,7 +1431,10 @@ impl Scissors {
 /// target pixels or texels, and one whose scissor is empty is left out, its
 /// OR pass with it. Every other draw, the overlay's text included, has the
 /// whole canvas it is drawn into, which also resets a world draw's
-/// scissor before the overlay over it.
+/// scissor before the overlay over it. A clipped models or planets draw
+/// ([`Batch::clip`]), in either layer, is scissored besides to its clip
+/// in the space it draws in ([`Frame::clip_scissor_in`]), met with the
+/// world's, and is left out, with its models pass, when that is empty.
 fn lay_out(frame: &Frame) -> Layout<'_> {
     let mut layout = Layout::default();
     let scissors = Scissors::of(frame);
@@ -2622,6 +2630,165 @@ mod tests {
         let layout = lay_out(&nowhere);
         assert_eq!(layout.world.len(), 1);
         assert_eq!(layout.models, []);
+    }
+
+    /// [`models`] clipped to the logical `clip`.
+    fn clipped_models(meshes: &[u32], clip: Rect) -> Batch {
+        let Batch::Models { light, models, .. } = models(meshes) else {
+            unreachable!("a models batch");
+        };
+        Batch::Models {
+            light,
+            models,
+            clip: Some(clip),
+        }
+    }
+
+    /// A planets batch of one planet, clipped to the logical `clip`.
+    fn clipped_planets(clip: Rect) -> Batch {
+        Batch::Planets {
+            light: Light::STANDARD,
+            planets: vec![crate::gpu::PlanetInstance {
+                planet: crate::gpu::PlanetId(0),
+                dest: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 32.0,
+                    h: 32.0,
+                },
+                reach: 1.0,
+                frame: crate::planet::Frame::new(0.0, 0.0),
+                turns: [0.0; 2],
+                rings: [0.0; 2],
+                ring_color: [0.0; 3],
+                atmosphere: [0.0; 4],
+            }],
+            clip: Some(clip),
+        }
+    }
+
+    /// The logical columns `x` to `x` + `w`, the whole height.
+    fn columns(x: f32, w: f32) -> Rect {
+        Rect {
+            x,
+            y: 0.0,
+            w,
+            h: 32.0,
+        }
+    }
+
+    #[test]
+    fn an_overlay_clipped_models_draw_is_scissored_to_its_clip_in_target_pixels() {
+        let clip = columns(4.0, 10.0);
+        let frame = frame_of(vec![
+            clipped_models(&[2], clip),
+            Batch::Text(vec![run("a")]),
+        ]);
+        let layout = lay_out(&frame);
+        let scissor = frame.clip_scissor_in(WorldSpace::Target, clip);
+        assert_eq!(scissor, pixels(8, 0, 20, 64));
+        assert_eq!(layout.scissors, [scissor, WHOLE_TARGET]);
+        // It still draws in a pass of its own, with depth.
+        assert_eq!(depths(&layout, &layout.passes), [false, true, false]);
+    }
+
+    #[test]
+    fn an_overlay_clipped_planets_draw_is_scissored_to_its_clip() {
+        let clip = columns(4.0, 10.0);
+        let frame = frame_of(vec![clipped_planets(clip), Batch::Text(vec![run("a")])]);
+        let layout = lay_out(&frame);
+        assert_eq!(layout.scissors, [pixels(8, 0, 20, 64), WHOLE_TARGET]);
+        assert!(matches!(layout.draws[0], Draw::Planets { .. }));
+    }
+
+    #[test]
+    fn a_clipped_world_model_in_a_texture_world_is_scissored_in_texels_to_its_clip_met_with_the_world_clip()
+     {
+        let clip = Rect {
+            x: 16.0,
+            y: 4.0,
+            w: 16.0,
+            h: 20.0,
+        };
+        let frame = textured(clipped_to(
+            Frame {
+                world: vec![0],
+                ..frame_of(vec![
+                    clipped_models(&[2], clip),
+                    Batch::Text(vec![run("a")]),
+                ])
+            },
+            0.0,
+            24.0,
+        ));
+        let layout = lay_out(&frame);
+        let met = (frame.world_scissor()).meet(frame.clip_scissor_in(frame.world_space, clip));
+        assert_eq!(met, pixels(16, 4, 8, 20));
+        assert_eq!(scissored(&layout, &layout.world), [met]);
+        assert_eq!(scissored(&layout, &layout.passes), [WHOLE_TARGET]);
+    }
+
+    #[test]
+    fn a_clipped_model_in_the_world_tail_is_scissored_in_target_pixels() {
+        let clip = columns(4.0, 10.0);
+        let frame = textured(Frame {
+            world: vec![0, 1],
+            world_tail: Some(1),
+            ..frame_of(vec![
+                Batch::Solid(vec![solid(4.0)]),
+                clipped_models(&[2], clip),
+            ])
+        });
+        let layout = lay_out(&frame);
+        assert_eq!(scissored(&layout, &layout.world), [pixels(0, 0, 32, 32)]);
+        assert_eq!(
+            scissored(&layout, &layout.passes),
+            [frame.clip_scissor_in(WorldSpace::Target, clip)]
+        );
+        assert_eq!(
+            frame.clip_scissor_in(WorldSpace::Target, clip),
+            pixels(8, 0, 20, 64)
+        );
+    }
+
+    #[test]
+    fn a_models_draw_clipped_off_the_canvas_is_left_out_with_its_pass() {
+        let off = columns(40.0, 8.0);
+        let frame = frame_of(vec![clipped_models(&[2], off), Batch::Text(vec![run("a")])]);
+        let layout = lay_out(&frame);
+        assert!(
+            !layout
+                .draws
+                .iter()
+                .any(|draw| matches!(draw, Draw::Models { .. })),
+            "{:?}",
+            layout.draws
+        );
+        assert_eq!(layout.models, []);
+        assert!(!depths(&layout, &layout.passes).contains(&true));
+        let planets = frame_of(vec![clipped_planets(off)]);
+        assert_eq!(lay_out(&planets).draws, []);
+    }
+
+    #[test]
+    fn a_faded_clipped_models_draw_keeps_its_runs_under_its_scissor() {
+        let faded = ModelInstance {
+            alpha: 0.5,
+            ..model(4)
+        };
+        let batch = vec![model(3), faded, model(5)];
+        let clip = columns(4.0, 10.0);
+        let frame = frame_of(vec![Batch::Models {
+            light: Light::STANDARD,
+            models: batch.clone(),
+            clip: Some(clip),
+        }]);
+        let layout = lay_out(&frame);
+        let [Draw::Models { runs, .. }] = layout.draws.as_slice() else {
+            panic!("{:?}", layout.draws);
+        };
+        assert_eq!(*runs, draw_runs(&batch));
+        assert_eq!(layout.scissors, [pixels(8, 0, 20, 64)]);
     }
 
     #[test]
