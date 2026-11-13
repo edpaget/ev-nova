@@ -38,10 +38,11 @@
 //!   carried (metallic, roughness); its fake and contract check behind
 //!   the `recording` feature.
 //! - `planets`: the [`Renderer`]'s planets by [`nova_view::PlanetKey`]
-//!   ([`Renderer::add_planet`]), each baked, if it was added unbaked, and
-//!   its textures uploaded the first frame that draws it
-//!   ([`Gpu::upload_planet`]), and the [`Batch::Planets`] a list's planets
-//!   become.
+//!   ([`Renderer::add_planet`]), each made (baked, or its texture read)
+//!   and its textures uploaded the first frame that draws it
+//!   ([`Gpu::upload_planet`]), its pixels then let go, or its stand-in
+//!   drawn when it can't be made; and the [`Batch::Planets`] a list's
+//!   planets become.
 //! - [`planet_source`]: the [`PlanetSource`] port, the new game's planets
 //!   and moons by stellar ([`PlanetRequest`]) as [`LoadedPlanet`]s, a
 //!   generated look left unbaked or a texture left unread for its first

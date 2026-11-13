@@ -19,7 +19,8 @@ use crate::gpu::{
 use crate::images::{ImageError, ImageSource};
 use crate::model::Mesh;
 use crate::models::{self, Models};
-use crate::planet_source::LoadedPlanet;
+use crate::planet_files::PlanetFiles;
+use crate::planet_source::{LoadedPlanet, PlanetError};
 use crate::planets::Planets;
 use crate::quickdraw_stretch;
 use crate::render_scale::RenderScale;
@@ -46,6 +47,11 @@ pub struct RenderReport {
     /// ([`Renderer::add_planet`]), each listed the first time it is drawn.
     /// They draw nothing.
     pub missing_planets: Vec<PlanetKey>,
+    /// Planets that couldn't be made in the frame that first needed them
+    /// (a texture that didn't read), each with why, listed in that frame
+    /// alone. They draw the stand-in they carry
+    /// ([`LoadedPlanet::with_stand_in`]) from then on, or nothing.
+    pub failed_planets: Vec<(PlanetKey, PlanetError)>,
 }
 
 /// A frame's place in the atlas and the size it is drawn at.
@@ -140,14 +146,27 @@ impl<S: ImageSource> Renderer<S> {
 
     /// Draws planet `key` ([`DrawCommand::Planet`]) as `planet` from the
     /// next frame on, replacing any planet it had. Adding it costs
-    /// nothing: the first frame that draws it bakes it, if it came unbaked
-    /// ([`LoadedPlanet::unbaked`]), and uploads its textures
+    /// nothing: the first frame that draws it makes it (bakes it if it
+    /// came unbaked, [`LoadedPlanet::unbaked`], or reads its texture if it
+    /// came unread, [`LoadedPlanet::unread`], through the files
+    /// [`Renderer::set_planet_files`] gave) and uploads its textures
     /// ([`Gpu::upload_planet`]), before that frame is submitted, so the
-    /// frame draws it. A planet replaced is baked and uploaded again at
-    /// its next draw, under the same [`PlanetId`](crate::gpu::PlanetId).
-    /// One never drawn is never baked.
+    /// frame draws it. From then on the renderer holds none of its pixels,
+    /// only what its instance is made from ([`crate::planet::Figure`]). A
+    /// planet replaced is made and uploaded again at its next draw, under
+    /// the same [`PlanetId`](crate::gpu::PlanetId). One never drawn is
+    /// never made. One that can't be made is reported in that frame
+    /// ([`RenderReport::failed_planets`]) and draws its stand-in.
     pub fn add_planet(&mut self, key: PlanetKey, planet: LoadedPlanet) {
         self.planets.add(key, planet);
+    }
+
+    /// Reads the textures of planets added unread
+    /// ([`LoadedPlanet::unread`]) through `files` from the next frame on.
+    /// Until it is given files, such a planet fails as missing
+    /// ([`PlanetError::Missing`]).
+    pub fn set_planet_files(&mut self, files: Box<dyn PlanetFiles>) {
+        self.planets.set_files(files);
     }
 
     /// The bytes of planet pixels it holds on the CPU: each planet's
@@ -254,13 +273,15 @@ impl<S: ImageSource> Renderer<S> {
     /// clip ([`Batch::clip`]), models clipped alike sharing one, and the
     /// GPU cuts it there ([`Frame::clip_scissor_in`]), its parts with it.
     ///
-    /// A planet ([`DrawCommand::Planet`]) is baked, if it was added
-    /// unbaked, and uploads its textures the first
-    /// frame that draws it ([`Renderer::add_planet`]); consecutive planets
-    /// share a [`Batch::Planets`] ([`crate::planets`]), and a clipped one
-    /// carries its clip as a model does. A key with no
-    /// planet draws nothing and is reported once
-    /// ([`RenderReport::missing_planets`]).
+    /// A planet ([`DrawCommand::Planet`]) is made, if it was added unbaked
+    /// or unread, and uploads its textures the first frame that draws it
+    /// ([`Renderer::add_planet`]), then lets its pixels go; consecutive
+    /// planets share a [`Batch::Planets`] ([`crate::planets`]), and a
+    /// clipped one carries its clip as a model does. A key with no planet
+    /// draws nothing and is reported once
+    /// ([`RenderReport::missing_planets`]). One that can't be made is
+    /// reported in that frame ([`RenderReport::failed_planets`]) and draws
+    /// its stand-in in its place, clipped alike, from that frame on.
     ///
     /// A sky ([`DrawCommand::Sky`]) is a [`Batch::Sky`] of its own, the
     /// core's backdrop puffs then stars ([`crate::sky::instances`]) in the
@@ -536,11 +557,20 @@ impl<S: ImageSource> Renderer<S> {
                 let shown = (pose, alpha, colorize, clip.map(rect_of));
                 (self.models).draw_model(model, shown, logical, batches, gpu, missing);
             }
-            // Cut by a clip on the GPU, as a model is.
+            // Cut by a clip on the GPU, as a model is. One that can't be
+            // made draws its stand-in in its place, cut by the same clip.
             DrawCommand::Planet { planet, ref pose } => {
-                let missing = &mut report.missing_planets;
+                let told = (&mut report.missing_planets, &mut report.failed_planets);
                 let placed = (pose, clip.map(rect_of));
-                (self.planets).draw(planet, placed, batches, gpu, missing);
+                let instead = (self.planets).draw(planet, placed, batches, gpu, told);
+                if let Some(stand_in) = instead {
+                    let mut drawn = DrawList::new();
+                    let (center, radius) = (pose.center, pose.radius);
+                    nova_view::outline::draw_stellar(&mut drawn, &stand_in, center, radius);
+                    for command in &drawn {
+                        self.draw(command, clip, target, batches, gpu, report);
+                    }
+                }
             }
             // Drawn uncut by a clip, as a line is, in a batch of its own.
             DrawCommand::Sky { ref sky } => {

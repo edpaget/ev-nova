@@ -12,14 +12,33 @@
 //!
 //! # A planet is made ready at its first draw
 //!
-//! A planet may be added unbaked ([`LoadedPlanet::unbaked`]): the new
-//! game adds every generated planet of its galaxy that way at start-up,
-//! and a bake takes tens of milliseconds. Adding costs nothing. The first
-//! frame whose draw list commands the planet with a pose that draws
-//! ([`planet::quad`]) bakes it, builds its mips and uploads it, all before
-//! that frame is submitted, so the frame draws it: nothing is ever drawn
-//! as nothing while it waits. It is baked once, and holds its surface
-//! from then on. A planet never commanded is never baked.
+//! A planet may be added unbaked ([`LoadedPlanet::unbaked`]) or unread
+//! ([`LoadedPlanet::unread`]): the new game adds every planet of its
+//! galaxy that way at start-up, since a bake takes tens of milliseconds
+//! and a texture's decode several. Adding costs nothing. The first frame
+//! whose draw list commands the planet with a pose that draws
+//! ([`planet::quad`]) makes it ([`LoadedPlanet::make`]: bakes its look,
+//! or reads its texture through the renderer's [`PlanetFiles`]), builds
+//! its mips and uploads it, all before that frame is submitted, so the
+//! frame draws it: nothing is ever drawn as nothing while it waits. A
+//! planet never commanded is never made.
+//!
+//! Once uploaded, a planet's pixels are let go: the renderer keeps its
+//! [`Figure`] (all its instance is made from) and how to make it again (a
+//! look, or a texture's file), so it holds no planet pixels on the CPU.
+//! A planet given as a surface ([`LoadedPlanet::surface`], tests) is
+//! spent once uploaded, and has nothing to be made again from.
+//!
+//! # A planet that can't be made
+//!
+//! A bake can't fail, but a read can (a file that doesn't decode, or one
+//! changed since start-up checked it). The planet is reported in that
+//! frame ([`crate::RenderReport::failed_planets`]), and from then on
+//! draws, in that frame too, the stand-in it carries
+//! ([`LoadedPlanet::with_stand_in`]: its stellar's disc), drawn by the
+//! renderer in its place with its clip, so no screen has to know. It isn't
+//! made again until its key is given a new planet; one with no stand-in
+//! draws nothing.
 //!
 //! So what a screen commands decides when the pause falls. The flight
 //! commands every stellar of its system each frame, on screen or off
@@ -41,40 +60,74 @@
 
 use std::collections::{HashMap, HashSet};
 
+use nova_view::outline::StellarStandIn;
 use nova_view::{PlanetKey, PlanetPose};
 
 use crate::gpu::{Batch, Gpu, PlanetId, PlanetInstance, Rect};
-use crate::planet::{self, PLANET_LIGHT};
-use crate::planet_files::NoFiles;
-use crate::planet_source::LoadedPlanet;
+use crate::planet::{self, Figure, PLANET_LIGHT};
+use crate::planet_files::{NoFiles, PlanetFiles};
+use crate::planet_source::{LoadedPlanet, PlanetError};
 
-/// A planet the renderer was given, and whether the GPU holds it as it is.
+/// A planet the renderer was given: how to make it, and what of it is
+/// ready. It holds no pixels once they are uploaded.
 #[derive(Debug)]
 struct Held {
     id: PlanetId,
-    /// As it was given, until a frame draws it; baked from then on.
-    planet: LoadedPlanet,
-    uploaded: bool,
+    /// The planet as it was given, to make it (again) from: a look, a
+    /// texture's file, or a surface; `None` once a given surface has been
+    /// uploaded, which has nothing to be made again from.
+    planet: Option<LoadedPlanet>,
+    /// What it draws instead if it can't be made.
+    stand_in: Option<StellarStandIn>,
+    /// How far it reaches, in its radii, known before it is made.
+    reach: f32,
+    /// Its figure, once it is made and its textures uploaded as it is:
+    /// all that drawing it needs from then on.
+    figure: Option<Figure>,
+    /// Whether making it failed: it draws its stand-in, and isn't made
+    /// again until its key is given a new planet.
+    failed: bool,
 }
 
 /// The planets the renderer was given, by key.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct Planets {
     held: HashMap<PlanetKey, Held>,
     /// The number the next new key's planet takes.
     next: u32,
     /// The keys with no planet already reported.
     reported: HashSet<PlanetKey>,
+    /// What reads a texture left unread.
+    files: Box<dyn PlanetFiles>,
+}
+
+impl Default for Planets {
+    fn default() -> Self {
+        Planets {
+            held: HashMap::new(),
+            next: 0,
+            reported: HashSet::new(),
+            files: Box::new(NoFiles),
+        }
+    }
 }
 
 impl Planets {
     /// Gives `key` `planet`, replacing any planet it had: the replacement
-    /// keeps the old one's number and is uploaded at its next draw. An
-    /// unbaked planet is kept unbaked.
+    /// keeps the old one's number and is made and uploaded at its next
+    /// draw.
     pub(crate) fn add(&mut self, key: PlanetKey, planet: LoadedPlanet) {
+        let stand_in = planet.stand_in().cloned();
+        let reach = planet.reach();
         if let Some(held) = self.held.get_mut(&key) {
-            held.planet = planet;
-            held.uploaded = false;
+            *held = Held {
+                planet: Some(planet),
+                stand_in,
+                reach,
+                figure: None,
+                failed: false,
+                ..*held
+            };
             return;
         }
         let id = PlanetId(self.next);
@@ -83,63 +136,86 @@ impl Planets {
             key,
             Held {
                 id,
-                planet,
-                uploaded: false,
+                planet: Some(planet),
+                stand_in,
+                reach,
+                figure: None,
+                failed: false,
             },
         );
     }
 
+    /// Reads the textures of planets left unread through `files` from now
+    /// on.
+    pub(crate) fn set_files(&mut self, files: Box<dyn PlanetFiles>) {
+        self.files = files;
+    }
+
     /// Draws planet `key` at `pose`, only inside `clip` when it has one,
-    /// onto `batches`: its instance, the planet baked first if it was
-    /// added unbaked and its textures uploaded through `gpu` if need be,
-    /// and a key with no planet pushed onto `missing` once. A pose
-    /// [`planet::quad`] refuses draws nothing, and bakes and uploads
-    /// nothing. A planet wholly outside its clip is still made ready: the
-    /// GPU's scissor, not the core, cuts it.
+    /// onto `batches`: its instance, the planet made first if it isn't
+    /// ready (its look baked, or its texture read) and its textures
+    /// uploaded through `gpu`, its pixels then let go. A key with no
+    /// planet is pushed onto `missing` once, and draws nothing. A planet
+    /// that can't be made is pushed onto `failed` with why, once, and
+    /// from then on gives back its stand-in for the caller to draw in its
+    /// place (`None` when it has none). A pose [`planet::quad`] refuses
+    /// draws nothing, and makes nothing. A planet wholly outside its clip
+    /// is still made ready: the GPU's scissor, not the core, cuts it.
     pub(crate) fn draw(
         &mut self,
         key: PlanetKey,
         (pose, clip): (&PlanetPose, Option<Rect>),
         batches: &mut Vec<Batch>,
         gpu: &mut impl Gpu,
-        missing: &mut Vec<PlanetKey>,
-    ) {
+        (missing, failed): (&mut Vec<PlanetKey>, &mut Vec<(PlanetKey, PlanetError)>),
+    ) -> Option<StellarStandIn> {
         let Some(held) = self.held.get_mut(&key) else {
             if self.reported.insert(key) {
                 missing.push(key);
             }
-            return;
+            return None;
         };
-        // A pose that draws nothing is refused before the bake it would
+        // A pose that draws nothing is refused before the work it would
         // waste: the reach needs none.
-        if planet::quad(pose, held.planet.reach()).is_none() {
-            return;
+        planet::quad(pose, held.reach)?;
+        if held.failed {
+            return held.stand_in.clone();
         }
-        if held.planet.baked().is_none() {
-            // Made in place, and held from then on.
-            let Ok(made) = held.planet.make(&NoFiles) else {
-                return;
-            };
-            held.planet = LoadedPlanet::surface(made);
+        if held.figure.is_none() {
+            let made = (held.planet.as_ref()).map(|planet| planet.make(self.files.as_ref()));
+            match made {
+                Some(Ok(surface)) => {
+                    gpu.upload_planet(held.id, &planet::textures(&surface));
+                    held.figure = Some(Figure::of(&surface));
+                    // A given surface is spent: holding it would hold
+                    // its pixels.
+                    if held.planet.as_ref().and_then(LoadedPlanet::baked).is_some() {
+                        held.planet = None;
+                    }
+                }
+                Some(Err(error)) => {
+                    held.failed = true;
+                    failed.push((key, error));
+                    return held.stand_in.clone();
+                }
+                None => return None,
+            }
         }
-        let Some(surface) = held.planet.baked() else {
-            return;
-        };
-        let Some(instance) = planet::instance(held.id, surface, pose) else {
-            return;
-        };
-        if !held.uploaded {
-            gpu.upload_planet(held.id, &planet::textures(surface));
-            held.uploaded = true;
-        }
-        push(batches, instance, clip);
+        let figure = held.figure.as_ref()?;
+        push(
+            batches,
+            planet::figure_instance(held.id, figure, pose)?,
+            clip,
+        );
+        None
     }
 
-    /// The bytes of planet pixels held: each surface's, clouds' and ring
-    /// profile's, for the planets that hold one.
+    /// The bytes of planet pixels held: those of each planet given as a
+    /// surface and not uploaded yet. A look or a texture holds none until
+    /// it is made, and none once it is uploaded.
     pub(crate) fn bytes_held(&self) -> usize {
         (self.held.values())
-            .filter_map(|held| held.planet.baked())
+            .filter_map(|held| held.planet.as_ref()?.baked())
             .map(|surface| {
                 surface.surface.rgba.len()
                     + surface.clouds.as_ref().map_or(0, |c| c.rgba.len())
@@ -177,11 +253,17 @@ mod tests {
         Orientation, Point,
     };
 
+    use std::rc::Rc;
+
+    use nova_view::outline::StellarStandIn;
+
     use super::*;
     use crate::Renderer;
     use crate::gpu::{Frame, PlanetTextures};
     use crate::images::{ImageError, ImageSource};
     use crate::model::Mesh;
+    use crate::planet_files::{FakePlanetFiles, TextureFile};
+    use crate::planet_source::PlanetError;
     use crate::recording::{GpuCall, RecordingGpu};
     use crate::viewport::{LogicalSize, Viewport};
 
@@ -334,9 +416,10 @@ mod tests {
         LoadedPlanet::unbaked(look(seed), SMALL)
     }
 
-    /// Whether the renderer holds the planet `key` baked.
+    /// Whether the renderer holds the planet `key` ready to draw: made and
+    /// uploaded.
     fn is_baked(renderer: &Renderer<OneSprite>, key: PlanetKey) -> bool {
-        renderer.planets().held[&key].planet.baked().is_some()
+        renderer.planets().held[&key].figure.is_some()
     }
 
     #[test]
@@ -405,13 +488,300 @@ mod tests {
         let mut list = DrawList::new();
         list.planet(PlanetKey(2), pose(20.0, 20.0));
         frame_of(&mut renderer, &list, &mut RecordingGpu::new());
-        let baked = bake(&look(77), SMALL);
-        assert!(pixel_bytes(&baked) > 0);
         assert_eq!(
             renderer.planet_bytes_held(),
-            pixel_bytes(&surface(9)) + pixel_bytes(&baked),
-            "a baked one holds its bake's"
+            pixel_bytes(&surface(9)),
+            "a baked one holds none of its bake's once uploaded"
         );
+        list.planet(GLOBE, pose(40.0, 20.0));
+        frame_of(&mut renderer, &list, &mut RecordingGpu::new());
+        assert_eq!(
+            renderer.planet_bytes_held(),
+            0,
+            "nor one given as a surface"
+        );
+    }
+
+    /// A stand-in disc.
+    const DISC: Color = Color::rgba(30, 60, 90, 255);
+
+    /// The file [`unread`] names.
+    const FILE: &str = "media/export/pack/moon.png";
+
+    /// A texture's 4 by 2 surface, its texels `level`.
+    fn textured(level: u8) -> Surface {
+        Surface::from_texture(nova_galaxy_media::texture::Texture {
+            file: FILE.into(),
+            width: 4,
+            height: 2,
+            disk_bytes: 0,
+            rgba: vec![level; 32],
+        })
+    }
+
+    /// The texture at [`FILE`], not read yet.
+    fn unread() -> LoadedPlanet {
+        LoadedPlanet::unread(TextureFile {
+            stellar: "pale".into(),
+            asset: "moon-surface".into(),
+            file: FILE.into(),
+            limits: nova_galaxy_media::budget::Limits::default(),
+        })
+    }
+
+    /// Files holding [`FILE`] as [`textured`] 7, shared so a test can
+    /// count its reads.
+    fn files() -> Rc<FakePlanetFiles> {
+        Rc::new(FakePlanetFiles::default().with(FILE, textured(7)))
+    }
+
+    /// A renderer as [`renderer`] reading textures from `files`.
+    fn reading(files: &Rc<FakePlanetFiles>) -> Renderer<OneSprite> {
+        let mut renderer = renderer();
+        renderer.set_planet_files(Box::new(Rc::clone(files)));
+        renderer
+    }
+
+    /// The index of the first `Submit` among `gpu`'s calls.
+    fn first_submit(gpu: &RecordingGpu) -> usize {
+        (gpu.calls.iter())
+            .position(|call| matches!(call, GpuCall::Submit(_)))
+            .expect("a frame")
+    }
+
+    #[test]
+    fn after_its_upload_the_renderer_holds_none_of_a_planet_s_pixels() {
+        for (given, made) in [
+            (unbaked(77), bake(&look(77), SMALL)),
+            (unread(), textured(7)),
+            (planet(30), surface(30)),
+        ] {
+            let files = files();
+            let mut renderer = reading(&files);
+            renderer.add_planet(PlanetKey(2), given);
+            let mut gpu = RecordingGpu::new();
+            let mut list = DrawList::new();
+            list.planet(PlanetKey(2), pose(20.0, 20.0));
+            let frame = frame_of(&mut renderer, &list, &mut gpu);
+            assert_eq!(
+                renderer.planets().bytes_held(),
+                pixel_bytes(&surface(9)),
+                "the globe's"
+            );
+            assert_eq!(uploads(&gpu), [(PlanetId(1), planet::textures(&made))]);
+            assert!(matches!(gpu.calls[0], GpuCall::UploadPlanet { .. }));
+            assert_eq!(first_submit(&gpu), 1, "uploaded before the frame");
+            assert_eq!(
+                frame.batches,
+                [Batch::Planets {
+                    light: PLANET_LIGHT,
+                    planets: vec![planet::instance(PlanetId(1), &made, &pose(20.0, 20.0)).unwrap()],
+                    clip: None,
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn an_unread_texture_is_read_in_the_first_frame_that_draws_it_and_never_before() {
+        let files = files();
+        let mut renderer = reading(&files);
+        renderer.add_planet(PlanetKey(2), unread());
+        assert_eq!(files.reads(FILE), 0, "not when it is added");
+        let mut gpu = RecordingGpu::new();
+        let mut elsewhere = DrawList::new();
+        elsewhere.planet(GLOBE, pose(20.0, 20.0));
+        frame_of(&mut renderer, &elsewhere, &mut gpu);
+        assert_eq!(files.reads(FILE), 0, "nor in a frame that doesn't draw it");
+        let mut list = DrawList::new();
+        list.planet(PlanetKey(2), pose(20.0, 20.0));
+        frame_of(&mut renderer, &list, &mut gpu);
+        assert_eq!(files.reads(FILE), 1, "in the frame that draws it");
+        frame_of(&mut renderer, &list, &mut gpu);
+        assert_eq!(files.reads(FILE), 1, "and only then");
+    }
+
+    /// An error the files give for [`FILE`].
+    fn unreadable() -> PlanetError {
+        PlanetError::Unreadable {
+            stellar: "pale".into(),
+            asset: "moon-surface".into(),
+            why: format!("`{FILE}`: bad"),
+        }
+    }
+
+    /// Files that fail to read [`FILE`] with [`unreadable`].
+    fn failing() -> Rc<FakePlanetFiles> {
+        Rc::new(FakePlanetFiles::default().with_error(FILE, unreadable()))
+    }
+
+    /// `commands` among a sprite before them and a line after.
+    fn among(commands: &[DrawCommand]) -> DrawList {
+        let mut list = DrawList::new();
+        list.sprite(ImageKey::sprite(1, 0), Point::new(4.0, 4.0), Color::WHITE);
+        for command in commands {
+            list.push(command.clone());
+        }
+        list.line(
+            Point::new(0.0, 0.0),
+            Point::new(9.0, 9.0),
+            1.0,
+            Color::WHITE,
+        );
+        list
+    }
+
+    /// The commands the disc stand-in draws in a planet's place at `pose`.
+    fn disc_at(pose: &PlanetPose) -> Vec<DrawCommand> {
+        let mut disc = DrawList::new();
+        nova_view::outline::draw_stellar(
+            &mut disc,
+            &StellarStandIn::Disc(DISC),
+            pose.center,
+            pose.radius,
+        );
+        disc.iter().cloned().collect()
+    }
+
+    #[test]
+    fn a_texture_that_fails_to_read_draws_its_stand_in_in_that_frame_and_is_reported_once() {
+        let files = failing();
+        let mut renderer = reading(&files);
+        renderer.add_planet(
+            PlanetKey(2),
+            unread().with_stand_in(StellarStandIn::Disc(DISC)),
+        );
+        let at = pose(20.0, 20.0);
+        let list = among(&[DrawCommand::Planet {
+            planet: PlanetKey(2),
+            pose: at,
+        }]);
+        let expected = frame_of(
+            &mut self::renderer(),
+            &among(&disc_at(&at)),
+            &mut RecordingGpu::new(),
+        );
+        assert!(!disc_at(&at).is_empty());
+        let mut gpu = RecordingGpu::new();
+        let report = renderer.render(&list, &viewport(), &mut gpu);
+        assert_eq!(report.failed_planets, [(PlanetKey(2), unreadable())]);
+        assert_eq!(
+            gpu.submits()[0].batches,
+            expected.batches,
+            "its disc, in place"
+        );
+        let again = renderer.render(&list, &viewport(), &mut gpu);
+        assert_eq!(again.failed_planets, [], "reported once");
+        assert_eq!(gpu.submits()[1].batches, expected.batches, "its disc again");
+        assert_eq!(uploads(&gpu), []);
+        assert_eq!(files.reads(FILE), 1, "and not asked again");
+    }
+
+    #[test]
+    fn a_clipped_planet_that_fails_draws_its_stand_in_clipped_alike() {
+        let mut renderer = reading(&failing());
+        renderer.add_planet(
+            PlanetKey(2),
+            unread().with_stand_in(StellarStandIn::Disc(DISC)),
+        );
+        let at = pose(20.0, 20.0);
+        let clip = bounds(0.0, 0.0, 22.0, 30.0);
+        let mut list = DrawList::new();
+        list.clipped(
+            clip,
+            DrawCommand::Planet {
+                planet: PlanetKey(2),
+                pose: at,
+            },
+        );
+        let mut reference = DrawList::new();
+        for command in disc_at(&at) {
+            reference.clipped(clip, command);
+        }
+        let expected = frame_of(&mut self::renderer(), &reference, &mut RecordingGpu::new());
+        let frame = frame_of(&mut renderer, &list, &mut RecordingGpu::new());
+        assert!(!frame.batches.is_empty());
+        assert_eq!(frame.batches, expected.batches);
+    }
+
+    #[test]
+    fn a_planet_that_fails_with_no_stand_in_draws_nothing_and_is_reported_once() {
+        let mut renderer = reading(&failing());
+        renderer.add_planet(PlanetKey(2), unread());
+        let mut list = DrawList::new();
+        list.planet(PlanetKey(2), pose(20.0, 20.0));
+        let mut gpu = RecordingGpu::new();
+        let first = renderer.render(&list, &viewport(), &mut gpu);
+        let second = renderer.render(&list, &viewport(), &mut gpu);
+        assert_eq!(first.failed_planets, [(PlanetKey(2), unreadable())]);
+        assert_eq!(second.failed_planets, []);
+        assert!(gpu.submits().iter().all(|frame| frame.batches.is_empty()));
+    }
+
+    #[test]
+    fn a_failed_key_given_a_new_planet_is_made_again() {
+        let files = failing();
+        let mut renderer = reading(&files);
+        renderer.add_planet(PlanetKey(2), unread());
+        let mut list = DrawList::new();
+        list.planet(PlanetKey(2), pose(20.0, 20.0));
+        let mut gpu = RecordingGpu::new();
+        frame_of(&mut renderer, &list, &mut gpu);
+        renderer.add_planet(PlanetKey(2), unbaked(77));
+        let frame = frame_of(&mut renderer, &list, &mut gpu);
+        assert_eq!(
+            uploads(&gpu),
+            [(PlanetId(1), planet::textures(&bake(&look(77), SMALL)))]
+        );
+        assert_eq!(kinds(&frame), ["planets"]);
+        // And a texture again, read again.
+        renderer.add_planet(PlanetKey(2), unread());
+        let report = renderer.render(&list, &viewport(), &mut gpu);
+        assert_eq!(report.failed_planets, [(PlanetKey(2), unreadable())]);
+        assert_eq!(files.reads(FILE), 2);
+    }
+
+    #[test]
+    fn with_no_files_given_an_unread_texture_fails_as_missing() {
+        let mut renderer = renderer();
+        renderer.add_planet(PlanetKey(2), unread());
+        let mut list = DrawList::new();
+        list.planet(PlanetKey(2), pose(20.0, 20.0));
+        let report = renderer.render(&list, &viewport(), &mut RecordingGpu::new());
+        assert_eq!(
+            report.failed_planets,
+            [(
+                PlanetKey(2),
+                PlanetError::Missing {
+                    stellar: "pale".into(),
+                    asset: "moon-surface".into(),
+                    file: FILE.into(),
+                }
+            )]
+        );
+    }
+
+    #[test]
+    fn a_planet_with_a_refused_pose_is_not_made_and_does_not_fail() {
+        let files = failing();
+        let mut renderer = reading(&files);
+        renderer.add_planet(
+            PlanetKey(2),
+            unread().with_stand_in(StellarStandIn::Disc(DISC)),
+        );
+        let mut list = DrawList::new();
+        list.planet(
+            PlanetKey(2),
+            PlanetPose {
+                radius: 0.0,
+                ..pose(20.0, 20.0)
+            },
+        );
+        let mut gpu = RecordingGpu::new();
+        let report = renderer.render(&list, &viewport(), &mut gpu);
+        assert_eq!(report.failed_planets, []);
+        assert_eq!(files.reads(FILE), 0);
+        assert!(gpu.submits()[0].batches.is_empty());
     }
 
     #[test]
