@@ -1901,6 +1901,22 @@ mod tests {
         );
         let one_at_a_time = reading(raiser(4), RuleKey::CountedSale, RuleSource::Bible);
         assert_eq!(one_at_a_time.check_at(sale, pass(0, 3)), Ok(()));
+        let one_at_a_time = reading(raiser(3), RuleKey::CountedSale, RuleSource::Bible);
+        assert_eq!(
+            one_at_a_time.check_at(sale, pass(0, 3)),
+            first(1),
+            "owned less one: 2 x 2 left of 5"
+        );
+        let exactly = shop(with(row(10, 3, 10), |facts| {
+            facts.raises = vec![Raise {
+                target: OutfitId(200),
+                held: 4,
+                target_max: Some(2),
+                left_by_the_bible: 4,
+                target_names: None,
+            }];
+        }));
+        assert_eq!(exactly.check(sale), Ok(()), "held exactly what is left");
         let unknown = shop(with(row(10, 2, 10), |facts| {
             facts.raises = vec![Raise {
                 target: OutfitId(200),
@@ -2135,6 +2151,29 @@ mod tests {
             ..shop(with(row(10, 2, 20), |facts| facts.ammo_cap = Some(6)))
         };
         assert_eq!(capped.count_max(OutfitId(128), Direction::Buy), Some(4));
+    }
+
+    #[test]
+    fn the_buy_count_keeps_to_the_max_less_those_owned_only_while_the_max_is_above_them() {
+        // A raised cap above the `Max`: only the `Max` test limits it.
+        let most = |owned, max| {
+            Outfitter {
+                cash: 1_000_000,
+                ..shop(with(row(10, owned, max), |facts| facts.raised = Some(30)))
+            }
+            .count_max(OutfitId(128), Direction::Buy)
+        };
+        assert_eq!(most(15, 20), Some(5), "the max less those owned");
+        assert_eq!(
+            most(20, 20),
+            Some(10),
+            "at the max: the cap less those owned"
+        );
+        assert_eq!(
+            most(25, 20),
+            Some(5),
+            "above the max: the cap less those owned"
+        );
     }
 
     fn i64_to_u32(value: i64) -> u32 {
