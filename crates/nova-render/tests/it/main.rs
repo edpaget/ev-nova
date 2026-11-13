@@ -6,6 +6,7 @@
 
 mod common;
 
+mod clipped_models;
 mod colorized_models;
 mod enlarged_atlas;
 mod faded_models;
