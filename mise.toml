@@ -7,6 +7,7 @@ rust = { version = "1.98.1", components = "rustfmt,clippy" }
 # of GitHub releases can time out and fall back to building from source.
 "aqua:nextest-rs/nextest/cargo-nextest" = "0.9.146"
 "cargo:cargo-mutants" = "27.1.0"
+"cargo:cargo-sweep" = "0.8.0"
 "aqua:EmbarkStudios/cargo-deny" = "0.19.9"
 hk = "2.4.0"
 pkl = "0.32.1"
@@ -141,6 +142,10 @@ description = "Mutation testing (cargo-mutants); pass extra flags after --, e.g.
 # and test processes across both mutant jobs at 8 (default: one per core).
 env = { NEXTEST_PROFILE = "mutants" }
 run = "cargo mutants --workspace --jobserver-tasks 8"
+
+[tasks.sweep]
+description = "Remove build artifacts no build has used in 7 days, from every target dir under target/ (debug, clippy, dev-tools, windows); a used crate's artifacts stay warm"
+run = "cargo sweep --time 7"
 
 [tasks.ci]
 description = "Everything CI would run; `hk check` runs this, and it gates review and landing"
