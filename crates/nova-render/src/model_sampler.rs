@@ -289,6 +289,15 @@ mod tests {
             sample(&four, linear, [0.5, 0.5], 0.0),
             mix(top, bottom, 0.5),
         );
+        // In a taller texture, the four are the two rows either side:
+        // rows 1 and 2 of three, not row 0 wrapped round.
+        let tall = texture(2, &[10, 20, 30, 40, 50, 60]);
+        let upper = mix(shown(30), shown(40), 0.5);
+        let lower = mix(shown(50), shown(60), 0.5);
+        assert_sample(
+            sample(&tall, linear, [0.5, 2.0 / 3.0], 0.0),
+            mix(upper, lower, 0.5),
+        );
         // Off the middle, each axis by its own fraction.
         let top = mix(shown(0), shown(80), 0.25);
         let bottom = mix(shown(160), shown(240), 0.25);
