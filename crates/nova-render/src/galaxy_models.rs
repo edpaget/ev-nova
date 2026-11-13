@@ -24,6 +24,12 @@
 //! for, and the livery to paint it in ([`crate::livery::painted`]), each
 //! colour's bytes as the format reads them
 //! ([`Color::rgb`](nova_galaxy_format::id::Color::rgb)).
+//!
+//! For a station or outpost, [`station_livery`] reads the livery of the
+//! faction that owns it: its `owner`, and the first livery by id whose
+//! `faction` names that owner, its colours read as a ship's are. Which of
+//! its model's materials take each colour is the model asset's `paint`,
+//! as for a ship.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -201,12 +207,31 @@ pub fn ship_request(galaxy: &Galaxy, ship: &Id) -> Option<ModelRequest> {
 #[must_use]
 pub fn ship_livery(galaxy: &Galaxy, ship: &Id) -> Option<Livery> {
     let resolved = resolve(galaxy, ship).ok()?;
-    let palette = &galaxy.liveries.get(resolved.livery?)?.data.palette;
-    Some(Livery {
+    Some(livery_of(&galaxy.liveries.get(resolved.livery?)?.data))
+}
+
+/// The livery a station or outpost `stellar` wears in `galaxy`: the first
+/// livery, by id, whose `faction` is the stellar's `owner`, each slot's
+/// colour read as its bytes, as [`ship_livery`] reads one. `None` for a
+/// stellar that isn't there, has no owner, or whose owner no livery names.
+#[must_use]
+pub fn station_livery(galaxy: &Galaxy, stellar: &Id) -> Option<Livery> {
+    let owner = galaxy.stellars.get(stellar)?.data.owner.as_ref()?;
+    galaxy
+        .liveries
+        .values()
+        .find(|livery| livery.data.faction.as_ref() == Some(owner))
+        .map(|livery| livery_of(&livery.data))
+}
+
+/// `livery`'s palette, each slot's colour as its bytes.
+fn livery_of(livery: &nova_galaxy_format::fleet::Livery) -> Livery {
+    let palette = &livery.palette;
+    Livery {
         primary: palette.primary.rgb(),
         secondary: palette.secondary.rgb(),
         trim: palette.trim.rgb(),
-    })
+    }
 }
 
 /// Why `asset` has no model, as the port says it.
@@ -570,6 +595,50 @@ mod tests {
             "names a missing one"
         );
         assert_eq!(ship_livery(&galaxy, &id("nothing")), None, "no such ship");
+    }
+
+    #[test]
+    fn a_station_wears_the_first_livery_naming_its_owner() {
+        let crown_yard = "---\nname: Crown Yard\nkind: station\nsystem: alpha\n\
+                          position: [9, 9]\nowner: crown\n---\n";
+        let source = galaxy()
+            .with(
+                "factions/crown.md",
+                "---\nname: Crown\nkind: minor\ncolor: \"#334455\"\n---\n",
+            )
+            .with("stellars/crown-yard.md", crown_yard);
+        let (galaxy, problems) = load(&source);
+        assert!(problems.is_empty(), "{problems:?}");
+        // Each slot read apart, so a swapped slot fails.
+        let league = Livery {
+            primary: [0xdd, 0xcc, 0xaa],
+            secondary: [0xaa, 0x88, 0x00],
+            trim: [0x22, 0x22, 0x22],
+        };
+        assert_eq!(station_livery(&galaxy, &id("alpha-yard")), Some(league));
+        assert_eq!(station_livery(&galaxy, &id("alpha-prime")), None, "unowned");
+        assert_eq!(
+            station_livery(&galaxy, &id("crown-yard")),
+            None,
+            "no livery names its owner"
+        );
+        assert_eq!(station_livery(&galaxy, &id("nothing")), None, "no stellar");
+
+        // A second livery naming the league, earlier by id, is the one.
+        let earlier = source.with(
+            "liveries/aa-league.md",
+            "---\nname: Early league\nfaction: league\n\
+             palette: {primary: \"#102030\", secondary: \"#405060\", trim: \"#708090\"}\n---\n",
+        );
+        let (galaxy, _) = load(&earlier);
+        assert_eq!(
+            station_livery(&galaxy, &id("alpha-yard")),
+            Some(Livery {
+                primary: [0x10, 0x20, 0x30],
+                secondary: [0x40, 0x50, 0x60],
+                trim: [0x70, 0x80, 0x90],
+            })
+        );
     }
 
     /// A 2 by 2 image: red, green, blue and half-clear white.
