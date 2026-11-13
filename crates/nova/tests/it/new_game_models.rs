@@ -45,7 +45,7 @@ use nova_sim::flight_frame::{FlightFrame, GateFade};
 use nova_sim::{OutfitId, SetExpr, ShipId, StellarId, TargetPick, Vec2};
 use nova_view::flight::model_fade::model_alpha;
 use nova_view::flight::{StellarModel, mounted_outfits};
-use nova_view::{DrawCommand, DrawLayer, DrawList, Key, ModelKey, Screen};
+use nova_view::{Colorize, DrawCommand, DrawLayer, DrawList, Key, ModelKey, Screen};
 
 use crate::common::{draw, fly_new_pilot_modelled};
 use crate::pilots::Harness;
@@ -539,6 +539,19 @@ fn translucent_sample(n: u8) -> (NewGame, WorldAssets) {
 /// `game` with `assets` has filled its system with traffic, each ship on
 /// screen.
 fn drawn_alphas(game: NewGame, data: &GameData, assets: &WorldAssets) -> Vec<(ModelKey, f32)> {
+    (drawn_hulls(game, data, assets).into_iter())
+        .map(|(model, alpha, _)| (model, alpha))
+        .collect()
+}
+
+/// Each model the world layer draws, with its alpha and its colorize,
+/// once the app flying `game` with `assets` has filled its system with
+/// traffic, each ship on screen.
+fn drawn_hulls(
+    game: NewGame,
+    data: &GameData,
+    assets: &WorldAssets,
+) -> Vec<(ModelKey, f32, Option<Colorize>)> {
     let pilots = MemoryPilots::new();
     let mut harness = flying(game, assets, &pilots);
     harness
@@ -566,7 +579,12 @@ fn drawn_alphas(game: NewGame, data: &GameData, assets: &WorldAssets) -> Vec<(Mo
     world(&harness)
         .iter()
         .filter_map(|command| match command {
-            DrawCommand::Model { model, alpha, .. } => Some((*model, *alpha)),
+            DrawCommand::Model {
+                model,
+                alpha,
+                colorize,
+                ..
+            } => Some((*model, *alpha, *colorize)),
             _ => None,
         })
         .collect()
@@ -599,16 +617,23 @@ fn a_translucent_class_draws_its_hulls_at_its_base_alpha_and_the_rest_whole() {
             "{model:?}: {alpha} in {alphas:?}"
         );
     }
-    // The sample as it is draws every model whole.
+    // The sample as it is draws every model whole, and in its own
+    // colours: its system is clear, and no ship is ionized or at a gate
+    // (the colorize a murk, an ion tint or a gate gives is nova-view's
+    // `model_colorize` tests').
     let (plain, assets) = sample();
     let data = sample().0.data;
-    let alphas = drawn_alphas(plain, &data, &assets);
-    assert!(alphas.iter().any(|&(model, _)| model == faint));
+    let hulls = drawn_hulls(plain, &data, &assets);
+    assert!(hulls.iter().any(|&(model, ..)| model == faint));
     assert!(
-        alphas
+        hulls
             .iter()
-            .all(|&(_, alpha)| (alpha - 1.0).abs() < f32::EPSILON),
-        "{alphas:?}"
+            .all(|&(_, alpha, _)| (alpha - 1.0).abs() < f32::EPSILON),
+        "{hulls:?}"
+    );
+    assert!(
+        hulls.iter().all(|(.., colorize)| colorize.is_none()),
+        "{hulls:?}"
     );
 }
 
