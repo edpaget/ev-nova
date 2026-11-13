@@ -8,7 +8,10 @@
 //! screen's picture and grid icons, the escort and comm dialogs' item 11,
 //! the spaceport's landscape, the planet comm dialog's item 5, the system
 //! viewer and the main menu's pilot panel
-//! (rdm:phase/rendering-3d/phase-16-pilot-panel-ship-model).
+//! (rdm:phase/rendering-3d/phase-16-pilot-panel-ship-model). The ship
+//! browser, a developer's viewer, turns a class's portrait in flight's
+//! top-down pose ([`ShipPortrait::draw_posed_in`]) rather than holding it
+//! still (rdm:phase/rendering-3d/phase-17-ship-browser-models).
 //!
 //! - **A ship** draws as its [`ShipPortrait`]: its hull and the outfits
 //!   its class's own and as-built kits' mounts show, turrets facing the
@@ -133,6 +136,20 @@ impl ShipPortrait {
     /// positive, finite scale (no size) or no finite centre (a side that
     /// is no number) draws nothing.
     pub fn draw_in(&self, list: &mut DrawList, area: Bounds) -> bool {
+        self.draw_posed_in(list, area, portrait_orientation())
+    }
+
+    /// Draws it into `area` as [`ShipPortrait::draw_in`] does, fitted and
+    /// centred the same way, but with its hull in `orientation` rather
+    /// than the still [`portrait_orientation`]; its parts follow the
+    /// hull's pose. The ship browser turns a portrait in flight's pose
+    /// this way ([`crate::ships`]).
+    pub fn draw_posed_in(
+        &self,
+        list: &mut DrawList,
+        area: Bounds,
+        orientation: Orientation,
+    ) -> bool {
         let scale = FIT * area.width().min(area.height()) / 2.0 / self.radius;
         let centre = area.center();
         if !(scale.is_finite() && scale > 0.0 && centre.x.is_finite() && centre.y.is_finite()) {
@@ -142,7 +159,7 @@ impl ShipPortrait {
             self.hull,
             ModelPose {
                 center: centre,
-                orientation: portrait_orientation(),
+                orientation,
                 scale,
             },
         );
@@ -387,6 +404,52 @@ mod tests {
         let (drew, commands) = drawn_in(&huge, Bounds::at(Point::new(0.0, 0.0), 64.0, 64.0));
         assert!(!drew, "an infinite scale");
         assert_eq!(commands, []);
+        for (portrait, area) in [
+            (&portrait, Bounds::at(Point::new(0.0, 0.0), 0.0, 64.0)),
+            (&portrait, Bounds::at(Point::new(0.0, 0.0), f32::NAN, 64.0)),
+            (&portrait, Bounds::at(Point::new(0.0, 0.0), 64.0, f32::NAN)),
+            (&portrait, Bounds::at(Point::new(0.0, 0.0), 64.0, -3.0)),
+            (&portrait, Bounds::at(Point::new(f32::NAN, 0.0), 64.0, 64.0)),
+            (&portrait, Bounds::at(Point::new(0.0, f32::NAN), 64.0, 64.0)),
+            (&huge, Bounds::at(Point::new(0.0, 0.0), 64.0, 64.0)),
+        ] {
+            let mut list = DrawList::new();
+            let drew = portrait.draw_posed_in(&mut list, area, Orientation::IDENTITY);
+            assert!(!drew, "{area:?}");
+            assert_eq!(list.iter().count(), 0, "{area:?}");
+        }
+    }
+
+    #[test]
+    fn drawn_posed_it_fits_and_centres_as_draw_in_and_takes_the_pose_given() {
+        let portrait = portrait();
+        let area = Bounds::at(Point::new(10.0, 20.0), 128.0, 64.0);
+        let pose = Orientation::about([0.0, 0.0, 1.0], 0.7);
+        let mut list = DrawList::new();
+        assert!(portrait.draw_posed_in(&mut list, area, pose));
+        let mut want = vec![DrawCommand::Model {
+            model: HULL,
+            pose: ModelPose {
+                center: Point::new(74.0, 52.0),
+                orientation: pose,
+                scale: FIT * 64.0 / 2.0 / 4.0,
+            },
+            alpha: 1.0,
+            colorize: None,
+        }];
+        want.extend(portrait.parts.iter().cloned());
+        assert_eq!(commands(&list), want);
+    }
+
+    #[test]
+    fn draw_in_is_drawn_posed_in_the_portrait_orientation() {
+        let portrait = portrait();
+        let area = Bounds::at(Point::new(10.0, 20.0), 128.0, 64.0);
+        let mut posed = DrawList::new();
+        assert!(portrait.draw_posed_in(&mut posed, area, portrait_orientation()));
+        let (drew, still) = drawn_in(&portrait, area);
+        assert!(drew);
+        assert_eq!(still, commands(&posed));
     }
 
     #[test]
