@@ -42,7 +42,8 @@ pub struct ShipModel {
     /// kits' mounts show reach from its origin, in model units: no turn
     /// moves any of them further, so the model in any pose fits in a
     /// circle of this times its scale about its centre. A screen that
-    /// fits a portrait of the class in a rectangle sizes it by this.
+    /// fits a portrait of the class in a rectangle sizes it by this
+    /// ([`ShipPortrait`](crate::model_picture::ShipPortrait)).
     pub radius: f32,
 }
 

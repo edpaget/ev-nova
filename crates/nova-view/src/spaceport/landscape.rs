@@ -18,9 +18,7 @@ use crate::geometry::Bounds;
 use crate::image::ImageKey;
 use crate::outline::{self, StellarStandIn};
 
-/// How much of the item's shorter side a stand-in spans: a margin, so the
-/// shape sits inside the landscape box rather than touching its edges.
-pub const FIT: f32 = 0.8;
+pub use crate::model_picture::FIT;
 
 /// What the landscape item shows.
 #[derive(Clone, Debug, PartialEq)]

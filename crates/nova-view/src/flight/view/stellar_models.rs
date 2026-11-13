@@ -14,6 +14,9 @@
 //! - **A planet**: a [`DrawCommand::Planet`] at the stand-in's centre, its
 //!   globe the stand-in disc's radius, turned by the view's flight clock.
 //!
+//! Both are drawn by [`draw_stellar_model`], which the other screens that
+//! show a stellar share.
+//!
 //! Only a stellar that draws its stand-in, having no sheet, is replaced:
 //! stock stellars have sheets, and stock data has no models, so it draws
 //! as it always did. The data picks the model, not a rulebook key. The
@@ -21,16 +24,15 @@
 //!
 //! [`DrawCommand::Model`]: crate::DrawCommand::Model
 //! [`DrawCommand::Planet`]: crate::DrawCommand::Planet
+//! [`StellarModel`]: crate::flight::world_models::StellarModel
 
 use nova_sim::landing::UNKNOWN_STELLAR_RADIUS;
 
+use crate::DrawList;
 use crate::flight::sim_port::FlightSim;
-use crate::flight::world_models::StellarModel;
-use crate::model::{ModelPose, Orientation};
-use crate::planet::PlanetPose;
+use crate::model_picture::draw_stellar_model;
 use crate::system::camera::Camera;
 use crate::system::scene::{self, SystemScene};
-use crate::{DrawList, Point};
 
 use super::FlightView;
 
@@ -52,45 +54,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
             camera,
             Some(self.seen_murk()),
             |list, stellar, centre| {
-                self.world_models
-                    .stellar(stellar.id)
-                    .is_some_and(|model| draw_stellar_model(list, model, centre, time))
+                self.world_models.stellar(stellar.id).is_some_and(|model| {
+                    draw_stellar_model(list, model, centre, UNKNOWN_STELLAR_RADIUS, time)
+                })
             },
         );
     }
-}
-
-/// Draws `model` round `centre`, reaching the stand-in's radius, a planet
-/// at the flight clock's `time` (see the module docs), and says whether
-/// it drew. A model whose scale to that radius isn't finite (it reaches
-/// nowhere, or too little, or its reach is no number) draws nothing, so
-/// the stand-in draws in its place.
-fn draw_stellar_model(list: &mut DrawList, model: StellarModel, centre: Point, time: f64) -> bool {
-    match model {
-        StellarModel::Model { key, reach } => {
-            let scale = UNKNOWN_STELLAR_RADIUS / reach;
-            if !scale.is_finite() {
-                return false;
-            }
-            list.model(
-                key,
-                ModelPose {
-                    center: centre,
-                    orientation: Orientation::IDENTITY,
-                    scale,
-                },
-            );
-        }
-        StellarModel::Planet { key } => {
-            list.planet(
-                key,
-                PlanetPose {
-                    center: centre,
-                    radius: UNKNOWN_STELLAR_RADIUS,
-                    time,
-                },
-            );
-        }
-    }
-    true
 }
