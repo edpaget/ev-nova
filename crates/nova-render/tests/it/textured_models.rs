@@ -4,7 +4,8 @@
 //!   through [`GalaxyModels`], registered and drawn on [`RecordingGpu`]:
 //!   the texture is uploaded decoded, then the mesh naming it, its
 //!   vertices carrying the fixture's texture coordinates and the unlit
-//!   flag, and the frame draws it.
+//!   flag, and the frame draws it. The same box with no texture
+//!   coordinates uploads its mesh and no texture.
 //! - Offscreen: a quad facing the camera in a 2 by 2 texture of four
 //!   colours shows each texel in its quadrant as
 //!   [`fragment`](nova_render::camera::fragment) gives it, lit and unlit,
@@ -155,6 +156,53 @@ fn a_textured_unlit_model_from_data_uploads_its_texture_then_its_mesh_and_draws(
     };
     assert_eq!(models.len(), 1);
     assert_eq!(models[0].mesh, MeshId(0));
+}
+
+#[test]
+fn a_textured_model_from_data_with_no_coordinates_uploads_no_texture() {
+    const HULL: ModelKey = ModelKey(4);
+    // The same box with no texture coordinates: nothing samples its image.
+    let glb = Builder::new([2.0, 1.0, 4.0])
+        .material(Mat {
+            textured: true,
+            ..Mat::new("hull", [1.0; 4])
+        })
+        .image(ImageAt::Embedded)
+        .image_bytes(&png(2, 2, &SKIN))
+        .glb();
+    let source = galaxy().with_bytes("media/export/pack/hull.glb", &glb);
+    let (galaxy, _) = load(&source);
+    let loaded = GalaxyModels::new(&galaxy, &source)
+        .model(&ModelRequest::new("hull", Some(8.0)))
+        .expect("the box loads");
+
+    let mut renderer = Renderer::new(NoImages);
+    renderer.add_model(HULL, loaded.mesh());
+    let mut list = DrawList::new();
+    list.model(
+        HULL,
+        ModelPose {
+            center: Point::new(16.0, 12.0),
+            orientation: Orientation::IDENTITY,
+            scale: 1.0,
+        },
+    );
+    let mut gpu = RecordingGpu::new();
+    renderer.render(&list, &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0), &mut gpu);
+
+    let [
+        GpuCall::UploadMesh {
+            data: uploaded,
+            textures,
+            ..
+        },
+        GpuCall::Submit(_),
+    ] = gpu.calls.as_slice()
+    else {
+        panic!("a mesh and a frame, no texture: {:?}", gpu.calls);
+    };
+    assert_eq!(textures, &[]);
+    assert_eq!(uploaded.sections(), [Section::new(0..36, None)]);
 }
 
 /// A quad facing the camera, a unit a side, in a material of the linear

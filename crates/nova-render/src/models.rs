@@ -13,6 +13,11 @@
 //! ([`Gpu::upload_model_texture`]), each once however many meshes hold
 //! its pointer (`crate::model_texture::Resident`), and the mesh is
 //! uploaded with the numbers they took. An untextured mesh uploads none.
+//! Every texture a mesh holds is uploaded, whether or not a section
+//! names it; a model's merged mesh
+//! ([`LoadedModel::mesh`](crate::model_source::LoadedModel::mesh)) holds
+//! only the textures a part samples, so a model whose textured materials
+//! sit only on parts with no texture coordinates uploads none either.
 //!
 //! Consecutive models share one [`Batch::Models`], lit by
 //! [`Light::STANDARD`]. Once a frame's batches are settled, each models
