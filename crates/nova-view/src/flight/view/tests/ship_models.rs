@@ -72,6 +72,7 @@ pub(super) fn table() -> WorldModels {
         key,
         scale: SCALE,
         base_transp: 0,
+        radius: 2.0,
     };
     WorldModels {
         ships: BTreeMap::from([
@@ -519,6 +520,7 @@ fn a_hidden_npc_and_one_waiting_at_its_gate_draw_no_model_and_no_outline() {
                 key: NPC_HULL,
                 scale: SCALE,
                 base_transp: 32,
+                radius: 2.0,
             },
         );
         let catalog = FakeCatalog {

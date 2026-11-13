@@ -15,7 +15,9 @@
 //!   resolved `translucency` (its `BaseTransp`, 0 when none gives one).
 //!   Its kits as built are its resolved `mods`
 //!   (`nova_galaxy_format::fleet::resolve`), root base first, each that
-//!   is a kit.
+//!   is a kit. Its radius ([`ShipModel::radius`]) is the furthest its hull
+//!   mesh or a part its own and as-built mounts show reaches, measured
+//!   once the outfits are keyed.
 //! - **Outfits**: each outfit model a mount shows, keyed by (asset) at a
 //!   metre a unit, unpainted.
 //! - **Stations and outposts**: each whose `visual` is a model, keyed as
@@ -127,6 +129,7 @@ pub fn world_assets_from(
                 key,
                 scale,
                 base_transp: translucency(game, id),
+                radius: 0.0,
             };
             table.ships.insert(ship, model);
         }
@@ -134,6 +137,16 @@ pub fn world_assets_from(
     for asset in shown_assets(&table) {
         if let Some(key) = keys.key(&ModelRequest::new(&asset, None), None) {
             table.outfits.insert(asset, key);
+        }
+    }
+    let radii: Vec<(ShipId, f32)> = table
+        .ships
+        .iter()
+        .map(|(&ship, model)| (ship, ship_radius(&table, &keys, ship, model.key)))
+        .collect();
+    for (ship, radius) in radii {
+        if let Some(model) = table.ships.get_mut(&ship) {
+            model.radius = radius;
         }
     }
     let mut planet_list = Vec::new();
@@ -206,6 +219,33 @@ fn built_kits(game: &NewGame, id: &Id) -> Vec<OutfitId> {
 /// gives one or it doesn't resolve.
 fn translucency(game: &NewGame, id: &Id) -> i16 {
     resolve(&game.galaxy, id).map_or(0, |resolved| i16::from(resolved.translucency))
+}
+
+/// How far ship class `ship`'s hull `hull` and the parts its own and
+/// as-built kits' mounts show reach from its origin, in model units
+/// ([`ShipModel::radius`]): the hull mesh's radius, or a part's further,
+/// each the length of its mount's point raised by its lift plus its own
+/// mesh's radius. A part with no key isn't drawn, so it reaches nowhere.
+fn ship_radius<M: ModelSource>(
+    table: &WorldModels,
+    keys: &Keyring<'_, M>,
+    ship: ShipId,
+    hull: ModelKey,
+) -> f32 {
+    let hull_radius = keys.radius(hull).unwrap_or(0.0);
+    table
+        .mounts(ship, table.built_kits(ship))
+        .iter()
+        .filter_map(|mount| {
+            let shown = mount.shows.as_ref()?;
+            let part = keys.radius(table.outfit(&shown.asset)?)?;
+            let [x, y, z] = mount.at;
+            let lifted = z + shown.lift;
+            #[allow(clippy::cast_possible_truncation, reason = "a mount's metres")]
+            let reach = (x * x + y * y + lifted * lifted).sqrt() as f32;
+            Some(reach + part)
+        })
+        .fold(hull_radius, f32::max)
 }
 
 /// Every outfit model asset a mount in `table` shows.
@@ -282,6 +322,14 @@ impl<'a, M: ModelSource> Keyring<'a, M> {
         self.keys.insert(id, key);
         self.meshes.push((key, mesh));
         Some(key)
+    }
+
+    /// The radius of the mesh `key` names, if it was handed out.
+    fn radius(&self, key: ModelKey) -> Option<f32> {
+        self.meshes
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, mesh)| mesh.radius())
     }
 
     /// The meshes keyed and the problems found.
@@ -791,6 +839,48 @@ mod tests {
         // Light freighter (shared with the plain one), the gunship's
         // paint, the turret and the hub.
         assert_eq!(keys.len(), 4);
+    }
+
+    #[test]
+    fn a_class_s_radius_reaches_its_hull_and_each_part_its_mounts_as_built_show() {
+        let (game, assets) = built(&modelled_sample_3d());
+        let table = &assets.models;
+        let turret = table.outfit("turret-mount").expect("the turret's key");
+        let turret_radius = mesh(&assets, turret).radius();
+        let gunship = ship(&game, "harrow-gunship");
+        let model = table.ship(gunship).expect("the gunship's model");
+        let hull_radius = mesh(&assets, model.key).radius();
+        let mounts = table.mounts(gunship, table.built_kits(gunship));
+        let parts: Vec<f32> = mounts
+            .iter()
+            .filter_map(|mount| {
+                let shown = mount.shows.as_ref()?;
+                let [x, y, z] = mount.at;
+                let lifted = (x * x + y * y + (z + shown.lift) * (z + shown.lift)).sqrt();
+                #[allow(clippy::cast_possible_truncation)]
+                Some(lifted as f32 + turret_radius)
+            })
+            .collect();
+        assert!(!parts.is_empty(), "the gun bed shows the turret");
+        let want = parts.iter().copied().fold(hull_radius, f32::max);
+        assert!(
+            (model.radius - want).abs() < 1e-5,
+            "{} is not {want}",
+            model.radius
+        );
+        assert!(model.radius.is_finite() && model.radius > 0.0);
+
+        let freighter = ship(&game, "light-freighter");
+        let plain = table.ship(freighter).expect("the freighter's model");
+        assert!(
+            table
+                .mounts(freighter, table.built_kits(freighter))
+                .iter()
+                .all(|mount| mount.shows.is_none()),
+            "the freighter shows no part"
+        );
+        let hull = mesh(&assets, plain.key).radius();
+        assert!((plain.radius - hull).abs() < f32::EPSILON);
     }
 
     #[test]

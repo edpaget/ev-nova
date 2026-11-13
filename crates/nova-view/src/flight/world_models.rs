@@ -38,6 +38,12 @@ pub struct ShipModel {
     /// read it from, so the edge fills it from the data
     /// (`nova_galaxy_format`'s `fleet::Ship::translucency`), 0 by default.
     pub base_transp: i16,
+    /// How far the hull and the outfits its class's own and as-built
+    /// kits' mounts show reach from its origin, in model units: no turn
+    /// moves any of them further, so the model in any pose fits in a
+    /// circle of this times its scale about its centre. A screen that
+    /// fits a portrait of the class in a rectangle sizes it by this.
+    pub radius: f32,
 }
 
 /// What a stellar draws in 3D.
@@ -144,6 +150,7 @@ mod tests {
                     key: HULL,
                     scale: 1.0,
                     base_transp: 6,
+                    radius: 3.0,
                 },
             )]),
             built_kits: BTreeMap::from([(ShipId(129), vec![BED])]),
@@ -181,6 +188,7 @@ mod tests {
                 key: HULL,
                 scale: 1.0,
                 base_transp: 6,
+                radius: 3.0,
             })
         );
         assert_eq!(table.ship(ShipId(129)), None);
