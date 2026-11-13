@@ -161,6 +161,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_offer_can_be_refused_only_with_a_refuse_button() {
+        let prompt = |refuse: Option<&str>| OfferPrompt {
+            mission: MissionId(128),
+            text: String::new(),
+            labels: OfferLabels {
+                accept: "Accept".into(),
+                refuse: refuse.map(Into::into),
+            },
+            graphic: None,
+            movie: None,
+        };
+        assert!(prompt(Some("Refuse")).can_refuse());
+        assert!(!prompt(None).can_refuse());
+    }
+
+    #[test]
     fn the_macs_ticks_are_60_a_second() {
         assert_eq!(mac_ticks(FIRST_OFFER_TICKS), Duration::from_millis(250));
         assert_eq!(mac_ticks(60), Duration::from_secs(1));

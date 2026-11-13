@@ -40,3 +40,68 @@ impl Pod {
         }
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::float_cmp)]
+mod tests {
+    use super::*;
+
+    /// A pod shown at (10, 20), drifting (2, -1) a pass, with `life`.
+    fn pod(life: f32) -> Pod {
+        Pod {
+            position: Vec2::new(10.0, 20.0),
+            velocity: Vec2::new(2.0, -1.0),
+            life,
+            frame: 3,
+            shown: true,
+        }
+    }
+
+    /// `pod` after one step at `gain`.
+    fn stepped(mut pod: Pod, gain: SpeedMult) -> Pod {
+        pod.step(gain);
+        pod
+    }
+
+    #[test]
+    fn a_pod_drifts_by_its_velocity_and_ages_a_tick_at_full_gain() {
+        let pod = stepped(pod(10.0), SpeedMult::FULL);
+        assert_eq!(pod.position, Vec2::new(12.0, 19.0));
+        assert_eq!(pod.life, 9.0);
+        assert!(pod.shown);
+        assert_eq!(pod.frame, 3, "its frame is left");
+        assert_eq!(pod.velocity, Vec2::new(2.0, -1.0));
+    }
+
+    #[test]
+    fn at_half_gain_a_pod_drifts_and_ages_by_half() {
+        let pod = stepped(pod(10.0), SpeedMult::new(0.5));
+        assert_eq!(pod.position, Vec2::new(11.0, 19.5));
+        assert_eq!(pod.life, 9.5);
+        assert!(pod.shown);
+        assert_eq!(stepped(self::pod(10.0), SpeedMult::ZERO), self::pod(10.0));
+    }
+
+    #[test]
+    fn a_life_of_none_or_less_hides_it_and_it_stays_hidden() {
+        assert!(stepped(pod(1.5), SpeedMult::FULL).shown, "0.5 left");
+        assert!(!stepped(pod(1.0), SpeedMult::FULL).shown, "at 0");
+        assert!(
+            !stepped(pod(0.5), SpeedMult::new(0.5)).shown,
+            "at 0, half gain"
+        );
+        assert!(!stepped(pod(0.25), SpeedMult::FULL).shown, "below 0");
+        let hidden = Pod {
+            shown: false,
+            ..pod(50.0)
+        };
+        assert!(!stepped(hidden, SpeedMult::FULL).shown, "never shown again");
+    }
+
+    #[test]
+    fn a_nan_life_hides_it() {
+        let pod = stepped(pod(f32::NAN), SpeedMult::FULL);
+        assert!(pod.life.is_nan());
+        assert!(!pod.shown);
+    }
+}

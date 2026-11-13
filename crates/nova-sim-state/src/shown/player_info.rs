@@ -382,6 +382,16 @@ mod tests {
     }
 
     #[test]
+    fn one_is_a_ton_and_any_other_count_tons() {
+        let list: Vec<String> = ["ton", "tons"].iter().map(|&w| w.to_owned()).collect();
+        let words = Words::from_list(&list);
+        assert_eq!(words.tons_for(1), "ton");
+        for n in [0, 2, -1, 1_000] {
+            assert_eq!(words.tons_for(n), "tons", "{n}");
+        }
+    }
+
+    #[test]
     fn a_cheat_suffix_is_the_number_in_brackets_after_a_space() {
         assert_eq!(cheat_suffix(128), " (128)");
         assert_eq!(cheat_suffix(-5), " (-5)");

@@ -93,6 +93,44 @@ pub const DEFAULT_PLAY_AREA: Area = Area {
 mod tests {
     use super::*;
 
+    /// The area from (`left`, `top`) to (`right`, `bottom`).
+    fn area(left: f32, top: f32, right: f32, bottom: f32) -> Area {
+        Area {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+
+    #[test]
+    fn two_areas_overlap_only_strictly() {
+        let unit = area(0.0, 0.0, 10.0, 10.0);
+        assert!(unit.overlaps(area(5.0, 5.0, 15.0, 15.0)));
+        assert!(unit.overlaps(area(-5.0, -5.0, 1.0, 1.0)));
+        assert!(unit.overlaps(unit));
+        for (touching, side) in [
+            (area(10.0, 0.0, 20.0, 10.0), "right"),
+            (area(-10.0, 0.0, 0.0, 10.0), "left"),
+            (area(0.0, 10.0, 10.0, 20.0), "bottom"),
+            (area(0.0, -10.0, 10.0, 0.0), "top"),
+        ] {
+            assert!(!unit.overlaps(touching), "{side}");
+            assert!(!touching.overlaps(unit), "{side}");
+        }
+        assert!(!unit.overlaps(area(20.0, 20.0, 30.0, 30.0)));
+        assert!(!unit.overlaps(area(0.0, 20.0, 10.0, 30.0)), "below");
+        assert!(!unit.overlaps(area(20.0, 0.0, 30.0, 10.0)), "beside");
+    }
+
+    #[test]
+    fn a_point_overlaps_an_area_it_lies_strictly_inside() {
+        let unit = area(0.0, 0.0, 10.0, 10.0);
+        assert!(area(5.0, 5.0, 5.0, 5.0).overlaps(unit));
+        assert!(!area(0.0, 5.0, 0.0, 5.0).overlaps(unit), "on the edge");
+        assert!(!area(10.0, 10.0, 10.0, 10.0).overlaps(unit), "a corner");
+    }
+
     #[test]
     fn a_full_fade_is_0x40_translucency_steps() {
         assert_eq!(TRANSLUCENCY_STEPS, 0x40);

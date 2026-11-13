@@ -91,6 +91,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_lightning_weapon_loads_no_falloff_whatever_it_says() {
+        assert_eq!(loaded_falloff(100, 5, 1), 0);
+        assert_eq!(loaded_falloff(0, 5, 3), 0, "not a beam");
+        assert_eq!(loaded_falloff(100, 0, 1), 0, "not the default");
+    }
+
+    #[test]
+    fn a_weapon_that_is_no_beam_keeps_its_falloff() {
+        assert_eq!(loaded_falloff(0, -3, 0), -3);
+        assert_eq!(loaded_falloff(-1, 0, 0), 0);
+        assert_eq!(loaded_falloff(0, 7, -2), 7);
+    }
+
+    #[test]
+    fn a_beam_of_falloff_none_or_less_loads_16_and_any_other_keeps_its_own() {
+        assert_eq!(DEFAULT_FALLOFF, 16);
+        assert_eq!(loaded_falloff(1, 0, 0), DEFAULT_FALLOFF);
+        assert_eq!(loaded_falloff(50, -2, 0), DEFAULT_FALLOFF);
+        assert_eq!(loaded_falloff(50, 1, 0), 1);
+        assert_eq!(loaded_falloff(50, 7, 0), 7);
+    }
+
+    #[test]
     fn guidance_decodes_at_each_value() {
         for (raw, guidance) in [
             (-1, Guidance::Unguided),

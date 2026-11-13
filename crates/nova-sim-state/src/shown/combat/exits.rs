@@ -75,6 +75,22 @@ mod tests {
     }
 
     #[test]
+    fn a_compression_is_its_percent_over_100_and_none_or_less_counts_as_100() {
+        let exits = ShipExits {
+            up_compress: (50, 0),
+            down_compress: (-20, 150),
+            ..ShipExits::default()
+        };
+        let (up, down) = compression(&exits);
+        assert_eq!(up, Vec2::new(0.5, 1.0));
+        assert_eq!(down, Vec2::new(1.0, 1.5));
+        assert_eq!(
+            compression(&ShipExits::default()),
+            (Vec2::new(1.0, 1.0), Vec2::new(1.0, 1.0))
+        );
+    }
+
+    #[test]
     fn the_drawn_frame_truncates_the_heading() {
         let at = |heading| drawn_frame(heading, frames(36), None);
         assert_eq!(

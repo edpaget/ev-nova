@@ -125,6 +125,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_centred_rect_halves_its_size_as_integers_its_extra_pixel_right_and_down() {
+        let rect = SpriteRect::centred(Vec2::new(100.0, 50.0), (41, 30));
+        assert_eq!((rect.left, rect.top), (80.0, 35.0));
+        assert_eq!((rect.width, rect.height), (41, 30));
+        let even = SpriteRect::centred(Vec2::new(0.0, 0.0), (40, 31));
+        assert_eq!((even.left, even.top), (-20.0, -15.0));
+    }
+
+    #[test]
+    fn a_rect_holds_its_left_and_top_edges_but_not_its_right_and_bottom() {
+        let wide = SpriteRect {
+            left: 0.0,
+            top: 0.0,
+            width: 48,
+            height: 20,
+        };
+        assert!(wide.holds(Vec2::new(0.0, 0.0)));
+        assert!(wide.holds(Vec2::new(47.9, 19.9)));
+        assert!(!wide.holds(Vec2::new(48.0, 10.0)), "the right edge");
+        assert!(!wide.holds(Vec2::new(10.0, 20.0)), "the bottom edge");
+        assert!(!wide.holds(Vec2::new(-0.1, 10.0)), "no margin at 48 wide");
+        assert!(!wide.holds(Vec2::new(10.0, -0.1)));
+    }
+
+    #[test]
+    fn a_rect_no_wider_than_47_is_clicked_with_16_pixels_to_spare() {
+        let small = SpriteRect {
+            left: 0.0,
+            top: 0.0,
+            width: SMALL_SPRITE_WIDTH,
+            height: 60,
+        };
+        assert!(small.holds(Vec2::new(-16.0, -16.0)));
+        assert!(!small.holds(Vec2::new(-16.1, 0.0)));
+        assert!(small.holds(Vec2::new(62.9, 75.9)));
+        assert!(!small.holds(Vec2::new(63.0, 0.0)), "47 + 16 out");
+        assert!(!small.holds(Vec2::new(0.0, 76.0)), "60 + 16 out");
+    }
+
+    #[test]
     fn the_nav_mode_starts_off() {
         assert_eq!(NavMode::default(), NavMode::Off);
     }

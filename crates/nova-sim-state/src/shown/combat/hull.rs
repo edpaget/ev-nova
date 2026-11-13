@@ -388,4 +388,86 @@ mod tests {
         assert!(holds_armour(armor(0.0, 0.1)));
         assert!(!holds_armour(armor(5.0, 0.0)));
     }
+
+    #[test]
+    fn every_condition_but_destroyed_is_active() {
+        assert!(Condition::Intact.active());
+        assert!(Condition::Disabled.active());
+        assert!(UNSET.active());
+        assert!(!Condition::Destroyed.active());
+    }
+
+    #[test]
+    fn a_disabled_or_breaking_up_ship_is_disabled_and_no_other() {
+        assert!(Condition::Disabled.disabled());
+        assert!(UNSET.disabled());
+        assert!(
+            Condition::Dying {
+                ticks_left: 9,
+                starting: false
+            }
+            .disabled()
+        );
+        assert!(!Condition::Intact.disabled());
+        assert!(!Condition::Destroyed.disabled());
+    }
+
+    #[test]
+    fn the_death_timer_ticks_down_only_while_it_is_set_and_ends_the_starting_frame() {
+        let counted = |mut condition: Condition| {
+            condition.count_down();
+            condition
+        };
+        assert_eq!(
+            counted(Condition::Dying {
+                ticks_left: 3,
+                starting: true
+            }),
+            Condition::Dying {
+                ticks_left: 2,
+                starting: false
+            }
+        );
+        assert_eq!(
+            counted(Condition::Dying {
+                ticks_left: 1,
+                starting: false
+            }),
+            Condition::Dying {
+                ticks_left: 0,
+                starting: false
+            }
+        );
+        assert_eq!(counted(UNSET), UNSET, "unset: left as it is");
+        for other in [Condition::Intact, Condition::Disabled, Condition::Destroyed] {
+            assert_eq!(counted(other), other);
+        }
+    }
+
+    #[test]
+    fn settling_the_start_clears_a_set_timers_starting_frame_and_keeps_its_ticks() {
+        let settled = |mut condition: Condition| {
+            condition.settle_start();
+            condition
+        };
+        assert_eq!(
+            settled(Condition::Dying {
+                ticks_left: 3,
+                starting: true
+            }),
+            Condition::Dying {
+                ticks_left: 3,
+                starting: false
+            }
+        );
+        let past = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        assert_eq!(settled(past), past);
+        assert_eq!(settled(UNSET), UNSET, "unset: left as it is");
+        for other in [Condition::Intact, Condition::Disabled, Condition::Destroyed] {
+            assert_eq!(settled(other), other);
+        }
+    }
 }
