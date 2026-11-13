@@ -10,8 +10,10 @@ use super::overlay::{OverlayGpu, OverlayPainter, PaintTarget};
 use super::upscale::{Upscale, upscale_for};
 use super::{InitError, WgpuRenderer, acquire};
 use crate::fonts::FontFaces;
-use crate::gpu::{Frame, Gpu, PageId, PlanetId, PlanetTextures};
+use crate::gpu::{Frame, Gpu, ModelTextureId, PageId, PlanetId, PlanetTextures};
 use crate::model::{Mesh, MeshId};
+use crate::model_texture::ModelTexture;
+use crate::sky::{SkyImage, SkyImageId};
 use crate::upscale::{Abilities, Upscaler, UpscalerProbe, WorldResolution};
 use crate::viewport::PixelRect;
 
@@ -120,6 +122,22 @@ impl OffscreenGpu {
             .read()
     }
 
+    /// How many samplers, bind groups, textures and render pipelines its
+    /// device holds, in that order, from wgpu's counters once the device
+    /// is idle (as [`Self::render_pipelines`] waits): for tests that pin
+    /// that a frame makes none.
+    #[cfg(test)]
+    pub(super) fn resources_held(&self) -> [isize; 4] {
+        let pipelines = self.render_pipelines();
+        let held = self.device.get_internal_counters().hal;
+        [
+            held.samplers.read(),
+            held.bind_groups.read(),
+            held.textures.read(),
+            pipelines,
+        ]
+    }
+
     /// How many font faces the text renderer loaded.
     #[must_use]
     pub fn font_faces(&self) -> usize {
@@ -204,12 +222,24 @@ impl Gpu for OffscreenGpu {
         self.renderer.clear_pages();
     }
 
-    fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh) {
-        self.renderer.upload_mesh(mesh, data);
+    fn upload_model_texture(&mut self, texture: ModelTextureId, data: &ModelTexture) {
+        self.renderer.upload_model_texture(texture, data);
+    }
+
+    fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh, textures: &[ModelTextureId]) {
+        self.renderer.upload_mesh(mesh, data, textures);
     }
 
     fn upload_planet(&mut self, planet: PlanetId, textures: &PlanetTextures) {
         self.renderer.upload_planet(planet, textures);
+    }
+
+    fn release_planet(&mut self, planet: PlanetId) {
+        self.renderer.release_planet(planet);
+    }
+
+    fn upload_sky_image(&mut self, image: SkyImageId, data: &SkyImage) {
+        self.renderer.upload_sky_image(image, data);
     }
 
     fn submit(&mut self, frame: &Frame) {

@@ -932,7 +932,9 @@ impl AppScreen {
     /// when the interface file has none). With no metrics to lay it out,
     /// the hail is hung up, with a warning. Flight's cursor hides first,
     /// as `_HandlePlayerCommunication` hides its sprite before
-    /// `_DoCommDialog` (@0x62561, @0x625c1).
+    /// `_DoCommDialog` (@0x62561, @0x625c1). The hailed ship's class draws
+    /// as its model's portrait when the world models' table has one
+    /// (`CommDialog::with_ship_model`).
     fn open_comm(&mut self, view: &HailView) {
         self.hide_flight_cursor();
         let Some(metrics) = self.metrics() else {
@@ -963,7 +965,11 @@ impl AppScreen {
         self.comm = Some(
             dialog
                 .with_focus_ring(self.dialog_focus_ring())
-                .with_bindings(self.bindings.clone()),
+                .with_bindings(self.bindings.clone())
+                .with_ship_model(nova_view::model_picture::ShipPortrait::of(
+                    &self.world_models,
+                    view.ship,
+                )),
         );
     }
 

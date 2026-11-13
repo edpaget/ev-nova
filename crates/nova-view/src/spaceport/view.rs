@@ -222,6 +222,7 @@ use crate::bound_names::{CONFIRM_OR_BACK, press_clause};
 use crate::color::Color;
 use crate::draw::DrawList;
 use crate::flight::view::SharedChance;
+use crate::flight::world_models::WorldModels;
 use crate::flight::{MapOpener, PortScreen};
 use crate::font::Font;
 use crate::geometry::Point;
@@ -608,6 +609,10 @@ pub struct SpaceportView {
     told: Told,
     /// Map, Pilot and Missions on touch (the `touch` module).
     play_keys: crate::ui::touch_aids::PlayKeys,
+    /// The world models the shipyard and the hire screen draw a class
+    /// with no `PICT` by ([`SpaceportView::with_world_models`]); empty
+    /// by default.
+    world_models: Rc<WorldModels>,
 }
 
 impl SpaceportView {
@@ -717,7 +722,24 @@ impl SpaceportView {
             gambling: gamble::Gambling::default(),
             keys: CommandReader::new(contexts::PORT),
             told: Told::default(),
+            world_models: Rc::default(),
         }
+    }
+
+    /// The spaceport whose shipyard and hire screen draw a class with no
+    /// `PICT` as its model from `models` (the shipyard's `picture`
+    /// module), and whose landscape draws its stellar's model or planet
+    /// when it has no `PICT` ([`Landscape::with_model`]).
+    #[must_use]
+    pub fn with_world_models(mut self, models: Rc<WorldModels>) -> Self {
+        if let Ok(port) = &mut self.port {
+            port.landscape = port
+                .landscape
+                .clone()
+                .with_model(models.stellar(self.stellar));
+        }
+        self.world_models = models;
+        self
     }
 
     /// The spaceport reading its keys through `bindings`: its own, its
@@ -2256,7 +2278,8 @@ impl SpaceportView {
         );
         bar.set_nothing_for_hire(barkeeping.nothing_for_hire);
         bar = self.gambling.give_race(
-            bar.with_news(barkeeping.news.clone())
+            bar.with_world_models(Rc::clone(&self.world_models))
+                .with_news(barkeeping.news.clone())
                 .with_focus_ring(ring)
                 .with_bindings(self.keys.bindings().clone()),
         );
@@ -2333,6 +2356,7 @@ impl SpaceportView {
                         Rc::clone(&shipbuying.catalog),
                         style,
                     )
+                    .with_world_models(Rc::clone(&self.world_models))
                     .with_focus_ring(ring)
                     .with_bindings(bindings);
                     Open::Shipyard(Box::new(match offer {
@@ -2751,6 +2775,7 @@ pub(in crate::spaceport) mod tests {
     mod pad_untold;
     mod play_keys;
     mod ship_movies;
+    mod world_models;
 
     use crate::keymap::test_keys::MISSION_INFO_KEY;
     use std::cell::RefCell;

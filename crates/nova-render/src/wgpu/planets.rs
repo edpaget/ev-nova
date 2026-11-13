@@ -147,6 +147,14 @@ impl Planets {
         self.groups.insert(planet, group);
     }
 
+    /// Drops planet `planet`'s textures: they are owned only through its
+    /// bind group, and wgpu keeps them alive until the GPU has finished
+    /// any work already submitted with them. It draws nothing until it is
+    /// uploaded again.
+    pub(super) fn release(&mut self, planet: PlanetId) {
+        self.groups.remove(&planet);
+    }
+
     /// Encodes the planets `instances` of `buffer`, planet `planets[i]`
     /// for the i-th, into `pass`, the projection's `globals` bound, one
     /// square each. A planet the GPU doesn't hold is skipped.
@@ -172,8 +180,9 @@ impl Planets {
 }
 
 /// A texture of `levels`, a mip chain (one level for a ring's row),
-/// uploaded on `queue`.
-fn texture(
+/// uploaded on `queue`: a planet's, or a model's
+/// (`super::models`).
+pub(super) fn texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     label: &str,

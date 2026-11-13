@@ -1649,6 +1649,27 @@ fn a_hull_s_anim_sets_only_its_size() {
     assert!((PX_PER_METRE - 1.0).abs() < f64::EPSILON, "provisional");
 }
 
+#[test]
+fn a_translucent_hull_s_anim_takes_its_translucency_as_its_base_transp() {
+    let source = skiff_with_stats().with(
+        "ships/wisp.md",
+        "---\nname: Wisp\nbase: skiff\ntranslucency: 10\n---\n",
+    );
+    let game = loaded(&source);
+    let (_, wisp): (_, ShipAnim) = named(&game, game.ids.ships[&id("wisp")]);
+    let (_, skiff): (_, ShipAnim) = named(&game, game.ids.ships[&id("skiff")]);
+    assert_eq!(wisp.base_transp, 10);
+    assert_eq!(
+        wisp,
+        ShipAnim {
+            base_transp: 10,
+            ..skiff
+        },
+        "only its base_transp differs"
+    );
+    assert_eq!(skiff.base_transp, 0);
+}
+
 /// The fixture galaxy with a hull `barge` whose `size` gives
 /// `collision_radius` (YAML text, so `.nan` and `.inf` can be written).
 fn barge_with_radius(collision_radius: &str) -> MemSource {

@@ -2,9 +2,29 @@
 //! asset's `.glb` or `.gltf` (with the buffers and images a `.gltf`
 //! names) through the format's [`Source`] port, needing no GPU.
 //!
+//! A scene comes from one of two places. Given the scenes somebody read
+//! already ([`GalaxyModels::reading`]: the loader's, which reads every
+//! model a ship, a mount or a station shows for its 2D stand-in), an
+//! asset among them is taken as it was read there, a failure included,
+//! and the source isn't asked about it. Any other asset, and every asset
+//! with no scenes given, is read through the source
+//! (`nova_galaxy_media::read_asset_scene`). Either way what is made of the
+//! scene is the same.
+//!
 //! It only chains decisions made elsewhere: which file is the model and
 //! how it is read (`nova_galaxy_media::scene`), which budget covers it and
-//! what it breaks (`nova_galaxy_media::budget`), how it sits on a ship
+//! what it breaks (`nova_galaxy_media::budget`), how each image a part
+//! samples
+//! ([`Part::sampling_material`](crate::model_source::Part::sampling_material):
+//! an image nothing samples is never decoded) is sniffed, held to the
+//! default budget's
+//! `texture` side and to the renderer's largest
+//! ([`MAX_TEXTURE_SIDE`]) and decoded (`nova_galaxy_media::image`), how
+//! its mip chain is built ([`ModelTexture::new`]), which sampler, which
+//! coordinate set and which transform a base colour is sampled by
+//! (`nova_galaxy_media::sampling`: the sampler is handed on in the port's
+//! terms, and the coordinates arrive already resolved), how it sits on a
+//! ship
 //! (`nova_galaxy_media::Placement`), which livery slot the asset's `paint`
 //! puts each material in ([`nova_galaxy_media::slot_of`], the rule the
 //! top-down silhouettes use too), and how a placed primitive becomes a
@@ -20,36 +40,70 @@
 //! for, and the livery to paint it in ([`crate::livery::painted`]), each
 //! colour's bytes as the format reads them
 //! ([`Color::rgb`](nova_galaxy_format::id::Color::rgb)).
+//!
+//! For a station or outpost, [`station_livery`] reads the livery of the
+//! faction that owns it: its `owner`, and the first livery by id whose
+//! `faction` names that owner, its colours read as a ship's are. Which of
+//! its model's materials take each colour is the model asset's `paint`,
+//! as for a ship.
+
+use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use nova_galaxy_format::asset::{AssetKind, Paint};
 use nova_galaxy_format::fleet::resolve;
 use nova_galaxy_format::id::Id;
 use nova_galaxy_format::load::Galaxy;
 use nova_galaxy_format::source::Source;
-use nova_galaxy_media::budget::{self, limits, measure, over_budget};
+use nova_galaxy_media::budget::{self, Limits, limits, measure, over_budget, texture_limits};
+use nova_galaxy_media::sampling as media;
 use nova_galaxy_media::scene::{Scene, read_asset_scene};
-use nova_galaxy_media::{NoModel, Placement, Slot, slot_of};
+use nova_galaxy_media::{AssetScenes, NoImage, NoModel, Placement, Slot, read_image, slot_of};
 
+use crate::gpu::MAX_TEXTURE_SIDE;
 use crate::livery::Livery;
 use crate::model::MeshError;
+use crate::model_sampler::{Filter, Mip, ModelSampler, Wrap};
 use crate::model_source::{
-    self, LoadedModel, Material, Measure, ModelError, ModelRequest, ModelSource, Overrun,
-    PaintSlot, Texture,
+    self, ImageRef, LoadedModel, Material, Measure, ModelError, ModelRequest, ModelSource, Overrun,
+    PaintSlot, Part, Texture,
 };
+use crate::model_texture::ModelTexture;
 
 /// The new game's models: the asset manifest and budgets of `galaxy`, the
-/// files read through `source`.
+/// files read through `source`, but for the scenes it was given already
+/// read ([`reading`](Self::reading)).
 #[derive(Clone, Copy, Debug)]
 pub struct GalaxyModels<'a, S: Source> {
     galaxy: &'a Galaxy,
     source: &'a S,
+    /// The scenes somebody read already, if any were given.
+    scenes: Option<&'a AssetScenes>,
 }
 
 impl<'a, S: Source> GalaxyModels<'a, S> {
     /// The models `galaxy` names, read through `source`.
     #[must_use]
     pub fn new(galaxy: &'a Galaxy, source: &'a S) -> Self {
-        GalaxyModels { galaxy, source }
+        GalaxyModels {
+            galaxy,
+            source,
+            scenes: None,
+        }
+    }
+
+    /// The same models, taking each asset in `scenes` as it was read
+    /// there (its scene, or why it has none) and asking the source for
+    /// nothing about it: the loader's
+    /// ([`NewGame::scenes`](nova_data::new_game::NewGame::scenes)), so
+    /// no model file is read twice. An asset with no entry is still read
+    /// through the source.
+    #[must_use]
+    pub fn reading(self, scenes: &'a AssetScenes) -> Self {
+        GalaxyModels {
+            scenes: Some(scenes),
+            ..self
+        }
     }
 }
 
@@ -66,9 +120,16 @@ impl<S: Source> ModelSource for GalaxyModels<'_, S> {
         if asset.kind != AssetKind::Model {
             return Err(ModelError::NotAModel(name.clone()));
         }
-        let (scene, front) =
-            read_asset_scene(self.source, asset).map_err(|why| no_model(name, why))?;
-        let over = over_budget(&limits(self.galaxy, &id), measure(&scene));
+        let read;
+        let (scene, front) = match self.scenes.and_then(|scenes| scenes.get(&id)) {
+            Some(Ok((scene, front))) => (scene, *front),
+            Some(Err(why)) => return Err(no_model(name, why.clone())),
+            None => {
+                read = read_asset_scene(self.source, asset).map_err(|why| no_model(name, why))?;
+                (&read.0, read.1)
+            }
+        };
+        let over = over_budget(&limits(self.galaxy, &id), measure(scene));
         if !over.is_empty() {
             return Err(ModelError::OverBudget {
                 asset: name.clone(),
@@ -80,10 +141,110 @@ impl<S: Source> ModelSource for GalaxyModels<'_, S> {
                 .ok_or_else(|| ModelError::NoDepth(name.clone()))?,
             None => Placement::unscaled_bounds(scene.bounds, front),
         };
-        loaded(&scene, &placement, asset.paint.as_ref()).map_err(|error| ModelError::Mesh {
+        let parts = parts(scene, &placement).map_err(|error| ModelError::Mesh {
             asset: name.clone(),
             error,
+        })?;
+        let (textures, places) = textures(name, scene, &parts, &texture_limits(self.galaxy))?;
+        Ok(LoadedModel {
+            materials: materials(scene, asset.paint.as_ref(), &places),
+            parts,
+            textures,
         })
+    }
+}
+
+/// A scene's base-colour textures, decoded, and which of them each of the
+/// scene's images became (`None` for an image no part samples).
+type Textures = (Vec<Texture>, Vec<Option<usize>>);
+
+/// The textures of `asset`'s `scene`, drawn as `parts`: each image some
+/// part samples (the base colour of a material
+/// [`Part::sampling_material`] gives, the port's one definition), in the
+/// images' order, read by `nova_galaxy_media::read_image` held to `limits`
+/// (the default budget's `texture`) and to the largest side the renderer
+/// draws ([`MAX_TEXTURE_SIDE`]).
+///
+/// An image no part samples is not decoded: one no base colour names, and
+/// one named only by materials on parts with no coordinates to sample it
+/// by. Nothing is drawn from it, so it costs no decode and no memory, and
+/// it can't refuse the model, whether it wouldn't decode, is over the
+/// budget or is larger than the renderer draws.
+fn textures(
+    asset: &str,
+    scene: &Scene,
+    parts: &[Part],
+    limits: &Limits,
+) -> Result<Textures, ModelError> {
+    let sampled: BTreeSet<usize> = parts
+        .iter()
+        .filter_map(Part::sampling_material)
+        .filter_map(|at| scene.materials.get(at)?.base_color_texture)
+        .map(|texture| texture.image)
+        .collect();
+    let mut textures = Vec::new();
+    let mut places = vec![None; scene.images.len()];
+    for at in sampled {
+        let Some(image) = scene.images.get(at) else {
+            continue;
+        };
+        let which = || {
+            image
+                .path
+                .clone()
+                .map_or(ImageRef::Embedded(at), ImageRef::File)
+        };
+        let pixels = read_image(&image.bytes, limits, MAX_TEXTURE_SIDE)
+            .map_err(|why| no_image(asset, which(), why))?;
+        let texture =
+            ModelTexture::new(pixels.width, pixels.height, pixels.rgba).map_err(|error| {
+                ModelError::TextureUndecodable {
+                    asset: asset.to_owned(),
+                    image: which(),
+                    why: error.to_string(),
+                }
+            })?;
+        places[at] = Some(textures.len());
+        textures.push(Texture {
+            image: Arc::new(texture),
+            path: image.path.clone(),
+        });
+    }
+    Ok((textures, places))
+}
+
+/// Why `asset`'s `image` has no pixels, as the port says it.
+///
+/// - Neither a PNG nor a JPEG, a header that gives no size, and data that
+///   doesn't decode are all [`ModelError::TextureUndecodable`], never
+///   [`ModelError::Unreadable`]: the model itself read, and nothing
+///   before this adapter decodes its images, so nobody has reported it.
+/// - Over the budget's `side` is [`ModelError::TextureOverBudget`],
+///   naming the image as the others do, not the model's own
+///   [`ModelError::OverBudget`]: the author has to know which image to
+///   shrink.
+/// - Over the renderer's largest side is
+///   [`ModelError::TextureTooLarge`].
+fn no_image(asset: &str, image: ImageRef, why: NoImage) -> ModelError {
+    let asset = asset.to_owned();
+    match why {
+        NoImage::Unknown => ModelError::TextureUndecodable {
+            asset,
+            image,
+            why: "it is neither a PNG nor a JPEG".to_owned(),
+        },
+        NoImage::Undecodable(why) => ModelError::TextureUndecodable { asset, image, why },
+        NoImage::OverBudget(over) => ModelError::TextureOverBudget {
+            asset,
+            image,
+            over: over.iter().map(overrun).collect(),
+        },
+        NoImage::TooLarge { side, most } => ModelError::TextureTooLarge {
+            asset,
+            image,
+            side,
+            most,
+        },
     }
 }
 
@@ -108,12 +269,31 @@ pub fn ship_request(galaxy: &Galaxy, ship: &Id) -> Option<ModelRequest> {
 #[must_use]
 pub fn ship_livery(galaxy: &Galaxy, ship: &Id) -> Option<Livery> {
     let resolved = resolve(galaxy, ship).ok()?;
-    let palette = &galaxy.liveries.get(resolved.livery?)?.data.palette;
-    Some(Livery {
+    Some(livery_of(&galaxy.liveries.get(resolved.livery?)?.data))
+}
+
+/// The livery a station or outpost `stellar` wears in `galaxy`: the first
+/// livery, by id, whose `faction` is the stellar's `owner`, each slot's
+/// colour read as its bytes, as [`ship_livery`] reads one. `None` for a
+/// stellar that isn't there, has no owner, or whose owner no livery names.
+#[must_use]
+pub fn station_livery(galaxy: &Galaxy, stellar: &Id) -> Option<Livery> {
+    let owner = galaxy.stellars.get(stellar)?.data.owner.as_ref()?;
+    galaxy
+        .liveries
+        .values()
+        .find(|livery| livery.data.faction.as_ref() == Some(owner))
+        .map(|livery| livery_of(&livery.data))
+}
+
+/// `livery`'s palette, each slot's colour as its bytes.
+fn livery_of(livery: &nova_galaxy_format::fleet::Livery) -> Livery {
+    let palette = &livery.palette;
+    Livery {
         primary: palette.primary.rgb(),
         secondary: palette.secondary.rgb(),
         trim: palette.trim.rgb(),
-    })
+    }
 }
 
 /// Why `asset` has no model, as the port says it.
@@ -137,6 +317,32 @@ fn paint_slot(slot: Slot) -> PaintSlot {
     }
 }
 
+/// A texture's sampler, as the port says it. It matches every variant of
+/// each of its values: each wrap, filter and mip mode the media crate
+/// reads has to reach the port as its own.
+fn sampler(from: media::Sampler) -> ModelSampler {
+    let wrap = |wrap| match wrap {
+        media::Wrap::Repeat => Wrap::Repeat,
+        media::Wrap::Mirror => Wrap::Mirror,
+        media::Wrap::Clamp => Wrap::Clamp,
+    };
+    let filter = |filter| match filter {
+        media::Filter::Nearest => Filter::Nearest,
+        media::Filter::Linear => Filter::Linear,
+    };
+    ModelSampler {
+        wrap_s: wrap(from.wrap_s),
+        wrap_t: wrap(from.wrap_t),
+        mag: filter(from.mag),
+        min: filter(from.min),
+        mip: match from.mip {
+            media::Mip::None => Mip::None,
+            media::Mip::Nearest => Mip::Nearest,
+            media::Mip::Linear => Mip::Linear,
+        },
+    }
+}
+
 /// A budget overrun, as the port says it. It matches every measure: each
 /// limit the media crate checks has to reach the port as its own.
 pub(crate) fn overrun(over: &budget::Overrun) -> Overrun {
@@ -152,19 +358,16 @@ pub(crate) fn overrun(over: &budget::Overrun) -> Overrun {
     }
 }
 
-/// `scene` placed by `placement`, its materials in the slots `paint`
-/// puts them in, as the port hands it over.
-fn loaded(
-    scene: &Scene,
-    placement: &Placement,
-    paint: Option<&Paint>,
-) -> Result<LoadedModel, MeshError> {
+/// `scene`'s primitives placed by `placement`, as the port's parts. A
+/// primitive's coordinates are forwarded as the scene resolved them (the
+/// set its base colour names, transformed).
+fn parts(scene: &Scene, placement: &Placement) -> Result<Vec<Part>, MeshError> {
     #[allow(
         clippy::cast_possible_truncation,
         reason = "a placed model's metres are well inside f32"
     )]
     let narrow = |v: [f64; 3]| v.map(|c| c as f32);
-    let parts = scene
+    scene
         .primitives
         .iter()
         .map(|p| {
@@ -192,13 +395,28 @@ fn loaded(
                 p.uvs.clone(),
             )
         })
-        .collect::<Result<_, _>>()?;
-    Ok(LoadedModel {
-        parts,
-        materials: scene
-            .materials
-            .iter()
-            .map(|m| Material {
+        .collect()
+}
+
+/// `scene`'s materials as the port hands them over: each in the slot
+/// `paint` puts it in, and naming its base colour's texture through its
+/// own sampler. `places` says which decoded texture each of the scene's
+/// images became ([`textures`]). A material whose image was decoded names
+/// it even if its own parts have no coordinates (another part samples
+/// it); one whose image was not names no texture.
+fn materials(scene: &Scene, paint: Option<&Paint>, places: &[Option<usize>]) -> Vec<Material> {
+    scene
+        .materials
+        .iter()
+        .map(|m| {
+            // The texture it draws, among those decoded, and the sampler
+            // it draws it through: the default for a material that draws
+            // none.
+            let drawn = m.base_color_texture.and_then(|texture| {
+                let at = places.get(texture.image).copied().flatten()?;
+                Some((at, sampler(texture.sampler)))
+            });
+            Material {
                 name: m.name.clone(),
                 paint: paint
                     .zip(m.name.as_deref())
@@ -208,28 +426,23 @@ fn loaded(
                 metallic: m.metallic,
                 roughness: m.roughness,
                 unlit: m.unlit,
-                base_color_texture: m.base_color_texture,
-            })
-            .collect(),
-        textures: scene
-            .images
-            .iter()
-            .map(|i| Texture {
-                bytes: i.bytes.clone(),
-                mime: i.mime.clone(),
-                path: i.path.clone(),
-            })
-            .collect(),
-    })
+                base_color_texture: drawn.map(|(at, _)| at),
+                base_color_sampler: drawn.map_or(ModelSampler::DEFAULT, |(_, sampler)| sampler),
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use nova_galaxy_format::asset::Front;
     use nova_galaxy_format::fixture::{CC0, galaxy};
     use nova_galaxy_format::load::load;
-    use nova_galaxy_format::source::MemSource;
-    use nova_galaxy_media::fixture::{Builder, ImageAt, Mat, PNG, glb};
+    use nova_galaxy_format::source::{CountingSource, MemSource};
+    use nova_galaxy_media::fixture::{
+        Builder, ImageAt, JPEG, JPEG_SIZE, Mat, PNG, SamplerCodes, TransformJson, code, glb, png,
+    };
 
     use super::*;
     use crate::model_source::{PaintSlot, check_contract, vertex_color};
@@ -484,48 +697,115 @@ mod tests {
     }
 
     #[test]
-    fn a_gltf_with_its_bin_and_image_loads() {
-        let (json, bin) = Builder::new([1.0; 3])
-            .texcoords()
-            .material(Mat {
-                textured: true,
-                unlit: true,
-                metallic: 0.25,
-                roughness: 0.5,
-                ..Mat::new("hull", [1.0; 4])
+    fn a_station_wears_the_first_livery_naming_its_owner() {
+        let crown_yard = "---\nname: Crown Yard\nkind: station\nsystem: alpha\n\
+                          position: [9, 9]\nowner: crown\n---\n";
+        let source = galaxy()
+            .with(
+                "factions/crown.md",
+                "---\nname: Crown\nkind: minor\ncolor: \"#334455\"\n---\n",
+            )
+            .with("stellars/crown-yard.md", crown_yard);
+        let (galaxy, problems) = load(&source);
+        assert!(problems.is_empty(), "{problems:?}");
+        // Each slot read apart, so a swapped slot fails.
+        let league = Livery {
+            primary: [0xdd, 0xcc, 0xaa],
+            secondary: [0xaa, 0x88, 0x00],
+            trim: [0x22, 0x22, 0x22],
+        };
+        assert_eq!(station_livery(&galaxy, &id("alpha-yard")), Some(league));
+        assert_eq!(station_livery(&galaxy, &id("alpha-prime")), None, "unowned");
+        assert_eq!(
+            station_livery(&galaxy, &id("crown-yard")),
+            None,
+            "no livery names its owner"
+        );
+        assert_eq!(station_livery(&galaxy, &id("nothing")), None, "no stellar");
+
+        // A second livery naming the league, earlier by id, is the one.
+        let earlier = source.with(
+            "liveries/aa-league.md",
+            "---\nname: Early league\nfaction: league\n\
+             palette: {primary: \"#102030\", secondary: \"#405060\", trim: \"#708090\"}\n---\n",
+        );
+        let (galaxy, _) = load(&earlier);
+        assert_eq!(
+            station_livery(&galaxy, &id("alpha-yard")),
+            Some(Livery {
+                primary: [0x10, 0x20, 0x30],
+                secondary: [0x40, 0x50, 0x60],
+                trim: [0x70, 0x80, 0x90],
             })
+        );
+    }
+
+    /// A 2 by 2 image: red, green, blue and half-clear white.
+    const SKIN: [u8; 16] = [
+        255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 128,
+    ];
+
+    /// The file a `.gltf` hull's image is.
+    const SKIN_FILE: &str = "media/export/pack/skin.png";
+
+    /// A box with texture coordinates in one textured, unlit material.
+    fn skinned() -> Builder {
+        Builder::new([1.0; 3]).texcoords().material(Mat {
+            textured: true,
+            unlit: true,
+            metallic: 0.25,
+            roughness: 0.5,
+            ..Mat::new("hull", [1.0; 4])
+        })
+    }
+
+    /// The test galaxy with `hull` the `.gltf` of `builder`, its buffer
+    /// beside it and its image, `image`, at [`SKIN_FILE`].
+    fn with_gltf_hull(builder: Builder, image: &[u8]) -> MemSource {
+        let (json, bin) = builder
             .image(ImageAt::Uri("skin.png".into()))
             .gltf("hull.bin");
-        let source = galaxy()
+        galaxy()
             .with(
                 "assets/hull.md",
                 &format!(
                     "---\nkind: model\nplaceholder: false\nfiles: [media/export/pack/hull.gltf, \
-                     media/export/pack/hull.bin, media/export/pack/skin.png]\n{CC0}---\n"
+                     media/export/pack/hull.bin, {SKIN_FILE}]\n{CC0}---\n"
                 ),
             )
             .with("media/export/pack/hull.gltf", &json)
             .with_bytes("media/export/pack/hull.bin", &bin)
-            .with_bytes("media/export/pack/skin.png", PNG);
+            .with_bytes(SKIN_FILE, image)
+    }
+
+    /// The test galaxy with `hull` the `.glb` of `builder`, `image`
+    /// embedded in it.
+    fn with_glb_hull(builder: Builder, image: &[u8]) -> MemSource {
+        with_hull(&builder.image(ImageAt::Embedded).image_bytes(image).glb())
+    }
+
+    /// The first level of `model`'s texture `at`: its size and pixels.
+    fn first_level(model: &LoadedModel, at: usize) -> (u32, u32, &[u8]) {
+        let level = &model.textures[at].image.levels()[0];
+        (level.width, level.height, &level.rgba)
+    }
+
+    #[test]
+    fn a_gltf_with_its_bin_and_image_loads_its_image_decoded() {
+        let source = with_gltf_hull(skinned(), &png(2, 2, &SKIN));
         let model = ask(&source, "hull", Some(8.0)).unwrap();
-        assert_eq!(
-            model.textures,
-            [Texture {
-                bytes: PNG.to_vec(),
-                mime: None,
-                path: Some("media/export/pack/skin.png".into()),
-            }]
-        );
+        assert_eq!(model.textures.len(), 1);
+        assert_eq!(first_level(&model, 0), (2, 2, &SKIN[..]));
+        assert_eq!(model.textures[0].path.as_deref(), Some(SKIN_FILE));
         assert_eq!(
             model.materials,
             [Material {
                 name: Some("hull".into()),
-                paint: None,
-                base_color: [1.0; 4],
                 metallic: 0.25,
                 roughness: 0.5,
                 unlit: true,
                 base_color_texture: Some(0),
+                ..Material::new([1.0; 4])
             }]
         );
         let part = &model.parts[0];
@@ -534,6 +814,433 @@ mod tests {
             part.uv.as_ref().map(Vec::len),
             Some(part.mesh.vertices().len())
         );
+        // The merged mesh draws it: one section on the texture, unlit.
+        let mesh = model.mesh();
+        assert_eq!(mesh.sections().len(), 1);
+        assert_eq!(mesh.sections()[0].texture, Some(0));
+        assert!(mesh.vertices().iter().all(|v| v.unlit));
+    }
+
+    #[test]
+    fn a_glb_s_embedded_image_loads_decoded_png_or_jpeg() {
+        let model = ask(&with_glb_hull(skinned(), &png(2, 2, &SKIN)), "hull", None).unwrap();
+        assert_eq!(first_level(&model, 0), (2, 2, &SKIN[..]));
+        assert_eq!(model.textures[0].path, None);
+
+        let model = ask(&with_glb_hull(skinned(), JPEG), "hull", None).unwrap();
+        let (width, height, rgba) = first_level(&model, 0);
+        assert_eq!((width, height), JPEG_SIZE);
+        assert_eq!(rgba.len(), (width * height * 4) as usize);
+    }
+
+    #[test]
+    fn an_image_no_base_colour_names_is_not_decoded() {
+        // The stub doesn't decode, and nothing asks it to.
+        let plain = Builder::new([1.0; 3])
+            .texcoords()
+            .material(Mat::new("hull", [1.0; 4]));
+        for source in [
+            with_glb_hull(plain.clone(), PNG),
+            with_gltf_hull(plain, PNG),
+        ] {
+            let model = ask(&source, "hull", None).unwrap();
+            assert_eq!(model.textures, []);
+            assert_eq!(model.materials[0].base_color_texture, None);
+        }
+    }
+
+    #[test]
+    fn the_textures_are_only_the_images_named_and_each_material_names_its_own() {
+        // A spare image first, which doesn't decode: the model's own is
+        // image 1, and the model's only texture.
+        let builder = skinned()
+            .material(Mat::new("plain", [1.0; 4]))
+            .material(Mat {
+                textured: true,
+                ..Mat::new("again", [1.0; 4])
+            })
+            .spare_image(PNG);
+        let model = ask(&with_glb_hull(builder, &png(2, 2, &SKIN)), "hull", None).unwrap();
+        assert_eq!(model.textures.len(), 1);
+        assert_eq!(first_level(&model, 0), (2, 2, &SKIN[..]));
+        let named: Vec<_> = model
+            .materials
+            .iter()
+            .map(|m| m.base_color_texture)
+            .collect();
+        assert_eq!(named, [Some(0), None, Some(0)]);
+    }
+
+    /// A box with no texture coordinates in one textured material.
+    fn bare() -> Builder {
+        Builder::new([1.0; 3]).material(Mat {
+            textured: true,
+            sampler: Some(sharp().0),
+            ..Mat::new("hull", [1.0; 4])
+        })
+    }
+
+    /// A box with the first coordinate set in one material textured by
+    /// the second, which the box lacks.
+    fn missing_set() -> Builder {
+        Builder::new([1.0; 3]).texcoords().material(Mat {
+            textured: true,
+            tex_coord: 1,
+            sampler: Some(sharp().0),
+            ..Mat::new("hull", [1.0; 4])
+        })
+    }
+
+    /// Asserts `source`'s hull loads having decoded nothing: no texture,
+    /// its one material naming none through the default sampler.
+    fn assert_decodes_nothing(source: &MemSource) {
+        let model = ask(source, "hull", None).unwrap();
+        assert_eq!(model.textures, []);
+        assert_eq!(model.materials.len(), 1);
+        assert_eq!(model.materials[0].base_color_texture, None);
+        assert_eq!(model.materials[0].base_color_sampler, ModelSampler::DEFAULT);
+        let mesh = model.mesh();
+        assert!(mesh.textures().is_empty());
+        assert!(mesh.sections().iter().all(|s| s.texture.is_none()));
+    }
+
+    #[test]
+    fn a_textured_material_on_a_model_with_no_coordinates_decodes_nothing() {
+        // The stub doesn't decode, and nothing asks it to.
+        assert_decodes_nothing(&with_glb_hull(bare(), PNG));
+        assert_decodes_nothing(&with_gltf_hull(bare(), PNG));
+    }
+
+    #[test]
+    fn a_material_naming_a_coordinate_set_the_mesh_lacks_decodes_nothing() {
+        assert_decodes_nothing(&with_glb_hull(missing_set(), PNG));
+        assert_decodes_nothing(&with_gltf_hull(missing_set(), PNG));
+    }
+
+    /// A base colour that isn't white, so a vertex shows it.
+    const OCHRE: [f32; 4] = [0.5, 0.25, 0.125, 1.0];
+
+    /// A box with texture coordinates in one textured material of
+    /// [`OCHRE`], made by `material` from it.
+    fn ochre(material: impl FnOnce(Mat) -> Mat) -> Builder {
+        let base = Mat {
+            textured: true,
+            ..Mat::new("hull", OCHRE)
+        };
+        Builder::new([1.0; 3]).texcoords().material(material(base))
+    }
+
+    /// Asserts `source`'s hull decodes nothing, meets the contract, and
+    /// draws every vertex in [`OCHRE`].
+    fn assert_untextured_ochre(source: &MemSource) {
+        assert_decodes_nothing(source);
+        let (galaxy, _) = load(source);
+        let models = GalaxyModels::new(&galaxy, source);
+        check_contract(&models, &ModelRequest::new("hull", None), "nothing");
+        let model = ask(source, "hull", None).unwrap();
+        let mesh = model.mesh();
+        assert!(
+            mesh.vertices()
+                .iter()
+                .all(|v| v.color == vertex_color(OCHRE))
+        );
+    }
+
+    #[test]
+    fn a_texture_coordinate_that_is_not_finite_decodes_nothing_and_meets_the_contract() {
+        // The stub doesn't decode: a texture that slipped through would
+        // refuse the model.
+        let builder = ochre(|m| m).bad_texcoord(f32::NAN);
+        assert_untextured_ochre(&with_glb_hull(builder.clone(), PNG));
+        assert_untextured_ochre(&with_gltf_hull(builder, PNG));
+    }
+
+    #[test]
+    fn a_texture_with_no_source_decodes_nothing_and_meets_the_contract() {
+        let through = || {
+            ochre(|m| Mat {
+                only_through: Some("EXT_texture_webp"),
+                ..m
+            })
+        };
+        for builder in [through(), through().requires("EXT_texture_webp")] {
+            assert_untextured_ochre(&with_glb_hull(builder.clone(), PNG));
+            assert_untextured_ochre(&with_gltf_hull(builder, PNG));
+        }
+    }
+
+    #[test]
+    fn a_texture_with_no_source_leaves_another_material_s_texture_drawn() {
+        let builder = ochre(|m| Mat {
+            only_through: Some("EXT_texture_webp"),
+            ..m
+        })
+        .material(Mat {
+            textured: true,
+            ..Mat::new("skin", [1.0; 4])
+        });
+        for source in [
+            with_glb_hull(builder.clone(), &png(2, 2, &SKIN)),
+            with_gltf_hull(builder, &png(2, 2, &SKIN)),
+        ] {
+            let model = ask(&source, "hull", None).unwrap();
+            assert_eq!(model.textures.len(), 1);
+            assert_eq!(first_level(&model, 0), (2, 2, &SKIN[..]));
+            let named: Vec<_> = model
+                .materials
+                .iter()
+                .map(|m| m.base_color_texture)
+                .collect();
+            assert_eq!(named, [None, Some(0)]);
+            let mesh = model.mesh();
+            let drawn: Vec<_> = mesh.sections().iter().map(|s| s.texture).collect();
+            assert_eq!(drawn, [None, Some(0)]);
+            assert_eq!(mesh.textures().len(), 1);
+        }
+    }
+
+    #[test]
+    fn an_unsampled_image_cannot_refuse_the_model() {
+        // A default budget that gives textures no limits at all.
+        let unlimited = "---\nmodel: {triangles: 20000, kib: 4096}\n---\n";
+        let too_large = declaring(MAX_TEXTURE_SIDE + 1, 2);
+        // Each image refuses a model that samples it, its own way.
+        let sampled = |image: &[u8]| ask(&with_glb_hull(skinned(), image), "hull", None);
+        assert!(matches!(
+            sampled(PNG),
+            Err(ModelError::TextureUndecodable { .. })
+        ));
+        assert!(matches!(
+            sampled(&too_large),
+            Err(ModelError::TextureOverBudget { .. })
+        ));
+        let unbudgeted = with_glb_hull(skinned(), &too_large).with("budgets/default.md", unlimited);
+        assert!(matches!(
+            ask(&unbudgeted, "hull", None),
+            Err(ModelError::TextureTooLarge { .. })
+        ));
+        // Unsampled, none does.
+        assert_decodes_nothing(&with_glb_hull(bare(), PNG));
+        assert_decodes_nothing(&with_glb_hull(bare(), &too_large));
+        assert_decodes_nothing(
+            &with_glb_hull(bare(), &too_large).with("budgets/default.md", unlimited),
+        );
+    }
+
+    /// A box with the first coordinate set in two materials on one image:
+    /// the first sampled by that set, the second by one the box lacks.
+    fn half_sampled() -> Builder {
+        skinned().material(Mat {
+            textured: true,
+            tex_coord: 1,
+            ..Mat::new("other", [1.0; 4])
+        })
+    }
+
+    #[test]
+    fn an_image_one_part_samples_and_another_does_not_is_decoded_once() {
+        let source = with_glb_hull(half_sampled(), &png(2, 2, &SKIN));
+        let model = ask(&source, "hull", None).unwrap();
+        assert_eq!(model.textures.len(), 1);
+        let named: Vec<_> = model
+            .materials
+            .iter()
+            .map(|m| m.base_color_texture)
+            .collect();
+        assert_eq!(named, [Some(0), Some(0)]);
+        let mesh = model.mesh();
+        let drawn: Vec<_> = mesh.sections().iter().map(|s| s.texture).collect();
+        assert_eq!(drawn, [Some(0), None]);
+        assert_eq!(mesh.textures().len(), 1);
+    }
+
+    #[test]
+    fn only_the_sampled_image_of_two_is_decoded_and_its_material_names_it() {
+        // The fixture writes one image, so the second is added to the
+        // scene as read: the stub, which doesn't decode, named by the
+        // material no part samples.
+        let glb = half_sampled()
+            .image(ImageAt::Embedded)
+            .image_bytes(&png(2, 2, &SKIN))
+            .glb();
+        let mut scene = nova_galaxy_media::read_scene("hull.glb", &glb, |_| None).unwrap();
+        let stub = nova_galaxy_media::scene::Image {
+            bytes: PNG.to_vec(),
+            mime: None,
+            path: None,
+        };
+        scene.images.push(stub);
+        let image_of = |scene: &mut Scene, material: usize, image: usize| {
+            let texture = scene.materials[material].base_color_texture.as_mut();
+            texture.expect("textured").image = image;
+        };
+        image_of(&mut scene, 1, 1);
+        let placement = Placement::unscaled_bounds(scene.bounds, Front::MinusZ);
+        let (galaxy, _) = load(&galaxy());
+        let limits = texture_limits(&galaxy);
+        let read = |scene: &Scene| {
+            let parts = parts(scene, &placement).unwrap();
+            let (textures, places) = textures("hull", scene, &parts, &limits).unwrap();
+            (textures, materials(scene, None, &places))
+        };
+        let check = |scene: &Scene| {
+            let (textures, materials) = read(scene);
+            assert_eq!(textures.len(), 1);
+            assert_eq!(textures[0].image.levels()[0].rgba, SKIN);
+            assert_eq!(materials[0].base_color_texture, Some(0));
+            assert_eq!(materials[1].base_color_texture, None);
+        };
+        check(&scene);
+        // The unsampled image first: the sampled one is still texture 0.
+        scene.images.swap(0, 1);
+        image_of(&mut scene, 0, 1);
+        image_of(&mut scene, 1, 0);
+        check(&scene);
+    }
+
+    /// A real PNG whose header is rewritten to declare `width` by
+    /// `height`: its size reads, and it doesn't decode.
+    fn declaring(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = png(2, 2, &SKIN);
+        bytes[16..20].copy_from_slice(&width.to_be_bytes());
+        bytes[20..24].copy_from_slice(&height.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn an_image_over_the_default_budget_s_side_is_over_budget_naming_it() {
+        let budget = |side: u32| {
+            format!(
+                "---\nmodel: {{triangles: 20000, kib: 4096}}\n\
+                 texture: {{kib: 1, side: {side}}}\n---\n"
+            )
+        };
+        let side = || {
+            vec![Overrun {
+                measure: Measure::Side,
+                used: 2,
+                most: 1,
+                budget: "budgets/default.md".into(),
+            }]
+        };
+        // Embedded after a spare image, it is named by its index.
+        let spared = skinned().spare_image(&png(2, 2, &SKIN));
+        let source = with_glb_hull(spared, &png(2, 2, &SKIN));
+        let over = source.clone().with("budgets/default.md", &budget(1));
+        assert_eq!(
+            ask(&over, "hull", None),
+            Err(ModelError::TextureOverBudget {
+                asset: "hull".into(),
+                image: ImageRef::Embedded(1),
+                over: side(),
+            })
+        );
+        // At the limit it loads.
+        let at_the_limit = source.with("budgets/default.md", &budget(2));
+        assert!(ask(&at_the_limit, "hull", None).is_ok());
+        // Beside a `.gltf`, it is named by its file.
+        let beside =
+            with_gltf_hull(skinned(), &png(2, 2, &SKIN)).with("budgets/default.md", &budget(1));
+        assert_eq!(
+            ask(&beside, "hull", None),
+            Err(ModelError::TextureOverBudget {
+                asset: "hull".into(),
+                image: ImageRef::File(SKIN_FILE.into()),
+                over: side(),
+            })
+        );
+    }
+
+    #[test]
+    fn an_image_that_does_not_decode_is_its_own_error_naming_the_asset_and_the_image() {
+        // The stub: a PNG's signature, with no header to size it by.
+        assert_eq!(
+            ask(&with_gltf_hull(skinned(), PNG), "hull", None),
+            Err(ModelError::TextureUndecodable {
+                asset: "hull".into(),
+                image: ImageRef::File(SKIN_FILE.into()),
+                why: "its header gives no size".into(),
+            })
+        );
+        // Embedded after a spare image, it is named by its index.
+        let spared = skinned().spare_image(&png(2, 2, &SKIN));
+        assert_eq!(
+            ask(&with_glb_hull(spared, PNG), "hull", None),
+            Err(ModelError::TextureUndecodable {
+                asset: "hull".into(),
+                image: ImageRef::Embedded(1),
+                why: "its header gives no size".into(),
+            })
+        );
+        // A header that reads, over data that doesn't.
+        let Err(ModelError::TextureUndecodable { asset, image, why }) =
+            ask(&with_glb_hull(skinned(), &declaring(4, 4)), "hull", None)
+        else {
+            panic!("it decoded");
+        };
+        assert_eq!((asset.as_str(), image), ("hull", ImageRef::Embedded(0)));
+        assert_ne!(why, "its header gives no size");
+    }
+
+    #[test]
+    fn bytes_that_are_no_image_on_a_textured_material_do_not_decode() {
+        for source in [
+            with_glb_hull(skinned(), b"GIF89a, or anything else"),
+            with_glb_hull(skinned(), b""),
+        ] {
+            let error = ask(&source, "hull", None).unwrap_err();
+            assert_eq!(
+                error,
+                ModelError::TextureUndecodable {
+                    asset: "hull".into(),
+                    image: ImageRef::Embedded(0),
+                    why: "it is neither a PNG nor a JPEG".into(),
+                }
+            );
+            // Never the error a caller takes as already reported.
+            assert!(!matches!(error, ModelError::Unreadable { .. }));
+        }
+    }
+
+    #[test]
+    fn an_image_larger_than_the_renderer_draws_is_refused_with_no_side_budget() {
+        // A default budget that gives textures no limits at all.
+        let unlimited = "---\nmodel: {triangles: 20000, kib: 4096}\n---\n";
+        let source = |side: u32| {
+            with_gltf_hull(skinned(), &declaring(side, 2)).with("budgets/default.md", unlimited)
+        };
+        assert_eq!(
+            ask(&source(MAX_TEXTURE_SIDE + 1), "hull", None),
+            Err(ModelError::TextureTooLarge {
+                asset: "hull".into(),
+                image: ImageRef::File(SKIN_FILE.into()),
+                side: MAX_TEXTURE_SIDE + 1,
+                most: MAX_TEXTURE_SIDE,
+            })
+        );
+        // At the most it is within it: it fails only when it decodes.
+        assert!(matches!(
+            ask(&source(MAX_TEXTURE_SIDE), "hull", None),
+            Err(ModelError::TextureUndecodable { .. })
+        ));
+        // Under the test galaxy's own budget, its side limit comes first.
+        let budgeted = with_gltf_hull(skinned(), &declaring(MAX_TEXTURE_SIDE + 1, 2));
+        assert!(matches!(
+            ask(&budgeted, "hull", None),
+            Err(ModelError::TextureOverBudget { .. })
+        ));
+    }
+
+    #[test]
+    fn the_model_s_own_budget_is_checked_before_its_images_are_decoded() {
+        let source = with_glb_hull(skinned(), PNG).with(
+            "budgets/default.md",
+            "---\nmodel: {triangles: 11, kib: 4096}\n---\n",
+        );
+        assert!(matches!(
+            ask(&source, "hull", None),
+            Err(ModelError::OverBudget { .. })
+        ));
     }
 
     #[test]
@@ -677,11 +1384,325 @@ mod tests {
     }
 
     #[test]
+    fn each_media_sampler_value_is_the_port_s_of_the_same_name() {
+        use nova_galaxy_media::sampling as media;
+
+        use crate::model_sampler::{Filter, Mip, Wrap};
+        // Each field on its own, the others left at the default: no two
+        // fields are crossed.
+        let read = |change: &dyn Fn(&mut media::Sampler)| {
+            let mut from = media::Sampler::DEFAULT;
+            change(&mut from);
+            sampler(from)
+        };
+        assert_eq!(read(&|_| ()), ModelSampler::DEFAULT);
+        for (from, to) in [
+            (media::Wrap::Repeat, Wrap::Repeat),
+            (media::Wrap::Mirror, Wrap::Mirror),
+            (media::Wrap::Clamp, Wrap::Clamp),
+        ] {
+            let along_u = ModelSampler {
+                wrap_s: to,
+                ..ModelSampler::DEFAULT
+            };
+            assert_eq!(read(&|s| s.wrap_s = from), along_u);
+            let along_v = ModelSampler {
+                wrap_t: to,
+                ..ModelSampler::DEFAULT
+            };
+            assert_eq!(read(&|s| s.wrap_t = from), along_v);
+        }
+        for (from, to) in [
+            (media::Filter::Nearest, Filter::Nearest),
+            (media::Filter::Linear, Filter::Linear),
+        ] {
+            let mag = ModelSampler {
+                mag: to,
+                ..ModelSampler::DEFAULT
+            };
+            assert_eq!(read(&|s| s.mag = from), mag);
+            let min = ModelSampler {
+                min: to,
+                ..ModelSampler::DEFAULT
+            };
+            assert_eq!(read(&|s| s.min = from), min);
+        }
+        for (from, to) in [
+            (media::Mip::None, Mip::None),
+            (media::Mip::Nearest, Mip::Nearest),
+            (media::Mip::Linear, Mip::Linear),
+        ] {
+            let mip = ModelSampler {
+                mip: to,
+                ..ModelSampler::DEFAULT
+            };
+            assert_eq!(read(&|s| s.mip = from), mip);
+        }
+    }
+
+    /// A sampler that clamps along u and reads the nearest texel, as the
+    /// fixture writes it and as the port says it.
+    fn sharp() -> (SamplerCodes, ModelSampler) {
+        use crate::model_sampler::{Filter, Wrap};
+        let codes = SamplerCodes {
+            wrap_s: Some(code::CLAMP_TO_EDGE),
+            mag: Some(code::NEAREST),
+            ..SamplerCodes::default()
+        };
+        let sampler = ModelSampler {
+            wrap_s: Wrap::Clamp,
+            mag: Filter::Nearest,
+            ..ModelSampler::DEFAULT
+        };
+        (codes, sampler)
+    }
+
+    #[test]
+    fn two_materials_on_one_image_load_one_texture_and_their_own_samplers() {
+        let (codes, sharp) = sharp();
+        let builder = skinned()
+            .material(Mat {
+                textured: true,
+                sampler: Some(codes),
+                ..Mat::new("sharp", [1.0; 4])
+            })
+            .material(Mat::new("plain", [1.0; 4]));
+        let model = ask(&with_glb_hull(builder, &png(2, 2, &SKIN)), "hull", None).unwrap();
+        assert_eq!(model.textures.len(), 1, "one decode for the one image");
+        let read: Vec<_> = model
+            .materials
+            .iter()
+            .map(|m| (m.base_color_texture, m.base_color_sampler))
+            .collect();
+        assert_eq!(
+            read,
+            [
+                (Some(0), ModelSampler::DEFAULT),
+                (Some(0), sharp),
+                (None, ModelSampler::DEFAULT),
+            ]
+        );
+        // The merged mesh draws the one texture through each.
+        let mesh = model.mesh();
+        assert_eq!(mesh.textures().len(), 1);
+        let drawn: Vec<_> = mesh
+            .sections()
+            .iter()
+            .map(|s| (s.texture, s.sampler))
+            .collect();
+        assert_eq!(read, drawn);
+    }
+
+    #[test]
+    fn a_material_whose_image_was_not_decoded_carries_the_default_sampler() {
+        // The scene as read, handed over with none of its images decoded:
+        // the material draws no texture, so it says nothing of a sampler.
+        let (codes, sharp) = sharp();
+        let builder = Builder::new([1.0; 3])
+            .texcoords()
+            .material(Mat {
+                textured: true,
+                sampler: Some(codes),
+                ..Mat::new("sharp", [1.0; 4])
+            })
+            .image(ImageAt::Embedded);
+        let scene = nova_galaxy_media::read_scene("hull.glb", &builder.glb(), |_| None).unwrap();
+        assert_eq!(scene.images.len(), 1);
+        let decoded = materials(&scene, None, &[Some(0)]);
+        assert_eq!(decoded[0].base_color_texture, Some(0));
+        assert_eq!(decoded[0].base_color_sampler, sharp);
+        let undecoded = materials(&scene, None, &[None]);
+        assert_eq!(undecoded[0].base_color_texture, None);
+        assert_eq!(undecoded[0].base_color_sampler, ModelSampler::DEFAULT);
+    }
+
+    /// The box with both coordinate sets, its one material sampled as
+    /// `material` says.
+    fn two_sets(material: Mat) -> Builder {
+        Builder::new([1.0; 3])
+            .normals()
+            .texcoords()
+            .texcoords1()
+            .material(Mat {
+                textured: true,
+                ..material
+            })
+    }
+
+    /// The coordinates of `builder`'s one part, loaded, and as the media
+    /// crate reads them.
+    fn coordinates(builder: &Builder) -> (Vec<[f32; 2]>, Vec<[f32; 2]>) {
+        let source = with_glb_hull(builder.clone(), &png(2, 2, &SKIN));
+        let model = ask(&source, "hull", None).unwrap();
+        let glb = builder
+            .clone()
+            .image(ImageAt::Embedded)
+            .image_bytes(&png(2, 2, &SKIN))
+            .glb();
+        let scene = nova_galaxy_media::read_scene("hull.glb", &glb, |_| None).unwrap();
+        (
+            model.parts[0].uv.clone().expect("coordinates"),
+            scene.primitives[0].uvs.clone().expect("coordinates"),
+        )
+    }
+
+    #[test]
+    fn a_part_s_coordinates_are_the_set_and_transform_the_scene_resolved() {
+        let plain = coordinates(&two_sets(Mat::new("hull", [1.0; 4])));
+        assert_eq!(plain.0, plain.1);
+        // The second set, as read: not the first.
+        let second = coordinates(&two_sets(Mat {
+            tex_coord: 1,
+            ..Mat::new("hull", [1.0; 4])
+        }));
+        assert_eq!(second.0, second.1);
+        assert_ne!(second.0, plain.0);
+        // Transformed, as read: not as written.
+        let transformed = coordinates(&two_sets(Mat {
+            transform: Some(TransformJson {
+                offset: Some([0.25, 0.5]),
+                scale: Some([2.0, 0.5]),
+                ..TransformJson::default()
+            }),
+            ..Mat::new("hull", [1.0; 4])
+        }));
+        assert_eq!(transformed.0, transformed.1);
+        assert_ne!(transformed.0, plain.0);
+    }
+
+    /// A box that uses all three: a sampler of its own, the second
+    /// coordinate set and a transform.
+    fn sampled() -> Builder {
+        two_sets(Mat {
+            sampler: Some(sharp().0),
+            tex_coord: 1,
+            transform: Some(TransformJson {
+                offset: Some([0.25, 0.5]),
+                rotation: Some(0.5),
+                scale: Some([2.0, 0.5]),
+                tex_coord: None,
+            }),
+            ..Mat::new("hull", [1.0; 4])
+        })
+    }
+
+    #[test]
     fn the_adapter_meets_the_contract() {
         let source = faced_box();
         let (galaxy, _) = load(&source);
         let models = GalaxyModels::new(&galaxy, &source);
         check_contract(&models, &ModelRequest::new("hull", Some(8.0)), "nothing");
         check_contract(&models, &ModelRequest::new("hull", None), "nothing");
+        // Textured and unlit, a `.glb` and a `.gltf`; and sampled its own
+        // way, by the second set, transformed; and textured with nothing
+        // to sample by, or only on some of its parts.
+        for source in [
+            with_glb_hull(skinned(), &png(2, 2, &SKIN)),
+            with_gltf_hull(skinned(), &png(2, 2, &SKIN)),
+            with_glb_hull(sampled(), &png(2, 2, &SKIN)),
+            with_gltf_hull(sampled(), &png(2, 2, &SKIN)),
+            with_glb_hull(bare(), &png(2, 2, &SKIN)),
+            with_gltf_hull(missing_set(), &png(2, 2, &SKIN)),
+            with_glb_hull(half_sampled(), &png(2, 2, &SKIN)),
+        ] {
+            let (galaxy, _) = load(&source);
+            let models = GalaxyModels::new(&galaxy, &source);
+            check_contract(&models, &ModelRequest::new("hull", Some(8.0)), "nothing");
+            check_contract(&models, &ModelRequest::new("hull", None), "nothing");
+        }
+    }
+
+    /// The scene of `asset` as a loader reading `source` would carry it.
+    fn carried(galaxy: &Galaxy, source: &impl Source, asset: &str) -> AssetScenes {
+        let read = read_asset_scene(source, &galaxy.assets[&id(asset)].data);
+        AssetScenes::from([(id(asset), read)])
+    }
+
+    #[test]
+    fn a_scene_already_read_answers_as_reading_does_and_asks_the_source_for_nothing() {
+        for source in [
+            faced_box(),
+            with_glb_hull(skinned(), &png(2, 2, &SKIN)),
+            with_gltf_hull(skinned(), &png(2, 2, &SKIN)),
+        ] {
+            let (galaxy, _) = load(&source);
+            let scenes = carried(&galaxy, &source, "hull");
+            let counting = CountingSource::new(&source);
+            let models = GalaxyModels::new(&galaxy, &counting).reading(&scenes);
+            for length in [Some(8.0), None] {
+                let request = ModelRequest::new("hull", length);
+                let read = GalaxyModels::new(&galaxy, &source).model(&request);
+                assert!(read.is_ok());
+                assert_eq!(models.model(&request), read);
+            }
+            assert_eq!(counting.all_bytes_asked(), [], "nothing read again");
+            assert_eq!(counting.heads_asked("media/export/pack/hull.glb"), 0);
+        }
+    }
+
+    #[test]
+    fn a_scene_carried_as_a_failure_is_the_error_reading_would_give() {
+        let pointer = b"version https://git-lfs.github.com/spec/v1\noid sha256:ab\nsize 12\n";
+        for (source, asset) in [
+            (with_hull(pointer), "hull"),
+            (galaxy(), "hull"),
+            (with_hull(b"glTF nonsense"), "hull"),
+            (with_hull(&glb([1.0; 3], [0.0; 3])), "spire"),
+        ] {
+            let (galaxy, _) = load(&source);
+            let scenes = carried(&galaxy, &source, asset);
+            let counting = CountingSource::new(&source);
+            let models = GalaxyModels::new(&galaxy, &counting).reading(&scenes);
+            let request = ModelRequest::new(asset, None);
+            let read = GalaxyModels::new(&galaxy, &source).model(&request);
+            assert!(read.is_err(), "{read:?}");
+            assert_eq!(models.model(&request), read);
+            assert_eq!(counting.all_bytes_asked(), [], "{asset}: not read again");
+        }
+    }
+
+    #[test]
+    fn an_asset_with_no_scene_carried_is_read_through_the_source() {
+        let source = faced_box();
+        let (galaxy, _) = load(&source);
+        // Scenes that hold another asset's, and none at all.
+        for scenes in [carried(&galaxy, &source, "spire"), AssetScenes::new()] {
+            let counting = CountingSource::new(&source);
+            let models = GalaxyModels::new(&galaxy, &counting).reading(&scenes);
+            let request = ModelRequest::new("hull", Some(8.0));
+            assert_eq!(
+                models.model(&request),
+                GalaxyModels::new(&galaxy, &source).model(&request)
+            );
+            assert_eq!(
+                counting.all_bytes_asked(),
+                [("media/export/pack/hull.glb".to_owned(), 1)]
+            );
+        }
+    }
+
+    #[test]
+    fn a_scene_of_an_asset_that_is_no_model_is_still_not_a_model() {
+        // The loader reads whatever a ship or a station names; the port
+        // still refuses one the manifest doesn't call a model.
+        let source = with_hull(&glb([1.0; 3], [0.0; 3]));
+        let (galaxy, _) = load(&source);
+        let scenes = carried(&galaxy, &source, "surface");
+        let models = GalaxyModels::new(&galaxy, &source).reading(&scenes);
+        assert_eq!(
+            models.model(&ModelRequest::new("surface", None)),
+            Err(ModelError::NotAModel("surface".into()))
+        );
+    }
+
+    #[test]
+    fn the_adapter_meets_the_contract_reading_scenes_it_was_given() {
+        for source in [faced_box(), with_gltf_hull(skinned(), &png(2, 2, &SKIN))] {
+            let (galaxy, _) = load(&source);
+            let scenes = carried(&galaxy, &source, "hull");
+            let models = GalaxyModels::new(&galaxy, &source).reading(&scenes);
+            check_contract(&models, &ModelRequest::new("hull", Some(8.0)), "nothing");
+            check_contract(&models, &ModelRequest::new("hull", None), "nothing");
+        }
     }
 }

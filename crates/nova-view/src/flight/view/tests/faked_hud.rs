@@ -358,6 +358,7 @@ fn the_target_panel_shows_the_frames_target_with_its_types_card_and_its_code() {
             name: "Ace".to_owned(),
             subtitle: "Light Transport".to_owned(),
             picture: Some(3001),
+            model: None,
             status: TargetStatus::Disabled,
             tag: Some(Tag::Code("Fed.".to_owned())),
         })

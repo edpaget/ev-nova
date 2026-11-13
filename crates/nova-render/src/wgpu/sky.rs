@@ -1,9 +1,11 @@
 //! The wgpu side of [`Batch::Sky`](crate::Batch::Sky): the sky pipeline
 //! and its draws. It decides nothing: each star's centre, radius and
-//! colour come from the core ([`crate::sky`]), and `sky.wgsl` mirrors the
-//! core's [`coverage`](crate::sky::coverage) per fragment.
+//! colour and trail come from the core ([`crate::sky`]), and `sky.wgsl`
+//! mirrors the core's [`streak_coverage`](crate::sky::streak_coverage)
+//! per fragment.
 //!
-//! The pipeline draws one square per star into [`SCENE_FORMAT`] with no
+//! The pipeline draws one rectangle per star, covering its streak and
+//! its radius round it (a square for a round star), into [`SCENE_FORMAT`] with no
 //! depth attachment, adding its colour to what is beneath (one times the
 //! source plus one times the destination) and leaving the destination's
 //! alpha as it is.
@@ -19,9 +21,9 @@ use crate::sky::StarInstance;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub(super) struct StarData {
-    /// Its centre in logical units, its radius, then 0.
+    /// Its centre in logical units, its radius, then its trail's x.
     pub place: [f32; 4],
-    /// Its colour, then 0.
+    /// Its colour, then its trail's y.
     pub color: [f32; 4],
 }
 
@@ -29,8 +31,8 @@ impl From<&StarInstance> for StarData {
     fn from(star: &StarInstance) -> Self {
         let [r, g, b] = star.color;
         Self {
-            place: [star.centre.x, star.centre.y, star.radius, 0.0],
-            color: [r, g, b, 0.0],
+            place: [star.centre.x, star.centre.y, star.radius, star.trail.x],
+            color: [r, g, b, star.trail.y],
         }
     }
 }
@@ -128,26 +130,20 @@ mod tests {
             centre: Point::new(1.0, 2.0),
             radius: 3.0,
             color: [0.25, 0.5, 0.75],
+            trail: Point::new(-6.0, 9.5),
         };
         let data = StarData::from(&star);
         let floats: &[f32] = bytemuck::cast_slice(std::slice::from_ref(&data));
-        assert_eq!(floats, [1.0, 2.0, 3.0, 0.0, 0.25, 0.5, 0.75, 0.0]);
+        assert_eq!(floats, [1.0, 2.0, 3.0, -6.0, 0.25, 0.5, 0.75, 9.5]);
     }
 
-    #[test]
-    fn a_star_drawn_lights_its_centre_by_its_colour_and_nothing_far_from_it() {
+    /// `star` drawn alone in a 32 x 32 target of logical 32 x 32, a unit a
+    /// pixel, read back; `None` with no adapter.
+    fn drawn_alone(star: StarInstance) -> Option<Vec<u8>> {
         use crate::fonts::FontFaces;
         use crate::gpu::{Batch, Frame, Gpu, WorldSpace};
         use crate::viewport::{LogicalSize, PixelRect};
-        // Logical 32 x 32 in the 32 x 32 target: a unit a pixel.
-        let Ok(mut gpu) = crate::wgpu::OffscreenGpu::new(32, 32, &FontFaces::bundled()) else {
-            return;
-        };
-        let star = StarInstance {
-            centre: Point::new(16.5, 16.5),
-            radius: 4.0,
-            color: [0.8, 0.4, 0.2],
-        };
+        let mut gpu = crate::wgpu::OffscreenGpu::new(32, 32, &FontFaces::bundled()).ok()?;
         gpu.submit(&Frame {
             target: (32, 32),
             viewport: PixelRect {
@@ -164,14 +160,106 @@ mod tests {
             world_clip: None,
             world_tail: None,
         });
-        let pixels = gpu.read_pixels().expect("read back");
-        let at = |x: usize, y: usize| &pixels[(y * 32 + x) * 4..(y * 32 + x) * 4 + 3];
-        // Pixel (16, 16)'s centre is the star's: whole coverage.
-        let centre: Vec<i32> = at(16, 16).iter().map(|&c| i32::from(c)).collect();
-        for (seen, want) in centre.iter().zip([204, 102, 51]) {
-            assert!((seen - want).abs() <= 2, "{centre:?}");
+        Some(gpu.read_pixels().expect("read back"))
+    }
+
+    /// Pixel (`x`, `y`) of a 32-wide read-back.
+    fn at(pixels: &[u8], x: usize, y: usize) -> [i32; 3] {
+        let i = (y * 32 + x) * 4;
+        [0, 1, 2].map(|c| i32::from(pixels[i + c]))
+    }
+
+    fn assert_lit_whole(seen: [i32; 3], what: &str) {
+        for (seen_c, want) in seen.iter().zip([204, 102, 51]) {
+            assert!((seen_c - want).abs() <= 2, "{what}: {seen:?}");
         }
-        assert_eq!(at(2, 2), [0, 0, 0]);
+    }
+
+    #[test]
+    fn a_star_drawn_lights_its_centre_by_its_colour_and_nothing_far_from_it() {
+        let Some(pixels) = drawn_alone(StarInstance {
+            centre: Point::new(16.5, 16.5),
+            radius: 4.0,
+            color: [0.8, 0.4, 0.2],
+            trail: Point::new(0.0, 0.0),
+        }) else {
+            return;
+        };
+        // Pixel (16, 16)'s centre is the star's: whole coverage.
+        assert_lit_whole(at(&pixels, 16, 16), "the centre");
+        assert_eq!(at(&pixels, 2, 2), [0, 0, 0]);
+    }
+
+    #[test]
+    fn a_streaked_star_lights_its_trail_whole_and_nothing_well_past_its_ends() {
+        // Trails heading right, left, up and right, and down and left, so
+        // the quad is sized round the segment whichever way it points.
+        let streaks = [
+            ((6.5, 16.5), (18.0, 0.0)),
+            ((24.5, 16.5), (-18.0, 0.0)),
+            ((8.5, 24.5), (14.0, -14.0)),
+            ((24.5, 6.5), (-12.0, 16.0)),
+        ];
+        for ((cx, cy), (tx, ty)) in streaks {
+            let star = StarInstance {
+                centre: Point::new(cx, cy),
+                radius: 2.0,
+                color: [0.8, 0.4, 0.2],
+                trail: Point::new(tx, ty),
+            };
+            let Some(pixels) = drawn_alone(star) else {
+                return;
+            };
+            // The centre, the trail's middle and its end are each on the
+            // segment (each a pixel's centre): whole coverage.
+            for along in [0.0, 0.5, 1.0] {
+                let (x, y) = (cx + tx * along, cy + ty * along);
+                let what = format!("trail ({tx}, {ty}) at {along}");
+                assert_lit_whole(at(&pixels, x as usize, y as usize), &what);
+            }
+            // Every pixel, lit or dark, is what the core's streak gives
+            // there: dark beside the segment and well past either end.
+            for (x, y) in (0..32).flat_map(|y| (0..32).map(move |x| (x, y))) {
+                let offset = Point::new(x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
+                let lit = crate::sky::streak_coverage(offset, star.trail, star.radius);
+                let want = (0.8 * lit * 255.0).round() as i32;
+                let seen = at(&pixels, x, y)[0];
+                assert!(
+                    (seen - want).abs() <= 2,
+                    "trail ({tx}, {ty}) at ({x}, {y}): {seen} for {want}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_large_faint_puff_lights_every_pixel_as_the_cores_falloff_says() {
+        // A backdrop's puff: wider than the target, its centre near a
+        // corner so the target runs from its middle out past its edge.
+        let color = [0.06, 0.04, 0.02];
+        let puff = StarInstance {
+            centre: Point::new(2.0, 2.0),
+            radius: 36.0,
+            color,
+            trail: Point::new(0.0, 0.0),
+        };
+        let Some(pixels) = drawn_alone(puff) else {
+            return;
+        };
+        let mut lit = 0;
+        for (x, y) in (0..32).flat_map(|y| (0..32).map(move |x| (x, y))) {
+            let t = (x as f32 + 0.5 - 2.0).hypot(y as f32 + 0.5 - 2.0) / puff.radius;
+            let cover = crate::sky::coverage(t);
+            let seen = at(&pixels, x, y);
+            for (seen, c) in seen.into_iter().zip(color) {
+                let want = (c * cover * 255.0).round() as i32;
+                assert!((seen - want).abs() <= 1, "({x}, {y}): {seen} for {want}");
+            }
+            lit += usize::from(seen[0] > 0);
+        }
+        // The gradient reaches most of the target, and its far corner is dark.
+        assert!(lit > 600, "{lit}");
+        assert_eq!(at(&pixels, 31, 31), [0, 0, 0]);
     }
 
     #[test]

@@ -1,0 +1,538 @@
+//! How long the new game's 3D start-up takes
+//! (rdm:phase/rendering-3d/phase-11-new-game-world-load-time): the loader
+//! (`nova_data::new_game::load`), the world builder ([`world_assets`]),
+//! and the first and second frames that draw one system's planets.
+//!
+//! The one test here is `#[ignore]`d, so CI never runs it; it only reads
+//! the clock and prints, and asserts nothing about time. Run it by hand,
+//! in both builds:
+//!
+//! ```text
+//! cargo nextest run -p nova-render --release --test it --run-ignored only --no-capture load_cost::
+//! cargo nextest run -p nova-render --test it --run-ignored only --no-capture load_cost::
+//! ```
+//!
+//! It times four data sets:
+//!
+//! - the 3D sample (`nova_data::new_game::fixture::modelled_sample_3d`):
+//!   three systems, one generated planet;
+//! - the scaled galaxy ([`scaled`]): the 3D sample with [`ADDED_SYSTEMS`]
+//!   more systems of two generated planets each, the seven types by
+//!   turns, each with clouds, rings and an atmosphere;
+//! - the decorated galaxy ([`decorated`]): the scaled galaxy with
+//!   [`SKY_IMAGES`] distinct sky images listed across its systems, so the
+//!   world builder's time shows what reading sky decorations at load
+//!   costs (each distinct image decoded, premultiplied and mipped once);
+//! - the textured galaxy ([`textured`]): the scaled galaxy with
+//!   [`TEXTURED`] textured planets, each a distinct PNG of
+//!   [`TEXTURE_WIDTH`] by half that, one in each of the first systems it
+//!   adds;
+//! - the folder `GAME_DATA` names, the full sample, skipping without it.
+//!
+//! It then tours the scaled and textured galaxies, and `GAME_DATA`'s
+//! ([`tour`]): one frame in each system that draws a planet, in id order,
+//! on one renderer, then the megabytes of planet pixels the renderer and
+//! the GPU hold after the last system, and what the frame that draws the
+//! first system again takes
+//! (rdm:phase/rendering-3d/phase-19-release-planets-of-systems-left).
+//!
+//! It ends with what one seeded galaxy's bake takes, which the first
+//! frame that draws its sky pays.
+//!
+//! The frames are drawn on the `recording` Gpu, so no GPU adapter is
+//! needed: a first frame's time is what the renderer does on the CPU
+//! before it submits (a planet's mips, and its bake when it is added
+//! unbaked), not the GPU's upload. It is hermetic but for `GAME_DATA`:
+//! in-memory sources, with no other files or environment.
+
+use std::collections::BTreeMap;
+use std::fmt::Debug;
+use std::path::Path;
+use std::sync::Arc;
+use std::time::Instant;
+
+use nova_data::new_game::fixture::modelled_sample_3d;
+use nova_data::new_game::{NewGame, load};
+use nova_data::wire::id::{StellarId, SystemId};
+use nova_galaxy_format::source::{DirSource, MemSource, Source};
+use nova_galaxy_media::fixture::png;
+use nova_render::recording::{NoImages, RecordingGpu};
+use nova_render::sky::galaxy;
+use nova_render::{
+    GalaxyPlanetFiles, LOGICAL, LoadedPlanet, Renderer, Viewport, WorldAssets, world_assets,
+};
+use nova_view::flight::StellarModel;
+use nova_view::flight::sky::sky_seed;
+use nova_view::{DrawList, PlanetKey, PlanetPose, Point};
+
+use super::common::game_data;
+
+/// The systems [`scaled`] adds to the 3D sample, two planets each.
+const ADDED_SYSTEMS: u32 = 49;
+
+/// The most runs of one data set; each number reported is the least of
+/// its runs.
+const RUNS: u32 = 5;
+
+/// A data set stops running again once its runs have taken this long, so
+/// a slow one (the scaled galaxy in a debug build) runs once.
+const ENOUGH_MS: f64 = 10_000.0;
+
+/// The seven planet types, as a look's `type` names them.
+const TYPES: [&str; 7] = [
+    "rocky",
+    "desert",
+    "ocean",
+    "garden",
+    "ice",
+    "lava",
+    "gas-giant",
+];
+
+/// The 3D sample with [`ADDED_SYSTEMS`] more systems, each of two
+/// generated planets: the seven types by turns, each with clouds, rings
+/// and an atmosphere. It has no ID table, so no record is unpinned.
+fn scaled() -> MemSource {
+    let mut source = modelled_sample_3d().without("nova-ids.json");
+    for system in 0..ADDED_SYSTEMS {
+        source = source.with(
+            &format!("systems/added-{system}.md"),
+            &format!(
+                "---\nname: Added {system}\nregion: commonwealth-rim\n\
+                 map: [{}, {}]\n---\n",
+                1000 + system * 20,
+                1000 + (system % 7) * 20
+            ),
+        );
+        for planet in 0..2 {
+            let n = system * 2 + planet;
+            let kind = TYPES[n as usize % TYPES.len()];
+            source = source.with(
+                &format!("stellars/added-{system}-{planet}.md"),
+                &format!(
+                    "---\nname: Added {system} {planet}\nkind: planet\nsystem: added-{system}\n\
+                     position: [{}, 0]\nvisual:\n  generated:\n    type: {kind}\n\
+                     \x20   palette: [\"#c9a36b\", \"#8a5a3c\", \"#e8d8b0\"]\n    clouds: 0.6\n\
+                     \x20   rings: {{inner: 1.4, outer: 2.3, color: \"#d8c8a8\"}}\n\
+                     \x20   atmosphere: {{color: \"#f0e0c0\", thickness: 0.04}}\n\
+                     \x20   seed: {}\n---\n",
+                    planet * 600,
+                    4417 + n
+                ),
+            );
+        }
+    }
+    source
+}
+
+/// The textured planets [`textured`] adds, one in each of the first
+/// systems [`scaled`] adds.
+const TEXTURED: u32 = 4;
+
+/// The width of each of [`textured`]'s planet textures, in pixels: twice
+/// its height, as a surface is.
+const TEXTURE_WIDTH: u32 = 2048;
+
+/// [`scaled`] with [`TEXTURED`] textured planets, each a distinct
+/// [`TEXTURE_WIDTH`] by half that PNG built in code as a smooth gradient
+/// (so it compresses as art does), with its texture manifest entry, and a
+/// default budget whose `texture` admits them: so what a galaxy's textured
+/// planets cost at start-up and at first draw is on the readout.
+fn textured() -> MemSource {
+    let mut source = scaled().with(
+        "budgets/default.md",
+        "---\ntexture: {kib: 65536, side: 4096}\n---\n",
+    );
+    let (width, height) = (TEXTURE_WIDTH, TEXTURE_WIDTH / 2);
+    for planet in 0..TEXTURED {
+        let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                rgba.extend([
+                    (x * 255 / width) as u8,
+                    (y * 255 / height) as u8,
+                    (planet * 60) as u8,
+                    255,
+                ]);
+            }
+        }
+        let file = format!("media/export/planets/textured-{planet}.png");
+        source = source
+            .with(
+                &format!("assets/textured-{planet}.md"),
+                &format!("---\nkind: texture\nplaceholder: false\nfiles: [{file}]\n---\n"),
+            )
+            .with_bytes(&file, &png(width, height, &rgba))
+            .with(
+                &format!("stellars/textured-{planet}.md"),
+                &format!(
+                    "---\nname: Textured {planet}\nkind: planet\nsystem: added-{planet}\n\
+                     position: [-600, 0]\nvisual: {{asset: textured-{planet}}}\n---\n"
+                ),
+            );
+    }
+    source
+}
+
+/// The distinct sky images [`decorated`] adds.
+const SKY_IMAGES: u32 = 12;
+
+/// The side of each of [`decorated`]'s sky images, in pixels.
+const SKY_IMAGE_SIDE: u32 = 512;
+
+/// [`scaled`] with [`SKY_IMAGES`] distinct sky images, each
+/// [`SKY_IMAGE_SIDE`] square with a clear border, built in code, and two
+/// decorations on each added system, the images by turns: so the cost of
+/// reading a galaxy's worth of sky images at load is on the readout.
+fn decorated() -> MemSource {
+    let mut source = scaled();
+    let side = SKY_IMAGE_SIDE;
+    for image in 0..SKY_IMAGES {
+        let mut rgba = Vec::with_capacity((side * side * 4) as usize);
+        for y in 0..side {
+            for x in 0..side {
+                let edge = x.min(y).min(side - 1 - x).min(side - 1 - y);
+                let shade = ((x * 7 + y * 3 + image * 40) % 200) as u8;
+                rgba.extend([
+                    shade,
+                    shade / 2,
+                    255 - shade,
+                    if edge < 32 { 0 } else { 255 },
+                ]);
+            }
+        }
+        let file = format!("media/export/sky/added-{image}.png");
+        source = source
+            .with(
+                &format!("assets/sky-{image}.md"),
+                &format!("---\nkind: texture\nplaceholder: false\nfiles: [{file}]\n---\n"),
+            )
+            .with_bytes(&file, &png(side, side, &rgba));
+    }
+    for system in 0..ADDED_SYSTEMS {
+        let (one, other) = (system % SKY_IMAGES, (system + 5) % SKY_IMAGES);
+        source = source.with(
+            &format!("systems/added-{system}.md"),
+            &format!(
+                "---\nname: Added {system}\nregion: commonwealth-rim\nmap: [{}, {}]\n\
+                 sky:\n  decorations:\n    - image: sky-{one}\n    \
+                 - {{image: sky-{other}, blend: glow, size: 256, parallax: 0.2}}\n---\n",
+                1000 + system * 20,
+                1000 + (system % 7) * 20
+            ),
+        );
+    }
+    source
+}
+
+/// The distinct sky images `assets` holds for `game`'s systems, and the
+/// megabytes they take with their mips.
+fn sky_images(game: &NewGame, assets: &WorldAssets) -> (usize, f64) {
+    let mut images = BTreeMap::new();
+    for &nova in game.ids.systems.values() {
+        let listed = assets.skies.decorations(sky_seed(SystemId(nova)));
+        for decoration in listed.unwrap_or_default() {
+            let texels: usize = (decoration.image.texture().levels().iter())
+                .map(|level| level.rgba.len())
+                .sum();
+            images.insert(Arc::as_ptr(&decoration.image) as usize, texels);
+        }
+    }
+    let bytes: usize = images.values().sum();
+    (images.len(), bytes as f64 / (1024.0 * 1024.0))
+}
+
+/// The milliseconds since `start`.
+fn ms(start: Instant) -> f64 {
+    start.elapsed().as_secs_f64() * 1000.0
+}
+
+/// The megabytes `planet` holds on the CPU as the builder hands it over:
+/// its surface, its clouds and its ring profile, or nothing to speak of
+/// for a look not baked yet.
+fn megabytes(planet: &LoadedPlanet) -> f64 {
+    let Some(surface) = planet.baked() else {
+        return 0.0;
+    };
+    let bytes = surface.surface.rgba.len()
+        + surface.clouds.as_ref().map_or(0, |c| c.rgba.len())
+        + surface.rings.as_ref().map_or(0, |r| r.profile.len());
+    bytes as f64 / (1024.0 * 1024.0)
+}
+
+/// The planet keys of the system of `game` that draws the most planets
+/// (the first by id among equals), with its id; none when no system draws
+/// one.
+fn busiest_system(game: &NewGame, assets: &WorldAssets) -> Option<(String, Vec<PlanetKey>)> {
+    let systems = planets_by_system(game, assets);
+    let most = systems.values().map(Vec::len).max()?;
+    systems.into_iter().find(|(_, keys)| keys.len() == most)
+}
+
+/// The planet keys of each system of `game` that draws one, by the
+/// system's id, in id order.
+fn planets_by_system(game: &NewGame, assets: &WorldAssets) -> BTreeMap<String, Vec<PlanetKey>> {
+    let mut systems: BTreeMap<String, Vec<PlanetKey>> = BTreeMap::new();
+    for (id, &nova) in &game.ids.stellars {
+        if let Some(StellarModel::Planet { key, .. }) = assets.models.stellar(StellarId(nova)) {
+            let system = game.galaxy.stellars[id].data.system.to_string();
+            systems.entry(system).or_default().push(key);
+        }
+    }
+    systems
+}
+
+/// A list that draws `keys`' planets side by side, flying in the system
+/// `id` of `game` when it is given.
+fn planets_list(keys: &[PlanetKey], in_system: Option<(&NewGame, &str)>) -> DrawList {
+    let mut list = DrawList::new();
+    if let Some((game, id)) = in_system {
+        let nova = (game.ids.systems.iter())
+            .find_map(|(system, &nova)| (system.as_str() == id).then_some(nova))
+            .expect("a system of the game");
+        list.in_system(SystemId(nova));
+    }
+    for (n, key) in keys.iter().enumerate() {
+        list.planet(
+            *key,
+            PlanetPose {
+                center: Point::new(100.0 + 40.0 * n as f32, 200.0),
+                radius: 30.0,
+                time: 0.0,
+            },
+        );
+    }
+    list
+}
+
+/// A renderer holding `assets`' meshes and planets, reading textures left
+/// unread from `source`.
+fn renderer_of(
+    assets: WorldAssets,
+    source: &(impl Source + Clone + Debug + 'static),
+) -> Renderer<NoImages> {
+    let mut renderer = Renderer::new(NoImages);
+    renderer.set_planet_files(Box::new(GalaxyPlanetFiles::new(source.clone())));
+    for (key, mesh) in assets.meshes {
+        renderer.add_model(key, mesh);
+    }
+    for (key, planet) in assets.planets {
+        renderer.add_planet(key, planet);
+    }
+    renderer
+}
+
+/// The viewport every frame here is drawn into.
+fn viewport() -> Viewport {
+    Viewport::new(LOGICAL, (LOGICAL.w * 2, LOGICAL.h * 2), 2.0)
+}
+
+/// Bytes as megabytes.
+fn mb(bytes: usize) -> f64 {
+    bytes as f64 / (1024.0 * 1024.0)
+}
+
+/// Loads and builds `source`, then visits each of its systems that draws
+/// a planet, in id order, one frame each drawing that system's planets,
+/// on one renderer and one recording Gpu; then draws the first system
+/// again. Prints what the renderer holds on the CPU and the Gpu holds
+/// after the last system, and what that return frame took.
+fn tour(name: &str, source: &(impl Source + Clone + Debug + 'static), dir: &Path) {
+    let game = load(source, dir);
+    let assets = world_assets(&game, source);
+    let systems = planets_by_system(&game, &assets);
+    let mut renderer = renderer_of(assets, source);
+    let mut gpu = RecordingGpu::new();
+    let start = Instant::now();
+    for (system, keys) in &systems {
+        let list = planets_list(keys, Some((&game, system)));
+        renderer.render(&list, &viewport(), &mut gpu);
+    }
+    let tour_ms = ms(start);
+    let (cpu, held) = (renderer.planet_bytes_held(), gpu.planet_bytes_held());
+    let Some((first, keys)) = systems.iter().next() else {
+        println!("{name}: no system draws a planet");
+        return;
+    };
+    let list = planets_list(keys, Some((&game, first)));
+    let start = Instant::now();
+    renderer.render(&list, &viewport(), &mut gpu);
+    let return_ms = ms(start);
+    let build = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    println!("{name} ({build}, one run):");
+    println!(
+        "  tour            {:10.2} ms over {} systems",
+        tour_ms,
+        systems.len()
+    );
+    println!(
+        "  held after it   {:.1} MB of planet pixels on the CPU, {:.1} MB on the GPU",
+        mb(cpu),
+        mb(held)
+    );
+    println!(
+        "  back to `{first}` {:10.2} ms ({} planets)",
+        return_ms,
+        keys.len()
+    );
+}
+
+/// One run's numbers.
+struct Run {
+    load_ms: f64,
+    world_ms: f64,
+    /// The planets handed over holding their surface, and those left for
+    /// their first draw (unbaked or unread).
+    planets: (usize, usize),
+    planet_mb: f64,
+    /// The distinct sky images read, and the megabytes they hold.
+    sky_images: (usize, f64),
+    system: Option<(String, usize)>,
+    first_frame_ms: f64,
+    second_frame_ms: f64,
+    problems: usize,
+}
+
+/// Loads and builds `source` once, then draws its busiest system's
+/// planets twice.
+fn run(source: &(impl Source + Clone + Debug + 'static), dir: &Path) -> Run {
+    let start = Instant::now();
+    let game = load(source, dir);
+    let load_ms = ms(start);
+    let start = Instant::now();
+    let assets = world_assets(&game, source);
+    let world_ms = ms(start);
+
+    let baked = assets
+        .planets
+        .iter()
+        .filter(|(_, planet)| planet.baked().is_some())
+        .count();
+    let planets = (baked, assets.planets.len() - baked);
+    let planet_mb = assets.planets.iter().map(|(_, p)| megabytes(p)).sum();
+    let sky_images = sky_images(&game, &assets);
+    let problems = game.problems.len() + assets.problems.len();
+    let system = busiest_system(&game, &assets);
+    let list = planets_list(system.as_ref().map_or(&[][..], |(_, keys)| keys), None);
+    let mut renderer = renderer_of(assets, source);
+    let viewport = viewport();
+    let mut gpu = RecordingGpu::new();
+    let start = Instant::now();
+    renderer.render(&list, &viewport, &mut gpu);
+    let first_frame_ms = ms(start);
+    let start = Instant::now();
+    renderer.render(&list, &viewport, &mut gpu);
+    let second_frame_ms = ms(start);
+    Run {
+        load_ms,
+        world_ms,
+        planets,
+        planet_mb,
+        sky_images,
+        system: system.map(|(id, keys)| (id, keys.len())),
+        first_frame_ms,
+        second_frame_ms,
+        problems,
+    }
+}
+
+/// Runs `source` up to [`RUNS`] times and prints the least of each
+/// number, under `name`.
+fn report(name: &str, source: &(impl Source + Clone + Debug + 'static), dir: &Path) {
+    let started = Instant::now();
+    let mut runs = Vec::new();
+    while runs.len() < RUNS as usize && (runs.is_empty() || ms(started) < ENOUGH_MS) {
+        runs.push(run(source, dir));
+    }
+    let least = |of: fn(&Run) -> f64| runs.iter().map(of).fold(f64::INFINITY, f64::min);
+    let shown = runs.last().expect("a run");
+    let build = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    println!("{name} ({build}, least of {} runs):", runs.len());
+    println!("  new_game::load  {:10.2} ms", least(|r| r.load_ms));
+    println!("  world_assets    {:10.2} ms", least(|r| r.world_ms));
+    println!(
+        "  planets         {} baked or read holding {:.1} MB, {} unbaked or unread",
+        shown.planets.0, shown.planet_mb, shown.planets.1
+    );
+    println!(
+        "  sky images      {} read holding {:.1} MB",
+        shown.sky_images.0, shown.sky_images.1
+    );
+    match &shown.system {
+        Some((system, drawn)) => {
+            println!(
+                "  first frame     {:10.2} ms ({drawn} planets of `{system}`)",
+                least(|r| r.first_frame_ms)
+            );
+            println!("  second frame    {:10.2} ms", least(|r| r.second_frame_ms));
+        }
+        None => println!("  no system draws a planet"),
+    }
+    println!("  problems        {}", shown.problems);
+}
+
+#[test]
+#[ignore = "reads the clock; run by hand (see the module doc)"]
+fn the_new_game_s_start_up_costs() {
+    report(
+        "3D sample: 3 systems, 1 generated planet",
+        &modelled_sample_3d(),
+        Path::new("sample"),
+    );
+    report(
+        &format!(
+            "scaled galaxy: {} systems, {} generated planets",
+            3 + ADDED_SYSTEMS,
+            1 + 2 * ADDED_SYSTEMS
+        ),
+        &scaled(),
+        Path::new("scaled"),
+    );
+    report(
+        &format!(
+            "decorated galaxy: the scaled galaxy with {SKY_IMAGES} sky images of \
+             {SKY_IMAGE_SIDE} square, two decorations on each of {ADDED_SYSTEMS} systems"
+        ),
+        &decorated(),
+        Path::new("decorated"),
+    );
+    let textured_name = format!(
+        "textured galaxy: the scaled galaxy with {TEXTURED} textured planets of \
+         {TEXTURE_WIDTH} by {}",
+        TEXTURE_WIDTH / 2
+    );
+    report(&textured_name, &textured(), Path::new("textured"));
+    tour("tour of the scaled galaxy", &scaled(), Path::new("scaled"));
+    tour(
+        &format!("tour of the {textured_name}"),
+        &textured(),
+        Path::new("textured"),
+    );
+    if let Some(dir) = game_data() {
+        report("GAME_DATA folder", &DirSource::new(&dir), &dir);
+        tour("tour of the GAME_DATA folder", &DirSource::new(&dir), &dir);
+    }
+    // A seeded galaxy is baked the first frame that draws its sky: what
+    // that frame pays, once for each system that has one.
+    let far = (0..10_000)
+        .find_map(galaxy::seeded)
+        .expect("a seed with a galaxy");
+    let least = (0..RUNS)
+        .map(|_| {
+            let start = Instant::now();
+            let image = galaxy::bake(&far);
+            let took = ms(start);
+            assert_eq!(image.width(), galaxy::GALAXY_SIDE);
+            took
+        })
+        .fold(f64::INFINITY, f64::min);
+    println!("a seeded galaxy's bake, at its sky's first frame: {least:.2} ms");
+}

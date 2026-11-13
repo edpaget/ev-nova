@@ -351,7 +351,12 @@ fn landing_in_a_flight_that_never_started_does_nothing() {
 /// [`faked`] in Sol with L pressed over its cleared hypergate, which
 /// offers Alpha Centauri (131) and Barnard (132): the hypergate map open.
 pub(super) fn at_the_hypergate() -> Faked {
-    let mut view = faked(sol());
+    at_the_hypergate_in(catalog())
+}
+
+/// [`at_the_hypergate`], read from `catalog`.
+pub(super) fn at_the_hypergate_in(catalog: FakeCatalog) -> Faked {
+    let mut view = faked_in(catalog, sol());
     let opening = map_opening(&view.frame, Some(130));
     view.sim.queue_screen(opening);
     view.sim.queue_answer(at_gate(GateKind::Hypergate));

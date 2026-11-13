@@ -2455,3 +2455,23 @@ fn the_rollover_aims_at_the_live_pointer_back_from_the_ship_browser() {
         "the pointer left the window on the ship browser"
     );
 }
+
+#[test]
+fn the_world_models_reach_the_main_menu_given_after_it() {
+    let store = MemoryPilots::new();
+    let table = Rc::new(nova_view::flight::WorldModels::default());
+    let screen = menu_with_dialogs(&store).with_world_models(Rc::clone(&table));
+    let menu = screen.main_menu().expect("a main menu");
+    assert!(Rc::ptr_eq(menu.world_models(), &table));
+}
+
+#[test]
+fn the_world_models_reach_the_main_menu_given_before_it() {
+    let store = MemoryPilots::new();
+    let table = Rc::new(nova_view::flight::WorldModels::default());
+    let screen = with_dialogs(data())
+        .with_world_models(Rc::clone(&table))
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+    let menu = screen.main_menu().expect("a main menu");
+    assert!(Rc::ptr_eq(menu.world_models(), &table));
+}

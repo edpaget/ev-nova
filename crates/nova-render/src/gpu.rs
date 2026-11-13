@@ -16,7 +16,11 @@ pub use crate::atlas::{PageId, Uv};
 use crate::camera::Light;
 use crate::model::Mesh;
 pub use crate::model::MeshId;
+use crate::model_texture::ModelTexture;
+pub use crate::model_texture::ModelTextureId;
+pub use crate::sky::SkyImageId;
 pub use crate::sky::StarInstance;
+use crate::sky::{Placement, SkyImage};
 use crate::upscale::{Upscaler, WorldResolution};
 use crate::viewport::{LogicalSize, PixelRect};
 
@@ -37,18 +41,55 @@ pub trait Gpu {
     /// Drops every page, atlas and stream pages alike, for an atlas started
     /// afresh: the next page created is page 0 again.
     fn clear_pages(&mut self);
+    /// Holds `data` as model texture `texture`, for the sections of the
+    /// meshes that name it to sample ([`Gpu::upload_mesh`]): its mip
+    /// chain as given. It says nothing of how it is sampled: each
+    /// section that names it says so, and two may sample it two ways.
+    /// The renderer uploads a texture once, before the first mesh that
+    /// names it, however many meshes hold it and however many samplers
+    /// read it. Model textures are not pages: [`Gpu::clear_pages`] keeps
+    /// them.
+    fn upload_model_texture(&mut self, texture: ModelTextureId, data: &ModelTexture);
     /// Holds `data` as mesh `mesh`, replacing any mesh of that id, for
-    /// [`Batch::Models`] to draw. The renderer uploads a mesh the first
-    /// frame that draws it, and again after it is replaced
-    /// ([`crate::Renderer::add_model`]); it never hands over one with no
-    /// triangles. Meshes are not pages: [`Gpu::clear_pages`] keeps them.
-    fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh);
+    /// [`Batch::Models`] to draw. `textures` are the numbers its textures
+    /// ([`Mesh::textures`]) were uploaded under
+    /// ([`Gpu::upload_model_texture`]), one for each in the mesh's order,
+    /// so a [`Section`](crate::model::Section) that names texture `i`
+    /// draws with `textures[i]`, sampled as the section's
+    /// [`sampler`](crate::model::Section::sampler) says
+    /// ([`crate::model_sampler::sample`]); each was uploaded before this
+    /// call. Everything a frame needs to sample a section arrives here,
+    /// so an adapter makes its samplers at this call and none while
+    /// drawing. The
+    /// renderer uploads a mesh the first frame that draws it, and again
+    /// after it is replaced ([`crate::Renderer::add_model`]); it never
+    /// hands over one with no triangles. Meshes are not pages:
+    /// [`Gpu::clear_pages`] keeps them.
+    fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh, textures: &[ModelTextureId]);
     /// Holds `textures` as planet `planet`'s, replacing any it had, for
     /// [`Batch::Planets`] to draw. The renderer uploads a planet's textures
-    /// the first frame that draws it, and again after it is replaced
-    /// ([`crate::Renderer::add_planet`]). Planets are not pages:
+    /// the first frame that draws it, again after it is replaced
+    /// ([`crate::Renderer::add_planet`]), or after it released them
+    /// ([`Gpu::release_planet`]). Planets are not pages:
     /// [`Gpu::clear_pages`] keeps them.
     fn upload_planet(&mut self, planet: PlanetId, textures: &PlanetTextures);
+    /// Drops planet `planet`'s textures. The renderer uploads it again
+    /// ([`Gpu::upload_planet`]) before any frame draws it again; it
+    /// releases a planet only after the frame it last drew it in was
+    /// submitted. Planets are not pages. Every adapter forwards or does
+    /// this, so it has no default: one that forgot would hold them for
+    /// the session in silence.
+    fn release_planet(&mut self, planet: PlanetId);
+    /// Holds `data` as sky image `image`, for [`Batch::SkyImages`] to
+    /// draw: its premultiplied texels and their mip chain as given, read
+    /// through the one sampler every sky image takes
+    /// ([`crate::sky::SKY_SAMPLER`]). Everything a frame needs to draw it
+    /// arrives here, so an adapter makes its texture, its sampler and its
+    /// bindings at this call and none while drawing. The renderer uploads
+    /// an image once, the first frame that draws it, before that frame is
+    /// submitted, however many skies and decorations show it. Sky images
+    /// are not pages: [`Gpu::clear_pages`] keeps them.
+    fn upload_sky_image(&mut self, image: SkyImageId, data: &SkyImage);
     /// Draws `frame` to the window or target.
     fn submit(&mut self, frame: &Frame);
     /// The resolution it draws the world layer at, which decides each
@@ -134,6 +175,19 @@ pub struct ModelInstance {
     /// that instance's depth band ([`crate::camera::band`]). The core
     /// reads it when it settles the bands; the adapter needn't.
     pub shares_band: bool,
+    /// How opaque it draws, above 0 to 1: its fragments' alpha times this
+    /// ([`crate::camera::faded`]). A part takes its model's. The core
+    /// settles which runs of a batch draw faded
+    /// ([`crate::models::draw_runs`]); the adapter draws them as told.
+    pub alpha: f32,
+    /// Its colorize, as a quad carries one ([`colorize_instance`]): the
+    /// colour's 5-bit red, green and blue, 0 to 31, and the level, 1 to 32
+    /// to mix; [`NO_COLORIZE`] for a model drawn in its own colours. Its
+    /// fragments' colour is mixed toward it after their lighting and
+    /// before the alpha ([`crate::camera::colorized`]). A part takes its
+    /// model's. It changes no run: a colorized opaque model draws with the
+    /// opaque ones.
+    pub colorize: [f32; 4],
 }
 
 /// Which planet's textures a [`PlanetInstance`] draws with: numbered by
@@ -244,33 +298,66 @@ pub enum Batch {
     /// 3D models ([`nova_view::DrawCommand::Model`]), drawn in order with
     /// depth and `light` (see [`crate::camera`]): each model's depth is in
     /// its own band, every later one nearer, and the depth buffer is
-    /// cleared at the batch's start.
+    /// cleared at the batch's start. They draw only inside `clip`'s pixels
+    /// ([`Frame::clip_scissor_in`]) when it has one.
     Models {
         /// The light they are lit by.
         light: Light,
         /// The models, in draw order.
         models: Vec<ModelInstance>,
+        /// Where they may draw, in logical units, when they were clipped
+        /// ([`nova_view::DrawCommand::Clipped`]): the meet of every clip
+        /// around each model, all alike in one batch. `None` when they
+        /// weren't.
+        clip: Option<Rect>,
     },
     /// Planets ([`nova_view::DrawCommand::Planet`]), drawn in order lit by
     /// `light` (see [`crate::planet`]), blended as sprites are. They test
-    /// no depth and write none.
+    /// no depth and write none. They draw only inside `clip`'s pixels
+    /// ([`Frame::clip_scissor_in`]) when it has one.
     Planets {
         /// The light they are lit by.
         light: Light,
         /// The planets, in draw order.
         planets: Vec<PlanetInstance>,
+        /// Where they may draw, in logical units, when they were clipped
+        /// ([`nova_view::DrawCommand::Clipped`]): the meet of every clip
+        /// around each planet, all alike in one batch. `None` when they
+        /// weren't.
+        clip: Option<Rect>,
     },
-    /// The layered sky's stars ([`nova_view::DrawCommand::Sky`]), far
-    /// layer first (see [`crate::sky`]): each adds its colour, by the
-    /// core's falloff, to what is beneath. They test no depth and write
-    /// none.
+    /// The layered sky ([`nova_view::DrawCommand::Sky`]): its distant
+    /// backdrop's puffs, then its stars, far layer first (see
+    /// [`crate::sky`]). Each adds its colour, by the core's falloff, to
+    /// what is beneath. They test no depth and write none.
     Sky(Vec<StarInstance>),
+    /// A sky's decorations ([`crate::sky::SkyDecoration`]), in draw
+    /// order, far to near: each a quad of its image
+    /// ([`Gpu::upload_sky_image`]), which leaves `beneath · (1 − cover) +
+    /// light` ([`crate::sky::lit`], [`crate::sky::over`]). It follows its
+    /// sky's [`Batch::Sky`], when that sky drew one. They test no depth
+    /// and write none.
+    SkyImages(Vec<SkyImageInstance>),
+}
+
+/// One sky decoration as the sky-image shader draws it: which image, and
+/// everything the core worked out for its quad
+/// ([`crate::sky::placed`]). The adapter only draws the quad and samples
+/// the image through the one sampler ([`crate::sky::SKY_SAMPLER`]) at
+/// the placement's level of detail.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SkyImageInstance {
+    /// Its image.
+    pub image: SkyImageId,
+    /// Where it is drawn and what it adds.
+    pub placement: Placement,
 }
 
 impl Batch {
     /// A short name for its kind: `"sprites"`, `"or-fill"`, `"solid"`,
-    /// `"text"`, `"models"`, `"planets"` or `"sky"`. Other crates' tests
-    /// describe a frame's shape by it without matching every kind.
+    /// `"text"`, `"models"`, `"planets"`, `"sky"` or `"sky-images"`. Other
+    /// crates' tests describe a frame's shape by it without matching
+    /// every kind.
     #[must_use]
     pub fn kind(&self) -> &'static str {
         match self {
@@ -281,10 +368,12 @@ impl Batch {
             Self::Models { .. } => "models",
             Self::Planets { .. } => "planets",
             Self::Sky(_) => "sky",
+            Self::SkyImages(_) => "sky-images",
         }
     }
 
-    /// How many draws it holds: quads, text runs, models, planets or stars.
+    /// How many draws it holds: quads, text runs, models, planets, stars
+    /// or sky images.
     #[must_use]
     pub fn draws(&self) -> usize {
         match self {
@@ -294,6 +383,18 @@ impl Batch {
             Self::Models { models, .. } => models.len(),
             Self::Planets { planets, .. } => planets.len(),
             Self::Sky(stars) => stars.len(),
+            Self::SkyImages(images) => images.len(),
+        }
+    }
+
+    /// Where it may draw, in logical units, besides the world's clip: a
+    /// clipped models or planets batch's clip, and `None` for any other
+    /// (a clipped sprite, picture, text run or fill is cut in the core).
+    #[must_use]
+    pub fn clip(&self) -> Option<Rect> {
+        match self {
+            Self::Models { clip, .. } | Self::Planets { clip, .. } => *clip,
+            _ => None,
         }
     }
 }
@@ -401,10 +502,24 @@ impl Frame {
     /// world's space, and in texels for [`WorldSpace::Texture`].
     #[must_use]
     pub fn world_scissor_in(&self, space: WorldSpace) -> PixelRect {
+        self.world_clip.map_or_else(
+            || self.space_pixels(space),
+            |clip| self.clip_scissor_in(space, clip),
+        )
+    }
+
+    /// The pixels of `space` a logical `clip` covers: projected onto the
+    /// viewport in target pixels for [`WorldSpace::Target`], and onto the
+    /// texture in texels for [`WorldSpace::Texture`], each edge rounded to
+    /// the nearest pixel as [`Frame::world_scissor`]'s are, so it ends on
+    /// the column a [`DrawCommand::Clipped`] crop ends on. Clamped to the
+    /// space's pixels; it may be empty (no width or no height) when `clip`
+    /// lies outside the logical space. The world's clip plays no part.
+    ///
+    /// [`DrawCommand::Clipped`]: nova_view::DrawCommand::Clipped
+    #[must_use]
+    pub fn clip_scissor_in(&self, space: WorldSpace, clip: Rect) -> PixelRect {
         let onto = self.space_pixels(space);
-        let Some(clip) = self.world_clip else {
-            return onto;
-        };
         let sx = onto.w as f32 / self.logical.w as f32;
         let sy = onto.h as f32 / self.logical.h as f32;
         let (x0, x1) = (onto.x as f32, (onto.x + onto.w) as f32);
@@ -873,6 +988,67 @@ mod tests {
         assert_eq!(textured().world_scissor_in(TARGET), rect(0, 8, 64, 48));
     }
 
+    fn logical(x: f32, y: f32, w: f32, h: f32) -> Rect {
+        Rect { x, y, w, h }
+    }
+
+    #[test]
+    fn clip_scissor_in_the_target_projects_onto_the_viewport() {
+        // Scale 2, the viewport 8 below the target's top.
+        let frame = letterboxed();
+        let clip = logical(4.0, 3.0, 10.0, 5.0);
+        assert_eq!(frame.clip_scissor_in(TARGET, clip), rect(8, 14, 20, 10));
+        // The world's own clip plays no part.
+        let world_clipped = clipped(letterboxed(), 0.0, 0.0, 1.0, 1.0);
+        assert_eq!(
+            world_clipped.clip_scissor_in(TARGET, clip),
+            rect(8, 14, 20, 10)
+        );
+    }
+
+    #[test]
+    fn clip_scissor_in_a_texture_projects_onto_texels_at_its_render_scale() {
+        let frame = textured();
+        let clip = logical(4.0, 3.0, 10.0, 5.0);
+        assert_eq!(
+            frame.clip_scissor_in(frame.world_space, clip),
+            rect(4, 3, 10, 5)
+        );
+        // A texture at half the logical size: half a texel a unit.
+        let half = WorldSpace::Texture { size: (16, 12) };
+        assert_eq!(frame.clip_scissor_in(half, clip), rect(2, 2, 5, 2));
+    }
+
+    #[test]
+    fn clip_scissor_rounds_each_edge_to_the_nearest_pixel() {
+        // Scale 2: 4.3 and 14.2 across are 8.6 and 28.4, rounded to 9 and
+        // 28; 3.2 and 8.3 down are 6.4 and 16.6, so 8 + 6 and 8 + 17.
+        let frame = letterboxed();
+        let clip = logical(4.3, 3.2, 9.9, 5.1);
+        assert_eq!(frame.clip_scissor_in(TARGET, clip), rect(9, 14, 19, 11));
+        // A widened scale, 1.875 across and down in a 60x45 target.
+        let widened = Frame {
+            target: (60, 45),
+            viewport: rect(0, 0, 60, 45),
+            ..letterboxed()
+        };
+        let clip = logical(3.0, 2.0, 20.0, 11.0);
+        assert_eq!(widened.clip_scissor_in(TARGET, clip), rect(6, 4, 37, 20));
+    }
+
+    #[test]
+    fn clip_scissor_clamps_to_the_space_and_is_empty_outside_it() {
+        let frame = letterboxed();
+        let spilling = logical(-4.0, -2.0, 10.0, 6.0);
+        assert_eq!(frame.clip_scissor_in(TARGET, spilling), rect(0, 8, 12, 8));
+        let texture = WorldSpace::Texture { size: (32, 24) };
+        assert_eq!(frame.clip_scissor_in(texture, spilling), rect(0, 0, 6, 4));
+        let right = frame.clip_scissor_in(TARGET, logical(40.0, 0.0, 8.0, 8.0));
+        assert_eq!(right.w, 0, "{right:?}");
+        let below = frame.clip_scissor_in(texture, logical(0.0, 30.0, 8.0, 8.0));
+        assert_eq!(below.h, 0, "{below:?}");
+    }
+
     #[test]
     fn a_batch_names_its_kind_and_counts_its_draws() {
         let run = TextRun {
@@ -890,6 +1066,8 @@ mod tests {
             clip_from_model: [[0.0; 4]; 4],
             normal_from_model: [[0.0; 3]; 3],
             shares_band: false,
+            alpha: 1.0,
+            colorize: NO_COLORIZE,
         };
         let planet = PlanetInstance {
             planet: PlanetId(0),
@@ -919,18 +1097,35 @@ mod tests {
             Batch::Models {
                 light: Light::STANDARD,
                 models: vec![model; 6],
+                clip: None,
             },
             Batch::Planets {
                 light: Light::STANDARD,
                 planets: vec![planet; 7],
+                clip: None,
             },
             Batch::Sky(vec![
                 StarInstance {
                     centre: Point::new(0.0, 0.0),
                     radius: 1.0,
                     color: [1.0; 3],
+                    trail: Point::new(0.0, 0.0),
                 };
                 8
+            ]),
+            Batch::SkyImages(vec![
+                SkyImageInstance {
+                    image: SkyImageId(0),
+                    placement: crate::sky::Placement {
+                        centre: Point::new(0.0, 0.0),
+                        right: Point::new(1.0, 0.0),
+                        down: Point::new(0.0, 1.0),
+                        color: [1.0; 3],
+                        cover: 1.0,
+                        lod: 0.0,
+                    },
+                };
+                9
             ]),
         ];
         let shape: Vec<(&str, usize)> = batches
@@ -946,9 +1141,44 @@ mod tests {
                 ("text", 5),
                 ("models", 6),
                 ("planets", 7),
-                ("sky", 8)
+                ("sky", 8),
+                ("sky-images", 9)
             ]
         );
+    }
+
+    #[test]
+    fn batch_clip_is_a_models_or_planets_clip_and_none_for_other_kinds() {
+        let clip = Some(logical(1.0, 2.0, 3.0, 4.0));
+        let models = |clip| Batch::Models {
+            light: Light::STANDARD,
+            models: Vec::new(),
+            clip,
+        };
+        let planets = |clip| Batch::Planets {
+            light: Light::STANDARD,
+            planets: Vec::new(),
+            clip,
+        };
+        assert_eq!(models(clip).clip(), clip);
+        assert_eq!(planets(clip).clip(), clip);
+        assert_eq!(models(None).clip(), None);
+        assert_eq!(planets(None).clip(), None);
+        let others = [
+            solid(1.0),
+            Batch::OrFill(vec![quad(0.0, 0.0, 1.0, 1.0)]),
+            Batch::Text(Vec::new()),
+            Batch::Sky(Vec::new()),
+            Batch::SkyImages(Vec::new()),
+            Batch::Sprites {
+                page: PageId(0),
+                blend: Blend::Normal,
+                quads: Vec::new(),
+            },
+        ];
+        for other in others {
+            assert_eq!(other.clip(), None, "{}", other.kind());
+        }
     }
 
     #[test]

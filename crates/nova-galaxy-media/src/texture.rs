@@ -8,15 +8,29 @@
 //! largest texture). Then it checks the shape the engine draws, whatever
 //! the budgets say: twice as wide as tall, each side a power of two (so
 //! its mip chain halves exactly). Only then is the image decoded, whatever
-//! its colour type or bit depth, to RGBA8.
-
-use std::io::Cursor;
+//! its colour type or bit depth, to RGBA8. The header and the pixels are
+//! read as [`image`](crate::image) reads any PNG.
+//!
+//! A caller that reads a texture later than it loads it (the renderer
+//! reads a planet's at its first draw) splits that in two: at load,
+//! [`check_texture`] makes every check but the decode from the file's
+//! first bytes and its size alone, never reading it whole, and gives a
+//! [`TextureHeader`]; later, [`read_texture_file`] reads the file
+//! ([`texture_file`] names it) and makes the same checks again before it
+//! decodes, so a file changed since is caught, and one that passes the
+//! check can still fail to decode. One private check serves both, so
+//! they can't drift.
+//!
+//! [`read_picture`] reads a texture asset that is not a surface: a sky
+//! decoration's image, of any shape. It makes the same checks in the
+//! same order, less the shape.
 
 use nova_galaxy_format::asset::Asset;
-use nova_galaxy_format::media::is_lfs_pointer;
+use nova_galaxy_format::media::{LFS_POINTER, is_lfs_pointer};
 use nova_galaxy_format::source::Source;
 
 use crate::budget::{Cost, Limits, Overrun, over_budget};
+use crate::image::{decode_png, png_size};
 
 /// A texture's pixels, as read.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -86,23 +100,116 @@ pub fn is_surface_shape(width: u32, height: u32) -> bool {
     width.is_power_of_two() && height.is_power_of_two() && width / 2 == height
 }
 
+/// What a texture's file says of it without its pixels: from its header
+/// and its size on disk.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextureHeader {
+    /// The data-folder path of its file.
+    pub file: String,
+    /// Its width in pixels.
+    pub width: u32,
+    /// Its height in pixels.
+    pub height: u32,
+    /// The bytes its file takes on disk.
+    pub disk_bytes: u64,
+}
+
+/// How many of a file's first bytes the check reads: a PNG's signature
+/// and its `IHDR` chunk (33), or a Git LFS pointer's opening line if that
+/// is longer.
+const HEAD: usize = if LFS_POINTER.len() > 33 {
+    LFS_POINTER.len()
+} else {
+    33
+};
+
+/// The file `asset`'s texture is read from: its first `.png`, whatever
+/// its `placeholder` flag. [`NoTexture::None`] when it names none.
+pub fn texture_file(asset: &Asset) -> Result<&str, NoTexture> {
+    asset
+        .files
+        .iter()
+        .find(|f| f.extension() == "png")
+        .map(nova_galaxy_format::id::MediaPath::as_str)
+        .ok_or(NoTexture::None)
+}
+
+/// Checks the texture at `file` as [`read_texture_file`] would, from its
+/// first bytes and its size alone (`Source::head`, `Source::size`), never
+/// reading it whole: that it is there, not a Git LFS pointer, a PNG's
+/// header, within `limits` and `max_side`, and a surface's shape, in that
+/// order. A file that passes can still fail to decode when it is read.
+pub fn check_texture(
+    source: &impl Source,
+    file: &str,
+    limits: &Limits,
+    max_side: u32,
+) -> Result<TextureHeader, NoTexture> {
+    let unreadable =
+        |why: &dyn std::fmt::Display| NoTexture::Unreadable(format!("`{file}`: {why}"));
+    let head = match source.head(file, HEAD) {
+        Ok(Some(head)) => head,
+        Ok(None) => return Err(NoTexture::Missing(file.to_owned())),
+        Err(e) => return Err(unreadable(&e)),
+    };
+    let disk_bytes = match source.size(file) {
+        Ok(Some(size)) => size,
+        Ok(None) => return Err(NoTexture::Missing(file.to_owned())),
+        Err(e) => return Err(unreadable(&e)),
+    };
+    check(file, &head, disk_bytes, limits, max_side, is_surface_shape)
+}
+
+/// The texture at `file`, read through `source` and held to `limits` and
+/// `max_side`, as [`read_texture`] reads its asset's: the same checks in
+/// the same order, from the file's size and its header, then the decode.
+pub fn read_texture_file(
+    source: &impl Source,
+    file: &str,
+    limits: &Limits,
+    max_side: u32,
+) -> Result<Texture, NoTexture> {
+    read(source, file, limits, max_side, is_surface_shape)
+}
+
 /// The texture `asset` names, read through `source` and held to `limits`
 /// (`budget::limits` of the asset) and to `max_side`, the longest side
 /// the caller can draw: its first `.png`, whatever its `placeholder`
-/// flag. The budget, the side and the shape are checked from the file's
-/// size and its header, before the image is decoded.
+/// flag ([`texture_file`]). The budget, the side and the shape are
+/// checked from the file's size and its header, before the image is
+/// decoded ([`read_texture_file`]).
 pub fn read_texture(
     source: &impl Source,
     asset: &Asset,
     limits: &Limits,
     max_side: u32,
 ) -> Result<Texture, NoTexture> {
-    let file = asset
-        .files
-        .iter()
-        .find(|f| f.extension() == "png")
-        .ok_or(NoTexture::None)?;
-    let path = file.as_str();
+    read_texture_file(source, texture_file(asset)?, limits, max_side)
+}
+
+/// The picture `asset` names, read as [`read_texture`] reads a planet's
+/// surface but of any shape: a sky decoration's image, which is not held
+/// to a surface's 2:1 or to powers of two. The budget and the side are
+/// checked from the file's size and its header, before the image is
+/// decoded, and it never gives [`NoTexture::Shape`].
+pub fn read_picture(
+    source: &impl Source,
+    asset: &Asset,
+    limits: &Limits,
+    max_side: u32,
+) -> Result<Texture, NoTexture> {
+    read(source, texture_file(asset)?, limits, max_side, |_, _| true)
+}
+
+/// The one reader behind [`read_texture_file`] and [`read_picture`]: the
+/// file at `path` read whole, [`check`]ed, and only then decoded.
+fn read(
+    source: &impl Source,
+    path: &str,
+    limits: &Limits,
+    max_side: u32,
+    shape: impl Fn(u32, u32) -> bool,
+) -> Result<Texture, NoTexture> {
     let unreadable =
         |why: &dyn std::fmt::Display| NoTexture::Unreadable(format!("`{path}`: {why}"));
     let bytes = match source.bytes(path) {
@@ -110,11 +217,35 @@ pub fn read_texture(
         Ok(None) => return Err(NoTexture::Missing(path.to_owned())),
         Err(e) => return Err(unreadable(&e)),
     };
-    if is_lfs_pointer(&bytes) {
+    let header = check(path, &bytes, bytes.len() as u64, limits, max_side, shape)?;
+    let rgba = decode_png(&bytes).map_err(|e| unreadable(&e))?;
+    Ok(Texture {
+        file: header.file,
+        width: header.width,
+        height: header.height,
+        disk_bytes: header.disk_bytes,
+        rgba,
+    })
+}
+
+/// The one check behind reading and [`check_texture`], so both find the
+/// same in one order, from `head` (the file's first bytes, or all of
+/// them) and `disk_bytes` (its size): a Git LFS pointer, a PNG's header,
+/// the budget, the most side, then `shape` (whether a width and height
+/// may be drawn).
+fn check(
+    path: &str,
+    head: &[u8],
+    disk_bytes: u64,
+    limits: &Limits,
+    max_side: u32,
+    shape: impl Fn(u32, u32) -> bool,
+) -> Result<TextureHeader, NoTexture> {
+    if is_lfs_pointer(head) {
         return Err(NoTexture::Pointer);
     }
-    let (width, height) = header_size(&bytes).ok_or_else(|| unreadable(&"not a PNG"))?;
-    let disk_bytes = bytes.len() as u64;
+    let (width, height) =
+        png_size(head).ok_or_else(|| NoTexture::Unreadable(format!("`{path}`: not a PNG")))?;
     let over = over_budget(limits, Cost::texture(disk_bytes, width.max(height)));
     if !over.is_empty() {
         return Err(NoTexture::OverBudget(over));
@@ -126,72 +257,25 @@ pub fn read_texture(
             most: max_side,
         });
     }
-    if !is_surface_shape(width, height) {
+    if !shape(width, height) {
         return Err(NoTexture::Shape {
             file: path.to_owned(),
             width,
             height,
         });
     }
-    let rgba = decode(&bytes).map_err(|e| unreadable(&e))?;
-    Ok(Texture {
+    Ok(TextureHeader {
         file: path.to_owned(),
         width,
         height,
         disk_bytes,
-        rgba,
-    })
-}
-
-/// The PNG signature.
-const SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
-
-/// The width and height a PNG's header gives, read from its first chunk
-/// (`IHDR`) alone; `None` when `bytes` doesn't start as a PNG does.
-fn header_size(bytes: &[u8]) -> Option<(u32, u32)> {
-    let be = |at: usize| Some(u32::from_be_bytes(bytes.get(at..at + 4)?.try_into().ok()?));
-    if !bytes.starts_with(SIGNATURE) || bytes.get(12..16) != Some(b"IHDR") {
-        return None;
-    }
-    Some((be(16)?, be(20)?))
-}
-
-/// `bytes`, a whole PNG of any colour type and depth, as 8-bit RGBA.
-fn decode(bytes: &[u8]) -> Result<Vec<u8>, png::DecodingError> {
-    let mut decoder = png::Decoder::new(Cursor::new(bytes));
-    decoder.set_transformations(png::Transformations::normalize_to_color8());
-    let mut reader = decoder.read_info()?;
-    let size = reader
-        .output_buffer_size()
-        .ok_or(png::DecodingError::LimitsExceeded)?;
-    let mut pixels = vec![0; size];
-    let info = reader.next_frame(&mut pixels)?;
-    pixels.truncate(info.buffer_size());
-    Ok(match info.color_type {
-        png::ColorType::Rgba => pixels,
-        png::ColorType::Rgb => pixels
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .flat_map(|[r, g, b]| [*r, *g, *b, u8::MAX])
-            .collect(),
-        png::ColorType::GrayscaleAlpha => pixels
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .flat_map(|[g, a]| [*g, *g, *g, *a])
-            .collect(),
-        // Grey; a palette is expanded to RGB or RGBA before it gets here.
-        png::ColorType::Grayscale | png::ColorType::Indexed => {
-            pixels.iter().flat_map(|g| [*g, *g, *g, u8::MAX]).collect()
-        }
     })
 }
 
 #[cfg(test)]
 mod tests {
     use nova_galaxy_format::id::Id;
-    use nova_galaxy_format::source::MemSource;
+    use nova_galaxy_format::source::{CountingSource, MemSource};
 
     use super::*;
     use crate::budget::{Limit, Measure};
@@ -513,6 +597,269 @@ mod tests {
         assert!(matches!(
             read(&rgba_png(64, 64, &vec![0; 64 * 64 * 4]), &side),
             Err(NoTexture::OverBudget(_))
+        ));
+    }
+
+    #[test]
+    fn a_wrong_shape_is_found_from_the_header_before_decoding() {
+        // Square, and garbage past its header: the shape is what is
+        // reported, so the pixels were never decoded.
+        let mut bytes = rgba_png(64, 64, &vec![0; 64 * 64 * 4])[..33].to_vec();
+        bytes.extend(std::iter::repeat_n(0xA5, 16));
+        assert_eq!(
+            read(&bytes, &Limits::default()),
+            Err(NoTexture::Shape {
+                file: FILE.into(),
+                width: 64,
+                height: 64,
+            })
+        );
+        // The same file as a picture has no shape to break, so it fails
+        // when it decodes.
+        assert!(matches!(
+            picture(&bytes, &Limits::default()),
+            Err(NoTexture::Unreadable(_))
+        ));
+    }
+
+    #[test]
+    fn a_texture_s_file_is_its_asset_s_first_png() {
+        let asset = asset(&[
+            "media/export/p/LICENSE.txt",
+            "media/export/p/a.png",
+            "media/export/p/b.png",
+        ]);
+        assert_eq!(texture_file(&asset), Ok("media/export/p/a.png"));
+        assert_eq!(texture_file(&self::asset(&[])), Err(NoTexture::None));
+        assert_eq!(
+            texture_file(&self::asset(&["media/export/p/a.glb"])),
+            Err(NoTexture::None)
+        );
+        let placeholder = nova_galaxy_format::frontmatter::parse::<Asset>(
+            "---\nkind: texture\nplaceholder: true\n---\n",
+        )
+        .unwrap()
+        .0;
+        assert_eq!(texture_file(&placeholder), Err(NoTexture::None));
+    }
+
+    #[test]
+    fn checking_a_texture_reads_its_head_and_size_and_never_its_bytes() {
+        let bytes = rgba_png(64, 32, &vec![3; 64 * 32 * 4]);
+        let source = MemSource::default().with_bytes(FILE, &bytes);
+        let counting = CountingSource::new(&source);
+        let header = check_texture(&counting, FILE, &Limits::default(), u32::MAX).unwrap();
+        assert_eq!(
+            header,
+            TextureHeader {
+                file: FILE.into(),
+                width: 64,
+                height: 32,
+                disk_bytes: bytes.len() as u64,
+            }
+        );
+        assert_eq!(counting.heads_asked(FILE), 1);
+        assert_eq!(counting.sizes_asked(FILE), 1);
+        assert_eq!(counting.bytes_asked(FILE), 0, "never read whole");
+    }
+
+    #[test]
+    fn checking_finds_from_the_header_what_reading_finds_in_the_same_order() {
+        let pointer = b"version https://git-lfs.github.com/spec/v1\noid sha256:ab\nsize 12\n";
+        let mut headless = rgba_png(2, 1, &RGBA);
+        headless[12..16].copy_from_slice(b"IDAT");
+        let side = Limits {
+            side: limit(32),
+            ..Limits::default()
+        };
+        let kib = Limits {
+            kib: limit(1),
+            ..Limits::default()
+        };
+        let cases: [(&str, Option<Vec<u8>>, Limits, u32); 9] = [
+            (
+                "pointer",
+                Some(pointer.to_vec()),
+                Limits::default(),
+                u32::MAX,
+            ),
+            ("missing", None, Limits::default(), u32::MAX),
+            (
+                "not a PNG",
+                Some(b"GIF89a nonsense".to_vec()),
+                Limits::default(),
+                u32::MAX,
+            ),
+            ("no IHDR", Some(headless), Limits::default(), u32::MAX),
+            (
+                "over the side",
+                Some(corrupt_past_the_header(16)),
+                side.clone(),
+                u32::MAX,
+            ),
+            (
+                "over the kib",
+                Some(corrupt_past_the_header(2000)),
+                kib,
+                u32::MAX,
+            ),
+            (
+                "over the most",
+                Some(header_only(16_384, 8_192)),
+                Limits::default(),
+                8_192,
+            ),
+            (
+                "wrong shape",
+                Some(rgba_png(64, 64, &vec![0; 64 * 64 * 4])),
+                Limits::default(),
+                u32::MAX,
+            ),
+            (
+                "budget before shape",
+                Some(rgba_png(64, 64, &vec![0; 64 * 64 * 4])),
+                side,
+                u32::MAX,
+            ),
+        ];
+        for (case, bytes, limits, most) in cases {
+            let source = match &bytes {
+                Some(bytes) => MemSource::default().with_bytes(FILE, bytes),
+                None => MemSource::default(),
+            };
+            let read = read_texture(&source, &asset(&[FILE]), &limits, most);
+            assert!(read.is_err(), "{case}");
+            let checked = check_texture(&source, FILE, &limits, most);
+            assert_eq!(checked.map(|_| ()), read.map(|_| ()), "{case}");
+        }
+    }
+
+    #[test]
+    fn a_texture_corrupt_past_its_header_passes_the_check_and_fails_the_read() {
+        let source = MemSource::default().with_bytes(FILE, &corrupt_past_the_header(2000));
+        let header = check_texture(&source, FILE, &Limits::default(), u32::MAX).unwrap();
+        assert_eq!((header.width, header.height), (64, 32));
+        let Err(NoTexture::Unreadable(why)) =
+            read_texture_file(&source, FILE, &Limits::default(), u32::MAX)
+        else {
+            panic!("unreadable");
+        };
+        assert!(why.starts_with(&format!("`{FILE}`")), "{why}");
+    }
+
+    #[test]
+    fn reading_a_texture_file_reads_it_once_as_read_texture_does() {
+        let source = MemSource::default().with_bytes(FILE, &rgba_png(4, 2, &[9; 32]));
+        let counting = CountingSource::new(&source);
+        let read = read_texture_file(&counting, FILE, &Limits::default(), u32::MAX);
+        assert_eq!(counting.bytes_asked(FILE), 1);
+        assert_eq!(counting.heads_asked(FILE), 0);
+        assert_eq!(counting.sizes_asked(FILE), 0);
+        assert_eq!(
+            read,
+            read_texture(&source, &asset(&[FILE]), &Limits::default(), u32::MAX)
+        );
+        assert!(read.is_ok());
+    }
+
+    /// What reading `bytes` as the picture at [`FILE`] gives, held to
+    /// `limits`.
+    fn picture(bytes: &[u8], limits: &Limits) -> Result<Texture, NoTexture> {
+        let source = MemSource::default().with_bytes(FILE, bytes);
+        read_picture(&source, &asset(&[FILE]), limits, u32::MAX)
+    }
+
+    #[test]
+    fn a_picture_of_any_shape_reads() {
+        let pixels: Vec<u8> = (0..5 * 3 * 4).collect();
+        let bytes = rgba_png(5, 3, &pixels);
+        let texture = picture(&bytes, &Limits::default()).unwrap();
+        assert_eq!((texture.width, texture.height), (5, 3));
+        assert_eq!(texture.rgba, pixels);
+        assert_eq!(texture.file, FILE);
+        assert_eq!(texture.disk_bytes, bytes.len() as u64);
+        // A planet's surface refuses the shape a picture takes.
+        assert_eq!(
+            read(&bytes, &Limits::default()),
+            Err(NoTexture::Shape {
+                file: FILE.into(),
+                width: 5,
+                height: 3,
+            })
+        );
+        // A tall one and a square one read too.
+        assert!(picture(&rgba_png(1, 4, &[7; 16]), &Limits::default()).is_ok());
+        assert!(picture(&rgba_png(2, 2, &[7; 16]), &Limits::default()).is_ok());
+    }
+
+    #[test]
+    fn a_picture_that_cannot_be_read_says_why_as_a_texture_does() {
+        let pointer = b"version https://git-lfs.github.com/spec/v1\noid sha256:ab\nsize 12\n";
+        assert_eq!(
+            picture(pointer, &Limits::default()),
+            Err(NoTexture::Pointer)
+        );
+        let source = MemSource::default();
+        assert_eq!(
+            read_picture(&source, &asset(&[FILE]), &Limits::default(), u32::MAX),
+            Err(NoTexture::Missing(FILE.into()))
+        );
+        assert_eq!(
+            read_picture(&source, &asset(&[]), &Limits::default(), u32::MAX),
+            Err(NoTexture::None)
+        );
+        let Err(NoTexture::Unreadable(why)) = picture(b"GIF89a nonsense", &Limits::default())
+        else {
+            panic!("unreadable");
+        };
+        assert!(why.contains("not a PNG"), "{why}");
+    }
+
+    #[test]
+    fn a_picture_is_held_to_its_budget_and_the_most_side_before_decoding() {
+        let side = Limits {
+            side: limit(32),
+            ..Limits::default()
+        };
+        assert_eq!(
+            picture(&corrupt_past_the_header(16), &side),
+            Err(NoTexture::OverBudget(vec![Overrun {
+                measure: Measure::Side,
+                used: 64,
+                most: 32,
+                budget: Id::try_from("default".to_owned()).unwrap(),
+            }]))
+        );
+        let bytes = corrupt_past_the_header(2000);
+        let kib = Limits {
+            kib: limit(1),
+            ..Limits::default()
+        };
+        assert!(matches!(
+            picture(&bytes, &kib),
+            Err(NoTexture::OverBudget(over)) if over[0].measure == Measure::Kib
+        ));
+        let within = |bytes: &[u8], most: u32| {
+            read_picture(
+                &MemSource::default().with_bytes(FILE, bytes),
+                &asset(&[FILE]),
+                &Limits::default(),
+                most,
+            )
+        };
+        // A tall header alone: its longer side is its height.
+        assert_eq!(
+            within(&header_only(300, 2_000), 1_024),
+            Err(NoTexture::TooLarge {
+                file: FILE.into(),
+                side: 2_000,
+                most: 1_024,
+            })
+        );
+        // At the most is within it: it fails only when it decodes.
+        assert!(matches!(
+            within(&header_only(300, 1_024), 1_024),
+            Err(NoTexture::Unreadable(_))
         ));
     }
 }

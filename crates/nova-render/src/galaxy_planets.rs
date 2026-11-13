@@ -1,10 +1,26 @@
-//! [`PlanetSource`] for the new game's data: [`GalaxyPlanets`] bakes a
-//! stellar's generated look, or reads its texture asset's `.png` through
-//! the format's [`Source`] port, needing no GPU.
+//! [`PlanetSource`] for the new game's data: [`GalaxyPlanets`] answers a
+//! stellar's generated look unbaked, with the sizes to bake it at, or its
+//! texture asset's `.png` checked from its header and left unread, through
+//! the format's [`Source`] port, needing no GPU. [`GalaxyPlanetFiles`] is
+//! the [`PlanetFiles`] that reads such a texture later.
 //!
-//! It only chains decisions made elsewhere: how a look bakes
-//! (`nova_galaxy_media::planet::bake`), how a texture is read and checked
-//! (`nova_galaxy_media::texture::read_texture`), which budget covers it
+//! A look isn't baked here: a bake takes tens of milliseconds, a galaxy
+//! has hundreds of planets, and a pilot sees a few of them in a session.
+//! So the answer for a generated stellar costs nothing, and the renderer
+//! bakes it the first frame that draws it (`crate::planets`). Nor is a
+//! texture read here: a 2048 by 1024 one takes milliseconds to decode and
+//! megabytes to hold. It is checked from its file's head and size alone
+//! (`nova_galaxy_media::texture::check_texture`: there, not an LFS
+//! pointer, a PNG, within its budget, the GPU's side and a surface's
+//! shape), so whatever can fail before the decode fails here, where the
+//! caller reports it at start-up; the renderer reads it through
+//! [`GalaxyPlanetFiles`] the first frame that draws it, and the read
+//! checks it again, since the file may have changed. Only a file that
+//! doesn't decode, or one changed since, fails then.
+//!
+//! It only chains decisions made elsewhere: how a look bakes, later
+//! (`nova_galaxy_media::planet::bake`), how a texture is checked and read
+//! (`nova_galaxy_media::texture`), which budget covers it
 //! (`nova_galaxy_media::budget::limits`), and how a texture becomes a
 //! planet (`nova_galaxy_media::planet::Surface::from_texture`). Those are
 //! pinned by their own tests; this module's tests check what it does with
@@ -16,17 +32,19 @@ use nova_galaxy_format::asset::AssetKind;
 use nova_galaxy_format::id::Id;
 use nova_galaxy_format::load::Galaxy;
 use nova_galaxy_format::model::{StellarKind, Visual};
-use nova_galaxy_format::source::Source;
+use nova_galaxy_format::source::{DirSource, Source};
 use nova_galaxy_media::budget::limits;
-use nova_galaxy_media::planet::{Sizes, Surface, bake};
-use nova_galaxy_media::{NoTexture, read_texture};
+use nova_galaxy_media::planet::{Sizes, Surface};
+use nova_galaxy_media::{NoTexture, check_texture, read_texture_file, texture_file};
 
 use crate::galaxy_models::overrun;
 use crate::gpu::MAX_TEXTURE_SIDE;
+use crate::planet_files::{PlanetFiles, TextureFile};
 use crate::planet_source::{LoadedPlanet, PlanetError, PlanetRequest, PlanetSource};
 
 /// The new game's planets: the stellars, asset manifest and budgets of
-/// `galaxy`, texture files read through `source`, looks baked at `sizes`.
+/// `galaxy`, texture files read through `source`, looks answered unbaked,
+/// to be baked at `sizes`.
 #[derive(Clone, Copy, Debug)]
 pub struct GalaxyPlanets<'a, S: Source> {
     galaxy: &'a Galaxy,
@@ -36,7 +54,7 @@ pub struct GalaxyPlanets<'a, S: Source> {
 
 impl<'a, S: Source> GalaxyPlanets<'a, S> {
     /// The planets `galaxy` names, textures read through `source`, looks
-    /// baked at the engine's sizes ([`Sizes::ENGINE`]).
+    /// to be baked at the engine's sizes ([`Sizes::ENGINE`]).
     #[must_use]
     pub fn new(galaxy: &'a Galaxy, source: &'a S) -> Self {
         GalaxyPlanets {
@@ -46,7 +64,8 @@ impl<'a, S: Source> GalaxyPlanets<'a, S> {
         }
     }
 
-    /// The same planets with looks baked at `sizes`: smaller, for tests.
+    /// The same planets with looks to be baked at `sizes`: smaller, for
+    /// tests.
     #[must_use]
     pub fn baked_at(self, sizes: Sizes) -> Self {
         GalaxyPlanets { sizes, ..self }
@@ -62,18 +81,18 @@ impl<S: Source> PlanetSource for GalaxyPlanets<'_, S> {
         if matches!(stellar.kind, StellarKind::Station | StellarKind::Outpost) {
             return Err(PlanetError::NotAPlanet(name.clone()));
         }
-        let surface = match &stellar.visual {
-            None => return Err(PlanetError::NotAPlanet(name.clone())),
-            Some(Visual::Generated(look)) => bake(look, self.sizes),
-            Some(Visual::Asset(asset)) => self.texture(name, asset)?,
-        };
-        Ok(LoadedPlanet { surface })
+        match &stellar.visual {
+            None => Err(PlanetError::NotAPlanet(name.clone())),
+            Some(Visual::Generated(look)) => Ok(LoadedPlanet::unbaked(look.clone(), self.sizes)),
+            Some(Visual::Asset(asset)) => self.texture(name, asset).map(LoadedPlanet::unread),
+        }
     }
 }
 
 impl<S: Source> GalaxyPlanets<'_, S> {
-    /// The planet of `stellar` drawn from its texture asset `asset`.
-    fn texture(&self, stellar: &str, asset: &Id) -> Result<Surface, PlanetError> {
+    /// The file of `stellar`'s texture asset `asset`, checked from its
+    /// header and size and left unread.
+    fn texture(&self, stellar: &str, asset: &Id) -> Result<TextureFile, PlanetError> {
         let (stellar, name) = (stellar.to_owned(), asset.to_string());
         let Some(doc) = self.galaxy.assets.get(asset) else {
             return Err(PlanetError::NoAsset {
@@ -88,10 +107,56 @@ impl<S: Source> GalaxyPlanets<'_, S> {
             });
         }
         let limits = limits(self.galaxy, asset);
-        read_texture(self.source, &doc.data, &limits, MAX_TEXTURE_SIDE)
-            .map(Surface::from_texture)
-            .map_err(|why| no_texture(stellar, name, why))
+        let checked = texture_file(&doc.data).and_then(|file| {
+            check_texture(self.source, file, &limits, MAX_TEXTURE_SIDE).map(|_| file.to_owned())
+        });
+        match checked {
+            Ok(file) => Ok(TextureFile {
+                stellar,
+                asset: name,
+                file,
+                limits,
+            }),
+            Err(why) => Err(no_texture(stellar, name, why)),
+        }
     }
+}
+
+/// [`PlanetFiles`] for the new game's data: reads a texture's file
+/// through the format's [`Source`] port, as `GalaxyPlanets` checked it at
+/// load, and checks it again (it may have changed since).
+#[derive(Clone, Debug)]
+pub struct GalaxyPlanetFiles<S> {
+    source: S,
+}
+
+impl<S: Source> GalaxyPlanetFiles<S> {
+    /// Texture files read through `source`: its own, or borrowed or
+    /// shared (`&S`, `Rc<S>`).
+    pub fn new(source: S) -> Self {
+        GalaxyPlanetFiles { source }
+    }
+}
+
+impl<S: Source + std::fmt::Debug> PlanetFiles for GalaxyPlanetFiles<S> {
+    fn read(&self, texture: &TextureFile) -> Result<Surface, PlanetError> {
+        let TextureFile {
+            stellar,
+            asset,
+            file,
+            limits,
+        } = texture;
+        read_texture_file(&self.source, file, limits, MAX_TEXTURE_SIDE)
+            .map(Surface::from_texture)
+            .map_err(|why| no_texture(stellar.clone(), asset.clone(), why))
+    }
+}
+
+/// [`GalaxyPlanetFiles`] over the folder `dir`, read as the format's
+/// directory adapter reads it, so the app names no source.
+#[must_use]
+pub fn planet_files_in(dir: &std::path::Path) -> GalaxyPlanetFiles<DirSource> {
+    GalaxyPlanetFiles::new(DirSource::new(dir))
 }
 
 /// Why `stellar`'s texture `asset` can't be had, as the port says it.
@@ -140,12 +205,13 @@ fn no_texture(stellar: String, asset: String, why: NoTexture) -> PlanetError {
 mod tests {
     use nova_galaxy_format::fixture::{CC0, galaxy};
     use nova_galaxy_format::load::load;
-    use nova_galaxy_format::source::MemSource;
+    use nova_galaxy_format::source::{CountingSource, MemSource};
     use nova_galaxy_media::fixture::png;
-    use nova_galaxy_media::planet::TEXTURE_DAY;
+    use nova_galaxy_media::planet::{TEXTURE_DAY, bake};
 
     use super::*;
     use crate::model_source::{Measure, Overrun};
+    use crate::planet_files::{FakePlanetFiles, PlanetFiles, TextureFile};
     use crate::planet_source::check_contract;
 
     const SMALL: Sizes = Sizes {
@@ -190,7 +256,7 @@ mod tests {
     }
 
     #[test]
-    fn a_generated_stellar_is_its_look_baked() {
+    fn a_generated_stellar_is_its_look_unbaked_with_the_sizes_to_bake_it_at() {
         let source = sample();
         let (galaxy, problems) = load(&source);
         assert_eq!(problems, [], "the sample loads cleanly");
@@ -198,24 +264,176 @@ mod tests {
         else {
             panic!("generated");
         };
+        let small = ask(&source, "kestrel-reach").expect("a planet");
+        assert_eq!(small, LoadedPlanet::unbaked(look.clone(), SMALL));
+        assert_eq!(small.baked(), None, "not baked here");
         assert_eq!(
-            ask(&source, "kestrel-reach"),
-            Ok(LoadedPlanet {
-                surface: bake(look, SMALL),
-            })
+            small.make(&FakePlanetFiles::default()),
+            Ok(bake(look, SMALL))
         );
         // The engine's sizes, unless told otherwise.
         let engine = GalaxyPlanets::new(&galaxy, &source);
-        assert_eq!(engine.sizes, Sizes::ENGINE);
+        assert_eq!(
+            engine.planet(&PlanetRequest::new("kestrel-reach")),
+            Ok(LoadedPlanet::unbaked(look.clone(), Sizes::ENGINE))
+        );
+    }
+
+    #[test]
+    fn an_unbaked_stellar_reaches_as_far_as_its_look_s_rings_and_atmosphere() {
+        // Kestrel Reach: rings to 2.3, an atmosphere 0.04 thick.
+        let planet = ask(&sample(), "kestrel-reach").expect("a planet");
+        assert!((planet.reach() - 2.3).abs() < 1e-6, "{}", planet.reach());
     }
 
     fn id(s: &str) -> Id {
         Id::try_from(s.to_owned()).unwrap()
     }
 
+    /// The texture file `alpha-prime` draws, as the sample checks it.
+    fn alpha_prime(source: &MemSource) -> TextureFile {
+        let (galaxy, _) = load(source);
+        TextureFile {
+            stellar: "alpha-prime".into(),
+            asset: "surface".into(),
+            file: "media/export/pack/surface.png".into(),
+            limits: limits(&galaxy, &id("surface")),
+        }
+    }
+
+    #[test]
+    fn a_texture_planet_is_checked_at_load_from_its_head_and_left_unread() {
+        let source = sample();
+        let (galaxy, _) = load(&source);
+        let counting = CountingSource::new(&source);
+        let answer =
+            GalaxyPlanets::new(&galaxy, &counting).planet(&PlanetRequest::new("alpha-prime"));
+        let texture = alpha_prime(&source);
+        assert!(texture.limits.side.is_some(), "the sample's budget");
+        assert_eq!(answer, Ok(LoadedPlanet::unread(texture)));
+        let file = "media/export/pack/surface.png";
+        assert_eq!(counting.heads_asked(file), 1);
+        assert_eq!(counting.sizes_asked(file), 1);
+        assert_eq!(counting.bytes_asked(file), 0, "not read at load");
+    }
+
+    #[test]
+    fn a_texture_corrupt_past_its_header_loads_unread_and_fails_when_read() {
+        let mut corrupt = png(16, 8, &pattern())[..33].to_vec();
+        corrupt.extend([0xA5; 64]);
+        let source = sample().with_bytes("media/export/pack/surface.png", &corrupt);
+        let texture = alpha_prime(&source);
+        assert_eq!(
+            ask(&source, "alpha-prime"),
+            Ok(LoadedPlanet::unread(texture.clone()))
+        );
+        assert!(matches!(
+            GalaxyPlanetFiles::new(&source).read(&texture),
+            Err(PlanetError::Unreadable { ref stellar, ref asset, ref why })
+                if stellar == "alpha-prime" && asset == "surface" && why.contains("surface.png")
+        ));
+    }
+
+    #[test]
+    fn the_files_adapter_reads_a_texture_once_as_the_reader_does() {
+        let source = sample();
+        let texture = alpha_prime(&source);
+        let counting = CountingSource::new(&source);
+        let read = GalaxyPlanetFiles::new(&counting).read(&texture);
+        assert_eq!(counting.bytes_asked(&texture.file), 1);
+        let (galaxy, _) = load(&source);
+        let asset = &galaxy.assets[&id("surface")].data;
+        let expected =
+            nova_galaxy_media::read_texture(&source, asset, &texture.limits, MAX_TEXTURE_SIDE)
+                .map(Surface::from_texture)
+                .expect("the sample's texture reads");
+        assert_eq!(read, Ok(expected));
+    }
+
+    #[test]
+    fn the_files_adapter_reports_a_file_gone_or_changed_since_load() {
+        let texture = alpha_prime(&sample());
+        let named = || ("alpha-prime".to_owned(), "surface".to_owned());
+        let gone = sample().without("media/export/pack/surface.png");
+        let (stellar, asset) = named();
+        assert_eq!(
+            GalaxyPlanetFiles::new(&gone).read(&texture),
+            Err(PlanetError::Missing {
+                stellar,
+                asset,
+                file: "media/export/pack/surface.png".into(),
+            })
+        );
+        let pointer = sample().with_bytes(
+            "media/export/pack/surface.png",
+            b"version https://git-lfs.github.com/spec/v1\noid sha256:ab\nsize 12\n",
+        );
+        let (stellar, asset) = named();
+        assert_eq!(
+            GalaxyPlanetFiles::new(&pointer).read(&texture),
+            Err(PlanetError::LfsPointer { stellar, asset })
+        );
+        let square = sample().with_bytes("media/export/pack/surface.png", &png(8, 8, &[0; 256]));
+        let (stellar, asset) = named();
+        assert_eq!(
+            GalaxyPlanetFiles::new(&square).read(&texture),
+            Err(PlanetError::Shape {
+                stellar,
+                asset,
+                file: "media/export/pack/surface.png".into(),
+                width: 8,
+                height: 8,
+            })
+        );
+    }
+
+    #[test]
+    fn the_files_adapter_meets_the_contract() {
+        let source = sample();
+        let texture = alpha_prime(&source);
+        let absent = TextureFile {
+            file: "media/export/pack/gone.png".into(),
+            ..texture.clone()
+        };
+        crate::planet_files::check_contract(&GalaxyPlanetFiles::new(&source), &texture, &absent);
+    }
+
+    /// A folder of this test's own under the system's temporary folder,
+    /// removed when dropped.
+    struct Folder(std::path::PathBuf);
+
+    impl Drop for Folder {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn the_files_of_a_folder_are_read_from_disk() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("after 1970")
+            .as_nanos();
+        let folder = Folder(std::env::temp_dir().join(format!(
+            "nova-render-planet-files-{}-{nanos}",
+            std::process::id()
+        )));
+        let mut pack = folder.0.clone();
+        pack.extend(["media", "export", "pack"]);
+        std::fs::create_dir_all(&pack).expect("its folder");
+        std::fs::write(pack.join("surface.png"), png(16, 8, &pattern())).expect("the file");
+        let texture = alpha_prime(&sample());
+        let read = planet_files_in(&folder.0).read(&texture);
+        assert_eq!(read, GalaxyPlanetFiles::new(&sample()).read(&texture));
+        assert!(read.is_ok());
+    }
+
     #[test]
     fn a_texture_planet_is_its_texture_with_no_extras() {
-        let planet = ask(&sample(), "alpha-prime").unwrap().surface;
+        let source = sample();
+        let unread = ask(&source, "alpha-prime").unwrap();
+        assert!(unread.baked().is_none(), "left for its first draw");
+        let planet = unread.make(&GalaxyPlanetFiles::new(&source)).unwrap();
         let opaque: Vec<u8> = pattern()
             .chunks(4)
             .flat_map(|t| [t[0], t[1], t[2], 0])
@@ -279,7 +497,7 @@ mod tests {
     }
 
     #[test]
-    fn each_way_a_texture_fails_reaches_the_port() {
+    fn each_way_a_texture_fails_its_header_reaches_the_port_at_load() {
         let pointer = sample().with_bytes(
             "media/export/pack/surface.png",
             b"version https://git-lfs.github.com/spec/v1\noid sha256:ab\nsize 12\n",
@@ -399,8 +617,9 @@ mod tests {
         let source = sample();
         let (galaxy, _) = load(&source);
         let planets = GalaxyPlanets::new(&galaxy, &source).baked_at(SMALL);
+        let files = GalaxyPlanetFiles::new(&source);
         for stellar in ["kestrel-reach", "alpha-prime"] {
-            check_contract(&planets, &PlanetRequest::new(stellar), "nothing");
+            check_contract(&planets, &files, &PlanetRequest::new(stellar), "nothing");
         }
     }
 
@@ -422,6 +641,7 @@ mod tests {
             )
             .with_bytes("media/export/pack/moon.png", &png(4, 2, &[50; 32]));
         let planet = ask(&source, "pale").unwrap();
-        assert_eq!(planet.surface.surface.rgba, [50, 50, 50, 0].repeat(8));
+        let made = planet.make(&GalaxyPlanetFiles::new(&source)).unwrap();
+        assert_eq!(made.surface.rgba, [50, 50, 50, 0].repeat(8));
     }
 }

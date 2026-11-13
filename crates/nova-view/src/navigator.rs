@@ -5,12 +5,14 @@
 //! (the shared Back, read through the navigator's bindings) goes back
 //! from the system to the map, which kept its view and selection. Escape
 //! on the map does nothing here: what it means there (quitting) is the
-//! app's router's to decide.
+//! app's router's to decide. Each system view it opens draws the world
+//! models it was given ([`Navigator::with_world_models`]).
 
 use std::rc::Rc;
 use std::time::Duration;
 
 use crate::flight::SharedChance;
+use crate::flight::world_models::WorldModels;
 use crate::galaxy::{GalaxyCatalog, GalaxyMap};
 use crate::keymap::{Command, CommandReader, SharedBindings, UiCommand, contexts};
 use crate::system::{SystemCatalog, SystemView};
@@ -28,6 +30,9 @@ pub struct Navigator<C> {
     /// What each system view opened draws its stellars' random frames on
     /// ([`SystemView::with_chance`]).
     chance: SharedChance,
+    /// The models and planets each system view opened draws its stellars
+    /// as ([`SystemView::with_world_models`]); empty by default.
+    world_models: Rc<WorldModels>,
     /// Its own key, Back, as a command ([`contexts::NAVIGATOR`]); the
     /// map and each system view opened read the same bindings.
     keys: CommandReader,
@@ -42,6 +47,7 @@ impl<C: GalaxyCatalog + SystemCatalog> Navigator<C> {
             map,
             system: None,
             chance: SharedChance::default(),
+            world_models: Rc::default(),
             keys: CommandReader::new(contexts::NAVIGATOR),
         }
     }
@@ -103,6 +109,16 @@ impl<C> Navigator<C> {
     #[must_use]
     pub fn with_chance(self, chance: SharedChance) -> Self {
         Self { chance, ..self }
+    }
+
+    /// The navigator with each system view it opens drawing its stellars'
+    /// models and planets from `models` ([`SystemView::with_world_models`]).
+    #[must_use]
+    pub fn with_world_models(self, models: Rc<WorldModels>) -> Self {
+        Self {
+            world_models: models,
+            ..self
+        }
     }
 
     /// The navigator with the map's text measured by `metrics`, which its
@@ -178,6 +194,7 @@ impl<C: GalaxyCatalog + SystemCatalog> Screen for Navigator<C> {
             self.system = Some(
                 SystemView::new(&self.catalog, id)
                     .with_chance(self.chance.clone())
+                    .with_world_models(Rc::clone(&self.world_models))
                     .with_bindings(self.keys.bindings().clone()),
             );
         }
@@ -275,28 +292,31 @@ mod tests {
                     stand_in: None,
                 }]
             } else {
-                vec![StellarContents {
-                    id: StellarId(130),
-                    name: "Beta Flicker".to_owned(),
-                    x: 0,
-                    y: 0,
-                    sprite: Ok(StellarSheet {
-                        image: crate::SheetImage::Rled(1001),
-                        frames: NonZeroU16::new(4).expect("non-zero"),
-                        frame_width: 8,
-                        frame_height: 8,
-                        image_size: (8, 8),
-                        eight_bit: false,
-                        clip_quirks: false,
-                    }),
-                    dead_sprite: None,
-                    animation: StellarAnimation {
-                        delay: 1,
-                        frame0_bias: 0,
-                        flags2: nova_sim_frame::landing::RANDOM,
+                vec![
+                    StellarContents {
+                        id: StellarId(130),
+                        name: "Beta Flicker".to_owned(),
+                        x: 0,
+                        y: 0,
+                        sprite: Ok(StellarSheet {
+                            image: crate::SheetImage::Rled(1001),
+                            frames: NonZeroU16::new(4).expect("non-zero"),
+                            frame_width: 8,
+                            frame_height: 8,
+                            image_size: (8, 8),
+                            eight_bit: false,
+                            clip_quirks: false,
+                        }),
+                        dead_sprite: None,
+                        animation: StellarAnimation {
+                            delay: 1,
+                            frame0_bias: 0,
+                            flags2: nova_sim_frame::landing::RANDOM,
+                        },
+                        stand_in: None,
                     },
-                    stand_in: None,
-                }]
+                    beta_dock(),
+                ]
             };
             SystemContents {
                 id,
@@ -316,8 +336,54 @@ mod tests {
         }
     }
 
+    /// Beta's dock (131) at (100, 0): no sheet, a disc standing in.
+    fn beta_dock() -> StellarContents {
+        StellarContents {
+            id: StellarId(131),
+            name: "Beta Dock".to_owned(),
+            x: 100,
+            y: 0,
+            sprite: Err("no spïn".to_owned()),
+            dead_sprite: None,
+            animation: StellarAnimation::default(),
+            stand_in: Some(crate::outline::StellarStandIn::Disc(crate::Color::WHITE)),
+        }
+    }
+
     fn navigator() -> Navigator<FakeCatalog> {
         Navigator::new(FakeCatalog)
+    }
+
+    #[test]
+    fn each_system_view_it_opens_draws_the_world_models() {
+        use crate::flight::world_models::{StellarModel, WorldModels};
+        use crate::model::ModelKey;
+        let hub = ModelKey(5);
+        let models = Rc::new(WorldModels {
+            stellars: [(
+                StellarId(131),
+                StellarModel::Model {
+                    key: hub,
+                    reach: 2.0,
+                },
+            )]
+            .into(),
+            ..WorldModels::default()
+        });
+        let keys = |navigator: &mut Navigator<FakeCatalog>| {
+            select(navigator, 129);
+            navigator.input(&press(Key::Enter));
+            assert_eq!(open(navigator), Some(SystemId(129)));
+            drawn(navigator)
+                .iter()
+                .filter_map(|command| match command {
+                    crate::DrawCommand::Model { model, .. } => Some(*model),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(keys(&mut navigator().with_world_models(models)), [hub]);
+        assert_eq!(keys(&mut navigator()), []);
     }
 
     fn key(key: Key, pressed: bool, repeat: bool) -> Input {

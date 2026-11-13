@@ -848,7 +848,7 @@ fn shown_heading(from: ShipPlace, to: ShipPlace, alpha: f32) -> f32 {
 /// crossfaded at (32 − t)/32, which this alpha draws. An NPC gets no
 /// screen flash, as the player's own gate arrival does (see
 /// [`jump`](super::jump)).
-fn npc_tint(gate: GateFade) -> Option<Color> {
+pub(crate) fn npc_tint(gate: GateFade) -> Option<Color> {
     let level = match gate {
         GateFade::Emerging { ticks_left } => emerge_level(ticks_left)?,
         GateFade::Entering { ticks_left } => enter_level(ticks_left),
@@ -1542,6 +1542,9 @@ pub struct FlightView<C, S: FlightSim> {
     held_alts: RefCell<crate::flight::held_alt::HeldAlts>,
     /// Each ship's weapon glow while it is lit ([`WeaponGlows`]).
     glows: WeaponGlows,
+    /// Each modelled ship's turret swing toward its aim, stepped once a
+    /// pass shown ([`TurretSwings`](crate::flight::turret_swing::TurretSwings)).
+    turret_swings: crate::flight::turret_swing::TurretSwings,
     /// The NPCs' flashes and glows let go of at the last change of system
     /// or landing, held for the escorts the fleet keeps
     /// ([`HeldDisplays`](crate::flight::carried_displays::HeldDisplays)).

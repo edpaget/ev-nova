@@ -118,6 +118,7 @@ use crate::bound_names::{CONFIRM_OR_BACK, press_clause};
 use crate::color::Color;
 use crate::draw::DrawList;
 use crate::flight::PortScreen;
+use crate::flight::world_models::WorldModels;
 use crate::font::Font;
 use crate::image::ImageKey;
 use crate::input::Input;
@@ -289,6 +290,9 @@ pub struct BarScreen {
     /// The dialog, or why it cannot be shown.
     laid: Result<Laid, String>,
     hiring: Hiring,
+    /// The world models its hire screen draws a class's model by
+    /// ([`BarScreen::with_world_models`]); empty by default.
+    world_models: Rc<WorldModels>,
     style: ButtonStyle,
     /// Whether its dialogs' buttons take the keyboard focus.
     focus_ring: FocusRing,
@@ -399,6 +403,7 @@ impl BarScreen {
         Self {
             laid,
             hiring,
+            world_models: Rc::default(),
             style,
             focus_ring: FocusRing::default(),
             hire_gate: HireGate {
@@ -439,6 +444,14 @@ impl BarScreen {
             offering.set_bindings(bindings.clone());
         }
         self.keys.set_bindings(bindings);
+        self
+    }
+
+    /// The bar whose hire screen draws a class with no `PICT` as its model
+    /// from `models`, when it has one ([`HireScreen::with_world_models`]).
+    #[must_use]
+    pub fn with_world_models(mut self, models: Rc<WorldModels>) -> Self {
+        self.world_models = models;
         self
     }
 
@@ -867,7 +880,8 @@ impl BarScreen {
             self.style,
         )
         .with_focus_ring(self.focus_ring)
-        .with_bindings(self.keys.bindings().clone());
+        .with_bindings(self.keys.bindings().clone())
+        .with_world_models(&self.world_models);
         hire.set_movies(self.movies.clone());
         self.told.tell(&mut hire);
         self.hire = Some(hire);
@@ -1944,6 +1958,41 @@ mod tests {
             ButtonStyle::STOCK,
             true,
         )
+    }
+
+    #[test]
+    fn the_hire_screen_it_opens_draws_a_modelled_class_from_its_world_models() {
+        use crate::flight::world_models::ShipModel;
+        use crate::model::ModelKey;
+        let models = WorldModels {
+            ships: [(
+                ShipId(129),
+                ShipModel {
+                    key: ModelKey(4),
+                    scale: 1.0,
+                    base_transp: 0,
+                    radius: 2.0,
+                },
+            )]
+            .into(),
+            ..WorldModels::default()
+        };
+        let keys = |screen: &BarScreen| -> Vec<ModelKey> {
+            let mut list = DrawList::new();
+            screen.hire_screen().expect("open").draw(&mut list);
+            list.iter()
+                .filter_map(|command| match command {
+                    DrawCommand::Model { model, .. } => Some(*model),
+                    _ => None,
+                })
+                .collect()
+        };
+        let mut screen = laid_hire_bar().with_world_models(Rc::new(models));
+        screen.open_hire(list(2));
+        assert_eq!(keys(&screen), [ModelKey(4)]);
+        let mut plain = laid_hire_bar();
+        plain.open_hire(list(2));
+        assert_eq!(keys(&plain), []);
     }
 
     #[test]

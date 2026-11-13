@@ -14,10 +14,11 @@
 //! index and texture coordinate; the parts' order; and every part it
 //! doesn't paint as it was. A part with no material, or whose material
 //! has no slot, isn't painted. A painted material with a texture keeps
-//! it, so once textures are sampled (glTF multiplies the factor by the
-//! texture) the livery tints the texture as the data's "keeps its
-//! textures" asks; until then it draws flat in the livery's colour, as an
-//! unpainted textured material draws flat in its own.
+//! it, by the same shared pointer, so one hull in two liveries uploads
+//! its texture once. The texture is sampled and multiplied by the vertex
+//! colour ([`crate::camera::fragment`]), so the livery tints the texture
+//! as the data's "keeps its textures" asks, as an unpainted textured
+//! material's own factor tints its own.
 //!
 //! Which slot a material is in is the source's reading of the model's
 //! `paint`. The galaxy adapter takes it from `nova_galaxy_media::slot_of`,
@@ -47,7 +48,7 @@
 //! crate's slot ([`crate::galaxy_models`]).
 
 use crate::model::{Mesh, Vertex};
-use crate::model_source::{LoadedModel, Material, linear, vertex_color};
+use crate::model_source::{LoadedModel, Material, Part, linear, vertex_color};
 
 /// A livery slot: which of a livery's colours paints a material.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -112,10 +113,7 @@ pub fn painted(model: &LoadedModel, livery: &Livery) -> LoadedModel {
         .parts
         .iter()
         .map(|part| {
-            let painted = part
-                .material
-                .and_then(|at| materials.get(at))
-                .filter(|m| m.paint.is_some());
+            let painted = paint_of(part, &materials);
             let mut part = part.clone();
             if let Some(material) = painted {
                 part.mesh = recolored(&part.mesh, vertex_color(material.base_color));
@@ -128,6 +126,27 @@ pub fn painted(model: &LoadedModel, livery: &Livery) -> LoadedModel {
         materials,
         textures: model.textures.clone(),
     }
+}
+
+/// Whether a livery would paint any of `model`: some part of it is drawn
+/// in a material with a slot. When none is, [`painted`] leaves every part,
+/// and so the model's mesh, as it was.
+#[must_use]
+pub(crate) fn takes_paint(model: &LoadedModel) -> bool {
+    model
+        .parts
+        .iter()
+        .any(|part| paint_of(part, &model.materials).is_some())
+}
+
+/// The material of `materials` that paints `part`: the one it is drawn
+/// in, when that has a slot. The one rule for which parts a livery paints
+/// (see the [module docs](self)): [`painted`] rebakes the parts it names,
+/// and [`takes_paint`] asks whether it names any.
+fn paint_of<'a>(part: &Part, materials: &'a [Material]) -> Option<&'a Material> {
+    part.material
+        .and_then(|at| materials.get(at))
+        .filter(|material| material.paint.is_some())
 }
 
 /// `mesh` with every vertex coloured `color`.
@@ -143,8 +162,11 @@ fn recolored(mesh: &Mesh, color: [f32; 4]) -> Mesh {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
-    use crate::model_source::{Part, Texture};
+    use crate::model_source::Texture;
+    use crate::model_texture::ModelTexture;
 
     /// Three liveries' colours apart in every slot and channel.
     const LEAGUE: Livery = Livery {
@@ -163,11 +185,7 @@ mod tests {
         Material {
             name: Some(name.to_owned()),
             paint: slot,
-            base_color: [0.25, 0.5, 0.75, 1.0],
-            metallic: 1.0,
-            roughness: 1.0,
-            unlit: false,
-            base_color_texture: None,
+            ..Material::new([0.25, 0.5, 0.75, 1.0])
         }
     }
 
@@ -202,8 +220,7 @@ mod tests {
             parts,
             materials,
             textures: vec![Texture {
-                bytes: b"png".to_vec(),
-                mime: Some("image/png".into()),
+                image: Arc::new(ModelTexture::new(1, 1, vec![9, 9, 9, 255]).unwrap()),
                 path: None,
             }],
         }
@@ -315,6 +332,92 @@ mod tests {
                 assert_eq!(p.color[3], 0.5, "alpha kept");
             }
         }
+        // Merged, the painted model draws the same texture, by the same
+        // pointer, so the two liveries share one upload; and stays unlit.
+        let (merged, own) = (painted.mesh(), model.mesh());
+        assert_eq!(merged.sections(), own.sections());
+        assert_eq!(merged.sections()[0].texture, Some(0));
+        assert!(Arc::ptr_eq(&merged.textures()[0], &model.textures[0].image));
+        assert!(Arc::ptr_eq(&merged.textures()[0], &own.textures()[0]));
+        assert!(merged.vertices().iter().all(|v| v.unlit));
+        for (p, o) in merged.vertices().iter().zip(own.vertices()) {
+            assert_eq!(p.uv, o.uv);
+        }
+    }
+
+    #[test]
+    fn two_liveries_of_a_hull_with_an_unsampled_texture_share_the_sampled_one() {
+        use crate::recording::{GpuCall, NoImages, RecordingGpu};
+        use crate::viewport::{LogicalSize, Viewport};
+
+        // Texture 0 is named only by the material of a face with no
+        // coordinates; texture 1 by a painted material on the rest.
+        let skin = Material {
+            base_color_texture: Some(1),
+            ..material("metal", Some(PaintSlot::Primary))
+        };
+        let bare = Material {
+            base_color_texture: Some(0),
+            ..material("dark", None)
+        };
+        let mut model = cube(
+            vec![skin, bare],
+            [Some(1), Some(0), Some(0), Some(0), Some(0), Some(0)],
+        );
+        model.parts[0].uv = None;
+        model.textures.push(Texture {
+            image: Arc::new(ModelTexture::new(1, 1, vec![7, 7, 7, 255]).unwrap()),
+            path: None,
+        });
+        let meshes = [
+            model.mesh(),
+            painted(&model, &LEAGUE).mesh(),
+            painted(&model, &RAIDER).mesh(),
+        ];
+        assert_ne!(meshes[1], meshes[2], "painted apart");
+        for mesh in &meshes {
+            assert_eq!(mesh.textures().len(), 1);
+            assert!(Arc::ptr_eq(&mesh.textures()[0], &model.textures[1].image));
+            assert_eq!(mesh.sections().last().unwrap().texture, Some(0));
+        }
+
+        // Drawn, the three upload the one texture once and all name it.
+        let mut renderer = crate::Renderer::new(NoImages);
+        let mut list = nova_view::DrawList::new();
+        for (at, mesh) in meshes.into_iter().enumerate() {
+            let key = nova_view::ModelKey(at as u32 + 1);
+            renderer.add_model(key, mesh);
+            list.model(
+                key,
+                nova_view::ModelPose {
+                    center: nova_view::Point::new(12.0, 12.0),
+                    orientation: nova_view::Orientation::IDENTITY,
+                    scale: 10.0,
+                },
+            );
+        }
+        let viewport = Viewport::new(LogicalSize { w: 64, h: 48 }, (128, 96), 2.0);
+        let mut gpu = RecordingGpu::new();
+        renderer.render(&list, &viewport, &mut gpu);
+        let uploaded: Vec<_> = gpu
+            .calls
+            .iter()
+            .filter_map(|call| match call {
+                GpuCall::UploadModelTexture { texture, data } => Some((*texture, data.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(uploaded.len(), 1);
+        assert_eq!(uploaded[0].1, *model.textures[1].image);
+        let named: Vec<_> = gpu
+            .calls
+            .iter()
+            .filter_map(|call| match call {
+                GpuCall::UploadMesh { textures, .. } => Some(textures.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(named, vec![vec![uploaded[0].0]; 3]);
     }
 
     #[test]
@@ -324,6 +427,49 @@ mod tests {
             [Some(0), Some(1), None, Some(0), Some(1), None],
         );
         assert_eq!(painted(&model, &LEAGUE), model);
+    }
+
+    #[test]
+    fn a_model_with_a_part_in_a_slotted_material_takes_paint() {
+        assert!(takes_paint(&slotted()));
+        // One painted part among unpainted ones is enough.
+        let one = cube(
+            vec![
+                material("dark", None),
+                material("metal", Some(PaintSlot::Trim)),
+            ],
+            [Some(0), None, Some(9), Some(0), None, Some(1)],
+        );
+        assert!(takes_paint(&one));
+        assert_ne!(painted(&one, &LEAGUE).mesh(), one.mesh());
+    }
+
+    #[test]
+    fn a_model_with_no_part_in_a_slotted_material_takes_no_paint() {
+        // Materials with no slot, no material, and an index out of range.
+        let unslotted = cube(
+            vec![material("dark", None), material("glass", None)],
+            [Some(0), Some(1), None, Some(9), Some(1), None],
+        );
+        assert!(!takes_paint(&unslotted));
+        assert_eq!(painted(&unslotted, &LEAGUE), unslotted);
+        // A slotted material no part is drawn in paints no part.
+        let undrawn = cube(
+            vec![
+                material("dark", None),
+                material("metal", Some(PaintSlot::Primary)),
+            ],
+            [Some(0), None, Some(9), Some(0), None, Some(2)],
+        );
+        assert!(!takes_paint(&undrawn));
+        assert_eq!(painted(&undrawn, &LEAGUE).parts, undrawn.parts);
+        assert_eq!(painted(&undrawn, &LEAGUE).mesh(), undrawn.mesh());
+        // No parts at all.
+        assert!(!takes_paint(&LoadedModel {
+            parts: Vec::new(),
+            materials: vec![material("metal", Some(PaintSlot::Primary))],
+            textures: Vec::new(),
+        }));
     }
 
     #[test]

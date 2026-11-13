@@ -149,6 +149,25 @@
 //! [`modelled_sample`] with a station model on both stations and a
 //! generated planet in the start system, for the 3D flight screen:
 //! [`modelled_sample_3d`]'s docs say what each is.
+//!
+//! # `liveried_stations_3d()`
+//!
+//! [`modelled_sample_3d`] with the station hub painted and a livery for
+//! the commonwealth, so Luyten Exchange draws in its owner's livery and
+//! Marrow Yard, whose owner has none, in the kit's own colours:
+//! [`liveried_stations_3d`]'s docs say what each is.
+//!
+//! # `sky_sample()`
+//!
+//! [`modelled_sample`] with a `sky` block on the start system, Luyten
+//! Crossing ([`SKY_SAMPLE_BLOCK`]), so its layered sky draws the data's
+//! look: [`sky_sample`]'s docs say what it is.
+//!
+//! # `decorated_sample()`
+//!
+//! [`modelled_sample`] with two sky images and a list of decorations on
+//! the start system ([`DECORATED_SAMPLE_BLOCK`]), so its sky draws a hulk
+//! and a galaxy from data: [`decorated_sample`]'s docs say what each is.
 
 use std::path::{Path, PathBuf};
 
@@ -402,6 +421,215 @@ pub fn modelled_sample_3d() -> MemSource {
         .with("nova-ids.json", &pinned)
 }
 
+/// The id of the commonwealth's livery in [`liveried_stations_3d`].
+pub const COMMONWEALTH_LIVERY: &str = "commonwealth-colours";
+
+/// The commonwealth's livery's colours in [`liveried_stations_3d`], as
+/// sRGB bytes: primary, secondary and trim. Each channel of each is at
+/// least 18 from that channel of every [`KENNEY`] colour (as bytes) and
+/// every slot of the sample's `harrow-raider` livery, and the three are
+/// apart from each other.
+pub const COMMONWEALTH_COLOURS: [[u8; 3]; 3] =
+    [[0xff, 0x8c, 0x00], [0x71, 0x8c, 0xff], [0x00, 0xff, 0xff]];
+
+/// [`modelled_sample_3d`], with its stations' hub painted and the
+/// commonwealth given a livery, so a station draws in its owner's colours:
+///
+/// - the `station-hub` asset is painted as the sample's ships are
+///   (`primary: [metal]`, `secondary: [metalRed]`, `trim: [metalDark]`),
+///   its top in `metalDark`, as the freighter's is;
+/// - the livery [`COMMONWEALTH_LIVERY`] names the `commonwealth`, in
+///   [`COMMONWEALTH_COLOURS`]. No ship wears it.
+///
+/// So `luyten-exchange`, the commonwealth's, wears the commonwealth's
+/// livery, and `marrow-yard`, owned by `marrow-commons`, which no livery
+/// names, wears none and draws in the kit's own colours.
+///
+/// [`modelled_sample_3d`] stays as it is, so the tests over it keep their
+/// meaning.
+///
+/// # Panics
+///
+/// When the sample folder can't be read.
+#[must_use]
+pub fn liveried_stations_3d() -> MemSource {
+    let hex = |[r, g, b]: [u8; 3]| format!("\"#{r:02x}{g:02x}{b:02x}\"");
+    let [primary, secondary, trim] = COMMONWEALTH_COLOURS.map(hex);
+    modelled_sample_3d()
+        .with(
+            "assets/station-hub.md",
+            &format!(
+                "---\nkind: model\nplaceholder: false\nfront: \"-z\"\n\
+                 paint: {{primary: [metal], secondary: [metalRed], trim: [metalDark]}}\n\
+                 files: [{STATION_HUB_GLB}]\n{KENNEY_CC0}---\n"
+            ),
+        )
+        .with(
+            &format!("liveries/{COMMONWEALTH_LIVERY}.md"),
+            &format!(
+                "---\nname: Commonwealth colours\nfaction: commonwealth\n\
+                 palette: {{primary: {primary}, secondary: {secondary}, trim: {trim}}}\n---\n"
+            ),
+        )
+}
+
+/// The `sky` block [`sky_sample`] gives Luyten Crossing, a front-matter
+/// fragment: no stars, a warm tint, and red clouds in every backdrop
+/// cell, a look no seed gives, so a test can tell the data's look from
+/// the seeded one.
+pub const SKY_SAMPLE_BLOCK: &str = "sky:\n  stars: 0\n  tint: \"#ffb070\"\n  \
+                                    backdrop: {color: \"#ff0000\", amount: 1}\n";
+
+/// [`modelled_sample`], with a `sky` block ([`SKY_SAMPLE_BLOCK`]) in the
+/// front matter of `luyten-crossing`, the start system: its sky draws no
+/// stars, a tint of `#ffb070` and a red backdrop in every cell. The other
+/// two systems, `brightwater` and `marrow` (in its `nebula`), have none,
+/// so they draw the seeded default.
+///
+/// [`modelled_sample`] stays as it is, so the tests over it keep their
+/// meaning.
+///
+/// # Panics
+///
+/// When the sample folder can't be read.
+#[must_use]
+pub fn sky_sample() -> MemSource {
+    let file = "systems/luyten-crossing.md";
+    let text = std::fs::read_to_string(sample_folder().join(file)).expect("a sample file");
+    let (front, body) = text
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.split_once("\n---\n"))
+        .expect("front matter");
+    modelled_sample().with(
+        file,
+        &format!("---\n{front}\n{SKY_SAMPLE_BLOCK}---\n{body}"),
+    )
+}
+
+/// The id of the hulk's image asset in [`decorated_sample`].
+pub const SKY_HULK: &str = "far-hulk";
+
+/// The id of the galaxy's image asset in [`decorated_sample`].
+pub const SKY_GALAXY: &str = "far-galaxy";
+
+/// The hulk's image file in [`decorated_sample`].
+pub const SKY_HULK_PNG: &str = "media/export/sky/far-hulk.png";
+
+/// The galaxy's image file in [`decorated_sample`].
+pub const SKY_GALAXY_PNG: &str = "media/export/sky/far-galaxy.png";
+
+/// The hulk's image's width and height in pixels: not square, so its
+/// drawn shape follows it.
+pub const SKY_HULK_SIZE: (u32, u32) = (16, 8);
+
+/// The galaxy's image's width and height in pixels.
+pub const SKY_GALAXY_SIZE: (u32, u32) = (8, 8);
+
+/// The `sky` block [`decorated_sample`] gives Luyten Crossing, a
+/// front-matter fragment: a hulk painted over the sky, every field set
+/// to a value no default gives, and a galaxy that sets its blend alone
+/// (`glow`), so every other field of it takes the engine's default and
+/// its place comes from the system's seed.
+pub const DECORATED_SAMPLE_BLOCK: &str = "sky:\n  decorations:\n    - image: far-hulk\n      \
+                                          at: [140, -90]\n      parallax: 0.2\n      size: 96\n      \
+                                          turn: 30\n      spin: 4\n      tint: \"#ffb070\"\n      \
+                                          brightness: 0.75\n      blend: over\n    \
+                                          - image: far-galaxy\n      blend: glow\n";
+
+/// The hulk's image in [`decorated_sample`], 8-bit RGBA with straight
+/// alpha, [`SKY_HULK_SIZE`]: a grey hull, lighter to the right and
+/// darker down, with a wholly clear top-left quarter (written in red, so
+/// a reader that averaged straight alpha would show it).
+#[must_use]
+pub fn sky_hulk_rgba() -> Vec<u8> {
+    let (width, height) = SKY_HULK_SIZE;
+    let mut rgba = Vec::new();
+    for y in 0..height {
+        for x in 0..width {
+            if x < width / 2 && y < height / 2 {
+                rgba.extend([255, 0, 0, 0]);
+            } else {
+                let shade = u8::try_from(90 + x * 8 - y * 6).expect("a byte");
+                rgba.extend([shade, shade, shade.saturating_add(20), 255]);
+            }
+        }
+    }
+    rgba
+}
+
+/// The galaxy's image in [`decorated_sample`], 8-bit RGBA,
+/// [`SKY_GALAXY_SIZE`]: a pale glow on opaque black, brightest in the
+/// middle and black at its corners.
+#[must_use]
+pub fn sky_galaxy_rgba() -> Vec<u8> {
+    let (width, height) = SKY_GALAXY_SIZE;
+    let mut rgba = Vec::new();
+    for y in 0..height {
+        for x in 0..width {
+            // Twice its distance from the middle, in texels, on each
+            // axis: 1 to 7.
+            let from_middle = |at: u32, side: u32| (2 * at + 1).abs_diff(side);
+            let far = from_middle(x, width).max(from_middle(y, height));
+            let light = u8::try_from(255 - far.min(7) * 36 - 3).expect("a byte");
+            let light = if far >= 7 { 0 } else { light };
+            rgba.extend([light, light, light.saturating_sub(light / 8), 255]);
+        }
+    }
+    rgba
+}
+
+/// [`modelled_sample`], with two sky images and a `sky` block
+/// ([`DECORATED_SAMPLE_BLOCK`]) listing them as decorations of
+/// `luyten-crossing`, the start system:
+///
+/// - the texture asset [`SKY_HULK`], its file ([`SKY_HULK_PNG`]) the
+///   PNG of [`sky_hulk_rgba`];
+/// - the texture asset [`SKY_GALAXY`], its file ([`SKY_GALAXY_PNG`]) the
+///   PNG of [`sky_galaxy_rgba`].
+///
+/// The PNGs are built in code (`nova_galaxy_media::fixture::png`); no art
+/// is checked in. The other two systems, `brightwater` and `marrow`, list
+/// no decorations, so they draw the engine's default for their seeds.
+///
+/// [`modelled_sample`] stays as it is, so the tests over it keep their
+/// meaning.
+///
+/// # Panics
+///
+/// When the sample folder can't be read.
+#[must_use]
+pub fn decorated_sample() -> MemSource {
+    let file = "systems/luyten-crossing.md";
+    let text = std::fs::read_to_string(sample_folder().join(file)).expect("a sample file");
+    let (front, body) = text
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.split_once("\n---\n"))
+        .expect("front matter");
+    let texture = |png: &str| {
+        format!(
+            "---\nkind: texture\nplaceholder: false\nfiles: [{png}]\nlicence: CC0-1.0\n\
+             licence_file: media/export/sky/LICENSE.txt\nauthor: ev-nova's tests\n\
+             source_url: https://example.com/sky\nretrieved: 2026-11-13\n---\n"
+        )
+    };
+    let (hulk, galaxy) = (SKY_HULK_SIZE, SKY_GALAXY_SIZE);
+    modelled_sample()
+        .with(
+            file,
+            &format!("---\n{front}\n{DECORATED_SAMPLE_BLOCK}---\n{body}"),
+        )
+        .with(&format!("assets/{SKY_HULK}.md"), &texture(SKY_HULK_PNG))
+        .with_bytes(
+            SKY_HULK_PNG,
+            &nova_galaxy_media::fixture::png(hulk.0, hulk.1, &sky_hulk_rgba()),
+        )
+        .with(&format!("assets/{SKY_GALAXY}.md"), &texture(SKY_GALAXY_PNG))
+        .with_bytes(
+            SKY_GALAXY_PNG,
+            &nova_galaxy_media::fixture::png(galaxy.0, galaxy.1, &sky_galaxy_rgba()),
+        )
+}
+
 /// Every file under `dir`, by its path from `dir` with `/` between its
 /// parts.
 fn read_into_memory(dir: &Path) -> MemSource {
@@ -430,4 +658,121 @@ fn read_into_memory(dir: &Path) -> MemSource {
         into
     }
     walk(dir, "", MemSource::default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_liveried_stations_load_with_the_commonwealth_s_livery_and_no_problems() {
+        let game = super::super::load(&liveried_stations_3d(), Path::new("sample"));
+        assert_eq!(game.problems, Vec::new());
+        let id = |s: &str| nova_galaxy_format::id::Id::try_from(s.to_owned()).expect("an id");
+        let livery = &game.galaxy.liveries[&id(COMMONWEALTH_LIVERY)].data;
+        assert_eq!(livery.faction, Some(id("commonwealth")));
+        let hub = &game.galaxy.assets[&id("station-hub")].data;
+        assert!(hub.paint.is_some(), "the hub is painted");
+    }
+
+    #[test]
+    fn the_decorated_sample_loads_with_its_start_systems_two_decorations_and_no_problems() {
+        use nova_galaxy_format::asset::AssetKind;
+        use nova_galaxy_format::id::{Color, Fraction, MediaPath};
+        use nova_galaxy_format::sky::decoration::{
+            Blend, DecorationParallax, DecorationSize, DecorationSpin, DecorationTurn,
+        };
+        let game = super::super::load(&decorated_sample(), Path::new("sample"));
+        assert_eq!(game.problems, Vec::new());
+        let id = |s: &str| nova_galaxy_format::id::Id::try_from(s.to_owned()).expect("an id");
+        let sky = |system: &str| game.galaxy.systems[&id(system)].data.sky.as_ref();
+        let listed = sky("luyten-crossing")
+            .and_then(|sky| sky.decorations.as_ref())
+            .expect("its decorations");
+        let [hulk, galaxy] = listed.as_slice() else {
+            panic!("two decorations: {listed:?}");
+        };
+        // The hulk sets every field to a value no default gives.
+        assert_eq!(hulk.image.as_str(), SKY_HULK);
+        assert_eq!(hulk.at, Some([140, -90]));
+        assert_eq!(hulk.parallax.map(DecorationParallax::get), Some(0.2));
+        assert_eq!(hulk.size.map(DecorationSize::get), Some(96.0));
+        assert_eq!(hulk.turn.map(DecorationTurn::get), Some(30.0));
+        assert_eq!(hulk.spin.map(DecorationSpin::get), Some(4.0));
+        assert_eq!(hulk.tint.as_ref().map(Color::rgb), Some([0xff, 0xb0, 0x70]));
+        assert_eq!(hulk.brightness.map(Fraction::get), Some(0.75));
+        assert_eq!(hulk.blend, Blend::Over);
+        // The galaxy sets its blend alone.
+        assert_eq!(galaxy.image.as_str(), SKY_GALAXY);
+        assert_eq!(galaxy.blend, Blend::Glow);
+        assert!(galaxy.at.is_none() && galaxy.parallax.is_none() && galaxy.size.is_none());
+        assert!(galaxy.turn.is_none() && galaxy.tint.is_none() && galaxy.brightness.is_none());
+        assert!(galaxy.spin.is_none());
+        // The other two systems list none.
+        assert!(sky("brightwater").is_none() && sky("marrow").is_none());
+        // Each image is a texture asset naming its one file, a PNG of its
+        // size.
+        let source = decorated_sample();
+        for (asset, file, (width, height)) in [
+            (SKY_HULK, SKY_HULK_PNG, SKY_HULK_SIZE),
+            (SKY_GALAXY, SKY_GALAXY_PNG, SKY_GALAXY_SIZE),
+        ] {
+            let entry = &game.galaxy.assets[&id(asset)].data;
+            assert_eq!(entry.kind, AssetKind::Texture);
+            let files: Vec<&str> = entry.files.iter().map(MediaPath::as_str).collect();
+            assert_eq!(files, [file]);
+            let bytes = nova_galaxy_format::source::Source::bytes(&source, file)
+                .expect("readable")
+                .expect("its file");
+            // A PNG's header gives its width and height, big-endian,
+            // from its 17th byte.
+            let side = |at: usize| u32::from_be_bytes(bytes[at..at + 4].try_into().expect("four"));
+            assert_eq!(&bytes[1..4], b"PNG");
+            assert_eq!((side(16), side(20)), (width, height));
+        }
+    }
+
+    #[test]
+    fn the_hulk_has_a_clear_corner_and_the_galaxy_fades_to_its_edge() {
+        let (width, height) = SKY_HULK_SIZE;
+        let hulk = sky_hulk_rgba();
+        assert_eq!(hulk.len(), (width * height * 4) as usize);
+        let alpha = |pixels: &[u8], w: u32, x: u32, y: u32| pixels[((y * w + x) * 4 + 3) as usize];
+        // Its top-left quarter is clear, the rest opaque.
+        assert_eq!(alpha(&hulk, width, 0, 0), 0);
+        assert_eq!(alpha(&hulk, width, width / 2 - 1, height / 2 - 1), 0);
+        assert_eq!(alpha(&hulk, width, width / 2, 0), 255);
+        assert_eq!(alpha(&hulk, width, 0, height / 2), 255);
+        assert_eq!(alpha(&hulk, width, width - 1, height - 1), 255);
+        // Its hull is grey, lighter by 8 a column and darker by 6 a row
+        // from 90, its blue 20 over.
+        let texel = |pixels: &[u8], w: u32, x: u32, y: u32| {
+            let at = ((y * w + x) * 4) as usize;
+            [pixels[at], pixels[at + 1], pixels[at + 2], pixels[at + 3]]
+        };
+        assert_eq!(texel(&hulk, width, 15, 0), [210, 210, 230, 255]);
+        assert_eq!(texel(&hulk, width, 8, 7), [112, 112, 132, 255]);
+        assert_eq!(texel(&hulk, width, 0, 7), [48, 48, 68, 255]);
+        assert_eq!(texel(&hulk, width, 3, 3), [255, 0, 0, 0]);
+        let (width, height) = SKY_GALAXY_SIZE;
+        let galaxy = sky_galaxy_rgba();
+        assert_eq!(galaxy.len(), (width * height * 4) as usize);
+        let red = |x: u32, y: u32| galaxy[((y * width + x) * 4) as usize];
+        // Brightest in the middle, black at the corner, opaque throughout.
+        assert!(red(width / 2, height / 2) > 200);
+        assert_eq!(red(0, 0), 0);
+        assert!(red(width / 2, height / 2) > red(1, height / 2));
+        assert_eq!(alpha(&galaxy, width, 0, 0), 255);
+        // Each ring out from the middle is 36 darker, from 216, its blue
+        // an eighth under; the outermost ring is black.
+        assert_eq!(texel(&galaxy, width, 4, 4), [216, 216, 189, 255]);
+        assert_eq!(texel(&galaxy, width, 3, 3), [216, 216, 189, 255]);
+        assert_eq!(texel(&galaxy, width, 2, 5), [144, 144, 126, 255]);
+        assert_eq!(texel(&galaxy, width, 1, 4), [72, 72, 63, 255]);
+        assert_eq!(texel(&galaxy, width, 4, 6), [72, 72, 63, 255]);
+        assert_eq!(texel(&galaxy, width, 7, 3), [0, 0, 0, 255]);
+        assert_eq!(texel(&galaxy, width, 4, 0), [0, 0, 0, 255]);
+        assert_ne!(SKY_HULK_SIZE, SKY_GALAXY_SIZE);
+        assert_ne!(SKY_HULK_SIZE.0, SKY_HULK_SIZE.1, "the hulk is not square");
+    }
 }

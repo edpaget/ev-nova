@@ -69,10 +69,10 @@ use super::credits::{self, credits_text, draw_amount_rows};
 use super::grid::{self, GridColors, Shown};
 use super::layout::DONE_LABEL;
 use super::ship_movie::ShipMovie;
-use super::shipyard::picture::ShipPicture;
+use super::shipyard::picture::{ShipPicture, draw_grid_pictures};
 use super::shipyard::{
     BACKGROUND, BUY_ITEM, DESCRIPTION_ITEM, DONE_ITEM, GRID_ITEM, INFO_BOX_ITEM, INFO_ITEM,
-    INFO_LABEL, InfoTemplates, PICTURE_ITEM, Panel, SCROLL_DOWN_ITEM, SCROLL_UP_ITEM,
+    INFO_LABEL, InfoTemplates, PICTURE_ITEM, Panel, SCROLL_DOWN_ITEM, SCROLL_UP_ITEM, ShipLook,
     ShipyardCatalog, movie_files, open_panel,
 };
 use super::shipyard_grid::{PressOutcome, ShipyardGrid};
@@ -80,6 +80,7 @@ use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::bound_names::{CONFIRM_OR_BACK, press_clause};
 use crate::color::Color;
 use crate::draw::DrawList;
+use crate::flight::world_models::WorldModels;
 use crate::geometry::{Bounds, Point};
 use crate::input::Input;
 use crate::keymap::{Command, CommandReader, HireCommand, SharedBindings, UiCommand, contexts};
@@ -161,6 +162,8 @@ pub struct HireScreen {
     catalog: CatalogHandle,
     /// The grid's frame colours, read from the catalog once.
     colors: GridColors,
+    /// Each class's looks, read once when there is a dialog.
+    looks: Vec<ShipLook>,
     /// Each listed ship's picture, read once when there is a dialog.
     pictures: Vec<ShipPicture>,
     style: ButtonStyle,
@@ -233,24 +236,20 @@ impl HireScreen {
                 info,
             }
         });
-        let (pictures, movies) = if laid.is_ok() {
-            let looks = catalog.ship_looks();
-            let pictures = list
-                .rows
-                .iter()
-                .map(|row| ShipPicture::read(row.id, &looks, |id| catalog.picture_exists(id)))
-                .collect();
-            (pictures, movie_files(&looks))
+        let looks = if laid.is_ok() {
+            catalog.ship_looks()
         } else {
-            (Vec::new(), Vec::new())
+            Vec::new()
         };
+        let movies = movie_files(&looks);
         let grid = ShipyardGrid::open(&list.rules, list.rows.len());
         let mut screen = Self {
             laid,
             list,
             colors: catalog.grid_colors(),
             catalog: CatalogHandle(catalog),
-            pictures,
+            looks,
+            pictures: Vec::new(),
             style,
             focus_ring: FocusRing::default(),
             grid,
@@ -263,9 +262,36 @@ impl HireScreen {
             keys: CommandReader::new(contexts::HIRE),
             sounds: Vec::new(),
         };
+        screen.read_pictures(&WorldModels::default());
         screen.selected_changed();
         screen.sync_pad_cells();
         screen
+    }
+
+    /// The hire screen drawing a class with no `PICT` as its model from
+    /// `models`, when it has one (the shipyard's `picture` module); its
+    /// pictures read again.
+    #[must_use]
+    pub fn with_world_models(mut self, models: &WorldModels) -> Self {
+        self.read_pictures(models);
+        self
+    }
+
+    /// Reads each listed ship's picture, its model from `models`, when
+    /// there is a dialog to show them in.
+    fn read_pictures(&mut self, models: &WorldModels) {
+        if self.laid.is_err() {
+            return;
+        }
+        let catalog = &self.catalog.0;
+        self.pictures = self
+            .list
+            .rows
+            .iter()
+            .map(|row| {
+                ShipPicture::read(row.id, &self.looks, models, |id| catalog.picture_exists(id))
+            })
+            .collect();
     }
 
     /// The hire screen with its dialogs' buttons taking the keyboard focus
@@ -544,22 +570,21 @@ impl HireScreen {
     /// then, last, the selected cell framed again in `GridBright`. No cell
     /// is filled (`_ShipyardDialogUpdate` @0x58f44-0x58f69,
     /// @0x58f9d-0x58fbf, which draws hire mode's grid as the shipyard's).
+    /// A new game's model icons come after all of it, as one run
+    /// ([`draw_grid_pictures`]).
     fn draw_grid(&self, laid: &Laid, list: &mut DrawList) {
         let metrics = &*laid.metrics.0;
         let Some(area) = laid.dialog.item_bounds(GRID_ITEM) else {
             return;
         };
-        let count = self.list.rows.len();
         let selected = self.selected();
-        self.grid.cells().draw_cells(
+        draw_grid_pictures(
             list,
-            area,
-            count,
-            selected,
-            self.colors,
+            self.grid.cells(),
+            (area, selected, self.colors),
+            &self.pictures,
             |list, index, cell| {
                 let row = &self.list.rows[index];
-                self.pictures[index].draw_cell(list, cell);
                 grid::draw_cell_name(list, metrics, cell, &row.short_name);
             },
         );
@@ -1655,6 +1680,53 @@ mod tests {
                 .iter()
                 .any(|(words, at, _)| words == NO_PICTURE && picture.contains(*at)),
             "no \"No Picture\""
+        );
+    }
+
+    #[test]
+    fn a_ship_with_no_picture_and_a_model_shows_its_model_in_the_picture_item_and_its_cell() {
+        use crate::flight::world_models::ShipModel;
+        use crate::model::ModelKey;
+        use crate::model_picture::ShipPortrait;
+
+        let models = WorldModels {
+            ships: [(
+                ShipId(140),
+                ShipModel {
+                    key: ModelKey(3),
+                    scale: 1.0,
+                    base_transp: 0,
+                    radius: 5.0,
+                },
+            )]
+            .into(),
+            ..WorldModels::default()
+        };
+        let portrait = ShipPortrait::of(&models, ShipId(140)).expect("a portrait");
+        let in_area = |area: Bounds| {
+            let mut list = DrawList::new();
+            assert!(portrait.draw_in(&mut list, area));
+            list.iter().cloned().collect::<Vec<_>>()
+        };
+        let before = screen_of(&art(), list());
+        let mut screen = screen_of(&art(), list()).with_world_models(&models);
+        let cell = screen.cell_bounds(1).expect("a cell");
+        assert!(contains(&drawn(&screen), &in_area(grid::icon_bounds(cell))));
+        assert!(!contains(
+            &drawn(&before),
+            &in_area(grid::icon_bounds(cell))
+        ));
+        screen.input(&key(Key::ArrowRight, false));
+        assert_eq!(screen.selected(), Some(1));
+        let picture = item(&screen, PICTURE_ITEM);
+        assert!(
+            contains(&drawn(&screen), &in_area(picture)),
+            "the picture item's model"
+        );
+        assert_eq!(
+            drawn(&screen_of(&art(), list()).with_world_models(&WorldModels::default())),
+            drawn(&before),
+            "an empty table"
         );
     }
 

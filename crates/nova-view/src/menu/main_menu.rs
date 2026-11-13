@@ -9,7 +9,9 @@
 //! for the one pressed) at its `cölr` 128 position from `menuTopCorner`
 //! (@0x184f8-0x186f7), then the rollover over them (@0x18713). Every
 //! position is an offset from `menuTopCorner`. The router tells the menu
-//! which pilot the panel is about ([`MainMenu::show_pilot`]).
+//! which pilot the panel is about ([`MainMenu::show_pilot`]), and gives it
+//! the world models' table a ship with no picture is drawn as its model
+//! from ([`MainMenu::with_world_models`]).
 //!
 //! **The appear** ([`MainMenu::appear`], `_LoadMainScreenAnim`). The
 //! three slides set off ([`Slides`]), and each row of buttons, 0 and 3,
@@ -65,6 +67,7 @@ use super::tracking::{MainScreenTracker, Tracked};
 use crate::color::Color;
 use crate::draw::{DrawCommand, DrawList, fill_rect};
 use crate::flight::SharedChance;
+use crate::flight::world_models::WorldModels;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
@@ -368,13 +371,35 @@ impl MainMenu {
         self.reader.set_bindings(bindings);
     }
 
-    /// The menu with its pilot panel in `looks`, showing no pilot. A menu
+    /// The menu with its pilot panel in `looks`, showing no pilot, keeping
+    /// the world models given ([`MainMenu::with_world_models`]). A menu
     /// made without them draws the panel in the stock font and colours
     /// with empty labels.
     #[must_use]
     pub fn with_pilot_panel(mut self, looks: PanelLooks) -> Self {
-        self.panel = PilotPanelArea::new(looks);
+        let models = Rc::clone(self.panel.world_models());
+        self.panel = PilotPanelArea::new(looks).with_world_models(models);
         self
+    }
+
+    /// The menu with its pilot panel drawing a ship with no picture as its
+    /// model from `models` ([`PilotPanelArea::with_world_models`]).
+    #[must_use]
+    pub fn with_world_models(mut self, models: Rc<WorldModels>) -> Self {
+        self.panel.set_world_models(models);
+        self
+    }
+
+    /// Gives the pilot panel `models` ([`PilotPanelArea::set_world_models`]),
+    /// for a table that arrives after the menu is built.
+    pub fn set_world_models(&mut self, models: Rc<WorldModels>) {
+        self.panel.set_world_models(models);
+    }
+
+    /// The world models' table the pilot panel draws from.
+    #[must_use]
+    pub fn world_models(&self) -> &Rc<WorldModels> {
+        self.panel.world_models()
     }
 
     /// Shows `pilot` in the pilot panel, reading its ship from `source`
@@ -751,6 +776,7 @@ mod tests {
 
     use super::*;
     use crate::draw::{Blend, lights_tint};
+    use crate::flight::world_models::ShipModel;
     use crate::input::Key;
     use crate::menu::art::MainScreenSource;
     use crate::menu::fixture::{
@@ -759,6 +785,7 @@ mod tests {
         SLIDE_POSITIONS, main_screen_art,
     };
     use crate::menu::pilot_panel::PanelShip;
+    use crate::model::ModelKey;
     use crate::target_picture::ShipPicture;
     use crate::text::fixture::MonoMetrics;
 
@@ -1620,6 +1647,125 @@ mod tests {
             )
             .expect("a button");
         assert!(title < panel && panel < button, "{title} {panel} {button}");
+    }
+
+    /// A source like [`Ships`] whose ships have no picture.
+    struct NoPicture;
+
+    impl PilotPanelSource for NoPicture {
+        fn pilot_panel_looks(&self) -> PanelLooks {
+            panel_looks()
+        }
+
+        fn panel_ship(&self, _ship: nova_sim_frame::catalog::ShipId) -> PanelShip {
+            PanelShip {
+                subtitle: "Variant".to_owned(),
+                picture: None,
+            }
+        }
+    }
+
+    /// A table modelling ship 128, [`alive`]'s, as [`ModelKey`] 7.
+    fn one_ship_table() -> Rc<WorldModels> {
+        Rc::new(WorldModels {
+            ships: std::collections::BTreeMap::from([(
+                nova_sim_frame::catalog::ShipId(128),
+                ShipModel {
+                    key: ModelKey(7),
+                    scale: 1.0,
+                    base_transp: 0,
+                    radius: 4.0,
+                },
+            )]),
+            ..WorldModels::default()
+        })
+    }
+
+    fn model_at(list: &DrawList) -> Option<(usize, Point)> {
+        list.iter()
+            .enumerate()
+            .find_map(|(at, command)| match command {
+                DrawCommand::Model { pose, .. } => Some((at, pose.center)),
+                _ => None,
+            })
+    }
+
+    #[test]
+    fn the_menu_s_pilot_panel_draws_a_modelled_ship_between_the_panel_s_texts_and_the_buttons() {
+        let mut menu = appearing()
+            .with_pilot_panel(panel_looks())
+            .with_world_models(one_ship_table());
+        menu.show_pilot(alive(), &NoPicture);
+        menu.tick(mac_ticks(4));
+        let list = drawn(&menu);
+        let place =
+            |wanted: &dyn Fn(&DrawCommand) -> bool| list.iter().position(wanted).expect("drawn");
+        let panel =
+            place(&|command| matches!(command, DrawCommand::Text { text, .. } if text == "Ada"));
+        let (model, _) = model_at(&list).expect("the model");
+        let button = place(
+            &|command| matches!(command, DrawCommand::Picture { image, .. } if image.kind == ImageKind::Rled),
+        );
+        assert!(panel < model && model < button, "{panel} {model} {button}");
+        let mut menu = with_art()
+            .with_pilot_panel(panel_looks())
+            .with_world_models(one_ship_table());
+        menu.show_pilot(alive(), &NoPicture);
+        menu.input(&Input::PointerMoved(menu.press_point(MenuChoice::About)));
+        menu.tick(Duration::ZERO);
+        menu.tick(mac_ticks(1));
+        let list = drawn(&menu);
+        let (model, _) = model_at(&list).expect("the model");
+        let rollover = list
+            .iter()
+            .position(|command| matches!(command, DrawCommand::Sprite { .. }))
+            .expect("the rollover");
+        assert!(model < rollover, "{model} {rollover}");
+
+        let mut menu = stand_in()
+            .with_pilot_panel(panel_looks())
+            .with_world_models(one_ship_table());
+        menu.show_pilot(alive(), &NoPicture);
+        let list = drawn(&menu);
+        let panel = list
+            .iter()
+            .position(|command| matches!(command, DrawCommand::Text { text, .. } if text == "Ada"))
+            .expect("the panel");
+        let (model, centre) = model_at(&list).expect("the model");
+        let button = list
+            .iter()
+            .position(
+                |command| matches!(command, DrawCommand::Text { text, .. } if text == "New Pilot"),
+            )
+            .expect("a button");
+        assert!(panel < model && model < button, "{panel} {model} {button}");
+        assert_eq!(centre, Point::new(512.0, 384.0 + 312.0));
+    }
+
+    #[test]
+    fn a_table_given_before_the_looks_is_kept() {
+        let table = one_ship_table();
+        let before = stand_in()
+            .with_world_models(Rc::clone(&table))
+            .with_pilot_panel(panel_looks());
+        let after = stand_in()
+            .with_pilot_panel(panel_looks())
+            .with_world_models(Rc::clone(&table));
+        let mut set = stand_in().with_pilot_panel(panel_looks());
+        set.set_world_models(Rc::clone(&table));
+        for (name, mut menu) in [("before", before), ("after", after), ("set", set)] {
+            assert!(Rc::ptr_eq(menu.world_models(), &table), "{name}");
+            menu.show_pilot(alive(), &NoPicture);
+            assert!(model_at(&drawn(&menu)).is_some(), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_menu_given_no_table_draws_as_before() {
+        let mut menu = stand_in().with_pilot_panel(panel_looks());
+        menu.show_pilot(alive(), &NoPicture);
+        assert_eq!(model_at(&drawn(&menu)), None);
+        assert!(menu.world_models().ships.is_empty());
     }
 
     #[test]

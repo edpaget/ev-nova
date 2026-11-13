@@ -17,8 +17,20 @@
 //! Each key is read through the view's bindings
 //! ([`SystemView::with_bindings`]), and the help line ([`help_line`])
 //! names the keys bound, through the player's layout.
+//!
+//! A stellar that draws its stand-in, having no sheet, and that the world
+//! models' table gives a model or a planet ([`SystemView::with_world_models`],
+//! the new game's), draws it as the flight does, through the flight's own
+//! path (`crate::model_picture::draw_stellar_model`): a station's model
+//! unturned at the stand-in's centre, reaching as far as the stand-in, a
+//! planet's globe at the stand-in disc's radius, turned by the view's own
+//! clock. Its name keeps its place. Stock data has no models, so it draws
+//! as it always did.
 
+use std::rc::Rc;
 use std::time::Duration;
+
+use nova_sim_frame::landing::UNKNOWN_STELLAR_RADIUS;
 
 use super::camera::{CAMERA_SPEED, Camera};
 use super::catalog::{SystemCatalog, SystemId};
@@ -26,7 +38,9 @@ use super::scene::{self, SystemScene};
 use super::starfield;
 use crate::bound_names::{Spelling, group, name_read};
 use crate::flight::SharedChance;
+use crate::flight::world_models::WorldModels;
 use crate::keymap::{Command, CommandInput, CommandReader, SharedBindings, UiCommand, contexts};
+use crate::model_picture::draw_stellar_model;
 use crate::time::ticks;
 use crate::{Color, DrawList, Input, Key, Point, Screen, ScreenAction};
 
@@ -95,6 +109,9 @@ pub struct SystemView {
     keys: CommandReader,
     /// What a stellar's random next frame (`Flags2` 0x0002) is drawn on.
     chance: SharedChance,
+    /// The stellars' models and planets, drawn in their stand-ins' place
+    /// ([`SystemView::with_world_models`]); empty by default.
+    world_models: Rc<WorldModels>,
 }
 
 impl SystemView {
@@ -111,6 +128,7 @@ impl SystemView {
             elapsed: Duration::ZERO,
             keys: CommandReader::new(contexts::SYSTEM_VIEW),
             chance: SharedChance::default(),
+            world_models: Rc::default(),
         }
     }
 
@@ -118,6 +136,17 @@ impl SystemView {
     #[must_use]
     pub fn with_chance(self, chance: SharedChance) -> Self {
         Self { chance, ..self }
+    }
+
+    /// The view drawing each stellar `models` gives a model or a planet as
+    /// the flight draws it, in its stand-in's place (see the module docs).
+    /// An empty table draws as none.
+    #[must_use]
+    pub fn with_world_models(self, models: Rc<WorldModels>) -> Self {
+        Self {
+            world_models: models,
+            ..self
+        }
     }
 
     /// The view reading its keys through `bindings`.
@@ -231,9 +260,22 @@ impl Screen for SystemView {
         self.camera.move_by(vx * seconds, vy * seconds);
     }
 
+    /// The starfield, the stellars (a model or planet the table gives one
+    /// in its stand-in's place), then the overlay.
     fn draw(&self, list: &mut DrawList) {
         starfield::draw(list, &self.camera);
-        scene::draw_stellars(list, &self.scene, &self.camera, None);
+        let time = self.elapsed.as_secs_f64();
+        scene::draw_stellars_instead(
+            list,
+            &self.scene,
+            &self.camera,
+            None,
+            |list, stellar, centre| {
+                self.world_models.stellar(stellar.id).is_some_and(|model| {
+                    draw_stellar_model(list, model, centre, UNKNOWN_STELLAR_RADIUS, time)
+                })
+            },
+        );
         self.draw_overlay(list);
     }
 
@@ -250,6 +292,7 @@ mod tests {
 
     use super::*;
     use crate::draw::crossed_box;
+    use crate::flight::world_models::StellarModel;
     use crate::system::camera::{CAMERA_MARGIN, VIEW_CENTER};
     use crate::system::catalog::{
         StellarAnimation, StellarContents, StellarId, StellarSheet, SystemContents,
@@ -468,6 +511,17 @@ mod tests {
         assert_eq!(center(&view), at(0.0, 0.0));
         assert_eq!(view.frame(2), Some(0));
         assert_eq!(view.frame(3), None);
+    }
+
+    #[test]
+    fn the_system_viewer_names_no_system() {
+        // Browsing systems isn't flying in them: naming one would have the
+        // renderer let flight's planets go (`nova_render`'s `visits`).
+        let view = sol();
+        let mut list = DrawList::new();
+        Screen::draw(&view, &mut list);
+        assert!(!list.is_empty());
+        assert_eq!(list.system(), None);
     }
 
     // Moving the camera.
@@ -925,5 +979,135 @@ mod tests {
         }
         let oracle: Vec<u16> = (0..12).map(|halves| wormhole_after(halves / 2)).collect();
         assert_eq!(shown, oracle);
+    }
+
+    // The world models.
+
+    const HUB: crate::model::ModelKey = crate::model::ModelKey(7);
+    const GIANT: crate::planet::PlanetKey = crate::planet::PlanetKey(3);
+
+    /// Luyten (133): an Exchange (140) at (200, 100) and Kestrel Reach
+    /// (141) at (-250, 50), neither with a sheet, standing in as discs.
+    fn luyten() -> SystemView {
+        let sheetless = |id, name, at| StellarContents {
+            stand_in: Some(crate::outline::StellarStandIn::Disc(Color::WHITE)),
+            ..stellar(id, name, at, Err(format!("no spïn for {id}")), 0)
+        };
+        let catalog = FakeCatalog(vec![SystemContents {
+            id: SystemId(133),
+            name: "Luyten".to_owned(),
+            stellars: vec![
+                sheetless(140, "Exchange", (200, 100)),
+                sheetless(141, "Kestrel Reach", (-250, 50)),
+            ],
+            type_zero_sprite: Ok(sheet(1000, 1, 40)),
+            problems: Vec::new(),
+        }]);
+        SystemView::new(&catalog, SystemId(133))
+    }
+
+    /// The Exchange's hub, Kestrel Reach's planet.
+    fn models() -> std::rc::Rc<WorldModels> {
+        std::rc::Rc::new(WorldModels {
+            stellars: [
+                (
+                    StellarId(140),
+                    StellarModel::Model {
+                        key: HUB,
+                        reach: 4.0,
+                    },
+                ),
+                // Ringed: the viewer draws the globe at its stand-in's
+                // radius whatever its rings reach.
+                (StellarId(141), StellarModel::planet(GIANT, 2.3)),
+            ]
+            .into(),
+            ..WorldModels::default()
+        })
+    }
+
+    /// Where `view`'s stand-ins are centred, by stellar.
+    fn stand_in_centres(view: &SystemView) -> Vec<(StellarId, Point)> {
+        let mut centres = Vec::new();
+        scene::draw_stellars_instead(
+            &mut DrawList::new(),
+            view.scene(),
+            view.camera(),
+            None,
+            |_, stellar, centre| {
+                centres.push((stellar.id, centre));
+                false
+            },
+        );
+        centres
+    }
+
+    #[test]
+    fn a_modelled_station_and_planet_draw_at_their_stand_ins_centres() {
+        let mut view = luyten().with_world_models(models());
+        view.tick(QUARTER);
+        let centres = stand_in_centres(&view);
+        let centre = |id| {
+            centres
+                .iter()
+                .find(|(stellar, _)| *stellar == StellarId(id))
+                .expect("a stand-in")
+                .1
+        };
+        let commands: Vec<DrawCommand> = drawn(&view).iter().cloned().collect();
+        assert!(commands.contains(&DrawCommand::model(
+            HUB,
+            crate::model::ModelPose {
+                center: centre(140),
+                orientation: crate::model::Orientation::IDENTITY,
+                scale: UNKNOWN_STELLAR_RADIUS / 4.0,
+            }
+        )));
+        assert!(commands.contains(&DrawCommand::Planet {
+            planet: GIANT,
+            pose: crate::planet::PlanetPose {
+                center: centre(141),
+                radius: UNKNOWN_STELLAR_RADIUS,
+                time: QUARTER.as_secs_f64(),
+            },
+        }));
+        assert!(
+            !commands
+                .iter()
+                .any(|command| matches!(command, DrawCommand::Triangle { .. })),
+            "no stand-in"
+        );
+    }
+
+    #[test]
+    fn a_modelled_stellar_s_name_keeps_its_place() {
+        let names = |view: &SystemView| -> Vec<DrawCommand> {
+            drawn(view)
+                .iter()
+                .filter(|command| {
+                    matches!(command, DrawCommand::Text { text, .. }
+                        if text == "Exchange" || text == "Kestrel Reach")
+                })
+                .cloned()
+                .collect()
+        };
+        let plain = names(&luyten());
+        assert_eq!(plain.len(), 2);
+        assert_eq!(names(&luyten().with_world_models(models())), plain);
+    }
+
+    #[test]
+    fn an_empty_table_draws_the_stellars_as_draw_stellars_does() {
+        let view = luyten().with_world_models(std::rc::Rc::default());
+        let commands: Vec<DrawCommand> = drawn(&view).iter().cloned().collect();
+        let mut want = DrawList::new();
+        starfield::draw(&mut want, view.camera());
+        scene::draw_stellars(&mut want, view.scene(), view.camera(), None);
+        let want: Vec<DrawCommand> = want.iter().cloned().collect();
+        assert_eq!(commands[..want.len()], want);
+        assert_eq!(
+            commands,
+            drawn(&luyten()).iter().cloned().collect::<Vec<_>>()
+        );
     }
 }

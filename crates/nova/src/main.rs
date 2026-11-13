@@ -476,7 +476,10 @@ fn main() -> ExitCode {
     let runner = with_gamepads(Runner::new(images, screen, fonts), &report)
         .with_diagnostics(Box::new(std::io::stderr()))
         .with_report(Rc::clone(&report))
-        .with_world_assets(world.meshes, world.planets);
+        .with_world_assets(world.meshes, world.planets, world.skies)
+        // A new game's textured planets are read from its folder at their
+        // first draw; stock data has none.
+        .with_planet_files(Box::new(nova_render::planet_files_in(&dir)));
     let runner = match audio {
         Some(core) => runner.with_audio(core.with_settings(settings.audio)),
         None => runner,

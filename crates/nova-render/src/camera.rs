@@ -33,10 +33,30 @@
 //! One directional light and an ambient term, Lambert's, in the gamma
 //! space every canvas blends in ([`shade`]). The shader computes the same
 //! formula per fragment from the interpolated normal.
+//!
+//! # A fragment
+//!
+//! [`fragment`] is the whole of what a model's fragment shows: its vertex
+//! colour times its texture's texel, lit unless its material is unlit.
+//! A model drawn colorized (the command's colorize: a ship's murk, its
+//! ion tint, a gate's wash) shows [`colorized`] of it: its colour mixed
+//! toward the colorize's as a sprite's texel is, on 5-bit channels. A
+//! model drawn faded ([`ModelInstance::alpha`], the command's alpha as
+//! [`alpha`] takes it) shows [`faded`] of that: its alpha times the
+//! model's, blended straight over what is beneath. So the order is
+//! `faded(colorized(fragment(..), colorize), alpha)`:
+//!
+//! - the colorize after the light, since a sprite colorizes the texel it
+//!   would otherwise show and a model would otherwise show its lit
+//!   fragment, and so an unlit fragment the same;
+//! - the alpha after the colorize, as a sprite's tint applies to its
+//!   mixed texel; the mix keeps the fragment's own alpha.
+//!
+//! `models.wgsl` mirrors all three.
 
-use nova_view::{ModelPose, Mounting};
+use nova_view::{Color, Colorize, ModelPose, Mounting};
 
-use crate::gpu::ModelInstance;
+use crate::gpu::{ModelInstance, NO_COLORIZE};
 use crate::model::MeshId;
 use crate::viewport::LogicalSize;
 
@@ -77,6 +97,27 @@ pub fn shade(normal: [f32; 3], base: [f32; 4], light: Light) -> [f32; 4] {
     let lit = light.ambient + (1.0 - light.ambient) * facing;
     let [red, green, blue, alpha] = base;
     [red * lit, green * lit, blue * lit, alpha]
+}
+
+/// One fragment of a model: its vertex `color` times its section's
+/// `texel` (white where the section has no texture), each of the four
+/// channels, then lit by `light` on a surface facing `normal` ([`shade`])
+/// unless it is `unlit`, which draws the product as it is whatever the
+/// normal and the light.
+#[must_use]
+pub fn fragment(
+    normal: [f32; 3],
+    color: [f32; 4],
+    texel: [f32; 4],
+    unlit: bool,
+    light: Light,
+) -> [f32; 4] {
+    let base = [0, 1, 2, 3].map(|channel| color[channel] * texel[channel]);
+    if unlit {
+        base
+    } else {
+        shade(normal, base, light)
+    }
 }
 
 /// The instance that draws `mesh`, `radius` model units across at most
@@ -190,7 +231,60 @@ fn placed(
         clip_from_model: [0, 1, 2, 3].map(|col| rows.map(|row| row[col])),
         normal_from_model: [0, 1, 2].map(|col| r.map(|row| row[col])),
         shares_band,
+        alpha: 1.0,
+        colorize: NO_COLORIZE,
     })
+}
+
+/// The alpha a model drawn at `alpha` ([`nova_view::DrawCommand::Model`])
+/// draws at: `alpha` held to 1, or `None`, drawing nothing, when it isn't
+/// finite or is 0 or less.
+#[must_use]
+pub fn alpha(alpha: f32) -> Option<f32> {
+    (alpha.is_finite() && alpha > 0.0).then(|| alpha.min(1.0))
+}
+
+/// A fragment of a model drawn at `alpha` (its [`ModelInstance::alpha`]):
+/// `fragment`, as [`fragment`] gives it, with its alpha times `alpha` and
+/// its colour as it is, blended straight over what is beneath. The
+/// adapter draws only the model's nearest surface so (see the `models`
+/// module), so nothing of the model shows through itself.
+#[must_use]
+pub fn faded(fragment: [f32; 4], alpha: f32) -> [f32; 4] {
+    let [red, green, blue, own] = fragment;
+    [red, green, blue, own * alpha]
+}
+
+/// A fragment of a model drawn colorized (its
+/// [`ModelInstance::colorize`]): `fragment`, as [`fragment`] gives it,
+/// mixed toward `colorize`'s colour as a sprite's texel is, its alpha
+/// kept. Each colour channel is held to 0 to 1, rounded to its nearest
+/// 8-bit value and narrowed to its top 5 bits, mixed
+/// ([`Colorize::mix`]: the kept share and the colour's each floored, then
+/// OR-ed), and widened back by bit replication
+/// ([`nova_view::Color::from_rgb555`]). A level of 32 is the colour
+/// exactly, whatever the fragment and so whatever the light. A colorize
+/// that doesn't mix ([`Colorize::mixes`]) leaves the fragment as it is,
+/// unnarrowed.
+///
+/// `shader.wgsl` mixes a sprite's texel so (`texel_mixed`), and
+/// `models.wgsl` mirrors this.
+#[must_use]
+pub fn colorized(fragment: [f32; 4], colorize: Colorize) -> [f32; 4] {
+    if !colorize.mixes() {
+        return fragment;
+    }
+    let [red, green, blue, alpha] = fragment;
+    let s5 = [red, green, blue].map(|channel| {
+        // Held to 0 to 255 before it is cast. Halves round to even, as
+        // WGSL's `round` does.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let c8 = (channel.clamp(0.0, 1.0) * 255.0).round_ties_even() as u8;
+        c8 >> 3
+    });
+    let mixed = Color::from_rgb555(colorize.mix(s5));
+    let [red, green, blue] = [mixed.r, mixed.g, mixed.b].map(|channel| f32::from(channel) / 255.0);
+    [red, green, blue, alpha]
 }
 
 /// Gives each of `models`, one batch's in draw order, its band of the
@@ -242,7 +336,7 @@ fn unit(v: [f32; 3]) -> [f32; 3] {
 mod tests {
     use std::f32::consts::{FRAC_PI_2, PI};
 
-    use nova_view::{Mounting, Orientation, Point};
+    use nova_view::{Colorize, Mounting, Orientation, Point};
 
     use super::*;
 
@@ -287,6 +381,41 @@ mod tests {
 
     fn made(logical: LogicalSize, pose: &ModelPose) -> ModelInstance {
         instance(logical, pose, MESH, 1.0).expect("drawable")
+    }
+
+    #[test]
+    fn an_instance_and_a_part_draw_whole_and_uncolorized_until_told() {
+        let pose = pose(12.0, 6.0, Orientation::IDENTITY, 5.0);
+        assert_eq!(made(LOGICAL, &pose).alpha, 1.0);
+        assert_eq!(made(LOGICAL, &pose).colorize, NO_COLORIZE);
+        let still = Mounting {
+            at: [0.0; 3],
+            turn: 0.0,
+        };
+        let part = part(LOGICAL, &pose, &still, MESH, 1.0).expect("drawable");
+        assert_eq!(part.alpha, 1.0);
+        assert_eq!(part.colorize, NO_COLORIZE);
+    }
+
+    #[test]
+    fn a_drawable_alpha_is_finite_and_above_0_and_held_to_1() {
+        for drawn in [0.25, 1.0, f32::MIN_POSITIVE] {
+            assert_eq!(alpha(drawn), Some(drawn), "{drawn}");
+        }
+        assert_eq!(alpha(1.5), Some(1.0));
+        assert_eq!(alpha(f32::MAX), Some(1.0));
+        for refused in [0.0, -0.0, -0.5, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(alpha(refused), None, "{refused}");
+        }
+    }
+
+    #[test]
+    fn a_faded_fragment_keeps_its_colour_and_multiplies_its_alpha() {
+        assert_eq!(
+            faded([0.5, 0.25, 1.0, 0.8], 0.5),
+            [0.5, 0.25, 1.0, 0.8 * 0.5]
+        );
+        assert_eq!(faded([0.5, 0.25, 1.0, 0.8], 1.0), [0.5, 0.25, 1.0, 0.8]);
     }
 
     #[test]
@@ -750,6 +879,243 @@ mod tests {
         assert_eq!(lit, RED);
         let dim = shade([0.0, 0.0, -1.0], RED, light);
         assert_eq!(dim, [0.5, 0.25, 0.125, 0.75]);
+    }
+
+    /// A texel apart from white in every channel.
+    const TEXEL: [f32; 4] = [0.5, 0.25, 0.75, 0.5];
+    const WHITE: [f32; 4] = [1.0; 4];
+
+    /// Normals and lights apart: facing the light, away from it, edge-on,
+    /// and none at all.
+    fn normals_and_lights() -> Vec<([f32; 3], Light)> {
+        let lights = [
+            Light::STANDARD,
+            Light {
+                direction: [0.0, 0.0, 1.0],
+                ambient: 0.5,
+            },
+            Light {
+                direction: [3.0, -1.0, 0.5],
+                ambient: 0.0,
+            },
+        ];
+        let normals = [
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+            [1.0, 0.0, 0.0],
+            [-0.4, 0.8, 0.2],
+            [0.0; 3],
+        ];
+        lights
+            .into_iter()
+            .flat_map(|light| normals.map(|normal| (normal, light)))
+            .collect()
+    }
+
+    #[test]
+    fn an_unlit_fragment_is_its_colour_times_its_texel_whatever_the_light() {
+        let product = [0.5, 0.125, 0.1875, 0.375];
+        for (normal, light) in normals_and_lights() {
+            assert_eq!(fragment(normal, RED, TEXEL, true, light), product);
+            // With a white texel, its vertex colour exactly.
+            assert_eq!(fragment(normal, RED, WHITE, true, light), RED);
+            // With a white vertex, its texel exactly.
+            assert_eq!(fragment(normal, WHITE, TEXEL, true, light), TEXEL);
+        }
+    }
+
+    #[test]
+    fn a_lit_fragment_is_the_product_shaded() {
+        let product = [0.5, 0.125, 0.1875, 0.375];
+        for (normal, light) in normals_and_lights() {
+            assert_eq!(
+                fragment(normal, RED, TEXEL, false, light),
+                shade(normal, product, light)
+            );
+            // With a white texel, a model with no texture as it was lit.
+            assert_eq!(
+                fragment(normal, RED, WHITE, false, light),
+                shade(normal, RED, light)
+            );
+        }
+        // Lit and unlit differ wherever the light is not full.
+        let dim = Light {
+            direction: [0.0, 0.0, 1.0],
+            ambient: 0.5,
+        };
+        let away = [0.0, 0.0, -1.0];
+        assert_eq!(
+            fragment(away, RED, TEXEL, false, dim),
+            [0.25, 0.0625, 0.09375, 0.375]
+        );
+        assert_ne!(
+            fragment(away, RED, TEXEL, false, dim),
+            fragment(away, RED, TEXEL, true, dim)
+        );
+    }
+
+    #[test]
+    fn a_fragment_s_alpha_is_its_colour_s_times_its_texel_s_lit_or_not() {
+        let light = Light {
+            direction: [0.0, 0.0, 1.0],
+            ambient: 0.5,
+        };
+        for unlit in [false, true] {
+            let faded = fragment([0.0, 0.0, -1.0], RED, TEXEL, unlit, light);
+            assert_eq!(faded[3], 0.75 * 0.5, "unlit {unlit}");
+            let clear = fragment([0.0, 0.0, 1.0], RED, [1.0, 1.0, 1.0, 0.0], unlit, light);
+            assert_eq!(clear[3], 0.0, "unlit {unlit}");
+        }
+    }
+
+    /// A fragment whose colour sits mid-way in the 5-bit steps `s5`, at
+    /// `alpha`.
+    fn of_steps(s5: [u8; 3], alpha: f32) -> [f32; 4] {
+        let [r, g, b] = s5.map(|c| (f32::from(c) * 8.0 + 4.0) / 255.0);
+        [r, g, b, alpha]
+    }
+
+    /// The 5-bit colour `rgb5` as the fragment that shows it, at `alpha`.
+    fn widened(rgb5: [u8; 3], alpha: f32) -> [f32; 4] {
+        let shown = nova_view::Color::from_rgb555(rgb5);
+        let [r, g, b] = [shown.r, shown.g, shown.b].map(|c| f32::from(c) / 255.0);
+        [r, g, b, alpha]
+    }
+
+    #[test]
+    fn a_colorized_fragment_mixes_each_5_bit_channel_and_keeps_its_alpha() {
+        let tint = Colorize {
+            level: 14,
+            rgb5: [5, 0, 31],
+        };
+        let mixed = tint.mix([7, 31, 0]);
+        assert_eq!(mixed, [3, 17, 13], "the sprite's arithmetic");
+        assert_eq!(
+            colorized(of_steps([7, 31, 0], 0.4), tint),
+            widened(mixed, 0.4)
+        );
+        // Widened by bit replication: 3 is 24 | 0, 17 is 136 | 4, 13 is
+        // 104 | 3.
+        assert_eq!(
+            colorized(of_steps([7, 31, 0], 0.4), tint),
+            [24.0 / 255.0, 140.0 / 255.0, 107.0 / 255.0, 0.4]
+        );
+    }
+
+    #[test]
+    fn the_halves_are_ored_not_added() {
+        let half = Colorize {
+            level: 16,
+            rgb5: [31, 0, 21],
+        };
+        // Red: 15 | 15 is 15, where adding would give 30. 15 widens to 123.
+        let grey = 123.0 / 255.0;
+        assert_eq!(
+            colorized(of_steps([31, 31, 10], 1.0), half),
+            [grey, grey, grey, 1.0]
+        );
+    }
+
+    #[test]
+    fn level_32_is_the_colour_whatever_the_fragment() {
+        let full = Colorize {
+            level: 32,
+            rgb5: [3, 17, 30],
+        };
+        for fragment in [
+            [0.0, 0.0, 0.0, 0.5],
+            [1.0, 1.0, 1.0, 0.5],
+            [0.9, 0.1, 0.4, 0.5],
+        ] {
+            assert_eq!(colorized(fragment, full), widened([3, 17, 30], 0.5));
+        }
+    }
+
+    #[test]
+    fn a_colorize_that_does_not_mix_leaves_the_fragment_untouched() {
+        // Off every 5-bit step, so narrowing it would show.
+        let fragment = [0.3, 0.7, 0.123, 0.4];
+        for level in [0, 33, 200] {
+            let none = Colorize {
+                level,
+                rgb5: [3, 17, 30],
+            };
+            assert_eq!(colorized(fragment, none), fragment, "{level}");
+        }
+        let least = Colorize {
+            level: 1,
+            rgb5: [3, 17, 30],
+        };
+        assert_ne!(colorized(fragment, least), fragment, "level 1 mixes");
+    }
+
+    #[test]
+    fn a_channel_narrows_from_its_nearest_8_bit_value() {
+        // At level 1 toward black a step s shows as s × 31 >> 5, so steps
+        // 2, 3 and 31 show apart: 1, 2 and 30.
+        let barely = Colorize {
+            level: 1,
+            rgb5: [0, 0, 0],
+        };
+        // 23.4 rounds to 23, step 2; 23.6 to 24, step 3; 247.6 to 248,
+        // step 31.
+        let fragment = [23.4 / 255.0, 23.6 / 255.0, 247.6 / 255.0, 1.0];
+        assert_eq!(colorized(fragment, barely), widened([1, 2, 30], 1.0));
+        assert_eq!(barely.mix([2, 3, 31]), [1, 2, 30]);
+    }
+
+    #[test]
+    fn a_channel_outside_0_to_1_is_held_before_it_narrows() {
+        let barely = Colorize {
+            level: 1,
+            rgb5: [0, 0, 0],
+        };
+        // Above 1 is step 31 and below 0 step 0, as 1 and 0 are.
+        assert_eq!(
+            colorized([1.5, -0.25, 300.0, 0.75], barely),
+            colorized([1.0, 0.0, 1.0, 0.75], barely)
+        );
+        assert_eq!(
+            colorized([1.5, -0.25, 300.0, 0.75], barely),
+            widened([30, 0, 30], 0.75)
+        );
+    }
+
+    #[test]
+    fn an_unlit_fragment_is_colorized_as_a_lit_one() {
+        let half = Colorize {
+            level: 16,
+            rgb5: [0, 4, 31],
+        };
+        let dim = Light {
+            direction: [0.0, 0.0, 1.0],
+            ambient: 0.5,
+        };
+        let away = [0.0, 0.0, -1.0];
+        // RED × TEXEL is (0.5, 0.125, 0.1875), steps 16, 4 and 6; lit at
+        // a half, (0.25, 0.0625, 0.09375), steps 8, 2 and 3.
+        assert_eq!(
+            colorized(fragment(away, RED, TEXEL, true, dim), half),
+            widened(half.mix([16, 4, 6]), 0.375)
+        );
+        assert_eq!(
+            colorized(fragment(away, RED, TEXEL, false, dim), half),
+            widened(half.mix([8, 2, 3]), 0.375)
+        );
+        assert_ne!(half.mix([16, 4, 6]), half.mix([8, 2, 3]));
+    }
+
+    #[test]
+    fn a_colorized_fragment_fades_by_its_alpha_after_it_mixes() {
+        let half = Colorize {
+            level: 16,
+            rgb5: [0, 4, 31],
+        };
+        let [r, g, b, _] = widened(half.mix([31, 10, 7]), 1.0);
+        assert_eq!(
+            faded(colorized(of_steps([31, 10, 7], 0.8), half), 0.5),
+            [r, g, b, 0.8 * 0.5]
+        );
     }
 
     #[test]

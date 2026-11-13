@@ -13,7 +13,10 @@
 //! - Otherwise, in the original's order: the target's name, bright,
 //!   centred, 16 below the top (@0x4b6ab-0x4b765); its picture stretched
 //!   into a 128 x 64 rectangle about the area's centre, each half of
-//!   which is truncated (@0x4b76a-0x4b808), none without one; its
+//!   which is truncated (@0x4b76a-0x4b808), none without one, but a new
+//!   game's ship, which has no picture, draws its model's still portrait
+//!   fitted to that rectangle instead ([`TargetPanel::model`],
+//!   [`ShipPortrait`]); its
 //!   subtitle, bright, centred, at `SubtitleSize`, 29 below the top
 //!   (@0x4b80f-0x4b8de).
 //! - Its status line, 5 in from the left and 6 above the bottom
@@ -55,6 +58,8 @@ pub use nova_sim_frame::brackets::Standing;
 
 use super::catalog::StatusBarLayout;
 use super::pen::Pen;
+use crate::geometry::Bounds;
+use crate::model_picture::ShipPortrait;
 use crate::text::TextMetrics;
 use crate::{DrawList, ImageKey, Point};
 
@@ -110,7 +115,7 @@ pub enum Tag {
 }
 
 /// What the target panel shows of the target.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TargetPanel {
     /// Its name: a marked mission ship's drawn name (`_DrawStatusTarg`
     /// @0x4b6c8), else a person's own, else its ship type's.
@@ -121,6 +126,10 @@ pub struct TargetPanel {
     pub subtitle: String,
     /// Its ship type's picture, if any.
     pub picture: Option<i16>,
+    /// Its ship type's model, drawn as a portrait in the picture's place
+    /// when it has no picture: the new game's, whose ships have no
+    /// pictures (see the module docs).
+    pub model: Option<ShipPortrait>,
     /// Its status line.
     pub status: TargetStatus,
     /// Its label, if any.
@@ -152,16 +161,22 @@ pub fn draw_target_panel(
         return;
     };
     pen.centred_text(&target.name, left, right, top + NAME_BASELINE, size, bright);
+    let (x, y) = (
+        f32::midpoint(left, right).trunc(),
+        f32::midpoint(top, bottom).trunc(),
+    );
+    let picture_at = Point::new(x - PICTURE_WIDTH / 2.0, y - PICTURE_HEIGHT / 2.0);
     if let Some(picture) = target.picture {
-        let (x, y) = (
-            f32::midpoint(left, right).trunc(),
-            f32::midpoint(top, bottom).trunc(),
-        );
         pen.list.stretched_picture(
             ImageKey::picture(picture),
-            Point::new(x - PICTURE_WIDTH / 2.0, y - PICTURE_HEIGHT / 2.0),
+            picture_at,
             PICTURE_WIDTH,
             PICTURE_HEIGHT,
+        );
+    } else if let Some(model) = &target.model {
+        model.draw_in(
+            pen.list,
+            Bounds::at(picture_at, PICTURE_WIDTH, PICTURE_HEIGHT),
         );
     }
     pen.centred_text(
@@ -344,9 +359,73 @@ mod tests {
             name: "Shuttle".to_owned(),
             subtitle: "Light Transport".to_owned(),
             picture: Some(3000),
+            model: None,
             status: TargetStatus::Shield(73),
             tag: Some(Tag::Code("Fed.".to_owned())),
         }
+    }
+
+    /// A portrait of a hull of radius 2 with no parts.
+    fn portrait() -> ShipPortrait {
+        use crate::flight::world_models::{ShipModel, WorldModels};
+        use crate::model::ModelKey;
+        let ship = nova_sim_frame::ShipId(128);
+        let models = WorldModels {
+            ships: [(
+                ship,
+                ShipModel {
+                    key: ModelKey(7),
+                    scale: 1.0,
+                    base_transp: 0,
+                    radius: 2.0,
+                },
+            )]
+            .into(),
+            ..WorldModels::default()
+        };
+        ShipPortrait::of(&models, ship).expect("a portrait")
+    }
+
+    #[test]
+    fn a_target_with_a_model_and_no_picture_draws_its_portrait_in_the_picture_s_place() {
+        let target = TargetPanel {
+            picture: None,
+            model: Some(portrait()),
+            ..shuttle()
+        };
+        let commands = panel(Some(&target), Some(&MonoMetrics));
+        let mut want = DrawList::new();
+        // The picture's 128 x 64 rectangle about (926, 386).
+        let area = Bounds::at(Point::new(862.0, 354.0), PICTURE_WIDTH, PICTURE_HEIGHT);
+        assert!(portrait().draw_in(&mut want, area));
+        let want: Vec<DrawCommand> = want.iter().cloned().collect();
+        assert_eq!(want.len(), 1);
+        assert_eq!(commands[0], text("Shuttle", 905.0, 334.0, 12.0, BRIGHT));
+        assert_eq!(commands[1..=want.len()], want);
+        assert_eq!(
+            commands[want.len() + 1],
+            text("Light Transport", 889.0, 349.0, 10.0, BRIGHT)
+        );
+        let DrawCommand::Model { pose, .. } = &commands[1] else {
+            panic!("a model");
+        };
+        assert_eq!(pose.center, Point::new(926.0, 386.0));
+    }
+
+    #[test]
+    fn a_target_with_a_picture_draws_only_the_picture_model_or_not() {
+        let with_model = TargetPanel {
+            model: Some(portrait()),
+            ..shuttle()
+        };
+        assert_eq!(
+            panel(Some(&with_model), Some(&MonoMetrics)),
+            panel(Some(&shuttle()), Some(&MonoMetrics))
+        );
+        assert!(matches!(
+            panel(Some(&with_model), None)[1],
+            DrawCommand::StretchedPicture { .. }
+        ));
     }
 
     #[test]

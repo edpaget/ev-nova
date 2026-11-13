@@ -1,5 +1,6 @@
 //! Draw commands and draw lists.
 
+use nova_data::SystemId;
 use nova_sim_frame::blink::FULL;
 
 use crate::color::Color;
@@ -327,18 +328,42 @@ pub enum DrawCommand {
     /// orientation is zero or not finite, whose mesh has no triangles, or
     /// whose key has no mesh draws nothing; the renderer reports a key
     /// with no mesh once.
+    ///
+    /// It draws at `alpha`: 1 opaque ([`DrawList::model`]), less faded
+    /// ([`DrawList::faded_model`]), a cloaking or gating ship's. A faded
+    /// model shows only its nearest surface over what is beneath it, as an
+    /// opaque model would composited at `alpha`; its own back faces and
+    /// its parts inside it never show through it. The parts mounted on it
+    /// ([`DrawCommand::Mounted`]) fade with it at the same alpha. An alpha
+    /// that isn't finite or is 0 or less draws nothing, its parts with it;
+    /// one above 1 draws as 1.
+    ///
+    /// It draws mixed toward `colorize`, as a sprite is
+    /// ([`DrawCommand::Colorized`]): the murk a ship is seen through, its
+    /// ion tint, a gate's white wash. The mix is the sprite's, on 5-bit
+    /// channels ([`Colorize::mix`]), of the colour the model would
+    /// otherwise show: after its lighting, so a level of 32 is the flat
+    /// colour whatever the light, and before its alpha. Its parts take the
+    /// same colorize. A model with none, or with one that doesn't mix
+    /// ([`Colorize::mixes`]), draws in its own colours, unnarrowed.
     Model {
         /// Which model.
         model: ModelKey,
         /// Where it goes, how it is turned and how big it is.
         pose: ModelPose,
+        /// How opaque it draws, 0 to 1 (straight alpha), its parts with it.
+        alpha: f32,
+        /// The colour it is mixed toward and by how much, its parts with
+        /// it; `None` draws it as it is ([`DrawCommand::with_colorize`]).
+        colorize: Option<Colorize>,
     },
     /// A planet: the globe registered under `planet`, with its clouds,
     /// rings and atmosphere, centred at `pose`'s centre at its radius and
     /// turned to its time (see [`crate::planet`]). It is drawn in list
     /// order, as a sprite is: a model drawn after it covers it, and it
     /// covers a model drawn before it. A part
-    /// ([`DrawCommand::Mounted`]) after it has no model to sit on.
+    /// ([`DrawCommand::Mounted`]) after it has no model to sit on. It is
+    /// cut by a clip ([`DrawCommand::Clipped`]) as a model is.
     ///
     /// A planet whose radius is not a positive, finite number, whose
     /// centre or time is not finite, or whose key has no planet draws
@@ -354,7 +379,7 @@ pub enum DrawCommand {
     /// layer drifting by its depth's parallax and all dimmed to its level
     /// (see [`crate::sky`]). What the layers look like is the renderer's.
     /// The stars add their light to what is beneath them; anything drawn
-    /// after the sky covers it. Like a model, it is drawn uncut by a clip.
+    /// after the sky covers it. It is drawn uncut by a clip, as a line is.
     ///
     /// A sky at level 0, or whose eye or anchor is not finite, draws
     /// nothing.
@@ -383,9 +408,13 @@ pub enum DrawCommand {
     },
     /// `command` drawn only inside `clip`: a text run cut to it, a
     /// sprite's, picture's or movie frame's quad cropped to it with its
-    /// texture coordinates, a tiled picture's or OR fill's area cut to it. A
-    /// line, a dot, a triangle or a model is drawn as it is, uncut. The
-    /// floating map clips its names and arrows to its frame so.
+    /// texture coordinates, a tiled picture's or OR fill's area cut to it.
+    /// A model and the parts mounted on it, and a planet, are cut at the
+    /// clip's pixel edges, rounded as a crop's, so they end on the column a
+    /// cropped sprite does; a part is cut by its model's clip, whatever its
+    /// own. A line, a dot, a triangle or a sky is drawn as it is, uncut. A
+    /// clip with no area draws nothing at all. The floating map clips its
+    /// names and arrows to its frame so.
     Clipped {
         /// Where it may draw.
         clip: Bounds,
@@ -395,6 +424,51 @@ pub enum DrawCommand {
 }
 
 impl DrawCommand {
+    /// A [`DrawCommand::Model`]: `model` drawn whole (alpha 1) at `pose`.
+    #[must_use]
+    pub fn model(model: ModelKey, pose: ModelPose) -> Self {
+        Self::faded_model(model, pose, 1.0)
+    }
+
+    /// A [`DrawCommand::Model`]: `model` drawn at `pose` at `alpha`, in
+    /// its own colours.
+    #[must_use]
+    pub fn faded_model(model: ModelKey, pose: ModelPose, alpha: f32) -> Self {
+        Self::Model {
+            model,
+            pose,
+            alpha,
+            colorize: None,
+        }
+    }
+
+    /// The command with a [`DrawCommand::Model`]'s colorize set to
+    /// `colorize`, or to none when it doesn't mix ([`Colorize::mixes`]),
+    /// as [`DrawCommand::mixed_sprite`] draws a plain sprite; any other
+    /// command as it is, a part ([`DrawCommand::Mounted`]) included, since
+    /// it takes its model's.
+    #[must_use]
+    pub fn with_colorize(mut self, colorize: Option<Colorize>) -> Self {
+        if let Self::Model {
+            colorize: drawn, ..
+        } = &mut self
+        {
+            *drawn = colorize.filter(|colorize| colorize.mixes());
+        }
+        self
+    }
+
+    /// The command with a [`DrawCommand::Model`]'s alpha set to `alpha`;
+    /// any other command as it is, a part ([`DrawCommand::Mounted`])
+    /// included, since it fades with its model.
+    #[must_use]
+    pub fn at_alpha(mut self, alpha: f32) -> Self {
+        if let Self::Model { alpha: drawn, .. } = &mut self {
+            *drawn = alpha;
+        }
+        self
+    }
+
     /// The command moved by `by` ([`DrawList::extend_translated`]).
     #[must_use]
     pub fn translated(&self, by: Point) -> Self {
@@ -532,6 +606,9 @@ pub struct DrawList {
     /// What the frame asks of the platform's text entry, if a focused
     /// field asks ([`DrawList::ask_text_entry`]).
     text_entry: Option<EntryAsk>,
+    /// The system whose stellars the frame flies among, if it names one
+    /// ([`DrawList::in_system`]).
+    system: Option<SystemId>,
 }
 
 impl DrawList {
@@ -619,6 +696,27 @@ impl DrawList {
     #[must_use]
     pub fn text_entry(&self) -> Option<EntryAsk> {
         self.text_entry
+    }
+
+    /// Names `system` as the one the frame flies in: a readout of where
+    /// the frame is, as the text-entry ask is, which the renderer reads to
+    /// tell a visit to a system from the next (`nova_render`'s `visits`:
+    /// it lets go of the planets of systems the pilot has left). Only
+    /// flight names one, in the passes that draw its system's stellars;
+    /// a screen that shows a system without flying in it (the galaxy
+    /// map's system viewer, the spaceport) names none. A screen that flies
+    /// must name its system, or the renderer never lets a planet go. The
+    /// last one named wins.
+    pub fn in_system(&mut self, system: SystemId) -> &mut Self {
+        self.system = Some(system);
+        self
+    }
+
+    /// The system the frame flies in, if it names one
+    /// ([`DrawList::in_system`]).
+    #[must_use]
+    pub fn system(&self) -> Option<SystemId> {
+        self.system
     }
 
     /// The commands, in draw order.
@@ -784,8 +882,12 @@ impl DrawList {
     /// widened view so. Each keeps its layer. `other`'s world clip, moved
     /// by `by`, replaces this list's if `other` has one, and so does its
     /// world tail, moved past this list's commands, and its text-entry ask,
-    /// moved by `by` too.
+    /// moved by `by` too, and the system it names
+    /// ([`DrawList::in_system`]).
     pub fn extend_translated(&mut self, other: &Self, by: Point) -> &mut Self {
+        if let Some(system) = other.system {
+            self.system = Some(system);
+        }
         if let Some(tail) = other.world_tail {
             self.world_tail = Some(self.commands.len() + tail);
         }
@@ -857,9 +959,15 @@ impl DrawList {
         self.push(DrawCommand::Triangle { corners, color })
     }
 
-    /// Appends a [`DrawCommand::Model`]: `model` drawn at `pose`.
+    /// Appends a [`DrawCommand::Model`]: `model` drawn whole at `pose`.
     pub fn model(&mut self, model: ModelKey, pose: ModelPose) -> &mut Self {
-        self.push(DrawCommand::Model { model, pose })
+        self.push(DrawCommand::model(model, pose))
+    }
+
+    /// Appends a [`DrawCommand::Model`]: `model` drawn at `pose`, faded to
+    /// `alpha`, the parts mounted after it with it.
+    pub fn faded_model(&mut self, model: ModelKey, pose: ModelPose, alpha: f32) -> &mut Self {
+        self.push(DrawCommand::faded_model(model, pose, alpha))
     }
 
     /// Appends a [`DrawCommand::Planet`]: `planet` drawn at `pose`.
@@ -1117,21 +1225,21 @@ mod tests {
 
     /// Model 7 at (`x`, `y`), turned a little about z, at scale 3.
     fn model_at(x: f32, y: f32) -> DrawCommand {
-        DrawCommand::Model {
-            model: ModelKey(7),
-            pose: ModelPose {
+        DrawCommand::model(
+            ModelKey(7),
+            ModelPose {
                 center: at(x, y),
                 orientation: Orientation::about([0.0, 0.0, 1.0], 0.5),
                 scale: 3.0,
             },
-        }
+        )
     }
 
     #[test]
     fn a_model_pushed_alone_is_overlay() {
         let mut list = DrawList::new();
         let model_at_origin = model_at(1.0, 2.0);
-        let DrawCommand::Model { model, pose } = model_at_origin.clone() else {
+        let DrawCommand::Model { model, pose, .. } = model_at_origin.clone() else {
             unreachable!()
         };
         list.model(model, pose);
@@ -1144,7 +1252,7 @@ mod tests {
     #[test]
     fn a_model_inside_world_is_world() {
         let mut list = DrawList::new();
-        let DrawCommand::Model { model, pose } = model_at(1.0, 2.0) else {
+        let DrawCommand::Model { model, pose, .. } = model_at(1.0, 2.0) else {
             unreachable!()
         };
         list.world(|list| {
@@ -1191,15 +1299,11 @@ mod tests {
         );
     }
 
-    /// Sky 9 looking from (100, -50), drawn at (`x`, `y`), at half murk.
+    /// Sky 9 looking from (100, -50), drawn at (`x`, `y`), at half murk,
+    /// rushing by (7, -3).
     fn sky_at(x: f32, y: f32) -> DrawCommand {
         DrawCommand::Sky {
-            sky: SkyPose {
-                seed: 9,
-                eye: at(100.0, -50.0),
-                anchor: at(x, y),
-                level: 16,
-            },
+            sky: SkyPose::new(9, at(100.0, -50.0), at(x, y), 16).with_rush(at(7.0, -3.0)),
         }
     }
 
@@ -1219,7 +1323,7 @@ mod tests {
     }
 
     #[test]
-    fn a_translated_sky_moves_its_anchor_and_not_its_eye() {
+    fn a_translated_sky_moves_its_anchor_and_not_its_eye_or_rush() {
         assert_eq!(
             sky_at(1.0, 2.0).translated(at(10.0, -4.0)),
             sky_at(11.0, -2.0)
@@ -1234,6 +1338,180 @@ mod tests {
         );
     }
 
+    /// The pose [`model_at`] draws at (`x`, `y`).
+    fn pose_at(x: f32, y: f32) -> ModelPose {
+        let DrawCommand::Model { pose, .. } = model_at(x, y) else {
+            unreachable!()
+        };
+        pose
+    }
+
+    #[test]
+    fn model_pushes_a_model_drawn_whole() {
+        let mut list = DrawList::new();
+        list.model(ModelKey(7), pose_at(1.0, 2.0));
+        assert_eq!(
+            list.iter().collect::<Vec<_>>(),
+            [&DrawCommand::Model {
+                model: ModelKey(7),
+                pose: pose_at(1.0, 2.0),
+                alpha: 1.0,
+                colorize: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn faded_model_pushes_a_model_at_its_alpha() {
+        let mut list = DrawList::new();
+        list.faded_model(ModelKey(7), pose_at(1.0, 2.0), 0.375);
+        assert_eq!(
+            list.iter().collect::<Vec<_>>(),
+            [&DrawCommand::faded_model(
+                ModelKey(7),
+                pose_at(1.0, 2.0),
+                0.375
+            )]
+        );
+        assert_eq!(
+            DrawCommand::faded_model(ModelKey(7), pose_at(1.0, 2.0), 0.375),
+            DrawCommand::Model {
+                model: ModelKey(7),
+                pose: pose_at(1.0, 2.0),
+                alpha: 0.375,
+                colorize: None,
+            }
+        );
+    }
+
+    #[test]
+    fn the_model_constructor_draws_whole() {
+        assert_eq!(
+            DrawCommand::model(ModelKey(7), pose_at(1.0, 2.0)),
+            DrawCommand::faded_model(ModelKey(7), pose_at(1.0, 2.0), 1.0)
+        );
+    }
+
+    #[test]
+    fn at_alpha_sets_a_models_alpha_and_leaves_any_other_command() {
+        assert_eq!(
+            model_at(1.0, 2.0).at_alpha(0.25),
+            DrawCommand::faded_model(ModelKey(7), pose_at(1.0, 2.0), 0.25)
+        );
+        assert_eq!(
+            DrawCommand::faded_model(ModelKey(7), pose_at(1.0, 2.0), 0.25).at_alpha(1.0),
+            model_at(1.0, 2.0)
+        );
+        let part = DrawCommand::Mounted {
+            model: ModelKey(8),
+            mounting: mounting(),
+        };
+        assert_eq!(part.clone().at_alpha(0.25), part);
+    }
+
+    #[test]
+    fn a_translated_faded_model_keeps_its_alpha() {
+        assert_eq!(
+            DrawCommand::faded_model(ModelKey(7), pose_at(1.0, 2.0), 0.25)
+                .translated(at(10.0, -4.0)),
+            DrawCommand::faded_model(ModelKey(7), pose_at(11.0, -2.0), 0.25)
+        );
+    }
+
+    /// The colorize a model's hull takes of `model`, a model command.
+    fn colorize_of(model: &DrawCommand) -> Option<Colorize> {
+        let DrawCommand::Model { colorize, .. } = model else {
+            panic!("not a model: {model:?}")
+        };
+        *colorize
+    }
+
+    fn half_toward_blue() -> Colorize {
+        Colorize {
+            level: 16,
+            rgb5: [0, 4, 31],
+        }
+    }
+
+    #[test]
+    fn a_model_is_built_with_no_colorize() {
+        assert_eq!(colorize_of(&model_at(1.0, 2.0)), None);
+        assert_eq!(
+            colorize_of(&DrawCommand::faded_model(
+                ModelKey(7),
+                pose_at(1.0, 2.0),
+                0.375
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn with_colorize_sets_a_models_colorize_only_when_it_mixes() {
+        let mixed = model_at(1.0, 2.0).with_colorize(Some(half_toward_blue()));
+        assert_eq!(
+            mixed,
+            DrawCommand::Model {
+                model: ModelKey(7),
+                pose: pose_at(1.0, 2.0),
+                alpha: 1.0,
+                colorize: Some(half_toward_blue()),
+            }
+        );
+        for level in [0, 33] {
+            let none = Colorize {
+                level,
+                ..half_toward_blue()
+            };
+            assert_eq!(
+                model_at(1.0, 2.0).with_colorize(Some(none)),
+                model_at(1.0, 2.0),
+                "{level}"
+            );
+            // And it takes one already there away.
+            assert_eq!(
+                mixed.clone().with_colorize(Some(none)),
+                model_at(1.0, 2.0),
+                "{level}"
+            );
+        }
+        assert_eq!(model_at(1.0, 2.0).with_colorize(None), model_at(1.0, 2.0));
+        assert_eq!(mixed.with_colorize(None), model_at(1.0, 2.0));
+    }
+
+    #[test]
+    fn with_colorize_leaves_any_command_but_a_model() {
+        let part = DrawCommand::Mounted {
+            model: ModelKey(8),
+            mounting: mounting(),
+        };
+        assert_eq!(part.clone().with_colorize(Some(half_toward_blue())), part);
+        let sprite = DrawCommand::Sprite {
+            image: ImageKey::sprite(3, 0),
+            center: at(1.0, 2.0),
+            tint: Color::WHITE,
+            blend: Blend::Normal,
+        };
+        assert_eq!(
+            sprite.clone().with_colorize(Some(half_toward_blue())),
+            sprite
+        );
+    }
+
+    #[test]
+    fn at_alpha_and_translated_keep_a_models_colorize() {
+        let mixed = model_at(1.0, 2.0).with_colorize(Some(half_toward_blue()));
+        assert_eq!(
+            mixed.clone().at_alpha(0.25),
+            DrawCommand::faded_model(ModelKey(7), pose_at(1.0, 2.0), 0.25)
+                .with_colorize(Some(half_toward_blue()))
+        );
+        assert_eq!(
+            mixed.translated(at(10.0, -4.0)),
+            model_at(11.0, -2.0).with_colorize(Some(half_toward_blue()))
+        );
+    }
+
     fn mounting() -> Mounting {
         Mounting {
             at: [0.5, -1.0, 2.0],
@@ -1244,7 +1522,7 @@ mod tests {
     #[test]
     fn mounted_pushes_a_part_on_the_model_before_it() {
         let mut list = DrawList::new();
-        let DrawCommand::Model { model, pose } = model_at(1.0, 2.0) else {
+        let DrawCommand::Model { model, pose, .. } = model_at(1.0, 2.0) else {
             unreachable!()
         };
         list.model(model, pose).mounted(ModelKey(8), mounting());
@@ -1297,6 +1575,33 @@ mod tests {
             list.text_entry(),
             Some(ask(10.0, 4).offset(at(170.0, -2.0)))
         );
+    }
+
+    #[test]
+    fn a_list_names_no_system_until_told_and_the_last_told_wins() {
+        let mut list = DrawList::new();
+        assert_eq!(list.system(), None);
+        list.in_system(SystemId(130));
+        assert_eq!(list.system(), Some(SystemId(130)));
+        list.in_system(SystemId(131));
+        assert_eq!(list.system(), Some(SystemId(131)));
+        assert!(list.is_empty(), "a system is no command");
+    }
+
+    #[test]
+    fn extending_a_list_carries_the_other_list_s_system() {
+        let mut flight = DrawList::new();
+        flight.in_system(SystemId(130));
+        let mut list = DrawList::new();
+        list.extend_translated(&flight, at(170.0, 0.0));
+        assert_eq!(list.system(), Some(SystemId(130)));
+        // A list that names none keeps the one named.
+        list.extend_translated(&DrawList::new(), at(170.0, 0.0));
+        assert_eq!(list.system(), Some(SystemId(130)));
+        let mut other = DrawList::new();
+        other.in_system(SystemId(131));
+        list.extend_translated(&other, at(0.0, 0.0));
+        assert_eq!(list.system(), Some(SystemId(131)), "the last named wins");
     }
 
     #[test]

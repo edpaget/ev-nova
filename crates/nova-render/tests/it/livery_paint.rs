@@ -68,11 +68,7 @@ fn material(name: &str, paint: Option<PaintSlot>, base_color: [f32; 4]) -> Mater
     Material {
         name: Some(name.to_owned()),
         paint,
-        base_color,
-        metallic: 1.0,
-        roughness: 1.0,
-        unlit: false,
-        base_color_texture: None,
+        ..Material::new(base_color)
     }
 }
 

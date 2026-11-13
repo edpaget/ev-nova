@@ -28,7 +28,10 @@
 //! ([`WorldModels`](super::world_models::WorldModels)) and, for every
 //! turning mount, the ship's turret facing as the frame the sim port
 //! fills carries it
-//! ([`FrameShip::turret_facing`](nova_sim_frame::flight_frame::FrameShip::turret_facing)).
+//! ([`FrameShip::turret_facing`](nova_sim_frame::flight_frame::FrameShip::turret_facing)),
+//! swung toward at a rate: the view's eased facing
+//! ([`TurretSwings::facing`](super::turret_swing::TurretSwings::facing)),
+//! the readout itself once a swing has settled.
 //!
 //! A ship's mounts are its class's and its kits' hardpoints, each showing
 //! the outfit the data puts on it, the ship as built. A weapon the player
@@ -76,7 +79,7 @@ pub fn mounted_outfits(
             mounting: Mounting { at, turn },
         })
     });
-    std::iter::once(DrawCommand::Model { model: hull, pose })
+    std::iter::once(DrawCommand::model(hull, pose))
         .chain(parts)
         .collect()
 }
@@ -142,13 +145,7 @@ mod tests {
             mount("bed", [0.0, -2.0, 6.0], true, Some(("turret-mount", 0.3))),
         ];
         let drawn = mounted_outfits(HULL, pose(30.0), 30.0, &mounts, &[], key_of);
-        assert_eq!(
-            drawn[0],
-            DrawCommand::Model {
-                model: HULL,
-                pose: pose(30.0)
-            }
-        );
+        assert_eq!(drawn[0], DrawCommand::model(HULL, pose(30.0)));
         let keys: Vec<ModelKey> = mountings(&drawn).iter().map(|(k, _)| *k).collect();
         assert_eq!(keys, [GUN, TURRET]);
         assert_eq!(drawn.len(), 3);
@@ -232,12 +229,6 @@ mod tests {
     #[test]
     fn a_hull_with_no_mounts_draws_its_model_alone() {
         let drawn = mounted_outfits(HULL, pose(40.0), 40.0, &[], &[], key_of);
-        assert_eq!(
-            drawn,
-            [DrawCommand::Model {
-                model: HULL,
-                pose: pose(40.0)
-            }]
-        );
+        assert_eq!(drawn, [DrawCommand::model(HULL, pose(40.0))]);
     }
 }

@@ -9,9 +9,12 @@
 //! models and lengths, the outfit and stations that use `station-hub` and
 //! `turret-mount`, the placeholders, and the three budgets with their
 //! numbers, copied by hand. The models themselves are boxes built in code
-//! (`nova_galaxy_media::fixture`) in the Kenney space kit's four unlit
+//! (`nova_galaxy_media::fixture`) in the Kenney space kit's four
 //! materials, with normals and texture coordinates, and the turret as a
-//! tree of nodes; no art enters the repo.
+//! tree of nodes; no art enters the repo. The kit's materials are lit and
+//! have no texture: its files list `KHR_materials_unlit` among the
+//! extensions they use, but no material of theirs carries it, and none
+//! names an image (checked against the six files on 2026-11-12).
 //!
 //! [`the_bible_s_sample_models_load`] reads the real sample through
 //! [`DirSource`] when `GAME_DATA` names it, and skips, passing, when it is
@@ -35,7 +38,8 @@ use crate::common::game_data;
 /// Where the sample's models sit.
 const PACK: &str = "media/export/kenney-space-kit";
 
-/// The Kenney space kit's materials, each unlit, in the kit's colours.
+/// The Kenney space kit's materials, each lit and untextured, in the
+/// kit's colours.
 const KENNEY: [(&str, [f32; 4]); 4] = [
     ("metal", [0.8, 0.8, 0.82, 1.0]),
     ("metalRed", [0.7, 0.15, 0.1, 1.0]),
@@ -127,17 +131,12 @@ const PLACEHOLDERS: [(&str, &str); 3] = [
     ("registry-numbers", "texture"),
 ];
 
-/// A box `size` big in the kit's four unlit materials, with normals and
+/// A box `size` big in the kit's four materials, with normals and
 /// texture coordinates.
 fn kenney(size: [f32; 3]) -> Builder {
     KENNEY.iter().fold(
         Builder::new(size).normals().texcoords(),
-        |b, (name, color)| {
-            b.material(Mat {
-                unlit: true,
-                ..Mat::new(name, *color)
-            })
-        },
+        |b, (name, color)| b.material(Mat::new(name, *color)),
     )
 }
 
@@ -355,7 +354,14 @@ fn the_sample_s_six_models_load_through_the_adapter_and_meet_the_contract() {
             Some("dark")
         ]
     );
-    assert!(turret.materials.iter().all(|m| m.unlit));
+    // Lit and untextured, as the kit's are: the merged mesh is one
+    // section the light shades.
+    assert!(turret.materials.iter().all(|m| !m.unlit));
+    assert!(turret.textures.is_empty());
+    let merged = turret.mesh();
+    assert_eq!(merged.sections().len(), 1);
+    assert_eq!(merged.sections()[0].texture, None);
+    assert!(merged.vertices().iter().all(|v| !v.unlit));
 
     // The painted models put the kit's metals in the livery's three slots
     // and leave `dark` as drawn; the station and the turret paint nothing.

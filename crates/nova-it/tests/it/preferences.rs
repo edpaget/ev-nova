@@ -49,7 +49,8 @@ use nova_view::sound::UiSound;
 use nova_view::ui::PrefsDialog;
 use nova_view::ui::prefs::OK_ITEM;
 use nova_view::{
-    DrawLayer, FullscreenKind, Key, MonitorMode, MouseButton, Scaling, Upscaler, VideoMode,
+    DrawLayer, FullscreenKind, Key, MonitorMode, MouseButton, RenderScale, Scaling, Upscaler,
+    VideoMode,
 };
 use winit::event::ElementState;
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -527,9 +528,9 @@ fn the_preferences_over_the_main_menu_set_the_music_playing_there() {
     harness.press(Key::KeyP);
     assert_eq!(harness.showing(), Showing::Preferences);
     // Past Ship Animations, Engine Glows, Running Lights, Weapon Effects,
-    // Smoke Trails, Parallax Starfield, the display picker and the Scaling
-    // list to the music volume.
-    for _ in 0..14 {
+    // Smoke Trails, Parallax Starfield, the render-scale list, the display
+    // picker and the Scaling list to the music volume.
+    for _ in 0..15 {
         harness.press(Key::Tab);
     }
     harness.press(Key::ArrowDown);
@@ -976,7 +977,7 @@ impl Harness {
     /// for each `true`, Up for each `false`) and presses Return.
     fn pick(&mut self, steps: &[bool]) {
         self.command_comma();
-        for _ in 0..11 {
+        for _ in 0..12 {
             self.press(Key::Tab);
         }
         for &down in steps {
@@ -1111,7 +1112,7 @@ impl Harness {
     fn step_scaling_by(&mut self, key: Key, times: usize) {
         self.command_comma();
         assert_eq!(self.showing(), Showing::Preferences);
-        for _ in 0..12 {
+        for _ in 0..13 {
             self.press(Key::Tab);
         }
         for _ in 0..times {
@@ -1428,4 +1429,89 @@ fn a_stored_upscaler_unknown_or_unavailable_starts_native_with_one_warning_and_i
         assert_eq!(saved(&store)["frame_upscaler"], name);
         assert_eq!(harness.app.take_warnings(), Vec::<String>::new(), "{name}");
     }
+}
+
+impl Harness {
+    /// Clicks the open Preferences dialog's render-scale list's down
+    /// arrow `downs` times.
+    fn step_render_scale(&mut self, downs: usize) {
+        let down = self.dialog().render_scale().rects().down.center();
+        for _ in 0..downs {
+            self.click(down);
+        }
+    }
+}
+
+/// The share of the 1024 x 768 window's viewport the open dialog's
+/// render-scale list shows, as the world's texture size; `None` for Auto.
+fn share_shown(harness: &Harness) -> Option<WorldSpace> {
+    match harness.dialog().render_scale().selected() {
+        RenderScale::Auto => None,
+        RenderScale::Percent(percent) => {
+            let of = |side: u32| side * u32::from(percent) / 100;
+            Some(WorldSpace::Texture {
+                size: (of(1024), of(768)),
+            })
+        }
+    }
+}
+
+/// The stock dialog's render-scale list, in "Check For Updates"'s row,
+/// changes the size flight's world is drawn at with each click, the
+/// dialog still open over it: no relaunch, no notice, nothing rebuilt.
+/// The choice is saved under `render_scale`, and a restart draws its
+/// first frame at it and opens the dialog on it.
+#[test]
+fn a_render_scale_stepped_in_flight_draws_the_next_frame_at_it_and_survives_a_restart() {
+    let store = seeded();
+    let (mut harness, warnings) = Harness::launched_probing(&store, &[NATIVE]);
+    assert_eq!(warnings, Vec::<String>::new());
+    harness.press_physical(KeyCode::KeyF);
+    assert_eq!(harness.showing(), Showing::Flight);
+    assert_eq!(world_space(&harness.frame_calls()), WorldSpace::Target);
+
+    harness.command_comma();
+    assert_eq!(harness.showing(), Showing::Preferences);
+    assert_eq!(share_shown(&harness), None, "it opens on Auto");
+    assert!(
+        texts(&harness.frame())
+            .iter()
+            .any(|text| text == &harness.dialog().render_scale().selected().label()),
+        "the list is drawn"
+    );
+    assert_eq!(saved(&store).get("render_scale"), None);
+
+    // Two clicks down, past the backing size itself.
+    harness.step_render_scale(2);
+    let stepped = share_shown(&harness).expect("a percentage");
+    assert_ne!(stepped, TEXTURE, "smaller than the viewport");
+    assert_eq!(harness.showing(), Showing::Preferences, "still open");
+    let open = harness.frame_calls();
+    assert_eq!(world_space(&open), stepped, "the very next frame");
+    assert!(!open.contains(&GpuCall::ClearPages), "the atlas is kept");
+    assert!(!harness.dialog().relaunch_notice_shown());
+    let RenderScale::Percent(percent) = harness.dialog().render_scale().selected() else {
+        panic!("a percentage");
+    };
+    assert_eq!(saved(&store)["render_scale"], percent);
+    assert_eq!(saved(&store)["music"], true, "the rest kept");
+
+    // Another preference's change keeps it.
+    let music = harness.dialog().music().rect().center();
+    harness.click(music);
+    assert_eq!(saved(&store)["render_scale"], percent);
+    harness.ok();
+    assert_eq!(world_space(&harness.frame_calls()), stepped, "and closed");
+    assert_eq!(harness.app.take_warnings(), Vec::<String>::new());
+
+    let (mut restarted, warnings) = Harness::launched_probing(&store, &[NATIVE]);
+    assert_eq!(warnings, Vec::<String>::new());
+    restarted.press_physical(KeyCode::KeyF);
+    assert_eq!(
+        world_space(&restarted.frame_calls()),
+        stepped,
+        "from the first frame"
+    );
+    restarted.command_comma();
+    assert_eq!(share_shown(&restarted), Some(stepped), "shown as stored");
 }

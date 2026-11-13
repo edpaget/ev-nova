@@ -1,10 +1,12 @@
 //! The player's Scaling: the one the game starts with, from the stored
 //! choice and what the device can use, and the switches a pick in the
 //! Preferences dialog makes at each of its two sites, the per-frame
-//! upscaler and the load-time enlarger.
+//! upscaler and the load-time enlarger. And the render scale the world
+//! is drawn at before the Scaling enlarges it: the stored one at startup,
+//! then each step of the dialog's list, at once.
 
 use nova_render::{Gpu, ImageSource, UpscalerProbe, enlarger_for, listed};
-use nova_view::{Enlargement, Scaling, Screen, Upscaler};
+use nova_view::{Enlargement, RenderScale, Scaling, Screen, Upscaler};
 
 use super::App;
 use crate::settings::{GameKeeper, ScalingSetting};
@@ -89,8 +91,10 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// upscaler and, for a load-time scaling, the renderer enlarging with
     /// its enlarger (before the first frame, so the atlas is still empty),
     /// and the renderer drawing the world layer at the stored render scale
-    /// (`nova_render::Renderer::set_render_scale`). Then offers the screen the Scaling list (native, the upscalers
-    /// `gpu` can use, then Super-xBR) and the one running
+    /// (`nova_render::Renderer::set_render_scale`), which the Preferences
+    /// dialog's list changes afterwards ([`App::pick_render_scale`]). Then
+    /// offers the screen the Scaling list (native, the upscalers `gpu` can
+    /// use, then Super-xBR) and the one running
     /// ([`Screen::offer_scaling`]). The stored choice is never changed
     /// here, so it comes back on a device that has it.
     pub fn restore_scaling(&mut self, gpu: &mut (impl Gpu + UpscalerProbe)) {
@@ -127,6 +131,16 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         changed
     }
 
+    /// Draws flight's world layer at `scale` from the next frame, as the
+    /// Preferences dialog's render-scale list reported it with each step.
+    /// Unlike a Scaling pick it waits for nothing: the renderer keeps its
+    /// atlas and the GPU its upscaler
+    /// (`nova_render::Renderer::set_render_scale`), so the world behind
+    /// the open dialog follows the list.
+    pub(super) fn pick_render_scale(&mut self, scale: RenderScale) {
+        self.renderer.set_render_scale(scale);
+    }
+
     /// Makes the upscaler switch the player picked on `gpu`, if one is
     /// still to be made, so the frame drawn next is drawn with it.
     pub(super) fn switch_upscaler(&mut self, gpu: &mut impl Gpu) {
@@ -145,8 +159,8 @@ mod tests {
     use nova_render::recording::{GpuCall, RecordingGpu};
     use nova_render::{Frame, ImageError, ImageSource, WorldSpace};
     use nova_view::{
-        Color, DrawList, Enlargement, ImageKey, ImageKind, Input, Key, Point, Prefs, Scaling,
-        Screen, ScreenAction, SoundPrefs, Upscaler,
+        Color, DrawList, Enlargement, ImageKey, ImageKind, Input, Key, Point, Prefs, RenderScale,
+        Scaling, Screen, ScreenAction, SoundPrefs, Upscaler,
     };
 
     use super::*;
@@ -724,6 +738,88 @@ mod tests {
             WorldSpace::Texture { size: (512, 384) }
         );
         assert_eq!(app.take_warnings(), Vec::<String>::new());
+    }
+
+    /// The default preferences, the world drawn at `render_scale`.
+    fn scaled(render_scale: RenderScale) -> Prefs {
+        Prefs {
+            render_scale,
+            ..Prefs::default()
+        }
+    }
+
+    /// The render scale the Preferences dialog reports sizes the very next
+    /// frame's world, with nothing closed or relaunched: no upscaler switch,
+    /// no atlas rebuild, no image uploaded again. The settings file keeps
+    /// it, and Auto afterwards draws as the Scaling does on its own and
+    /// leaves the key out.
+    #[test]
+    fn a_render_scale_the_dialog_reports_sizes_the_next_frames_world_and_is_saved() {
+        let (store, _) = holding("native");
+        let mut gpu = RecordingGpu::probing(&[NATIVE, SHARP]);
+        let mut app = restored(&store, &mut gpu);
+        assert_eq!(
+            world_of(&frame_calls(&mut app, &mut gpu, 16)),
+            WorldSpace::Target
+        );
+
+        app.screen.report = Some(scaled(RenderScale::Percent(50)));
+        let calls = frame_calls(&mut app, &mut gpu, 32);
+        assert_eq!(
+            world_of(&calls),
+            WorldSpace::Texture { size: (512, 384) },
+            "half the 1024 x 768 viewport, in the frame that noticed it"
+        );
+        assert!(!calls.contains(&GpuCall::ClearPages), "the atlas is kept");
+        assert_eq!(uploads(&calls), [], "nothing is loaded again");
+        assert_eq!(gpu.upscaler(), NATIVE);
+        assert_eq!(saved(&store)["render_scale"], 50);
+        assert_eq!(saved(&store)["frame_upscaler"], "native");
+
+        app.screen.report = Some(scaled(RenderScale::Auto));
+        let calls = frame_calls(&mut app, &mut gpu, 48);
+        assert_eq!(world_of(&calls), WorldSpace::Target, "the Scaling's own");
+        assert_eq!(saved(&store).get("render_scale"), None, "Auto is left out");
+        assert_eq!(app.take_warnings(), Vec::<String>::new());
+    }
+
+    /// Reported on an input, as a click on the list's arrow reports it, the
+    /// render scale is set before the next frame is drawn.
+    #[test]
+    fn a_render_scale_reported_on_an_input_is_drawn_at_from_the_next_frame() {
+        let store = holding_scaled("sharp_bilinear", 75);
+        let mut gpu = RecordingGpu::probing(&[SHARP]);
+        let mut app = restored(&store, &mut gpu);
+        frame(&mut app, &mut gpu, 16);
+        app.screen.report = Some(Prefs {
+            scaling: Scaling::SharpBilinear,
+            ..scaled(RenderScale::Percent(25))
+        });
+        let enter = WindowEvent::Key {
+            key: Key::Enter,
+            pressed: true,
+            repeat: false,
+        };
+        app.handle(enter, &mut Window, &mut gpu);
+        assert_eq!(saved(&store)["render_scale"], 25);
+        assert_eq!(
+            frame(&mut app, &mut gpu, 32).world_space,
+            WorldSpace::Texture { size: (256, 192) }
+        );
+        assert_eq!(gpu.upscaler(), SHARP, "the Scaling is as it was");
+    }
+
+    /// Without a settings file the render scale reported still applies.
+    #[test]
+    fn without_settings_a_reported_render_scale_still_sizes_the_world() {
+        let mut gpu = RecordingGpu::probing(&[NATIVE]);
+        let mut app: TestApp = App::new(&Window, OneSprite, ScalingScreen::default());
+        app.restore_scaling(&mut gpu);
+        app.screen.report = Some(scaled(RenderScale::Percent(50)));
+        assert_eq!(
+            frame(&mut app, &mut gpu, 16).world_space,
+            WorldSpace::Texture { size: (512, 384) }
+        );
     }
 
     #[test]

@@ -9,7 +9,11 @@
 //! - **Item 4, the reply** (@0x90b7c-0x90c57): white text on a black box,
 //!   the box the item inset 1 and the text set in the item inset (4, 2).
 //! - **Item 5, the stellar's sprite** (@0x90cc6-0x90e26): the frame the
-//!   flight shows of it, centred in the item.
+//!   flight shows of it, centred in the item. A stellar with no frame that
+//!   the world models' table gives a model or a planet (the new game's)
+//!   draws that instead, as the flight shows it
+//!   ([`PlanetCommDialog::with_stellar_model`]): unturned or at time 0,
+//!   centred, at the flight's size or fitted to the item if smaller.
 //! - **Item 6, the text** (@0x90e8d-0x910f2): its name in white on the
 //!   baseline 12 below the item's top, its type label in medium grey on
 //!   26, and on 42 the status line: "Status:" (`STR#` 2002 #196) in medium
@@ -41,8 +45,11 @@ use nova_sim_frame::planet_comm::{
     PlanetCommButton, PlanetCommItem, PlanetCommView, PlanetStatus, STATUS_LABEL,
 };
 
+use nova_sim_frame::landing::UNKNOWN_STELLAR_RADIUS;
+
 use crate::color::Color;
 use crate::draw::{Blend, DrawCommand, DrawList};
+use crate::flight::world_models::StellarModel;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
@@ -50,6 +57,7 @@ use crate::input::{Input, MouseButton};
 use crate::keymap::{
     Command, CommandReader, PlanetCommCommand, SharedBindings, UiCommand, contexts,
 };
+use crate::model_picture::{FIT, draw_stellar_model};
 use crate::screen::{Screen, ScreenAction};
 use crate::text::TextMetrics;
 
@@ -138,6 +146,9 @@ pub struct PlanetCommDialog {
     picture: Option<ImageKey>,
     view: PlanetCommView,
     sprite: Option<StellarFrame>,
+    /// The stellar's model or planet, drawn in item 5 when it has no
+    /// frame ([`PlanetCommDialog::with_stellar_model`]).
+    model: Option<StellarModel>,
     dialog: Dialog,
     press: Option<PlanetCommItem>,
     /// Whether the pointer went down on item 3 while it is hidden.
@@ -217,11 +228,20 @@ impl PlanetCommDialog {
             picture,
             view: view.clone(),
             sprite,
+            model: None,
             dialog,
             press: None,
             hidden_pressed: false,
             reader: CommandReader::new(contexts::PLANET_COMM),
         })
+    }
+
+    /// The planet comm dialog drawing `model`, the stellar's model or
+    /// planet, in item 5 when it has no frame (see the module docs).
+    #[must_use]
+    pub fn with_stellar_model(mut self, model: Option<StellarModel>) -> Self {
+        self.model = model;
+        self
     }
 
     /// The planet comm dialog reading its keys through `bindings`.
@@ -358,7 +378,13 @@ impl PlanetCommDialog {
     /// (@0xbb2a0-0xbb2ac) and the clipped blit's frame is never drawn
     /// here, even for a sheet with clip quirks.
     fn draw_sprite(&self, list: &mut DrawList) {
-        let (Some(shown), Some(at)) = (self.sprite, self.dialog.item_bounds(SPRITE_ITEM)) else {
+        let Some(at) = self.dialog.item_bounds(SPRITE_ITEM) else {
+            return;
+        };
+        let Some(shown) = self.sprite else {
+            if let Some(model) = self.model {
+                draw_model(list, model, at);
+            }
             return;
         };
         let ((width, height), (placed_w, placed_h)) = (shown.size, shown.placed_as);
@@ -385,6 +411,24 @@ impl PlanetCommDialog {
             list.clipped(slot, sprite);
         }
     }
+}
+
+/// Draws the stellar's `model` in item 5, `at`, as the flight draws it
+/// ([`draw_stellar_model`]): round the item's centre, each half truncated
+/// as the sprite's is, reaching the flight's [`UNKNOWN_STELLAR_RADIUS`] or
+/// [`FIT`] of half the item's shorter side if that is less, a planet at
+/// time 0. A planet's globe takes the flight's radius only while its rings
+/// and atmosphere ([`StellarModel::overhang`]) fit that fit, and shrinks
+/// so their outer edge reaches it when they don't. It is fitted, not cut
+/// by a clip, so it shows whole.
+fn draw_model(list: &mut DrawList, model: StellarModel, at: Bounds) {
+    let centre = Point::new(
+        f32::midpoint(at.min.x, at.max.x).trunc(),
+        f32::midpoint(at.min.y, at.max.y).trunc(),
+    );
+    let room = FIT * at.width().min(at.height()) / 2.0 / model.overhang();
+    let radius = UNKNOWN_STELLAR_RADIUS.min(room);
+    draw_stellar_model(list, model, centre, radius, 0.0);
 }
 
 /// The planet comm dialog for `view` on `template`: the three buttons
@@ -1197,5 +1241,154 @@ mod tests {
         )
         .expect("builds");
         crate::ui::panel::testing::assert_backed_first(&drawn(&dialog), dialog.dialog().bounds());
+    }
+
+    const HUB: StellarModel = StellarModel::Model {
+        key: crate::model::ModelKey(9),
+        reach: 4.0,
+    };
+
+    /// Earth with no frame to show, and `model` drawn for it.
+    fn unframed(model: Option<StellarModel>) -> PlanetCommDialog {
+        PlanetCommDialog::new(
+            &stock(),
+            &greeting(),
+            None,
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+        .expect("builds")
+        .with_stellar_model(model)
+    }
+
+    /// What item 5's model draws: the model round the item's truncated
+    /// centre, at the flight's size or the fit of its shorter side, at
+    /// time 0.
+    fn model_in_item(dialog: &PlanetCommDialog, model: StellarModel) -> Vec<DrawCommand> {
+        let at = dialog.dialog().item_bounds(SPRITE_ITEM).expect("item 5");
+        let centre = Point::new(
+            f32::midpoint(at.min.x, at.max.x).trunc(),
+            f32::midpoint(at.min.y, at.max.y).trunc(),
+        );
+        let radius = UNKNOWN_STELLAR_RADIUS.min(FIT * at.width().min(at.height()) / 2.0);
+        let mut list = DrawList::new();
+        assert!(draw_stellar_model(&mut list, model, centre, radius, 0.0));
+        list.iter().cloned().collect()
+    }
+
+    #[test]
+    fn with_no_frame_a_stellar_s_model_draws_in_item_5_in_the_sprite_s_place() {
+        let giant = StellarModel::planet(crate::planet::PlanetKey(2), 1.0);
+        for model in [HUB, giant] {
+            let dialog = unframed(Some(model));
+            let want = model_in_item(&dialog, model);
+            assert_eq!(want.len(), 1);
+            let commands = drawn(&dialog);
+            let plain = drawn(&unframed(None));
+            let at = commands
+                .iter()
+                .position(|command| *command == want[0])
+                .expect("the model");
+            assert_eq!(commands[..at], plain[..at], "the backdrop first");
+            assert_eq!(commands[at + 1..], plain[at..], "then the rest as before");
+            assert!(at > 0, "over the backdrop");
+        }
+    }
+
+    #[test]
+    fn the_model_is_drawn_at_the_flight_s_size_in_a_large_item_and_fitted_in_a_small_one() {
+        let dialog = unframed(Some(HUB));
+        let DrawCommand::Model { pose, .. } = model_in_item(&dialog, HUB)[0] else {
+            panic!("a model");
+        };
+        assert_eq!(
+            pose.scale,
+            UNKNOWN_STELLAR_RADIUS / 4.0,
+            "stock item 5 is large"
+        );
+        let mut small = stock();
+        small.items[SPRITE_ITEM - 1].bounds = Bounds::at(Point::new(222.0, 5.0), 40.0, 50.0);
+        let small = PlanetCommDialog::new(
+            &small,
+            &greeting(),
+            None,
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+        .expect("builds")
+        .with_stellar_model(Some(HUB));
+        let DrawCommand::Model { pose, .. } = model_in_item(&small, HUB)[0] else {
+            panic!("a model");
+        };
+        assert_eq!(pose.scale, FIT * 40.0 / 2.0 / 4.0);
+        assert!(drawn(&small).contains(&model_in_item(&small, HUB)[0]));
+    }
+
+    /// Earth with no frame on `template`, and `model` drawn for it.
+    fn unframed_on(template: &DialogTemplate, model: StellarModel) -> PlanetCommDialog {
+        PlanetCommDialog::new(
+            template,
+            &greeting(),
+            None,
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+        .expect("builds")
+        .with_stellar_model(Some(model))
+    }
+
+    /// The radius each planet the dialog draws is drawn at.
+    fn planet_radii(dialog: &PlanetCommDialog) -> Vec<f32> {
+        drawn(dialog)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Planet { pose, .. } => Some(pose.radius),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn a_planet_s_rings_and_atmosphere_stay_within_the_fit_of_item_5() {
+        let mut small = stock();
+        small.items[SPRITE_ITEM - 1].bounds = Bounds::at(Point::new(222.0, 5.0), 40.0, 50.0);
+        for template in [stock(), small] {
+            let at = template.items[SPRITE_ITEM - 1].bounds;
+            let room = FIT * at.width().min(at.height()) / 2.0;
+            for reach in [2.3, 2.0] {
+                let ringed = StellarModel::planet(crate::planet::PlanetKey(2), reach);
+                let radii = planet_radii(&unframed_on(&template, ringed));
+                assert_eq!(radii.len(), 1);
+                assert!(
+                    radii[0] * reach <= room + 1e-3,
+                    "{reach} in {at:?}: {} reaches past {room}",
+                    radii[0]
+                );
+                assert_eq!(radii[0], UNKNOWN_STELLAR_RADIUS.min(room / reach));
+            }
+            for reach in [1.0, 0.5, f32::NAN, f32::INFINITY] {
+                let globe = StellarModel::planet(crate::planet::PlanetKey(2), reach);
+                assert_eq!(
+                    planet_radii(&unframed_on(&template, globe)),
+                    [UNKNOWN_STELLAR_RADIUS.min(room)],
+                    "{reach} draws the globe as before"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_frame_comes_before_a_model_and_neither_draws_nothing() {
+        let framed = dialog(&greeting()).with_stellar_model(Some(HUB));
+        assert_eq!(drawn(&framed), drawn(&dialog(&greeting())));
+        let bare = drawn(&unframed(None));
+        assert!(
+            !bare.iter().any(|command| matches!(
+                command,
+                DrawCommand::Model { .. } | DrawCommand::Sprite { .. }
+            )),
+            "nothing in item 5"
+        );
     }
 }

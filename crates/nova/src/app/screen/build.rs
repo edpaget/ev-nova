@@ -355,12 +355,24 @@ impl AppScreen {
 
     /// The router with each flight drawing the new game's ships, stations
     /// and planets as the 3D models `models` names
-    /// ([`FlightView::with_world_models`]): an empty table, the default,
-    /// until it is given. `main` gives the renderer the meshes and planets
-    /// its keys name (`App::with_world_assets`).
+    /// ([`FlightView::with_world_models`]), and the other screens that
+    /// show one (the spaceport's shipyard, hire screen and landscape, the
+    /// escort, comm and planet comm dialogs, the navigator's system
+    /// viewer, the main menu's pilot panel) drawing it as its model
+    /// (`nova_view::model_picture`), and the ship browser turning a class
+    /// with no sprite sheet as its model ([`ShipBrowser::with_world_models`]):
+    /// an empty table, the default, until it is given. The main menu takes it whether it is given before the
+    /// menu is built ([`AppScreen::with_pilots`]) or after, as `main`
+    /// gives it. `main` gives the renderer the meshes and planets its keys
+    /// name (`App::with_world_assets`).
     #[must_use]
-    pub fn with_world_models(self, models: Rc<nova_view::flight::WorldModels>) -> Self {
+    pub fn with_world_models(mut self, models: Rc<nova_view::flight::WorldModels>) -> Self {
+        if let Some(menu) = &mut self.menu {
+            menu.screen.set_world_models(Rc::clone(&models));
+        }
         Self {
+            galaxy: self.galaxy.with_world_models(Rc::clone(&models)),
+            ships: self.ships.with_world_models(Rc::clone(&models)),
             world_models: models,
             ..self
         }
@@ -583,7 +595,9 @@ impl AppScreen {
     /// it (plug-in data that lacks it, say) it draws the stand-in, with a
     /// warning saying why. Its logo picks on the router's effects chance
     /// ([`AppScreen::with_effects_chance`]), drawing nothing the
-    /// simulation rolls.
+    /// simulation rolls. Its pilot panel draws a ship with no picture as
+    /// its model from the world models given
+    /// ([`AppScreen::with_world_models`]), before or after.
     ///
     /// The game opens on the menu as it appears: the second's fade from
     /// black over it, and its slides after (see the module docs).
@@ -604,7 +618,8 @@ impl AppScreen {
         let mut screen = MainMenu::new(art, self.data.button_style(), Rc::clone(&metrics))
             .with_bindings(self.bindings.clone())
             .with_chance(self.effects_chance.clone())
-            .with_pilot_panel(self.data.pilot_panel_looks());
+            .with_pilot_panel(self.data.pilot_panel_looks())
+            .with_world_models(Rc::clone(&self.world_models));
         screen.appear();
         Self {
             side: Side::MainMenu,

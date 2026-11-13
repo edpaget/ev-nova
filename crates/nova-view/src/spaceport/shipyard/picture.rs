@@ -9,6 +9,14 @@
 //! - **Its `PICT`** ([`ship_picture`]: its own, or that of the
 //!   lowest-numbered ship sharing its `shän` base image), stretched into
 //!   the item or the icon.
+//! - **Its model** ([`ShipPortrait`]), which only the new game's data has:
+//!   its class's hull and as-built parts from the world models' table
+//!   ([`WorldModels`]), in the still portrait pose, fitted to [`FIT`] of
+//!   half the item's or the icon's shorter side by its radius. A grid
+//!   draws its model icons last, after every cell and frame, as one run
+//!   ([`draw_grid_pictures`]), so the renderer draws them in one models
+//!   pass rather than one a cell; nothing the cells draw lies under an
+//!   icon's model.
 //! - **Its stand-in** ([`ShipLook::stand_in`]), which only the new game's
 //!   data has: the outline flight draws for the ship
 //!   ([`outline`]), nose up, centred and fitted to
@@ -19,14 +27,16 @@
 //!   [`grid::draw_cell_picture`] paints it.
 //!
 //! The movie and the `PICT` come first, in the original's order, so a
-//! stock ship keeps them: a stock store holds no stand-ins.
+//! stock ship keeps them: a stock store holds no stand-ins, and stock
+//! data has no models.
 
 use super::{ShipLook, base_images, ship_picture};
 use crate::draw::DrawList;
+use crate::flight::world_models::WorldModels;
 use crate::geometry::Bounds;
+use crate::model_picture::{FIT, ShipPortrait};
 use crate::outline::{self, Outline};
-use crate::spaceport::grid;
-use crate::spaceport::landscape::FIT;
+use crate::spaceport::grid::{self, CellGrid, GridColors};
 use crate::spaceport::ship_movie::ShipMovie;
 use crate::text::TextMetrics;
 use nova_sim_frame::ShipId;
@@ -36,34 +46,47 @@ use nova_sim_frame::ShipId;
 pub enum ShipPicture {
     /// `PICT` `id`, which the data has.
     Picture(i16),
-    /// The class's stand-in: it has no `PICT`.
+    /// The class's model: it has no `PICT`.
+    Model(ShipPortrait),
+    /// The class's stand-in: it has no `PICT` and no model.
     StandIn(Outline),
-    /// Nothing: no `PICT` and no stand-in to draw.
+    /// Nothing: no `PICT`, no model and no stand-in to draw.
     Missing,
 }
 
 impl ShipPicture {
-    /// `picture` if there is one, else `stand_in` if it reaches past its
-    /// centre (one that doesn't would draw nothing), else nothing.
+    /// `picture` if there is one, else `model` if there is one, else
+    /// `stand_in` if it reaches past its centre (one that doesn't would
+    /// draw nothing), else nothing.
     #[must_use]
-    pub fn of(picture: Option<i16>, stand_in: Option<&Outline>) -> Self {
-        match (picture, stand_in) {
-            (Some(id), _) => Self::Picture(id),
-            (None, Some(outline)) if outline.reach() > 0.0 => Self::StandIn(outline.clone()),
-            (None, _) => Self::Missing,
+    pub fn of(
+        picture: Option<i16>,
+        model: Option<ShipPortrait>,
+        stand_in: Option<&Outline>,
+    ) -> Self {
+        match (picture, model, stand_in) {
+            (Some(id), _, _) => Self::Picture(id),
+            (None, Some(model), _) => Self::Model(model),
+            (None, None, Some(outline)) if outline.reach() > 0.0 => Self::StandIn(outline.clone()),
+            (None, None, _) => Self::Missing,
         }
     }
 
     /// The picture of `ship`, from each class's `looks`, a `PICT` there
-    /// when `exists` says so.
+    /// when `exists` says so, and its model from `models`.
     #[must_use]
-    pub fn read(ship: ShipId, looks: &[ShipLook], exists: impl Fn(i16) -> bool) -> Self {
+    pub fn read(
+        ship: ShipId,
+        looks: &[ShipLook],
+        models: &WorldModels,
+        exists: impl Fn(i16) -> bool,
+    ) -> Self {
         let picture = ship_picture(ship, &base_images(looks), exists);
         let stand_in = looks
             .iter()
             .find(|look| look.ship == ship)
             .and_then(|look| look.stand_in.as_ref());
-        Self::of(picture, stand_in)
+        Self::of(picture, ShipPortrait::of(models, ship), stand_in)
     }
 
     /// The `PICT`, when it is one.
@@ -71,14 +94,18 @@ impl ShipPicture {
     pub fn picture(&self) -> Option<i16> {
         match self {
             Self::Picture(id) => Some(*id),
-            Self::StandIn(_) | Self::Missing => None,
+            Self::Model(_) | Self::StandIn(_) | Self::Missing => None,
         }
     }
 
     /// Draws it in the picture item `area`: the `PICT` stretched to fill
-    /// it, the stand-in fitted to it, or "No Picture" and "Available".
+    /// it, the model or the stand-in fitted to it, or "No Picture" and
+    /// "Available".
     pub fn draw(&self, list: &mut DrawList, area: Bounds, metrics: &dyn TextMetrics) {
         match self {
+            Self::Model(portrait) => {
+                portrait.draw_in(list, area);
+            }
             Self::StandIn(outline) => fitted(list, outline, area),
             Self::Picture(_) | Self::Missing => {
                 grid::draw_picture(list, area, self.picture(), metrics);
@@ -87,10 +114,13 @@ impl ShipPicture {
     }
 
     /// Draws it in `cell`'s icon ([`grid::icon_bounds`]): the `PICT`
-    /// stretched into it, the stand-in fitted to it, or the icon painted
-    /// black.
+    /// stretched into it, the model or the stand-in fitted to it, or the
+    /// icon painted black.
     pub fn draw_cell(&self, list: &mut DrawList, cell: Bounds) {
         match self {
+            Self::Model(portrait) => {
+                portrait.draw_in(list, grid::icon_bounds(cell));
+            }
             Self::StandIn(outline) => fitted(list, outline, grid::icon_bounds(cell)),
             Self::Picture(_) | Self::Missing => {
                 grid::draw_cell_picture(list, cell, self.picture());
@@ -113,6 +143,39 @@ impl ShipPicture {
     }
 }
 
+/// Draws the shown cells of `cells` on the grid `area` holding one cell
+/// for each of `pictures`, `selected` framed in `colors`' bright and the
+/// rest in its dim ([`CellGrid::draw_cells`]): each cell's picture
+/// ([`ShipPicture::draw_cell`]), then the rest of it as `draw_rest` draws
+/// it; then, after every cell, each model's icon, together as one run
+/// (see the module docs).
+pub fn draw_grid_pictures(
+    list: &mut DrawList,
+    cells: &CellGrid,
+    (area, selected, colors): (Bounds, Option<usize>, GridColors),
+    pictures: &[ShipPicture],
+    mut draw_rest: impl FnMut(&mut DrawList, usize, Bounds),
+) {
+    let mut icons = Vec::new();
+    cells.draw_cells(
+        list,
+        area,
+        pictures.len(),
+        selected,
+        colors,
+        |list, index, cell| {
+            match &pictures[index] {
+                ShipPicture::Model(portrait) => icons.push((portrait, cell)),
+                picture => picture.draw_cell(list, cell),
+            }
+            draw_rest(list, index, cell);
+        },
+    );
+    for (portrait, cell) in icons {
+        portrait.draw_in(list, grid::icon_bounds(cell));
+    }
+}
+
 /// `outline` nose up round `area`'s centre, its farthest corner at
 /// [`FIT`] of half `area`'s shorter side.
 fn fitted(list: &mut DrawList, outline: &Outline, area: Bounds) {
@@ -125,8 +188,11 @@ mod tests {
     use super::*;
     use crate::color::Color;
     use crate::draw::DrawCommand;
+    use crate::flight::world_models::ShipModel;
     use crate::geometry::Point;
+    use crate::model::ModelKey;
     use crate::outline::OutlineTriangle;
+    use crate::spaceport::grid::GridColors;
     use crate::text::fixture::MonoMetrics;
 
     const RED: Color = Color::rgba(255, 0, 0, 255);
@@ -173,21 +239,184 @@ mod tests {
             .collect()
     }
 
+    const HULL: ModelKey = ModelKey(5);
+
+    /// Ship 130's hull model, of radius 2.
+    fn models() -> WorldModels {
+        WorldModels {
+            ships: [(
+                ShipId(130),
+                ShipModel {
+                    key: HULL,
+                    scale: 1.0,
+                    base_transp: 0,
+                    radius: 2.0,
+                },
+            )]
+            .into(),
+            ..WorldModels::default()
+        }
+    }
+
+    fn portrait() -> ShipPortrait {
+        ShipPortrait::of(&models(), ShipId(130)).expect("a portrait")
+    }
+
+    /// `portrait` drawn into `area`.
+    fn portrait_in(portrait: &ShipPortrait, area: Bounds) -> Vec<DrawCommand> {
+        drawn(|list| {
+            assert!(portrait.draw_in(list, area));
+        })
+    }
+
     #[test]
-    fn a_picture_comes_before_a_stand_in_and_a_stand_in_before_nothing() {
+    fn a_picture_comes_before_a_model_a_model_before_a_stand_in_and_a_stand_in_before_nothing() {
         assert_eq!(
-            ShipPicture::of(Some(5000), Some(&hull())),
+            ShipPicture::of(Some(5000), Some(portrait()), Some(&hull())),
             ShipPicture::Picture(5000)
         );
         assert_eq!(
-            ShipPicture::of(Some(5000), None),
+            ShipPicture::of(Some(5000), None, None),
             ShipPicture::Picture(5000)
         );
         assert_eq!(
-            ShipPicture::of(None, Some(&hull())),
+            ShipPicture::of(None, Some(portrait()), Some(&hull())),
+            ShipPicture::Model(portrait())
+        );
+        assert_eq!(
+            ShipPicture::of(None, Some(portrait()), None),
+            ShipPicture::Model(portrait())
+        );
+        assert_eq!(
+            ShipPicture::of(None, None, Some(&hull())),
             ShipPicture::StandIn(hull())
         );
-        assert_eq!(ShipPicture::of(None, None), ShipPicture::Missing);
+        assert_eq!(ShipPicture::of(None, None, None), ShipPicture::Missing);
+    }
+
+    #[test]
+    fn a_ship_s_model_is_read_from_the_table_after_its_pict() {
+        let looks = [
+            look(130, Some(1001), Some(hull())),
+            look(128, Some(1000), None),
+        ];
+        assert_eq!(
+            ShipPicture::read(ShipId(130), &looks, &models(), |_| false),
+            ShipPicture::Model(portrait())
+        );
+        assert_eq!(
+            ShipPicture::read(ShipId(130), &looks, &models(), |id| id == 5002),
+            ShipPicture::Picture(5002)
+        );
+        assert_eq!(
+            ShipPicture::read(ShipId(130), &looks, &WorldModels::default(), |_| false),
+            ShipPicture::StandIn(hull()),
+            "an empty table"
+        );
+        assert_eq!(ShipPicture::Model(portrait()).picture(), None);
+    }
+
+    #[test]
+    fn a_model_draws_fitted_to_the_item_and_to_a_cell_s_icon() {
+        let model = ShipPicture::Model(portrait());
+        for area in [item(), Bounds::at(Point::new(10.0, 20.0), 100.0, 300.0)] {
+            assert_eq!(
+                drawn(|list| model.draw(list, area, &MonoMetrics)),
+                portrait_in(&portrait(), area)
+            );
+        }
+        let cell = Bounds::at(Point::new(40.0, 50.0), 83.0, 54.0);
+        assert_eq!(
+            drawn(|list| model.draw_cell(list, cell)),
+            portrait_in(&portrait(), grid::icon_bounds(cell))
+        );
+        let movie = ShipMovie::new(Vec::new());
+        assert_eq!(
+            drawn(|list| model.draw_item(&movie, list, item(), &MonoMetrics)),
+            portrait_in(&portrait(), item())
+        );
+    }
+
+    #[test]
+    fn a_grid_draws_its_model_icons_as_one_run_after_its_cells() {
+        let cells = grid::CellGrid::default();
+        let area = Bounds::at(Point::new(0.0, 0.0), 332.0, 110.0);
+        let pictures = [
+            ShipPicture::Model(portrait()),
+            ShipPicture::Picture(5000),
+            ShipPicture::Model(portrait()),
+            ShipPicture::StandIn(hull()),
+            ShipPicture::Missing,
+        ];
+        let colors = GridColors::STOCK;
+        let commands = drawn(|list| {
+            draw_grid_pictures(
+                list,
+                &cells,
+                (area, Some(1), colors),
+                &pictures,
+                |_, _, _| {},
+            );
+        });
+        let mut cells_only = DrawList::new();
+        let mut shown = Vec::new();
+        cells.draw_cells(
+            &mut cells_only,
+            area,
+            pictures.len(),
+            Some(1),
+            colors,
+            |list, i, cell| {
+                shown.push((i, cell));
+                if !matches!(pictures[i], ShipPicture::Model(_)) {
+                    pictures[i].draw_cell(list, cell);
+                }
+            },
+        );
+        let mut want: Vec<DrawCommand> = cells_only.iter().cloned().collect();
+        for (i, cell) in shown {
+            if let ShipPicture::Model(portrait) = &pictures[i] {
+                want.extend(portrait_in(portrait, grid::icon_bounds(cell)));
+            }
+        }
+        assert_eq!(commands, want);
+        let models: Vec<usize> = commands
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| matches!(c, DrawCommand::Model { .. }))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(models.len(), 2);
+        assert_eq!(
+            models,
+            [commands.len() - 2, commands.len() - 1],
+            "one run, last"
+        );
+    }
+
+    #[test]
+    fn a_grid_with_no_model_draws_its_cells_as_it_always_has() {
+        let cells = grid::CellGrid::default();
+        let area = Bounds::at(Point::new(0.0, 0.0), 332.0, 110.0);
+        let pictures = [
+            ShipPicture::Picture(5000),
+            ShipPicture::StandIn(hull()),
+            ShipPicture::Missing,
+        ];
+        let colors = GridColors::STOCK;
+        let named = |list: &mut DrawList, i: usize, cell: Bounds| {
+            grid::draw_cell_name(list, &MonoMetrics, cell, &format!("ship {i}"));
+        };
+        let commands = drawn(|list| {
+            draw_grid_pictures(list, &cells, (area, None, colors), &pictures, named);
+        });
+        let want = drawn(|list| {
+            cells.draw_cells(list, area, pictures.len(), None, colors, |list, i, cell| {
+                pictures[i].draw_cell(list, cell);
+                named(list, i, cell);
+            });
+        });
+        assert_eq!(commands, want);
     }
 
     #[test]
@@ -198,9 +427,12 @@ mod tests {
                 color: RED,
             }],
         };
-        assert_eq!(ShipPicture::of(None, Some(&flat)), ShipPicture::Missing);
         assert_eq!(
-            ShipPicture::of(None, Some(&Outline::default())),
+            ShipPicture::of(None, None, Some(&flat)),
+            ShipPicture::Missing
+        );
+        assert_eq!(
+            ShipPicture::of(None, None, Some(&Outline::default())),
             ShipPicture::Missing
         );
     }
@@ -214,25 +446,26 @@ mod tests {
             look(131, None, None),
         ];
         let exists = |id: i16| id == 5000;
+        let none = WorldModels::default();
         assert_eq!(
-            ShipPicture::read(ShipId(128), &looks, exists),
+            ShipPicture::read(ShipId(128), &looks, &none, exists),
             ShipPicture::Picture(5000)
         );
         assert_eq!(
-            ShipPicture::read(ShipId(129), &looks, exists),
+            ShipPicture::read(ShipId(129), &looks, &none, exists),
             ShipPicture::Picture(5000),
             "the base image's sharer's"
         );
         assert_eq!(
-            ShipPicture::read(ShipId(130), &looks, exists),
+            ShipPicture::read(ShipId(130), &looks, &none, exists),
             ShipPicture::StandIn(hull())
         );
         assert_eq!(
-            ShipPicture::read(ShipId(131), &looks, exists),
+            ShipPicture::read(ShipId(131), &looks, &none, exists),
             ShipPicture::Missing
         );
         assert_eq!(
-            ShipPicture::read(ShipId(140), &looks, exists),
+            ShipPicture::read(ShipId(140), &looks, &none, exists),
             ShipPicture::Missing,
             "a class with no looks"
         );

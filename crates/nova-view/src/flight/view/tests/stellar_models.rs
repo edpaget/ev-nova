@@ -4,8 +4,8 @@
 //! centre, scaled to reach as far as the stand-in, and one with a planet
 //! draws the planet at the stand-in disc's radius and the flight clock; any
 //! other draws its stand-in, its name and order as before. On
-//! [`FakeFlight`], with a hand-built table. The system view draws no
-//! models: `system::scene`'s own tests pin its drawing, unchanged.
+//! [`FakeFlight`], with a hand-built table. The system viewer's models are
+//! pinned by `system::view`'s own tests.
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -21,17 +21,22 @@ use crate::outline::{Outline, OutlineTriangle, StellarStandIn};
 use crate::planet::{PlanetKey, PlanetPose};
 use crate::system::catalog::StellarContents;
 
-const HUB: ModelKey = ModelKey(7);
-const GIANT: PlanetKey = PlanetKey(3);
+pub(super) const HUB: ModelKey = ModelKey(7);
+pub(super) const GIANT: PlanetKey = PlanetKey(3);
 /// The hub's footprint's reach, in its own units.
-const REACH: f32 = 4.0;
+pub(super) const REACH: f32 = 4.0;
 /// The station, the gas giant and a moon, none with a sheet.
 const STATION: i16 = 140;
 const PLANET: i16 = 141;
 const MOON: i16 = 142;
 
 /// `id`, at `at`, with no sheet, standing in as `stand_in`.
-fn sheetless(id: i16, name: &str, at: (i16, i16), stand_in: StellarStandIn) -> StellarContents {
+pub(super) fn sheetless(
+    id: i16,
+    name: &str,
+    at: (i16, i16),
+    stand_in: StellarStandIn,
+) -> StellarContents {
     StellarContents {
         sprite: Err(format!("no spïn for {id}")),
         stand_in: Some(stand_in),
@@ -39,7 +44,7 @@ fn sheetless(id: i16, name: &str, at: (i16, i16), stand_in: StellarStandIn) -> S
     }
 }
 
-fn hub_from_above() -> Outline {
+pub(super) fn hub_from_above() -> Outline {
     Outline {
         triangles: vec![OutlineTriangle {
             corners: [at(0.0, -4.0), at(3.0, 2.0), at(-3.0, 2.0)],
@@ -96,7 +101,9 @@ fn table() -> WorldModels {
                     reach: REACH,
                 },
             ),
-            (StellarId(PLANET), StellarModel::Planet { key: GIANT }),
+            // Ringed: the flight draws the globe at its stand-in's
+            // radius whatever its rings reach.
+            (StellarId(PLANET), StellarModel::planet(GIANT, 2.3)),
         ]),
         ..WorldModels::default()
     }
@@ -108,7 +115,7 @@ fn view_of(models: WorldModels) -> Faked {
 
 /// Where `view` centres stellar `id`'s stand-in: as a sprite as wide as
 /// the landing reach.
-fn stand_in_centre(view: &Faked, id: i16) -> Point {
+pub(super) fn stand_in_centre(view: &Faked, id: i16) -> Point {
     let stellar = view
         .scene()
         .expect("laid out")
@@ -122,7 +129,7 @@ fn stand_in_centre(view: &Faked, id: i16) -> Point {
 }
 
 /// `stand_in` drawn round `centre` as the scene draws it.
-fn stand_in_at(stand_in: &StellarStandIn, centre: Point) -> Vec<DrawCommand> {
+pub(super) fn stand_in_at(stand_in: &StellarStandIn, centre: Point) -> Vec<DrawCommand> {
     let mut list = DrawList::new();
     crate::outline::draw_stellar(&mut list, stand_in, centre, UNKNOWN_STELLAR_RADIUS);
     list.iter().cloned().collect()
@@ -133,18 +140,31 @@ fn commands(list: &DrawList) -> Vec<DrawCommand> {
 }
 
 #[test]
+fn the_stellars_pass_marks_the_list_with_the_system_it_draws() {
+    for models in [table(), WorldModels::default()] {
+        let view = view_of(models);
+        let scene = view.scene().expect("laid out");
+        let mut list = DrawList::new();
+        view.draw_stellar_layer(&mut list, scene, &view.camera());
+        assert_eq!(list.system(), Some(scene.id()));
+        assert_eq!(scene.id(), SystemId(130), "Sol");
+        assert_eq!(world_list(&view).system(), Some(SystemId(130)));
+    }
+}
+
+#[test]
 fn a_station_with_a_model_draws_it_unturned_at_its_stand_ins_centre_and_reach() {
     let view = view_of(table());
     let list = commands(&world_list(&view));
     let centre = stand_in_centre(&view, STATION);
-    let model = DrawCommand::Model {
-        model: HUB,
-        pose: ModelPose {
+    let model = DrawCommand::model(
+        HUB,
+        ModelPose {
             center: centre,
             orientation: Orientation::IDENTITY,
             scale: UNKNOWN_STELLAR_RADIUS / REACH,
         },
-    };
+    );
     assert_eq!(list.iter().filter(|c| **c == model).count(), 1, "{list:?}");
     let outline = stand_in_at(&StellarStandIn::Outline(hub_from_above()), centre);
     assert!(
@@ -191,14 +211,14 @@ fn a_station_whose_model_reaches_a_little_draws_it_scaled_up() {
     let reach = 1e-30;
     let view = view_of(reaching(reach));
     let list = commands(&world_list(&view));
-    let model = DrawCommand::Model {
-        model: HUB,
-        pose: ModelPose {
+    let model = DrawCommand::model(
+        HUB,
+        ModelPose {
             center: stand_in_centre(&view, STATION),
             orientation: Orientation::IDENTITY,
             scale: UNKNOWN_STELLAR_RADIUS / reach,
         },
-    };
+    );
     assert_eq!(list.iter().filter(|c| **c == model).count(), 1, "{list:?}");
 }
 
@@ -284,6 +304,52 @@ fn a_stellar_with_no_entry_draws_its_stand_in_and_names_and_order_are_unchanged(
         .filter(|c| !matches!(c, DrawCommand::Model { .. } | DrawCommand::Planet { .. }))
         .collect();
     assert_eq!(others, kept);
+}
+
+#[test]
+fn two_stations_on_one_model_in_two_liveries_each_draw_their_own_key() {
+    // A second station on the hub, its table entry another key with the
+    // same reach, as one model painted in two owners' liveries is.
+    const YARD: i16 = 143;
+    const PAINTED_HUB: ModelKey = ModelKey(8);
+    let mut catalog = catalog_3d();
+    catalog.sol_more.push(sheetless(
+        YARD,
+        "Yard",
+        (-100, -200),
+        StellarStandIn::Outline(hub_from_above()),
+    ));
+    let mut frame = frame();
+    frame.stellars.push(record::stellar(StellarId(YARD)));
+    let mut models = table();
+    models.stellars.insert(
+        StellarId(YARD),
+        StellarModel::Model {
+            key: PAINTED_HUB,
+            reach: REACH,
+        },
+    );
+    let view = world(catalog, frame).with_world_models(Rc::new(models));
+    let list = commands(&world_list(&view));
+    for (id, key) in [(STATION, HUB), (YARD, PAINTED_HUB)] {
+        let model = DrawCommand::model(
+            key,
+            ModelPose {
+                center: stand_in_centre(&view, id),
+                orientation: Orientation::IDENTITY,
+                scale: UNKNOWN_STELLAR_RADIUS / REACH,
+            },
+        );
+        assert_eq!(
+            list.iter().filter(|c| **c == model).count(),
+            1,
+            "{id}: {list:?}"
+        );
+    }
+    assert_ne!(
+        stand_in_centre(&view, STATION),
+        stand_in_centre(&view, YARD)
+    );
 }
 
 #[test]

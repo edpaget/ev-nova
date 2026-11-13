@@ -69,19 +69,43 @@
 //! other pipeline meets a depth attachment. Each canvas, the scene or the
 //! world's, makes its depth texture the first frame that draws models into
 //! it. The model pipeline (`models.wgsl`) multiplies each vertex by the
-//! core's transforms and lights each fragment by
-//! [`camera::shade`](crate::camera::shade)'s formula; each mesh's buffers
-//! are made when it is uploaded ([`Gpu::upload_mesh`](crate::Gpu::upload_mesh)).
+//! core's transforms and colours each fragment as
+//! [`camera::fragment`](crate::camera::fragment) defines: the vertex
+//! colour times its section's texel, lit by
+//! [`camera::shade`](crate::camera::shade)'s formula unless it is unlit.
+//! Each mesh's buffers are made when it is uploaded
+//! ([`Gpu::upload_mesh`](crate::Gpu::upload_mesh)), and each texture's
+//! bind group when it is
+//! ([`Gpu::upload_model_texture`](crate::Gpu::upload_model_texture)); a
+//! section with no texture samples one white texel made with the
+//! pipeline, and a mesh is one draw per section. A clipped models batch
+//! is scissored to its batch's clip ([`Batch::clip`](crate::Batch::clip)),
+//! met with the world's, so its depth-only and colour runs are both cut
+//! there.
 //!
 //! A planets batch ([`Batch::Planets`](crate::Batch::Planets)) draws in
 //! an ordinary pass, with no depth: one square per planet, its fragments
 //! mirroring [`crate::planet`]'s functions (`planets.wgsl`), sampling the
 //! textures each planet uploads ([`Gpu::upload_planet`](crate::Gpu::upload_planet))
 //! with explicit gradients so no mip seam shows where the surface wraps.
+//! A clipped planets batch is scissored to its batch's clip, met with
+//! the world's, as a models batch is. A planet released
+//! ([`Gpu::release_planet`](crate::Gpu::release_planet)) drops its bind
+//! group, the only owner of its textures, so wgpu frees them once the
+//! work already submitted is done; it draws nothing until uploaded again.
 //!
 //! A sky batch ([`Batch::Sky`](crate::Batch::Sky)) draws in an ordinary
 //! pass, with no depth: one square per star, its fragments adding the
 //! star's colour by [`sky::coverage`](crate::sky::coverage) (`sky.wgsl`).
+//!
+//! A sky-images batch ([`Batch::SkyImages`](crate::Batch::SkyImages))
+//! draws in an ordinary pass, with no depth: one quad per decoration, as
+//! the core placed and turned it, its fragments sampling the image each
+//! uploads ([`Gpu::upload_sky_image`](crate::Gpu::upload_sky_image)) at
+//! the core's level of detail and leaving `beneath · (1 − cover) + light`
+//! ([`sky::over`](crate::sky::over), `sky_images.wgsl`). An image's
+//! texture and bind group are made at its upload, and the one sampler
+//! with the pipeline.
 //!
 //! Every render pipeline, glyphon's included, the model pipeline too, is built when the renderer
 //! is made or its upscaler is set, never on a frame: building one compiles
@@ -107,6 +131,7 @@ mod layout;
 #[cfg(target_os = "macos")]
 mod metal_fx;
 mod metrics;
+mod model_samplers;
 mod models;
 mod offscreen;
 mod overlay;
@@ -114,6 +139,7 @@ mod planets;
 mod renderer;
 mod sharp_bilinear;
 mod sky;
+mod sky_images;
 mod surface;
 mod upscale;
 

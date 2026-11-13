@@ -277,9 +277,9 @@ pub fn fly_new_pilot_wired(
     fly_from_the_menu(game)
 }
 
-/// [`fly_new_pilot_wired`], the app's renderer given the meshes and
-/// planets of `assets`, as `main` gives the runner the new game's world
-/// models.
+/// [`fly_new_pilot_wired`], the app's renderer given the meshes, planets
+/// and sky looks of `assets`, as `main` gives the runner the new game's
+/// world models.
 pub fn fly_new_pilot_modelled(
     data: &Rc<GameData>,
     store: &MemoryPilots,
@@ -289,7 +289,7 @@ pub fn fly_new_pilot_modelled(
 ) -> Harness {
     let game = Harness::built_wired(Rc::clone(data), store, wire)
         .with_settings(keeper)
-        .with_world_assets(assets.meshes, assets.planets);
+        .with_world_assets(assets.meshes, assets.planets, assets.skies);
     fly_from_the_menu(game)
 }
 

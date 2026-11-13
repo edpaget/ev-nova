@@ -10,9 +10,11 @@ use std::hash::{Hash, Hasher};
 use nova_data::graphics::Image;
 use nova_view::ImageKind;
 
-use crate::gpu::{Frame, Gpu, PageId, PlanetId, PlanetTextures};
+use crate::gpu::{Frame, Gpu, PageId, PlanetId, PlanetImage, PlanetTextures};
 use crate::images::{ImageError, ImageSource};
 use crate::model::{Mesh, MeshId};
+use crate::model_texture::{ModelTexture, ModelTextureId};
+use crate::sky::{SkyImage, SkyImageId};
 use crate::upscale::{Upscaler, UpscalerProbe, WorldResolution, resolution_of};
 use crate::viewport::PixelRect;
 
@@ -53,12 +55,21 @@ pub enum GpuCall {
     },
     /// [`Gpu::clear_pages`].
     ClearPages,
+    /// [`Gpu::upload_model_texture`].
+    UploadModelTexture {
+        /// The texture's id.
+        texture: ModelTextureId,
+        /// The texture.
+        data: ModelTexture,
+    },
     /// [`Gpu::upload_mesh`].
     UploadMesh {
         /// The mesh's id.
         mesh: MeshId,
         /// The mesh.
         data: Mesh,
+        /// The ids its textures were uploaded under, in the mesh's order.
+        textures: Vec<ModelTextureId>,
     },
     /// [`Gpu::upload_planet`].
     UploadPlanet {
@@ -66,6 +77,18 @@ pub enum GpuCall {
         planet: PlanetId,
         /// Its textures.
         textures: PlanetTextures,
+    },
+    /// [`Gpu::release_planet`].
+    ReleasePlanet {
+        /// The planet's id.
+        planet: PlanetId,
+    },
+    /// [`Gpu::upload_sky_image`].
+    UploadSkyImage {
+        /// The image's id.
+        image: SkyImageId,
+        /// The image.
+        data: SkyImage,
     },
     /// [`Gpu::submit`].
     Submit(Frame),
@@ -169,6 +192,82 @@ impl RecordingGpu {
     pub fn take(&mut self) -> Vec<GpuCall> {
         std::mem::take(&mut self.calls)
     }
+
+    /// The latest textures uploaded under each planet id, of the planets
+    /// not released since.
+    fn planets(&self) -> std::collections::BTreeMap<PlanetId, &PlanetTextures> {
+        let mut held = std::collections::BTreeMap::new();
+        for call in &self.calls {
+            match call {
+                GpuCall::UploadPlanet { planet, textures } => {
+                    held.insert(*planet, textures);
+                }
+                GpuCall::ReleasePlanet { planet } => {
+                    held.remove(planet);
+                }
+                _ => {}
+            }
+        }
+        held
+    }
+
+    /// Each planet a submitted frame draws (an instance of a
+    /// [`Batch::Planets`](crate::gpu::Batch::Planets)) that it did not hold
+    /// when the frame was submitted, with the frame's place among the
+    /// submits ([`submits`](Self::submits)): one never uploaded, or
+    /// released since. An adapter draws such a planet as nothing.
+    #[must_use]
+    pub fn unheld_planets_drawn(&self) -> Vec<(usize, PlanetId)> {
+        let mut held = std::collections::BTreeSet::new();
+        let mut unheld = Vec::new();
+        let mut submits = 0;
+        for call in &self.calls {
+            match call {
+                GpuCall::UploadPlanet { planet, .. } => {
+                    held.insert(*planet);
+                }
+                GpuCall::ReleasePlanet { planet } => {
+                    held.remove(planet);
+                }
+                GpuCall::Submit(frame) => {
+                    for batch in &frame.batches {
+                        if let crate::gpu::Batch::Planets { planets, .. } = batch {
+                            unheld.extend(
+                                (planets.iter())
+                                    .filter(|instance| !held.contains(&instance.planet))
+                                    .map(|instance| (submits, instance.planet)),
+                            );
+                        }
+                    }
+                    submits += 1;
+                }
+                _ => {}
+            }
+        }
+        unheld
+    }
+
+    /// The planets it holds textures for: uploaded, and not released
+    /// since.
+    #[must_use]
+    pub fn planets_held(&self) -> std::collections::BTreeSet<PlanetId> {
+        self.planets().into_keys().collect()
+    }
+
+    /// The bytes of planet textures it holds: every level of the latest
+    /// textures uploaded under each planet id not released since, surface,
+    /// clouds and rings.
+    #[must_use]
+    pub fn planet_bytes_held(&self) -> usize {
+        self.planets()
+            .values()
+            .map(|textures| {
+                let levels =
+                    |chain: &[PlanetImage]| chain.iter().map(|i| i.rgba.len()).sum::<usize>();
+                levels(&textures.surface) + levels(&textures.clouds) + textures.rings.rgba.len()
+            })
+            .sum::<usize>()
+    }
 }
 
 impl Gpu for RecordingGpu {
@@ -184,10 +283,18 @@ impl Gpu for RecordingGpu {
         self.calls.push(GpuCall::ClearPages);
     }
 
-    fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh) {
+    fn upload_model_texture(&mut self, texture: ModelTextureId, data: &ModelTexture) {
+        self.calls.push(GpuCall::UploadModelTexture {
+            texture,
+            data: data.clone(),
+        });
+    }
+
+    fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh, textures: &[ModelTextureId]) {
         self.calls.push(GpuCall::UploadMesh {
             mesh,
             data: data.clone(),
+            textures: textures.to_vec(),
         });
     }
 
@@ -195,6 +302,17 @@ impl Gpu for RecordingGpu {
         self.calls.push(GpuCall::UploadPlanet {
             planet,
             textures: textures.clone(),
+        });
+    }
+
+    fn release_planet(&mut self, planet: PlanetId) {
+        self.calls.push(GpuCall::ReleasePlanet { planet });
+    }
+
+    fn upload_sky_image(&mut self, image: SkyImageId, data: &SkyImage) {
+        self.calls.push(GpuCall::UploadSkyImage {
+            image,
+            data: data.clone(),
         });
     }
 
@@ -274,16 +392,173 @@ mod tests {
     }
 
     #[test]
-    fn recording_gpu_records_a_mesh_upload() {
+    fn recording_gpu_records_a_mesh_upload_and_its_textures_ids() {
         let mut gpu = RecordingGpu::new();
         let cube = Mesh::cube([nova_view::Color::WHITE; 6]);
-        gpu.upload_mesh(MeshId(3), &cube);
+        gpu.upload_mesh(MeshId(3), &cube, &[ModelTextureId(4), ModelTextureId(1)]);
         assert_eq!(
             gpu.calls,
             [GpuCall::UploadMesh {
                 mesh: MeshId(3),
-                data: cube
+                data: cube,
+                textures: vec![ModelTextureId(4), ModelTextureId(1)],
             }]
+        );
+    }
+
+    #[test]
+    fn recording_gpu_records_a_model_texture_upload() {
+        let mut gpu = RecordingGpu::new();
+        let texture = ModelTexture::new(2, 1, vec![1, 2, 3, 4, 5, 6, 7, 8]).expect("two texels");
+        gpu.upload_model_texture(ModelTextureId(6), &texture);
+        assert_eq!(
+            gpu.calls,
+            [GpuCall::UploadModelTexture {
+                texture: ModelTextureId(6),
+                data: texture,
+            }]
+        );
+    }
+
+    #[test]
+    fn recording_gpu_records_a_sky_image_upload() {
+        let mut gpu = RecordingGpu::new();
+        let image = SkyImage::new(2, 1, vec![1, 2, 3, 255, 5, 6, 7, 255]).expect("two texels");
+        gpu.upload_sky_image(SkyImageId(4), &image);
+        assert_eq!(
+            gpu.calls,
+            [GpuCall::UploadSkyImage {
+                image: SkyImageId(4),
+                data: image,
+            }]
+        );
+    }
+
+    /// Planet textures whose surface is `width` by `width / 2`, with no
+    /// clouds (a 2 by 1 clear layer) and a ring profile of `ring` texels.
+    fn planet_textures(width: u32, ring: u32) -> PlanetTextures {
+        let image = |width: u32, height: u32| crate::gpu::PlanetImage {
+            width,
+            height,
+            rgba: vec![0; (width * height * 4) as usize],
+        };
+        PlanetTextures {
+            surface: vec![image(width, width / 2), image(width / 2, width / 4)],
+            clouds: vec![image(2, 1), image(1, 1)],
+            rings: image(ring, 1),
+        }
+    }
+
+    #[test]
+    fn recording_gpu_counts_the_planet_bytes_the_gpu_holds() {
+        let mut gpu = RecordingGpu::new();
+        assert_eq!(gpu.planet_bytes_held(), 0);
+        // 8x4 + 4x2 surface, 2x1 + 1x1 clouds, 3x1 rings: 4 bytes a texel.
+        gpu.upload_planet(PlanetId(0), &planet_textures(8, 3));
+        let first = (32 + 8 + 2 + 1 + 3) * 4;
+        assert_eq!(gpu.planet_bytes_held(), first);
+        // 16x8 + 8x4 surface, the same clouds, 2x1 rings.
+        gpu.upload_planet(PlanetId(1), &planet_textures(16, 2));
+        let second = (128 + 32 + 2 + 1 + 2) * 4;
+        assert_eq!(
+            gpu.planet_bytes_held(),
+            first + second,
+            "every level of both"
+        );
+        // A second upload under one id replaces the first.
+        gpu.upload_planet(PlanetId(0), &planet_textures(16, 2));
+        assert_eq!(gpu.planet_bytes_held(), 2 * second);
+    }
+
+    #[test]
+    fn recording_gpu_records_a_planet_release_and_holds_it_no_longer() {
+        let mut gpu = RecordingGpu::new();
+        gpu.upload_planet(PlanetId(0), &planet_textures(8, 3));
+        gpu.upload_planet(PlanetId(1), &planet_textures(16, 2));
+        assert_eq!(
+            gpu.planets_held(),
+            [PlanetId(0), PlanetId(1)].into_iter().collect()
+        );
+        gpu.release_planet(PlanetId(0));
+        assert_eq!(
+            gpu.calls[2],
+            GpuCall::ReleasePlanet {
+                planet: PlanetId(0)
+            }
+        );
+        assert_eq!(gpu.planets_held(), [PlanetId(1)].into_iter().collect());
+        assert_eq!(gpu.planet_bytes_held(), (128 + 32 + 2 + 1 + 2) * 4);
+        // Uploaded again, it is held again: the latest upload counts.
+        gpu.upload_planet(PlanetId(0), &planet_textures(8, 3));
+        assert_eq!(gpu.planets_held().len(), 2);
+        assert_eq!(
+            gpu.planet_bytes_held(),
+            (128 + 32 + 2 + 1 + 2) * 4 + (32 + 8 + 2 + 1 + 3) * 4
+        );
+        gpu.release_planet(PlanetId(1));
+        gpu.release_planet(PlanetId(0));
+        assert!(gpu.planets_held().is_empty());
+        assert_eq!(gpu.planet_bytes_held(), 0);
+    }
+
+    /// A frame drawing planets `ids`, each in a batch of its own.
+    fn drawing(ids: &[u32]) -> Frame {
+        let figure = crate::planet::Figure {
+            rings: None,
+            atmosphere: None,
+            day: 10.0,
+            tilt: 0.0,
+        };
+        let pose = nova_view::PlanetPose {
+            center: nova_view::Point::new(10.0, 10.0),
+            radius: 4.0,
+            time: 0.0,
+        };
+        let batches = ids
+            .iter()
+            .map(|&id| crate::gpu::Batch::Planets {
+                light: crate::planet::PLANET_LIGHT,
+                planets: vec![
+                    crate::planet::figure_instance(PlanetId(id), &figure, &pose).expect("drawable"),
+                ],
+                clip: None,
+            })
+            .collect();
+        Frame {
+            target: (64, 48),
+            viewport: PixelRect {
+                x: 0,
+                y: 0,
+                w: 64,
+                h: 48,
+            },
+            logical: crate::viewport::LogicalSize { w: 32, h: 24 },
+            clear: nova_view::Color::BLACK,
+            world_space: crate::gpu::WorldSpace::Target,
+            batches,
+            world: Vec::new(),
+            world_clip: None,
+            world_tail: None,
+        }
+    }
+
+    #[test]
+    fn recording_gpu_finds_each_planet_a_frame_draws_that_it_did_not_hold() {
+        let mut gpu = RecordingGpu::new();
+        gpu.submit(&drawing(&[]));
+        gpu.upload_planet(PlanetId(0), &planet_textures(8, 3));
+        gpu.submit(&drawing(&[0]));
+        assert_eq!(gpu.unheld_planets_drawn(), []);
+        gpu.submit(&drawing(&[0, 1]));
+        gpu.release_planet(PlanetId(0));
+        gpu.submit(&drawing(&[0]));
+        gpu.upload_planet(PlanetId(0), &planet_textures(8, 3));
+        gpu.upload_planet(PlanetId(1), &planet_textures(8, 3));
+        gpu.submit(&drawing(&[1, 0]));
+        assert_eq!(
+            gpu.unheld_planets_drawn(),
+            [(2, PlanetId(1)), (3, PlanetId(0))],
+            "by the frame's place among the submits"
         );
     }
 

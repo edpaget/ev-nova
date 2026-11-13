@@ -96,6 +96,8 @@ pub struct FakeCatalog {
     /// The stellars Sol lists after Earth and the Moon: none, by
     /// default.
     pub sol_more: Vec<StellarContents>,
+    /// The stellars Alpha Centauri lists after Proxima: none, by default.
+    pub alpha_more: Vec<StellarContents>,
     /// How many frames Proxima's (140's) `Type` sheet has in Alpha
     /// Centauri: 1, by default.
     pub proxima_frames: u16,
@@ -410,6 +412,7 @@ pub fn catalog() -> FakeCatalog {
         alpha_buoy: -1,
         voices: nova_sim_catalog::voice::Voices::default(),
         sol_more: Vec::new(),
+        alpha_more: Vec::new(),
         proxima_frames: 1,
         gates: RefCell::new(Vec::new()),
         gate_listers: Vec::new(),
@@ -860,7 +863,10 @@ impl SystemCatalog for FakeCatalog {
             ),
             131 => (
                 "Alpha Centauri",
-                vec![dying(140, "Proxima", (0, 0), self.proxima_frames)],
+                [dying(140, "Proxima", (0, 0), self.proxima_frames)]
+                    .into_iter()
+                    .chain(self.alpha_more.iter().cloned())
+                    .collect(),
             ),
             // Read without `onward` too: a scripted flight's frame lays
             // Barnard out whatever its links.

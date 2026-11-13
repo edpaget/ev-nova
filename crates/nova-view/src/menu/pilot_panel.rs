@@ -23,6 +23,15 @@
 //! is black, as it is under every stock picture. A ship with no picture
 //! draws none (@0x18270).
 //!
+//! The engine fills that gap from the world models' table
+//! ([`PilotPanelArea::with_world_models`]): a ship with no picture whose
+//! class has a model draws its [`ShipPortrait`]
+//! ([`crate::model_picture`]) in the picture's place, fitted to the target
+//! picture's 128 x 64 rectangle centred on cx with its top at cy + 280,
+//! drawn whole rather than added (a model has no blend; over the black
+//! under the panel the two agree). A picture always comes first. Stock
+//! data has no models, so stock draws as before.
+//!
 //! **A pilot loaded and dying** (`_IsDying`): only the name, a space and
 //! #277 "has been killed", centred, or "Oh my God! They killed Kenny!"
 //! for a name starting "Kenny", case-sensitively (@0x1838c-0x18437). The
@@ -50,9 +59,12 @@ use nova_sim_frame::pilot_panel::PilotPanel;
 
 use crate::color::Color;
 use crate::draw::{Blend, DrawList};
+use crate::flight::target::{PICTURE_HEIGHT, PICTURE_WIDTH};
+use crate::flight::world_models::WorldModels;
 use crate::font::Font;
-use crate::geometry::Point;
+use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
+use crate::model_picture::ShipPortrait;
 use crate::target_picture::ShipPicture;
 use crate::text::TextMetrics;
 
@@ -231,13 +243,54 @@ pub enum PanelPilot {
     Blank,
 }
 
-/// The panel's state: its looks, the pilot shown and the ship read for it.
+/// The panel's state: its looks, the world models' table, the pilot shown
+/// and the ship read for it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PilotPanelArea {
     looks: PanelLooks,
+    /// The world models' table a ship with no picture draws its portrait
+    /// from; empty unless given.
+    models: Rc<WorldModels>,
     pilot: PanelPilot,
     /// The ship type last read, and what was read of it.
-    ship: Option<(ShipId, PanelShip)>,
+    ship: Option<ReadShip>,
+}
+
+/// A ship type the panel has read: what its source gave and, when that
+/// has no picture, its portrait from the world models' table.
+#[derive(Clone, Debug, PartialEq)]
+struct ReadShip {
+    id: ShipId,
+    panel: PanelShip,
+    portrait: Option<ShipPortrait>,
+}
+
+impl ReadShip {
+    /// Ship type `id` as `panel` shows it, its portrait read from `models`
+    /// only when it has no picture: a picture always comes first.
+    fn new(id: ShipId, panel: PanelShip, models: &WorldModels) -> Self {
+        let portrait = if panel.picture.is_none() {
+            ShipPortrait::of(models, id)
+        } else {
+            None
+        };
+        Self {
+            id,
+            panel,
+            portrait,
+        }
+    }
+}
+
+/// The rectangle a portrait is fitted to in the picture's place: the
+/// target picture's 128 x 64, centred on cx, its top at cy +
+/// [`PICTURE_TOP`].
+fn portrait_area(center: Point) -> Bounds {
+    Bounds::at(
+        Point::new(center.x - PICTURE_WIDTH / 2.0, center.y + PICTURE_TOP),
+        PICTURE_WIDTH,
+        PICTURE_HEIGHT,
+    )
 }
 
 /// Each alive row's x and baseline from (cx, cy), in the phase table's
@@ -265,9 +318,33 @@ impl PilotPanelArea {
     pub fn new(looks: PanelLooks) -> Self {
         Self {
             looks,
+            models: Rc::default(),
             pilot: PanelPilot::None,
             ship: None,
         }
+    }
+
+    /// The panel drawing a ship with no picture as its model from
+    /// `models` (see the module docs).
+    #[must_use]
+    pub fn with_world_models(mut self, models: Rc<WorldModels>) -> Self {
+        self.models = models;
+        self
+    }
+
+    /// Gives the panel `models` (see [`Self::with_world_models`]); a ship
+    /// already shown takes its portrait from them from the next draw.
+    pub fn set_world_models(&mut self, models: Rc<WorldModels>) {
+        self.models = models;
+        if let Some(read) = self.ship.take() {
+            self.ship = Some(ReadShip::new(read.id, read.panel, &self.models));
+        }
+    }
+
+    /// The world models' table the panel draws portraits from.
+    #[must_use]
+    pub fn world_models(&self) -> &Rc<WorldModels> {
+        &self.models
     }
 
     /// The pilot shown.
@@ -280,12 +357,10 @@ impl PilotPanelArea {
     /// differs from the one last read.
     pub fn show(&mut self, pilot: PanelPilot, source: &dyn PilotPanelSource) {
         if let PanelPilot::Alive(panel) = &pilot
-            && self
-                .ship
-                .as_ref()
-                .is_none_or(|(ship, _)| *ship != panel.ship)
+            && self.ship.as_ref().is_none_or(|ship| ship.id != panel.ship)
         {
-            self.ship = Some((panel.ship, source.panel_ship(panel.ship)));
+            let read = source.panel_ship(panel.ship);
+            self.ship = Some(ReadShip::new(panel.ship, read, &self.models));
         }
         self.pilot = pilot;
     }
@@ -320,11 +395,8 @@ impl PilotPanelArea {
 
     fn draw_alive(&self, list: &mut DrawList, center: Point, panel: &PilotPanel) {
         let labels = &self.looks.labels;
-        let ship = self
-            .ship
-            .as_ref()
-            .filter(|(ship, _)| *ship == panel.ship)
-            .map(|(_, ship)| ship);
+        let read = self.ship.as_ref().filter(|ship| ship.id == panel.ship);
+        let ship = read.map(|read| &read.panel);
         let subtitle = ship.map_or("", |ship| ship.subtitle.as_str());
         let (label, value) = (self.looks.label, self.looks.value);
         let texts: [(&str, Color); 14] = [
@@ -355,6 +427,8 @@ impl PilotPanelArea {
                 picture.height as f32,
                 Blend::Additive,
             );
+        } else if let Some(portrait) = read.and_then(|read| read.portrait.as_ref()) {
+            portrait.draw_in(list, portrait_area(center));
         }
     }
 
@@ -389,9 +463,12 @@ impl PilotPanelArea {
 #[allow(clippy::float_cmp)]
 mod tests {
     use std::cell::RefCell;
+    use std::collections::BTreeMap;
 
     use super::*;
     use crate::draw::DrawCommand;
+    use crate::flight::world_models::ShipModel;
+    use crate::model::ModelKey;
     use crate::text::fixture::MonoMetrics;
 
     /// A centre other than the classic (512, 384).
@@ -424,8 +501,8 @@ mod tests {
     }
 
     /// A source whose every ship is subtitled "Light Transport" with a
-    /// 41 x 20 `PICT` 3005, but for 200, which has no picture; it counts
-    /// its ship reads.
+    /// 41 x 20 `PICT` 3005, but for 200 and 201, which have no picture; it
+    /// counts its ship reads.
     #[derive(Default)]
     struct Ships {
         reads: RefCell<Vec<ShipId>>,
@@ -440,7 +517,7 @@ mod tests {
             self.reads.borrow_mut().push(ship);
             PanelShip {
                 subtitle: "Light Transport".to_owned(),
-                picture: (ship != ShipId(200)).then_some(ShipPicture {
+                picture: (!matches!(ship, ShipId(200 | 201))).then_some(ShipPicture {
                     picture: 3005,
                     width: 41,
                     height: 20,
@@ -702,6 +779,176 @@ mod tests {
         assert_eq!(stock.value, Color::rgba(255, 0, 0, 255));
         assert_eq!(stock.label, Color::rgba(128, 0, 0, 255));
         assert_eq!(stock.labels, labels());
+    }
+
+    /// Ships 133 and 200 modelled as [`ModelKey`] 7, reaching 4 units.
+    fn table() -> WorldModels {
+        modelled(&[(ShipId(133), ModelKey(7)), (ShipId(200), ModelKey(7))])
+    }
+
+    /// A table modelling each ship as its key, reaching 4 units.
+    fn modelled(ships: &[(ShipId, ModelKey)]) -> WorldModels {
+        WorldModels {
+            ships: ships
+                .iter()
+                .map(|&(ship, key)| {
+                    (
+                        ship,
+                        ShipModel {
+                            key,
+                            scale: 1.0,
+                            base_transp: 0,
+                            radius: 4.0,
+                        },
+                    )
+                })
+                .collect::<BTreeMap<_, _>>(),
+            ..WorldModels::default()
+        }
+    }
+
+    fn with_table(table: WorldModels, pilot: PanelPilot) -> PilotPanelArea {
+        let mut area = PilotPanelArea::new(looks()).with_world_models(Rc::new(table));
+        area.show(pilot, &Ships::default());
+        area
+    }
+
+    fn models(list: &DrawList) -> Vec<ModelKey> {
+        list.iter()
+            .filter_map(|command| match command {
+                DrawCommand::Model { model, .. } => Some(*model),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// What ship `ship`'s portrait from [`table`] draws in the picture's
+    /// rectangle, 128 x 64 with its top at cy + 280, centred on cx.
+    fn portrait_of(models: &WorldModels, ship: ShipId) -> Vec<DrawCommand> {
+        let mut want = DrawList::new();
+        let area = Bounds::at(Point::new(CENTER.x - 64.0, CENTER.y + 280.0), 128.0, 64.0);
+        assert!(
+            ShipPortrait::of(models, ship)
+                .expect("a portrait")
+                .draw_in(&mut want, area)
+        );
+        want.iter().cloned().collect()
+    }
+
+    /// The commands after the last text.
+    fn after_the_texts(list: &DrawList) -> Vec<DrawCommand> {
+        let commands: Vec<DrawCommand> = list.iter().cloned().collect();
+        let final_text = commands
+            .iter()
+            .rposition(|command| matches!(command, DrawCommand::Text { .. }))
+            .expect("a text");
+        commands[final_text + 1..].to_vec()
+    }
+
+    #[test]
+    fn a_modelled_ship_with_no_picture_draws_its_portrait_in_the_picture_s_rectangle() {
+        let list = drawn(&with_table(table(), alive(ShipId(200))), true);
+        assert_eq!(texts(&list).len(), 14);
+        assert!(pictures(&list).is_empty());
+        let after = after_the_texts(&list);
+        assert_eq!(after, portrait_of(&table(), ShipId(200)));
+        let Some(DrawCommand::Model { model, pose, .. }) = after.first() else {
+            panic!("a model first");
+        };
+        assert_eq!(*model, ModelKey(7));
+        assert_eq!(pose.center, Point::new(CENTER.x, CENTER.y + 312.0));
+    }
+
+    #[test]
+    fn a_ship_with_a_picture_draws_the_picture_even_with_a_model() {
+        let with = drawn(&with_table(table(), alive(ShipId(133))), true);
+        let without = drawn(&showing(alive(ShipId(133))), true);
+        assert_eq!(pictures(&with), pictures(&without));
+        assert_eq!(pictures(&with).len(), 1);
+        assert_eq!(models(&with), []);
+    }
+
+    #[test]
+    fn an_empty_table_draws_the_panel_s_commands_unchanged() {
+        for pilot in [
+            alive(ShipId(133)),
+            alive(ShipId(200)),
+            PanelPilot::Dying("Ada".to_owned()),
+            PanelPilot::None,
+            PanelPilot::Blank,
+        ] {
+            let empty = drawn(&with_table(WorldModels::default(), pilot.clone()), true);
+            assert_eq!(empty, drawn(&showing(pilot.clone()), true), "{pilot:?}");
+        }
+        let other = modelled(&[(ShipId(999), ModelKey(7))]);
+        assert_eq!(
+            drawn(&with_table(other, alive(ShipId(200))), true),
+            drawn(&showing(alive(ShipId(200))), true)
+        );
+    }
+
+    #[test]
+    fn a_dying_or_absent_pilot_draws_no_portrait() {
+        for pilot in [
+            PanelPilot::Dying("Ada".to_owned()),
+            PanelPilot::None,
+            PanelPilot::Blank,
+        ] {
+            assert_eq!(
+                models(&drawn(&with_table(table(), pilot.clone()), true)),
+                [],
+                "{pilot:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_table_given_after_the_pilot_is_shown_draws_its_portrait_from_then_on() {
+        let source = Ships::default();
+        let mut area = PilotPanelArea::new(looks());
+        area.show(alive(ShipId(200)), &source);
+        assert_eq!(models(&drawn(&area, true)), []);
+        area.set_world_models(Rc::new(table()));
+        let list = drawn(&area, true);
+        assert_eq!(after_the_texts(&list), portrait_of(&table(), ShipId(200)));
+        area.set_world_models(Rc::default());
+        assert_eq!(models(&drawn(&area, true)), []);
+        assert_eq!(*source.reads.borrow(), [ShipId(200)], "no source re-read");
+        // A ship with a picture never takes a portrait from a table.
+        let mut pictured = showing(alive(ShipId(133)));
+        pictured.set_world_models(Rc::new(table()));
+        assert_eq!(models(&drawn(&pictured, true)), []);
+        assert_eq!(pictures(&drawn(&pictured, true)).len(), 1);
+    }
+
+    #[test]
+    fn the_portrait_follows_the_ship_type_shown() {
+        let source = Ships::default();
+        let table = modelled(&[(ShipId(200), ModelKey(7)), (ShipId(201), ModelKey(8))]);
+        let mut area = PilotPanelArea::new(looks()).with_world_models(Rc::new(table));
+        area.show(alive(ShipId(200)), &source);
+        assert_eq!(models(&drawn(&area, true)), [ModelKey(7)]);
+        area.show(alive(ShipId(201)), &source);
+        assert_eq!(models(&drawn(&area, true)), [ModelKey(8)]);
+        area.show(alive(ShipId(133)), &source);
+        assert_eq!(models(&drawn(&area, true)), []);
+        area.show(alive(ShipId(133)), &source);
+        assert_eq!(
+            *source.reads.borrow(),
+            [ShipId(200), ShipId(201), ShipId(133)]
+        );
+    }
+
+    #[test]
+    fn the_world_models_given_are_the_panel_s() {
+        let given = Rc::new(table());
+        let area = PilotPanelArea::new(looks()).with_world_models(Rc::clone(&given));
+        assert!(Rc::ptr_eq(area.world_models(), &given));
+        let set = Rc::new(table());
+        let mut area = area;
+        area.set_world_models(Rc::clone(&set));
+        assert!(Rc::ptr_eq(area.world_models(), &set));
+        assert!(PilotPanelArea::new(looks()).world_models().ships.is_empty());
     }
 
     #[test]

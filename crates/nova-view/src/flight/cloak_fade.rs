@@ -82,6 +82,20 @@ pub fn full_fade_factor(paint: u8) -> u8 {
     if paint > 15 { 2 } else { 0 }
 }
 
+/// Each channel's source factor, in 32nds, of a hull at a full fade
+/// written at translucency `written`, painted `paint` (its
+/// [`paint_channels`]): the channel's [`full_fade_factor`] − +0xa8 + 32,
+/// capped at 32 (`_BlitPixieRLETranslucent` @0xc1568), so 2 + 2 above 15
+/// and 0 + 2 below at 0x1e.
+#[must_use]
+pub fn translucent_factors(paint: [u8; 3], written: u8) -> [u8; 3] {
+    paint.map(|channel| {
+        (full_fade_factor(channel) + 32)
+            .saturating_sub(written)
+            .min(32)
+    })
+}
+
 /// trunc(`from` − `fade`), held to 0..=32.
 fn cap(from: f32, fade: f32) -> u8 {
     // Held to 0..=32.
@@ -171,14 +185,7 @@ impl CloakDraw {
             CloakShown::Hidden => Some(full(None, TRANSLUCENCY_STEPS)),
             CloakShown::Translucent(written) => {
                 let level = written.min(TRANSLUCENCY_STEPS);
-                // Each source factor is the channel's − +0xa8 + 32, capped
-                // at 32 (`_BlitPixieRLETranslucent` @0xc1568).
-                let source = paint.map(|channel| {
-                    (full_fade_factor(channel) + 32)
-                        .saturating_sub(level)
-                        .min(32)
-                });
-                let tint = translucent_tint_by_channel(source, level);
+                let tint = translucent_tint_by_channel(translucent_factors(paint, written), level);
                 Some(full(Some((tint, Blend::OrTranslucent)), written))
             }
             CloakShown::Fading(fade) => Some(Self {
@@ -230,6 +237,17 @@ mod tests {
     #[test]
     fn a_full_fades_channel_factor_is_2_above_15_and_0_otherwise() {
         assert_eq!([32, 16, 15, 0].map(full_fade_factor), [2, 2, 0, 0]);
+    }
+
+    #[test]
+    fn a_full_fades_source_factor_is_its_factor_less_the_level_and_32_capped_at_32() {
+        assert_eq!(translucent_factors([32, 16, 15], 0x1e), [4, 4, 2]);
+        assert_eq!(translucent_factors([32, 16, 15], 0x20), [2, 2, 0]);
+        // Held to 32 from below, and to none past 0x22.
+        assert_eq!(translucent_factors([32, 15, 0], 0), [32, 32, 32]);
+        assert_eq!(translucent_factors([32, 15, 0], 0x22), [0, 0, 0]);
+        assert_eq!(translucent_factors([32, 15, 0], 0xff), [0, 0, 0]);
+        assert_eq!(translucent_factors([32, 15, 0], 1), [32, 31, 31]);
     }
 
     #[test]

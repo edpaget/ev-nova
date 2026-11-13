@@ -8,9 +8,25 @@
 //! has a default built from `files`, so an adapter that doesn't override
 //! it still compiles, but fails the folder as `files` does.
 //!
+//! A media file is read whole with [`Source::bytes`], or only as far as
+//! its first bytes with [`Source::head`], for a caller that needs to know
+//! how it starts and no more (the LFS check). `head` has a default cut
+//! from `bytes`, so an adapter that doesn't override it still compiles,
+//! but reads the file whole. So has [`Source::size`], a file's length in
+//! bytes for a caller that holds it to a budget without reading it (a
+//! texture checked from its header); the default reads it whole and
+//! counts it.
+//!
+//! A borrowed source (`&S`) and a shared one (`Rc<S>`) are sources too,
+//! answering with the source's own methods, so a caller can keep a source
+//! another part of the program reads as well.
+//!
 //! Every adapter is checked against `TREE` with `check_contract`, and one
 //! that lists per file against `TREE` plus `UNREADABLE` with
-//! `check_unreadable_contract` (all behind the `fixture` feature).
+//! `check_unreadable_contract`. `CountingSource` wraps a source, borrowed
+//! or its own, and counts the files asked of it whole, by their heads and
+//! by their sizes, for tests that a file is read once (all behind the
+//! `fixture` feature).
 
 use std::collections::BTreeMap;
 use std::io;
@@ -63,6 +79,78 @@ pub trait Source {
     /// written with `/`), or `None` if there is no such file. Media files
     /// are read this way.
     fn bytes(&self, path: &str) -> io::Result<Option<Vec<u8>>>;
+
+    /// The first `len` bytes of the file at `path` (the whole of a file
+    /// shorter than that), or `None` if there is no such file: for a
+    /// caller that only needs to know how a file starts, such as the LFS
+    /// check ([`crate::media::lfs_pointers`]).
+    ///
+    /// The default reads the file whole with [`bytes`](Self::bytes) and
+    /// cuts it, so a source that doesn't override it still compiles; an
+    /// adapter over real files overrides it to read no more than `len`.
+    fn head(&self, path: &str, len: usize) -> io::Result<Option<Vec<u8>>> {
+        Ok(self.bytes(path)?.map(|mut bytes| {
+            bytes.truncate(len);
+            bytes
+        }))
+    }
+
+    /// The length in bytes of the file at `path`, or `None` if there is no
+    /// such file: for a caller that holds a file to a budget of bytes on
+    /// disk without reading it (a texture checked from its header).
+    ///
+    /// The default reads the file whole with [`bytes`](Self::bytes) and
+    /// counts it, so a source that doesn't override it still compiles; an
+    /// adapter over real files overrides it to read none of it.
+    fn size(&self, path: &str) -> io::Result<Option<u64>> {
+        Ok(self.bytes(path)?.map(|bytes| bytes.len() as u64))
+    }
+}
+
+/// A borrowed source is a source, answering with its own methods.
+impl<S: Source + ?Sized> Source for &S {
+    fn files(&self, dir: &str, ext: &str) -> io::Result<Vec<SourceFile>> {
+        (**self).files(dir, ext)
+    }
+
+    fn listing(&self, dir: &str, ext: &str) -> io::Result<Vec<Listed>> {
+        (**self).listing(dir, ext)
+    }
+
+    fn bytes(&self, path: &str) -> io::Result<Option<Vec<u8>>> {
+        (**self).bytes(path)
+    }
+
+    fn head(&self, path: &str, len: usize) -> io::Result<Option<Vec<u8>>> {
+        (**self).head(path, len)
+    }
+
+    fn size(&self, path: &str) -> io::Result<Option<u64>> {
+        (**self).size(path)
+    }
+}
+
+/// A shared source is a source, answering with its own methods.
+impl<S: Source + ?Sized> Source for std::rc::Rc<S> {
+    fn files(&self, dir: &str, ext: &str) -> io::Result<Vec<SourceFile>> {
+        (**self).files(dir, ext)
+    }
+
+    fn listing(&self, dir: &str, ext: &str) -> io::Result<Vec<Listed>> {
+        (**self).listing(dir, ext)
+    }
+
+    fn bytes(&self, path: &str) -> io::Result<Option<Vec<u8>>> {
+        (**self).bytes(path)
+    }
+
+    fn head(&self, path: &str, len: usize) -> io::Result<Option<Vec<u8>>> {
+        (**self).head(path, len)
+    }
+
+    fn size(&self, path: &str) -> io::Result<Option<u64>> {
+        (**self).size(path)
+    }
 }
 
 /// Content held in memory, keyed by relative path.
@@ -184,13 +272,50 @@ impl Source for DirSource {
     }
 
     fn bytes(&self, path: &str) -> io::Result<Option<Vec<u8>>> {
-        let mut file = self.root.clone();
-        file.extend(path.split('/'));
-        match std::fs::read(file) {
-            Ok(bytes) => Ok(Some(bytes)),
+        absent_is_none(std::fs::read(self.file(path)))
+    }
+
+    /// Reads no more than `len` bytes of the file.
+    fn head(&self, path: &str, len: usize) -> io::Result<Option<Vec<u8>>> {
+        use std::io::Read;
+        let read = std::fs::File::open(self.file(path)).and_then(|file| {
+            let mut head = Vec::new();
+            file.take(len as u64).read_to_end(&mut head)?;
+            Ok(head)
+        });
+        absent_is_none(read)
+    }
+
+    /// Reads none of the file: its length is its metadata's, following a
+    /// link as reading it would.
+    fn size(&self, path: &str) -> io::Result<Option<u64>> {
+        match std::fs::metadata(self.file(path)) {
+            Ok(meta) if meta.is_dir() => Err(io::Error::new(
+                io::ErrorKind::IsADirectory,
+                format!("`{path}` is a folder, not a file"),
+            )),
+            Ok(meta) => Ok(Some(meta.len())),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e),
         }
+    }
+}
+
+impl DirSource {
+    /// Where the file at the relative `path` is on disk.
+    fn file(&self, path: &str) -> PathBuf {
+        let mut file = self.root.clone();
+        file.extend(path.split('/'));
+        file
+    }
+}
+
+/// `read`, with a file that isn't there as `None`.
+fn absent_is_none(read: io::Result<Vec<u8>>) -> io::Result<Option<Vec<u8>>> {
+    match read {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
     }
 }
 
@@ -205,6 +330,81 @@ fn texts(listed: Vec<Listed>) -> io::Result<Vec<SourceFile>> {
             })
         })
         .collect()
+}
+
+/// A [`Source`] that answers as the source it wraps and counts, by path,
+/// how often each file was asked for whole ([`Source::bytes`]) and by its
+/// head ([`Source::head`]): for a test that a file is read once, or not
+/// at all. Listings aren't counted.
+#[cfg(any(test, feature = "fixture"))]
+#[derive(Debug)]
+pub struct CountingSource<S> {
+    source: S,
+    bytes: std::cell::RefCell<BTreeMap<String, u32>>,
+    heads: std::cell::RefCell<BTreeMap<String, u32>>,
+    sizes: std::cell::RefCell<BTreeMap<String, u32>>,
+}
+
+#[cfg(any(test, feature = "fixture"))]
+impl<S: Source> CountingSource<S> {
+    /// `source`, with nothing asked of it yet: a borrowed one (`&source`),
+    /// or one it owns, which a test can share by wrapping the counter in
+    /// an `Rc`.
+    pub fn new(source: S) -> Self {
+        CountingSource {
+            source,
+            bytes: std::cell::RefCell::default(),
+            heads: std::cell::RefCell::default(),
+            sizes: std::cell::RefCell::default(),
+        }
+    }
+
+    /// How often the size of the file at `path` was asked for.
+    pub fn sizes_asked(&self, path: &str) -> u32 {
+        self.sizes.borrow().get(path).copied().unwrap_or(0)
+    }
+
+    /// How often the file at `path` was asked for whole.
+    pub fn bytes_asked(&self, path: &str) -> u32 {
+        self.bytes.borrow().get(path).copied().unwrap_or(0)
+    }
+
+    /// How often the head of the file at `path` was asked for.
+    pub fn heads_asked(&self, path: &str) -> u32 {
+        self.heads.borrow().get(path).copied().unwrap_or(0)
+    }
+
+    /// Every path asked for whole, with how often, sorted by path.
+    pub fn all_bytes_asked(&self) -> Vec<(String, u32)> {
+        let asked = self.bytes.borrow();
+        asked.iter().map(|(path, &n)| (path.clone(), n)).collect()
+    }
+}
+
+#[cfg(any(test, feature = "fixture"))]
+impl<S: Source> Source for CountingSource<S> {
+    fn files(&self, dir: &str, ext: &str) -> io::Result<Vec<SourceFile>> {
+        self.source.files(dir, ext)
+    }
+
+    fn listing(&self, dir: &str, ext: &str) -> io::Result<Vec<Listed>> {
+        self.source.listing(dir, ext)
+    }
+
+    fn bytes(&self, path: &str) -> io::Result<Option<Vec<u8>>> {
+        *self.bytes.borrow_mut().entry(path.to_owned()).or_default() += 1;
+        self.source.bytes(path)
+    }
+
+    fn head(&self, path: &str, len: usize) -> io::Result<Option<Vec<u8>>> {
+        *self.heads.borrow_mut().entry(path.to_owned()).or_default() += 1;
+        self.source.head(path, len)
+    }
+
+    fn size(&self, path: &str) -> io::Result<Option<u64>> {
+        *self.sizes.borrow_mut().entry(path.to_owned()).or_default() += 1;
+        self.source.size(path)
+    }
 }
 
 #[cfg(any(test, feature = "fixture"))]
@@ -251,6 +451,41 @@ pub fn check_contract(source: &impl Source) {
             .expect("reads a missing file"),
         None,
         "a missing file is None"
+    );
+    assert_eq!(
+        source
+            .head("media/export/pack/hull.glb", 2)
+            .expect("reads a file's head"),
+        Some(b"gl".to_vec()),
+        "a file's head is its first bytes"
+    );
+    assert_eq!(
+        source
+            .head("media/export/pack/hull.glb", 64)
+            .expect("reads a short file's head"),
+        Some(b"glTF\x02".to_vec()),
+        "a file shorter than asked is its head whole"
+    );
+    assert_eq!(
+        source
+            .head("media/export/pack/gone.glb", 2)
+            .expect("reads a missing file's head"),
+        None,
+        "a missing file has no head"
+    );
+    assert_eq!(
+        source
+            .size("media/export/pack/hull.glb")
+            .expect("reads a file's size"),
+        Some(5),
+        "a file's size is its length in bytes"
+    );
+    assert_eq!(
+        source
+            .size("media/export/pack/gone.glb")
+            .expect("reads a missing file's size"),
+        None,
+        "a missing file has no size"
     );
 }
 
@@ -312,6 +547,148 @@ mod tests {
         let source = DirSource::new(dir.path());
         assert!(source.files("systems", "md").is_err(), "not a folder");
         assert!(source.bytes("media").is_err(), "a folder, not a file");
+        assert!(source.head("media", 4).is_err(), "nor has a folder a head");
+        assert!(source.size("media").is_err(), "nor a size");
+        // A name no filesystem takes is an error, not a missing file.
+        assert!(source.size("media/bad\0name").is_err(), "a NUL in its name");
+    }
+
+    #[test]
+    fn the_directory_adapter_reads_only_the_head_it_is_asked_for() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "media/export/pack/hull.glb",
+            b"glTF\x02 and more",
+        );
+        let source = DirSource::new(dir.path());
+        let head = |len| source.head("media/export/pack/hull.glb", len).unwrap();
+        assert_eq!(head(0), Some(Vec::new()));
+        assert_eq!(head(4), Some(b"glTF".to_vec()));
+        assert_eq!(head(5), Some(b"glTF\x02".to_vec()));
+    }
+
+    #[test]
+    fn a_source_with_only_the_required_methods_meets_the_contract() {
+        let mut fake = MemSource::default();
+        for (path, text) in TREE {
+            fake = fake.with(path, text);
+        }
+        check_contract(&FilesOnly(fake));
+    }
+
+    #[test]
+    fn the_counting_source_answers_as_its_source_and_counts_each_path_asked() {
+        let mut fake = MemSource::default();
+        for (path, text) in TREE {
+            fake = fake.with(path, text);
+        }
+        let counting = CountingSource::new(&fake);
+        check_contract(&counting);
+        // The contract asks `hull.glb` whole once and for its head twice,
+        // and `gone.glb` once each way.
+        assert_eq!(counting.bytes_asked("media/export/pack/hull.glb"), 1);
+        assert_eq!(counting.heads_asked("media/export/pack/hull.glb"), 2);
+        assert_eq!(counting.bytes_asked("media/export/pack/gone.glb"), 1);
+        assert_eq!(counting.heads_asked("media/export/pack/gone.glb"), 1);
+        assert_eq!(counting.bytes_asked("systems/marrow.md"), 0, "listed");
+        assert_eq!(counting.heads_asked("systems/marrow.md"), 0);
+        assert_eq!(
+            counting.all_bytes_asked(),
+            [
+                ("media/export/pack/gone.glb".to_owned(), 1),
+                ("media/export/pack/hull.glb".to_owned(), 1)
+            ]
+        );
+    }
+
+    #[test]
+    fn the_counting_source_lists_per_file_as_its_source_does() {
+        let mut fake = MemSource::default();
+        for (path, text) in TREE {
+            fake = fake.with(path, text);
+        }
+        for (path, bytes) in UNREADABLE {
+            fake = fake.with_bytes(path, bytes);
+        }
+        check_unreadable_contract(&CountingSource::new(&fake));
+    }
+
+    /// A source whose `head` and `size` are its own, not a cut or the
+    /// length of its `bytes`.
+    #[derive(Debug)]
+    struct OwnHead;
+    impl Source for OwnHead {
+        fn files(&self, _: &str, _: &str) -> io::Result<Vec<SourceFile>> {
+            Ok(Vec::new())
+        }
+        fn bytes(&self, _: &str) -> io::Result<Option<Vec<u8>>> {
+            Ok(Some(b"whole".to_vec()))
+        }
+        fn head(&self, _: &str, _: usize) -> io::Result<Option<Vec<u8>>> {
+            Ok(Some(b"own".to_vec()))
+        }
+        fn size(&self, _: &str) -> io::Result<Option<u64>> {
+            Ok(Some(77))
+        }
+    }
+
+    #[test]
+    fn the_counting_source_asks_its_source_for_a_head_not_the_whole_file() {
+        let counting = CountingSource::new(&OwnHead);
+        assert_eq!(counting.head("any", 9).unwrap(), Some(b"own".to_vec()));
+        assert_eq!(counting.bytes_asked("any"), 0);
+        assert_eq!(counting.heads_asked("any"), 1);
+    }
+
+    #[test]
+    fn the_counting_source_counts_sizes_and_asks_its_source_for_its_own() {
+        let counting = CountingSource::new(&OwnHead);
+        assert_eq!(counting.size("any").unwrap(), Some(77));
+        assert_eq!(counting.size("any").unwrap(), Some(77));
+        assert_eq!(counting.sizes_asked("any"), 2);
+        assert_eq!(counting.sizes_asked("other"), 0);
+        assert_eq!(counting.bytes_asked("any"), 0, "not read whole");
+        assert_eq!(counting.heads_asked("any"), 0);
+    }
+
+    #[test]
+    fn a_borrowed_or_shared_source_answers_with_its_source_s_own_head_and_size() {
+        let borrowed = &OwnHead;
+        let answers = |source: &dyn Source| {
+            (
+                source.head("any", 9).unwrap(),
+                source.size("any").unwrap(),
+                source.bytes("any").unwrap(),
+            )
+        };
+        let own = (Some(b"own".to_vec()), Some(77), Some(b"whole".to_vec()));
+        assert_eq!(answers(&borrowed), own);
+        assert_eq!(answers(&std::rc::Rc::new(OwnHead)), own);
+        // Listings go through too.
+        let mut fake = MemSource::default();
+        for (path, text) in TREE {
+            fake = fake.with(path, text);
+        }
+        for (path, bytes) in UNREADABLE {
+            fake = fake.with_bytes(path, bytes);
+        }
+        check_unreadable_contract(&&fake);
+        check_unreadable_contract(&std::rc::Rc::new(fake));
+    }
+
+    #[test]
+    fn a_counting_source_may_own_its_source() {
+        let mut fake = MemSource::default();
+        for (path, text) in TREE {
+            fake = fake.with(path, text);
+        }
+        let counting = std::rc::Rc::new(CountingSource::new(fake));
+        let reader = std::rc::Rc::clone(&counting);
+        check_contract(&reader);
+        assert_eq!(counting.bytes_asked("media/export/pack/hull.glb"), 1);
+        assert_eq!(counting.sizes_asked("media/export/pack/hull.glb"), 1);
+        assert_eq!(counting.sizes_asked("media/export/pack/gone.glb"), 1);
     }
 
     #[test]

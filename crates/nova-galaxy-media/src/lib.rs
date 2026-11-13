@@ -26,15 +26,25 @@
 //! ship space by its front and length
 //! ([`Placement::ship_point_3d`]), and works out which art budget
 //! covers it and each limit it breaks ([`budget`], a port of `galaxy`'s
-//! `check/art.rs` budget rule, for models and textures).
+//! `check/art.rs` budget rule, for models and textures). A model's images
+//! reach the adapter as stored, and it has each one a base colour names
+//! decoded ([`image`](mod@image): a PNG or a JPEG, sniffed from its first
+//! bytes, held to the default budget's `texture` side from its header,
+//! then decoded to RGBA8).
 //!
 //! For drawing planets (the renderer's planet adapter,
 //! `nova_render::GalaxyPlanets`), it reads a planet's or moon's texture
 //! asset ([`texture`]: its `.png` held to the default budget's `texture`
-//! limits from its header, then decoded to RGBA8), and bakes a generated
+//! limits from its header, then decoded to RGBA8; or checked from its
+//! header at load, [`check_texture`], and read by its file later,
+//! [`read_texture_file`]), and bakes a generated
 //! look into the same kind of surface, with its clouds, rings, spin and
 //! tilt ([`planet`]: deterministic from the seed, the same bytes on every
 //! platform).
+//!
+//! For drawing a sky's decorations (the renderer's `new_game_sky_images`),
+//! it reads a texture asset of any shape ([`read_picture`]: the same
+//! budget and header checks, without a surface's 2:1).
 //!
 //! # What it holds, and why here
 //!
@@ -44,7 +54,8 @@
 //! the format alone: the crate depends on no other workspace crate, only
 //! on `nova-galaxy-format` and crates.io crates, so a git dependency
 //! builds it alone, as it builds the format. Only this crate decodes
-//! models (`deny.toml` bans `gltf` everywhere else).
+//! models and their JPEG images (`deny.toml` bans `gltf` and `zune-jpeg`
+//! everywhere else).
 //!
 //! Nothing here touches the filesystem: media are read through the
 //! format's [`Source`](nova_galaxy_format::source::Source) port, and the
@@ -54,18 +65,25 @@
 pub mod budget;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
+pub mod image;
 pub mod model;
 pub mod mount;
 pub mod outline;
 pub mod paint;
 pub mod placement;
 pub mod planet;
+pub mod sampling;
 pub mod scene;
 pub mod texture;
 
+pub use image::{NoImage, read_image};
 pub use model::{Bounds, Face, Model, NoModel, model, read_model};
 pub use outline::{BARE, Outline, Triangle, painted, rgb, silhouette, size_box, top_down};
 pub use paint::{Slot, slot_of};
 pub use placement::Placement;
-pub use scene::{Scene, read_asset_scene, read_scene};
-pub use texture::{NoTexture, read_texture};
+pub use sampling::{Sampler, TextureRef};
+pub use scene::{AssetScenes, Scene, read_asset_scene, read_scene};
+pub use texture::{
+    NoTexture, TextureHeader, check_texture, read_picture, read_texture, read_texture_file,
+    texture_file,
+};

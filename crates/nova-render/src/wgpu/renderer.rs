@@ -20,10 +20,16 @@ use super::layout::lay_out_text;
 use super::models::{ModelData, Models, depth_view};
 use super::planets::{PlanetData, Planets};
 use super::sky::{Sky, StarData};
+use super::sky_images::{SkyImageData, SkyImages};
 use super::upscale::{Upscale, abilities, upscale_for};
 use crate::fonts::FontFaces;
-use crate::gpu::{Batch, Frame, PageId, PlanetId, PlanetTextures, TextRun, WorldSpace};
+use crate::gpu::{
+    Batch, Frame, ModelTextureId, PageId, PlanetId, PlanetTextures, TextRun, WorldSpace,
+};
 use crate::model::{Mesh, MeshId};
+use crate::model_texture::ModelTexture;
+use crate::models::{ModelRun, draw_runs};
+use crate::sky::{SkyImage, SkyImageId};
 use crate::upscale::{Abilities, Upscaler, WorldResolution, offered};
 use crate::viewport::PixelRect;
 
@@ -91,10 +97,12 @@ enum Draw {
     Text {
         renderer: usize,
     },
-    /// Models: the instances, and the mesh of each, in order.
+    /// Models: the instances, the mesh of each, in order, and the runs the
+    /// core settled for them ([`draw_runs`]), by their place in the batch.
     Models {
         instances: Range<u32>,
         meshes: Vec<MeshId>,
+        runs: Vec<ModelRun>,
     },
     /// Planets: the instances, and the textures of each, in order.
     Planets {
@@ -104,6 +112,12 @@ enum Draw {
     /// The sky's stars: the instances.
     Sky {
         instances: Range<u32>,
+    },
+    /// A sky's decorations: the instances, and the image of each, in
+    /// order.
+    SkyImages {
+        instances: Range<u32>,
+        images: Vec<SkyImageId>,
     },
 }
 
@@ -161,6 +175,9 @@ pub struct WgpuRenderer {
     planets: Planets,
     /// The sky pipeline ([`Batch::Sky`]).
     sky: Sky,
+    /// The sky-image pipeline and the images' textures
+    /// ([`Batch::SkyImages`]).
+    sky_images: SkyImages,
     page_layout: wgpu::BindGroupLayout,
     texture_layout: wgpu::BindGroupLayout,
     scene: Option<Scene>,
@@ -309,9 +326,10 @@ impl WgpuRenderer {
             max_pipeline,
             solid_pipeline,
             blit_pipeline,
-            models: Models::new(device),
+            models: Models::new(device, queue),
             planets: Planets::new(device, &globals_layout),
             sky: Sky::new(device, &globals_layout),
+            sky_images: SkyImages::new(device, &globals_layout),
             page_layout,
             texture_layout,
             scene: None,
@@ -426,14 +444,31 @@ impl WgpuRenderer {
         self.pages.clear();
     }
 
-    /// Holds `data` as mesh `mesh`, replacing any mesh of that id.
-    pub fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh) {
-        self.models.upload(&self.device, mesh, data);
+    /// Holds `data` as model texture `texture`, replacing any of that id.
+    pub fn upload_model_texture(&mut self, texture: ModelTextureId, data: &ModelTexture) {
+        (self.models).upload_texture(&self.device, &self.queue, texture, data);
+    }
+
+    /// Holds `data` as mesh `mesh`, replacing any mesh of that id, its
+    /// textures those uploaded as `textures`.
+    pub fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh, textures: &[ModelTextureId]) {
+        self.models.upload(&self.device, mesh, data, textures);
     }
 
     /// Holds `textures` as planet `planet`'s, replacing any it had.
     pub fn upload_planet(&mut self, planet: PlanetId, textures: &PlanetTextures) {
         (self.planets).upload(&self.device, &self.queue, planet, textures);
+    }
+
+    /// Drops planet `planet`'s textures; it draws nothing until uploaded
+    /// again.
+    pub fn release_planet(&mut self, planet: PlanetId) {
+        self.planets.release(planet);
+    }
+
+    /// Holds `data` as sky image `image`, replacing any of that id.
+    pub fn upload_sky_image(&mut self, image: SkyImageId, data: &SkyImage) {
+        (self.sky_images).upload(&self.device, &self.queue, image, data);
     }
 
     /// Copies `image` onto page `page` at `at`.
@@ -506,6 +541,7 @@ impl WgpuRenderer {
         let model_buffer = self.vertex_buffer("nova model instances", &layout.models);
         let planet_buffer = self.vertex_buffer("nova planet instances", &layout.planets);
         let star_buffer = self.vertex_buffer("nova star instances", &layout.stars);
+        let sky_image_buffer = self.vertex_buffer("nova sky image instances", &layout.sky_images);
 
         let scene = self.scene.as_ref().expect("ensured above");
         let buffers = Buffers {
@@ -514,6 +550,7 @@ impl WgpuRenderer {
             models: &model_buffer,
             planets: &planet_buffer,
             stars: &star_buffer,
+            sky_images: &sky_image_buffer,
         };
         let mut commands = WgpuCommands::new(DeviceEncoders(&self.device));
         let world = if layout.world.is_empty() {
@@ -625,6 +662,7 @@ impl WgpuRenderer {
             models: model_buffer,
             planets: planet_buffer,
             stars: star_buffer,
+            ..
         } = buffers;
         let content = target.content;
         let full = PixelRect {
@@ -686,10 +724,13 @@ impl WgpuRenderer {
                         pass,
                     );
                 }
-                Draw::Models { instances, meshes } => {
+                Draw::Models {
+                    instances,
+                    meshes,
+                    runs,
+                } => {
                     set_viewport(pass, content);
-                    self.models
-                        .encode(pass, model_buffer, instances.clone(), meshes);
+                    (self.models).encode(pass, model_buffer, (instances.start, meshes), runs);
                 }
                 Draw::Planets { instances, planets } => {
                     set_viewport(pass, content);
@@ -700,6 +741,12 @@ impl WgpuRenderer {
                     set_viewport(pass, content);
                     let globals = &self.globals_group;
                     (self.sky).encode(pass, globals, star_buffer, instances.clone());
+                }
+                Draw::SkyImages { instances, images } => {
+                    set_viewport(pass, content);
+                    let globals = &self.globals_group;
+                    let buffer = buffers.sky_images;
+                    (self.sky_images).encode(pass, globals, buffer, instances.clone(), images);
                 }
             }
         }
@@ -1128,6 +1175,8 @@ struct Layout<'a> {
     planets: Vec<PlanetData>,
     /// Every sky batch's stars, in one buffer.
     stars: Vec<StarData>,
+    /// Every sky-images batch's instances, in one buffer.
+    sky_images: Vec<SkyImageData>,
     /// The text batches, one glyphon renderer each.
     text: Vec<&'a [TextRun]>,
     /// What to draw for each batch, in order.
@@ -1135,7 +1184,8 @@ struct Layout<'a> {
     /// The scissor each of `draws` is encoded with, index for index, in
     /// its canvas's pixels: [`Frame::world_scissor_in`] its canvas for a
     /// world draw of a clipped world, and the whole canvas for every other
-    /// draw.
+    /// draw; met with [`Frame::clip_scissor_in`] its canvas for a clipped
+    /// models or planets batch ([`Batch::clip`]).
     scissors: Vec<PixelRect>,
     /// For a world drawn into a texture of its own, the render passes its
     /// draws are split into, in order: the first clears the texture, and
@@ -1151,13 +1201,17 @@ struct Layout<'a> {
 impl<'a> Layout<'a> {
     /// Lays out the batch at `index` of `frame` at the end of `passes`,
     /// scissored to `scissors`' rect for its layer and the space it draws
-    /// in ([`Frame::space_of`]), opening a pass for an OR batch. It is left
+    /// in ([`Frame::space_of`]), met with its own clip's there when it has
+    /// one ([`Batch::clip`]), opening a pass for an OR batch. It is left
     /// out when its scissor is empty, and an OR batch is when it covers no
     /// pixel in that space.
     fn push(&mut self, frame: &'a Frame, index: usize, scissors: Scissors, passes: &mut Vec<Pass>) {
         let batch = &frame.batches[index];
         let space = frame.space_of(index);
         let scissor = scissors.for_draw(frame.layer(index), space);
+        let scissor = (batch.clip()).map_or(scissor, |clip| {
+            scissor.meet(frame.clip_scissor_in(space, clip))
+        });
         if scissor.w == 0 || scissor.h == 0 {
             return;
         }
@@ -1213,16 +1267,17 @@ impl<'a> Layout<'a> {
                     renderer: self.text.len() - 1,
                 }
             }
-            Batch::Models { light, models } => {
+            Batch::Models { light, models, .. } => {
                 let start = self.models.len() as u32;
                 self.models
                     .extend(models.iter().map(|model| ModelData::new(model, *light)));
                 Draw::Models {
                     instances: start..self.models.len() as u32,
                     meshes: models.iter().map(|model| model.mesh).collect(),
+                    runs: draw_runs(models),
                 }
             }
-            Batch::Planets { light, planets } => {
+            Batch::Planets { light, planets, .. } => {
                 let start = self.planets.len() as u32;
                 self.planets
                     .extend(planets.iter().map(|planet| PlanetData::new(planet, *light)));
@@ -1236,6 +1291,15 @@ impl<'a> Layout<'a> {
                 self.stars.extend(sky.iter().map(StarData::from));
                 Draw::Sky {
                     instances: first..self.stars.len() as u32,
+                }
+            }
+            Batch::SkyImages(images) => {
+                let first = self.sky_images.len() as u32;
+                self.sky_images
+                    .extend(images.iter().map(SkyImageData::from));
+                Draw::SkyImages {
+                    instances: first..self.sky_images.len() as u32,
+                    images: images.iter().map(|one| one.image).collect(),
                 }
             }
         };
@@ -1265,7 +1329,7 @@ impl<'a> Layout<'a> {
 }
 
 /// The buffers a frame's draws read: sprite and OR-fill instances, solid
-/// vertices, model instances, planet instances and stars.
+/// vertices, model instances, planet instances, stars and sky images.
 #[derive(Clone, Copy)]
 struct Buffers<'a> {
     instances: &'a wgpu::Buffer,
@@ -1273,6 +1337,7 @@ struct Buffers<'a> {
     models: &'a wgpu::Buffer,
     planets: &'a wgpu::Buffer,
     stars: &'a wgpu::Buffer,
+    sky_images: &'a wgpu::Buffer,
 }
 
 /// The scissors a frame's draws are encoded with, in their canvas's
@@ -1372,7 +1437,10 @@ impl Scissors {
 /// target pixels or texels, and one whose scissor is empty is left out, its
 /// OR pass with it. Every other draw, the overlay's text included, has the
 /// whole canvas it is drawn into, which also resets a world draw's
-/// scissor before the overlay over it.
+/// scissor before the overlay over it. A clipped models or planets draw
+/// ([`Batch::clip`]), in either layer, is scissored besides to its clip
+/// in the space it draws in ([`Frame::clip_scissor_in`]), met with the
+/// world's, and is left out, with its models pass, when that is empty.
 fn lay_out(frame: &Frame) -> Layout<'_> {
     let mut layout = Layout::default();
     let scissors = Scissors::of(frame);
@@ -2385,6 +2453,8 @@ mod tests {
             clip_from_model: [[f; 4]; 4],
             normal_from_model: [[f; 3]; 3],
             shares_band: false,
+            alpha: 1.0,
+            colorize: crate::gpu::NO_COLORIZE,
         }
     }
 
@@ -2393,6 +2463,7 @@ mod tests {
         Batch::Models {
             light: Light::STANDARD,
             models: meshes.iter().copied().map(model).collect(),
+            clip: None,
         }
     }
 
@@ -2430,6 +2501,7 @@ mod tests {
             Draw::Models {
                 instances: 0..2,
                 meshes: vec![MeshId(3), MeshId(5)],
+                runs: draw_runs(&[model(3), model(5)]),
             }
         );
         assert_eq!(
@@ -2437,6 +2509,7 @@ mod tests {
             Draw::Models {
                 instances: 2..3,
                 meshes: vec![MeshId(7)],
+                runs: draw_runs(&[model(7)]),
             }
         );
         let data: Vec<ModelData> = [3, 5, 7]
@@ -2444,6 +2517,30 @@ mod tests {
             .to_vec();
         assert_eq!(layout.models, data);
         assert_eq!(layout.instances, [SpriteInstance::from(&quad(1.0))]);
+    }
+
+    #[test]
+    fn a_models_draw_carries_the_runs_the_core_settles_for_its_batch() {
+        let faded = ModelInstance {
+            alpha: 0.5,
+            ..model(4)
+        };
+        let batch = vec![model(3), faded, model(5)];
+        let frame = frame_of(vec![
+            models(&[1]),
+            sprites(Blend::Normal, vec![quad(1.0)]),
+            Batch::Models {
+                light: Light::STANDARD,
+                models: batch.clone(),
+                clip: None,
+            },
+        ]);
+        let layout = lay_out(&frame);
+        let Draw::Models { runs, .. } = &layout.draws[2] else {
+            panic!("{:?}", layout.draws);
+        };
+        assert_eq!(*runs, draw_runs(&batch));
+        assert!(runs.iter().any(|run| run.faded));
     }
 
     #[test]
@@ -2501,6 +2598,7 @@ mod tests {
             [&Draw::Models {
                 instances: 0..1,
                 meshes: vec![MeshId(2)],
+                runs: draw_runs(&[model(2)]),
             }]
         );
         assert_eq!(depths(&layout, &layout.passes), [false]);
@@ -2538,6 +2636,165 @@ mod tests {
         let layout = lay_out(&nowhere);
         assert_eq!(layout.world.len(), 1);
         assert_eq!(layout.models, []);
+    }
+
+    /// [`models`] clipped to the logical `clip`.
+    fn clipped_models(meshes: &[u32], clip: Rect) -> Batch {
+        let Batch::Models { light, models, .. } = models(meshes) else {
+            unreachable!("a models batch");
+        };
+        Batch::Models {
+            light,
+            models,
+            clip: Some(clip),
+        }
+    }
+
+    /// A planets batch of one planet, clipped to the logical `clip`.
+    fn clipped_planets(clip: Rect) -> Batch {
+        Batch::Planets {
+            light: Light::STANDARD,
+            planets: vec![crate::gpu::PlanetInstance {
+                planet: crate::gpu::PlanetId(0),
+                dest: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 32.0,
+                    h: 32.0,
+                },
+                reach: 1.0,
+                frame: crate::planet::Frame::new(0.0, 0.0),
+                turns: [0.0; 2],
+                rings: [0.0; 2],
+                ring_color: [0.0; 3],
+                atmosphere: [0.0; 4],
+            }],
+            clip: Some(clip),
+        }
+    }
+
+    /// The logical columns `x` to `x` + `w`, the whole height.
+    fn columns(x: f32, w: f32) -> Rect {
+        Rect {
+            x,
+            y: 0.0,
+            w,
+            h: 32.0,
+        }
+    }
+
+    #[test]
+    fn an_overlay_clipped_models_draw_is_scissored_to_its_clip_in_target_pixels() {
+        let clip = columns(4.0, 10.0);
+        let frame = frame_of(vec![
+            clipped_models(&[2], clip),
+            Batch::Text(vec![run("a")]),
+        ]);
+        let layout = lay_out(&frame);
+        let scissor = frame.clip_scissor_in(WorldSpace::Target, clip);
+        assert_eq!(scissor, pixels(8, 0, 20, 64));
+        assert_eq!(layout.scissors, [scissor, WHOLE_TARGET]);
+        // It still draws in a pass of its own, with depth.
+        assert_eq!(depths(&layout, &layout.passes), [false, true, false]);
+    }
+
+    #[test]
+    fn an_overlay_clipped_planets_draw_is_scissored_to_its_clip() {
+        let clip = columns(4.0, 10.0);
+        let frame = frame_of(vec![clipped_planets(clip), Batch::Text(vec![run("a")])]);
+        let layout = lay_out(&frame);
+        assert_eq!(layout.scissors, [pixels(8, 0, 20, 64), WHOLE_TARGET]);
+        assert!(matches!(layout.draws[0], Draw::Planets { .. }));
+    }
+
+    #[test]
+    fn a_clipped_world_model_in_a_texture_world_is_scissored_in_texels_to_its_clip_met_with_the_world_clip()
+     {
+        let clip = Rect {
+            x: 16.0,
+            y: 4.0,
+            w: 16.0,
+            h: 20.0,
+        };
+        let frame = textured(clipped_to(
+            Frame {
+                world: vec![0],
+                ..frame_of(vec![
+                    clipped_models(&[2], clip),
+                    Batch::Text(vec![run("a")]),
+                ])
+            },
+            0.0,
+            24.0,
+        ));
+        let layout = lay_out(&frame);
+        let met = (frame.world_scissor()).meet(frame.clip_scissor_in(frame.world_space, clip));
+        assert_eq!(met, pixels(16, 4, 8, 20));
+        assert_eq!(scissored(&layout, &layout.world), [met]);
+        assert_eq!(scissored(&layout, &layout.passes), [WHOLE_TARGET]);
+    }
+
+    #[test]
+    fn a_clipped_model_in_the_world_tail_is_scissored_in_target_pixels() {
+        let clip = columns(4.0, 10.0);
+        let frame = textured(Frame {
+            world: vec![0, 1],
+            world_tail: Some(1),
+            ..frame_of(vec![
+                Batch::Solid(vec![solid(4.0)]),
+                clipped_models(&[2], clip),
+            ])
+        });
+        let layout = lay_out(&frame);
+        assert_eq!(scissored(&layout, &layout.world), [pixels(0, 0, 32, 32)]);
+        assert_eq!(
+            scissored(&layout, &layout.passes),
+            [frame.clip_scissor_in(WorldSpace::Target, clip)]
+        );
+        assert_eq!(
+            frame.clip_scissor_in(WorldSpace::Target, clip),
+            pixels(8, 0, 20, 64)
+        );
+    }
+
+    #[test]
+    fn a_models_draw_clipped_off_the_canvas_is_left_out_with_its_pass() {
+        let off = columns(40.0, 8.0);
+        let frame = frame_of(vec![clipped_models(&[2], off), Batch::Text(vec![run("a")])]);
+        let layout = lay_out(&frame);
+        assert!(
+            !layout
+                .draws
+                .iter()
+                .any(|draw| matches!(draw, Draw::Models { .. })),
+            "{:?}",
+            layout.draws
+        );
+        assert_eq!(layout.models, []);
+        assert!(!depths(&layout, &layout.passes).contains(&true));
+        let planets = frame_of(vec![clipped_planets(off)]);
+        assert_eq!(lay_out(&planets).draws, []);
+    }
+
+    #[test]
+    fn a_faded_clipped_models_draw_keeps_its_runs_under_its_scissor() {
+        let faded = ModelInstance {
+            alpha: 0.5,
+            ..model(4)
+        };
+        let batch = vec![model(3), faded, model(5)];
+        let clip = columns(4.0, 10.0);
+        let frame = frame_of(vec![Batch::Models {
+            light: Light::STANDARD,
+            models: batch.clone(),
+            clip: Some(clip),
+        }]);
+        let layout = lay_out(&frame);
+        let [Draw::Models { runs, .. }] = layout.draws.as_slice() else {
+            panic!("{:?}", layout.draws);
+        };
+        assert_eq!(*runs, draw_runs(&batch));
+        assert_eq!(layout.scissors, [pixels(8, 0, 20, 64)]);
     }
 
     #[test]
@@ -2735,15 +2992,49 @@ mod tests {
         gpu.create_page(PageId(0), 16);
         let blends = every_blend_frame();
         assert_builds_no_pipeline(&mut gpu, made, &blends, "a frame of every blend");
-        gpu.upload_mesh(MeshId(0), &Mesh::cube([Color::WHITE; 6]));
+        gpu.upload_mesh(MeshId(0), &Mesh::cube([Color::WHITE; 6]), &[]);
         let with_models = models_frame();
         assert_builds_no_pipeline(&mut gpu, made, &with_models, "a frame of models");
+        // The same mesh again, half of it on a texture: uploading the
+        // texture and drawing with it builds nothing either.
+        let texture = ModelTexture::new(2, 2, vec![128; 16]).expect("four texels");
+        gpu.upload_model_texture(ModelTextureId(0), &texture);
+        let cube = Mesh::cube([Color::WHITE; 6]);
+        let sections = vec![
+            crate::model::Section::new(0..18, Some(0)),
+            crate::model::Section::new(18..36, None),
+        ];
+        let skinned = Mesh::textured(
+            cube.vertices().to_vec(),
+            cube.indices().to_vec(),
+            vec![std::sync::Arc::new(texture)],
+            sections,
+        )
+        .expect("the cube in two sections");
+        gpu.upload_mesh(MeshId(0), &skinned, &[ModelTextureId(0)]);
+        assert_builds_no_pipeline(&mut gpu, made, &with_models, "a frame of textured models");
         let sky = frame_of(vec![Batch::Sky(vec![crate::sky::StarInstance {
             centre: Point::new(16.0, 16.0),
             radius: 2.0,
             color: [1.0; 3],
+            trail: Point::new(0.0, 0.0),
         }])]);
         assert_builds_no_pipeline(&mut gpu, made, &sky, "a frame of sky");
+        // A sky image uploaded, then drawn: neither builds one.
+        let image = SkyImage::new(2, 2, vec![128; 16]).expect("four texels");
+        gpu.upload_sky_image(SkyImageId(0), &image);
+        let decorated = frame_of(vec![Batch::SkyImages(vec![crate::gpu::SkyImageInstance {
+            image: SkyImageId(0),
+            placement: crate::sky::Placement {
+                centre: Point::new(16.0, 16.0),
+                right: Point::new(8.0, 0.0),
+                down: Point::new(0.0, 8.0),
+                color: [1.0; 3],
+                cover: 1.0,
+                lod: 0.0,
+            },
+        }])]);
+        assert_builds_no_pipeline(&mut gpu, made, &decorated, "a frame of sky images");
         // A native world drawn below 100% is a texture, enlarged with
         // sharp-bilinear: neither the first such frame nor a later one
         // builds it.
@@ -2807,6 +3098,7 @@ mod tests {
             ..frame_of(vec![Batch::Models {
                 light: Light::STANDARD,
                 models: vec![instance],
+                clip: None,
             }])
         };
         // Straight on, only +z shows.
@@ -2824,7 +3116,7 @@ mod tests {
                 return;
             };
             gpu.set_upscaler(upscaler);
-            gpu.upload_mesh(MeshId(3), &Mesh::cube(faces));
+            gpu.upload_mesh(MeshId(3), &Mesh::cube(faces), &[]);
             gpu.submit(&Frame {
                 world_space,
                 ..frame.clone()
@@ -2841,6 +3133,194 @@ mod tests {
             assert_eq!(pixel_at(&pixels, 2, 30), [0, 0, 0, 255], "{upscaler:?}");
             assert_eq!(pixel_at(&pixels, 32, 2), [0, 0, 0, 255], "{upscaler:?}");
         }
+    }
+
+    #[test]
+    fn a_section_samples_the_texture_uploaded_under_its_id_and_white_without_one() {
+        use crate::gpu::Gpu;
+        // The white cube straight on, so only +z shows: that face a
+        // section on the mesh's one texture, a single green texel.
+        const GREEN: [u8; 4] = [40, 200, 60, 255];
+        let logical = LogicalSize { w: 32, h: 24 };
+        let pose = nova_view::ModelPose {
+            center: Point::new(16.0, 12.0),
+            orientation: nova_view::Orientation::IDENTITY,
+            scale: 12.0,
+        };
+        let instance = crate::camera::instance(logical, &pose, MeshId(3), 0.9).expect("drawable");
+        let frame = Frame {
+            viewport: PixelRect {
+                x: 0,
+                y: 8,
+                w: 64,
+                h: 48,
+            },
+            logical,
+            world: vec![0],
+            ..frame_of(vec![Batch::Models {
+                light: Light::STANDARD,
+                models: vec![instance],
+                clip: None,
+            }])
+        };
+        let texture = ModelTexture::new(1, 1, GREEN.to_vec()).expect("one texel");
+        let cube = Mesh::cube([Color::WHITE; 6]);
+        let section = crate::model::Section::new;
+        let skinned = Mesh::textured(
+            cube.vertices().to_vec(),
+            cube.indices().to_vec(),
+            vec![std::sync::Arc::new(texture.clone())],
+            vec![
+                section(0..24, None),
+                section(24..30, Some(0)),
+                section(30..36, None),
+            ],
+        )
+        .expect("the cube in three sections");
+        // The middle pixel with the mesh's texture uploaded as `uploaded`
+        // and the mesh told it is `named`.
+        let middle = |uploaded: Option<ModelTextureId>, named: &[ModelTextureId]| {
+            let mut gpu = crate::wgpu::OffscreenGpu::new(64, 64, &FontFaces::bundled()).ok()?;
+            if let Some(id) = uploaded {
+                gpu.upload_model_texture(id, &texture);
+            }
+            gpu.upload_mesh(MeshId(3), &skinned, named);
+            gpu.submit(&frame);
+            Some(pixel_at(&gpu.read_pixels().expect("read back"), 32, 32))
+        };
+        let id = ModelTextureId(5);
+        let (Some(textured), Some(unnamed), Some(absent)) = (
+            middle(Some(id), &[id]),
+            middle(Some(id), &[]),
+            middle(None, &[id]),
+        ) else {
+            return;
+        };
+        let lit = |base: [u8; 4]| {
+            let base = base.map(f32::from);
+            crate::camera::shade([0.0, 0.0, 1.0], base, Light::STANDARD).map(|c| c.round() as u8)
+        };
+        let near = |got: [u8; 4], want: [u8; 4]| (0..3).all(|c| got[c].abs_diff(want[c]) <= 2);
+        assert!(near(textured, lit(GREEN)), "{textured:?} is not lit green");
+        // Told no id for its texture, or one the GPU doesn't hold, the
+        // section draws its vertex colour alone: white, lit.
+        for (what, got) in [("unnamed", unnamed), ("absent", absent)] {
+            assert!(near(got, lit([255; 4])), "{what}: {got:?} is not lit white");
+        }
+        assert!(!near(lit(GREEN), lit([255; 4])));
+    }
+
+    #[test]
+    fn two_sections_sample_one_texture_each_through_its_own_sampler() {
+        use crate::gpu::Gpu;
+        use crate::model_sampler::{Filter, ModelSampler, Wrap};
+        // The white cube straight on, so only +z shows. Its two triangles
+        // are two sections on the one texture, two texels wide, every
+        // vertex a quarter of the image past its right edge: repeating,
+        // that is the first texel's middle, and clamped, the last texel.
+        const TEXELS: [[u8; 4]; 2] = [[230, 40, 40, 255], [40, 60, 230, 255]];
+        const AGAIN: [[u8; 4]; 2] = [[40, 200, 60, 255], [200, 200, 40, 255]];
+        let clamped = ModelSampler {
+            wrap_s: Wrap::Clamp,
+            mag: Filter::Nearest,
+            ..ModelSampler::DEFAULT
+        };
+        let logical = LogicalSize { w: 32, h: 24 };
+        let pose = nova_view::ModelPose {
+            center: Point::new(16.0, 12.0),
+            orientation: nova_view::Orientation::IDENTITY,
+            scale: 12.0,
+        };
+        let instance = crate::camera::instance(logical, &pose, MeshId(3), 0.9).expect("drawable");
+        let frame = Frame {
+            viewport: PixelRect {
+                x: 0,
+                y: 8,
+                w: 64,
+                h: 48,
+            },
+            logical,
+            world: vec![0],
+            ..frame_of(vec![Batch::Models {
+                light: Light::STANDARD,
+                models: vec![instance],
+                clip: None,
+            }])
+        };
+        let texture =
+            |texels: [[u8; 4]; 2]| ModelTexture::new(2, 1, texels.concat()).expect("two texels");
+        let cube = Mesh::cube([Color::WHITE; 6]);
+        let vertices = cube
+            .vertices()
+            .iter()
+            .map(|v| crate::model::Vertex {
+                uv: [1.25, 0.5],
+                ..*v
+            })
+            .collect();
+        let section = crate::model::Section::new;
+        let skinned = Mesh::textured(
+            vertices,
+            cube.indices().to_vec(),
+            vec![std::sync::Arc::new(texture(TEXELS))],
+            vec![
+                section(0..24, None),
+                section(24..27, Some(0)),
+                section(27..30, Some(0)).sampled(clamped),
+                section(30..36, None),
+            ],
+        )
+        .expect("the cube in four sections");
+        let id = ModelTextureId(5);
+        // A pixel in each of +z's triangles, after `steps`.
+        let shown = |steps: &dyn Fn(&mut crate::wgpu::OffscreenGpu)| {
+            let mut gpu = crate::wgpu::OffscreenGpu::new(64, 64, &FontFaces::bundled()).ok()?;
+            steps(&mut gpu);
+            gpu.submit(&frame);
+            let pixels = gpu.read_pixels().expect("read back");
+            Some([pixel_at(&pixels, 39, 32), pixel_at(&pixels, 25, 32)])
+        };
+        let lit = |base: [u8; 4]| {
+            let base = base.map(f32::from);
+            crate::camera::shade([0.0, 0.0, 1.0], base, Light::STANDARD).map(|c| c.round() as u8)
+        };
+        let near = |got: [u8; 4], want: [u8; 4]| (0..3).all(|c| got[c].abs_diff(want[c]) <= 2);
+        let check = |what: &str, got: Option<[[u8; 4]; 2]>, texels: [[u8; 4]; 2]| {
+            let Some([repeated, held]) = got else {
+                return;
+            };
+            assert!(near(repeated, lit(texels[0])), "{what}: {repeated:?}");
+            assert!(near(held, lit(texels[1])), "{what}: {held:?}");
+        };
+        assert!(!near(lit(TEXELS[0]), lit(TEXELS[1])));
+        // The texture, then the mesh, as the renderer uploads them.
+        let in_order = shown(&|gpu| {
+            gpu.upload_model_texture(id, &texture(TEXELS));
+            gpu.upload_mesh(MeshId(3), &skinned, &[id]);
+        });
+        check("the texture then the mesh", in_order, TEXELS);
+        // The mesh first: the texture is bound through both samplers
+        // when it arrives.
+        let mesh_first = shown(&|gpu| {
+            gpu.upload_mesh(MeshId(3), &skinned, &[id]);
+            gpu.upload_model_texture(id, &texture(TEXELS));
+        });
+        check("the mesh then the texture", mesh_first, TEXELS);
+        // The texture uploaded again under its id: both sections draw
+        // the new one, each through its own sampler still.
+        let replaced = shown(&|gpu| {
+            gpu.upload_model_texture(id, &texture(TEXELS));
+            gpu.upload_mesh(MeshId(3), &skinned, &[id]);
+            gpu.upload_model_texture(id, &texture(AGAIN));
+        });
+        check("the texture replaced", replaced, AGAIN);
+        // Another texture's upload leaves these bound.
+        let beside = shown(&|gpu| {
+            gpu.upload_model_texture(id, &texture(TEXELS));
+            gpu.upload_mesh(MeshId(3), &skinned, &[id]);
+            gpu.upload_model_texture(ModelTextureId(6), &texture(AGAIN));
+        });
+        check("another texture uploaded", beside, TEXELS);
     }
 
     #[test]
@@ -2868,12 +3348,13 @@ mod tests {
             ..frame_of(vec![Batch::Models {
                 light: Light::STANDARD,
                 models: vec![instance],
+                clip: None,
             }])
         };
         let drawn = |upscaler| {
             let mut gpu = crate::wgpu::OffscreenGpu::new(64, 64, &FontFaces::bundled()).ok()?;
             gpu.set_upscaler(upscaler);
-            gpu.upload_mesh(MeshId(3), &Mesh::cube([Color::WHITE; 6]));
+            gpu.upload_mesh(MeshId(3), &Mesh::cube([Color::WHITE; 6]), &[]);
             gpu.submit(&frame);
             Some(gpu.read_pixels().expect("read back"))
         };
@@ -2905,16 +3386,19 @@ mod tests {
             Batch::Models {
                 light: Light::STANDARD,
                 models: vec![cube(8.0)],
+                clip: None,
             },
             sprites(Blend::Normal, vec![quad(1.0)]),
             Batch::Models {
                 light: Light::STANDARD,
                 models: vec![cube(12.0), cube(20.0)],
+                clip: None,
             },
             sprites(Blend::Or, vec![quad(3.0)]),
             Batch::Models {
                 light: Light::STANDARD,
                 models: vec![cube(24.0)],
+                clip: None,
             },
         ];
         for batch in &mut batches {

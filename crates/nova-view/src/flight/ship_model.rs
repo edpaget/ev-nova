@@ -11,10 +11,15 @@
 //! clockwise on screen, as headings turn (see [`model`](crate::model)), so
 //! the model's nose, up the screen (−y) at heading 0, faces the heading.
 //!
-//! This is the pose a screen draws a ship's [`DrawCommand::Model`] at,
-//! and its outfits on their hardpoints with it
+//! This is the pose a screen draws a flying ship's [`DrawCommand::Model`]
+//! at, and its outfits on their hardpoints with it
 //! ([`mounted_outfits`](super::mounted_outfits())): the flight screen
-//! draws a new game's ships so (its view's `ship_models` module).
+//! draws a new game's ships so (its view's `ship_models` module), and the
+//! ship browser turns a class with no sprite sheet through it
+//! ([`ships`](crate::ships)). A
+//! screen's picture of a class (the target panel, the shipyard, the comm
+//! and escort dialogs) draws it in the still portrait pose instead
+//! ([`portrait_orientation`](crate::model_picture::portrait_orientation)).
 //!
 //! [`DrawCommand::Model`]: crate::DrawCommand::Model
 

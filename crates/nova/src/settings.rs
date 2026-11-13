@@ -33,8 +33,9 @@
 //! range is clamped to it, and a fraction rounded. Absent, it is
 //! [`RenderScale::Auto`], the size the Scaling draws at on its own, and
 //! saving `Auto` leaves it out. A value that isn't a number is `Auto` too,
-//! and the file's other keys still load. No Preferences control sets it
-//! yet; the file is the only place to.
+//! and the file's other keys still load. The Preferences dialog's
+//! render-scale list sets it ([`GameSettings::with_prefs`]), stepping
+//! through Auto and a few percentages; the file may hold any other.
 //!
 //! `ship_animations`, `engine_glows` and `running_lights` are the
 //! original's `ShipAnimations`, `EngineGlows` and `RunningLights`, each
@@ -282,8 +283,8 @@ impl Default for GameSettings {
 
 impl GameSettings {
     /// The settings as the Preferences dialog shows them, the fullscreen
-    /// kind without its monitor, and the Scaling stored, or native when
-    /// this game has none of its name.
+    /// kind without its monitor, the Scaling stored, or native when this
+    /// game has none of its name, and the render scale stored.
     #[must_use]
     pub fn prefs(&self) -> Prefs {
         Prefs {
@@ -298,17 +299,21 @@ impl GameSettings {
             parallax_starfield: self.parallax_starfield,
             fullscreen: self.fullscreen_kind.kind(),
             scaling: self.frame_upscaler.known().unwrap_or_default(),
+            render_scale: self.render_scale,
         }
     }
 
     /// The settings `prefs` choose, from these, keeping a volume already
     /// at its chosen level as [`AudioSettings::with_prefs`] does, and the
     /// settings the prefs don't set: the map's borders, fullscreen, both
-    /// whether and how, the Scaling, the render scale and the remembered
-    /// `Nova Files`. A fullscreen kind or a scaling the dialog chooses is
-    /// the app's to apply and save, as it applies it, so a change of
-    /// another preference never overwrites a stored scaling this device
-    /// could not use.
+    /// whether and how, the Scaling and the remembered `Nova Files`. A
+    /// fullscreen kind or a scaling the dialog chooses is the app's to
+    /// apply and save, as it applies it, so a change of another preference
+    /// never overwrites a stored scaling this device could not use. The
+    /// render scale is set as the prefs have it: every device draws every
+    /// one, and the dialog lists the percentage stored
+    /// (`RenderScale::list`), so another preference's change reports it
+    /// back unchanged.
     #[must_use]
     pub fn with_prefs(self, prefs: Prefs) -> Self {
         Self {
@@ -321,6 +326,7 @@ impl GameSettings {
             engine_glows: prefs.engine_glows,
             running_lights: prefs.running_lights,
             parallax_starfield: prefs.parallax_starfield,
+            render_scale: prefs.render_scale,
             ..self
         }
     }
@@ -1388,17 +1394,36 @@ mod tests {
     }
 
     #[test]
-    fn the_prefs_keep_the_render_scale() {
+    fn the_prefs_carry_the_render_scale_both_ways() {
         let scaled = GameSettings {
-            render_scale: RenderScale::percent(67),
+            render_scale: RenderScale::percent(60),
             ..GameSettings::default()
         };
-        let changed = scaled.with_prefs(Prefs::default());
+        let shown = scaled.prefs();
         assert_eq!(
-            changed.render_scale,
-            RenderScale::Percent(67),
-            "the Preferences dialog never has it"
+            shown.render_scale,
+            RenderScale::Percent(60),
+            "the dialog opens on the one stored"
         );
+        let other = scaled.clone().with_prefs(Prefs {
+            hyperspace_effects: false,
+            ..shown
+        });
+        assert_eq!(
+            other.render_scale,
+            RenderScale::Percent(60),
+            "a change of another preference keeps a percentage the dialog doesn't step to"
+        );
+        let chosen = scaled.clone().with_prefs(Prefs {
+            render_scale: RenderScale::Percent(50),
+            ..shown
+        });
+        assert_eq!(chosen.render_scale, RenderScale::Percent(50));
+        let auto = scaled.with_prefs(Prefs {
+            render_scale: RenderScale::Auto,
+            ..shown
+        });
+        assert_eq!(auto.render_scale, RenderScale::Auto);
     }
 
     #[cfg(unix)]
@@ -1805,6 +1830,7 @@ mod tests {
                 parallax_starfield: true,
                 fullscreen: FullscreenKind::Borderless,
                 scaling: Scaling::Native,
+                render_scale: RenderScale::Auto,
             }
         );
         assert_eq!(

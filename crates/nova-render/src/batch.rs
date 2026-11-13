@@ -19,14 +19,17 @@ use crate::gpu::{
 use crate::images::{ImageError, ImageSource};
 use crate::model::Mesh;
 use crate::models::{self, Models};
-use crate::planet_source::LoadedPlanet;
+use crate::planet_files::PlanetFiles;
+use crate::planet_source::{LoadedPlanet, PlanetError};
 use crate::planets::Planets;
 use crate::quickdraw_stretch;
 use crate::render_scale::RenderScale;
-use crate::sky;
+use crate::sky::{self, SkyLooks};
+use crate::sky_images::SkyImages;
 use crate::streams::{Owner, Streams};
 use crate::upscale::world_space;
 use crate::viewport::{LogicalSize, PixelRect, Viewport};
+use crate::visits::Visits;
 
 /// What went wrong while rendering one frame.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -45,6 +48,11 @@ pub struct RenderReport {
     /// ([`Renderer::add_planet`]), each listed the first time it is drawn.
     /// They draw nothing.
     pub missing_planets: Vec<PlanetKey>,
+    /// Planets that couldn't be made in the frame that first needed them
+    /// (a texture that didn't read), each with why, listed in that frame
+    /// alone. They draw the stand-in they carry
+    /// ([`LoadedPlanet::with_stand_in`]) from then on, or nothing.
+    pub failed_planets: Vec<(PlanetKey, PlanetError)>,
 }
 
 /// A frame's place in the atlas and the size it is drawn at.
@@ -90,6 +98,14 @@ pub struct Renderer<S> {
     models: Models,
     /// The planets planets are drawn as ([`Renderer::add_planet`]).
     planets: Planets,
+    /// The flight systems visited, which decide what of the uploads is
+    /// let go ([`crate::visits`]).
+    visits: Visits,
+    /// Each system's own sky look, by its sky's seed
+    /// ([`Renderer::set_sky_looks`]).
+    skies: SkyLooks,
+    /// The sky images the GPU holds, for the skies' decorations.
+    sky_images: SkyImages,
     /// The size the world layer is drawn at
     /// ([`Renderer::set_render_scale`]).
     render_scale: RenderScale,
@@ -118,6 +134,9 @@ impl<S: ImageSource> Renderer<S> {
             stretches: HashMap::new(),
             models: Models::default(),
             planets: Planets::default(),
+            visits: Visits::default(),
+            skies: SkyLooks::new(),
+            sky_images: SkyImages::default(),
             render_scale: RenderScale::Auto,
         }
     }
@@ -131,12 +150,51 @@ impl<S: ImageSource> Renderer<S> {
     }
 
     /// Draws planet `key` ([`DrawCommand::Planet`]) as `planet` from the
-    /// next frame on, replacing any planet it had. Its textures are
-    /// uploaded ([`Gpu::upload_planet`]) the first frame that draws it,
-    /// and again after it is replaced, under the same
-    /// [`PlanetId`](crate::gpu::PlanetId).
+    /// next frame on, replacing any planet it had. Adding it costs
+    /// nothing: the first frame that draws it makes it (bakes it if it
+    /// came unbaked, [`LoadedPlanet::unbaked`], or reads its texture if it
+    /// came unread, [`LoadedPlanet::unread`], through the files
+    /// [`Renderer::set_planet_files`] gave) and uploads its textures
+    /// ([`Gpu::upload_planet`]), before that frame is submitted, so the
+    /// frame draws it. From then on the renderer holds none of its pixels,
+    /// only what its instance is made from ([`crate::planet::Figure`]). A
+    /// planet replaced is made and uploaded again at its next draw, under
+    /// the same [`PlanetId`](crate::gpu::PlanetId). One never drawn is
+    /// never made. One that can't be made is reported in that frame
+    /// ([`RenderReport::failed_planets`]) and draws its stand-in.
     pub fn add_planet(&mut self, key: PlanetKey, planet: LoadedPlanet) {
         self.planets.add(key, planet);
+    }
+
+    /// Reads the textures of planets added unread
+    /// ([`LoadedPlanet::unread`]) through `files` from the next frame on.
+    /// Until it is given files, such a planet fails as missing
+    /// ([`PlanetError::Missing`]).
+    pub fn set_planet_files(&mut self, files: Box<dyn PlanetFiles>) {
+        self.planets.set_files(files);
+    }
+
+    /// The bytes of planet pixels it holds on the CPU: each planet's
+    /// surface, clouds and ring profile, for those that hold them. A
+    /// readout, for the load-cost measurements.
+    #[must_use]
+    pub fn planet_bytes_held(&self) -> usize {
+        self.planets.bytes_held()
+    }
+
+    /// The planets held, for the planets' own tests.
+    #[cfg(test)]
+    pub(crate) fn planets(&self) -> &Planets {
+        &self.planets
+    }
+
+    /// Draws each sky ([`DrawCommand::Sky`]) in the look `looks` holds
+    /// for its seed, with the decorations it lists for it, from the next
+    /// frame on, in place of any looks before; a seed it holds none for
+    /// draws the default look. An image the GPU already holds is not
+    /// uploaded again.
+    pub fn set_sky_looks(&mut self, looks: SkyLooks) {
+        self.skies = looks;
     }
 
     /// The image source.
@@ -215,19 +273,34 @@ impl<S: ImageSource> Renderer<S> {
     /// batches are settled ([`crate::camera::band`]). A key with no mesh
     /// draws nothing and is reported once ([`RenderReport::missing_models`]).
     /// A part ([`DrawCommand::Mounted`]) joins the model just before it,
-    /// in its band ([`crate::models`]).
+    /// in its band ([`crate::models`]). A clipped model
+    /// ([`DrawCommand::Clipped`]) is not cropped: its batch carries the
+    /// clip ([`Batch::clip`]), models clipped alike sharing one, and the
+    /// GPU cuts it there ([`Frame::clip_scissor_in`]), its parts with it.
     ///
-    /// A planet ([`DrawCommand::Planet`]) uploads its textures the first
-    /// frame that draws it ([`Renderer::add_planet`]); consecutive planets
-    /// share a [`Batch::Planets`] ([`crate::planets`]). A key with no
-    /// planet draws nothing and is reported once
-    /// ([`RenderReport::missing_planets`]).
+    /// A planet ([`DrawCommand::Planet`]) is made, if it was added unbaked
+    /// or unread, and uploads its textures the first frame that draws it
+    /// ([`Renderer::add_planet`]), then lets its pixels go; consecutive
+    /// planets share a [`Batch::Planets`] ([`crate::planets`]), and a
+    /// clipped one carries its clip as a model does. A key with no planet
+    /// draws nothing and is reported once
+    /// ([`RenderReport::missing_planets`]). One that can't be made is
+    /// reported in that frame ([`RenderReport::failed_planets`]) and draws
+    /// its stand-in in its place, clipped alike, from that frame on. A
+    /// list that names a flight system other than the last one named
+    /// ([`DrawList::system`]) begins a new visit ([`crate::visits`]): once
+    /// that frame is submitted, the planets not drawn in this visit or the
+    /// one before are released ([`Gpu::release_planet`]), to be made
+    /// again in the first frame that draws them again.
     ///
     /// A sky ([`DrawCommand::Sky`]) is a [`Batch::Sky`] of its own, the
-    /// core's stars ([`crate::sky::stars`]) for the logical size and the
-    /// texels a unit is in the canvas it draws into: the world texture's
-    /// for a world sky drawn into one, the window's otherwise. A sky with
-    /// no stars is no batch.
+    /// core's backdrop puffs then stars ([`crate::sky::instances`]) in the
+    /// look set for its seed ([`Renderer::set_sky_looks`]), for the
+    /// logical size and the texels a unit is in the canvas it draws into:
+    /// the world texture's for a world sky drawn into one, the window's
+    /// otherwise. A sky that draws nothing is no batch. Its decorations
+    /// follow as a [`Batch::SkyImages`] of their own, each image uploaded
+    /// the first frame that draws it ([`crate::sky_images`]).
     ///
     /// A frame drawn after [`Renderer::set_enlarger`] first starts the
     /// atlas afresh, the stream pages with it; a zero-area viewport leaves
@@ -243,6 +316,7 @@ impl<S: ImageSource> Renderer<S> {
             return report;
         };
         self.rebuild(gpu);
+        let new_visit = self.visits.arrive(list.system());
         let logical = viewport.logical();
         let space = world_space(gpu.world_resolution(), self.render_scale, viewport);
         let target = Target {
@@ -288,14 +362,14 @@ impl<S: ImageSource> Renderer<S> {
             world_space: space,
             batches,
             world,
-            world_clip: list.world_clip().map(|clip| Rect {
-                x: clip.min.x,
-                y: clip.min.y,
-                w: clip.width(),
-                h: clip.height(),
-            }),
+            world_clip: list.world_clip().map(rect_of),
             world_tail: tail,
         });
+        // Once a visit, after the frame that began it, so no frame names
+        // a planet released.
+        if new_visit {
+            self.planets.release_left(&self.visits, gpu);
+        }
         report
     }
 
@@ -487,22 +561,42 @@ impl<S: ImageSource> Renderer<S> {
                     push_or_fill(batches, area, color);
                 }
             }
-            // Drawn uncut by a clip, as a line or a triangle is.
-            DrawCommand::Model { model, ref pose } => {
+            // Cut by a clip on the GPU: its batch carries the clip, which
+            // the adapter scissors it to.
+            DrawCommand::Model {
+                model,
+                ref pose,
+                alpha,
+                colorize,
+            } => {
                 let missing = &mut report.missing_models;
-                (self.models).draw_model(model, pose, logical, batches, gpu, missing);
+                let shown = (pose, alpha, colorize, clip.map(rect_of));
+                (self.models).draw_model(model, shown, logical, batches, gpu, missing);
             }
-            // Drawn uncut by a clip, as a model is.
+            // Cut by a clip on the GPU, as a model is. One that can't be
+            // made draws its stand-in in its place, cut by the same clip.
             DrawCommand::Planet { planet, ref pose } => {
-                let missing = &mut report.missing_planets;
-                (self.planets).draw(planet, pose, batches, gpu, missing);
+                let told = (&mut report.missing_planets, &mut report.failed_planets);
+                let placed = (pose, clip.map(rect_of));
+                let visit = self.visits.current();
+                let instead = (self.planets).draw(planet, placed, batches, gpu, told, visit);
+                if let Some(stand_in) = instead {
+                    let mut drawn = DrawList::new();
+                    let (center, radius) = (pose.center, pose.radius);
+                    nova_view::outline::draw_stellar(&mut drawn, &stand_in, center, radius);
+                    for command in &drawn {
+                        self.draw(command, clip, target, batches, gpu, report);
+                    }
+                }
             }
-            // Drawn uncut by a clip, as a model is, in a batch of its own.
+            // Drawn uncut by a clip, as a line is, in a batch of its own.
             DrawCommand::Sky { ref sky } => {
-                let stars = sky::stars(sky, logical, texels);
+                let look = self.skies.look(sky.seed);
+                let stars = sky::instances(sky, &look, logical, texels);
                 if !stars.is_empty() {
                     batches.push(Batch::Sky(stars));
                 }
+                (self.sky_images).draw(sky, &self.skies, logical, texels, batches, gpu);
             }
             DrawCommand::Mounted {
                 model,
@@ -515,10 +609,7 @@ impl<S: ImageSource> Renderer<S> {
                 clip: inner,
                 ref command,
             } => {
-                let clip = match clip {
-                    Some(outer) => meet(outer, inner),
-                    None => Some(inner),
-                };
+                let clip = meet(clip.unwrap_or(inner), inner);
                 // A clip with no area draws nothing at all.
                 if let Some(clip) = clip {
                     self.draw(command, Some(clip), target, batches, gpu, report);
@@ -886,6 +977,16 @@ impl Layers {
     fn settled(mut self) -> Self {
         self.settle();
         self
+    }
+}
+
+/// `bounds` as a frame carries a logical rect.
+fn rect_of(bounds: Bounds) -> Rect {
+    Rect {
+        x: bounds.min.x,
+        y: bounds.min.y,
+        w: bounds.width(),
+        h: bounds.height(),
     }
 }
 

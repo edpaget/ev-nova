@@ -682,6 +682,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             flashes: BTreeMap::new(),
             held_alts: std::cell::RefCell::default(),
             glows: crate::flight::weapon_glow::WeaponGlows::default(),
+            turret_swings: crate::flight::turret_swing::TurretSwings::default(),
             held_displays: crate::flight::carried_displays::HeldDisplays::default(),
             shot_looks: super::shots::ShotLooks::default(),
             metrics: None,

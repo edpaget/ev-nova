@@ -531,8 +531,9 @@ pub fn gate_fuels(galaxy: &Galaxy, ids: &IdTable) -> BTreeMap<ShipId, i16> {
         .collect()
 }
 
-/// The `shän` of the ship `id`, numbered `nova`, its size and its exit
-/// points; none for a ship with no `size`, which the simulation collides
+/// The `shän` of the ship `id`, numbered `nova`, its size, its exit
+/// points and its `BaseTransp`, the chain's `translucency` (0 when none
+/// gives one); none for a ship with no `size`, which the simulation collides
 /// as its default disc. A kind with more than four hardpoints is reported
 /// against `file`.
 #[must_use]
@@ -553,6 +554,7 @@ pub fn ship_anim(
     let mut anim = ShipAnim {
         base_x_size: pixels(size.beam),
         base_y_size: pixels(size.length),
+        base_transp: i16::from(ship.translucency),
         ..neutral_ship_anim()
     };
     for (kind, name, x, y) in [

@@ -24,9 +24,11 @@ use nova_render::planet::{
     Fragment, Frame, PLANET_LIGHT, VIEW_LEAN, fragment, globe, in_planet_shadow, lit, ring_hit,
     ring_shadow, surface_uv, turns,
 };
+use nova_render::planet_files::FakePlanetFiles;
+use nova_render::recording::{GpuCall, RecordingGpu};
 use nova_render::{
-    GalaxyPlanets, Light, LoadedPlanet, LogicalSize, Mesh, PlanetError, PlanetRequest,
-    PlanetSource, RenderReport, Renderer, Viewport,
+    GalaxyPlanetFiles, GalaxyPlanets, Gpu, Light, LoadedPlanet, LogicalSize, Mesh, PlanetError,
+    PlanetRequest, PlanetSource, RenderReport, Renderer, Viewport,
 };
 use nova_view::{
     Color, DrawCommand, DrawList, ModelKey, ModelPose, Orientation, PlanetKey, PlanetPose, Point,
@@ -112,14 +114,39 @@ fn sample(seed: u32) -> MemSource {
         )
 }
 
-/// `stellar`'s planet in `source`, through the adapter.
-fn loaded(source: &MemSource, stellar: &str) -> LoadedPlanet {
+/// `stellar`'s planet in `source`, as the adapter answers it: a generated
+/// look comes unbaked.
+fn answered(source: &MemSource, stellar: &str) -> LoadedPlanet {
     let (galaxy, problems) = load(source);
     assert_eq!(problems, [], "the mirrored sample loads cleanly");
     GalaxyPlanets::new(&galaxy, source)
         .baked_at(SMALL)
         .planet(&PlanetRequest::new(stellar))
         .unwrap_or_else(|e| panic!("{stellar} loads: {e}"))
+}
+
+/// `stellar`'s planet in `source`, through the adapter, holding what it
+/// draws with: a look is baked here, since each test reads the surface to
+/// work out the pixels it expects ([`surface_of`]).
+fn loaded(source: &MemSource, stellar: &str) -> LoadedPlanet {
+    let made = answered(source, stellar)
+        .make(&GalaxyPlanetFiles::new(source))
+        .unwrap_or_else(|e| panic!("{stellar} is made: {e}"));
+    LoadedPlanet::surface(made)
+}
+
+/// What `planet`, a look or a surface, draws with, made as the renderer
+/// makes it: a look baked, a surface as it is.
+fn made(planet: &LoadedPlanet) -> Surface {
+    planet
+        .make(&FakePlanetFiles::default())
+        .unwrap_or_else(|e| panic!("made: {e}"))
+}
+
+/// What `planet` draws with. Every planet [`loaded`] or built here holds
+/// its surface.
+fn surface_of(planet: &LoadedPlanet) -> &Surface {
+    planet.baked().expect("a planet holding its surface")
 }
 
 fn pose(x: f32, y: f32) -> PlanetPose {
@@ -251,7 +278,7 @@ fn kestrel_reach_draws_lit_with_its_halo_and_rings() {
     let Some(pixels) = alone(&planet, pose(CENTRE.0, CENTRE.1)) else {
         return;
     };
-    let surface = &planet.surface;
+    let surface = surface_of(&planet);
     let frame = Frame::new(surface.tilt as f32, VIEW_LEAN);
 
     // The lit centre region, north of the rings' shadow: the surface
@@ -322,12 +349,10 @@ fn kestrel_reach_draws_lit_with_its_halo_and_rings() {
     let behind = pixel_at(CENTRE, far_side);
     let local = local_of(CENTRE, behind);
     assert!(globe(local.0, local.1).is_some(), "on the globe");
-    let ringless = LoadedPlanet {
-        surface: Surface {
-            rings: None,
-            ..surface.clone()
-        },
-    };
+    let ringless = LoadedPlanet::surface(Surface {
+        rings: None,
+        ..surface.clone()
+    });
     let Some(bare) = alone(&ringless, pose(CENTRE.0, CENTRE.1)) else {
         return;
     };
@@ -389,6 +414,25 @@ fn the_same_seed_always_draws_the_same_planet() {
 }
 
 #[test]
+fn a_planet_answered_unbaked_draws_the_pixels_its_bake_does() {
+    let unbaked = answered(&sample(4417), "kestrel-reach");
+    assert!(unbaked.baked().is_none(), "the adapter bakes nothing");
+    let baked = LoadedPlanet::surface(made(&unbaked));
+    let Some(lazily) = alone(&unbaked, pose(CENTRE.0, CENTRE.1)) else {
+        return;
+    };
+    let Some(up_front) = alone(&baked, pose(CENTRE.0, CENTRE.1)) else {
+        return;
+    };
+    assert!(
+        lazily == up_front,
+        "the same pixels, baked at its first draw"
+    );
+    let lit_point = rgb(&lazily, pixel_at(CENTRE, (-0.2, -0.3)));
+    assert!(lit_point != [0, 0, 0], "and it draws: {lit_point:?}");
+}
+
+#[test]
 fn the_textured_planets_draw_their_textures_with_no_halo_or_rings() {
     for (stellar, blue) in [("marrow-fields", 100_u8), ("lantern-cloister", 200)] {
         let planet = loaded(&sample(4417), stellar);
@@ -398,7 +442,7 @@ fn the_textured_planets_draw_their_textures_with_no_halo_or_rings() {
         for at in [(-0.2, -0.2), (0.1, -0.3), (-0.3, 0.1)] {
             let pixel = pixel_at(CENTRE, at);
             let local = local_of(CENTRE, pixel);
-            let expected = core_color(&planet.surface, local);
+            let expected = core_color(surface_of(&planet), local);
             let got = rgb(&pixels, pixel);
             assert!(
                 near(got, expected, 6),
@@ -441,7 +485,7 @@ fn brightness(c: [u8; 3]) -> u32 {
 #[test]
 fn a_clouded_garden_shows_white_cloud_in_the_light() {
     let planet = verdance();
-    let surface = &planet.surface;
+    let surface = surface_of(&planet);
     assert!(surface.clouds.is_some(), "a garden has a cloud layer");
     let Some(pixels) = alone(&planet, pose(CENTRE.0, CENTRE.1)) else {
         return;
@@ -493,12 +537,12 @@ fn the_clouds_turn_on_their_own() {
     // A 32 s day: at `TIME` the surface has turned a quarter and the
     // clouds a half, so a cloud layer read at the surface's turn would
     // show a quarter turn out.
-    let mut surface = verdance().surface;
+    let mut surface = made(&verdance());
     surface.day = 32.0;
     surface.clouds = Some(ramped_clouds());
     let (turn, cloud_turn) = turns(TIME, surface.day);
     assert!((cloud_turn - turn - 0.25).abs() < 1e-4);
-    let planet = LoadedPlanet { surface };
+    let planet = LoadedPlanet::surface(surface);
     let Some(pixels) = alone(&planet, pose(CENTRE.0, CENTRE.1)) else {
         return;
     };
@@ -511,7 +555,7 @@ fn the_clouds_turn_on_their_own() {
     ] {
         let pixel = pixel_at(CENTRE, at);
         let local = local_of(CENTRE, pixel);
-        let expected = core_color(&planet.surface, local);
+        let expected = core_color(surface_of(&planet), local);
         let got = rgb(&pixels, pixel);
         assert!(
             near(got, expected, 8),
@@ -553,19 +597,17 @@ fn the_rings_shadow_the_globe_where_its_ray_toward_the_light_crosses_them() {
     // Kestrel Reach's rings cast their faint inner edge on the globe only
     // by its southern limb, and cover what they shade; these, narrow,
     // close in and dense throughout, shade the sunlit globe beyond them.
-    let kestrel = loaded(&sample(4417), "kestrel-reach").surface;
-    let planet = LoadedPlanet {
-        surface: Surface {
-            rings: Some(RingBand {
-                inner: 1.05,
-                outer: 1.5,
-                profile: vec![220; 64],
-                ..kestrel.rings.clone().expect("ringed")
-            }),
-            ..kestrel
-        },
-    };
-    let surface = &planet.surface;
+    let kestrel = made(&loaded(&sample(4417), "kestrel-reach"));
+    let planet = LoadedPlanet::surface(Surface {
+        rings: Some(RingBand {
+            inner: 1.05,
+            outer: 1.5,
+            profile: vec![220; 64],
+            ..kestrel.rings.clone().expect("ringed")
+        }),
+        ..kestrel
+    });
+    let surface = surface_of(&planet);
     let pixel = under_the_rings(surface);
     let local = local_of(CENTRE, pixel);
     let ringless = Surface {
@@ -576,9 +618,7 @@ fn the_rings_shadow_the_globe_where_its_ray_toward_the_light_crosses_them() {
         return;
     };
     let Some(bare) = alone(
-        &LoadedPlanet {
-            surface: ringless.clone(),
-        },
+        &LoadedPlanet::surface(ringless.clone()),
         pose(CENTRE.0, CENTRE.1),
     ) else {
         return;
@@ -602,7 +642,7 @@ fn the_globe_shadows_the_rings_behind_it_from_the_light() {
     // shadow on the rings shows beside it, off the disc.
     let tilted = Surface {
         tilt: 0.4,
-        ..loaded(&sample(4417), "kestrel-reach").surface
+        ..made(&loaded(&sample(4417), "kestrel-reach"))
     };
     let frame = Frame::new(0.4, VIEW_LEAN);
     let rings = tilted.rings.clone().expect("ringed");
@@ -624,12 +664,12 @@ fn the_globe_shadows_the_rings_behind_it_from_the_light() {
         .max_by(|a, b| a.1.total_cmp(&b.1))
         .expect("the globe's shadow falls on the rings off the disc");
     assert!(opacity > 0.4, "{opacity}");
-    let planet = LoadedPlanet { surface: tilted };
+    let planet = LoadedPlanet::surface(tilted);
     let Some(pixels) = alone(&planet, pose(CENTRE.0, CENTRE.1)) else {
         return;
     };
     let local = local_of(CENTRE, pixel);
-    let expected = core_color(&planet.surface, local);
+    let expected = core_color(surface_of(&planet), local);
     let ring = rings.color.map(|c| f32::from(c) / 255.0 * opacity as f32);
     let ambient = bytes(ring.map(|c| c * PLANET_LIGHT.ambient));
     assert!(near(expected, ambient, 1), "{expected:?} is the ambient's");
@@ -652,20 +692,18 @@ fn capped() -> LoadedPlanet {
             (0..64).flat_map(move |_| [c, c, c, 255])
         })
         .collect();
-    LoadedPlanet {
-        surface: Surface {
-            surface: Image {
-                width: 64,
-                height: 32,
-                rgba,
-            },
-            clouds: None,
-            rings: None,
-            atmosphere: None,
-            day: 300.0,
-            tilt: 0.0,
+    LoadedPlanet::surface(Surface {
+        surface: Image {
+            width: 64,
+            height: 32,
+            rgba,
         },
-    }
+        clouds: None,
+        rings: None,
+        atmosphere: None,
+        day: 300.0,
+        tilt: 0.0,
+    })
 }
 
 #[test]
@@ -718,6 +756,47 @@ const CUBE_FACES: [[u8; 3]; 6] = [
 ];
 
 #[test]
+fn a_released_planet_draws_nothing_until_uploaded_again() {
+    let Some(mut gpu) = gpu_with(SIDE, SIDE, &FontFaces::bundled()) else {
+        return;
+    };
+    // The frame and the upload the core makes for the planet, replayed on
+    // the adapter by hand.
+    let mut renderer = Renderer::new(Images);
+    renderer.add_planet(PLANET, loaded(&sample(4417), "marrow-fields"));
+    let mut list = DrawList::new();
+    list.planet(PLANET, pose(CENTRE.0, CENTRE.1));
+    let mut recording = RecordingGpu::new();
+    renderer.render(
+        &list,
+        &Viewport::new(LOGICAL, (SIDE, SIDE), 1.0),
+        &mut recording,
+    );
+    let [
+        GpuCall::UploadPlanet { planet, textures },
+        GpuCall::Submit(frame),
+    ] = &recording.calls[..]
+    else {
+        panic!("an upload, then a frame: {:?}", recording.calls.len());
+    };
+    let centre = (CENTRE.0 as u32, CENTRE.1 as u32);
+    gpu.upload_planet(*planet, textures);
+    gpu.submit(frame);
+    let drawn = gpu.read_pixels().expect("read back");
+    assert_ne!(rgb(&drawn, centre), [0, 0, 0], "drawn");
+    gpu.release_planet(*planet);
+    gpu.submit(frame);
+    let released = gpu.read_pixels().expect("read back");
+    assert!(
+        released.chunks(4).all(|p| p[..3] == [0, 0, 0]),
+        "black where it was"
+    );
+    gpu.upload_planet(*planet, textures);
+    gpu.submit(frame);
+    assert_eq!(gpu.read_pixels().expect("read back"), drawn, "back");
+}
+
+#[test]
 fn a_model_drawn_after_a_planet_covers_it() {
     let planet = loaded(&sample(4417), "marrow-fields");
     let mut list = DrawList::new();
@@ -746,7 +825,7 @@ fn a_model_drawn_after_a_planet_covers_it() {
     let beside = pixel_at(CENTRE, (-0.5, -0.5));
     assert!(near(
         rgb(&pixels, beside),
-        core_color(&planet.surface, local_of(CENTRE, beside)),
+        core_color(surface_of(&planet), local_of(CENTRE, beside)),
         6
     ));
 }

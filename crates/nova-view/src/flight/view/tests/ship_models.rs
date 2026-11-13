@@ -3,8 +3,10 @@
 //! ([`FlightView::with_world_models`]) draws it and its outfits on their
 //! mounts in its outline's place, turned by its shown heading and the
 //! frame's hull turn, its turrets facing its turret facing; a sheet, the
-//! stock look's included, wins; a faded ship keeps its 2D path; and no
-//! table, or an empty one, draws as before. On [`FakeFlight`], with a
+//! stock look's included, wins; a ship a cloak, a gate or its
+//! `BaseTransp` fades draws its model at its [`model_alpha`], jittered as
+//! its cloak jitters its hull, or nothing where its hull draws nothing;
+//! and no table, or an empty one, draws as before. On [`FakeFlight`], with a
 //! hand-built table. The commands expected are built with
 //! [`mounted_outfits`] and [`ship_orientation`], whose own tests pin how
 //! they place and turn.
@@ -13,28 +15,32 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use nova_data::store::{Footing, Mount, Mounts, Shown};
-use nova_sim_frame::OutfitId;
 use nova_sim_frame::cloak::CloakShown;
 use nova_sim_frame::combat::hull_turn::HullTurn;
+use nova_sim_frame::flight_frame::GateFade;
+use nova_sim_frame::{NpcId, OutfitId};
 
 use super::faked_world::{world, world_list};
 use super::*;
+use crate::flight::cloak_fade::{CloakDraw, cloak_rolls, player_cloak_rolls};
+use crate::flight::model_fade::model_alpha;
+use crate::flight::ship_layers::base_alpha;
 use crate::flight::world_models::{ShipModel, WorldModels};
 use crate::flight::{mounted_outfits, ship_orientation};
 use crate::model::{ModelKey, ModelPose};
 use crate::outline::{Outline, OutlineTriangle};
 
 const PLAYER_HULL: ModelKey = ModelKey(1);
-const NPC_HULL: ModelKey = ModelKey(2);
+pub(super) const NPC_HULL: ModelKey = ModelKey(2);
 const TURRET: ModelKey = ModelKey(3);
 const GUN: ModelKey = ModelKey(4);
 /// The kit that adds a turret bed.
-const BED: OutfitId = OutfitId(200);
+pub(super) const BED: OutfitId = OutfitId(200);
 /// How many logical units a model unit spans.
 const SCALE: f32 = 1.5;
 
 /// A dart 10 long from its centre to its nose, so 20 across as it turns.
-fn dart() -> Outline {
+pub(super) fn dart() -> Outline {
     Outline {
         triangles: vec![OutlineTriangle {
             corners: [at(0.0, 10.0), at(3.0, -4.0), at(-3.0, -4.0)],
@@ -44,7 +50,7 @@ fn dart() -> Outline {
 }
 
 /// The dart's frame: 20 by 20.
-const DART: (u32, u32) = (20, 20);
+pub(super) const DART: (u32, u32) = (20, 20);
 
 fn mount(hardpoint: &str, turns: bool, asset: &str) -> Mount {
     Mount {
@@ -61,8 +67,13 @@ fn mount(hardpoint: &str, turns: bool, asset: &str) -> Mount {
 
 /// Ship 128, the player's, with a fixed gun on its nose and a turret on
 /// the [`BED`] kit; ship 130, an NPC's, built with the bed.
-fn table() -> WorldModels {
-    let model = |key| ShipModel { key, scale: SCALE };
+pub(super) fn table() -> WorldModels {
+    let model = |key| ShipModel {
+        key,
+        scale: SCALE,
+        base_transp: 0,
+        radius: 2.0,
+    };
     WorldModels {
         ships: BTreeMap::from([
             (ShipId(128), model(PLAYER_HULL)),
@@ -83,7 +94,7 @@ fn table() -> WorldModels {
 
 /// The fake catalog with ship 128's sheet unreadable and the dart as the
 /// outline of 128 and 130, with ship 130's traffic.
-fn sheetless() -> FakeCatalog {
+pub(super) fn sheetless() -> FakeCatalog {
     FakeCatalog {
         sheet: Err("no shän 128 for shïp 128".to_owned()),
         outlines: vec![(128, dart()), (130, dart())],
@@ -93,7 +104,11 @@ fn sheetless() -> FakeCatalog {
 
 /// The player at the centre facing `heading` and NPC 0, of ship 130, at
 /// (100, -100) facing 90°, as `edit` leaves them, under `turn`.
-fn frame(heading: f32, turn: HullTurn, edit: impl FnOnce(&mut [FrameShip])) -> FlightFrame {
+pub(super) fn frame(
+    heading: f32,
+    turn: HullTurn,
+    edit: impl FnOnce(&mut [FrameShip]),
+) -> FlightFrame {
     let mut ships = vec![
         the_player_at(Vec2::ZERO, heading),
         record::npc(0, 130, Vec2::new(100.0, -100.0), 90.0),
@@ -106,12 +121,12 @@ fn frame(heading: f32, turn: HullTurn, edit: impl FnOnce(&mut [FrameShip])) -> F
 }
 
 /// `frame`'s view, drawing `models`.
-fn view_of(frame: FlightFrame, models: WorldModels) -> Faked {
+pub(super) fn view_of(frame: FlightFrame, models: WorldModels) -> Faked {
     world(sheetless(), frame).with_world_models(Rc::new(models))
 }
 
 /// The 3D commands `list` draws, in order.
-fn models(list: &DrawList) -> Vec<DrawCommand> {
+pub(super) fn models(list: &DrawList) -> Vec<DrawCommand> {
     list.iter()
         .filter(|c| matches!(c, DrawCommand::Model { .. } | DrawCommand::Mounted { .. }))
         .cloned()
@@ -127,7 +142,7 @@ fn triangles(list: &DrawList) -> Vec<DrawCommand> {
 
 /// The commands `ship`, drawn at `centre` facing `heading` under `turn`
 /// as `hull` with `kits`, gives by the table.
-fn expected(
+pub(super) fn expected(
     ship: &FrameShip,
     (centre, heading, turn): (Point, f32, HullTurn),
     hull: ModelKey,
@@ -151,28 +166,36 @@ fn expected(
     )
 }
 
-/// The player's commands and the NPC's, as `view` draws them by the table.
-fn expected_both(view: &Faked, turn: HullTurn) -> Vec<DrawCommand> {
-    let player = view.drawn().player();
+/// The NPC's commands, as `view` draws them opaque by the table.
+pub(super) fn expected_npc(view: &Faked, turn: HullTurn) -> Vec<DrawCommand> {
     let npc = *view.drawn().npcs().next().expect("the npc");
     let (at, heading) = view.shown_npc(&npc);
-    let camera = view.camera();
-    let mut all = expected(
+    expected(
         &npc,
-        (camera.sprite_centre(at, DART), heading, turn),
+        (view.camera().sprite_centre(at, DART), heading, turn),
         NPC_HULL,
         &[BED],
-    );
-    all.extend(expected(
-        &player,
+    )
+}
+
+/// The player's commands, as `view` draws them opaque by the table.
+pub(super) fn expected_player(view: &Faked, turn: HullTurn) -> Vec<DrawCommand> {
+    expected(
+        &view.drawn().player(),
         (
-            camera.sprite_centre(view.shown_position(), DART),
+            view.camera().sprite_centre(view.shown_position(), DART),
             view.shown_heading(),
             turn,
         ),
         PLAYER_HULL,
         &view.drawn().player_kits,
-    ));
+    )
+}
+
+/// The player's commands and the NPC's, as `view` draws them by the table.
+pub(super) fn expected_both(view: &Faked, turn: HullTurn) -> Vec<DrawCommand> {
+    let mut all = expected_npc(view, turn);
+    all.extend(expected_player(view, turn));
     all
 }
 
@@ -218,7 +241,7 @@ fn the_players_mounts_follow_the_kits_it_carries_and_an_npcs_its_class_built() {
 }
 
 /// The turn of each turret `list` draws.
-fn turret_turns(list: &DrawList) -> Vec<f32> {
+pub(super) fn turret_turns(list: &DrawList) -> Vec<f32> {
     models(list)
         .iter()
         .filter_map(|c| match c {
@@ -250,7 +273,9 @@ fn player_orientation(view: &Faked) -> crate::model::Orientation {
     models(&list)
         .iter()
         .find_map(|c| match c {
-            DrawCommand::Model { model, pose } if *model == PLAYER_HULL => Some(pose.orientation),
+            DrawCommand::Model { model, pose, .. } if *model == PLAYER_HULL => {
+                Some(pose.orientation)
+            }
             _ => None,
         })
         .expect("the player's hull")
@@ -293,7 +318,7 @@ fn a_class_with_no_model_draws_its_outline_as_before() {
 }
 
 /// Answers the fake catalog's own sheet for ship 130 alone.
-struct StockLook;
+pub(super) struct StockLook;
 
 impl ShipSprites for StockLook {
     fn ship_sheet(&self, id: ShipId) -> Result<ShipSheet, String> {
@@ -350,60 +375,250 @@ fn a_catalog_sheet_or_the_stock_look_wins_over_a_model() {
     );
 }
 
+/// `commands` jittered by `offset` and faded to `alpha`: the hull's centre
+/// moved and its alpha set, its parts following it.
+pub(super) fn faded(commands: Vec<DrawCommand>, offset: Point, alpha: f32) -> Vec<DrawCommand> {
+    commands
+        .into_iter()
+        .map(|command| command.translated(offset).at_alpha(alpha))
+        .collect()
+}
+
+/// The tick `view` rolls its cloaks' jitter at.
+fn tick(view: &Faked) -> u64 {
+    u64::try_from(crate::time::ticks(view.elapsed)).expect("a tick")
+}
+
+/// The jitter NPC 0's cloak, shown as `cloak`, takes in `view`.
+pub(super) fn npc_jitter(view: &Faked, cloak: CloakShown) -> Point {
+    CloakDraw::of(cloak, None, tick(view), &cloak_rolls(NpcId(0)))
+        .map_or(at(0.0, 0.0), |c| c.offset)
+}
+
+/// The jitter the player's cloak, shown as `cloak`, takes in `view`.
+pub(super) fn player_jitter(view: &Faked, cloak: CloakShown) -> Point {
+    CloakDraw::of(cloak, None, tick(view), &player_cloak_rolls()).map_or(at(0.0, 0.0), |c| c.offset)
+}
+
+/// The alpha a model of `BaseTransp` 0 draws at, as `cloak` and `gate` fade
+/// it ([`model_alpha`], whose own tests pin it).
+pub(super) fn alpha_of(cloak: CloakShown, gate: GateFade) -> f32 {
+    model_alpha(cloak, None, gate, 0).expect("drawn")
+}
+
 #[test]
-fn a_faded_ship_keeps_its_2d_path() {
+fn an_npc_fading_under_a_cloak_draws_its_model_and_outfits_jittered_at_its_alpha() {
+    let cloak = CloakShown::Fading(21.5);
+    let view = view_of(
+        frame(0.0, HullTurn::Continuous, |ships| ships[1].cloak = cloak),
+        table(),
+    );
+    let jitter = npc_jitter(&view, cloak);
+    assert_ne!(jitter, at(0.0, 0.0), "it jitters");
+    let alpha = alpha_of(cloak, GateFade::None);
+    assert!(alpha < 1.0);
+    let mut want = faded(expected_npc(&view, HullTurn::Continuous), jitter, alpha);
+    want.extend(expected_player(&view, HullTurn::Continuous));
+    let list = world_list(&view);
+    assert_eq!(models(&list), want);
+    assert_eq!(triangles(&list), [], "no outline");
+}
+
+#[test]
+fn a_seen_full_fade_npc_and_a_cloaked_player_draw_their_models_at_their_alphas() {
+    let (faint, fading) = (CloakShown::Translucent(0x1e), CloakShown::Fading(12.0));
+    let view = view_of(
+        frame(0.0, HullTurn::Continuous, |ships| {
+            ships[1].cloak = faint;
+            ships[0].cloak = fading;
+        }),
+        table(),
+    );
+    let mut want = faded(
+        expected_npc(&view, HullTurn::Continuous),
+        npc_jitter(&view, faint),
+        alpha_of(faint, GateFade::None),
+    );
+    want.extend(faded(
+        expected_player(&view, HullTurn::Continuous),
+        player_jitter(&view, fading),
+        alpha_of(fading, GateFade::None),
+    ));
+    assert_eq!(models(&world_list(&view)), want);
+}
+
+/// A paint whose channels fade apart, so its share is not the unpainted one.
+const PAINT: nova_sim_frame::Rgb15 = nova_sim_frame::Rgb15 { r: 31, g: 16, b: 4 };
+
+/// The alpha a model of `BaseTransp` 0 painted [`PAINT`] draws at under
+/// `cloak`, and that it is not the unpainted alpha.
+fn painted_alpha(cloak: CloakShown) -> f32 {
+    let alpha = model_alpha(cloak, Some(PAINT), GateFade::None, 0).expect("drawn");
+    assert_ne!(alpha, alpha_of(cloak, GateFade::None), "paint changes it");
+    alpha
+}
+
+#[test]
+fn a_painted_npc_fading_under_a_cloak_draws_its_model_at_its_painted_alpha() {
+    let cloak = CloakShown::Fading(21.5);
+    let view = view_of(
+        frame(0.0, HullTurn::Continuous, |ships| {
+            ships[1].cloak = cloak;
+            ships[1].paint = Some(PAINT);
+        }),
+        table(),
+    );
+    let jitter = CloakDraw::of(cloak, Some(PAINT), tick(&view), &cloak_rolls(NpcId(0)))
+        .expect("cloaked")
+        .offset;
+    let mut want = faded(
+        expected_npc(&view, HullTurn::Continuous),
+        jitter,
+        painted_alpha(cloak),
+    );
+    want.extend(expected_player(&view, HullTurn::Continuous));
+    assert_eq!(models(&world_list(&view)), want);
+}
+
+#[test]
+fn a_painted_player_fading_under_a_cloak_draws_its_model_at_its_painted_alpha() {
+    let cloak = CloakShown::Fading(12.0);
+    let view = view_of(
+        frame(0.0, HullTurn::Continuous, |ships| {
+            ships[0].cloak = cloak;
+            ships[0].paint = Some(PAINT);
+        }),
+        table(),
+    );
+    let jitter = CloakDraw::of(cloak, Some(PAINT), tick(&view), &player_cloak_rolls())
+        .expect("cloaked")
+        .offset;
+    let mut want = expected_npc(&view, HullTurn::Continuous);
+    want.extend(faded(
+        expected_player(&view, HullTurn::Continuous),
+        jitter,
+        painted_alpha(cloak),
+    ));
+    assert_eq!(models(&world_list(&view)), want);
+}
+
+#[test]
+fn a_hidden_npc_and_one_waiting_at_its_gate_draw_no_model_and_no_outline() {
     type Edit = fn(&mut [FrameShip]);
-    let edits: [(&str, Edit); 2] = [
-        ("cloaked", |ships| {
-            ships[1].cloak = CloakShown::Translucent(8);
+    let edits: [(&str, Edit); 3] = [
+        ("hidden", |ships| ships[1].cloak = CloakShown::Hidden),
+        ("waiting", |ships| {
+            ships[1].gate = GateFade::Emerging { ticks_left: 100.0 };
         }),
-        ("at a gate", |ships| {
-            ships[1].gate = nova_sim_frame::flight_frame::GateFade::Entering { ticks_left: 9.0 };
-        }),
+        ("unseen at its base", |ships| ships[1].class = ShipId(131)),
     ];
     for (why, edit) in edits {
-        let view = view_of(frame(0.0, HullTurn::Continuous, edit), table());
+        let mut models_table = table();
+        models_table.ships.insert(
+            ShipId(131),
+            ShipModel {
+                key: NPC_HULL,
+                scale: SCALE,
+                base_transp: 32,
+                radius: 2.0,
+            },
+        );
+        let catalog = FakeCatalog {
+            outlines: vec![(128, dart()), (130, dart()), (131, dart())],
+            ..sheetless()
+        };
+        let view = world(catalog, frame(0.0, HullTurn::Continuous, edit))
+            .with_world_models(Rc::new(models_table));
         let list = world_list(&view);
-        let npc_hulls = models(&list)
-            .iter()
-            .filter(|c| {
-                matches!(
-                    c,
-                    DrawCommand::Model {
-                        model: NPC_HULL,
-                        ..
-                    }
-                )
-            })
-            .count();
-        assert_eq!(npc_hulls, 0, "{why}");
-        assert!(!triangles(&list).is_empty(), "{why}: its outline");
+        assert_eq!(
+            models(&list),
+            expected_player(&view, HullTurn::Continuous),
+            "{why}"
+        );
+        assert_eq!(triangles(&list), [], "{why}: no outline");
     }
-    for (shown, cloak) in [
-        (nova_sim_frame::Drawn::Hidden, CloakShown::Opaque),
-        (nova_sim_frame::Drawn::SpriteHidden, CloakShown::Opaque),
-        (nova_sim_frame::Drawn::Full, CloakShown::Translucent(8)),
+}
+
+#[test]
+fn an_npc_entering_or_coming_out_of_a_gate_draws_at_the_gates_alpha() {
+    for gate in [
+        GateFade::Entering { ticks_left: 9.0 },
+        GateFade::Emerging { ticks_left: 3.0 },
     ] {
         let view = view_of(
-            frame(0.0, HullTurn::Continuous, |ships| {
-                ships[0].shown = shown;
-                ships[0].cloak = cloak;
-            }),
+            frame(0.0, HullTurn::Continuous, |ships| ships[1].gate = gate),
             table(),
         );
-        let player_hulls = models(&world_list(&view))
+        let alpha = alpha_of(CloakShown::Opaque, gate);
+        assert!(alpha < 1.0, "{gate:?}");
+        // Washed white as its sprite is (the `model_colorize` tests).
+        let wash = crate::flight::gate_colorize::gate_colorize(gate);
+        let mut want: Vec<_> = faded(
+            expected_npc(&view, HullTurn::Continuous),
+            at(0.0, 0.0),
+            alpha,
+        )
+        .into_iter()
+        .map(|command| command.with_colorize(wash))
+        .collect();
+        want.extend(expected_player(&view, HullTurn::Continuous));
+        assert_eq!(models(&world_list(&view)), want, "{gate:?}");
+    }
+}
+
+#[test]
+fn a_base_transparent_class_draws_its_model_at_its_base_alpha() {
+    let mut models_table = table();
+    for model in models_table.ships.values_mut() {
+        model.base_transp = 10;
+    }
+    let view = view_of(frame(0.0, HullTurn::Continuous, |_| {}), models_table);
+    let alpha = f32::from(base_alpha(10)) / 255.0;
+    assert_eq!(
+        model_alpha(CloakShown::Opaque, None, GateFade::None, 10),
+        Some(alpha)
+    );
+    let mut want = faded(
+        expected_npc(&view, HullTurn::Continuous),
+        at(0.0, 0.0),
+        alpha,
+    );
+    want.extend(faded(
+        expected_player(&view, HullTurn::Continuous),
+        at(0.0, 0.0),
+        alpha,
+    ));
+    assert_eq!(models(&world_list(&view)), want);
+}
+
+#[test]
+fn an_opaque_ship_draws_its_model_whole() {
+    let view = view_of(frame(0.0, HullTurn::Continuous, |_| {}), table());
+    let list = world_list(&view);
+    assert_eq!(models(&list), expected_both(&view, HullTurn::Continuous));
+    assert!(
+        models(&list)
             .iter()
-            .filter(|c| {
-                matches!(
-                    c,
-                    DrawCommand::Model {
-                        model: PLAYER_HULL,
-                        ..
-                    }
-                )
-            })
-            .count();
-        assert_eq!(player_hulls, 0, "{shown:?} {cloak:?}");
+            .all(|c| !matches!(c, DrawCommand::Model { alpha, .. } if *alpha != 1.0)),
+        "every hull at 1"
+    );
+}
+
+#[test]
+fn a_player_not_drawn_in_full_draws_no_model() {
+    for shown in [
+        nova_sim_frame::Drawn::Hidden,
+        nova_sim_frame::Drawn::SpriteHidden,
+    ] {
+        let view = view_of(
+            frame(0.0, HullTurn::Continuous, |ships| ships[0].shown = shown),
+            table(),
+        );
+        assert_eq!(
+            models(&world_list(&view)),
+            expected_npc(&view, HullTurn::Continuous),
+            "{shown:?}"
+        );
     }
 }
 

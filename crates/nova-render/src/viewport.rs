@@ -41,6 +41,24 @@ pub struct PixelRect {
     pub h: u32,
 }
 
+impl PixelRect {
+    /// The pixels both cover: their overlap, with no width or no height
+    /// when they only touch or lie apart.
+    #[must_use]
+    pub fn meet(self, other: Self) -> Self {
+        let x = self.x.max(other.x);
+        let y = self.y.max(other.y);
+        let right = (self.x + self.w).min(other.x + other.w);
+        let bottom = (self.y + self.h).min(other.y + other.h);
+        Self {
+            x,
+            y,
+            w: right.saturating_sub(x),
+            h: bottom.saturating_sub(y),
+        }
+    }
+}
+
 /// Where the logical space lands in the window.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Letterbox {
@@ -249,6 +267,27 @@ mod tests {
             Letterbox::Content { rect, scale } => (rect, scale),
             Letterbox::None => panic!("no content in {viewport:?}"),
         }
+    }
+
+    #[test]
+    fn pixel_rects_meet_in_their_overlap() {
+        let a = rect(10, 20, 30, 40);
+        // Overlapping: each way round.
+        assert_eq!(a.meet(rect(30, 50, 20, 20)), rect(30, 50, 10, 10));
+        assert_eq!(rect(30, 50, 20, 20).meet(a), rect(30, 50, 10, 10));
+        // Nested: the inner one.
+        assert_eq!(a.meet(rect(15, 25, 5, 5)), rect(15, 25, 5, 5));
+        assert_eq!(rect(15, 25, 5, 5).meet(a), rect(15, 25, 5, 5));
+        // Touching edges: no area.
+        let right = a.meet(rect(40, 20, 10, 40));
+        assert_eq!((right.w, right.h), (0, 40));
+        let below = a.meet(rect(10, 60, 30, 10));
+        assert_eq!((below.w, below.h), (30, 0));
+        // Disjoint: no area, either way round.
+        let apart = a.meet(rect(100, 100, 5, 5));
+        assert!(apart.w == 0 && apart.h == 0, "{apart:?}");
+        let before = rect(0, 0, 5, 5).meet(a);
+        assert!(before.w == 0 && before.h == 0, "{before:?}");
     }
 
     #[test]

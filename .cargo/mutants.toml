@@ -464,13 +464,25 @@ exclude_re = [
     # builds the same empty list, so it cannot be observed.
     "replace WindowPort::video_modes -> Vec<MonitorMode> with vec!\\[\\]",
     # The surface adapter's raw calls, as whole bodies only: pages,
-    # uploads, clearing the pages and mesh and planet uploads delegate to
-    # `WgpuRenderer` (tested offscreen), and `submit`
-    # is the raw configure / get_current_texture / present calls on a
-    # window surface, which needs a display. Its decisions are the tested
-    # `surface_action` and `acquire_outcome`; any other mutant inside these
-    # bodies is still run.
-    "replace <impl Gpu for SurfaceGpu>::(create_page|upload|clear_pages|upload_mesh|upload_planet|submit) with \\(\\)$",
+    # uploads, clearing the pages and model texture, mesh, planet and sky
+    # image uploads delegate to `WgpuRenderer` (tested offscreen), and
+    # `submit` is the raw configure / get_current_texture / present calls
+    # on a window surface, which needs a display. Its decisions are the
+    # tested `surface_action` and `acquire_outcome`; any other mutant
+    # inside these bodies is still run.
+    "replace <impl Gpu for SurfaceGpu>::(create_page|upload|clear_pages|upload_model_texture|upload_mesh|upload_planet|release_planet|upload_sky_image|submit) with \\(\\)$",
+    # A planet's release in the wgpu adapter (`OffscreenGpu` forwarding to
+    # `WgpuRenderer`, which drops the planet's bind group): each whole body
+    # is killed by nova-render::it's offscreen test
+    # `a_released_planet_draws_nothing_until_uploaded_again`, which phase
+    # runs leave out with `-E 'not binary_id(nova-render::it)'` because it
+    # drives wgpu (`.claude/rules/slow-tests.md`). Checked by hand when the
+    # release was added (rendering-3d phase 19).
+    "nova-render/src/wgpu/(offscreen|renderer|planets)\\.rs:[0-9]+:[0-9]+: replace (<impl Gpu for OffscreenGpu>::release_planet|WgpuRenderer::release_planet|Planets::release) with \\(\\)$",
+    # The texture check's head length: the larger of a PNG's 33-byte header
+    # and the LFS pointer's opening line (42), both constants, so `>=`
+    # picks the same one as `>`.
+    "nova-galaxy-media/src/texture\\.rs:[0-9]+:[0-9]+: replace > with >=$",
     # The same raw surface calls, now in `SurfaceGpu::present`, which
     # `submit` and the overlay's `submit_with` call (with a painter or
     # without): replacing either body is observable only on a window
@@ -933,6 +945,12 @@ exclude_re = [
     # lawless kit's bit 0, so the two never overlap and `^` gives the same
     # mask as `|`.
     "nova-data/src/new_game/law\\.rs:[0-9]+:[0-9]+: replace \\| with \\^ in govt_law$",
+    # A puff is kept when its square reaches into the view. A square that
+    # only touches the view's edge (`x + r == 0`) lights no pixel, as the
+    # falloff is 0 at a radius from the centre, so `>=` / `<=` keep only
+    # puffs that add nothing.
+    "nova-render/src/sky/backdrop\\.rs:[0-9]+:[0-9]+: replace > with >= in backdrop$",
+    "nova-render/src/sky/backdrop\\.rs:[0-9]+:[0-9]+: replace < with <= in backdrop$",
     # A stellar's frame-0 bias (`StellarFrames::advance`, its only `>`):
     # at a bias of exactly 1 the biased threshold, delay x 1, is the
     # unbiased delay, so `>=` reads the same as `>`.

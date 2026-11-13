@@ -41,7 +41,10 @@
 //! app prints nothing: a save that fails is kept as a warning until the
 //! caller takes it ([`App::take_warnings`]) and shows it. So are the
 //! warnings the screen reports ([`Screen::take_warnings`]), which the app
-//! takes after every input and frame.
+//! takes after every input and frame, and a model or planet key a frame
+//! draws with nothing registered for it with the renderer, once a key (the
+//! `missing_keys` module), and a planet whose texture didn't read in the
+//! frame that first drew it, once a planet (the `planet_failures` module).
 //!
 //! # Fullscreen
 //!
@@ -117,6 +120,14 @@
 //!   new upscaler is set on the GPU just before the next frame is drawn.
 //!   Switching between per-frame scalers changes no enlarger, so it never
 //!   rebuilds the atlas.
+//! - **The render scale.** Whatever the Scaling, the world layer is drawn
+//!   at the render scale the settings keep
+//!   ([`GameSettings::render_scale`]), set on the renderer at restore. The
+//!   dialog reports each step of its render-scale list as the
+//!   preferences' render scale, while it is still open; the app sets it
+//!   on the renderer at once and saves it with the other preferences, so
+//!   the next frame's world is drawn at it. Nothing is rebuilt and nothing
+//!   waits for a relaunch.
 //!
 //! # Display shapes
 //!
@@ -176,7 +187,9 @@ pub mod keyboard_access;
 pub mod last_device;
 mod loop_event;
 mod menu;
+mod missing_keys;
 mod pads;
+mod planet_failures;
 mod px_rect;
 mod safe_area;
 mod scaling;
@@ -656,7 +669,8 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// is a switch when it is not the one running: a new enlarger is set
     /// on the renderer at once, a new upscaler on the GPU before the next
     /// frame is drawn, and the choice is saved with the rest; otherwise
-    /// the stored choice is kept as it is. A fullscreen
+    /// the stored choice is kept as it is. Its render scale is set on the
+    /// renderer at once and saved with the rest. A fullscreen
     /// kind the player picked ([`Screen::take_display_choice`]) is held, to
     /// be entered and saved once the event is handled, which has the
     /// window; then a galaxy map borders setting
@@ -688,6 +702,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             if self.pick_scaling(prefs.scaling) {
                 settings.frame_upscaler = ScalingSetting::from(prefs.scaling);
             }
+            self.pick_render_scale(settings.render_scale);
             if let Some(core) = &mut self.audio {
                 core.apply(settings.audio);
             }
@@ -1179,6 +1194,15 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         self.switch_upscaler(gpu);
         let report = self.renderer.render(&list, &self.viewport, gpu);
         self.failures.extend(report.new_failures);
+        // A key drawn with nothing registered for it, which the report
+        // names the first time only: one warning each.
+        self.warnings.extend(missing_keys::warnings(
+            &report.missing_models,
+            &report.missing_planets,
+        ));
+        // A planet whose texture didn't read in the frame that first drew
+        // it, which draws its disc from then on: one warning each.
+        (self.warnings).extend(planet_failures::warnings(&report.failed_planets));
         // What drawing it raised (an upscaler's fallback, say), to show.
         self.warnings.extend(gpu.take_warnings());
         self.show_pointer(window);
@@ -1727,6 +1751,8 @@ mod tests {
     mod exiting;
     mod gamepads;
     mod menu;
+    mod missing_keys;
+    mod planet_failures;
     mod pointer_outside;
     mod pointer_release;
     mod safe_area;
@@ -3199,6 +3225,7 @@ mod tests {
         parallax_starfield: true,
         fullscreen: nova_view::FullscreenKind::Borderless,
         scaling: nova_view::Scaling::Native,
+        render_scale: nova_view::RenderScale::Auto,
     };
 
     /// `MUSIC_OFF` with the sound effects at `level`.

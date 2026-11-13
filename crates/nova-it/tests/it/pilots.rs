@@ -813,14 +813,16 @@ impl Harness {
     }
 
     /// The harness with `meshes` and `planets` registered with the app's
-    /// renderer, as `main` gives the runner the new game's world models.
+    /// renderer and its skies drawn in `skies`' looks, as `main` gives the
+    /// runner the new game's world models.
     pub(crate) fn with_world_assets(
         self,
         meshes: Vec<(nova_view::ModelKey, nova_render::Mesh)>,
         planets: Vec<(nova_view::PlanetKey, nova_render::LoadedPlanet)>,
+        skies: nova_render::sky::SkyLooks,
     ) -> Self {
         Self {
-            app: self.app.with_world_assets(meshes, planets),
+            app: self.app.with_world_assets(meshes, planets, skies),
             ..self
         }
     }

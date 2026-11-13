@@ -15,6 +15,13 @@
 //!   pick on it and M bring the ship into the linked system.
 //! - A left release off the window, or the focus lost, ends a drag on
 //!   flight's map.
+//! - Under the layered sky's reading (the new game's sky), the world's
+//!   sky rushes through a jump's warp, along the ship's travel, and not
+//!   before it. The new game's own data has no hyperlink to jump by, and
+//!   its gate readings fly none, so this flies the synthetic data under
+//!   the stock rules with that one reading (see the test's docs).
+//!   Wiring only: when the sky rushes is nova-view's rule (the view's
+//!   `sky` module), how a rush is drawn nova-render's (`sky`).
 //!
 //! How a course is plotted, when a jump is allowed, its fuel, its fades,
 //! its messages and its sounds' order are nova-sim's and nova-view's,
@@ -785,6 +792,71 @@ fn a_jumps_warp_sounds_reach_the_audio_port() {
         log.iter()
             .any(|command| matches!(*command, AudioCommand::Halt { sound } if sound == up)),
         "the warp-up halted: {log:?}"
+    );
+}
+
+/// The skies in the world layer the flight draws now.
+fn skies(harness: &Harness) -> Vec<nova_view::SkyPose> {
+    use nova_view::{DrawCommand, DrawLayer, DrawList, Screen};
+    let mut list = DrawList::new();
+    harness.flight().draw(&mut list);
+    list.layered()
+        .filter_map(|(layer, command)| match command {
+            DrawCommand::Sky { sky } if layer == DrawLayer::World => Some(*sky),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The rush on the one sky the world layer draws now.
+fn sky_rush(harness: &Harness) -> Point {
+    let skies = skies(harness);
+    assert_eq!(skies.len(), 1, "{skies:?}");
+    skies[0].rush
+}
+
+/// Under the layered sky's reading, the new game's sky, the world's sky
+/// rushes through a jump's warp along the ship's travel.
+///
+/// The rules are the stock ones with the layered sky's reading alone, not
+/// the whole new game's: the new game's gate readings
+/// (`RuleKey::GateLanes`, `RuleKey::GateAutopilot` and the rest) leave
+/// the synthetic data's hyperlinks off the star map and make J engage the
+/// gate autopilot, so its readings can't fly a hyperlink jump at all.
+#[test]
+fn under_the_layered_skys_reading_the_sky_rushes_along_the_ships_travel_through_the_warp() {
+    use nova_sim::{RuleKey, RuleSource, Rulebook};
+    let rules = Rulebook::default().with_override(RuleKey::LayeredStarfield, RuleSource::Bible);
+    let data = data();
+    let screen = start_screen(Rc::clone(&data)).with_rulebook(&rules);
+    let mut harness = Harness::flying_in(data, screen);
+    harness.plot(129);
+    harness.fly_out();
+    harness.frame();
+    let still = Point::new(0.0, 0.0);
+    assert_eq!(sky_rush(&harness), still, "flying, not warping");
+    // Where the ship was before the frame drawn last.
+    let mut from = harness.ship().position;
+    harness.press(Key::KeyJ);
+    harness.settle_until("the rush", |harness| {
+        let rushing = sky_rush(harness) != still;
+        assert!(
+            harness.session().jumping().is_some() || !rushing,
+            "no rush before the warp"
+        );
+        if !rushing {
+            from = harness.ship().position;
+        }
+        rushing
+    });
+    assert!(harness.session().jumping().is_some(), "still warping");
+    let rush = sky_rush(&harness);
+    let travel = harness.ship().position - from;
+    let dot = rush.x * travel.x + rush.y * travel.y;
+    let cross = rush.x * travel.y - rush.y * travel.x;
+    assert!(
+        dot > 0.0 && cross.abs() <= 0.05 * dot,
+        "{rush:?} along {travel:?}"
     );
 }
 

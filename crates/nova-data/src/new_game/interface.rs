@@ -499,7 +499,8 @@ fn text_dialog() -> (i16, DefaultDialog) {
 }
 
 /// The preferences: OK (1) and Key Settings (16); the effects toggles
-/// down the left (12-15, 10, 18); the music (8), the Scaling list (2),
+/// down the left (12-15, 10, 18) and the render-scale list (22) under
+/// them; the music (8), the Scaling list (2),
 /// the display picker (11), QuickTime Movies (9), the sound (20) and
 /// Hyperspace Effects (21) down the right; and the sound volume's label
 /// (4), value (5) and arrows (7 up, 6 down) under them, the music
@@ -531,6 +532,7 @@ fn preferences() -> (i16, DefaultDialog) {
             parked(),
             check(171, 121, 136, 18, "Sound"),
             check(171, 143, 154, 18, "Hyperspace Effects"),
+            check(11, 165, 154, 18, "Render Scale"),
         ],
     )
 }
@@ -668,6 +670,34 @@ mod tests {
             assert!(at(12).bottom <= at(button).top, "above {button}");
         }
         assert!(outside(at(8), width, height), "8 stays parked");
+    }
+
+    /// The render-scale list is built from item 22, as the stock dialog's
+    /// "Check For Updates" is: a check box in the left column, the next
+    /// row under Parallax Starfield (18), as wide as the column's other
+    /// boxes, clear of every other item.
+    #[test]
+    fn the_preferences_hold_a_render_scale_box_under_parallax_starfield() {
+        let dialogs = default_dialogs();
+        let prefs = dialogs.get(4003).expect("the preferences");
+        let (width, height) = size(&prefs.dlog);
+        assert_eq!(prefs.items.len(), 22);
+        let scale = &prefs.items[21];
+        let title = MacString::from("Render Scale");
+        assert_eq!(scale.kind, ItemKind::CheckBox { title });
+        assert!(scale.enabled);
+        let parallax = prefs.items[17].bounds;
+        let r = scale.bounds;
+        assert!(inside(r, width, height), "{r:?}");
+        assert_eq!((r.left, r.right), (parallax.left, parallax.right));
+        assert_eq!(r.bottom - r.top, parallax.bottom - parallax.top);
+        assert_eq!(r.top - parallax.top, 22, "the column's row pitch");
+        for (n, other) in (1..).zip(&prefs.items[..21]) {
+            let b = other.bounds;
+            let apart =
+                r.bottom <= b.top || b.bottom <= r.top || r.right <= b.left || b.right <= r.left;
+            assert!(apart, "item {n} under the render scale");
+        }
     }
 
     #[test]

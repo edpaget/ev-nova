@@ -34,6 +34,13 @@
 //! theirs onto it ([`ring_shadow`]); the atmosphere is a rim glow
 //! ([`rim`]) lit as the limb under it is.
 //!
+//! # The figure
+//!
+//! A planet's instance is made from its [`Figure`] alone (its rings'
+//! sizes and colour, its atmosphere, day and tilt: [`figure_instance`]),
+//! so once its textures are uploaded ([`textures`]) the renderer keeps
+//! that of it and none of its pixels.
+//!
 //! # The fragment
 //!
 //! How those pieces make one fragment's colour (the layers, their order
@@ -44,7 +51,7 @@ mod fragment;
 
 pub use fragment::{Fragment, fragment, globe_color, halo, ring_color};
 
-use nova_galaxy_media::planet::{Image, Surface};
+use nova_galaxy_media::planet::{Glow, Image, Surface};
 use nova_view::PlanetPose;
 use nova_view::geometry::{Bounds, Point};
 
@@ -109,6 +116,17 @@ impl Frame {
 pub fn reach(thickness: Option<f32>, outer: Option<f32>) -> f32 {
     let halo = thickness.map_or(1.0, |t| 1.0 + t);
     halo.max(outer.unwrap_or(1.0)).max(1.0)
+}
+
+/// How far a planet drawn with `surface` reaches, in its radii: the
+/// [`reach`] of its atmosphere's thickness and its rings' outer edge.
+#[must_use]
+pub fn surface_reach(surface: &Surface) -> f32 {
+    #[allow(clippy::cast_possible_truncation, reason = "a shader's sizes")]
+    reach(
+        surface.atmosphere.as_ref().map(|a| a.thickness as f32),
+        surface.rings.as_ref().map(|r| r.outer as f32),
+    )
 }
 
 /// The square a planet at `pose`, reaching `reach` of its radii, covers on
@@ -291,20 +309,85 @@ pub fn textures(surface: &Surface) -> PlanetTextures {
     }
 }
 
+/// A planet's rings less their profile: where they start and end, in its
+/// radii, and their colour.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rings {
+    /// Where they start, in planet radii.
+    pub inner: f64,
+    /// Where they end, in planet radii.
+    pub outer: f64,
+    /// Their colour.
+    pub color: [u8; 3],
+}
+
+/// What of a planet's [`Surface`] its instance is made from, once its
+/// textures are uploaded: its rings' sizes and colour, its atmosphere,
+/// its day and its tilt, and none of its pixels. The renderer keeps this
+/// of a planet, and drops the rest.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Figure {
+    /// Its rings, when it has them, less their profile.
+    pub rings: Option<Rings>,
+    /// Its atmosphere, when it has one.
+    pub atmosphere: Option<Glow>,
+    /// Its day, in seconds.
+    pub day: f64,
+    /// Its axial tilt, in radians.
+    pub tilt: f64,
+}
+
+impl Figure {
+    /// The figure of `surface`.
+    #[must_use]
+    pub fn of(surface: &Surface) -> Self {
+        Figure {
+            rings: surface.rings.as_ref().map(|r| Rings {
+                inner: r.inner,
+                outer: r.outer,
+                color: r.color,
+            }),
+            atmosphere: surface.atmosphere.clone(),
+            day: surface.day,
+            tilt: surface.tilt,
+        }
+    }
+
+    /// How far it reaches, in its radii: [`surface_reach`] of its surface.
+    #[must_use]
+    pub fn reach(&self) -> f32 {
+        #[allow(clippy::cast_possible_truncation, reason = "a shader's sizes")]
+        reach(
+            self.atmosphere.as_ref().map(|a| a.thickness as f32),
+            self.rings.as_ref().map(|r| r.outer as f32),
+        )
+    }
+}
+
 /// The instance that draws `surface`, held as `planet`, at `pose`: its
-/// square ([`quad`] over its [`reach`]), its [`Frame`] leaned by
-/// [`VIEW_LEAN`] and rolled by its tilt, its [`turns`] at the pose's time,
-/// and its rings' and atmosphere's sizes and colours. `None` when it draws
-/// nothing ([`quad`]).
+/// [`figure_instance`].
 #[must_use]
 pub fn instance(planet: PlanetId, surface: &Surface, pose: &PlanetPose) -> Option<PlanetInstance> {
-    let thickness = surface.atmosphere.as_ref().map(|a| a.thickness as f32);
-    let outer = surface.rings.as_ref().map(|r| r.outer as f32);
-    let reach = reach(thickness, outer);
+    figure_instance(planet, &Figure::of(surface), pose)
+}
+
+/// The instance that draws a planet of `figure`, held as `planet`, at
+/// `pose`: its square ([`quad`] over its [`reach`]), its [`Frame`] leaned
+/// by [`VIEW_LEAN`] and rolled by its tilt, its [`turns`] at the pose's
+/// time, and its rings' and atmosphere's sizes and colours. `None` when it
+/// draws nothing ([`quad`]).
+#[must_use]
+pub fn figure_instance(
+    planet: PlanetId,
+    figure: &Figure,
+    pose: &PlanetPose,
+) -> Option<PlanetInstance> {
+    let thickness = figure.atmosphere.as_ref().map(|a| a.thickness as f32);
+    let reach = figure.reach();
     let square = quad(pose, reach)?;
     let color = |c: [u8; 3]| c.map(|c| f32::from(c) / 255.0);
-    let ring_color = surface.rings.as_ref().map_or([0.0; 3], |r| color(r.color));
-    let [r, g, b] = surface
+    let ring_color = figure.rings.as_ref().map_or([0.0; 3], |r| color(r.color));
+    let [r, g, b] = figure
         .atmosphere
         .as_ref()
         .map_or([0.0; 3], |a| color(a.color));
@@ -317,9 +400,9 @@ pub fn instance(planet: PlanetId, surface: &Surface, pose: &PlanetPose) -> Optio
             h: square.max.y - square.min.y,
         },
         reach,
-        frame: Frame::new(surface.tilt as f32, VIEW_LEAN),
-        turns: turns(pose.time, surface.day).into(),
-        rings: surface
+        frame: Frame::new(figure.tilt as f32, VIEW_LEAN),
+        turns: turns(pose.time, figure.day).into(),
+        rings: figure
             .rings
             .as_ref()
             .map_or([0.0; 2], |r| [r.inner as f32, r.outer as f32]),
@@ -763,6 +846,70 @@ mod tests {
             ..pose
         };
         assert_eq!(instance(PlanetId(3), &surface(), &bad), None);
+    }
+
+    #[test]
+    fn a_figure_is_a_surface_less_its_pixels() {
+        assert_eq!(
+            Figure::of(&surface()),
+            Figure {
+                rings: Some(Rings {
+                    inner: 1.4,
+                    outer: 2.3,
+                    color: [255, 0, 51],
+                }),
+                atmosphere: Some(Glow {
+                    color: [0, 255, 0],
+                    thickness: 0.25,
+                }),
+                day: 300.0,
+                tilt: 0.2,
+            }
+        );
+        let bare = Surface {
+            rings: None,
+            atmosphere: None,
+            ..surface()
+        };
+        let figure = Figure::of(&bare);
+        assert_eq!((figure.rings, figure.atmosphere), (None, None));
+    }
+
+    #[test]
+    fn an_instance_from_a_figure_equals_one_from_its_surface() {
+        let pose = PlanetPose {
+            center: Point::new(100.0, 80.0),
+            radius: 10.0,
+            time: 75.0,
+        };
+        let full = surface();
+        let rings = Surface {
+            atmosphere: None,
+            ..surface()
+        };
+        let atmosphere = Surface {
+            rings: None,
+            ..surface()
+        };
+        let neither = Surface {
+            rings: None,
+            atmosphere: None,
+            ..surface()
+        };
+        let tilted = Surface {
+            tilt: -1.1,
+            day: 41.0,
+            ..surface()
+        };
+        for surface in [full, rings, atmosphere, neither, tilted] {
+            let figure = Figure::of(&surface);
+            assert_eq!(
+                figure_instance(PlanetId(5), &figure, &pose),
+                instance(PlanetId(5), &surface, &pose)
+            );
+            assert!(figure_instance(PlanetId(5), &figure, &pose).is_some());
+            assert_eq!(figure.reach().to_bits(), surface_reach(&surface).to_bits());
+        }
     }
 
     fn image(width: u32, height: u32, rgba: Vec<u8>) -> Image {

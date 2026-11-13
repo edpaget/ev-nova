@@ -8,7 +8,10 @@
 //! - **A readout the app needs only at a frame** is a field of the
 //!   [`DrawList`] the screen fills in [`Screen::draw`]. The text-entry ask
 //!   ([`DrawList::ask_text_entry`],
-//!   rdm:phase/key-bindings/phase-17-text-entry-port) is the first.
+//!   rdm:phase/key-bindings/phase-17-text-entry-port) is the first. The
+//!   system a flight frame flies in ([`DrawList::in_system`],
+//!   rdm:phase/rendering-3d/phase-19-release-planets-of-systems-left) is
+//!   the second, read by the renderer rather than the app.
 //! - **The readouts the app reads between frames** ([`Screen::hides_pointer`],
 //!   [`Screen::view_shape`], [`Screen::claims_touch`],
 //!   [`Screen::holds_back_keys`]) stay methods for now: the app reads them

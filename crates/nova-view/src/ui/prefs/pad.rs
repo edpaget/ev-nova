@@ -1,10 +1,11 @@
 //! Preferences' pad focus (rdm:phase/key-bindings/phase-8-gamepad-focus).
 //!
 //! - **Targets**, in [`Focus::next`]'s order: the ten toggles, each
-//!   stepper's two arrows in its part's place (the display picker, the
-//!   Scaling list, the effects volume, the music volume), then Key
-//!   Settings and OK: twenty in all. A stepper's arrows are targets of
-//!   their own, so South presses each as a click on it does.
+//!   stepper's two arrows in its part's place (the render-scale list, the
+//!   display picker, the Scaling list, the effects volume, the music
+//!   volume), then Key Settings and OK: twenty-two in all. A stepper's
+//!   arrows are targets of their own, so South presses each as a click on
+//!   it does.
 //! - **The initial target** is OK: the original's Preferences window
 //!   (`Keys.nib`'s `EVPrefsDialogController` window) names no
 //!   `initialFirstResponder` and authors no `nextKeyView` loop, and OK is
@@ -71,7 +72,8 @@ const TOGGLES: [Focus; 10] = [
 ];
 
 /// The steppers, in [`Focus::next`]'s order.
-const STEPPERS: [Focus; 4] = [
+const STEPPERS: [Focus; 5] = [
+    Focus::RenderScale,
     Focus::Display,
     Focus::Scaling,
     Focus::EffectsVolume,
@@ -123,6 +125,10 @@ impl PrefsDialog {
     /// Where a stepper's `arrow` is.
     fn arrow_rect(&self, part: Focus, arrow: Arrow) -> Bounds {
         let (up, down) = match part {
+            Focus::RenderScale => {
+                let rects = self.render_scale.rects();
+                (rects.up, rects.down)
+            }
             Focus::Display => (self.display.rects().up, self.display.rects().down),
             Focus::Scaling => {
                 let rects = self.scaling_list.picker.rects();
@@ -199,6 +205,7 @@ impl PrefsDialog {
                 Some(toggle) => toggle.press_keyed(),
                 None => return,
             },
+            PrefsTarget::Arrow(Focus::RenderScale, arrow) => self.render_scale.press_keyed(arrow),
             PrefsTarget::Arrow(Focus::Display, arrow) => self.display.press_keyed(arrow),
             PrefsTarget::Arrow(Focus::Scaling, arrow) => {
                 self.scaling_list.picker.press_keyed(arrow);
@@ -229,6 +236,9 @@ impl PrefsDialog {
                 if let Some(toggle) = self.toggle_mut(part) {
                     self.changed |= toggle.release_keyed();
                 }
+            }
+            PrefsTarget::Arrow(Focus::RenderScale, _) => {
+                self.changed |= self.render_scale.release_keyed();
             }
             PrefsTarget::Arrow(Focus::Display, _) => self.stepped |= self.display.release_keyed(),
             PrefsTarget::Arrow(Focus::Scaling, _) => {

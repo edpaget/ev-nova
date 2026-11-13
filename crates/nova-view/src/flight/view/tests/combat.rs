@@ -1154,6 +1154,7 @@ fn the_target_is_bracketed_and_its_panel_shows_it() {
             name: "Ship 129".to_owned(),
             subtitle: "Light Transport".to_owned(),
             picture: Some(3001),
+            model: None,
             status: nova_sim_frame::TargetStatus::Shield(100),
             tag: Some(Tag::Code("Fed.".to_owned())),
         }),

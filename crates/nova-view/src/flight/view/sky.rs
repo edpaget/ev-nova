@@ -14,8 +14,16 @@
 //! wrap jumps that point by the wrap's shift, so the view keeps the
 //! wraps' sum ([`SkyShift`]) and adds it back: the eye moves only by the
 //! ship's own move, and the sky doesn't jump.
+//!
+//! Through a jump's warp the sky rushes ([`rush`]): its pose carries the
+//! ship's move over the step, which the renderer streaks the stars by.
+//! The brake and turn before the warp and the arrival after it don't
+//! rush. Only the layered reading draws a sky, so the rush is the new
+//! game's alone; the original's starfield is left as ported.
 
-use nova_sim_frame::flight_frame::FlightFrame;
+use std::time::Duration;
+
+use nova_sim_frame::flight_frame::{FlightFrame, ShipPlace};
 use nova_sim_frame::player_wrap::PlayerWrap;
 use nova_sim_frame::{RuleSource, Vec2};
 
@@ -80,13 +88,45 @@ impl SkyShift {
 }
 
 /// Draws `frame`'s system's sky, seen from over `camera`'s centre with
-/// the wraps taken back by `shift`, drawn at its anchor: none in a system
-/// of negative murk.
-pub(super) fn draw(list: &mut DrawList, frame: &FlightFrame, camera: &Camera, shift: SkyShift) {
+/// the wraps taken back by `shift`, drawn at its anchor, rushing by
+/// [`rush`] from `previous`, `elapsed` into the flight
+/// ([`SkyPose::time`](crate::sky::SkyPose::time), the clock the planets
+/// turn by): none in a system of negative murk.
+pub(super) fn draw(
+    list: &mut DrawList,
+    frame: &FlightFrame,
+    previous: ShipPlace,
+    camera: &Camera,
+    shift: SkyShift,
+    elapsed: Duration,
+) {
     let eye = shift.eye(camera.center());
-    if let Some(sky) = sky_pose(frame.system, eye, camera.anchor(), frame.system_murk) {
-        list.sky(sky);
+    let rush = rush(frame, previous);
+    if let Some(sky) = sky_pose(frame.system, eye, camera.anchor(), rush, frame.system_murk) {
+        list.sky(sky.with_time(elapsed.as_secs_f64()));
     }
+}
+
+/// How far the sky rushes in `frame`, the frame drawn, the player's place
+/// a step ago `previous`: through the jump's warp
+/// ([`FlightFrame::warping`]) the ship's move over the step, zero
+/// otherwise, the brake and turn before it and the arrival after it
+/// included.
+///
+/// The move is the whole step's, from `previous` to where `frame` has the
+/// ship, the two places the ship is drawn between
+/// ([`FlightView::shown_position`](super::FlightView::shown_position)):
+/// on a double-time frame between its passes that is the held frame's
+/// pass, the one drawn. A wrap carries `previous` with it and an arrival
+/// resets it, so the rush is the ship's own move and never a wrap's
+/// shift or the jump's leap. The warp moves the ship's position rather
+/// than its velocity, so the velocity would miss it.
+fn rush(frame: &FlightFrame, previous: ShipPlace) -> Point {
+    if !frame.warping {
+        return Point::new(0.0, 0.0);
+    }
+    let now = frame.player().place().position;
+    Point::new(now.x - previous.position.x, now.y - previous.position.y)
 }
 
 #[cfg(test)]

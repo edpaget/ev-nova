@@ -183,8 +183,11 @@
 //!   `fleets/`, or a ninth that flies, is left out ([`traffic`]).
 //! - A hull's `livery` that isn't in `liveries/` draws bare; a hull's
 //!   `model` or a stellar's `visual` that isn't in `assets/` draws as its
-//!   box or its disc; an asset whose model file doesn't decode is reported
-//!   once, against the asset ([`looks`]).
+//!   box or its disc; an asset whose model file doesn't decode, or names
+//!   a buffer or an image file that isn't there, is reported once, against
+//!   the asset ([`looks`]).
+//! - A system's sky decoration whose `image` isn't in `assets/` is not
+//!   drawn, reported against the system ([`skies`]).
 //! - A hardpoint over no surface of its hull's model stands on the plane,
 //!   reported against the file that adds it, naming the hardpoint and the
 //!   model; an outfit's `model` that isn't in `assets/` shows nothing
@@ -332,6 +335,7 @@ pub mod outfits;
 pub mod pins;
 pub mod records;
 pub mod relations;
+pub mod skies;
 pub mod sounds;
 pub mod strings;
 #[cfg(test)]
@@ -346,6 +350,7 @@ use std::path::{Path, PathBuf};
 use nova_galaxy_format::load::Galaxy;
 use nova_galaxy_format::media::lfs_pointers;
 use nova_galaxy_format::source::{DirSource, Source};
+use nova_galaxy_media::AssetScenes;
 
 pub use nova_galaxy_format::load::Problem;
 
@@ -374,6 +379,12 @@ pub struct NewGame {
     /// planet looks from it for the 3D layer (`nova_render`'s
     /// `new_game_world`), with [`ids`](Self::ids) to name them.
     pub galaxy: Galaxy,
+    /// The scene of each model the stand-ins and the mounts read
+    /// ([`looks::Models`]), by its asset's id, or why it has none: for the
+    /// edge's 3D layer too, which builds its meshes from these and so
+    /// reads no model file again. An asset nothing shows as a model has no
+    /// entry.
+    pub scenes: AssetScenes,
 }
 
 /// Why a new game's folder couldn't be read at all.
@@ -403,9 +414,12 @@ pub fn open(dir: &Path) -> Result<NewGame, ListError> {
 /// the format's loader, the ID table ([`pins`]), the LFS check over its
 /// media, the mapping under the table's pins, then the stand-ins
 /// ([`looks`]) and the mounts ([`mounts`]), whose models are read from
-/// `source` too, each once, the sounds' clips ([`sounds`]), each once, the
-/// music ([`music`]), and the built bracket corners ([`brackets`]). It
-/// never writes the table.
+/// `source` too, each once and whole, its scene kept
+/// ([`NewGame::scenes`]), the check of each system's sky decorations
+/// ([`skies`]), the sounds' clips ([`sounds`]), each once, the
+/// music ([`music`]), and the built bracket corners ([`brackets`]). The
+/// LFS check reads only how each media file starts. It never writes the
+/// table.
 pub fn load(source: &impl Source, dir: &Path) -> NewGame {
     let (galaxy, mut problems) = nova_galaxy_format::load::load(source);
     let pins = pins::read(source, &mut problems);
@@ -424,6 +438,8 @@ pub fn load(source: &impl Source, dir: &Path) -> NewGame {
     let mut models = looks::Models::new(source);
     let stand_ins = looks::stand_ins(&galaxy, &ids, &mut models, &mut problems);
     let mounted = mounts::mounted(&galaxy, &ids, &mut models, &mut problems);
+    let scenes = models.into_scenes();
+    skies::unknown_images(&galaxy, &ids, &mut problems);
     let ship_lines = looks::ship_lines(&galaxy, &ids);
     let collision_radii = fleet::collision_radii(&galaxy, &ids);
     let gate_fuels = fleet::gate_fuels(&galaxy, &ids);
@@ -454,5 +470,6 @@ pub fn load(source: &impl Source, dir: &Path) -> NewGame {
         problems,
         lfs_pointers,
         galaxy,
+        scenes,
     }
 }

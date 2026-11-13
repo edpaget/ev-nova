@@ -38,6 +38,12 @@
 //!   "Spaceport" dialog, reading the stellar through its
 //!   [`spaceport::SpaceportCatalog`] port.
 //!
+//! # Pictures
+//!
+//! - [`model_picture`]: a ship's or stellar's 3D model drawn in a screen's
+//!   picture, in place of a `PICT`, a sprite or a stand-in
+//!   ([`model_picture::ShipPortrait`]).
+//!
 //! # Text
 //!
 //! Each [`DrawCommand::Text`] names its [`Font`], one of the game's two
@@ -96,6 +102,7 @@ pub mod keymap;
 pub mod menu;
 pub mod menu_command;
 pub mod model;
+pub mod model_picture;
 pub mod movie;
 pub mod movie_frame;
 pub mod navigator;

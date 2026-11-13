@@ -11,17 +11,31 @@
 //! `_BlitPixieRLEAddOver` (0xc24bf) at full: see [`lights_tint`] for the
 //! full record.
 //!
+//! A class with no sprite sheet (a new game's) whose model the world
+//! models' table holds ([`ShipBrowser::with_world_models`]) turns its
+//! model instead, with its as-built parts, in flight's top-down pose: one
+//! of `MODEL_STEPS` (the frames flight gives such a class) headings a
+//! tick, fitted to the placeholder's square, its [`frame`](ShipBrowser::frame)
+//! the step shown (`model_turn`, rdm:phase/rendering-3d/phase-17-ship-browser-models).
+//! A class with neither draws a crossed box and why it has no sprite.
+//!
 //! The screen reads ships only through the [`ShipCatalog`] port, once at
-//! start-up and once per selection; drawing never resolves anything.
+//! start-up and once per selection; drawing never resolves anything. A
+//! class's model is resolved with it, from the table, which is data the
+//! edge hands it, not game data.
 
+use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim_frame::{HashedRolls, lights_level};
 
 use super::catalog::{SheetInfo, ShipCatalog, ShipEntry, ShipId};
+use super::model_turn::{draw_model, model_step};
 use crate::bound_names::{Spelling, group, name_read};
 use crate::draw::{crossed_box, lights_tint};
+use crate::flight::WorldModels;
 use crate::keymap::{Command, CommandInput, CommandReader, SharedBindings, UiCommand, contexts};
+use crate::model_picture::ShipPortrait;
 use crate::time::ticks;
 use crate::{Color, DrawList, Font, Input, Point, Screen, ScreenAction};
 
@@ -46,10 +60,11 @@ const DESCRIPTION_TOP: f32 = 300.0;
 const DESCRIPTION_SIZE: f32 = 16.0;
 /// The description's (and the record error's) wrap width.
 pub const DESCRIPTION_WRAP: f32 = 496.0;
-/// The message under the placeholder: its left edge, size and wrap width.
+/// The message under the placeholder (or a model in its place): its left
+/// edge, size and wrap width.
 const SPRITE_ERROR_LEFT: f32 = 48.0;
-const SPRITE_ERROR_WRAP: f32 = 384.0;
-const MESSAGE_SIZE: f32 = 16.0;
+pub(super) const SPRITE_ERROR_WRAP: f32 = 384.0;
+pub(super) const MESSAGE_SIZE: f32 = 16.0;
 /// The footer: where it goes and its size.
 const FOOTER: Point = Point::new(16.0, 736.0);
 const FOOTER_SIZE: f32 = 16.0;
@@ -72,6 +87,12 @@ pub struct ShipBrowser<C> {
     selected: usize,
     /// The selected ship, resolved when it was selected.
     current: Option<ShipEntry>,
+    /// The world models' table: empty unless a new game's assets give one
+    /// ([`ShipBrowser::with_world_models`]).
+    models: Rc<WorldModels>,
+    /// The selected ship's model, for a class with no sprite sheet whose
+    /// model `models` holds; resolved with the ship.
+    portrait: Option<ShipPortrait>,
     /// Time since the selection.
     elapsed: Duration,
     /// What random running lights roll on.
@@ -91,6 +112,8 @@ impl<C: ShipCatalog> ShipBrowser<C> {
             ids,
             selected: 0,
             current,
+            models: Rc::default(),
+            portrait: None,
             elapsed: Duration::ZERO,
             blink_rolls: HashedRolls::new(0),
             keys: CommandReader::new(contexts::SHIP_BROWSER),
@@ -102,6 +125,34 @@ impl<C: ShipCatalog> ShipBrowser<C> {
     pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
         self.keys.set_bindings(bindings);
         self
+    }
+
+    /// The browser drawing a class with no sprite sheet as its model in
+    /// `models`, turning (see the module docs). The ship already shown
+    /// takes its model from the entry it holds; the catalog isn't read.
+    #[must_use]
+    pub fn with_world_models(mut self, models: Rc<WorldModels>) -> Self {
+        self.models = models;
+        self.portrait = self
+            .current
+            .as_ref()
+            .and_then(|ship| self.resolve_portrait(ship));
+        self
+    }
+
+    /// The world models' table it draws models from.
+    #[must_use]
+    pub fn world_models(&self) -> &Rc<WorldModels> {
+        &self.models
+    }
+
+    /// `ship`'s model, if it has no sprite sheet and the table models it: a
+    /// sheet always comes first.
+    fn resolve_portrait(&self, ship: &ShipEntry) -> Option<ShipPortrait> {
+        if ship.sprite.is_ok() {
+            return None;
+        }
+        ShipPortrait::of(&self.models, ship.id)
     }
 
     /// The selected ship, if there are any.
@@ -116,11 +167,15 @@ impl<C: ShipCatalog> ShipBrowser<C> {
         self.current.as_ref()
     }
 
-    /// The base sprite's frame being shown, if there is one.
+    /// The base sprite's frame being shown, or for a class drawn as its
+    /// model the model's step, if there is either.
     #[must_use]
     pub fn frame(&self) -> Option<u16> {
-        let sheet = self.current.as_ref()?.sprite.as_ref().ok()?;
-        Some(self.frame_of(*sheet))
+        let ship = self.current.as_ref()?;
+        match &ship.sprite {
+            Ok(sheet) => Some(self.frame_of(*sheet)),
+            Err(_) => self.portrait.as_ref().map(|_| model_step(self.elapsed)),
+        }
     }
 
     /// The frame of `sheet` for the time since the selection: one frame per
@@ -141,7 +196,9 @@ impl<C: ShipCatalog> ShipBrowser<C> {
         } else {
             (self.selected + count - 1) % count
         };
-        self.current = Some(self.catalog.ship(self.ids[self.selected]));
+        let ship = self.catalog.ship(self.ids[self.selected]);
+        self.portrait = self.resolve_portrait(&ship);
+        self.current = Some(ship);
         self.elapsed = Duration::ZERO;
     }
 
@@ -163,7 +220,14 @@ impl<C: ShipCatalog> ShipBrowser<C> {
                     }
                 }
             }
-            Err(message) => draw_placeholder(message, list),
+            Err(message) => {
+                let drew = self.portrait.as_ref().is_some_and(|portrait| {
+                    draw_model(portrait, model_step(self.elapsed), message, list)
+                });
+                if !drew {
+                    draw_placeholder(message, list);
+                }
+            }
         }
     }
 }
@@ -171,14 +235,20 @@ impl<C: ShipCatalog> ShipBrowser<C> {
 /// A grey box with its diagonals where the ship would be, and why.
 fn draw_placeholder(message: &str, list: &mut DrawList) {
     crossed_box(list, SHIP_CENTER, PLACEHOLDER_SIZE, PLACEHOLDER);
-    let bottom = SHIP_CENTER.y + PLACEHOLDER_SIZE / 2.0;
     list.text(
         format!("Sprite unavailable: {message}"),
-        Point::new(SPRITE_ERROR_LEFT, bottom + LINE_SPACING),
+        message_origin(),
         MESSAGE_SIZE,
         Some(SPRITE_ERROR_WRAP),
         Color::ERROR,
     );
+}
+
+/// Where the line saying why a ship has no sprite starts: a line under
+/// the placeholder's square, whether the placeholder or a model fills it.
+pub(super) fn message_origin() -> Point {
+    let bottom = SHIP_CENTER.y + PLACEHOLDER_SIZE / 2.0;
+    Point::new(SPRITE_ERROR_LEFT, bottom + LINE_SPACING)
 }
 
 /// The name, the stats (or why not), any layer errors and the description.
@@ -300,10 +370,16 @@ impl<C: ShipCatalog> Screen for ShipBrowser<C> {
 #[allow(clippy::float_cmp)]
 mod tests {
     use std::cell::RefCell;
+    use std::collections::BTreeMap;
     use std::num::NonZeroU16;
     use std::time::Duration;
 
+    use nova_data::store::{Footing, Mount, Mounts, Shown};
+
+    use super::super::model_turn::{MODEL_STEPS, model_area, model_orientation};
     use super::*;
+    use crate::flight::world_models::ShipModel;
+    use crate::model::{ModelKey, ModelPose};
     use crate::ships::catalog::{Blink, SheetInfo, ShipCatalog, ShipEntry, ShipId, ShipStats};
     use crate::{
         Blend, Color, DrawCommand, DrawList, Font, ImageKey, Input, Key, MouseButton, Point,
@@ -1179,6 +1255,295 @@ mod tests {
         let list = drawn(&browser);
         assert_eq!(texts(&list), ["No ships in the game data"]);
         assert_eq!(list.len(), 1);
+    }
+
+    /// Ship `id` with no sprite sheet (as a new game's class) and no layers.
+    fn modelled(id: i16) -> ShipEntry {
+        ShipEntry {
+            sprite: Err("no sprite".into()),
+            glow: None,
+            lights: None,
+            ..entry(id)
+        }
+    }
+
+    /// A world models' table modelling each `(ship, model key)`, radius 4.
+    fn table(ids: &[(i16, u32)]) -> Rc<WorldModels> {
+        Rc::new(WorldModels {
+            ships: ids
+                .iter()
+                .map(|&(id, key)| {
+                    (
+                        nova_sim_frame::ShipId(id),
+                        ShipModel {
+                            key: ModelKey(key),
+                            scale: 1.0,
+                            base_transp: 0,
+                            radius: 4.0,
+                        },
+                    )
+                })
+                .collect(),
+            ..WorldModels::default()
+        })
+    }
+
+    /// Ship 128 modelled as `ModelKey(7)`, a gun shown on a nose mount.
+    fn table_with_a_part() -> Rc<WorldModels> {
+        let mut models = Rc::unwrap_or_clone(table(&[(128, 7)]));
+        models.mounts = Mounts {
+            hulls: BTreeMap::from([(
+                nova_sim_frame::ShipId(128),
+                vec![Mount {
+                    hardpoint: "nose".to_owned(),
+                    at: [0.0, 2.0, 0.5],
+                    footing: Footing::Surface,
+                    turns: false,
+                    shows: Some(Shown {
+                        asset: "gun".to_owned(),
+                        lift: 0.25,
+                    }),
+                }],
+            )]),
+            kits: BTreeMap::new(),
+        };
+        models.outfits = BTreeMap::from([("gun".to_owned(), ModelKey(9))]);
+        Rc::new(models)
+    }
+
+    fn commands(list: &DrawList) -> Vec<DrawCommand> {
+        list.iter().cloned().collect()
+    }
+
+    fn models(list: &DrawList) -> Vec<(ModelKey, ModelPose)> {
+        list.iter()
+            .filter_map(|command| match command {
+                DrawCommand::Model { model, pose, .. } => Some((*model, *pose)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_modelled_class_with_no_sheet_draws_its_model_where_the_sprite_would_be() {
+        let catalog = FakeCatalog::with(vec![modelled(128)]);
+        let models = table(&[(128, 7)]);
+        let browser = ShipBrowser::new(&catalog).with_world_models(Rc::clone(&models));
+        let list = drawn(&browser);
+        let got = commands(&list);
+        let DrawCommand::Model { model, pose, .. } = &got[0] else {
+            panic!("the model first: {got:?}");
+        };
+        assert_eq!(*model, ModelKey(7));
+        assert_eq!(pose.center, SHIP_CENTER);
+        let mut want = DrawList::new();
+        let portrait = ShipPortrait::of(&models, nova_sim_frame::ShipId(128)).expect("a portrait");
+        assert!(portrait.draw_posed_in(&mut want, model_area(), model_orientation(0)));
+        assert_eq!(got[..want.len()], commands(&want)[..]);
+        assert_eq!(lines(&list), 0, "no crossed box");
+        assert_eq!(sprites(&list), []);
+        assert_eq!(
+            text_color(&list, "3D model (sprite unavailable: no sprite)"),
+            Color::DIM
+        );
+        let texts = texts(&list);
+        assert!(
+            !texts.iter().any(|t| t.starts_with("Sprite unavailable")),
+            "{texts:?}"
+        );
+        let shown = |text: &str| {
+            got.iter()
+                .position(|c| matches!(c, DrawCommand::Text { text: t, .. } if t.starts_with(text)))
+        };
+        for line in [
+            "Ship 128",
+            "Cost:",
+            "Speed:",
+            "Armour:",
+            "Shields:",
+            "Ship 1 of 1",
+        ] {
+            let at = shown(line).unwrap_or_else(|| panic!("{line:?} drawn"));
+            assert!(at > 0, "{line:?} after the model");
+        }
+    }
+
+    #[test]
+    fn the_placeholder_s_message_and_the_model_s_share_a_place() {
+        let catalog = FakeCatalog::with(vec![modelled(128)]);
+        let placeholder = drawn(&ShipBrowser::new(&catalog));
+        let model = drawn(&ShipBrowser::new(&catalog).with_world_models(table(&[(128, 7)])));
+        assert_eq!(
+            text_origin(&model, "3D model"),
+            text_origin(&placeholder, "Sprite unavailable")
+        );
+    }
+
+    #[test]
+    fn its_parts_are_drawn_after_its_hull() {
+        let catalog = FakeCatalog::with(vec![modelled(128)]);
+        let browser = ShipBrowser::new(&catalog).with_world_models(table_with_a_part());
+        let got = commands(&drawn(&browser));
+        assert!(
+            matches!(
+                got[0],
+                DrawCommand::Model {
+                    model: ModelKey(7),
+                    ..
+                }
+            ),
+            "{got:?}"
+        );
+        assert!(
+            matches!(
+                got[1],
+                DrawCommand::Mounted {
+                    model: ModelKey(9),
+                    ..
+                }
+            ),
+            "{got:?}"
+        );
+    }
+
+    #[test]
+    fn the_model_turns_a_step_a_tick_and_frame_reads_the_step() {
+        let catalog = FakeCatalog::with(vec![modelled(128)]);
+        let mut browser = ShipBrowser::new(&catalog).with_world_models(table(&[(128, 7)]));
+        let mut ticked = 0;
+        for (at, want) in [
+            (0, 0),
+            (1, 1),
+            (MODEL_STEPS - 1, MODEL_STEPS - 1),
+            (MODEL_STEPS, 0),
+            (MODEL_STEPS + 1, 1),
+        ] {
+            browser.tick(tick() * u32::from(at - ticked));
+            ticked = at;
+            assert_eq!(browser.frame(), Some(want), "{at} ticks");
+            let drawn = models(&drawn(&browser));
+            assert_eq!(drawn.len(), 1);
+            assert_eq!(
+                drawn[0].1.orientation,
+                model_orientation(want),
+                "{at} ticks"
+            );
+        }
+    }
+
+    #[test]
+    fn choosing_another_ship_restarts_the_turn() {
+        let catalog = FakeCatalog::with(vec![modelled(128), modelled(129)]);
+        let mut browser =
+            ShipBrowser::new(&catalog).with_world_models(table(&[(128, 7), (129, 8)]));
+        browser.tick(tick() * 5);
+        assert_eq!(browser.frame(), Some(5));
+        browser.input(&press(Key::ArrowRight));
+        assert_eq!(browser.frame(), Some(0));
+        let drawn = models(&drawn(&browser));
+        assert_eq!(drawn.len(), 1);
+        assert_eq!(drawn[0].0, ModelKey(8));
+        assert_eq!(drawn[0].1.orientation, model_orientation(0));
+    }
+
+    #[test]
+    fn a_class_with_a_sheet_draws_its_sheet_even_with_a_model() {
+        let catalog = FakeCatalog::with(vec![layered()]);
+        let mut plain = ShipBrowser::new(&catalog);
+        let mut with = ShipBrowser::new(&catalog).with_world_models(table(&[(128, 7)]));
+        for at in [0, 7] {
+            plain.tick(tick() * at);
+            with.tick(tick() * at);
+            let list = drawn(&with);
+            assert_eq!(commands(&list), commands(&drawn(&plain)), "{at}");
+            assert_eq!(models(&list), []);
+            assert_eq!(with.frame(), plain.frame());
+        }
+    }
+
+    #[test]
+    fn a_class_with_neither_draws_the_crossed_box() {
+        let catalog = FakeCatalog::with(vec![modelled(129)]);
+        let browser = ShipBrowser::new(&catalog).with_world_models(table(&[(128, 7)]));
+        let list = drawn(&browser);
+        assert_eq!(lines(&list), 6);
+        assert_eq!(
+            text_color(&list, "Sprite unavailable: no sprite"),
+            Color::ERROR
+        );
+        assert_eq!(models(&list), []);
+        assert_eq!(browser.frame(), None);
+    }
+
+    #[test]
+    fn a_model_that_cannot_be_fitted_draws_the_crossed_box() {
+        let catalog = FakeCatalog::with(vec![modelled(128)]);
+        let mut huge = Rc::unwrap_or_clone(table(&[(128, 7)]));
+        for model in huge.ships.values_mut() {
+            model.radius = f32::MIN_POSITIVE;
+        }
+        let browser = ShipBrowser::new(&catalog).with_world_models(Rc::new(huge));
+        let list = drawn(&browser);
+        assert_eq!(models(&list), []);
+        assert_eq!(lines(&list), 6);
+        assert_eq!(
+            text_color(&list, "Sprite unavailable: no sprite"),
+            Color::ERROR
+        );
+    }
+
+    #[test]
+    fn an_empty_table_draws_as_before() {
+        let catalogs = [
+            three_ships(),
+            FakeCatalog::with(vec![layered()]),
+            FakeCatalog::with(vec![modelled(128)]),
+            FakeCatalog::default(),
+        ];
+        for catalog in &catalogs {
+            let mut plain = ShipBrowser::new(catalog);
+            let mut with = ShipBrowser::new(catalog).with_world_models(Rc::default());
+            for at in [0, 4] {
+                plain.tick(tick() * at);
+                with.tick(tick() * at);
+                assert_eq!(commands(&drawn(&with)), commands(&drawn(&plain)));
+                assert_eq!(with.frame(), plain.frame());
+            }
+        }
+    }
+
+    #[test]
+    fn a_table_given_after_the_first_ship_is_resolved_draws_its_model() {
+        let catalog = FakeCatalog::with(vec![modelled(128)]);
+        let browser = ShipBrowser::new(&catalog);
+        assert_eq!(catalog.calls(), [ShipId(128)]);
+        let browser = browser.with_world_models(table(&[(128, 7)]));
+        assert_eq!(models(&drawn(&browser)).len(), 1);
+        assert_eq!(browser.frame(), Some(0));
+        assert_eq!(
+            catalog.calls(),
+            [ShipId(128)],
+            "the entry held is re-read, not the catalog"
+        );
+    }
+
+    #[test]
+    fn the_world_models_given_are_the_browser_s() {
+        let catalog = three_ships();
+        let models = table(&[(128, 7)]);
+        let browser = ShipBrowser::new(&catalog).with_world_models(Rc::clone(&models));
+        assert!(Rc::ptr_eq(browser.world_models(), &models));
+        assert!(ShipBrowser::new(&catalog).world_models().ships.is_empty());
+    }
+
+    #[test]
+    fn drawing_resolves_nothing_with_a_model_either() {
+        let catalog = FakeCatalog::with(vec![modelled(128)]);
+        let browser = ShipBrowser::new(&catalog).with_world_models(table(&[(128, 7)]));
+        let before = catalog.calls();
+        drawn(&browser);
+        drawn(&browser);
+        assert_eq!(catalog.calls(), before);
     }
 
     #[test]

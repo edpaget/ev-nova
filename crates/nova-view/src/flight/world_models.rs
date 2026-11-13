@@ -1,18 +1,23 @@
-//! The 3D models the flight screen draws in place of the new game's 2D
-//! stand-ins ([`WorldModels`]): which ship classes, outfits and stellars
-//! have a model or a planet registered with the renderer, under which
-//! key, and where each class's outfits stand.
+//! The 3D models every screen that shows a ship or stellar draws in place
+//! of the new game's 2D stand-ins ([`WorldModels`]): flight, and the
+//! [`model_picture`](crate::model_picture) module's screens (the target
+//! panel, the shipyard and hire screen, the escort, comm and planet comm
+//! dialogs, the spaceport's landscape, the system viewer). It says which
+//! ship classes, outfits and stellars have a model or a planet registered
+//! with the renderer, under which key, how far each class's model
+//! reaches, and where each class's outfits stand.
 //!
 //! It is plain data, built at the program's edge once the keys are known
 //! (`nova_render`'s `new_game_world`, which registers each key's mesh or
-//! planet with the renderer as it hands one out) and given to the flight
-//! ([`FlightView::with_world_models`](super::view::FlightView::with_world_models)).
-//! Tests build one by hand. An empty table, the default, draws exactly
-//! as no table: stock data has no models, so it never gets one.
+//! planet with the renderer as it hands one out) and given to each screen
+//! ([`FlightView::with_world_models`](super::view::FlightView::with_world_models)
+//! and its kin). Tests build one by hand. An empty table, the default,
+//! draws exactly as no table: stock data has no models, so it never gets
+//! one.
 //!
 //! What a key's presence decides, and in what order a ship's looks are
-//! tried, is the flight view's (its `ship_models` and `stellar_models`
-//! modules). The mounts answer as the store's do
+//! tried, is each screen's: the flight view's (its `ship_models` and
+//! `stellar_models` modules), and each picture's. The mounts answer as the store's do
 //! ([`Mounts::of`], `nova_data::store::GameData::mounts`): a class's own,
 //! then each kit's on that class, in the order given.
 
@@ -33,6 +38,18 @@ pub struct ShipModel {
     /// metres, drawn at the pixels a metre spans
     /// (`nova_data::new_game::fleet::PX_PER_METRE`).
     pub scale: f32,
+    /// How translucent its hull is, in 32nds as a sheet's `BaseTransp`: 0
+    /// opaque, 32 or more unseen. A class drawn as a model has no sheet to
+    /// read it from, so the edge fills it from the data
+    /// (`nova_galaxy_format`'s `fleet::Ship::translucency`), 0 by default.
+    pub base_transp: i16,
+    /// How far the hull and the outfits its class's own and as-built
+    /// kits' mounts show reach from its origin, in model units: no turn
+    /// moves any of them further, so the model in any pose fits in a
+    /// circle of this times its scale about its centre. A screen that
+    /// fits a portrait of the class in a rectangle sizes it by this
+    /// ([`ShipPortrait`](crate::model_picture::ShipPortrait)).
+    pub radius: f32,
 }
 
 /// What a stellar draws in 3D.
@@ -40,7 +57,9 @@ pub struct ShipModel {
 pub enum StellarModel {
     /// A model, a station's or an outpost's, in its own units.
     Model {
-        /// The model.
+        /// The model, in the livery of the stellar's owner as the edge
+        /// keys it (`nova_render::new_game_world`): one model in two
+        /// owners' liveries is two keys, so each stellar draws its own.
         key: ModelKey,
         /// How far its footprint reaches from its centre, in model units,
         /// measured as its stand-in outline's reach is
@@ -52,7 +71,34 @@ pub enum StellarModel {
     Planet {
         /// The planet.
         key: PlanetKey,
+        /// How far its rings and atmosphere reach on screen, in its
+        /// globe's radii: 1 for a bare globe, more for a halo or rings
+        /// (`nova_render`'s `planet::reach`). Flight draws the globe at
+        /// its stand-in's radius whatever this is; a picture fits the
+        /// whole of it to its rectangle ([`StellarModel::overhang`]).
+        reach: f32,
     },
+}
+
+impl StellarModel {
+    /// Planet `key` reaching `reach` of its globe's radii.
+    #[must_use]
+    pub const fn planet(key: PlanetKey, reach: f32) -> Self {
+        Self::Planet { key, reach }
+    }
+
+    /// How far it draws beyond the radius it is drawn at, as a multiple
+    /// of it: a planet's reach, or 1 where that is below 1 or no finite
+    /// number, as a planet never draws inside its globe; and 1 for a
+    /// model, whose scale fits its reach to the radius. A picture divides
+    /// the room it has by this, so the whole of it fits.
+    #[must_use]
+    pub fn overhang(self) -> f32 {
+        match self {
+            Self::Planet { reach, .. } if reach.is_finite() => reach.max(1.0),
+            Self::Planet { .. } | Self::Model { .. } => 1.0,
+        }
+    }
 }
 
 /// The models the flight draws (see the module docs).
@@ -138,6 +184,8 @@ mod tests {
                 ShipModel {
                     key: HULL,
                     scale: 1.0,
+                    base_transp: 6,
+                    radius: 3.0,
                 },
             )]),
             built_kits: BTreeMap::from([(ShipId(129), vec![BED])]),
@@ -157,8 +205,39 @@ mod tests {
                         reach: 4.0,
                     },
                 ),
-                (StellarId(136), StellarModel::Planet { key: GIANT }),
+                (StellarId(136), StellarModel::planet(GIANT, 2.3)),
             ]),
+        }
+    }
+
+    #[test]
+    fn a_planet_is_built_from_its_key_and_its_reach() {
+        assert_eq!(
+            StellarModel::planet(GIANT, 2.3),
+            StellarModel::Planet {
+                key: GIANT,
+                reach: 2.3
+            }
+        );
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn a_planet_overhangs_its_globe_by_its_reach_and_a_station_by_nothing() {
+        assert_eq!(StellarModel::planet(GIANT, 2.3).overhang(), 2.3);
+        assert_eq!(StellarModel::planet(GIANT, 1.04).overhang(), 1.04);
+        assert_eq!(StellarModel::planet(GIANT, 1.0).overhang(), 1.0);
+        let station = StellarModel::Model {
+            key: HUB,
+            reach: 4.0,
+        };
+        assert_eq!(station.overhang(), 1.0, "its scale fits its reach");
+        for reach in [0.5, 0.0, -2.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(
+                StellarModel::planet(GIANT, reach).overhang(),
+                1.0,
+                "{reach} is taken as the globe's"
+            );
         }
     }
 
@@ -173,7 +252,9 @@ mod tests {
             table.ship(ShipId(128)),
             Some(ShipModel {
                 key: HULL,
-                scale: 1.0
+                scale: 1.0,
+                base_transp: 6,
+                radius: 3.0,
             })
         );
         assert_eq!(table.ship(ShipId(129)), None);
@@ -188,7 +269,7 @@ mod tests {
         );
         assert_eq!(
             table.stellar(StellarId(136)),
-            Some(StellarModel::Planet { key: GIANT })
+            Some(StellarModel::planet(GIANT, 2.3))
         );
         assert_eq!(table.stellar(StellarId(129)), None);
     }

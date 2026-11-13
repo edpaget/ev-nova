@@ -13,6 +13,7 @@ use serde::Deserialize;
 
 use crate::goods::PriceLevel;
 use crate::id::{Color, DialogRef, Flag, Fraction, Harshness, Id, PointRef};
+use crate::sky::Sky;
 use crate::traffic::Traffic;
 
 /// An `[x, y]` position. On the galaxy map and inside a system, x grows
@@ -179,6 +180,12 @@ pub struct System {
     /// usual civilian traffic.
     #[serde(default)]
     pub traffic: Option<Traffic>,
+    /// How the system's sky looks behind the play: its star density, the
+    /// colour its stars lean toward, and its distant nebula backdrop.
+    /// Omit for the engine's stars and a backdrop picked by the system's
+    /// seed.
+    #[serde(default)]
+    pub sky: Option<Sky>,
 }
 
 /// A system-wide hazard. See `mechanics/systems-and-regions.md`.

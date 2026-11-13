@@ -444,6 +444,7 @@ fn quiet() -> Prefs {
         parallax_starfield: true,
         fullscreen: nova_view::FullscreenKind::Borderless,
         scaling: nova_view::Scaling::Native,
+        render_scale: nova_view::RenderScale::Auto,
     }
 }
 

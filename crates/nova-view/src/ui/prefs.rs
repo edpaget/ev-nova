@@ -1,8 +1,9 @@
 //! The Preferences dialog, "new prefs dialog" (`DLOG` 4003): sound effects
 //! and music on or off, each one's volume, Hyperspace Effects, QuickTime
 //! Movies, Smoke Trails, Weapon Effects, Ship Animations, Engine Glows,
-//! Running Lights, how the game runs fullscreen and how it is enlarged
-//! onto the window (its Scaling).
+//! Running Lights, how the game runs fullscreen, how it is enlarged onto
+//! the window (its Scaling) and the size its world is drawn at (its render
+//! scale).
 //!
 //! The stock dialog has a column of check boxes for options this game
 //! does not have yet, one volume (item 4's "Sound Volume:", its value in
@@ -32,8 +33,8 @@
 //!   [`RELAUNCH_NOTICE`], while any of their boxes differs from the value
 //!   the game launched with ([`LaunchPrefs`], `settingsChange:` @0xd0b01,
 //!   @0xd0b90-0xd0c40). The notice is drawn in the free area under
-//!   "Check For Updates" ([`NOTICE_AREA`]), where the classic dialog has
-//!   nothing.
+//!   "Check For Updates" ([`NOTICE_AREA`]), the render-scale list's row,
+//!   where the classic dialog has nothing.
 //! - Check box 18 ("Parallax Starfield") works as it stands: on, each
 //!   star gets its own parallax factor; off, every factor is 0. Like the
 //!   original's `accept:` (@0xcff03), the change applies at once, at the
@@ -57,13 +58,18 @@
 //!   as they load ([`PrefsDialog::with_scaling`]), each labelled
 //!   "Scaling: " and its name, as the row has no caption of its own. It
 //!   sits directly above the display picker, in the same column, so it is
-//!   laid out the same way, running on to the same margin; and it leaves
-//!   "Check For Updates" free for a later list. Its choice is held until
-//!   the dialog closes, as the display picker's is, and reported as
-//!   [`Prefs::scaling`] only when the player stepped it to another
-//!   scaling than the one running.
-//! - The one other check box, "Check For Updates", is drawn greyed and
-//!   unchecked: that option does not work yet.
+//!   laid out the same way, running on to the same margin. Its choice is
+//!   held until the dialog closes, as the display picker's is, and
+//!   reported as [`Prefs::scaling`] only when the player stepped it to
+//!   another scaling than the one running.
+//! - Check box 22 ("Check For Updates"), the last box with nothing to do,
+//!   holds the render-scale list (a [`Picker`] of [`RenderScale`]s, the
+//!   `render_scale` child module): Auto, then the percentages of the
+//!   backing size flight's world can be drawn at. It sits in the left
+//!   column under the drawing toggles, in the box's own area. Each step
+//!   applies at once, as a volume's does, with no relaunch notice.
+//! - Any other check box inside the dialog (the stock template has none
+//!   left) is drawn greyed and unchecked.
 //! - Key Settings opens the keys screen ([`KeysScreen`]) over the dialog,
 //!   as the original's Preferences window holds the Keys tabs. While it
 //!   is open it takes every input, tick and click, and draws over the
@@ -85,8 +91,9 @@
 //! (`-[NSApplication isFullKeyboardAccessEnabled]`), Tab moves the focus
 //! through every control and Space presses the focused one; with it off,
 //! only text fields and lists take the focus. This dialog has neither: its
-//! display picker and Scaling list are one-row pickers stepped by their
-//! arrows, as a pop-up button or a stepper is, not a list of rows. So
+//! display picker, Scaling list and render-scale list are one-row pickers
+//! stepped by their arrows, as a pop-up button or a stepper is, not a list
+//! of rows. So
 //! under [`FocusRing::Off`] (full keyboard access off) nothing is in the
 //! loop, and under [`FocusRing::Tab`] (on, and where the platform has no
 //! such setting) every part is. Whoever opens the dialog reads the setting
@@ -94,7 +101,7 @@
 //!
 //! # Pad focus
 //!
-//! A pad moves the same focus over twenty targets, each stepper's two
+//! A pad moves the same focus over twenty-two targets, each stepper's two
 //! arrows apart ([`PrefsTarget`]), under either reading, starting on OK
 //! (the `pad` child module). Its highlight shows only while the pad was
 //! the device used last, and the keyboard's outline only a focus the
@@ -115,6 +122,7 @@ use crate::keymap::{
     Bindings, Command, CommandInput, CommandReader, KeyCombo, SharedBindings, UiCommand, contexts,
 };
 use crate::preferences::{LaunchPrefs, Prefs};
+use crate::render_scale::RenderScale;
 use crate::scaling::Scaling;
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::SoundPrefs;
@@ -137,8 +145,10 @@ use super::toggle::Toggle;
 use super::volume::{VolumeControl, VolumeRects};
 
 mod pad;
+mod render_scale;
 
 pub use pad::PrefsTarget;
+pub use render_scale::RENDER_SCALE_ITEM;
 
 /// The dialog's `DLOG` (and `DITL`) ID.
 pub const PREFS_DIALOG: i16 = 4003;
@@ -240,8 +250,8 @@ pub const PARALLAX_STARFIELD_LABEL: &str = "Parallax Starfield";
 pub const RELAUNCH_NOTICE: &str = "(Changes will take effect the next time you run Nova)";
 
 /// Where the notice is drawn, dialog-local (left, top, right, bottom):
-/// under "Check For Updates" in the left column, an area `DITL` 4003
-/// leaves empty.
+/// under "Check For Updates" (the render-scale list's row) in the left
+/// column, an area `DITL` 4003 leaves empty.
 pub const NOTICE_AREA: (f32, f32, f32, f32) = (11.0, 189.0, 165.0, 241.0);
 
 /// The sound effects volume's label.
@@ -286,6 +296,8 @@ pub enum Focus {
     SmokeTrails,
     /// The Parallax Starfield toggle.
     ParallaxStarfield,
+    /// The render-scale list, the next row down the left column.
+    RenderScale,
     /// The display picker.
     Display,
     /// The Scaling list.
@@ -312,7 +324,8 @@ impl Focus {
             Self::RunningLights => Self::WeaponEffects,
             Self::WeaponEffects => Self::SmokeTrails,
             Self::SmokeTrails => Self::ParallaxStarfield,
-            Self::ParallaxStarfield => Self::Display,
+            Self::ParallaxStarfield => Self::RenderScale,
+            Self::RenderScale => Self::Display,
             Self::Display => Self::Scaling,
             Self::Scaling => Self::EffectsVolume,
             Self::EffectsVolume => Self::MusicVolume,
@@ -336,6 +349,7 @@ enum Target {
     WeaponEffects,
     SmokeTrails,
     ParallaxStarfield,
+    RenderScale,
     Display,
     Scaling,
     EffectsVolume,
@@ -369,6 +383,7 @@ fn inert_boxes(template: &DialogTemplate, dialog: &Dialog) -> Vec<Toggle> {
         PARALLAX_STARFIELD_ITEM,
         DISPLAY_ITEM,
         SCALING_ITEM,
+        RENDER_SCALE_ITEM,
     ];
     template
         .items
@@ -472,6 +487,9 @@ pub struct PrefsDialog {
     /// The Scaling, as reported: the one running, which the dialog opened
     /// on, until it closes on a pick.
     scaling: Scaling,
+    /// The render-scale list (the `render_scale` child module). Each step
+    /// of it is a change, reported at once.
+    render_scale: Picker<RenderScale>,
     /// The check boxes for options that do not work yet, greyed.
     inert: Vec<Toggle>,
     style: ButtonStyle,
@@ -590,6 +608,11 @@ impl PrefsDialog {
             picker: Picker::new(scaling_row, unoffered, prefs.scaling),
             stepped: false,
         };
+        let render_scale = Picker::new(
+            place(RENDER_SCALE_ITEM)?,
+            RenderScale::list(prefs.render_scale),
+            prefs.render_scale,
+        );
         let fullscreen = prefs.fullscreen;
         let scaling = prefs.scaling;
         let prefs = prefs.sound;
@@ -618,6 +641,7 @@ impl PrefsDialog {
             choice: None,
             scaling_list,
             scaling,
+            render_scale,
             inert,
             dialog,
             style,
@@ -727,6 +751,7 @@ impl PrefsDialog {
             parallax_starfield: self.parallax.on(),
             fullscreen: self.fullscreen,
             scaling: self.scaling,
+            render_scale: self.render_scale.selected(),
         }
     }
 
@@ -851,6 +876,7 @@ impl PrefsDialog {
     /// steps on the arrows.
     fn part_command(&mut self, part: Focus, input: CommandInput) {
         match part {
+            Focus::RenderScale => self.changed |= self.render_scale.command(input),
             Focus::Display => self.stepped |= self.display.command(input),
             Focus::Scaling => self.scaling_list.command(input),
             Focus::EffectsVolume => self.changed |= self.effects_volume.command(input),
@@ -877,7 +903,8 @@ impl PrefsDialog {
             Focus::WeaponEffects => &self.weapons,
             Focus::SmokeTrails => &self.smoke,
             Focus::ParallaxStarfield => &self.parallax,
-            Focus::Display
+            Focus::RenderScale
+            | Focus::Display
             | Focus::Scaling
             | Focus::EffectsVolume
             | Focus::MusicVolume
@@ -899,7 +926,8 @@ impl PrefsDialog {
             Focus::WeaponEffects => &mut self.weapons,
             Focus::SmokeTrails => &mut self.smoke,
             Focus::ParallaxStarfield => &mut self.parallax,
-            Focus::Display
+            Focus::RenderScale
+            | Focus::Display
             | Focus::Scaling
             | Focus::EffectsVolume
             | Focus::MusicVolume
@@ -936,6 +964,8 @@ impl PrefsDialog {
                 Target::SmokeTrails
             } else if self.parallax.contains(at) {
                 Target::ParallaxStarfield
+            } else if self.render_scale.arrow_at(at).is_some() {
+                Target::RenderScale
             } else if self.display.arrow_at(at).is_some() {
                 Target::Display
             } else if self.scaling_list.picker.arrow_at(at).is_some() {
@@ -959,6 +989,7 @@ impl PrefsDialog {
             Some(Target::WeaponEffects) => self.changed |= self.weapons.input(input),
             Some(Target::SmokeTrails) => self.changed |= self.smoke.input(input),
             Some(Target::ParallaxStarfield) => self.changed |= self.parallax.input(input),
+            Some(Target::RenderScale) => self.changed |= self.render_scale.input(input),
             Some(Target::Display) => self.stepped |= self.display.input(input),
             Some(Target::Scaling) => self.scaling_list.input(input),
             Some(Target::EffectsVolume) => self.changed |= self.effects_volume.input(input),
@@ -1013,6 +1044,7 @@ impl PrefsDialog {
         self.parallax.cancel_pointer();
         self.display.cancel_pointer();
         self.scaling_list.picker.cancel_pointer();
+        self.render_scale.cancel_pointer();
         self.effects_volume.cancel_pointer();
         self.music_volume.cancel_pointer();
         self.target = None;
@@ -1152,20 +1184,22 @@ impl Screen for PrefsDialog {
     ///   steps it. A click on OK closes the dialog, and one on Key
     ///   Settings opens the keys screen; the greyed check boxes do
     ///   nothing.
-    /// - A click on the display picker's or the Scaling list's arrows
-    ///   steps it.
+    /// - A click on the display picker's, the Scaling list's or the
+    ///   render-scale list's arrows steps it.
     /// - Under [`FocusRing::Tab`], Tab moves the focus (music, sound,
     ///   Hyperspace Effects, QuickTime Movies, then down the left column:
     ///   Ship Animations, Engine Glows, Running Lights, Weapon Effects,
-    ///   Smoke Trails, Parallax Starfield; the display picker, the Scaling list,
-    ///   the sound volume, the music volume, Key Settings, OK, and
-    ///   round). Space flips a focused toggle, opens the keys screen on
-    ///   Key Settings or activates OK; the arrow keys step a focused
-    ///   volume, and Up and Down the focused picker, repeats included.
-    ///   Under [`FocusRing::Off`] nothing takes the focus, so Tab, Space
-    ///   and the arrows do nothing.
-    /// - Return and Escape close it. Closing, whichever way, reports each
-    ///   picker's choice if it differs from the one the dialog opened on.
+    ///   Smoke Trails, Parallax Starfield, the render-scale list; the
+    ///   display picker, the Scaling list, the sound volume, the music
+    ///   volume, Key Settings, OK, and round). Space flips a focused
+    ///   toggle, opens the keys screen on Key Settings or activates OK;
+    ///   the arrow keys step a focused volume, and Up and Down the focused
+    ///   picker, repeats included. Under [`FocusRing::Off`] nothing takes
+    ///   the focus, so Tab, Space and the arrows do nothing.
+    /// - Return and Escape close it. Closing, whichever way, reports the
+    ///   display picker's and the Scaling list's choice if it differs from
+    ///   the one the dialog opened on. The render-scale list's step is
+    ///   reported at once, as a toggle's flip is.
     ///
     /// While the keys screen is open, every input is its.
     ///
@@ -1212,9 +1246,10 @@ impl Screen for PrefsDialog {
         }
     }
 
-    /// The backdrop and its outline, OK and Key Settings, the greyed check
-    /// box, the ten toggles, the display picker, the Scaling list,
-    /// then the two volumes, and the relaunch notice while it shows.
+    /// The backdrop and its outline, OK and Key Settings, any greyed check
+    /// box, the ten toggles, the display picker, the Scaling list, the
+    /// render-scale list, then the two volumes, and the relaunch notice
+    /// while it shows.
     /// The focused part is outlined. The keys screen, while it is open,
     /// is drawn over it all.
     fn draw(&self, list: &mut DrawList) {
@@ -1245,6 +1280,7 @@ impl Screen for PrefsDialog {
             .draw(focused(Focus::ParallaxStarfield), &self.metrics, list);
         self.display.draw(focused(Focus::Display), list);
         self.scaling_list.picker.draw(focused(Focus::Scaling), list);
+        self.render_scale.draw(focused(Focus::RenderScale), list);
         self.effects_volume
             .draw(focused(Focus::EffectsVolume), list);
         self.music_volume.draw(focused(Focus::MusicVolume), list);
@@ -1400,7 +1436,7 @@ mod tests {
     /// The stock "new prefs dialog" ([`fixture::stock_template`]), with
     /// one more check box parked outside it, as the Windows build parks
     /// nothing here.
-    fn template() -> DialogTemplate {
+    pub(super) fn template() -> DialogTemplate {
         let mut template = fixture::stock_template();
         template.items.push(ItemTemplate {
             bounds: ltrb(400.0, 10.0, 420.0, 20.0),
@@ -1414,11 +1450,11 @@ mod tests {
     const ORIGIN: Point = Point::new(344.0, 245.0);
 
     /// A dialog-local rectangle on the screen.
-    fn placed(left: f32, top: f32, right: f32, bottom: f32) -> Bounds {
+    pub(super) fn placed(left: f32, top: f32, right: f32, bottom: f32) -> Bounds {
         ltrb(left, top, right, bottom).offset(ORIGIN)
     }
 
-    fn start() -> Prefs {
+    pub(super) fn start() -> Prefs {
         Prefs {
             sound: SoundPrefs {
                 sound: true,
@@ -1472,7 +1508,7 @@ mod tests {
         }
     }
 
-    fn button(pressed: bool, at: Point) -> Input {
+    pub(super) fn button(pressed: bool, at: Point) -> Input {
         Input::PointerButton {
             button: MouseButton::Left,
             pressed,
@@ -1500,7 +1536,7 @@ mod tests {
         }
 
         fn controls(&self) -> Vec<(&'static str, Bounds)> {
-            const NAMES: [&str; 20] = [
+            const NAMES: [&str; 22] = [
                 "Music",
                 "Sound",
                 "Hyperspace Effects",
@@ -1511,6 +1547,8 @@ mod tests {
                 "Weapon Effects",
                 "Smoke Trails",
                 "Parallax Starfield",
+                "Render scale up",
+                "Render scale down",
                 "Display up",
                 "Display down",
                 "Scaling up",
@@ -1523,7 +1561,7 @@ mod tests {
                 "OK",
             ];
             let targets = self.0.pad_targets();
-            assert_eq!(targets.len(), NAMES.len(), "twenty targets");
+            assert_eq!(targets.len(), NAMES.len(), "twenty-two targets");
             NAMES
                 .into_iter()
                 .zip(targets)
@@ -1609,16 +1647,33 @@ mod tests {
 
     #[test]
     fn every_other_check_box_inside_is_greyed_with_its_own_title() {
-        let dialog = prefs();
+        assert!(
+            prefs().inert().is_empty(),
+            "every check box of the stock dialog holds a control"
+        );
+        let dialog = with_a_spare_box();
         let inert: Vec<(&str, bool, bool)> = dialog
             .inert()
             .iter()
             .map(|toggle| (toggle.label(), toggle.enabled(), toggle.on()))
             .collect();
         let titles: Vec<&str> = inert.iter().map(|(title, ..)| *title).collect();
-        assert_eq!(titles, ["Check For Updates"]);
+        assert_eq!(titles, ["Spare"]);
         assert!(inert.iter().all(|(_, enabled, on)| !enabled && !on));
-        assert_eq!(dialog.inert()[0].rect(), placed(11.0, 165.0, 156.0, 183.0));
+        assert_eq!(dialog.inert()[0].rect(), placed(11.0, 190.0, 100.0, 208.0));
+    }
+
+    /// The dialog over a template with one more check box inside it,
+    /// "Spare", which holds no control.
+    fn with_a_spare_box() -> PrefsDialog {
+        let mut template = template();
+        template.items.push(ItemTemplate {
+            bounds: ltrb(11.0, 190.0, 100.0, 208.0),
+            enabled: true,
+            kind: ItemSpec::CheckBox("Spare".into()),
+        });
+        PrefsDialog::new(&template, start(), ButtonStyle::STOCK, Rc::new(MonoMetrics))
+            .expect("builds")
     }
 
     #[test]
@@ -1967,7 +2022,8 @@ mod tests {
 
     #[test]
     fn the_greyed_check_boxes_do_nothing() {
-        let mut dialog = prefs();
+        let mut dialog = with_a_spare_box();
+        assert_eq!(dialog.inert().len(), 1);
         let points: Vec<Point> = dialog
             .inert()
             .iter()
@@ -2028,7 +2084,7 @@ mod tests {
     #[test]
     fn space_on_the_focused_key_settings_opens_the_keys_screen() {
         let mut dialog = prefs();
-        for _ in 0..15 {
+        for _ in 0..16 {
             dialog.input(&key(Key::Tab));
         }
         assert_eq!(dialog.focus(), Some(Focus::KeySettings));
@@ -2178,7 +2234,7 @@ mod tests {
     fn tab_moves_the_focus_round_the_ring() {
         let mut dialog = prefs();
         let mut order = Vec::new();
-        for _ in 0..17 {
+        for _ in 0..18 {
             dialog.input(&key(Key::Tab));
             order.push(dialog.focus().expect("focused"));
         }
@@ -2195,6 +2251,7 @@ mod tests {
                 Focus::WeaponEffects,
                 Focus::SmokeTrails,
                 Focus::ParallaxStarfield,
+                Focus::RenderScale,
                 Focus::Display,
                 Focus::Scaling,
                 Focus::EffectsVolume,
@@ -2230,7 +2287,7 @@ mod tests {
         let mut dialog = prefs();
         dialog.input(&key(Key::ArrowUp));
         assert_eq!(dialog.prefs(), start(), "nothing focused");
-        for _ in 0..13 {
+        for _ in 0..14 {
             dialog.input(&key(Key::Tab));
         }
         dialog.input(&key(Key::ArrowUp));
@@ -2290,7 +2347,7 @@ mod tests {
             assert!(dialog.closed(), "{input:?}");
         }
         let mut dialog = prefs();
-        for _ in 0..16 {
+        for _ in 0..17 {
             dialog.input(&key(Key::Tab));
         }
         dialog.input(&held(Key::Space));
@@ -2324,7 +2381,7 @@ mod tests {
         assert_eq!(dialog.take_prefs(), Some(changed));
         assert_eq!(dialog.take_prefs(), None, "once");
         // A step that changes nothing is not a change.
-        for _ in 0..13 {
+        for _ in 0..14 {
             dialog.input(&key(Key::Tab));
         }
         for _ in 0..3 {
@@ -2365,9 +2422,11 @@ mod tests {
         assert!(!smoke.smoke_trails);
         let parallax = focused(10, key(Key::Space)).expect("Space on Parallax Starfield");
         assert!(!parallax.parallax_starfield);
-        let effects = focused(13, key(Key::ArrowUp)).expect("Up on the sound volume");
+        let scale = focused(11, key(Key::ArrowDown)).expect("Down on the render scale");
+        assert_ne!(scale.render_scale, start().render_scale);
+        let effects = focused(14, key(Key::ArrowUp)).expect("Up on the sound volume");
         assert_eq!(effects.sound.effects_level, 5);
-        let volume = focused(14, key(Key::ArrowDown)).expect("Down on the music volume");
+        let volume = focused(15, key(Key::ArrowDown)).expect("Down on the music volume");
         assert_eq!(volume.sound.music_level, 1);
         let clicked = |part: fn(&PrefsDialog) -> Point| {
             let mut dialog = prefs();
@@ -2481,7 +2540,7 @@ mod tests {
             assert_eq!(dialog.take_sounds(), [], "{input:?}");
         }
         let mut dialog = prefs();
-        for _ in 0..16 {
+        for _ in 0..17 {
             dialog.input(&key(Key::Tab));
         }
         assert_eq!(dialog.take_sounds(), [], "Tab to OK");
@@ -2540,6 +2599,7 @@ mod tests {
             .draw(false, &MonoMetrics, &mut expected);
         dialog.display().draw(false, &mut expected);
         dialog.scaling().draw(false, &mut expected);
+        dialog.render_scale().draw(false, &mut expected);
         dialog.effects_volume().draw(false, &mut expected);
         dialog.music_volume().draw(false, &mut expected);
         assert_eq!(commands, expected.iter().cloned().collect::<Vec<_>>());
@@ -2577,7 +2637,7 @@ mod tests {
         assert_eq!(commands.len(), unfocused.len() + 4);
         let music: Vec<DrawCommand> = music.iter().cloned().collect();
         assert!(commands.windows(music.len()).any(|window| window == music));
-        for _ in 0..12 {
+        for _ in 0..13 {
             dialog.input(&key(Key::Tab));
         }
         let mut effects = DrawList::new();
@@ -2656,7 +2716,7 @@ mod tests {
 
     /// Tabs to the display picker.
     fn focus_display(dialog: &mut PrefsDialog) {
-        for _ in 0..11 {
+        for _ in 0..12 {
             dialog.input(&key(Key::Tab));
         }
         assert_eq!(dialog.focus(), Some(Focus::Display));
@@ -2968,7 +3028,7 @@ mod tests {
 
     /// Tabs to the Scaling list.
     fn focus_scaling(dialog: &mut PrefsDialog) {
-        for _ in 0..12 {
+        for _ in 0..13 {
             dialog.input(&key(Key::Tab));
         }
         assert_eq!(dialog.focus(), Some(Focus::Scaling));
@@ -3555,7 +3615,7 @@ mod tests {
     }
 
     #[test]
-    fn the_notice_sits_in_the_free_area_under_check_for_updates() {
+    fn the_notice_sits_in_the_free_area_under_the_render_scale_list() {
         let dialog = prefs().with_launch(LaunchPrefs {
             weapon_effects: false,
             ..LaunchPrefs::of(&start())
@@ -3584,6 +3644,7 @@ mod tests {
             .chain([
                 dialog.display().rects().bounds(),
                 dialog.scaling().rects().bounds(),
+                dialog.render_scale().rects().bounds(),
                 dialog.effects_volume().rects().bounds(),
                 dialog.music_volume().rects().bounds(),
                 ok,

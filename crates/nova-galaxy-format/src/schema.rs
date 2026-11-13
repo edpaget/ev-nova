@@ -213,6 +213,90 @@ mod tests {
     }
 
     #[test]
+    fn the_system_schema_describes_its_sky_with_its_bounds() {
+        let system = value("system.schema.json");
+        let described = |object: &serde_json::Value, field: &str| {
+            assert!(
+                object["properties"][field]["description"]
+                    .as_str()
+                    .is_some_and(|d| !d.is_empty()),
+                "{field}: {object}"
+            );
+        };
+        described(&system, "sky");
+        let required = system["required"].as_array().expect("required");
+        assert!(!required.contains(&"sky".into()), "{required:?}");
+        // A `$ref` (alone, or the one entry of an `anyOf` for an `Option`)
+        // resolved to its definition.
+        let definition = |field: &serde_json::Value| {
+            let reference = field["$ref"]
+                .as_str()
+                .or_else(|| {
+                    (field["anyOf"].as_array()?.iter()).find_map(|one| one["$ref"].as_str())
+                })
+                .unwrap_or_else(|| panic!("a reference: {field}"));
+            let name = reference.rsplit('/').next().expect("a name");
+            system["definitions"][name].clone()
+        };
+        let sky = definition(&system["properties"]["sky"]);
+        for field in ["stars", "tint", "backdrop"] {
+            described(&sky, field);
+        }
+        let stars = definition(&sky["properties"]["stars"]);
+        assert_eq!(
+            (stars["minimum"].as_u64(), stars["maximum"].as_u64()),
+            (Some(0), Some(2)),
+            "{stars}"
+        );
+        let backdrop = definition(&sky["properties"]["backdrop"]);
+        for field in ["color", "amount"] {
+            described(&backdrop, field);
+        }
+        let amount = definition(&backdrop["properties"]["amount"]);
+        assert_eq!(
+            (amount["minimum"].as_u64(), amount["maximum"].as_u64()),
+            (Some(0), Some(1)),
+            "{amount}"
+        );
+        assert_eq!(sky["additionalProperties"], false);
+        assert_eq!(backdrop["additionalProperties"], false);
+        described(&sky, "decorations");
+        let decorations = definition(&sky["properties"]["decorations"]);
+        assert_eq!(decorations["type"], "array", "{decorations}");
+        assert_eq!(decorations["maxItems"].as_u64(), Some(6), "{decorations}");
+        let decoration = definition(&decorations["items"]);
+        assert_eq!(decoration["additionalProperties"], false);
+        assert_eq!(decoration["required"], serde_json::json!(["image"]));
+        for field in [
+            "image",
+            "at",
+            "parallax",
+            "size",
+            "turn",
+            "spin",
+            "tint",
+            "brightness",
+            "blend",
+        ] {
+            described(&decoration, field);
+        }
+        for (field, least, most) in [
+            ("parallax", 0.0125, 0.5),
+            ("size", 8.0, 512.0),
+            ("turn", -360.0, 360.0),
+            ("spin", -20.0, 20.0),
+            ("brightness", 0.0, 1.0),
+        ] {
+            let number = definition(&decoration["properties"][field]);
+            assert_eq!(
+                (number["minimum"].as_f64(), number["maximum"].as_f64()),
+                (Some(least), Some(most)),
+                "{field}: {number}"
+            );
+        }
+    }
+
+    #[test]
     fn the_mission_schema_lists_the_outfit_effects() {
         let (_, mission) = &schema("mission.schema.json");
         let value: serde_json::Value = serde_json::from_str(mission).unwrap();
@@ -283,6 +367,23 @@ mod tests {
         let required = ship["required"].as_array().expect("required");
         assert!(!required.contains(&"price".into()), "{required:?}");
         assert!(!required.contains(&"sold_at".into()), "{required:?}");
+    }
+
+    #[test]
+    fn the_ship_schema_offers_an_optional_translucency() {
+        let ship = value("ship.schema.json");
+        let translucency = &ship["properties"]["translucency"];
+        let name = translucency["anyOf"]
+            .as_array()
+            .and_then(|options| options.iter().find_map(|o| o["$ref"].as_str()))
+            .or_else(|| translucency["$ref"].as_str())
+            .and_then(|r| r.rsplit('/').next())
+            .unwrap_or_else(|| panic!("a translucency definition: {translucency}"));
+        let definition = &ship["definitions"][name];
+        assert_eq!(definition["type"], "integer", "{definition}");
+        assert_eq!(definition["maximum"], 32, "{definition}");
+        let required = ship["required"].as_array().expect("required");
+        assert!(!required.contains(&"translucency".into()), "{required:?}");
     }
 
     #[test]

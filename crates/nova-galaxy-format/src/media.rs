@@ -23,9 +23,11 @@ pub fn is_lfs_pointer(bytes: &[u8]) -> bool {
 /// ([`Galaxy::media_paths`] that are [`MediaPath::is_export`]) whose bytes in
 /// `source` are LFS pointers, sorted.
 ///
-/// A file that is absent, or can't be read, isn't a pointer: the `galaxy`
-/// tool's checks report those. Files under `media/source/` are what
-/// artists edit, which nothing loads, so they aren't read.
+/// It asks for each file's head ([`Source::head`]), as many bytes as a
+/// pointer starts with, and reads no file whole. A file that is absent,
+/// or can't be read, isn't a pointer: the `galaxy` tool's checks report
+/// those. Files under `media/source/` are what artists edit, which
+/// nothing loads, so they aren't read.
 #[must_use]
 pub fn lfs_pointers<'a>(galaxy: &'a Galaxy, source: &impl Source) -> Vec<&'a str> {
     galaxy
@@ -35,10 +37,10 @@ pub fn lfs_pointers<'a>(galaxy: &'a Galaxy, source: &impl Source) -> Vec<&'a str
         .map(MediaPath::as_str)
         .filter(|path| {
             source
-                .bytes(path)
+                .head(path, LFS_POINTER.len())
                 .ok()
                 .flatten()
-                .is_some_and(|bytes| is_lfs_pointer(&bytes))
+                .is_some_and(|head| is_lfs_pointer(&head))
         })
         .collect()
 }
@@ -48,7 +50,7 @@ mod tests {
     use super::*;
     use crate::fixture;
     use crate::load::load;
-    use crate::source::MemSource;
+    use crate::source::{CountingSource, MemSource};
 
     /// A pointer as `git lfs` writes one.
     const POINTER: &[u8] = b"version https://git-lfs.github.com/spec/v1\n\
@@ -101,6 +103,47 @@ mod tests {
                 "media/export/pack/surface.png"
             ]
         );
+    }
+
+    #[test]
+    fn the_check_asks_each_export_path_s_head_once_and_reads_no_file_whole() {
+        let source = with_media(&[
+            ("media/export/pack/surface.png", POINTER),
+            ("media/export/pack/hull.glb", b"glTF\x02"),
+            ("media/source/spire.blend", POINTER),
+        ])
+        .with(
+            "assets/spire.md",
+            "---\nkind: model\nplaceholder: true\nsources: [media/source/spire.blend]\n---\n",
+        );
+        let (galaxy, _) = load(&source);
+        let counting = CountingSource::new(&source);
+        assert_eq!(
+            lfs_pointers(&galaxy, &counting),
+            ["media/export/pack/surface.png"]
+        );
+        let export: Vec<&str> = galaxy
+            .media()
+            .into_iter()
+            .filter(|path| path.is_export())
+            .map(MediaPath::as_str)
+            .collect();
+        assert!(export.len() >= 3, "{export:?}");
+        for path in export {
+            assert_eq!(counting.heads_asked(path), 1, "{path}");
+        }
+        assert_eq!(counting.heads_asked("media/source/spire.blend"), 0);
+        assert_eq!(counting.all_bytes_asked(), [], "no file whole");
+    }
+
+    #[test]
+    fn a_file_of_exactly_a_pointer_s_start_is_a_pointer_and_one_a_byte_short_is_not() {
+        // The head asked for is the whole of what a pointer starts with.
+        let exactly = with_media(&[("media/export/pack/hull.glb", LFS_POINTER)]);
+        assert_eq!(pointers(&exactly), ["media/export/pack/hull.glb"]);
+        let short = &LFS_POINTER[..LFS_POINTER.len() - 1];
+        let nearly = with_media(&[("media/export/pack/hull.glb", short)]);
+        assert_eq!(pointers(&nearly), Vec::<String>::new());
     }
 
     #[test]
