@@ -181,6 +181,17 @@ opt-level = 3
 [profile.dev.package.adler2]
 opt-level = 3
 
+# A generated planet is baked in the first frame that draws it
+# (`nova-render`'s `planets`), which after a jump is the arrival's white
+# frame. Unoptimised, one bake at the engine's sizes takes 0.56 to 1.1 s
+# (a gas giant to an ice world), so `cargo run -p nova` would hold that
+# white for seconds; optimised it takes 33 to 82 ms, as a release build's
+# does. The bake is all in this crate, so optimise it alone in dev and
+# test builds. It costs the crate slower rebuilds and locals a debugger
+# can't see.
+[profile.dev.package.nova-galaxy-media]
+opt-level = 3
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
