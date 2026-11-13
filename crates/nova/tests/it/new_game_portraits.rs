@@ -13,7 +13,9 @@
 //! with an escort. The main menu's pilot panel draws the pilot's class as
 //! its model (rdm:phase/rendering-3d/phase-16-pilot-panel-ship-model),
 //! for a pilot just created and for one saved and opened at launch, with
-//! the table given after the menu is built, as `main` gives it.
+//! the table given after the menu is built, as `main` gives it. The ship
+//! browser, Tab from the menu, turns a class's model in its sprite's
+//! place (rdm:phase/rendering-3d/phase-17-ship-browser-models).
 //!
 //! The 3D sample's stations sell no ships, so no shipyard opens over it:
 //! the shipyard's and the hire screen's models are pinned on nova-view's
@@ -351,6 +353,42 @@ fn the_main_menu_s_pilot_panel_draws_a_new_pilot_s_class_as_its_model() {
     draw(&mut harness);
     let (key, drawn) = the_menu_s_class_and_models(&harness, &assets);
     assert!(drawn.contains(&key), "the pilot's class: {drawn:?}");
+}
+
+#[test]
+fn the_ship_browser_turns_a_new_game_class_s_model() {
+    let pilots = MemoryPilots::new();
+    let (mut harness, assets) = on_the_menu(&pilots);
+    draw(&mut harness);
+    // Tab steps from the main menu to the developer viewers.
+    for _ in 0..4 {
+        if harness.showing() == Showing::ShipBrowser {
+            break;
+        }
+        tap(&mut harness, Key::Tab);
+    }
+    assert_eq!(harness.showing(), Showing::ShipBrowser);
+    let mut modelled = None;
+    for _ in 0..=assets.models.ships.len() {
+        let browser = harness.app.screen().ship_browser();
+        if let Some(model) = browser.selected().and_then(|id| assets.models.ship(id)) {
+            modelled = Some(model.key);
+            break;
+        }
+        tap(&mut harness, Key::ArrowRight);
+    }
+    let key = modelled.expect("a modelled class: the sample models every one");
+    let browser = harness.app.screen().ship_browser();
+    let drawn = models_of(browser);
+    assert!(drawn.contains(&key), "the class's model: {drawn:?}");
+    assert_eq!(browser.frame(), Some(0));
+    // Each redraw advances the app's clock; the browser, shown, ticks
+    // and its model turns.
+    for _ in 0..8 {
+        draw(&mut harness);
+    }
+    let frame = harness.app.screen().ship_browser().frame();
+    assert!(matches!(frame, Some(step) if step > 0), "{frame:?}");
 }
 
 #[test]
