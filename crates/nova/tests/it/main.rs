@@ -74,6 +74,7 @@ mod new_game_screens;
 mod new_game_shipyard;
 mod new_game_sky;
 mod new_game_sounds;
+mod new_game_station_livery;
 mod new_game_trade;
 mod new_game_traffic;
 mod new_game_travel;

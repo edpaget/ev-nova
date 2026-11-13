@@ -243,9 +243,16 @@ fn at_the_exchange() -> (Harness, ModelKey) {
     let Some(StellarModel::Model { key: hub, .. }) = assets.models.stellar(exchange) else {
         panic!("the exchange's model");
     };
+    (landed_at_the_exchange(game, &assets), hub)
+}
+
+/// The app flying the new game `game` (a cut of the sample, whose start
+/// is at Luyten Crossing), wired with its world models `assets` as `main`
+/// wires them, landed at Luyten Exchange from the crossing's centre.
+pub(crate) fn landed_at_the_exchange(game: NewGame, assets: &WorldAssets) -> Harness {
     let data = std::rc::Rc::new(game.data);
     let pilots = MemoryPilots::new();
-    let mut harness = flying_over(Ruleset::NewGame, &data, &assets, &pilots);
+    let mut harness = flying_over(Ruleset::NewGame, &data, assets, &pilots);
     harness
         .app
         .screen_mut()
@@ -264,7 +271,7 @@ fn at_the_exchange() -> (Harness, ModelKey) {
         draw(&mut harness);
     }
     assert_eq!(harness.showing(), Showing::Spaceport, "landed");
-    (harness, hub)
+    harness
 }
 
 #[test]
