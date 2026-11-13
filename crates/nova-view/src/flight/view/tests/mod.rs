@@ -105,6 +105,7 @@ mod faked_story;
 mod faked_travel;
 mod faked_wording;
 mod faked_world;
+mod first_frame_planets;
 mod flying;
 mod frame_rate;
 mod frames;

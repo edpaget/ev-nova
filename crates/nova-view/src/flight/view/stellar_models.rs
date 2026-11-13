@@ -17,6 +17,32 @@
 //! Both are drawn by [`draw_stellar_model`], which the other screens that
 //! show a stellar share.
 //!
+//! # Every shown stellar is commanded, on screen or off
+//!
+//! The pass commands each stellar the frame shows wherever its stand-in
+//! falls, as the stand-ins themselves are: nothing here culls one that is
+//! off screen. The renderer relies on that. It makes a planet ready (bakes
+//! a generated look, builds its mips, uploads it) in the first frame that
+//! commands it (`nova_render`'s `planets`), which takes tens of
+//! milliseconds a planet. With every stellar commanded each frame, a
+//! system's planets are all made ready in the first frame drawn there, and
+//! after a jump or a hypergate that frame is drawn under the arrival's
+//! solid white ([`JumpPhase::FadeIn`](crate::flight::jump::JumpPhase::FadeIn)
+//! at its start, or
+//! [`JumpPhase::Flash`](crate::flight::jump::JumpPhase::Flash)), so the
+//! pause holds the white and nothing hitches in motion. The view's
+//! `first_frame_planets` tests pin both.
+//!
+//! So a cull added here needs a replacement: culled planets would each be
+//! made ready in the frame they scroll into view, mid-flight. The
+//! replacement would be a side datum on the draw list naming the planets a
+//! screen will draw, for the renderer to make ready from.
+//!
+//! Not every first frame has a white over it: a pilot's first frame in
+//! flight, the first after a take-off or a wormhole, and a stellar that
+//! starts hidden and shows later pause with nothing covering them. Each is
+//! at a change of scene, not in motion.
+//!
 //! Only a stellar that draws its stand-in, having no sheet, is replaced:
 //! stock stellars have sheets, and stock data has no models, so it draws
 //! as it always did. The data picks the model, not a rulebook key. The
