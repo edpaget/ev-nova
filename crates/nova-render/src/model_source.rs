@@ -24,10 +24,13 @@
 //!
 //! # What is drawn of a material
 //!
-//! - **Its base-colour texture.** A source decodes each image a
-//!   material's base colour names ([`Texture`], a [`ModelTexture`] with
-//!   its mip chain) and no other, and the merged mesh draws each run of
-//!   parts on one texture as a section ([`LoadedModel::mesh`]). A
+//! - **Its base-colour texture.** A source decodes each image some part
+//!   samples ([`Part::sampling_material`]: the base colour of a material
+//!   on a part with texture coordinates) and no other ([`Texture`], a
+//!   [`ModelTexture`] with its mip chain). The merged mesh draws each run
+//!   of parts on one texture as a section, and holds only the textures
+//!   its sections name ([`LoadedModel::mesh`]), so a texture nothing
+//!   samples is neither decoded nor uploaded. A
 //!   fragment is its vertex colour times its texel, all four channels
 //!   ([`crate::camera::fragment`]). The product is taken in the gamma
 //!   space the vertex colour is baked in, the texel's sRGB bytes as they
@@ -96,6 +99,7 @@
 //! this module's tests, and the galaxy adapter runs it on every model of
 //! the sample.
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -147,6 +151,21 @@ pub struct Part {
     pub uv: Option<Vec<[f32; 2]>>,
 }
 
+impl Part {
+    /// The material whose base-colour texture this part samples: its
+    /// material, if it has texture coordinates to sample by. Without
+    /// coordinates, or without a material, it samples none.
+    ///
+    /// This is the one definition of "sampled". A texture is sampled when
+    /// some part's sampling material names it as its base colour:
+    /// [`LoadedModel::mesh`] draws only those, and a source decodes only
+    /// those.
+    #[must_use]
+    pub fn sampling_material(&self) -> Option<usize> {
+        self.material.filter(|_| self.uv.is_some())
+    }
+}
+
 /// A model's material.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Material {
@@ -195,8 +214,8 @@ impl Material {
     }
 }
 
-/// A model's base-colour texture: an image a material's base colour
-/// names, decoded.
+/// A model's base-colour texture: an image some part samples
+/// ([`Part::sampling_material`]), decoded.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Texture {
     /// Its pixels and their mip chain, shared: the meshes made of this
@@ -214,15 +233,20 @@ pub struct LoadedModel {
     pub parts: Vec<Part>,
     /// Its materials.
     pub materials: Vec<Material>,
-    /// Its base-colour textures: only the images a material's base colour
-    /// names.
+    /// Its base-colour textures: only the images some part samples
+    /// ([`Part::sampling_material`]), as a source owes it (the port's
+    /// contract). One held here that nothing samples costs its decode and
+    /// its memory, and [`mesh`](Self::mesh) leaves it out.
     pub textures: Vec<Texture>,
 }
 
 impl LoadedModel {
     /// Its parts merged into the one mesh
     /// [`Renderer::add_model`](crate::Renderer::add_model) takes, which
-    /// holds its textures by the pointers this model holds.
+    /// holds the textures its sections name by the pointers this model
+    /// holds, in this model's order, and no others: a texture no part
+    /// samples is left out, so it is never uploaded, and each section
+    /// names its texture by its place among those kept.
     ///
     /// The merge writes what a part's own mesh doesn't carry: each
     /// vertex's texture coordinates (from [`Part::uv`]) and whether it is
@@ -230,7 +254,8 @@ impl LoadedModel {
     /// run of consecutive parts that draw the same texture through the
     /// same sampler, so a model with no texture is one section. A part
     /// draws its material's texture, through its material's sampler,
-    /// only if it has texture coordinates to sample it by; without them,
+    /// only if it has texture coordinates to sample it by
+    /// ([`Part::sampling_material`]); without them,
     /// or without a material, it draws untextured, in its vertex colours
     /// alone, and its section carries the default sampler, so untextured
     /// runs merge whatever their materials say.
@@ -242,9 +267,11 @@ impl LoadedModel {
         for part in &self.parts {
             let material = part.material.and_then(|at| self.materials.get(at));
             let unlit = material.is_some_and(|m| m.unlit);
-            let drawn = material
+            let drawn = part
+                .sampling_material()
+                .and_then(|at| self.materials.get(at))
                 .and_then(|m| Some((m.base_color_texture?, m.base_color_sampler)))
-                .filter(|&(at, _)| part.uv.is_some() && at < self.textures.len());
+                .filter(|&(at, _)| at < self.textures.len());
             let (texture, sampler) = match drawn {
                 Some((at, sampler)) => (Some(at), sampler),
                 None => (None, ModelSampler::DEFAULT),
@@ -272,10 +299,25 @@ impl LoadedModel {
                 _ => sections.push(Section::new(start..end, texture).sampled(sampler)),
             }
         }
-        let textures = self.textures.iter().map(|t| Arc::clone(&t.image)).collect();
+        let textures = sampled_only(&mut sections, &self.textures);
         Mesh::textured(vertices, indices, textures, sections)
             .expect("each part's indices are in its own range, and its section in order")
     }
+}
+
+/// The textures of `textures` that `sections` name, by the pointers given
+/// and in their order there, with each section renumbered to name its
+/// texture among those kept. Every section's texture must be in
+/// `textures`.
+fn sampled_only(sections: &mut [Section], textures: &[Texture]) -> Vec<Arc<ModelTexture>> {
+    let named: BTreeSet<usize> = sections.iter().filter_map(|s| s.texture).collect();
+    for section in sections {
+        section.texture = section.texture.map(|at| named.range(..at).count());
+    }
+    named
+        .into_iter()
+        .map(|at| Arc::clone(&textures[at].image))
+        .collect()
 }
 
 /// Which of a model's images an error is about.
@@ -852,6 +894,24 @@ mod tests {
     }
 
     #[test]
+    fn a_part_samples_its_material_only_with_coordinates() {
+        let model = faced(
+            vec![textured(0); 4],
+            vec![texture(9)],
+            [
+                (Some(3), true),
+                (Some(3), false),
+                (None, true),
+                (None, false),
+                (Some(1), true),
+                (Some(1), true),
+            ],
+        );
+        let sampling: Vec<_> = model.parts.iter().map(Part::sampling_material).collect();
+        assert_eq!(sampling, [Some(3), None, None, None, Some(1), Some(1)]);
+    }
+
+    #[test]
     fn parts_on_one_texture_split_where_the_sampler_changes_and_only_there() {
         let mirrored = ModelSampler {
             wrap_t: Wrap::Mirror,
@@ -1027,6 +1087,183 @@ mod tests {
             ]
         );
         assert!(mesh.vertices()[4..12].iter().all(|v| v.uv == [0.0; 2]));
+        // Sampled by one part and not by another, the texture is held
+        // once.
+        assert_eq!(mesh.textures().len(), 1);
+        assert!(Arc::ptr_eq(&mesh.textures()[0], &model.textures[0].image));
+    }
+
+    #[test]
+    fn a_texture_no_part_samples_is_left_out_of_the_mesh() {
+        // A textured material on parts with no coordinates.
+        let bare = faced(vec![textured(0)], vec![texture(9)], [(Some(0), false); 6]);
+        // A texture no material names.
+        let unnamed = faced(
+            vec![material("plain")],
+            vec![texture(9)],
+            [(Some(0), true); 6],
+        );
+        // A material naming a texture the model lacks.
+        let lacking = faced(vec![textured(1)], vec![texture(9)], [(Some(0), true); 6]);
+        for model in [bare, unnamed, lacking] {
+            let mesh = model.mesh();
+            assert_eq!(mesh.sections(), [section(0..36, None)]);
+            assert!(mesh.textures().is_empty());
+        }
+    }
+
+    #[test]
+    fn the_mesh_holds_only_the_sampled_textures_renumbered_in_the_model_s_order() {
+        let model = faced(
+            vec![textured(0), textured(1), textured(2)],
+            vec![texture(1), texture(2), texture(3)],
+            [
+                (Some(2), true),
+                (Some(0), true),
+                (Some(1), false),
+                (Some(2), true),
+                (Some(2), true),
+                (Some(2), true),
+            ],
+        );
+        let mesh = model.mesh();
+        assert_eq!(
+            mesh.sections(),
+            [
+                section(0..6, Some(1)),
+                section(6..12, Some(0)),
+                section(12..18, None),
+                section(18..36, Some(1)),
+            ]
+        );
+        assert_eq!(mesh.textures().len(), 2);
+        assert!(Arc::ptr_eq(&mesh.textures()[0], &model.textures[0].image));
+        assert!(Arc::ptr_eq(&mesh.textures()[1], &model.textures[2].image));
+    }
+
+    #[test]
+    fn one_image_under_two_samplers_after_an_unsampled_texture_is_one_texture() {
+        let model = faced(
+            vec![sampled(1, SHARP), textured(1), textured(0)],
+            vec![texture(1), texture(2)],
+            [
+                (Some(0), true),
+                (Some(0), true),
+                (Some(1), true),
+                (Some(1), true),
+                (Some(2), false),
+                (Some(0), true),
+            ],
+        );
+        let mesh = model.mesh();
+        assert_eq!(
+            mesh.sections(),
+            [
+                section(0..12, Some(0)).sampled(SHARP),
+                section(12..24, Some(0)),
+                section(24..30, None),
+                section(30..36, Some(0)).sampled(SHARP),
+            ]
+        );
+        assert_eq!(mesh.textures().len(), 1);
+        assert!(Arc::ptr_eq(&mesh.textures()[0], &model.textures[1].image));
+    }
+
+    /// What a recording GPU is sent when a model's mesh is drawn once.
+    struct Uploads {
+        /// The textures uploaded, in order, each with the id it took.
+        textures: Vec<(crate::gpu::ModelTextureId, ModelTexture)>,
+        /// The one mesh uploaded.
+        mesh: Mesh,
+        /// The texture ids the mesh was uploaded naming.
+        named: Vec<crate::gpu::ModelTextureId>,
+    }
+
+    /// What a recording GPU is sent when `model`'s mesh is drawn once.
+    fn uploads(model: &LoadedModel) -> Uploads {
+        use crate::recording::{GpuCall, NoImages, RecordingGpu};
+        use crate::viewport::{LogicalSize, Viewport};
+
+        let key = nova_view::ModelKey(1);
+        let mut renderer = crate::Renderer::new(NoImages);
+        renderer.add_model(key, model.mesh());
+        let mut list = nova_view::DrawList::new();
+        list.model(
+            key,
+            nova_view::ModelPose {
+                center: nova_view::Point::new(12.0, 12.0),
+                orientation: nova_view::Orientation::IDENTITY,
+                scale: 10.0,
+            },
+        );
+        let viewport = Viewport::new(LogicalSize { w: 64, h: 48 }, (128, 96), 2.0);
+        let mut gpu = RecordingGpu::new();
+        renderer.render(&list, &viewport, &mut gpu);
+        let mut textures = Vec::new();
+        let mut meshes = Vec::new();
+        for call in gpu.calls {
+            match call {
+                GpuCall::UploadModelTexture { texture, data } => textures.push((texture, data)),
+                GpuCall::UploadMesh { data, textures, .. } => meshes.push((data, textures)),
+                _ => {}
+            }
+        }
+        assert_eq!(meshes.len(), 1, "the one mesh is uploaded once");
+        let (mesh, named) = meshes.remove(0);
+        Uploads {
+            textures,
+            mesh,
+            named,
+        }
+    }
+
+    #[test]
+    fn a_textured_material_on_parts_with_no_coordinates_uploads_no_texture() {
+        let model = faced(vec![textured(0)], vec![texture(9)], [(Some(0), false); 6]);
+        let Uploads {
+            textures,
+            mesh,
+            named,
+        } = uploads(&model);
+        assert_eq!(textures, []);
+        assert_eq!(named, []);
+        assert_eq!(mesh.sections(), [section(0..36, None)]);
+    }
+
+    #[test]
+    fn a_model_with_a_sampled_and_an_unsampled_texture_uploads_only_the_sampled_one() {
+        // The unsampled texture first in the model's list, then last: its
+        // material sits on a face with no coordinates.
+        for (sampled, unsampled) in [(1, 0), (0, 1)] {
+            let mut held = vec![texture(1), texture(2)];
+            held[sampled] = texture(7);
+            let model = faced(
+                vec![textured(sampled), textured(unsampled)],
+                held,
+                [
+                    (Some(1), false),
+                    (Some(0), true),
+                    (Some(0), true),
+                    (Some(0), true),
+                    (Some(0), true),
+                    (Some(0), true),
+                ],
+            );
+            let Uploads {
+                textures,
+                mesh,
+                named,
+            } = uploads(&model);
+            let ids: Vec<_> = textures.iter().map(|(id, _)| *id).collect();
+            assert_eq!(ids.len(), 1, "unsampled at {unsampled}");
+            assert_eq!(textures[0].1, *model.textures[sampled].image);
+            assert_eq!(named, ids, "the mesh names the one upload");
+            assert_eq!(
+                mesh.sections(),
+                [section(0..6, None), section(6..36, Some(0))],
+                "unsampled at {unsampled}"
+            );
+        }
     }
 
     #[test]

@@ -179,6 +179,12 @@ impl Mesh {
     /// sections that don't follow one another from index 0 to the last
     /// index, a section that ends inside a triangle, and a section that
     /// names a texture `textures` doesn't hold. A section may be empty.
+    ///
+    /// It holds the `textures` it is given, one no section names
+    /// included, and that one is uploaded with the rest. A model's merged
+    /// mesh
+    /// ([`LoadedModel::mesh`](crate::model_source::LoadedModel::mesh))
+    /// gives it none.
     pub fn textured(
         vertices: Vec<Vertex>,
         indices: Vec<u32>,
@@ -305,7 +311,8 @@ impl Mesh {
 
     /// The textures its sections draw with, each behind a shared pointer:
     /// two meshes that share the pointer share one upload
-    /// ([`crate::Gpu::upload_model_texture`]).
+    /// ([`crate::Gpu::upload_model_texture`]). They are the textures it
+    /// was made with ([`Mesh::textured`]), every one of which is uploaded.
     #[must_use]
     pub fn textures(&self) -> &[Arc<ModelTexture>] {
         &self.textures
