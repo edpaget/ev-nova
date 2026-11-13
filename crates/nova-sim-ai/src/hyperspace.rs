@@ -5,7 +5,8 @@
 //!   hyperlinks: every system unless the galaxy overlay hides some
 //!   ([`StarMap::with_hidden`]; see the `nova_sim::story` module's
 //!   "Galaxy overlay"), a link to a hidden system reaching the visible
-//!   system at its place. Its [`Places`] are the one resolver of which
+//!   system at its place. Its [`Places`] (the state layer's, which the
+//!   galaxy map's [`system_links`] reads too) are the one resolver of which
 //!   visible system stands for a system: the links, the course's hops and
 //!   every arrival all read it. A system's link to itself, or to a system that
 //!   does not exist, is no link. The star map is the single owner of these rules: the galaxy map
@@ -100,9 +101,8 @@ use crate::geometry::Vec2;
 use crate::navigation::next_after;
 use crate::rulebook::RuleSource;
 pub use crate::stats::{MIN_JUMP_DISTANCE, base_jump_days};
-use nova_sim_state::shown::hyperspace::place;
 pub use nova_sim_state::shown::hyperspace::{
-    JUMP_FUEL, JumpReadiness, JumpRefusal, link_pairs, max_jumps, system_links,
+    CoLocated, JUMP_FUEL, JumpReadiness, JumpRefusal, Places, link_pairs, max_jumps, system_links,
 };
 
 /// How far outside its no-jump zone, in pixels, a ship arrives, so that
@@ -308,144 +308,6 @@ impl Node {
     }
 }
 
-/// Which visible system stands for a place two visible systems share, as
-/// [`RuleKey::ColocatedResolution`](crate::RuleKey::ColocatedResolution)
-/// reads (see the `nova_sim::story` module's "Visibility and
-/// governments"). A hidden system stands for the lowest-ID visible system
-/// at its place under both.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum CoLocated {
-    /// The original's reading: the lowest-ID visible system at a place
-    /// stands for every system there, a visible one too
-    /// (`_FindActiveCoLocatedSystem` @0x4c02-0x4c40), so a link reaches
-    /// only it, and a visible system it shadows claims no stellar
-    /// (`_PropagateMissionBitEffects` @0x996ed-0x997bd). An arrival still
-    /// enters a shadowed visible system as it is, by the engine's
-    /// [`RuleKey::ArrivalSystem`](crate::RuleKey::ArrivalSystem).
-    #[default]
-    Lowest,
-    /// The other reading, story-runtime phase 4's: a visible system stands
-    /// for itself, so a link reaches every visible system at its target's
-    /// place.
-    Itself,
-}
-
-impl From<RuleSource> for CoLocated {
-    fn from(source: RuleSource) -> Self {
-        match source {
-            RuleSource::Engine => Self::Lowest,
-            RuleSource::Bible => Self::Itself,
-        }
-    }
-}
-
-/// Where each system of a galaxy is on the map, which of them the galaxy
-/// overlay hides, and so which system stands for each: the one place the
-/// original's `_FindActiveCoLocatedSystem` (@0x4be0) is read. A place is an
-/// exact map position; where two systems share an ID, the last wins.
-///
-/// A hidden system stands for the lowest-ID visible system at its place
-/// (none when no system there is visible). A visible one stands for the
-/// same system by the original's reading, which gives the lowest-ID
-/// visible one there even for a visible system (@0x4c02-0x4c40), and for
-/// itself by the other: the [`CoLocated`] resolution, which differs only
-/// where two systems at one place are both visible. The head of a place
-/// is its lowest-ID system, visible or not, as `_LoadObjectData` builds
-/// the chain (@0x783d9-0x78517).
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Places {
-    /// Each system's map position.
-    positions: BTreeMap<SystemId, Vec2>,
-    /// The systems at each place, by ascending ID.
-    by_place: BTreeMap<(u32, u32), Vec<SystemId>>,
-    /// The systems hidden.
-    hidden: BTreeSet<SystemId>,
-    /// Which visible system stands for a place two share.
-    colocated: CoLocated,
-}
-
-impl Places {
-    /// The places of `systems`, with those in `hidden` hidden, a place two
-    /// visible systems share resolved as `colocated` says.
-    #[must_use]
-    pub fn new(systems: &[StarSystem], hidden: &BTreeSet<SystemId>, colocated: CoLocated) -> Self {
-        let positions: BTreeMap<SystemId, Vec2> = systems
-            .iter()
-            .map(|system| (system.id, system.position))
-            .collect();
-        let mut by_place: BTreeMap<(u32, u32), Vec<SystemId>> = BTreeMap::new();
-        for (&id, &position) in &positions {
-            by_place.entry(place(position)).or_default().push(id);
-        }
-        Self {
-            positions,
-            by_place,
-            hidden: hidden.clone(),
-            colocated,
-        }
-    }
-
-    /// Whether `system` is among them.
-    #[must_use]
-    pub fn contains(&self, system: SystemId) -> bool {
-        self.positions.contains_key(&system)
-    }
-
-    /// `system`'s map position, hidden or not.
-    #[must_use]
-    pub fn position(&self, system: SystemId) -> Option<Vec2> {
-        self.positions.get(&system).copied()
-    }
-
-    /// Whether `system` is visible: unless it is hidden.
-    #[must_use]
-    pub fn visible(&self, system: SystemId) -> bool {
-        !self.hidden.contains(&system)
-    }
-
-    /// Whether `a` and `b` are both among them, at the same place.
-    #[must_use]
-    pub fn together(&self, a: SystemId, b: SystemId) -> bool {
-        let at = |id| self.position(id).map(place);
-        at(a).is_some() && at(a) == at(b)
-    }
-
-    /// Every system at `system`'s place, itself included, by ascending ID;
-    /// none when it is not among them.
-    pub fn at(&self, system: SystemId) -> impl Iterator<Item = SystemId> + '_ {
-        self.position(system)
-            .and_then(|position| self.by_place.get(&place(position)))
-            .into_iter()
-            .flatten()
-            .copied()
-    }
-
-    /// The visible system that stands for `system`: the lowest-ID visible
-    /// system at its place, if any, except that a visible system stands for
-    /// itself under [`CoLocated::Itself`]. A visible system at no place
-    /// (not among them) stands for itself.
-    #[must_use]
-    pub fn stand_in(&self, system: SystemId) -> Option<SystemId> {
-        if self.visible(system) {
-            return Some(
-                match self.colocated {
-                    CoLocated::Lowest => self.at(system).find(|&id| self.visible(id)),
-                    CoLocated::Itself => None,
-                }
-                .unwrap_or(system),
-            );
-        }
-        self.at(system).find(|&id| self.visible(id))
-    }
-
-    /// The head of `system`'s place: its lowest-ID system, visible or not;
-    /// none when it is not among them.
-    #[must_use]
-    pub fn head(&self, system: SystemId) -> Option<SystemId> {
-        self.at(system).next()
-    }
-}
-
 /// Every visible system's map position and the hyperlinks between them.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StarMap {
@@ -459,20 +321,15 @@ pub struct StarMap {
     places: Places,
 }
 
-/// The system standing for a link's target `to`, of those in `places`'
-/// catalog: nothing for a system it does not hold, or with none visible
-/// at its place (`_FindActiveCoLocatedSystem` @0x4be0).
-fn resolve_link(places: &Places, to: SystemId) -> Option<SystemId> {
-    places.contains(to).then(|| places.stand_in(to)).flatten()
-}
-
 impl StarMap {
     /// The map of `systems`, without links to itself or to a system that
     /// is not among them: each link drawn both ways, and jumped along as
     /// the [`HyperlinkRule`] says, a place two visible systems share
     /// resolved to the lowest of them ([`CoLocated::Lowest`]). Where two systems share an ID,
-    /// the last wins. This is the one place hyperlinks are normalised: the
-    /// galaxy map draws [`StarMap::links`].
+    /// the last wins. Its links resolve through [`Places`] and are
+    /// normalised by [`link_pairs`], as the galaxy map's
+    /// [`system_links`] are, so [`StarMap::links`] is `system_links` of
+    /// the same systems.
     #[must_use]
     pub fn new(systems: Vec<StarSystem>) -> Self {
         Self::with_hidden(systems, &BTreeSet::new(), CoLocated::Lowest)
@@ -504,7 +361,7 @@ impl StarMap {
             system
                 .links
                 .iter()
-                .filter_map(|&to| resolve_link(places, to))
+                .filter_map(|&to| places.link_target(to))
                 .collect()
         })
     }
@@ -544,7 +401,7 @@ impl StarMap {
         places: Places,
         links_of: impl Fn(&StarSystem, &Places) -> Vec<SystemId>,
     ) -> Self {
-        let colocated = places.colocated;
+        let colocated = places.colocated();
         let mut links = Vec::new();
         let mut nodes = BTreeMap::new();
         let mut con = BTreeMap::new();
@@ -640,7 +497,7 @@ impl StarMap {
     pub fn usable_con_slots(&self, id: SystemId) -> Vec<SystemId> {
         self.con_slots(id)
             .iter()
-            .filter_map(|&to| resolve_link(&self.places, to))
+            .filter_map(|&to| self.places.link_target(to))
             .collect()
     }
 
@@ -1174,13 +1031,6 @@ mod tests {
     }
 
     #[test]
-    fn the_lowest_visible_system_is_the_default_co_located_resolution() {
-        assert_eq!(CoLocated::default(), CoLocated::Lowest);
-        assert_eq!(CoLocated::from(RuleSource::Engine), CoLocated::Lowest);
-        assert_eq!(CoLocated::from(RuleSource::Bible), CoLocated::Itself);
-    }
-
-    #[test]
     fn a_hidden_system_is_off_the_map() {
         let map = replaced_hiding(&[3]);
         assert_eq!(map.systems().collect::<Vec<_>>(), ids(&[1, 2, 4]));
@@ -1268,86 +1118,6 @@ mod tests {
         assert_eq!(map.listed_links(SystemId(1)), ids(&[]));
         assert_eq!(map.links(), vec![]);
         assert_eq!(map.systems().collect::<Vec<_>>(), ids(&[1, 4]));
-    }
-
-    /// [`replaced_systems`]' places, with 5 also at O's position and
-    /// `hidden` hidden, by the engine's resolution.
-    fn places_hiding(hidden: &[i16]) -> Places {
-        places_resolving(hidden, CoLocated::Lowest)
-    }
-
-    /// [`replaced_systems`]' places, with 5 also at O's position and
-    /// `hidden` hidden, resolved as `colocated` says.
-    fn places_resolving(hidden: &[i16], colocated: CoLocated) -> Places {
-        let mut systems = replaced_systems();
-        systems.push(system_at(5, (50.0, 50.0), &[]));
-        let hidden = hidden.iter().copied().map(SystemId).collect();
-        Places::new(&systems, &hidden, colocated)
-    }
-
-    #[test]
-    fn by_the_engine_every_system_stands_for_the_lowest_visible_one_at_its_place() {
-        let places = places_hiding(&[2]);
-        let stand_in = |id| places.stand_in(SystemId(id)).map(|id| id.0);
-        assert_eq!(stand_in(3), Some(3), "the lowest visible there");
-        assert_eq!(stand_in(5), Some(3), "shadowed by 3, though visible");
-        assert_eq!(stand_in(2), Some(3), "hidden");
-        assert_eq!(stand_in(1), Some(1), "alone at its place");
-        assert_eq!(stand_in(99), Some(99), "nothing hides it");
-        assert!(places.visible(SystemId(5)), "still visible");
-        let places = places_hiding(&[]);
-        assert_eq!(places.stand_in(SystemId(5)), Some(SystemId(2)));
-        let places = places_hiding(&[2, 3]);
-        assert_eq!(places.stand_in(SystemId(2)), Some(SystemId(5)));
-        assert_eq!(places.stand_in(SystemId(5)), Some(SystemId(5)));
-        let places = places_hiding(&[2, 3, 5]);
-        assert_eq!(places.stand_in(SystemId(3)), None, "none visible there");
-        let places = places_hiding(&[4, 99]);
-        assert_eq!(places.stand_in(SystemId(4)), None, "alone at its place");
-        assert_eq!(places.stand_in(SystemId(99)), None, "hidden and nowhere");
-    }
-
-    #[test]
-    fn a_visible_system_stands_for_itself_and_a_hidden_one_for_the_lowest_visible_there() {
-        let places = places_resolving(&[2], CoLocated::Itself);
-        let stand_in = |id| places.stand_in(SystemId(id)).map(|id| id.0);
-        assert_eq!(stand_in(3), Some(3), "itself, visible");
-        assert_eq!(stand_in(5), Some(5), "itself, though 3 is lower");
-        assert_eq!(stand_in(2), Some(3), "the lowest visible there");
-        assert_eq!(stand_in(99), Some(99), "nothing hides it");
-        let places = places_resolving(&[2, 3], CoLocated::Itself);
-        assert_eq!(places.stand_in(SystemId(2)), Some(SystemId(5)));
-        let places = places_resolving(&[2, 3, 5], CoLocated::Itself);
-        assert_eq!(places.stand_in(SystemId(3)), None, "none visible there");
-        let places = places_resolving(&[4, 99], CoLocated::Itself);
-        assert_eq!(places.stand_in(SystemId(4)), None, "alone at its place");
-        assert_eq!(places.stand_in(SystemId(99)), None, "hidden and nowhere");
-    }
-
-    #[test]
-    fn the_head_of_a_place_is_its_lowest_system_visible_or_not() {
-        let places = places_hiding(&[2, 3, 5]);
-        let head = |id| places.head(SystemId(id)).map(|id| id.0);
-        assert_eq!(head(5), Some(2));
-        assert_eq!(head(2), Some(2));
-        assert_eq!(head(1), Some(1), "alone");
-        assert_eq!(head(99), None, "nowhere");
-    }
-
-    #[test]
-    fn places_know_every_systems_position_hidden_or_not() {
-        let places = places_hiding(&[2]);
-        assert!(places.contains(SystemId(2)));
-        assert!(!places.contains(SystemId(99)));
-        assert_eq!(places.position(SystemId(2)), Some(Vec2::new(50.0, 50.0)));
-        assert_eq!(places.position(SystemId(99)), None);
-        assert!(!places.visible(SystemId(2)));
-        assert!(places.visible(SystemId(3)));
-        assert!(places.visible(SystemId(99)));
-        assert!(places.together(SystemId(2), SystemId(5)));
-        assert!(!places.together(SystemId(2), SystemId(4)), "a pixel apart");
-        assert!(!places.together(SystemId(2), SystemId(99)));
-        assert!(!places.together(SystemId(99), SystemId(99)), "nowhere");
     }
 
     #[test]
