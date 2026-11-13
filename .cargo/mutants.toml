@@ -15,6 +15,19 @@ additional_cargo_test_args = ["--no-tests=pass"]
 # helpers that the packages' own tests turn on anyway.
 additional_cargo_args = ["--all-features"]
 
+# The flight's fake catalog is test support: canned records the view's
+# component tests and nova-flight's adapter and edge checks read. It
+# was `cfg(test)`, which cargo-mutants never mutates, until
+# rdm:phase/faster-builds/phase-6-nova-view-off-nova-sim published it
+# under `fixture` for nova-flight. A mutant of it changes a test's
+# input, not the game's behaviour (the 11 it left were canned values
+# no check reads: the buoy strings, the string patch, the box frame
+# sizes, a hull's lights image, Alpha Centauri's buoy and one
+# fixture's hulls), so the file is left out like the rest of the
+# `cfg(test)` code. A glob, not an `exclude_re`: the regex let its
+# struct-field deletions through.
+exclude_globs = ["crates/nova-view/src/flight/fake_catalog.rs"]
+
 exclude_re = [
     # The touch stick's clamp: at a length of exactly 1, dividing by the
     # length leaves the offset as it is, so `>=` reads the same as `>`.
@@ -924,15 +937,4 @@ exclude_re = [
     # at a bias of exactly 1 the biased threshold, delay x 1, is the
     # unbiased delay, so `>=` reads the same as `>`.
     "nova-sim-state/src/shown/stellar_frames\\.rs:[0-9]+:[0-9]+: replace > with >= in StellarFrames::advance$",
-    # The flight's fake catalog is test support: canned records the view's
-    # component tests and nova-flight's adapter and edge checks read. It
-    # was `cfg(test)`, which cargo-mutants never mutates, until
-    # rdm:phase/faster-builds/phase-6-nova-view-off-nova-sim published it
-    # under `fixture` for nova-flight. A mutant of it changes a test's
-    # input, not the game's behaviour (the 11 it left were canned values
-    # no check reads: the buoy strings, the string patch, the box frame
-    # sizes, a hull's lights image, Alpha Centauri's buoy and one
-    # fixture's hulls), so its mutants are left out like the rest of the
-    # `cfg(test)` code.
-    "nova-view/src/flight/fake_catalog\\.rs:",
 ]
