@@ -1,18 +1,23 @@
-//! The 3D models the flight screen draws in place of the new game's 2D
-//! stand-ins ([`WorldModels`]): which ship classes, outfits and stellars
-//! have a model or a planet registered with the renderer, under which
-//! key, and where each class's outfits stand.
+//! The 3D models every screen that shows a ship or stellar draws in place
+//! of the new game's 2D stand-ins ([`WorldModels`]): flight, and the
+//! [`model_picture`](crate::model_picture) module's screens (the target
+//! panel, the shipyard and hire screen, the escort, comm and planet comm
+//! dialogs, the spaceport's landscape, the system viewer). It says which
+//! ship classes, outfits and stellars have a model or a planet registered
+//! with the renderer, under which key, how far each class's model
+//! reaches, and where each class's outfits stand.
 //!
 //! It is plain data, built at the program's edge once the keys are known
 //! (`nova_render`'s `new_game_world`, which registers each key's mesh or
-//! planet with the renderer as it hands one out) and given to the flight
-//! ([`FlightView::with_world_models`](super::view::FlightView::with_world_models)).
-//! Tests build one by hand. An empty table, the default, draws exactly
-//! as no table: stock data has no models, so it never gets one.
+//! planet with the renderer as it hands one out) and given to each screen
+//! ([`FlightView::with_world_models`](super::view::FlightView::with_world_models)
+//! and its kin). Tests build one by hand. An empty table, the default,
+//! draws exactly as no table: stock data has no models, so it never gets
+//! one.
 //!
 //! What a key's presence decides, and in what order a ship's looks are
-//! tried, is the flight view's (its `ship_models` and `stellar_models`
-//! modules). The mounts answer as the store's do
+//! tried, is each screen's: the flight view's (its `ship_models` and
+//! `stellar_models` modules), and each picture's. The mounts answer as the store's do
 //! ([`Mounts::of`], `nova_data::store::GameData::mounts`): a class's own,
 //! then each kit's on that class, in the order given.
 

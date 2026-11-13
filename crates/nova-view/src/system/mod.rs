@@ -11,7 +11,9 @@
 //!   each stellar's world position and sheet, and the frame it shows: the
 //!   one its flight's session reports, or, in the viewer, its own
 //!   animation by the sim's rule (`nova_sim::stellar_frames`).
-//! - [`view`]: the [`SystemView`] screen, which only reads the port.
+//! - [`view`]: the [`SystemView`] screen, which only reads the port, and
+//!   draws a stellar the world models' table gives a model or a planet as
+//!   flight does ([`SystemView::with_world_models`]).
 
 pub mod camera;
 pub mod catalog;

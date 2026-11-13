@@ -45,8 +45,10 @@
 //! The selected ship's picture is [`ship_picture`]'s: `PICT` 5000 plus its
 //! ID less 128, or else that of the lowest-numbered ship sharing its
 //! `shän` base image, as the Bible says target pictures are shared; or,
-//! with no `PICT`, its stand-in, the outline flight draws for it, which
-//! only the new game's data has, nose up and fitted to the item; or "No
+//! with no `PICT`, its model's still portrait from the world models'
+//! table ([`ShipyardScreen::with_world_models`]), fitted to the item; or
+//! its stand-in, the outline flight draws for it, nose up and fitted to
+//! the item (only the new game's data has a model or a stand-in); or "No
 //! Picture" and "Available" centred on the picture item in white. The
 //! choice, its fit and its drawing are the `picture` module's, which the
 //! hire screen shares.

@@ -19,6 +19,12 @@
 //! [`ShipLook::stand_in`](crate::spaceport::ShipLook::stand_in)).
 //! Everything is drawn as [`DrawCommand::Triangle`]s, in the list's layer.
 //!
+//! Each of these screens draws a stand-in only where no model is: a ship
+//! class or stellar the world models' table gives a model or a planet
+//! draws that in the stand-in's place, in flight (its view's
+//! `ship_models` and `stellar_models` modules), in the system viewer and
+//! in the screens' own pictures ([`crate::model_picture`]).
+//!
 //! An outline's corners are in its own space: x to starboard, y to the
 //! nose, as the data draws a ship nose up. [`draw`] turns it by a heading
 //! as a sprite's frame is picked (degrees clockwise, 0 facing up the

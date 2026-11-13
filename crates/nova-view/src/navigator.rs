@@ -5,7 +5,8 @@
 //! (the shared Back, read through the navigator's bindings) goes back
 //! from the system to the map, which kept its view and selection. Escape
 //! on the map does nothing here: what it means there (quitting) is the
-//! app's router's to decide.
+//! app's router's to decide. Each system view it opens draws the world
+//! models it was given ([`Navigator::with_world_models`]).
 
 use std::rc::Rc;
 use std::time::Duration;
