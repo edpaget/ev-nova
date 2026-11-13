@@ -549,6 +549,8 @@ mod tests {
         assert!(source.bytes("media").is_err(), "a folder, not a file");
         assert!(source.head("media", 4).is_err(), "nor has a folder a head");
         assert!(source.size("media").is_err(), "nor a size");
+        // A name no filesystem takes is an error, not a missing file.
+        assert!(source.size("media/bad\0name").is_err(), "a NUL in its name");
     }
 
     #[test]

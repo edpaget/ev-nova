@@ -545,6 +545,36 @@ mod tests {
             0,
             "nor one given as a surface"
         );
+        // A surface with clouds and rings counts all three.
+        let full = bake(&look(77), SMALL);
+        let clouds = full.clouds.as_ref().expect("clouds").rgba.len();
+        let rings = full.rings.as_ref().expect("rings").profile.len();
+        assert!(clouds > 0 && rings > 0 && clouds != rings);
+        renderer.add_planet(PlanetKey(3), LoadedPlanet::surface(full.clone()));
+        assert_eq!(
+            renderer.planet_bytes_held(),
+            full.surface.rgba.len() + clouds + rings
+        );
+    }
+
+    #[test]
+    fn a_pose_a_replacement_s_reach_overflows_makes_nothing() {
+        // The globe reaches 1; its replacement's rings reach 2.3, so a
+        // radius 2e38 still fits the old reach and overflows the new.
+        let mut renderer = renderer();
+        renderer.add_planet(GLOBE, unbaked(77));
+        let mut list = DrawList::new();
+        list.planet(
+            GLOBE,
+            PlanetPose {
+                radius: 2e38,
+                ..pose(20.0, 20.0)
+            },
+        );
+        let mut gpu = RecordingGpu::new();
+        let frame = frame_of(&mut renderer, &list, &mut gpu);
+        assert_eq!(frame.batches, []);
+        assert_eq!(uploads(&gpu), [], "refused by the new reach, not made");
     }
 
     /// A stand-in disc.
