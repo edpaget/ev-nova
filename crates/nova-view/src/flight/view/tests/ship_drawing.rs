@@ -13,10 +13,11 @@ use super::*;
 use crate::flight::murk::sprite_murk;
 use crate::flight::ship_layers::{lights_murk, npc_glow_rolls};
 use crate::flight::weapon_glow::npc_glow_level;
-use nova_sim::catalog::{ShipDisplay, ShipExits};
-use nova_sim::cloak::CloakShown;
-use nova_sim::combat::ship_frames::{ANIMATED, Alt, BANKS, Drawn, FrameSpec};
-use nova_sim::flight_frame::{FrameShip, PassReport, StepReport, StepRun};
+use nova_sim_frame::catalog::{ShipDisplay, ShipExits};
+use nova_sim_frame::cloak::CloakShown;
+use nova_sim_frame::combat::ship_frames::{Alt, Drawn, FrameSpec};
+use nova_sim_frame::flight_frame::{FrameShip, PassReport, StepReport, StepRun};
+use nova_sim_state::shown::combat::ship_frames::{ANIMATED, BANKS};
 
 /// A `shän` display of `flags`, `sets` base sets and `AnimDelay` `delay`,
 /// its lights sprite steady.
@@ -36,8 +37,8 @@ fn shown_hull(
     display: ShipDisplay,
     frames: i16,
     weapons: &[WeaponId],
-) -> nova_sim::HullRecord {
-    nova_sim::HullRecord {
+) -> nova_sim_frame::catalog::HullRecord {
+    nova_sim_frame::catalog::HullRecord {
         display: Some(display),
         exits: Some(ShipExits {
             frames,
@@ -341,7 +342,7 @@ fn a_hits_flash_is_held_to_the_shields_share_of_its_classs_shield_not_its_capaci
     let mut view = flying_with(catalog, 180.0);
     let npc = ShipRef::Npc(NPC_0);
     redrawn(&mut view, 1, |npc| {
-        npc.shield = nova_sim::Gauge {
+        npc.shield = nova_sim_frame::Gauge {
             now: 20.0,
             max: 80.0,
         };
@@ -378,7 +379,7 @@ fn a_plug_in_shield_image_flashes_on_a_hit_and_fades() {
     let npc = ShipRef::Npc(NPC_0);
     assert_eq!(drawn_of(&view, 2501), [], "unhit");
     redrawn(&mut view, 1, |npc| {
-        npc.shield = nova_sim::Gauge {
+        npc.shield = nova_sim_frame::Gauge {
             now: 39.0,
             max: 40.0,
         };
@@ -675,7 +676,7 @@ fn a_hidden_cloaked_npc_draws_its_lit_weapon_glow_alone_and_one_at_its_gate_noth
     view.glows.step(
         &[(npc.ship, false)],
         |_| Some(1.0),
-        nova_sim::SpeedMult::FULL,
+        nova_sim_frame::SpeedMult::FULL,
     );
     let level = view.glows.drawn(npc.ship).expect("lit");
     npc.cloak = CloakShown::Hidden;
@@ -734,8 +735,8 @@ fn colorized_of(list: &DrawList, image: i16) -> Vec<(Color, bool, crate::Coloriz
 fn npc_drawn_ionized(
     view: &Faked,
     change: impl FnOnce(&mut FrameShip),
-    tint: Option<nova_sim::combat::ion_tint::IonTint>,
-    at: nova_sim::Vec2,
+    tint: Option<nova_sim_frame::combat::ion_tint::IonTint>,
+    at: nova_sim_frame::Vec2,
 ) -> (DrawList, u8) {
     let player = view.frame.player().position;
     let mut npc = npc_record(view, NPC_0);
@@ -748,7 +749,7 @@ fn npc_drawn_ionized(
     (list, murk)
 }
 
-const ION: nova_sim::combat::ion_tint::IonTint = nova_sim::combat::ion_tint::IonTint {
+const ION: nova_sim_frame::combat::ion_tint::IonTint = nova_sim_frame::combat::ion_tint::IonTint {
     level: 16,
     colour: 0x0034_c2ff,
 };
@@ -759,7 +760,7 @@ fn flashing(view: &mut Faked, ship: ShipRef) -> u8 {
     let mut flash = crate::flight::flash::ShieldFlash::default();
     flash.hit(false);
     let level = flash
-        .step(100.0, 100.0, true, nova_sim::SpeedMult::FULL)
+        .step(100.0, 100.0, true, nova_sim_frame::SpeedMult::FULL)
         .expect("drawn");
     view.flashes.insert(ship, flash);
     level
@@ -793,7 +794,7 @@ fn ionized_sheet() -> ShipSheet {
 }
 
 /// A murky flight whose NPC shows an alt layer and its lights.
-fn murky_ionizing(rules: Option<nova_sim::Rulebook>) -> Faked {
+fn murky_ionizing(rules: Option<nova_sim_frame::Rulebook>) -> Faked {
     let catalog = shown(
         display(0, 1, 0),
         ShipDisplay {
@@ -817,7 +818,7 @@ fn an_ionized_npc_draws_its_hull_and_layers_colorized_in_its_ion_colour_at_its_u
         &view,
         |npc| npc.drawn.alt = Alt::Drawn(0),
         Some(ION),
-        nova_sim::Vec2::new(100.0, -100.0),
+        nova_sim_frame::Vec2::new(100.0, -100.0),
     );
     assert!(murk > 0 && murk < 16, "{murk}");
     let colorize = crate::Colorize::toward(16, 0x0034_c2ff);
@@ -868,7 +869,7 @@ fn an_ionized_npcs_glow_is_held_below_its_ion_level() {
         &view,
         |npc| npc.glow = 24,
         Some(ION),
-        nova_sim::Vec2::new(100.0, -100.0),
+        nova_sim_frame::Vec2::new(100.0, -100.0),
     );
     let level = glow_level(24, now(&view), &npc_glow_rolls(NPC_0)).expect("lit");
     assert!(level > npc_glow_level(level, 16), "the hold is exercised");
@@ -889,7 +890,12 @@ fn an_ionized_npcs_weapon_glow_takes_the_hulls_colorize_held_below_it() {
         ..ionized_sheet()
     });
     lit_at_28(&mut view, NPC_0);
-    let (list, _) = npc_drawn_ionized(&view, |_| {}, Some(ION), nova_sim::Vec2::new(100.0, -100.0));
+    let (list, _) = npc_drawn_ionized(
+        &view,
+        |_| {},
+        Some(ION),
+        nova_sim_frame::Vec2::new(100.0, -100.0),
+    );
     assert!(28 > npc_glow_level(28, 16), "the hold is exercised");
     assert_eq!(
         colorized_of(&list, 2301),
@@ -906,7 +912,7 @@ fn an_ionized_npcs_weapon_glow_takes_the_hulls_colorize_held_below_it() {
 fn an_npc_with_no_ion_tint_keeps_its_murks_colorize() {
     let mut view = murky_ionizing(None);
     let shield = flashing(&mut view, ShipRef::Npc(NPC_0));
-    let at = nova_sim::Vec2::new(100.0, -100.0);
+    let at = nova_sim_frame::Vec2::new(100.0, -100.0);
     let (list, murk) = npc_drawn_ionized(&view, |_| {}, None, at);
     let colorize = crate::Colorize::toward_pixel(murk, MURK_COLOUR);
     let unmurked = Color {
@@ -930,7 +936,7 @@ fn an_npc_with_no_ion_tint_keeps_its_murks_colorize() {
 fn a_murky_npcs_shield_and_alt_copy_the_hulls_murk_colorize() {
     let mut view = murky_ionizing(None);
     let shield = flashing(&mut view, ShipRef::Npc(NPC_0));
-    let at = nova_sim::Vec2::new(100.0, -100.0);
+    let at = nova_sim_frame::Vec2::new(100.0, -100.0);
     let (list, murk) = npc_drawn_ionized(&view, |_| {}, None, at);
     assert!(murk > 0, "murked");
     let hull = colorized_of(&list, 2001);
@@ -955,7 +961,7 @@ fn a_cloaked_npc_in_a_murky_system_keeps_its_murks_colorize() {
         &view,
         |npc| npc.cloak = CloakShown::Translucent(0x1e),
         None,
-        nova_sim::Vec2::new(100.0, -100.0),
+        nova_sim_frame::Vec2::new(100.0, -100.0),
     );
     assert!(murk > 0, "murked");
     let faint = translucent_tint(4, 30);
@@ -975,8 +981,12 @@ fn a_cloaked_npc_in_a_murky_system_keeps_its_murks_colorize() {
 #[test]
 fn a_murkier_ionized_npc_takes_32_less_its_murk_as_a_pixel_by_the_engine() {
     let view = murky_ionizing(None);
-    let (list, murk) =
-        npc_drawn_ionized(&view, |_| {}, Some(ION), nova_sim::Vec2::new(300.0, -300.0));
+    let (list, murk) = npc_drawn_ionized(
+        &view,
+        |_| {},
+        Some(ION),
+        nova_sim_frame::Vec2::new(300.0, -300.0),
+    );
     assert!(murk >= 16, "{murk}");
     let unmurked = Color {
         a: crate::flight::ship_layers::base_alpha(10),
@@ -989,13 +999,17 @@ fn a_murkier_ionized_npc_takes_32_less_its_murk_as_a_pixel_by_the_engine() {
 
 #[test]
 fn a_murkier_ionized_npc_takes_its_ion_colour_at_its_murk_by_the_other_reading() {
-    let rules = nova_sim::Rulebook::default().with_override(
-        nova_sim::RuleKey::IonTintMurkColour,
-        nova_sim::RuleSource::Bible,
+    let rules = nova_sim_frame::Rulebook::default().with_override(
+        nova_sim_frame::RuleKey::IonTintMurkColour,
+        nova_sim_frame::RuleSource::Bible,
     );
     let view = murky_ionizing(Some(rules));
-    let (list, murk) =
-        npc_drawn_ionized(&view, |_| {}, Some(ION), nova_sim::Vec2::new(300.0, -300.0));
+    let (list, murk) = npc_drawn_ionized(
+        &view,
+        |_| {},
+        Some(ION),
+        nova_sim_frame::Vec2::new(300.0, -300.0),
+    );
     let unmurked = Color {
         a: crate::flight::ship_layers::base_alpha(10),
         ..Color::WHITE
@@ -1018,7 +1032,7 @@ fn an_ionized_npc_at_its_gate_shows_the_gates_white_colorize_not_its_tint() {
         &view,
         |npc| npc.gate = GateFade::Emerging { ticks_left: 3.0 },
         Some(ION),
-        nova_sim::Vec2::new(100.0, -100.0),
+        nova_sim_frame::Vec2::new(100.0, -100.0),
     );
     // A fade of 26: washed white at min(2 × 6, 32).
     let faded = Color {
@@ -1042,7 +1056,7 @@ fn an_npc_entering_a_gate_is_colorized_white_and_its_glow_held_out() {
         &view,
         |npc| npc.gate = GateFade::Entering { ticks_left: 4.0 },
         None,
-        nova_sim::Vec2::new(100.0, -100.0),
+        nova_sim_frame::Vec2::new(100.0, -100.0),
     );
     let white = crate::Colorize::toward_pixel(32, 0xffff);
     let faded = Color {
@@ -1084,7 +1098,7 @@ fn a_murked_npc_at_its_gate_takes_the_gates_colorize_in_place_of_its_murk() {
         &view,
         |npc| npc.gate = GateFade::Emerging { ticks_left: 3.0 },
         None,
-        nova_sim::Vec2::new(100.0, -100.0),
+        nova_sim_frame::Vec2::new(100.0, -100.0),
     );
     assert!(murk > 0, "murked");
     let faded = Color {
@@ -1111,7 +1125,7 @@ fn an_ionized_player_draws_its_hull_colorized_and_its_glow_plainly() {
     });
     let mut view = flying_with(catalog, 0.0);
     lit_at_28_ship(&mut view, ShipRef::Player);
-    let tint = nova_sim::combat::ion_tint::IonTint {
+    let tint = nova_sim_frame::combat::ion_tint::IonTint {
         level: 16,
         colour: 0x0000_80ff,
     };
@@ -1215,10 +1229,13 @@ fn lit_at_28(view: &mut Faked, id: NpcId) {
 
 /// Lights `ship`'s weapon glow in `view`: drawn at 28.
 fn lit_at_28_ship(view: &mut Faked, ship: ShipRef) {
+    view.glows.step(
+        &[(ship, false)],
+        |_| Some(4.0),
+        nova_sim_frame::SpeedMult::FULL,
+    );
     view.glows
-        .step(&[(ship, false)], |_| Some(4.0), nova_sim::SpeedMult::FULL);
-    view.glows
-        .step(&[], |_| Some(4.0), nova_sim::SpeedMult::FULL);
+        .step(&[], |_| Some(4.0), nova_sim_frame::SpeedMult::FULL);
     assert_eq!(view.glows.drawn(ship), Some(28));
 }
 
@@ -1228,7 +1245,12 @@ fn an_ionized_npcs_lit_weapon_glow_draws_its_solid_runs_plainly_right_after_it()
     use crate::draw::Blend;
     let mut view = murky_with(solid_sheet(true, false));
     lit_at_28(&mut view, NPC_0);
-    let (list, _) = npc_drawn_ionized(&view, |_| {}, Some(ION), nova_sim::Vec2::new(100.0, -100.0));
+    let (list, _) = npc_drawn_ionized(
+        &view,
+        |_| {},
+        Some(ION),
+        nova_sim_frame::Vec2::new(100.0, -100.0),
+    );
     let drawn = commands_of(&list, 1930);
     assert_eq!(drawn.len(), 2, "{drawn:?}");
     let (glow_at, kind, frame, colorized, _, blend) = drawn[0];
@@ -1251,7 +1273,12 @@ fn an_ionized_npcs_lit_weapon_glow_draws_its_solid_runs_plainly_right_after_it()
 fn a_weapon_glow_whose_sheet_holds_no_runs_draws_no_overlay() {
     let mut view = murky_with(solid_sheet(false, false));
     lit_at_28(&mut view, NPC_0);
-    let (list, _) = npc_drawn_ionized(&view, |_| {}, Some(ION), nova_sim::Vec2::new(100.0, -100.0));
+    let (list, _) = npc_drawn_ionized(
+        &view,
+        |_| {},
+        Some(ION),
+        nova_sim_frame::Vec2::new(100.0, -100.0),
+    );
     let drawn = commands_of(&list, 1930);
     assert_eq!(drawn.len(), 1, "{drawn:?}");
     assert_eq!(drawn[0].1, crate::ImageKind::Rled);
@@ -1299,7 +1326,12 @@ fn the_players_ship_is_drawn_faint_at_a_full_fade_and_jittered_while_fading() {
 #[test]
 fn an_unlit_weapon_glow_draws_neither_it_nor_its_runs() {
     let view = murky_with(solid_sheet(true, false));
-    let (list, _) = npc_drawn_ionized(&view, |_| {}, Some(ION), nova_sim::Vec2::new(100.0, -100.0));
+    let (list, _) = npc_drawn_ionized(
+        &view,
+        |_| {},
+        Some(ION),
+        nova_sim_frame::Vec2::new(100.0, -100.0),
+    );
     assert_eq!(commands_of(&list, 1930), []);
 }
 
@@ -1308,7 +1340,12 @@ fn a_translucent_hull_whose_sheet_holds_runs_draws_them_after_it() {
     use crate::ImageKind::{Rled, RledSolid};
     use crate::draw::Blend;
     let view = murky_with(solid_sheet(false, true));
-    let (list, _) = npc_drawn_ionized(&view, |_| {}, None, nova_sim::Vec2::new(100.0, -100.0));
+    let (list, _) = npc_drawn_ionized(
+        &view,
+        |_| {},
+        None,
+        nova_sim_frame::Vec2::new(100.0, -100.0),
+    );
     let drawn = commands_of(&list, 2001);
     let unmurked = Color {
         a: crate::flight::ship_layers::base_alpha(10),

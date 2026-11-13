@@ -5,8 +5,8 @@
 //! private state, or the private step, the check reached while it sat in
 //! this crate.
 
-use nova_sim::flight_frame::FlightFrame;
-use nova_sim::{ShipId, SimMessage, SystemId};
+use nova_sim_frame::flight_frame::FlightFrame;
+use nova_sim_frame::{ShipId, SimMessage, SystemId};
 
 use super::{FlightSim, FlightView, SharedChance};
 

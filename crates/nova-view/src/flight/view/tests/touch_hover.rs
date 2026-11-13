@@ -94,11 +94,15 @@ fn a_finger_resting_on_a_ship_animates_the_cursor_as_hover_does() {
     // Passes when written: phase 14 made the finger the pointer.
     let (mut by_mouse, id) = faked_with_npc();
     let over = npc_on_screen(&by_mouse, id);
-    by_mouse.sim.set_hover(Some(nova_sim::Hover::Ship(id)));
+    by_mouse
+        .sim
+        .set_hover(Some(nova_sim_frame::Hover::Ship(id)));
     by_mouse.input(&Input::PointerMoved(over));
     ticked(&mut by_mouse, 2);
     let (mut by_touch, _) = faked_with_npc();
-    by_touch.sim.set_hover(Some(nova_sim::Hover::Ship(id)));
+    by_touch
+        .sim
+        .set_hover(Some(nova_sim_frame::Hover::Ship(id)));
     let mut fingers = Fingers::claimed_by_screen(&mut by_touch);
     fingers.down(1, over);
     ticked(fingers.screen(), 2);

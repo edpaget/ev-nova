@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::landing::UNKNOWN_STELLAR_RADIUS;
+use nova_sim_frame::landing::UNKNOWN_STELLAR_RADIUS;
 
 use super::faked_world::{world, world_list};
 use super::*;

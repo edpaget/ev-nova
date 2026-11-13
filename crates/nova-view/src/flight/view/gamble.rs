@@ -13,8 +13,8 @@
 //! `_LoadDescription` does in `_DoRaceDialog` (@0x48d05-0x48d17,
 //! @0x48b89).
 
-use nova_sim::flight_frame::{Answer, FlightCommand, ScreenAnswer, ScreenAsk};
-use nova_sim::gamble::{Bet, GambleOpening, RACE_HELP_DESC, RaceRun, result_text};
+use nova_sim_frame::flight_frame::{Answer, FlightCommand, ScreenAnswer, ScreenAsk};
+use nova_sim_frame::gamble::{Bet, GambleOpening, RACE_HELP_DESC, RaceRun, result_text};
 
 use crate::flight::sim_port::FlightSim;
 use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};

@@ -12,9 +12,9 @@ use crate::flight::jump::{JumpEffect, JumpPhase};
 use crate::movie::fixture::{Call, MockMoviePlayer};
 use crate::movie::{MOVIE_FADE_FOR, Movies};
 use crate::view_shape::classic_offset;
-use nova_sim::flight_frame::{FlightEvent, GateEntry};
-use nova_sim::landing::LandOutcome;
-use nova_sim::{DescMovie, GateKind, LandPress};
+use nova_sim_frame::flight_frame::{FlightEvent, GateEntry};
+use nova_sim_frame::landing::LandOutcome;
+use nova_sim_frame::{DescMovie, GateKind, LandPress};
 
 /// How many advances each movie plays for.
 const ADVANCES: u32 = 3;
@@ -57,7 +57,7 @@ pub(super) fn filming(catalog: FakeCatalog, on: bool) -> (Faked, Rc<MockMoviePla
 /// Lands on Mars (129), the press's beep raised with it.
 pub(super) fn land_on_mars(view: &mut Faked) {
     view.sim
-        .queue_event(FlightEvent::Sound(nova_sim::SimSound::Landed));
+        .queue_event(FlightEvent::Sound(nova_sim_frame::SimSound::Landed));
     view.sim
         .queue_answer(Answer::LandPress(LandPress::Outcome(LandOutcome::Landed(
             StellarId(129),
@@ -114,27 +114,30 @@ fn a_landing_plays_its_desc_movie_before_it_lands_beeps_and_redraws_the_bar() {
     run_out(&mut view);
     assert_eq!(view.sim.steps(), 0, "flight frozen under it");
     assert_eq!(view.take_landing(), Some(StellarId(129)));
-    assert_eq!(view.take_sounds(), [Sound::Sim(nova_sim::SimSound::Landed)]);
+    assert_eq!(
+        view.take_sounds(),
+        [Sound::Sim(nova_sim_frame::SimSound::Landed)]
+    );
     assert!(view.reserves_scene.is_some(), "redrawn (@0x632fb)");
 }
 
 #[test]
 fn a_landing_movie_holds_back_only_the_beep_the_voice_kill_comes_out_on_the_press() {
     let (mut view, _player) = filming(filmed(&[129], &[]), true);
-    let voice = nova_sim::SoundId(1010);
+    let voice = nova_sim_frame::SoundId(1010);
     view.sim
-        .queue_event(FlightEvent::Sound(nova_sim::SimSound::Voice {
+        .queue_event(FlightEvent::Sound(nova_sim_frame::SimSound::Voice {
             sound: voice,
         }));
     view.tick(TICK);
     assert_eq!(
         view.take_sounds(),
-        [Sound::Sim(nova_sim::SimSound::Voice { sound: voice })],
+        [Sound::Sim(nova_sim_frame::SimSound::Voice { sound: voice })],
         "a voice playing at the landing"
     );
     for sound in [
-        nova_sim::SimSound::HaltVoice { sound: voice },
-        nova_sim::SimSound::ThrustStopped,
+        nova_sim_frame::SimSound::HaltVoice { sound: voice },
+        nova_sim_frame::SimSound::ThrustStopped,
     ] {
         view.sim.queue_event(FlightEvent::Sound(sound));
     }
@@ -143,14 +146,17 @@ fn a_landing_movie_holds_back_only_the_beep_the_voice_kill_comes_out_on_the_pres
     assert_eq!(
         view.take_sounds(),
         [
-            Sound::Sim(nova_sim::SimSound::HaltVoice { sound: voice }),
-            Sound::Sim(nova_sim::SimSound::ThrustStopped),
+            Sound::Sim(nova_sim_frame::SimSound::HaltVoice { sound: voice }),
+            Sound::Sim(nova_sim_frame::SimSound::ThrustStopped),
         ],
         "_KillVoiceSound (@0x66daf) comes before the movie (@0x632a7)"
     );
     assert_eq!(view.take_sounds(), [], "the beep still held");
     run_out(&mut view);
-    assert_eq!(view.take_sounds(), [Sound::Sim(nova_sim::SimSound::Landed)]);
+    assert_eq!(
+        view.take_sounds(),
+        [Sound::Sim(nova_sim_frame::SimSound::Landed)]
+    );
 }
 
 #[test]
@@ -169,7 +175,10 @@ fn a_landing_at_a_desc_naming_no_movie_or_none_at_all_loads_it_and_lands_at_once
         assert_eq!(player.calls(), [], "MovieFile empty: no movie (@0x55f39)");
         assert!(!view.playing());
         assert_eq!(view.take_landing(), Some(StellarId(129)));
-        assert_eq!(view.take_sounds(), [Sound::Sim(nova_sim::SimSound::Landed)]);
+        assert_eq!(
+            view.take_sounds(),
+            [Sound::Sim(nova_sim_frame::SimSound::Landed)]
+        );
     }
 }
 
@@ -332,10 +341,10 @@ fn a_cinematic_landing_movie_covers_the_whole_shared_view_in_a_widened_view() {
 }
 
 /// A land check's `CompText`, queued with the landing.
-fn comp_text() -> nova_sim::MissionText {
-    nova_sim::MissionText {
-        kind: nova_sim::MissionTextKind::Comp,
-        mission: nova_sim::MissionId(140),
+fn comp_text() -> nova_sim_frame::mission_screens::MissionText {
+    nova_sim_frame::mission_screens::MissionText {
+        kind: nova_sim_frame::mission_screens::MissionTextKind::Comp,
+        mission: nova_sim_frame::MissionId(140),
         text: "Done.".to_owned(),
         graphic: None,
         movie: None,
@@ -347,7 +356,7 @@ fn comp_text() -> nova_sim::MissionText {
 /// as the landing settled.
 fn land_on_mars_with_a_text(view: &mut Faked) {
     view.sim.queue_event(FlightEvent::MissionShown {
-        shown: nova_sim::MissionShown::Text(comp_text()),
+        shown: nova_sim_frame::MissionShown::Text(comp_text()),
         bar: None,
     });
     land_on_mars(view);
@@ -368,7 +377,7 @@ fn a_landing_movie_holds_the_land_checks_texts_until_it_ends() {
     assert_eq!(view.take_landing(), Some(StellarId(129)));
     assert_eq!(
         view.take_mission_texts(),
-        [nova_sim::MissionShown::Text(comp_text())]
+        [nova_sim_frame::MissionShown::Text(comp_text())]
     );
 }
 
@@ -379,7 +388,7 @@ fn with_movies_off_a_landings_texts_come_out_with_it() {
     assert_eq!(view.take_landing(), Some(StellarId(129)));
     assert_eq!(
         view.take_mission_texts(),
-        [nova_sim::MissionShown::Text(comp_text())]
+        [nova_sim_frame::MissionShown::Text(comp_text())]
     );
 }
 
@@ -780,7 +789,7 @@ fn a_wormhole_leading_nowhere_loads_nothing_and_is_refused_at_once() {
     into_the_wormhole(
         &mut view,
         Some(ScreenAnswer::GateEntryDesc(None)),
-        Answer::GateRefused(nova_sim::GateRefusal::NoExit),
+        Answer::GateRefused(nova_sim_frame::GateRefusal::NoExit),
     );
     assert_eq!(view.sim.asks(), [], "no movie past the refusal (@0x6461c)");
     assert_eq!(player.calls(), []);

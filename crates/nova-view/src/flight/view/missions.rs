@@ -10,9 +10,9 @@
 //! redraws around an accept, a refusal, an abort and an offer accepted at
 //! once are staged as their scripts ran ([`FlightView::stage_bar`]).
 
-use nova_sim::flight_frame::{Answer, FadedPress, FlightCommand, ScreenAnswer, ScreenAsk};
-use nova_sim::mission::screens::NO_ACTIVE_MISSIONS;
-use nova_sim::{
+use nova_sim_frame::flight_frame::{Answer, FadedPress, FlightCommand, ScreenAnswer, ScreenAsk};
+use nova_sim_frame::mission::screens::NO_ACTIVE_MISSIONS;
+use nova_sim_frame::{
     AbortError, AcceptError, ComputerRefusal, ComputerRow, MissionComputer, MissionId, MissionInfo,
     MissionInfoPress, NotOffered, OfferPrompt, RefuseShown, VenueOffer,
 };

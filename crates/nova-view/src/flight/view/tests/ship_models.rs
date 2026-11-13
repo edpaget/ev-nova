@@ -13,9 +13,9 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use nova_data::store::{Footing, Mount, Mounts, Shown};
-use nova_sim::OutfitId;
-use nova_sim::cloak::CloakShown;
-use nova_sim::combat::hull_turn::HullTurn;
+use nova_sim_frame::OutfitId;
+use nova_sim_frame::cloak::CloakShown;
+use nova_sim_frame::combat::hull_turn::HullTurn;
 
 use super::faked_world::{world, world_list};
 use super::*;
@@ -358,7 +358,7 @@ fn a_faded_ship_keeps_its_2d_path() {
             ships[1].cloak = CloakShown::Translucent(8);
         }),
         ("at a gate", |ships| {
-            ships[1].gate = nova_sim::flight_frame::GateFade::Entering { ticks_left: 9.0 };
+            ships[1].gate = nova_sim_frame::flight_frame::GateFade::Entering { ticks_left: 9.0 };
         }),
     ];
     for (why, edit) in edits {
@@ -380,9 +380,9 @@ fn a_faded_ship_keeps_its_2d_path() {
         assert!(!triangles(&list).is_empty(), "{why}: its outline");
     }
     for (shown, cloak) in [
-        (nova_sim::Drawn::Hidden, CloakShown::Opaque),
-        (nova_sim::Drawn::SpriteHidden, CloakShown::Opaque),
-        (nova_sim::Drawn::Full, CloakShown::Translucent(8)),
+        (nova_sim_frame::Drawn::Hidden, CloakShown::Opaque),
+        (nova_sim_frame::Drawn::SpriteHidden, CloakShown::Opaque),
+        (nova_sim_frame::Drawn::Full, CloakShown::Translucent(8)),
     ] {
         let view = view_of(
             frame(0.0, HullTurn::Continuous, |ships| {

@@ -4,7 +4,7 @@
 //! `EV Nova` executable).
 //!
 //! - A hit that reaches `_DamageShip`'s flash write
-//!   ([`CombatEvent::Hit`](nova_sim::CombatEvent::Hit)) sets the ship's
+//!   ([`CombatEvent::Hit`](nova_sim_frame::CombatEvent::Hit)) sets the ship's
 //!   timer (+0xc8f0) to [`FLASH_TICKS`], unless its weapon passes shields
 //!   ([`ShieldFlash::hit`]). The write follows the reaction block's skip
 //!   target, so a hit sets it whether the ship answers it or not: a
@@ -34,14 +34,14 @@
 //!   frame's gain while it is above none, drawn or not
 //!   ([`ShieldFlash::step`]): the original's `_gSpeedMult` (@0x2c964), in
 //!   doubles, narrowed, the pass's
-//!   [`PassReport::speed_mult`](nova_sim::flight_frame::PassReport::speed_mult). The
+//!   [`PassReport::speed_mult`](nova_sim_frame::flight_frame::PassReport::speed_mult). The
 //!   hold to the share and the level before it are unscaled.
 //!
 //! An NPC's shot hits land before its `_HandleShipDisplay` in
 //! `_DoPlayGameWork`, so they show on the frame they land; a hit on the
 //! player, a beam's, and some shockwaves land after their ship's display
 //! and show a frame later
-//! ([`CombatEvent::Hit::late`](nova_sim::CombatEvent::Hit)).
+//! ([`CombatEvent::Hit::late`](nova_sim_frame::CombatEvent::Hit)).
 //!
 //! The flight view steps each ship's flash with whether its class has a
 //! shän shield layer (`_masterShipShieldSprite[class]`, @0x2b754-0x2b791)
@@ -82,7 +82,7 @@ fn share(shield: f32, base: f32) -> f32 {
     }
 }
 
-use nova_sim::SpeedMult;
+use nova_sim_frame::SpeedMult;
 
 /// What a ship's display holds its flash by ([`ShieldFlash::step`]).
 #[derive(Clone, Copy, Debug, PartialEq)]

@@ -187,7 +187,7 @@ impl FrameRate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nova_sim::mission::screens::mac_ticks;
+    use nova_sim_frame::mission::screens::mac_ticks;
 
     /// Moves `meter` on by `n` Mac ticks.
     fn wait(meter: &mut FrameRate, n: u32) {

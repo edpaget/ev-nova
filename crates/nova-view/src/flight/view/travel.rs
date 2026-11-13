@@ -2,12 +2,10 @@
 //! its steps, arrival, take-off, landing, the shipyard and outfitter
 //! orders.
 
-#[cfg(doc)]
-use nova_sim::Session;
-use nova_sim::SessionEvent;
-use nova_sim::gate::next_gate_pick;
+use nova_sim_frame::SessionEvent;
+use nova_sim_frame::gate::next_gate_pick;
 
-use nova_sim::flight_frame::{
+use nova_sim_frame::flight_frame::{
     Answer, CarriedDisplay, FlightCommand, MapClick, MapOpen, MapScreen, ScreenAnswer, ScreenAsk,
 };
 
@@ -124,7 +122,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// computer's then redrawing the nav area, and mission info's nothing.
     pub(super) fn close_map_then(
         &mut self,
-        enter_gate: impl FnOnce(&mut Self, Option<nova_sim::SystemId>),
+        enter_gate: impl FnOnce(&mut Self, Option<nova_sim_frame::SystemId>),
     ) {
         // `_SaveMapBordersState` for a change, whatever the map's mode,
         // unless docked (@0x13c21-0x13c3f).
@@ -187,7 +185,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// screen caught up at once. Taking the events again finds none. A
     /// flight that failed drains nothing, and its frame is the default.
     ///
-    /// [`FlightEvent::Session`]: nova_sim::flight_frame::FlightEvent::Session
+    /// [`FlightEvent::Session`]: nova_sim_frame::flight_frame::FlightEvent::Session
     pub(super) fn catch_up(&mut self) -> Redrawn
     where
         C: SystemCatalog + ShipSprites + CombatLooks + StatusBars,
@@ -239,8 +237,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// into their new NPCs ([`FlightView::carry_displays`]). Gives what
     /// was redrawn.
     ///
-    /// [`FlightEvent::Session`]: nova_sim::flight_frame::FlightEvent::Session
-    /// [`FlightEvent::DisplaysCarried`]: nova_sim::flight_frame::FlightEvent::DisplaysCarried
+    /// [`FlightEvent::Session`]: nova_sim_frame::flight_frame::FlightEvent::Session
+    /// [`FlightEvent::DisplaysCarried`]: nova_sim_frame::flight_frame::FlightEvent::DisplaysCarried
     pub(super) fn catch_up_then(&mut self, redraw: impl FnOnce(&mut Self, Redrawn)) -> Redrawn {
         let mut redrawn = Redrawn::default();
         let inbox = self.drain();
@@ -297,7 +295,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Shows the course as it is flown on the course map, from the
-    /// current system ([`FlightFrame::course_shown`](nova_sim::flight_frame::FlightFrame::course_shown)).
+    /// current system ([`FlightFrame::course_shown`](nova_sim_frame::flight_frame::FlightFrame::course_shown)).
     pub(super) fn show_course(&mut self) {
         self.map
             .show_course(self.frame.system, &self.frame.course_shown);
@@ -410,7 +408,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// to the opening's ask ([`ScreenAsk::MapOpening`]). A flight that
     /// answers it nothing (one that failed to start) opens the map with no
     /// nav noted, the marks the opener gives itself
-    /// ([`MarksFrom::unanswered`](nova_sim::flight_frame::MarksFrom::unanswered)),
+    /// ([`MarksFrom::unanswered`](nova_sim_frame::flight_frame::MarksFrom::unanswered)),
     /// no borders shown, nothing preselected and no mission systems.
     ///
     /// Only [`MapOpening::Plain`] keeps any flight key held: any other
@@ -462,15 +460,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Takes the session's drawing onto the course map
-    /// ([`Session::map_drawing`]), as `_MapDialogUpdate` runs `_DrawMap`:
+    /// (`nova_sim::Session::map_drawing`), as `_MapDialogUpdate` runs `_DrawMap`:
     /// on the hypergate map with the gate's offers arrowed, each of which
-    /// that draw marks known ([`Session::mark_known`], `_DrawMap`
+    /// that draw marks known (`nova_sim::Session::mark_known`, `_DrawMap`
     /// @0xf457-0xf45f). So the first draw of the hypergate map shows an
     /// offer the player knew nothing of without its oval, and the next one,
     /// at a Tab, a click or the course map opened again before the next
     /// rebuild point, shows it, as the original's next `_MapDialogUpdate`
     /// does. What the drawing was taken from is noted after the mark
-    /// ([`MapKey`](nova_sim::flight_frame::MapKey)), so the mark itself
+    /// ([`MapKey`](nova_sim_frame::flight_frame::MapKey)), so the mark itself
     /// doesn't take it again. The borders and the panels for the system
     /// selected are taken with it, all one answer to the redraw's ask
     /// ([`ScreenAsk::Map`]). Which systems the drawing marks known is the
@@ -504,10 +502,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Shows `panel` on the course map, in cheat mode
-    /// ([`MapPanel::with_cheats`](nova_sim::map_panel::MapPanel::with_cheats))
+    /// ([`MapPanel::with_cheats`](nova_sim_frame::map_panel::MapPanel::with_cheats))
     /// when the cheats setting is on ([`FlightOverlays::cheats`](super::FlightOverlays::cheats)),
     /// as `_MapDialogUpdate` reads `_cheatsActive`.
-    fn show_map_panel(&mut self, panel: nova_sim::map_panel::MapPanel) {
+    fn show_map_panel(&mut self, panel: nova_sim_frame::map_panel::MapPanel) {
         let panel = if self.overlays.cheats {
             panel.with_cheats()
         } else {
@@ -517,7 +515,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Takes the session's info panels onto the course map
-    /// ([`Session::map_panel`], [`ScreenAsk::MapPanel`]) for the system it
+    /// (`nova_sim::Session::map_panel`, [`ScreenAsk::MapPanel`]) for the system it
     /// selects, as `_MapDialogUpdate` draws them after `_DrawMap`: on the
     /// hypergate map with the gate's offers, which title a destination.
     pub(super) fn retake_map_panel(&mut self) {
@@ -596,7 +594,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// Answers a press on the map that hit systems
     /// ([`GalaxyMap::take_press`](crate::galaxy::GalaxyMap::take_press)) as
-    /// `_DoSystemMap` takes item 3 ([`Session::map_click`]): the hypergate
+    /// `_DoSystemMap` takes item 3 (`nova_sim::Session::map_click`): the hypergate
     /// map passes the systems the gate offers, and every map the mission
     /// systems taken as it opened. With no session, or no hit accepted,
     /// the map drags. An accepted press draws the map again, as the
@@ -636,7 +634,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// Clear Route, from its button or C (`_DoSystemMap` item 8,
     /// @0x12c69-0x12dbf): the session's course cleared and its selection
-    /// let go ([`Session::clear_route`]), Clear Route disabled and the
+    /// let go (`nova_sim::Session::clear_route`), Clear Route disabled and the
     /// hypergate map's pick dropped
     /// ([`GalaxyMap::route_cleared`](crate::galaxy::GalaxyMap::route_cleared)),
     /// the map drawn again and the nav area redrawn at once (`_DrawStatus`
@@ -731,14 +729,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// off a planet (@0x13d0c-0x140d8). On the hypergate map, the map's
     /// selection steps to the next of the pending hypergate's
     /// destinations (`nova_sim::Session::hypergate_cycle`,
-    /// [`next_gate_pick`](nova_sim::gate::next_gate_pick)), back with
+    /// [`next_gate_pick`](nova_sim_frame::gate::next_gate_pick)), back with
     /// Shift, held as it is so a hidden one steps on too; no nav mode is
     /// written and the nav area isn't redrawn, as the original's mode 4 is
     /// never drawn (@0x13dd8-0x13ebd). A pick redraws the map's item 3
     /// ([`GalaxyMap::redraw`](crate::galaxy::GalaxyMap::redraw),
     /// @0x13e6f); with no destination to pick nothing is invalidated
     /// (`jle` @0x13daf). On the course map, the session cycles the
-    /// hyperspace selection ([`Session::cycle_map_selection`]); the map
+    /// hyperspace selection (`nova_sim::Session::cycle_map_selection`); the map
     /// then draws the new selected link and selects the system the
     /// original's `_selSystem` names (@0x1408c-0x140d8,
     /// `Session::map_preselection`), item 3 is redrawn whether a link

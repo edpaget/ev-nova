@@ -9,7 +9,7 @@
 //! over space and every ship.
 //!
 //! The blink follows the session's frame counter (see
-//! [`nova_sim::red_alert`]), not the HUD's `TickCount` cadence.
+//! [`nova_sim_frame::red_alert`]), not the HUD's `TickCount` cadence.
 //!
 //! The double-time icon (`_HandleDoubleTimeSprite` @0x2e5a7-0x2e61c):
 //! `cïcn` [`DOUBLE_TIME_CICN`], one frame (`_LoadSprites`
@@ -18,7 +18,7 @@
 //! Red Alert's sprite (@0x20390-0x203a4 against @0x20304-0x20312), so it
 //! is drawn over it.
 
-use nova_sim::AlertIcon;
+use nova_sim_frame::AlertIcon;
 
 use crate::geometry::Point;
 use crate::system::camera::Anchor;
@@ -30,7 +30,7 @@ use crate::{DrawList, ImageKey};
 /// `_SetupWind` @0x1b720, [`Anchor::PlayAreaCentre`]). That is the bar's
 /// left edge less the width, and a pixel further left when the play
 /// area's width is odd. It is placed so by both readings of
-/// [`RuleKey::FlightAnchor`](nova_sim::RuleKey::FlightAnchor), as
+/// [`RuleKey::FlightAnchor`](nova_sim_frame::RuleKey::FlightAnchor), as
 /// `_InitSprites` places it.
 #[must_use]
 pub fn alert_origin(width: u32, view_width: f32) -> Point {

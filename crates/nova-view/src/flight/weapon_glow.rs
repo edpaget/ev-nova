@@ -2,7 +2,7 @@
 //! `Flags2` 0x0200 weapon it fires glows (ship +0xc8e8), as
 //! `_HandleShipDisplay` draws it (@0x2c6ae-0x2c82c).
 //!
-//! - The fight lights it at 32.0 ([`CombatEvent::WeaponGlow`](nova_sim::CombatEvent::WeaponGlow)):
+//! - The fight lights it at 32.0 ([`CombatEvent::WeaponGlow`](nova_sim_frame::CombatEvent::WeaponGlow)):
 //!   a call that fired the weapon, before its ship's display, so it shows
 //!   that frame (the player's fighter bay's only once the session puts a
 //!   fighter it launched in the system, the same frame); and each live
@@ -22,7 +22,7 @@
 //! - Then the glow falls by its class's decay, `WeapDecay` × 0.333
 //!   ([`ShipSheet::weapon_decay`](super::catalog::ShipSheet::weapon_decay)),
 //!   times the frame's gain (@0x2c7ed), in doubles, narrowed, the pass's
-//!   [`PassReport::speed_mult`](nova_sim::flight_frame::PassReport::speed_mult), to
+//!   [`PassReport::speed_mult`](nova_sim_frame::flight_frame::PassReport::speed_mult), to
 //!   −1.0 at the least, unscaled ([`WeaponGlow::step`]).
 //!
 //! The spawns zero it (@0x3c4ff, @0x3ca71, @0x3d949, @0x82ef3, @0x1c4d4)
@@ -47,7 +47,7 @@
 
 use std::collections::BTreeMap;
 
-use nova_sim::{ShipRef, SpeedMult};
+use nova_sim_frame::{ShipRef, SpeedMult};
 
 /// The glow a firing lights (32.0 @0x62c98, @0x88de4, @0x30b37).
 pub const GLOW_LIT: f32 = 32.0;
@@ -186,7 +186,7 @@ impl WeaponGlows {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use nova_sim::NpcId;
+    use nova_sim_frame::NpcId;
 
     use super::*;
 

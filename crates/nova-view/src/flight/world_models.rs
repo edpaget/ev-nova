@@ -19,7 +19,7 @@
 use std::collections::BTreeMap;
 
 use nova_data::store::{Mount, Mounts};
-use nova_sim::{OutfitId, ShipId, StellarId};
+use nova_sim_frame::{OutfitId, ShipId, StellarId};
 
 use crate::model::ModelKey;
 use crate::planet::PlanetKey;

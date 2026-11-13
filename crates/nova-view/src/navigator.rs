@@ -67,7 +67,7 @@ impl<C: GalaxyCatalog + SystemCatalog> Navigator<C> {
     /// The navigator with its map's links drawn by `rules`
     /// ([`GalaxyMap::with_rules`]).
     #[must_use]
-    pub fn with_rules(self, rules: &nova_sim::Rulebook) -> Self {
+    pub fn with_rules(self, rules: &nova_sim_frame::Rulebook) -> Self {
         Self {
             map: self.map.with_rules(rules),
             ..self
@@ -293,7 +293,7 @@ mod tests {
                     animation: StellarAnimation {
                         delay: 1,
                         frame0_bias: 0,
-                        flags2: nova_sim::landing::RANDOM,
+                        flags2: nova_sim_frame::landing::RANDOM,
                     },
                     stand_in: None,
                 }]
@@ -595,7 +595,7 @@ mod tests {
     #[derive(Default)]
     struct Zeros(Vec<u32>);
 
-    impl nova_sim::Chance for Zeros {
+    impl nova_sim_frame::Chance for Zeros {
         fn fires(&mut self, _percent: u8) -> bool {
             false
         }
@@ -671,7 +671,7 @@ mod tests {
 
     #[test]
     fn the_gate_links_handed_in_and_the_rules_reach_the_maps_links() {
-        use nova_sim::{RuleKey, RuleSource, Rulebook};
+        use nova_sim_frame::{RuleKey, RuleSource, Rulebook};
         let laned = Rulebook::default().with_override(RuleKey::GateLanes, RuleSource::Bible);
         let gates = crate::galaxy::catalog::GateLinks {
             links: vec![(SystemId(128), SystemId(129))],

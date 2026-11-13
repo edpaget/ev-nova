@@ -6,8 +6,8 @@
 //! `tests/it/flight_seam.rs`'s.
 
 use super::*;
-use nova_sim::flight_frame::FlightEvent;
-use nova_sim::{DeskReading, GameDate, Reserves, SessionEvent};
+use nova_sim_frame::flight_frame::FlightEvent;
+use nova_sim_frame::{DeskReading, GameDate, Reserves, SessionEvent};
 
 /// Ada, docked on Earth in Sol.
 fn ada() -> DeskReading {

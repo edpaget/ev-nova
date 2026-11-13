@@ -368,7 +368,7 @@ mod tests {
     /// What a session shows of [`three_nebulae`]: every system, and of
     /// its nebulae (128 inactive and explored, 129 active and unexplored,
     /// 130 active and explored) only 130.
-    fn session() -> nova_sim::galaxy_map::GalaxyShown {
+    fn session() -> nova_sim_frame::galaxy_map::GalaxyShown {
         shown(
             &[(128, Some(128)), (129, None), (130, Some(128)), (131, None)],
             &[(128, 129), (128, 130)],

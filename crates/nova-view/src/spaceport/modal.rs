@@ -214,7 +214,7 @@ mod tests {
     use std::rc::Rc;
     use std::time::Duration;
 
-    use nova_sim::ShipId;
+    use nova_sim_frame::ShipId;
 
     use super::*;
     use crate::color::Color;

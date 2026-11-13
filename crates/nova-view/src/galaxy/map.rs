@@ -103,7 +103,7 @@
 //! arrows don't pan, Space types a space, and a click selects nothing.
 //! Find with an empty text, or Cancel, changes nothing and plays nothing.
 //! A text is matched as `_DoSystemSearch` does
-//! ([`map_search`](nova_sim::map_search)): the viewer searches every
+//! ([`map_search`](nova_sim_frame::map_search)): the viewer searches every
 //! system in the data itself, and an in-flight map leaves the search to
 //! its owner ([`GalaxyMap::take_find`]), which answers with
 //! [`GalaxyMap::show_search`]: a system found is selected and centred on
@@ -127,7 +127,7 @@
 //!
 //! Every map shades government borders under its nebulae
 //! ([`borders`](super::borders), worked out by
-//! [`map_borders`](nova_sim::map_borders)). An in-flight map adds the
+//! [`map_borders`](nova_sim_frame::map_borders)). An in-flight map adds the
 //! systems its owner shows ([`GalaxyMap::show_border_sources`],
 //! `nova_sim::Session::map_border_sources`), and runs the original's
 //! passes where `_DoSystemMap` and `_MapFilter` do, each only while the
@@ -179,7 +179,7 @@
 //!
 //! Over its nebulae, the map draws a [`MapPicture`]: in flight the
 //! session's drawing ([`GalaxyMap::show_drawing`], `nova_sim`'s
-//! [`galaxy_map`](nova_sim::galaxy_map) decides what `_DrawMap` draws),
+//! [`galaxy_map`](nova_sim_frame::galaxy_map) decides what `_DrawMap` draws),
 //! and on the viewer every system and link in the data
 //! ([`MapPicture::viewer`]): the Con links by `RuleKey::GateLanes`'
 //! engine reading, a fresh pilot's gate lanes by its other, each in its
@@ -263,7 +263,7 @@
 //!
 //! The course and hypergate maps draw the session's info panels
 //! ([`GalaxyMap::show_panel`], `nova_sim`'s
-//! [`map_panel`](nova_sim::map_panel) decides them, the
+//! [`map_panel`](nova_sim_frame::map_panel) decides them, the
 //! [`panel`](super::panel) module lays them out), measured by the
 //! flight's text metrics ([`GalaxyMap::with_metrics`]), at DITL 2000's
 //! items 2 and 6 from the dialog's top-left corner. They draw none of the
@@ -275,21 +275,21 @@
 //! explored level and nothing unexplored, and its lines in the right
 //! column.
 //!
-//! [`RuleKey::NebulaPicture`]: nova_sim::RuleKey::NebulaPicture
-//! [`RuleKey::MapBorderPace`]: nova_sim::RuleKey::MapBorderPace
-//! [`RuleKey::MapFindBorders`]: nova_sim::RuleKey::MapFindBorders
+//! [`RuleKey::NebulaPicture`]: nova_sim_frame::RuleKey::NebulaPicture
+//! [`RuleKey::MapBorderPace`]: nova_sim_frame::RuleKey::MapBorderPace
+//! [`RuleKey::MapFindBorders`]: nova_sim_frame::RuleKey::MapFindBorders
 
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::Vec2;
-use nova_sim::galaxy_map::GalaxyShown;
-use nova_sim::galaxy_map::{MapDrawing, MapLink, arrow_head};
-use nova_sim::iff::SystemColorCode;
-use nova_sim::map_borders::{BorderPasses, BorderSources, PaintedCell};
-use nova_sim::map_lanes::LaneLook;
-use nova_sim::map_panel::MapPanel;
-use nova_sim::map_search::{self, SearchOutcome};
+use nova_sim_frame::Vec2;
+use nova_sim_frame::galaxy_map::GalaxyShown;
+use nova_sim_frame::galaxy_map::{MapDrawing, MapLink, arrow_head};
+use nova_sim_frame::iff::SystemColorCode;
+use nova_sim_frame::map_borders::{BorderPasses, BorderSources, PaintedCell};
+use nova_sim_frame::map_lanes::LaneLook;
+use nova_sim_frame::map_panel::MapPanel;
+use nova_sim_frame::map_search::{self, SearchOutcome};
 
 use super::borders::MapBorders;
 use super::buttons::MapButton;
@@ -913,8 +913,8 @@ impl GalaxyMap {
     /// as `source` reads [`RuleKey::NebulaPicture`]. The viewer has no
     /// rules: it keeps the engine's.
     ///
-    /// [`RuleKey::NebulaPicture`]: nova_sim::RuleKey::NebulaPicture
-    pub fn set_nebula_pick(&mut self, source: nova_sim::RuleSource) {
+    /// [`RuleKey::NebulaPicture`]: nova_sim_frame::RuleKey::NebulaPicture
+    pub fn set_nebula_pick(&mut self, source: nova_sim_frame::RuleSource) {
         if self.mode != MapMode::Viewer {
             self.nebula_pick = PicturePick::of(source);
         }
@@ -1011,11 +1011,10 @@ impl GalaxyMap {
         self.route = route.to_vec();
     }
 
-    /// Shows `drawing`, the session's ([`Session::map_drawing`]), as what
+    /// Shows `drawing`, the session's (`nova_sim::Session::map_drawing`), as what
     /// the map draws, each system framed in its code's colour
     /// ([`MapPicture::of`]), in place of any shown before.
     ///
-    /// [`Session::map_drawing`]: nova_sim::Session::map_drawing
     pub fn show_drawing(&mut self, drawing: &MapDrawing) {
         self.picture = Some(MapPicture::of(drawing));
     }
@@ -1056,11 +1055,10 @@ impl GalaxyMap {
         self.selected = self.selected.filter(|&id| self.model.system(id).is_some());
     }
 
-    /// Shows `panel`, the session's ([`Session::map_panel`]), as the info
+    /// Shows `panel`, the session's (`nova_sim::Session::map_panel`), as the info
     /// panels an in-flight map draws, in place of any shown before. The
     /// viewer never draws it.
     ///
-    /// [`Session::map_panel`]: nova_sim::Session::map_panel
     pub fn show_panel(&mut self, panel: MapPanel) {
         self.panel = Some(panel);
     }
@@ -1253,11 +1251,10 @@ impl GalaxyMap {
         }
     }
 
-    /// Shows `sources`, the session's ([`Session::map_border_sources`]),
+    /// Shows `sources`, the session's (`nova_sim::Session::map_border_sources`),
     /// as what an in-flight map's borders add from now on. The owner shows
     /// them before the map opens and again with each drawing.
     ///
-    /// [`Session::map_border_sources`]: nova_sim::Session::map_border_sources
     pub fn show_border_sources(&mut self, sources: BorderSources) {
         self.borders.show_sources(sources);
         self.settle_borders();
@@ -1267,9 +1264,13 @@ impl GalaxyMap {
     /// [`RuleKey::MapFindBorders`]. The viewer has no rules: it keeps the
     /// engine's.
     ///
-    /// [`RuleKey::MapBorderPace`]: nova_sim::RuleKey::MapBorderPace
-    /// [`RuleKey::MapFindBorders`]: nova_sim::RuleKey::MapFindBorders
-    pub fn set_border_rules(&mut self, pace: nova_sim::RuleSource, find: nova_sim::RuleSource) {
+    /// [`RuleKey::MapBorderPace`]: nova_sim_frame::RuleKey::MapBorderPace
+    /// [`RuleKey::MapFindBorders`]: nova_sim_frame::RuleKey::MapFindBorders
+    pub fn set_border_rules(
+        &mut self,
+        pace: nova_sim_frame::RuleSource,
+        find: nova_sim_frame::RuleSource,
+    ) {
         if self.mode != MapMode::Viewer {
             self.borders.set_rules(pace, find);
         }
@@ -3937,7 +3938,7 @@ mod tests {
 
     // Drawing as `_DrawMap` does.
 
-    use nova_sim::galaxy_map::DrawnSystem;
+    use nova_sim_frame::galaxy_map::DrawnSystem;
 
     fn link(from: i16, to: i16, selected: bool) -> MapLink {
         MapLink {
@@ -4091,8 +4092,8 @@ mod tests {
     /// [`drawing`] with each link's look: the current link's `current`,
     /// Gamma's to Alpha stable both ways, the selected slot's stable.
     fn looked(current: LaneLook) -> MapDrawing {
-        use nova_sim::catalog::GateStability::Stable;
-        use nova_sim::map_lanes::Back;
+        use nova_sim_frame::catalog::GateStability::Stable;
+        use nova_sim_frame::map_lanes::Back;
         let stable = |from, to| LaneLook {
             from: SystemId(from),
             to: SystemId(to),
@@ -4107,8 +4108,8 @@ mod tests {
 
     /// Alpha's look to Beta: `out`, and `back`.
     fn alpha_beta(
-        out: Option<nova_sim::catalog::GateStability>,
-        back: nova_sim::map_lanes::Back,
+        out: Option<nova_sim_frame::catalog::GateStability>,
+        back: nova_sim_frame::map_lanes::Back,
     ) -> LaneLook {
         LaneLook {
             from: SystemId(128),
@@ -4120,8 +4121,8 @@ mod tests {
 
     #[test]
     fn a_lane_is_drawn_in_its_stabilitys_colour_and_dash() {
-        use nova_sim::catalog::GateStability::{Dead, Stable, Unstable};
-        use nova_sim::map_lanes::Back;
+        use nova_sim_frame::catalog::GateStability::{Dead, Stable, Unstable};
+        use nova_sim_frame::map_lanes::Back;
         for (stability, color, pieces) in [
             (Stable, lanes::STABLE, 1),
             (Unstable, lanes::UNSTABLE, 47),
@@ -4146,8 +4147,8 @@ mod tests {
 
     #[test]
     fn a_lane_whose_ways_differ_is_drawn_in_two_halves() {
-        use nova_sim::catalog::GateStability::{Dead, Stable};
-        use nova_sim::map_lanes::Back;
+        use nova_sim_frame::catalog::GateStability::{Dead, Stable};
+        use nova_sim_frame::map_lanes::Back;
         let list = drawn(&showing(&looked(alpha_beta(
             Some(Stable),
             Back::Way(Some(Dead)),
@@ -4165,8 +4166,8 @@ mod tests {
 
     #[test]
     fn a_one_way_lane_has_two_head_strokes_at_its_far_end() {
-        use nova_sim::catalog::GateStability::Unstable;
-        use nova_sim::map_lanes::Back;
+        use nova_sim_frame::catalog::GateStability::Unstable;
+        use nova_sim_frame::map_lanes::Back;
         let list = drawn(&showing(&looked(alpha_beta(Some(Unstable), Back::OneWay))));
         let heads: Vec<_> = lines(&list, lanes::UNSTABLE)
             .into_iter()
@@ -4178,8 +4179,8 @@ mod tests {
 
     #[test]
     fn the_hypergate_map_and_the_selected_and_mode_3_links_keep_their_colours() {
-        use nova_sim::catalog::GateStability::Dead;
-        use nova_sim::map_lanes::Back;
+        use nova_sim_frame::catalog::GateStability::Dead;
+        use nova_sim_frame::map_lanes::Back;
         let looks = looked(alpha_beta(Some(Dead), Back::Way(Some(Dead))));
         let list = drawn(&showing(&looks));
         assert_eq!(
@@ -4199,8 +4200,8 @@ mod tests {
 
     #[test]
     fn a_closed_lane_is_drawn_in_its_look_with_no_grey_link_under_it() {
-        use nova_sim::catalog::GateStability::{Dead, Unstable};
-        use nova_sim::map_lanes::Back;
+        use nova_sim_frame::catalog::GateStability::{Dead, Unstable};
+        use nova_sim_frame::map_lanes::Back;
         for (stability, color, pieces) in [(Unstable, lanes::UNSTABLE, 47), (Dead, lanes::DEAD, 86)]
         {
             let closed = MapDrawing {
@@ -4737,7 +4738,7 @@ mod tests {
 
     // The session's panel.
 
-    use nova_sim::map_panel::{Column, ColumnBody, MapPanel, PanelWords, Ports, Strip};
+    use nova_sim_frame::map_panel::{Column, ColumnBody, MapPanel, PanelWords, Ports, Strip};
 
     /// The stock titles, `<Unknown>` and "Unexplored"'s neighbours.
     fn panel_words() -> PanelWords {
@@ -4779,14 +4780,14 @@ mod tests {
             strip: Strip::Info {
                 ports: Ports::Unknown,
                 hazards: words.unknown.clone(),
-                date: nova_sim::map_panel::PanelDate::Text("Jun 23, 1177".to_owned()),
+                date: nova_sim_frame::map_panel::PanelDate::Text("Jun 23, 1177".to_owned()),
             },
             column: Column {
                 title: words.selected.clone(),
                 body: ColumnBody::Unknown,
             },
             words,
-            numbers: nova_sim::map_panel::CheatNumbers::default(),
+            numbers: nova_sim_frame::map_panel::CheatNumbers::default(),
         }
     }
 
@@ -4859,7 +4860,7 @@ mod tests {
     use crate::galaxy::dialog::DIALOG_ORIGIN;
     use crate::galaxy::find::{FIND_ITEM, PROMPT};
     use crate::sound::{Sound, UiSound};
-    use nova_sim::map_search::SearchOutcome;
+    use nova_sim_frame::map_search::SearchOutcome;
 
     fn measured(map: GalaxyMap) -> GalaxyMap {
         map.with_metrics(Rc::new(MonoMetrics))

@@ -54,8 +54,8 @@
 
 use std::time::Duration;
 
-use nova_sim::Chance;
-use nova_sim::mission::screens::mac_ticks;
+use nova_sim_frame::Chance;
+use nova_sim_frame::mission::screens::mac_ticks;
 
 use crate::sound::{SoundId, UiSound};
 

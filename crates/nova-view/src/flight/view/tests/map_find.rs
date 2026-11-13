@@ -3,9 +3,9 @@ use super::*;
 use crate::galaxy::GalaxyMap;
 use crate::galaxy::find::PROMPT;
 use crate::text::fixture::MonoMetrics;
-use nova_sim::MapClicked;
-use nova_sim::map_panel::{Column, ColumnBody, MapPanel, PanelWords, Ports, Strip};
-use nova_sim::map_search::SearchOutcome;
+use nova_sim_frame::map_click::MapClicked;
+use nova_sim_frame::map_panel::{Column, ColumnBody, MapPanel, PanelWords, Ports, Strip};
+use nova_sim_frame::map_search::SearchOutcome;
 
 // Space, Find and Done on the in-flight maps (`_MapFilter`,
 // `_DoSystemSearch`).
@@ -57,14 +57,14 @@ pub(super) fn panel_titled(title: &str) -> MapPanel {
         strip: Strip::Info {
             ports: Ports::Unknown,
             hazards: String::new(),
-            date: nova_sim::map_panel::PanelDate::Text(String::new()),
+            date: nova_sim_frame::map_panel::PanelDate::Text(String::new()),
         },
         column: Column {
             title: title.to_owned(),
             body: ColumnBody::Unknown,
         },
         words: PanelWords::default(),
-        numbers: nova_sim::map_panel::CheatNumbers::default(),
+        numbers: nova_sim_frame::map_panel::CheatNumbers::default(),
     }
 }
 
@@ -165,9 +165,9 @@ fn a_system_the_flights_find_doesnt_find_leaves_the_selection_and_panel() {
     // Sol hidden by its `Visibility` once bit 50 is set: a viewer, which
     // has no flight, finds it anyway.
     let catalog = FakeCatalog {
-        visibility: vec![nova_sim::catalog::SystemVisibility {
+        visibility: vec![nova_sim_frame::catalog::SystemVisibility {
             id: SystemId(130),
-            visibility: nova_sim::Test::parse("!b50"),
+            visibility: nova_sim_catalog::control::Test::parse("!b50"),
         }],
         ..named(catalog())
     };

@@ -3,8 +3,8 @@ use super::*;
 use crate::flight::view::dialog_map::MapOpening;
 use crate::galaxy::buttons::{MapButton, MapButtons};
 use crate::galaxy::dialog::DIALOG_ORIGIN;
-use nova_sim::Face;
-use nova_sim::flight_frame::StepInput;
+use nova_sim_frame::Face;
+use nova_sim_frame::flight_frame::StepInput;
 
 // The map key's wait on close in flight (`_DoSystemMap`
 // @0x13a2e-0x13a46): every close waits, inert, while M is held, and the
@@ -579,7 +579,7 @@ fn a_click_during_the_wait_is_left_out_of_what_the_close_gives() {
 fn the_wait_is_read_from_its_start_not_from_ms_press() {
     // A port map opens with M held, and isn't waiting yet.
     let mut view = faked_sol(in_sol());
-    view.open_dialog_map(MapOpener::Offer(nova_sim::MissionId(130)));
+    view.open_dialog_map(MapOpener::Offer(nova_sim_frame::MissionId(130)));
     assert!(!view.map_waiting(), "M held, no close asked");
     view.port_map_input(&key(MAP, true));
     assert!(view.map_waiting());

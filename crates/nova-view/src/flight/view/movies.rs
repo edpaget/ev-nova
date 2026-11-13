@@ -65,9 +65,9 @@
 //! Neither function plays a sound.
 
 #[cfg(doc)]
-use nova_sim::SimSound;
-use nova_sim::flight_frame::{Answer, FlightCommand, GateEntry, ScreenAnswer, ScreenAsk};
-use nova_sim::{StellarId, SystemId};
+use nova_sim_frame::SimSound;
+use nova_sim_frame::flight_frame::{Answer, FlightCommand, GateEntry, ScreenAnswer, ScreenAsk};
+use nova_sim_frame::{StellarId, SystemId};
 
 use crate::draw::fill_rect;
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};

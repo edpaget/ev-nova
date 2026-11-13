@@ -8,9 +8,9 @@
 //! its hypergate entry among it. The flight's messages are worded by the
 //! flight's names ([`FlightView::word`]).
 
-use nova_sim::flight_frame::{Answer, FlightCommand, GateEntry, GatePilotShown};
-use nova_sim::landing::LandOutcome;
-use nova_sim::{CombatEvent, GateKind, GateRefusal, LandPress, SimMessage, SystemId};
+use nova_sim_frame::flight_frame::{Answer, FlightCommand, GateEntry, GatePilotShown};
+use nova_sim_frame::landing::LandOutcome;
+use nova_sim_frame::{CombatEvent, GateKind, GateRefusal, LandPress, SimMessage, SystemId};
 
 use crate::Input;
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
@@ -52,7 +52,7 @@ impl<
     /// wormhole's entry first play the stellar's `dësc` movie, flight
     /// frozen under it (see the `movies` module). A refusal names its stellar from
     /// the scene, or by the opening's name for one the scene doesn't hold
-    /// ([`Names::stellar`](nova_sim::flight_frame::Names::stellar)),
+    /// ([`Names::stellar`](nova_sim_frame::flight_frame::Names::stellar)),
     /// and says the gate's line when the flight says the stellar is one
     /// ([`Answer::LandRefused`]'s `gate`). Each command is sent under its
     /// gate ([`FlightView::send_gated`]), so a press the flight doesn't take
@@ -160,7 +160,7 @@ impl<
     /// ([`FlightView::take_landing`]) and the status bar is redrawn: at
     /// the press, or once the landing's movie has ended
     /// ([`FlightView::land_with_movie`]).
-    pub(super) fn landed_on(&mut self, stellar: nova_sim::StellarId) {
+    pub(super) fn landed_on(&mut self, stellar: nova_sim_frame::StellarId) {
         self.pending_landing = Some(stellar);
         self.redraw_status();
     }
@@ -257,7 +257,7 @@ impl<
     ///   silently, and putting back the bar's nav in port, as M does.
     /// - A text Find confirmed is searched as the in-flight map's Find
     ///   searches
-    ///   ([`ScreenAsk::Find`](nova_sim::flight_frame::ScreenAsk::Find)),
+    ///   ([`ScreenAsk::Find`](nova_sim_frame::flight_frame::ScreenAsk::Find)),
     ///   and the map shows what it found
     ///   ([`GalaxyMap::show_search`](crate::galaxy::GalaxyMap::show_search)).
     /// - The map's beeps (Space's and Find's) join the flight's.

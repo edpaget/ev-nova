@@ -12,7 +12,7 @@
 //!   (`nova_sim::scoop::Scooping`). Its frame is the simulation's,
 //!   `trunc(frame)` (@0x2e1ae-0x2e1bd), taken round the sheet's frames.
 //! - Over its last 32 ticks it fades: its blend level `n`, 0 to 31
-//!   ([`CargoBox::fade`](nova_sim::cargo_box::CargoBox::fade)), draws it
+//!   (`nova_sim::cargo_box::CargoBox::fade`), draws it
 //!   `n`/32 transparent, white at alpha `(32 − n)/32`.
 //! - A box whose sheet was not read is the shots' crossed box, on the
 //!   whole point of its position.

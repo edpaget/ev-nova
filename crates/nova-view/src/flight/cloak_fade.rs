@@ -32,10 +32,10 @@
 //! from hashed rolls of its own, per ship and tick ([`cloak_rolls`]), not
 //! the original's `Rand` draws.
 
-use nova_sim::blink::BlinkChance;
-use nova_sim::cloak::{CloakShown, FADE_FULL, TRANSLUCENCY_STEPS};
-use nova_sim::traffic::npc::NpcId;
-use nova_sim::{HashedRolls, Rgb15};
+use nova_sim_frame::blink::BlinkChance;
+use nova_sim_frame::cloak::{CloakShown, FADE_FULL, TRANSLUCENCY_STEPS};
+use nova_sim_frame::traffic::npc::NpcId;
+use nova_sim_frame::{HashedRolls, Rgb15};
 
 use super::paint::paint_channels;
 use crate::draw::{lights_tint_by_channel, translucent_tint_by_channel};
@@ -384,7 +384,7 @@ mod tests {
     mod drawing {
         use std::num::NonZeroU16;
 
-        use nova_sim::combat::ship_frames::{Alt, Drawn, FrameSpec};
+        use nova_sim_frame::combat::ship_frames::{Alt, Drawn, FrameSpec};
 
         use super::super::*;
         use super::Always;

@@ -15,9 +15,9 @@
 //! What the sky looks like (its layers, depths, density and tints) is the
 //! renderer's (`nova_render::sky`).
 //!
-//! [`RuleKey::LayeredStarfield`]: nova_sim::RuleKey::LayeredStarfield
+//! [`RuleKey::LayeredStarfield`]: nova_sim_frame::RuleKey::LayeredStarfield
 
-use nova_sim::SystemId;
+use nova_sim_frame::SystemId;
 
 use crate::flight::stars::murk_level;
 use crate::geometry::Point;

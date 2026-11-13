@@ -15,7 +15,7 @@
 
 use std::num::NonZeroU16;
 
-use nova_sim::Vec2;
+use nova_sim_frame::Vec2;
 
 use super::camera::Camera;
 use super::catalog::{

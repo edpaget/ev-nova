@@ -7,8 +7,8 @@
 
 use std::cell::Cell;
 
-use nova_sim::flight_frame::StepRun;
-use nova_sim::player_wrap::PlayerWrap;
+use nova_sim_frame::flight_frame::StepRun;
+use nova_sim_frame::player_wrap::PlayerWrap;
 
 use crate::flight::catalog::{StarDot, StarDots};
 use crate::flight::stars::murk_level;

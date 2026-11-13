@@ -9,8 +9,8 @@
 use super::faked_screen::{in_flight, warp_ends};
 use super::faked_travel::jump_now;
 use super::*;
-use nova_sim::SessionEvent;
-use nova_sim::flight_frame::FlightEvent;
+use nova_sim_frame::SessionEvent;
+use nova_sim_frame::flight_frame::FlightEvent;
 
 /// The view `FlightView::over` reads of `fake` over `catalog`, by the
 /// default rules.
@@ -155,7 +155,7 @@ fn a_new_pilot_shows_the_default_status_bar() {
 #[test]
 fn a_ship_type_whose_government_has_its_own_interface_shows_that_bar() {
     let mut frame = sol();
-    frame.hud.interface_government = Some(nova_sim::GovtId(150));
+    frame.hud.interface_government = Some(nova_sim_frame::GovtId(150));
     let view = opened(governed(catalog(), 128, 129), showing(frame));
     assert_eq!(
         view.status_bar(),
@@ -179,7 +179,7 @@ fn a_ship_type_whose_government_has_its_own_interface_shows_that_bar() {
     );
     for interface in [127, 0, -1] {
         let mut frame = sol();
-        frame.hud.interface_government = Some(nova_sim::GovtId(150));
+        frame.hud.interface_government = Some(nova_sim_frame::GovtId(150));
         let view = opened(governed(catalog(), 128, interface), showing(frame));
         assert_eq!(
             view.status_bar().map(|bar| &bar.layout),

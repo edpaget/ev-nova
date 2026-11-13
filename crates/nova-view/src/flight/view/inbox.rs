@@ -21,8 +21,8 @@
 //! so a fight's diagnostic and a report can interleave in the app's log.
 //! Nothing the player sees depends on it.
 
-use nova_sim::flight_frame::{CarriedDisplay, FlightEvent, LoadedDesc, RoomRefusal};
-use nova_sim::{
+use nova_sim_frame::flight_frame::{CarriedDisplay, FlightEvent, LoadedDesc, RoomRefusal};
+use nova_sim_frame::{
     CommNote, FighterNote, Granted, InterfaceLoad, MissionBoardLine, MissionShown, NavMode,
     PayNote, PersonQuote, SessionEvent, SimDiagnostic, SimMessage, SimSound, TextBar,
 };
@@ -239,9 +239,10 @@ impl Inbox {
 
 #[cfg(test)]
 mod tests {
-    use nova_sim::{
-        Help, MissionId, MissionText, MissionTextKind, NpcId, OutfitId, Reserves, StellarId,
-        SystemId, WeaponId,
+    use nova_sim_frame::mission_screens::MissionText;
+    use nova_sim_frame::mission_screens::MissionTextKind;
+    use nova_sim_frame::{
+        Help, MissionId, NpcId, OutfitId, Reserves, StellarId, SystemId, WeaponId,
     };
 
     use super::*;
@@ -273,7 +274,7 @@ mod tests {
     }
 
     fn movie() -> MissionShown {
-        MissionShown::Movie(nova_sim::DescMovie {
+        MissionShown::Movie(nova_sim_frame::DescMovie {
             file: "offer.mov".to_owned(),
             after: true,
             double_size: false,
@@ -456,7 +457,7 @@ mod tests {
             count: 2,
         };
         let refuelled = MissionBoardLine::Refuelled {
-            ship: nova_sim::ShipId(128),
+            ship: nova_sim_frame::ShipId(128),
         };
         let nav = NavMode::Stellar(Some(StellarId(128)));
         inbox.receive(vec![
@@ -478,7 +479,7 @@ mod tests {
         CarriedDisplay {
             from: NpcId(from),
             to: NpcId(to),
-            prepares: vec![nova_sim::SpeedMult::FULL],
+            prepares: vec![nova_sim_frame::SpeedMult::FULL],
         }
     }
 

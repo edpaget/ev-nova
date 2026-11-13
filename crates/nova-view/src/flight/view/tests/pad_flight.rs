@@ -9,7 +9,7 @@ use super::faked_flight::{at_rest, last_step_input, ticked};
 use super::*;
 use crate::input::{PadAxis, PadButton};
 use crate::keymap::FLIGHT_DEAD_ZONE;
-use nova_sim::{Amounts, Turn};
+use nova_sim_frame::{Amounts, Turn};
 
 fn axis(view: &mut Faked, axis: PadAxis, value: f32) {
     view.input(&Input::PadAxis { axis, value });
@@ -29,7 +29,7 @@ fn raw(amount: f32) -> f32 {
 }
 
 /// The step input after a tick.
-fn stepped(view: &mut Faked) -> nova_sim::flight_frame::StepInput {
+fn stepped(view: &mut Faked) -> nova_sim_frame::flight_frame::StepInput {
     ticked(view, 1);
     last_step_input(view)
 }
@@ -207,7 +207,7 @@ fn release_keys_zeroes_the_flight_axes() {
 #[test]
 fn a_stick_outside_the_dead_zone_fades_the_cursor_as_a_helm_key() {
     let mut view = at_rest(catalog());
-    view.frame.key_fades = nova_sim::flight_frame::KeyFades::EVERY;
+    view.frame.key_fades = nova_sim_frame::flight_frame::KeyFades::EVERY;
     assert!(!view.cursor_keyed());
     axis(&mut view, PadAxis::RightX, 0.1);
     assert!(!view.cursor_keyed(), "in the dead zone");

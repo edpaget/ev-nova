@@ -4,7 +4,7 @@ use std::num::NonZeroU16;
 use std::rc::Rc;
 
 pub use nova_data::ShipId;
-pub use nova_sim::Blink;
+pub use nova_sim_frame::Blink;
 
 /// A ship's key stats, raw from its `shïp` record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -1,7 +1,7 @@
 //! The player's preferences as the Preferences dialog shows them, which a
 //! screen reports through [`Screen::take_prefs`](crate::Screen::take_prefs).
 
-use nova_sim::combat::SpriteLoad;
+use nova_sim_frame::combat::SpriteLoad;
 
 use crate::scaling::Scaling;
 use crate::sound::SoundPrefs;

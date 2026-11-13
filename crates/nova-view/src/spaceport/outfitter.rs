@@ -26,7 +26,7 @@
 //! time with the arrows below it,
 //! or with the selection. The arrow keys, and Page Up and Page Down as Up
 //! and Down, move the selection by
-//! [`RuleKey::GridArrows`](nova_sim::RuleKey::GridArrows), as the
+//! [`RuleKey::GridArrows`](nova_sim_frame::RuleKey::GridArrows), as the
 //! shipyard's do: by the engine, Up on the first row and Down onto an
 //! empty cell stay (`_OutfitFilter` @0x58203-0x583b8). With nothing listed, the grid says so (`STR#`
 //! 2002 #206).
@@ -59,7 +59,7 @@
 //! launcher, the #208-212 sentence, [`ammunition_first`]) or for the `Max`
 //! it raises (`ModType` 27, the same sentence naming the outfit to sell
 //! first, [`raised_first`]) is shown as
-//! [`RuleKey::SaleRefusal`](nova_sim::RuleKey::SaleRefusal) says. By the
+//! [`RuleKey::SaleRefusal`](nova_sim_frame::RuleKey::SaleRefusal) says. By the
 //! engine, as the original does, Sell stays enabled (the Sell flag alone
 //! enables it) and the info box never words it; a click refused in the
 //! sell loop shows the words in "Desc Dialog" (`DLOG` 3003,
@@ -85,7 +85,7 @@
 //! `_DoOutfitDialog` does (@0x5c0c0-0x5c1aa for a buy, @0x5c5e3-0x5c628
 //! for a sale): when the outfitter says it asks
 //! ([`Outfitter::count_asked`], by the engine's reading of
-//! [`RuleKey::OutfitCount`](nova_sim::RuleKey::OutfitCount) the maximum
+//! [`RuleKey::OutfitCount`](nova_sim_frame::RuleKey::OutfitCount) the maximum
 //! `count_max` works out, none at 1 or less), the quantity dialog
 //! ([`QuantityDialog`], `DLOG` 1003, or its fallback; `_DoQuantityDialog`
 //! @0x56d5b) opens over the outfitter at that count, OK titled "Buy" or
@@ -104,7 +104,7 @@
 //!
 //! After an order that changes the listing, the screen follows what the
 //! order left the selection at ([`OutfitterScreen::reselect`]), as
-//! [`RuleKey::RelistedSelection`](nova_sim::RuleKey::RelistedSelection)
+//! [`RuleKey::RelistedSelection`](nova_sim_frame::RuleKey::RelistedSelection)
 //! says. By the engine, the selection is reset as `_DoOutfitDialog` resets
 //! it (@0x5c32c-0x5c35b, @0x5d021-0x5d04b): no cell is highlighted, the
 //! grid scrolls to its top, and Buy and Sell answer for `oütf` 128,
@@ -118,7 +118,7 @@
 //! order showed is closed (-0x63d, @0x5da33).
 //!
 //! The grid's presses and arrows follow
-//! [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection). By the
+//! [`RuleKey::GridSelection`](nova_sim_frame::RuleKey::GridSelection). By the
 //! engine, the selection is the selected outfit, as `_OutfitFilter` keeps
 //! it (`*0xded58`). A press on an empty cell position within the grid's
 //! cells selects nothing (@0x58632-0x58648): no cell is highlighted, Buy
@@ -158,7 +158,7 @@
 //! ([`OutfitterScreen::take_offer_choice`]). The quantity dialog and a
 //! sale's alert cover the outfitter, as the offer does: nothing is asked
 //! while any is open, and the wait runs on or stops as
-//! [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock) reads it
+//! [`RuleKey::OfferClock`](nova_sim_frame::RuleKey::OfferClock) reads it
 //! ([`OutfitterScreen::with_offer_clock`]).
 //!
 //! Done, Return and Escape close it. Without the dialog, the screen says
@@ -168,7 +168,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::{
+use nova_sim_frame::{
     Direction, LcNames, MissionId, OfferPrompt, OutfitId, OutfitOrder, OutfitRefusal, OutfitRow,
     Outfitter, Reselection, RuleSource, SaleAlert,
 };
@@ -486,7 +486,7 @@ pub struct OutfitterScreen {
     /// The selected cell, whether one is highlighted (`*0xded5c`), and
     /// the grid's scrolling.
     grid: CellGrid,
-    /// The reading of [`RuleKey::GridArrows`](nova_sim::RuleKey::GridArrows)
+    /// The reading of [`RuleKey::GridArrows`](nova_sim_frame::RuleKey::GridArrows)
     /// the grid's arrows follow, read from the outfitter's rules once.
     arrow_moves: ArrowMoves,
     /// The order asked for, and how many it moves, until it is taken.
@@ -517,7 +517,7 @@ pub struct OutfitterScreen {
     /// listing reset the selection to, listed or not
     /// ([`OutfitterScreen::reselect`]); `None` is nothing selected, after
     /// an empty cell clicked by the engine's reading of
-    /// [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection).
+    /// [`RuleKey::GridSelection`](nova_sim_frame::RuleKey::GridSelection).
     /// Unread while a cell is highlighted.
     unhighlighted_outfit: Option<OutfitId>,
     /// Whether an order left nothing listed, so the outfitter closes
@@ -539,7 +539,7 @@ impl OutfitterScreen {
     /// its template (`DLOG` 3003), and none without one. Its buttons are
     /// labelled in `style`, and each outfit's picture and description are
     /// read from `catalog`. It opens as
-    /// [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection) reads
+    /// [`RuleKey::GridSelection`](nova_sim_frame::RuleKey::GridSelection) reads
     /// it: by the engine with nothing selected, Buy and Sell greyed and
     /// no picture, info box or description, as `_DoOutfitDialog` sets
     /// `*0xded58` and `*0xded5c` to -1, the scroll to 0 and clears Sell
@@ -651,7 +651,7 @@ impl OutfitterScreen {
     /// The outfitter with mission offers, each shown in the offer dialog of
     /// its variant laid out by `templates` (or saying why there is none): it asks for the
     /// first as it opens, and again once rearmed ([`OutfitterScreen::rearm`]), as
-    /// the original's does ([`OUTFITTER`](nova_sim::mission::screens::OUTFITTER)).
+    /// the original's does ([`OUTFITTER`](nova_sim_frame::mission::screens::OUTFITTER)).
     #[must_use]
     pub fn with_offers(self, templates: OfferTemplates) -> Self {
         Self {
@@ -665,7 +665,7 @@ impl OutfitterScreen {
     }
 
     /// Its offers' timer running as `clock` reads
-    /// [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock), for offers
+    /// [`RuleKey::OfferClock`](nova_sim_frame::RuleKey::OfferClock), for offers
     /// given ([`OutfitterScreen::with_offers`]) before it.
     #[must_use]
     pub fn with_offer_clock(self, clock: RuleSource) -> Self {
@@ -838,7 +838,7 @@ impl OutfitterScreen {
     /// with none highlighted after a reset, the outfit the reset
     /// selected, listed or not; and none after a click on an empty cell
     /// by the engine's reading of
-    /// [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection)
+    /// [`RuleKey::GridSelection`](nova_sim_frame::RuleKey::GridSelection)
     /// (@0x58632-0x58648).
     #[must_use]
     pub fn selected_outfit(&self) -> Option<OutfitId> {
@@ -876,7 +876,7 @@ impl OutfitterScreen {
     }
 
     /// Follows what an order left the selection at, as
-    /// [`RuleKey::RelistedSelection`](nova_sim::RuleKey::RelistedSelection)
+    /// [`RuleKey::RelistedSelection`](nova_sim_frame::RuleKey::RelistedSelection)
     /// reads it: [`Reselection::Kept`] changes nothing;
     /// [`Reselection::Reset`] highlights no cell, scrolls the grid to its
     /// top and has Buy and Sell answer for its outfit, listed or not, with
@@ -1011,14 +1011,14 @@ impl OutfitterScreen {
     }
 
     /// Whether the grid's presses and arrows follow `_OutfitFilter`, by
-    /// [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection): an empty cell clicked selects nothing,
+    /// [`RuleKey::GridSelection`](nova_sim_frame::RuleKey::GridSelection): an empty cell clicked selects nothing,
     /// and an arrow that leaves the selected outfit as it was reads no
     /// description.
     fn follows_outfit_filter(&self) -> bool {
         self.outfitter
             .rules
-            .source_for(nova_sim::RuleKey::GridSelection)
-            == nova_sim::RuleSource::Engine
+            .source_for(nova_sim_frame::RuleKey::GridSelection)
+            == nova_sim_frame::RuleSource::Engine
     }
 
     /// Shows the highlighted cell's picture and description, unless they
@@ -1133,7 +1133,7 @@ impl OutfitterScreen {
 
     /// Moves the selection for an arrow `command` pressed, and says
     /// whether it was an arrow, as [`CellGrid::arrow`] moves it by the reading
-    /// of [`RuleKey::GridArrows`](nova_sim::RuleKey::GridArrows): by the
+    /// of [`RuleKey::GridArrows`](nova_sim_frame::RuleKey::GridArrows): by the
     /// engine, Up on the first row and Down onto an empty cell stay, and
     /// Page Up and Page Down move as Up and Down. With no cell highlighted,
     /// after a reset or an empty cell clicked, an arrow highlights one:
@@ -1147,7 +1147,7 @@ impl OutfitterScreen {
 
     /// Scrolls the grid a row down, or up, never past either end, with
     /// the selection as
-    /// [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection) reads
+    /// [`RuleKey::GridSelection`](nova_sim_frame::RuleKey::GridSelection) reads
     /// it. By the engine, as `_DoOutfitDialog`'s scroll arrows do (item 10
     /// @0x5d351-0x5d3d6, item 11 @0x5d6b0-0x5d759), a scroll that moves
     /// keeps the highlighted cell while it stays in view and reads its
@@ -1223,7 +1223,7 @@ impl OutfitterScreen {
 
     /// Follows a press on the cell position `index` and says whether it
     /// took the press. A listed cell is highlighted and selected. An
-    /// empty one, by the engine's reading of [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection),
+    /// empty one, by the engine's reading of [`RuleKey::GridSelection`](nova_sim_frame::RuleKey::GridSelection),
     /// highlights and selects nothing (`_OutfitFilter` @0x58632-0x58648),
     /// and by the other is left to the dialog.
     fn press_cell(&mut self, index: usize) -> bool {
@@ -1518,9 +1518,10 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
-    use nova_sim::{
-        Launcher, OutfitFacts, Raise, Reselection, RuleKey, RuleSource, Rulebook, SaleAlert,
-    };
+    use nova_sim_frame::{Reselection, RuleKey, RuleSource, Rulebook, SaleAlert};
+    use nova_sim_state::shown::outfitter::Launcher;
+    use nova_sim_state::shown::outfitter::OutfitFacts;
+    use nova_sim_state::shown::outfitter::Raise;
 
     use crate::draw::{DrawCommand, fill_rect, frame_rect};
     use crate::font::Font;

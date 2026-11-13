@@ -51,7 +51,7 @@ impl CellClicks {
 
 #[cfg(test)]
 mod tests {
-    use nova_sim::mission::screens::mac_ticks;
+    use nova_sim_frame::mission::screens::mac_ticks;
 
     use super::*;
 

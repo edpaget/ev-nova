@@ -4,7 +4,7 @@
 
 use std::rc::Rc;
 
-use nova_sim::DescMovie;
+use nova_sim_frame::DescMovie;
 
 use super::button::ButtonStyle;
 use super::dialog::DialogTemplate;

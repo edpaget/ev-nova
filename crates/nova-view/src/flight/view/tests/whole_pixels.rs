@@ -14,8 +14,8 @@ use super::missions::rocky;
 use super::ship_drawing::{NPC_0, display, flying_with, npc_sheet, redrawn, shown};
 use super::*;
 use crate::flight::catalog::EffectSheet;
-use nova_sim::DrawnShips;
-use nova_sim::navigation::SpriteRect;
+use nova_sim_frame::navigation::SpriteRect;
+use nova_sim_state::shown::hover::DrawnShips;
 
 /// Where the player is: off a whole pixel on both axes.
 const PLAYER: Vec2 = Vec2::new(0.25, -0.5);
@@ -230,7 +230,7 @@ fn a_stale_slots_box_sits_at_its_truncated_offset_from_the_player() {
     let size = (41, 40);
     let mut view = placed(npc_of(size), Vec2::new(200.0, 0.0));
     redrawn(&mut view, 1, |npc| {
-        npc.hover = nova_sim::HoverPlace::Stale(Vec2::new(30.7, -12.9));
+        npc.hover = nova_sim_frame::HoverPlace::Stale(Vec2::new(30.7, -12.9));
     });
     view.npc_previous.clear();
     let boxed = view.drawn_boxes().npc(NPC_0).expect("boxed");
@@ -244,8 +244,8 @@ fn a_stale_slots_box_sits_at_its_truncated_offset_from_the_player() {
 
 #[test]
 fn a_held_alt_layer_stays_at_the_whole_pixel_place_it_was_drawn_at() {
-    use nova_sim::catalog::ShipDisplay;
-    use nova_sim::combat::ship_frames::Alt;
+    use nova_sim_frame::catalog::ShipDisplay;
+    use nova_sim_frame::combat::ship_frames::Alt;
     let npc = ShipDisplay {
         alt_sets: 2,
         alt_image: true,
@@ -296,7 +296,7 @@ const SPRITE_MOVES: Vec2 = Vec2::new(8.0, -4.0);
 
 /// `view` half way from the player's step at (-10, 6), to its frame's.
 fn half_way(mut view: Faked) -> Faked {
-    view.previous = nova_sim::flight_frame::ShipPlace {
+    view.previous = nova_sim_frame::flight_frame::ShipPlace {
         position: Vec2::new(-10.0, 6.0),
         heading: 0.0,
     };
@@ -312,7 +312,7 @@ fn resized(sheet: &mut EffectSheet, (frame_width, frame_height): (u32, u32)) {
 
 /// A flight showing a moving [`BLASTER`] shot, or `weapon`'s, half way.
 fn a_shot_of(weapon: WeaponId) -> Faked {
-    let shot = nova_sim::flight_frame::FrameShot {
+    let shot = nova_sim_frame::flight_frame::FrameShot {
         velocity: SPRITE_MOVES,
         ..shot_of(0, weapon, SPRITE, 0.0)
     };
@@ -326,7 +326,7 @@ fn a_shot_of(weapon: WeaponId) -> Faked {
 /// A flight showing a moving asteroid of kind 0, half way.
 fn an_asteroid() -> Faked {
     let frame = FlightFrame {
-        asteroids: vec![nova_sim::flight_frame::FrameAsteroid {
+        asteroids: vec![nova_sim_frame::flight_frame::FrameAsteroid {
             velocity: SPRITE_MOVES,
             ..asteroid_at(SPRITE)
         }],
@@ -338,7 +338,7 @@ fn an_asteroid() -> Faked {
 /// A flight showing a moving cargo box of graphic 0, half way.
 fn a_box() -> Faked {
     let frame = FlightFrame {
-        cargo_boxes: vec![nova_sim::flight_frame::FrameBox {
+        cargo_boxes: vec![nova_sim_frame::flight_frame::FrameBox {
             velocity: SPRITE_MOVES,
             ..box_at(SPRITE)
         }],
@@ -460,7 +460,7 @@ fn a_targets_brackets_keep_to_its_hull_between_steps() {
     let mut view = placed(npc_of(size), Vec2::new(10.7, -20.3));
     view.npc_previous = vec![(
         NPC_0,
-        nova_sim::flight_frame::ShipPlace {
+        nova_sim_frame::flight_frame::ShipPlace {
             position: PLAYER + Vec2::new(4.6, -11.9),
             heading: 0.0,
         },

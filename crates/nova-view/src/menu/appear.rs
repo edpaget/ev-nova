@@ -19,7 +19,7 @@
 //! ends.
 //!
 //! **On a return**, by the engine's reading of
-//! [`RuleKey::MainScreenReturnFade`](nova_sim::RuleKey::MainScreenReturnFade)
+//! [`RuleKey::MainScreenReturnFade`](nova_sim_frame::RuleKey::MainScreenReturnFade)
 //! (`_EnterGameFromMainScreen` @0x1a4ff-0x1a6ff): the window is painted
 //! black, and it stays black while the primary button is held (the
 //! `StillDown` spin @0x1a59a-0x1a5a6) and through the second's fade,

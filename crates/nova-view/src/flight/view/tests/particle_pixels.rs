@@ -7,8 +7,8 @@
 //! pin the wiring: which player the offset comes from, across steps, a
 //! wrap and double time.
 
-use nova_sim::combat::ParticleBurst;
-use nova_sim::flight_frame::{PassReport, StepReport, StepRun};
+use nova_sim_frame::combat::ParticleBurst;
+use nova_sim_frame::flight_frame::{PassReport, StepReport, StepRun};
 
 use super::faked_world::world_list;
 use super::stepping::{MOVE, SHIFT, STOOD, frame, place, stepping, wrap, wrapping};

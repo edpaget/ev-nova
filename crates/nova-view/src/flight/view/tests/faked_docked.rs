@@ -12,9 +12,11 @@ use super::faked_shops::{
 };
 use super::*;
 use crate::system::SystemScene;
-use nova_sim::flight_frame::FlightEvent;
-use nova_sim::navigation::NavMode;
-use nova_sim::{Gauge, LandOutcome, LandPress, MapClicked, SavedNav, SessionEvent, Settled};
+use nova_sim_frame::flight_frame::FlightEvent;
+use nova_sim_frame::landing::LandOutcome;
+use nova_sim_frame::map_click::MapClicked;
+use nova_sim_frame::navigation::NavMode;
+use nova_sim_frame::{Gauge, LandPress, SavedNav, SessionEvent, Settled};
 
 /// Barnard (132), with no stellar: what a landed `N131` or `M132` leaves
 /// in mode 2.
@@ -40,8 +42,9 @@ fn by_the_engine_a_landed_ms_stellar_shows_at_the_ports_next_nav_redraw() {
             view.decline_ship(ShipId(129));
         }),
         ("a refused purchase, after its prompt's close", |view| {
-            view.sim
-                .queue_answer(Answer::ShipBought(Err(nova_sim::ShipRefusal::NotListed)));
+            view.sim.queue_answer(Answer::ShipBought(Err(
+                nova_sim_frame::ShipRefusal::NotListed,
+            )));
             assert!(view.buy_ship(ShipId(999), "Kestrel").is_err());
         }),
         ("a mission text closing", |view| {
@@ -87,14 +90,14 @@ fn by_the_engine_a_landed_ms_stellar_shows_at_the_ports_next_nav_redraw() {
 }
 
 /// An outfitter run of one pass, its button passed.
-fn passed_run() -> nova_sim::OutfitRun {
-    nova_sim::OutfitRun {
-        run: nova_sim::order_loop::OrderRun {
+fn passed_run() -> nova_sim_frame::OutfitRun {
+    nova_sim_frame::OutfitRun {
+        run: nova_sim_frame::order_loop::OrderRun {
             done: 1,
             stopped: None,
         },
         alert: None,
-        after: nova_sim::Reselection::Kept,
+        after: nova_sim_frame::Reselection::Kept,
         button_passed: true,
     }
 }
@@ -386,7 +389,7 @@ fn texts_before_an_h(cadence: RuleSource) -> Vec<(&'static str, Faked)> {
     queue(&mut refusal);
     let refused = after(&refusal);
     refusal.sim.queue_answer_showing(
-        Answer::RefuseShown(Ok(nova_sim::RefuseShown { offer_hidden: true })),
+        Answer::RefuseShown(Ok(nova_sim_frame::RefuseShown { offer_hidden: true })),
         refused,
     );
     assert!(refusal.refuse_mission(MissionId(130)).is_ok());
@@ -432,7 +435,7 @@ fn leaving_the_dock_drops_the_texts_pending_redraws() {
     assert_eq!(view.bar_steps.len(), 1, "the brief's close");
     let flying = leaves(&view, |frame| frame.landed = None);
     view.sim.queue_answer_showing(
-        Answer::Departed(nova_sim::Departure {
+        Answer::Departed(nova_sim_frame::Departure {
             stellar: StellarId(128),
             settled: Settled::default(),
         }),
@@ -571,7 +574,7 @@ fn take_off_from(
         frame.nav_mode = after;
     });
     view.sim.queue_answer_showing(
-        Answer::Departed(nova_sim::Departure {
+        Answer::Departed(nova_sim_frame::Departure {
             stellar: StellarId(128),
             settled: Settled::default(),
         }),
@@ -755,7 +758,7 @@ fn a_text_queued_in_the_take_offs_days_shows_over_its_held_nav() {
         frame.texts_queued = 1;
     });
     view.sim.queue_answer_showing(
-        Answer::Departed(nova_sim::Departure {
+        Answer::Departed(nova_sim_frame::Departure {
             stellar: StellarId(128),
             settled: Settled::default(),
         }),
@@ -799,8 +802,11 @@ fn a_text_queued_before_the_last_nav_redraw_leaves_the_nav_area_as_redrawn() {
 /// [`sol_drawing`].
 fn mapped() -> Faked {
     let mut view = docked();
-    view.sim
-        .queue_screen(opening_with(EARTH, Some(130), nova_sim::MapMarks::NONE));
+    view.sim.queue_screen(opening_with(
+        EARTH,
+        Some(130),
+        nova_sim_frame::MapMarks::NONE,
+    ));
     view.sim.queue_screen(redrawn(sol_drawing()));
     view
 }
@@ -1049,7 +1055,7 @@ fn a_move_while_landed_is_laid_out_once_the_ship_takes_off() {
     view.sim
         .queue_event(FlightEvent::Session(SessionEvent::SystemChanged));
     view.sim.queue_answer_showing(
-        Answer::Departed(nova_sim::Departure {
+        Answer::Departed(nova_sim_frame::Departure {
             stellar: StellarId(128),
             settled: Settled::default(),
         }),
@@ -1104,7 +1110,7 @@ fn an_outfits_on_purchase_h_redraws_the_new_hull_once_settled_and_at_the_take_of
         "once"
     );
     view.sim.queue_answer_showing(
-        Answer::Departed(nova_sim::Departure {
+        Answer::Departed(nova_sim_frame::Departure {
             stellar: StellarId(128),
             settled: Settled::default(),
         }),

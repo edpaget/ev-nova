@@ -12,7 +12,7 @@
 //! ([`FlightView::let_go_of_input`]), so nothing stays held under the
 //! map, a movie or a dialog.
 
-use nova_sim::Takes;
+use nova_sim_frame::Takes;
 
 use super::FlightView;
 use crate::draw::DrawList;

@@ -15,11 +15,12 @@ use std::cell::RefCell;
 use std::num::NonZeroU16;
 
 use crate::system::camera::{VIEW_CENTER, VIEW_SIZE};
-use nova_sim::flight_frame::GateFade;
-use nova_sim::landing::StellarFlags;
-use nova_sim::{
-    LandingSite, OutfitId, Reserves, ShipId, ShipStats, SimSound, SystemId, TICK, Vec2,
-};
+use nova_sim_base::TICK;
+use nova_sim_frame::catalog::LandingSite;
+use nova_sim_frame::flight_frame::GateFade;
+use nova_sim_frame::landing::StellarFlags;
+use nova_sim_frame::{OutfitId, Reserves, ShipId, SimSound, SystemId, Vec2};
+use nova_sim_state::stats::ShipStats;
 
 use super::*;
 use crate::devtools::{PilotDesk, PilotEdit};
@@ -49,24 +50,26 @@ use crate::spaceport::PortDialog;
 use crate::system::scene::PLACEHOLDER;
 use crate::system::{scene, starfield};
 use crate::{DrawList, ImageKey, Input, Key, MouseButton, Screen, ScreenAction};
-use nova_sim::ShipIff;
-use nova_sim::flight_frame::{
+use nova_sim_frame::ShipIff;
+use nova_sim_frame::catalog::PilotCatalog;
+use nova_sim_frame::flight_frame::{
     Answer, FlightCommand, FlightFrame, MapClick, MapOpen, MapScreen, MarksFrom, Names,
     ScreenAnswer, ScreenAsk,
 };
-use nova_sim::galaxy_map::GalaxyShown;
-use nova_sim::mission::screens::NO_ACTIVE_MISSIONS;
-use nova_sim::{
+use nova_sim_frame::galaxy_map::GalaxyShown;
+use nova_sim_frame::mission::screens::NO_ACTIVE_MISSIONS;
+use nova_sim_frame::{
     AbortError, AcceptError, Assigned, Assignment, CombatCatalog, ComputerRefusal, Controls,
-    FighterNote, MissionId, MissionShown, NotOffered, PilotCatalog, PlayerCommand, Rulebook,
-    StellarIff, StellarPick, Take, Taken, Turn, VenueOffer,
+    FighterNote, MissionId, MissionShown, NotOffered, PlayerCommand, Rulebook, StellarIff,
+    StellarPick, Take, Taken, Turn, VenueOffer,
 };
 
 use crate::system::catalog::{StellarContents, StellarId, StellarSheet};
 use crate::{Blend, DrawCommand, Font};
-use nova_sim::{BoardRefusal, DockKind, MissionBoardLine};
-use nova_sim::{GLOW_CRUISE, glow_level};
-use nova_sim::{RuleKey, RuleSource};
+use nova_sim_frame::glow::GLOW_CRUISE;
+use nova_sim_frame::glow_level;
+use nova_sim_frame::{BoardRefusal, DockKind, MissionBoardLine};
+use nova_sim_frame::{RuleKey, RuleSource};
 
 mod anchor;
 mod between_passes;
@@ -165,16 +168,26 @@ use keys::*;
 /// (`nova_sim::combat::PLAYER_FIRE_PRIORITY`), which its tests pin.
 const PLAYER_FIRE_PRIORITY: u8 = 5;
 
+/// The labels a refusable offer with blank ones shows, "Yes" and "No", as
+/// nova-sim gives them (`nova_sim::mission::screens::offer_labels("", "",
+/// true)`, which its tests pin). The view shows the labels it is handed.
+fn yes_no() -> nova_sim_frame::mission::OfferLabels {
+    nova_sim_frame::mission::OfferLabels {
+        accept: "Yes".to_owned(),
+        refuse: Some("No".to_owned()),
+    }
+}
+
 /// Where flight draws the player's ship in Nova's own 1024 x 768 by the
 /// original's reading of [`RuleKey::FlightAnchor`]: the play area's
 /// centre, `_screenCenter`, (trunc((1024 − 194) / 2), 384).
 const PLAYER_AT: Point = Point::new(415.0, 384.0);
 
 /// The planet comm dialog open on stellar `id`, "Earth", greeting.
-fn planet_view(id: i16) -> nova_sim::planet_comm::PlanetCommView {
-    use nova_sim::planet_comm::{PlanetCommButton, PlanetCommView};
+fn planet_view(id: i16) -> nova_sim_frame::planet_comm::PlanetCommView {
+    use nova_sim_frame::planet_comm::{PlanetCommButton, PlanetCommView};
     PlanetCommView {
-        stellar: nova_sim::StellarId(id),
+        stellar: nova_sim_frame::StellarId(id),
         name: "Earth".to_owned(),
         type_label: "[Earth/Luna System]".to_owned(),
         reply: "Channel open to Earth.".to_owned(),
@@ -338,13 +351,18 @@ fn blinking(blink: Blink) -> FakeCatalog {
 
 /// `hull` with a lights sprite blinking `blink`, as its `shän` names one,
 /// which the session's display steps (`nova_sim::combat::ship_lights`).
-fn lit_hull(hull: nova_sim::HullRecord, blink: Blink) -> nova_sim::HullRecord {
-    let display = hull.display.unwrap_or(nova_sim::catalog::ShipDisplay {
-        base_sets: 1,
-        ..nova_sim::catalog::ShipDisplay::default()
-    });
-    nova_sim::HullRecord {
-        display: Some(nova_sim::catalog::ShipDisplay {
+fn lit_hull(
+    hull: nova_sim_frame::catalog::HullRecord,
+    blink: Blink,
+) -> nova_sim_frame::catalog::HullRecord {
+    let display = hull
+        .display
+        .unwrap_or(nova_sim_frame::catalog::ShipDisplay {
+            base_sets: 1,
+            ..nova_sim_frame::catalog::ShipDisplay::default()
+        });
+    nova_sim_frame::catalog::HullRecord {
+        display: Some(nova_sim_frame::catalog::ShipDisplay {
             blink,
             lights_image: true,
             ..display
@@ -425,7 +443,7 @@ fn hud_at(list: &DrawList) -> usize {
         .expect("the HUD")
 }
 
-use nova_sim::{Chance, Direction, Good, Lot, Order};
+use nova_sim_frame::{Chance, Direction, Good, Lot, Order};
 
 const BUY_FOOD: Order = Order {
     row: 0,
@@ -560,9 +578,9 @@ fn faked_on_map(view: &mut Faked, id: i16) -> Point {
 /// mission arrows.
 fn drawn_system(
     id: i16,
-    code: nova_sim::iff::SystemColorCode,
-) -> nova_sim::galaxy_map::DrawnSystem {
-    nova_sim::galaxy_map::DrawnSystem {
+    code: nova_sim_frame::iff::SystemColorCode,
+) -> nova_sim_frame::galaxy_map::DrawnSystem {
+    nova_sim_frame::galaxy_map::DrawnSystem {
         id: SystemId(id),
         code,
         red_arrow: false,
@@ -573,14 +591,14 @@ fn drawn_system(
 /// The course map's drawing in Sol (130) with the nav off, as a session
 /// over [`catalog`] draws it: Sol, uninhabited and the one system named,
 /// and its link to Alpha Centauri (131), unexplored.
-fn sol_drawing() -> nova_sim::galaxy_map::MapDrawing {
-    use nova_sim::iff::SystemColorCode;
+fn sol_drawing() -> nova_sim_frame::galaxy_map::MapDrawing {
+    use nova_sim_frame::iff::SystemColorCode;
     let (sol, alpha) = (SystemId(130), SystemId(131));
-    nova_sim::galaxy_map::MapDrawing {
+    nova_sim_frame::galaxy_map::MapDrawing {
         hypergate: false,
         course: Vec::new(),
         current_links: vec![(sol, alpha)],
-        links: vec![nova_sim::galaxy_map::MapLink {
+        links: vec![nova_sim_frame::galaxy_map::MapLink {
             from: sol,
             to: alpha,
             selected: false,
@@ -602,7 +620,7 @@ fn sol_drawing() -> nova_sim::galaxy_map::MapDrawing {
 /// ([`ScreenAsk::MapOpening`]): `frame`'s nav noted, no marks, no border
 /// sources, `preselection` selected and no mission systems.
 fn map_opening(frame: &FlightFrame, preselection: Option<i16>) -> ScreenAnswer {
-    opening_with(frame.nav_mode, preselection, nova_sim::MapMarks::NONE)
+    opening_with(frame.nav_mode, preselection, nova_sim_frame::MapMarks::NONE)
 }
 
 /// What a scripted flight answers the course map's opening with the nav
@@ -611,32 +629,32 @@ fn map_opening(frame: &FlightFrame, preselection: Option<i16>) -> ScreenAnswer {
 fn opening_with(
     nav: NavMode,
     preselection: Option<i16>,
-    marks: nova_sim::MapMarks,
+    marks: nova_sim_frame::MapMarks,
 ) -> ScreenAnswer {
     ScreenAnswer::MapOpening(MapOpen {
-        nav: nova_sim::SavedNav::of(nav),
+        nav: nova_sim_frame::SavedNav::of(nav),
         marks,
-        borders: nova_sim::map_borders::BorderSources::default(),
+        borders: nova_sim_frame::map_borders::BorderSources::default(),
         preselection: preselection.map(SystemId),
         missions: Vec::new(),
     })
 }
 
 /// A panel that says nothing: an empty strip and column, no words.
-fn blank_panel() -> nova_sim::map_panel::MapPanel {
-    use nova_sim::map_panel::{Column, ColumnBody, MapPanel, PanelWords, Ports, Strip};
+fn blank_panel() -> nova_sim_frame::map_panel::MapPanel {
+    use nova_sim_frame::map_panel::{Column, ColumnBody, MapPanel, PanelWords, Ports, Strip};
     MapPanel {
         strip: Strip::Info {
             ports: Ports::None,
             hazards: String::new(),
-            date: nova_sim::map_panel::PanelDate::Text(String::new()),
+            date: nova_sim_frame::map_panel::PanelDate::Text(String::new()),
         },
         column: Column {
             title: String::new(),
             body: ColumnBody::Unknown,
         },
         words: PanelWords::default(),
-        numbers: nova_sim::map_panel::CheatNumbers::default(),
+        numbers: nova_sim_frame::map_panel::CheatNumbers::default(),
     }
 }
 
@@ -645,19 +663,19 @@ fn blank_panel() -> nova_sim::map_panel::MapPanel {
 /// session does (none off the hypergate map), no border sources and
 /// `panel`.
 fn redrawn_with(
-    drawing: nova_sim::galaxy_map::MapDrawing,
-    panel: nova_sim::map_panel::MapPanel,
+    drawing: nova_sim_frame::galaxy_map::MapDrawing,
+    panel: nova_sim_frame::map_panel::MapPanel,
 ) -> ScreenAnswer {
     ScreenAnswer::Map(Box::new(MapScreen {
         marks_known: drawing.gate_arrows.clone(),
         drawing,
-        borders: nova_sim::map_borders::BorderSources::default(),
+        borders: nova_sim_frame::map_borders::BorderSources::default(),
         panel,
     }))
 }
 
 /// [`redrawn_with`] `drawing` and a [`blank_panel`].
-fn redrawn(drawing: nova_sim::galaxy_map::MapDrawing) -> ScreenAnswer {
+fn redrawn(drawing: nova_sim_frame::galaxy_map::MapDrawing) -> ScreenAnswer {
     redrawn_with(drawing, blank_panel())
 }
 
@@ -668,7 +686,7 @@ fn redrawn(drawing: nova_sim::galaxy_map::MapDrawing) -> ScreenAnswer {
 fn queue_map(
     view: &mut Faked,
     preselection: Option<i16>,
-    drawing: nova_sim::galaxy_map::MapDrawing,
+    drawing: nova_sim_frame::galaxy_map::MapDrawing,
 ) {
     let opening = map_opening(&view.frame, preselection);
     view.sim.queue_screen(opening);
@@ -678,10 +696,10 @@ fn queue_map(
 /// What a scripted flight answers the floating map's show
 /// ([`ScreenAsk::FloatingMap`]): `drawing`, selecting `preselection`.
 fn floating_shown(
-    drawing: nova_sim::galaxy_map::MapDrawing,
+    drawing: nova_sim_frame::galaxy_map::MapDrawing,
     preselection: Option<i16>,
 ) -> ScreenAnswer {
-    ScreenAnswer::FloatingMap(Box::new(nova_sim::flight_frame::FloatingMap {
+    ScreenAnswer::FloatingMap(Box::new(nova_sim_frame::flight_frame::FloatingMap {
         drawing,
         preselection: preselection.map(SystemId),
     }))
@@ -700,7 +718,7 @@ fn faked_sol(frame: FlightFrame) -> Faked {
 fn a_view_over_a_scripted_flight_shows_its_frame() {
     let mut view = faked(FlightFrame {
         nav_mode: NavMode::Hyperspace(Some(SystemId(131))),
-        jump_readiness: nova_sim::JumpReadiness::Clear,
+        jump_readiness: nova_sim_frame::JumpReadiness::Clear,
         ..in_sol()
     });
     faked_hud::changes(&mut view, |frame| frame.explored = vec![SystemId(131)]);
@@ -710,7 +728,7 @@ fn a_view_over_a_scripted_flight_shows_its_frame() {
         view.nav_now(),
         NavDisplay::Hyperspace {
             destination: hud::NavDestination::Named("Alpha Centauri".to_owned()),
-            readiness: nova_sim::JumpReadiness::Clear,
+            readiness: nova_sim_frame::JumpReadiness::Clear,
         }
     );
 }
@@ -731,7 +749,7 @@ fn cueing_alpha() -> Vec<String> {
         hud::NAV_UNEXPLORED.to_owned(),
     ]
 }
-use nova_sim::mission::screens::SPACEPORT;
+use nova_sim_frame::mission::screens::SPACEPORT;
 
 /// Which of the bar's parts show as they are now: the gauges, the
 /// nav area, the target panel and the radar.
@@ -744,9 +762,9 @@ fn retaken(view: &FlightView<FakeCatalog, impl FlightSim>) -> [bool; 4] {
     ]
 }
 
-use nova_sim::NpcId;
+use nova_sim_frame::NpcId;
 
-use nova_sim::{BoomId, Condition, PlayerFate, WeaponId};
+use nova_sim_frame::{BoomId, Condition, PlayerFate, WeaponId};
 
 use crate::flight::brackets::{self, Standing};
 use crate::flight::effects::{DEBRIS_COLOR, Effects};
@@ -812,7 +830,9 @@ fn bracket_icons(list: &DrawList) -> Vec<i16> {
 
 /// What the target panel's status line shows this frame, if there is
 /// a target.
-fn status_shown(view: &FlightView<FakeCatalog, impl FlightSim>) -> Option<nova_sim::TargetStatus> {
+fn status_shown(
+    view: &FlightView<FakeCatalog, impl FlightSim>,
+) -> Option<nova_sim_frame::TargetStatus> {
     view.target_shown(&view.frame_now())
         .as_ref()
         .as_ref()
@@ -820,13 +840,15 @@ fn status_shown(view: &FlightView<FakeCatalog, impl FlightSim>) -> Option<nova_s
 }
 
 /// What the target panel's status line would show of the target now.
-fn status_now(view: &FlightView<FakeCatalog, impl FlightSim>) -> Option<nova_sim::TargetStatus> {
+fn status_now(
+    view: &FlightView<FakeCatalog, impl FlightSim>,
+) -> Option<nova_sim_frame::TargetStatus> {
     view.target_now(&view.frame_now()).map(|panel| panel.status)
 }
 
-use nova_sim::HailRefusal;
+use nova_sim_frame::HailRefusal;
 
-use nova_sim::EscortClass;
+use nova_sim_frame::EscortClass;
 
 const HELLO: &str = "Message Buoy: hello.";
 
@@ -840,9 +862,9 @@ fn ui_sounds(view: &mut FlightView<FakeCatalog, impl FlightSim>) -> Vec<UiSound>
         })
         .collect()
 }
-use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
+use nova_sim_frame::hire::{DEFECTED_ONE, DEFECTED_SOME};
 
-use nova_sim::MissionTextKind;
+use nova_sim_frame::mission_screens::MissionTextKind;
 
 /// The background of the status bar `view` shows.
 fn bar_shown(view: &FlightView<FakeCatalog, impl FlightSim>) -> Option<i16> {
@@ -853,15 +875,15 @@ fn bar_shown(view: &FlightView<FakeCatalog, impl FlightSim>) -> Option<i16> {
 }
 /// Stellar `id` with `Strength` 100 and `DeadTime` 5, so that `Y`
 /// destroys it, and `Flags2` `flags2`.
-fn life(id: i16, flags2: u16) -> nova_sim::StellarLife {
-    nova_sim::StellarLife {
+fn life(id: i16, flags2: u16) -> nova_sim_frame::catalog::StellarLife {
+    nova_sim_frame::catalog::StellarLife {
         id: StellarId(id),
         strength: 100,
         dead_time: 5,
         flags2,
         explosion: None,
-        on_destroy: nova_sim::Script::default(),
-        on_regen: nova_sim::Script::default(),
+        on_destroy: nova_sim_catalog::control::Script::default(),
+        on_regen: nova_sim_catalog::control::Script::default(),
     }
 }
 
@@ -883,7 +905,7 @@ fn now_tick(view: &FlightView<FakeCatalog, impl FlightSim>) -> u64 {
 }
 const HYPER_SELECT: Key = Key::Backslash;
 
-use nova_sim::GateKind;
+use nova_sim_frame::GateKind;
 
 /// The course map's sounds `view` holds, taken with the rest.
 fn map_sounds(view: &mut FlightView<FakeCatalog, impl FlightSim>) -> Vec<UiSound> {
@@ -903,7 +925,7 @@ fn npc_on_screen<C, S: FlightSim>(view: &FlightView<C, S>, id: NpcId) -> Point {
 fn npc_record<C, S: crate::flight::sim_port::FlightSim>(
     view: &FlightView<C, S>,
     id: NpcId,
-) -> nova_sim::flight_frame::FrameShip {
+) -> nova_sim_frame::flight_frame::FrameShip {
     *view.frame.ship(ShipRef::Npc(id)).expect("in the frame")
 }
 
@@ -935,7 +957,7 @@ use crate::galaxy::map::{
     BRIGHT_GREEN, CLEARED, CYAN, DARK_GREY, DENIED, DIM_GREEN, HOSTILE, LESS_DARK_GREY, LIGHT_GREY,
 };
 use crate::geometry::Bounds;
-use nova_sim::mission::screens::mac_ticks;
+use nova_sim_frame::mission::screens::mac_ticks;
 
 /// The floating map's border lines in `list`: those in the
 /// `FloatingMap` colour on the frame's edges, whatever their alpha.
@@ -963,9 +985,9 @@ fn floating_alpha(view: &FlightView<FakeCatalog, impl FlightSim>) -> Option<u8> 
 
 /// `dësc` `id` as the rescue loaded it ([`FlightEvent::RescueDesc`]).
 ///
-/// [`FlightEvent::RescueDesc`]: nova_sim::flight_frame::FlightEvent::RescueDesc
-fn rescued(id: i16) -> nova_sim::flight_frame::LoadedDesc {
-    nova_sim::flight_frame::LoadedDesc {
+/// [`FlightEvent::RescueDesc`]: nova_sim_frame::flight_frame::FlightEvent::RescueDesc
+fn rescued(id: i16) -> nova_sim_frame::flight_frame::LoadedDesc {
+    nova_sim_frame::flight_frame::LoadedDesc {
         id,
         text: Some("Rescued.".to_owned()),
     }
@@ -973,7 +995,7 @@ fn rescued(id: i16) -> nova_sim::flight_frame::LoadedDesc {
 
 /// The world point `drawn`'s rect is centred on.
 #[allow(clippy::cast_precision_loss)]
-fn box_centre(drawn: nova_sim::DrawnBox) -> Point {
+fn box_centre(drawn: nova_sim_frame::DrawnBox) -> Point {
     let rect = drawn.rect;
     Point::new(
         rect.left + rect.width as f32 / 2.0,

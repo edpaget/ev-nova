@@ -5,8 +5,8 @@
 use super::faked_screen::{sent_count, sent_since};
 use super::faked_travel::{arrival_report, lit, now_shows, warping};
 use super::*;
-use nova_sim::flight_frame::{FadedPress, FlightEvent, PassReport, ShipPlace, StepRun};
-use nova_sim::{HailRefusal, Hailed, MissionInfoPress, VenueOffer};
+use nova_sim_frame::flight_frame::{FadedPress, FlightEvent, PassReport, ShipPlace, StepRun};
+use nova_sim_frame::{HailRefusal, Hailed, MissionInfoPress, VenueOffer};
 
 /// A report of one step, carrying a lit collapse as `lit_collapse` says.
 fn one_step(lit_collapse: bool) -> StepReport {
@@ -55,8 +55,8 @@ fn collapses_lit(view: &mut Faked) {
 /// it isn't told to answer, a press not taken, which leaves it clear.
 pub(super) fn requests(view: &mut Faked) {
     view.sim
-        .queue_answer(Answer::LandPress(nova_sim::LandPress::Outcome(
-            nova_sim::LandOutcome::Requested {
+        .queue_answer(Answer::LandPress(nova_sim_frame::LandPress::Outcome(
+            nova_sim_frame::landing::LandOutcome::Requested {
                 stellar: StellarId(128),
                 station: false,
             },
@@ -503,7 +503,7 @@ fn a_press_on_the_frame_after_a_lit_collapse_acts_as_a_plain_press() {
 }
 
 /// A comm dialog's contents.
-fn faked_hail_view() -> nova_sim::HailView {
+fn faked_hail_view() -> nova_sim_frame::HailView {
     super::faked_hail::hail_view("Channel open.")
 }
 
@@ -855,8 +855,8 @@ fn a_waiting_l_that_lands_runs_no_step_that_tick() {
     view.input(&key(LAND_KEY, true));
     view.change_sim(|sim| sim.take(PlayerCommand::Land));
     view.sim
-        .queue_answer(Answer::LandPress(nova_sim::LandPress::Outcome(
-            nova_sim::landing::LandOutcome::Landed(StellarId(128)),
+        .queue_answer(Answer::LandPress(nova_sim_frame::LandPress::Outcome(
+            nova_sim_frame::landing::LandOutcome::Landed(StellarId(128)),
         )));
     let stepped = view.sim.steps();
     view.tick(TICK);
@@ -901,8 +901,9 @@ fn a_kept_m_acts_after_a_jump_given_up_between_steps() {
 fn l_that_opened_the_hypergate_map_is_not_read_after_a_later_jump() {
     let mut view = faked(super::frames::sol());
     view.sim.queue_screen(map_opening(&view.frame, Some(130)));
-    view.sim
-        .queue_answer(super::faked_landing::at_gate(nova_sim::GateKind::Hypergate));
+    view.sim.queue_answer(super::faked_landing::at_gate(
+        nova_sim_frame::GateKind::Hypergate,
+    ));
     view.sim
         .queue_answer(Answer::Offered(vec![SystemId(131), SystemId(132)]));
     view.input(&key(LAND_KEY, true));
@@ -1070,7 +1071,7 @@ fn a_second_pass_line_stands_over_a_refusal_the_keys_said_after_the_steps() {
             lit_collapse: true,
             between_passes: Some(Box::new(super::frames::sol())),
             passes: vec![PassReport::default(), PassReport::default()],
-            second_pass_lines: vec![nova_sim::flight_frame::RaisedLine::Message(
+            second_pass_lines: vec![nova_sim_frame::flight_frame::RaisedLine::Message(
                 SimMessage::NoActiveMissions,
             )],
             ..StepRun::default()
@@ -1106,9 +1107,9 @@ fn a_second_pass_line_stands_over_a_refusal_the_keys_said_after_the_steps() {
 #[test]
 fn a_land_press_that_finds_no_stellar_leaves_the_latch_clear_and_reads_again() {
     for refusal in [
-        nova_sim::LandingRefusal::NoStellars,
-        nova_sim::LandingRefusal::NothingLandable,
-        nova_sim::LandingRefusal::Jumping,
+        nova_sim_frame::LandingRefusal::NoStellars,
+        nova_sim_frame::LandingRefusal::NothingLandable,
+        nova_sim_frame::LandingRefusal::Jumping,
     ] {
         let mut view = faked(super::frames::sol());
         let from = sent_count(&view);
@@ -1149,7 +1150,7 @@ fn a_land_press_that_requests_sets_the_latch() {
     let mut view = faked(super::frames::sol());
     let from = sent_count(&view);
     view.sim.queue_answer(Answer::LandRefused {
-        refusal: nova_sim::LandingRefusal::Disabled,
+        refusal: nova_sim_frame::LandingRefusal::Disabled,
         gate: None,
         requested: true,
     });
@@ -1166,7 +1167,7 @@ fn a_land_press_that_requests_sets_the_latch() {
 /// three ticks with every command refused, as a fate that takes no input
 /// refuses them, then flying again with both still held: the commands
 /// sent from then on.
-fn latched_through(fate: nova_sim::PlayerFate) -> Vec<FlightCommand> {
+fn latched_through(fate: nova_sim_frame::PlayerFate) -> Vec<FlightCommand> {
     let mut view = faked(super::frames::sol());
     requests(&mut view);
     view.input(&key(LAND_KEY, true));
@@ -1180,7 +1181,7 @@ fn latched_through(fate: nova_sim::PlayerFate) -> Vec<FlightCommand> {
         view.tick(TICK);
     }
     view.change_sim(|sim| {
-        sim.frame_mut().fate = nova_sim::PlayerFate::Flying;
+        sim.frame_mut().fate = nova_sim_frame::PlayerFate::Flying;
         sim.take(PlayerCommand::Land);
         sim.take(PlayerCommand::MissionInfo);
     });
@@ -1192,13 +1193,13 @@ fn latched_through(fate: nova_sim::PlayerFate) -> Vec<FlightCommand> {
 
 #[test]
 fn l_and_i_held_through_the_pod_keep_their_latches() {
-    let sent = latched_through(nova_sim::PlayerFate::Ejected { ticks_left: 30 });
+    let sent = latched_through(nova_sim_frame::PlayerFate::Ejected { ticks_left: 30 });
     assert_eq!(sent, [], "both still latched");
 }
 
 #[test]
 fn l_and_i_held_while_dead_keep_their_latches() {
-    let sent = latched_through(nova_sim::PlayerFate::Exploded);
+    let sent = latched_through(nova_sim_frame::PlayerFate::Exploded);
     assert_eq!(sent, [], "both still latched");
 }
 
@@ -1208,12 +1209,12 @@ fn l_and_i_let_go_after_the_pod_and_pressed_again_act() {
     requests(&mut view);
     view.input(&key(LAND_KEY, true));
     view.change_sim(|sim| {
-        sim.frame_mut().fate = nova_sim::PlayerFate::Ejected { ticks_left: 30 };
+        sim.frame_mut().fate = nova_sim_frame::PlayerFate::Ejected { ticks_left: 30 };
         sim.refuse(PlayerCommand::Land);
     });
     view.tick(TICK);
     view.change_sim(|sim| {
-        sim.frame_mut().fate = nova_sim::PlayerFate::Flying;
+        sim.frame_mut().fate = nova_sim_frame::PlayerFate::Flying;
         sim.take(PlayerCommand::Land);
     });
     view.input(&key(LAND_KEY, false));

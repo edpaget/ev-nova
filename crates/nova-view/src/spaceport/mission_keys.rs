@@ -133,7 +133,7 @@ pub(super) fn run_replay<S>(
 
 #[cfg(test)]
 mod tests {
-    use nova_sim::{MissionId, MissionInfo};
+    use nova_sim_frame::{MissionId, MissionInfo};
 
     use super::super::missions::tests::{
         button, computer_row_at, computer_selected, info_row_at, info_screen_of, key, mac_ticks,

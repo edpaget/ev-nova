@@ -44,14 +44,14 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::escort_dialog::{
+use nova_sim_frame::escort_dialog::{
     CANCEL_SALE, CANCEL_UPGRADE, CANNOT_BE_UPGRADED, CAPTURED_ESCORT, CREDIT, CREDITS,
     EscortButton, EscortDialogView, RELEASE, SELL_ESCORT, SELL_PRICE, SaleLine, UPGRADE_COST,
     UPGRADE_ESCORT, UpgradeLine, WILL_BE_SOLD, WILL_BE_UPGRADED,
 };
-use nova_sim::fleet::EscortMark;
-use nova_sim::hire::{HIRED_ESCORT, PAY_LABEL, PER_DAY};
-use nova_sim::{CreditUnit, ShownWage};
+use nova_sim_frame::fleet::EscortMark;
+use nova_sim_frame::hire::{HIRED_ESCORT, PAY_LABEL, PER_DAY};
+use nova_sim_frame::{CreditUnit, ShownWage};
 
 use crate::color::Color;
 use crate::draw::DrawList;
@@ -494,7 +494,7 @@ pub(crate) use tests::pad_probe;
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use nova_sim::ShipId;
+    use nova_sim_frame::ShipId;
 
     use super::*;
     use crate::draw::DrawCommand;

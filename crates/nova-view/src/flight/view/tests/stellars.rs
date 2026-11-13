@@ -1,7 +1,7 @@
 use super::*;
 use crate::flight::sim_port::FlightSim;
-use nova_sim::SessionEvent;
-use nova_sim::flight_frame::{FlightEvent, FrameRadarStellar};
+use nova_sim_frame::SessionEvent;
+use nova_sim_frame::flight_frame::{FlightEvent, FrameRadarStellar};
 
 // Session events.
 
@@ -135,7 +135,9 @@ fn f5_near_the_wormhole_selects_it_and_the_nav_area_names_it() {
     view.tick(TICK);
     assert_eq!(
         super::faked_screen::picks_since(&view, 0),
-        [FlightCommand::SelectStellar(nova_sim::StellarPick::Nearest)]
+        [FlightCommand::SelectStellar(
+            nova_sim_frame::StellarPick::Nearest
+        )]
     );
     view.change_sim(|sim| sim.frame_mut().nav_mode = NavMode::Stellar(Some(StellarId(150))));
     view.redraw_status();
@@ -268,7 +270,7 @@ fn after_a_galaxy_event_the_nav_area_names_the_system_standing_for_a_hidden_next
         view.nav_now(),
         NavDisplay::Hyperspace {
             destination: hud::NavDestination::Named("Alpha Reborn".to_owned()),
-            readiness: nova_sim::JumpReadiness::Blocked,
+            readiness: nova_sim_frame::JumpReadiness::Blocked,
         }
     );
 }
@@ -286,7 +288,7 @@ fn after_a_galaxy_event_a_hop_with_no_system_at_its_place_shows_no_destination()
         view.nav_now(),
         NavDisplay::Hyperspace {
             destination: hud::NavDestination::None,
-            readiness: nova_sim::JumpReadiness::Blocked,
+            readiness: nova_sim_frame::JumpReadiness::Blocked,
         }
     );
 }

@@ -1,12 +1,12 @@
 //! The flight view's choice of starfield ([`StarfieldKind`]), and the
 //! layered sky it draws by
-//! [`RuleKey::LayeredStarfield`](nova_sim::RuleKey::LayeredStarfield)'s
+//! [`RuleKey::LayeredStarfield`](nova_sim_frame::RuleKey::LayeredStarfield)'s
 //! other reading ([`draw`]; see [`crate::flight::sky`]).
 //!
 //! The choice is made once, from the two keys' readings, when the view's
 //! rules are read ([`Presentation`](super::stepping::Presentation)): the
 //! layered sky's reading wins over whatever
-//! [`RuleKey::FlightStarfield`](nova_sim::RuleKey::FlightStarfield) reads.
+//! [`RuleKey::FlightStarfield`](nova_sim_frame::RuleKey::FlightStarfield) reads.
 //! Under the layered sky the original's starfield is neither scattered
 //! nor stepped, so the effects' chance draws nothing for it.
 //!
@@ -15,9 +15,9 @@
 //! wraps' sum ([`SkyShift`]) and adds it back: the eye moves only by the
 //! ship's own move, and the sky doesn't jump.
 
-use nova_sim::flight_frame::FlightFrame;
-use nova_sim::player_wrap::PlayerWrap;
-use nova_sim::{RuleSource, Vec2};
+use nova_sim_frame::flight_frame::FlightFrame;
+use nova_sim_frame::player_wrap::PlayerWrap;
+use nova_sim_frame::{RuleSource, Vec2};
 
 use crate::DrawList;
 use crate::flight::sky::sky_pose;
@@ -37,9 +37,9 @@ pub(super) enum StarfieldKind {
 
 impl StarfieldKind {
     /// The starfield the readings of
-    /// [`RuleKey::FlightStarfield`](nova_sim::RuleKey::FlightStarfield),
+    /// [`RuleKey::FlightStarfield`](nova_sim_frame::RuleKey::FlightStarfield),
     /// `starfield`, and of
-    /// [`RuleKey::LayeredStarfield`](nova_sim::RuleKey::LayeredStarfield),
+    /// [`RuleKey::LayeredStarfield`](nova_sim_frame::RuleKey::LayeredStarfield),
     /// `layered`, pick: the layered sky by the latter's other reading,
     /// whatever the former reads; otherwise the former's.
     pub(super) fn of(starfield: RuleSource, layered: RuleSource) -> Self {

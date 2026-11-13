@@ -9,10 +9,11 @@
 use super::faked_travel::sent_but_lines;
 use super::live_keys::latches_its_close;
 use super::*;
-use nova_sim::PlayerInfo;
-use nova_sim::flight_frame::FlightEvent;
-use nova_sim::pilot_panel::PilotPanel;
-use nova_sim::player_info::{CheatIds, Words};
+use nova_sim_frame::PlayerInfo;
+use nova_sim_frame::flight_frame::FlightEvent;
+use nova_sim_frame::pilot_panel::PilotPanel;
+use nova_sim_frame::player_info::Words;
+use nova_sim_state::shown::player_info::CheatIds;
 
 /// A player info screen for Ada, flying the Bitsy, cheats off.
 fn screen() -> PlayerInfo {
@@ -80,7 +81,7 @@ fn a_press_the_flight_refuses_asks_nothing_and_beeps_through_the_drain() {
     let mut view = faked(in_sol());
     view.hold_key(Key::ArrowUp);
     view.sim
-        .queue_event(FlightEvent::Sound(nova_sim::SimSound::Refused));
+        .queue_event(FlightEvent::Sound(nova_sim_frame::SimSound::Refused));
     view.sim.queue_answer(Answer::PlayerInfoPressed(false));
     let _ = view.ask_player_info();
     assert_eq!(sent_but_lines(&view), [FlightCommand::PressPlayerInfo]);
@@ -88,7 +89,7 @@ fn a_press_the_flight_refuses_asks_nothing_and_beeps_through_the_drain() {
     assert!(!view.holds_no_key(), "the flight keys held");
     assert_eq!(
         view.drained_sounds(),
-        [Sound::Sim(nova_sim::SimSound::Refused)],
+        [Sound::Sim(nova_sim_frame::SimSound::Refused)],
         "the flight's beep"
     );
 }

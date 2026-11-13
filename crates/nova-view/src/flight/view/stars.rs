@@ -1,9 +1,9 @@
 //! The flight view's starfield: the original's ([`Starfield`]) by the
 //! engine's reading of
-//! [`RuleKey::FlightStarfield`](nova_sim::RuleKey::FlightStarfield),
+//! [`RuleKey::FlightStarfield`](nova_sim_frame::RuleKey::FlightStarfield),
 //! the port's procedural dots ([`starfield::draw`]) by the other. The
 //! third kind, the layered sky by
-//! [`RuleKey::LayeredStarfield`](nova_sim::RuleKey::LayeredStarfield)'s
+//! [`RuleKey::LayeredStarfield`](nova_sim_frame::RuleKey::LayeredStarfield)'s
 //! other reading, is the `sky` module's: under it this module handles no
 //! star (the view's `StarfieldKind` picks among the three).
 //!
@@ -40,10 +40,10 @@
 //! `_RandomizeStars` reads it (@0x0b2be-0x0b2fa): the view hands its own
 //! flag to each scattering, so a change waits for the next one.
 //!
-//! [`SessionEvent::StarfieldReset`]: nova_sim::SessionEvent::StarfieldReset
+//! [`SessionEvent::StarfieldReset`]: nova_sim_frame::SessionEvent::StarfieldReset
 
-use nova_sim::flight_frame::{FlightFrame, PassReport};
-use nova_sim::{Chance, RuleSource, Vec2};
+use nova_sim_frame::flight_frame::{FlightFrame, PassReport};
+use nova_sim_frame::{Chance, RuleSource, Vec2};
 
 use crate::DrawList;
 use crate::flight::catalog::Looks;
@@ -52,7 +52,7 @@ use crate::system::camera::{Anchor, Camera, STATUS_BAR_WIDTH};
 use crate::system::starfield;
 
 /// Whether the view draws the original's starfield, by `source`, its
-/// reading of [`RuleKey::FlightStarfield`](nova_sim::RuleKey::FlightStarfield), with some star art read
+/// reading of [`RuleKey::FlightStarfield`](nova_sim_frame::RuleKey::FlightStarfield), with some star art read
 /// into `looks` ([`Looks::star_art`]: the sheet, else the data's stand-in
 /// dots): without any no star is drawn, so none is scattered or stepped,
 /// and the effects' chance draws nothing for them.
@@ -113,7 +113,7 @@ pub(super) fn reset(
 
 /// Steps `stars` after a `pass`, in a view `view` logical units in size
 /// drawn about `anchor`, the stars' look from `looks`, when `source`, the
-/// view's reading of [`RuleKey::FlightStarfield`](nova_sim::RuleKey::FlightStarfield), draws the original's
+/// view's reading of [`RuleKey::FlightStarfield`](nova_sim_frame::RuleKey::FlightStarfield), draws the original's
 /// starfield ([`original`]; see the module docs): wraps and
 /// places them, drawing on `chance`; and after the first pass, `first`
 /// the ship's position before it, snapshots them for the frame and
@@ -141,7 +141,7 @@ pub(super) fn step(
 }
 
 /// Draws the starfield by `source`'s reading of
-/// [`RuleKey::FlightStarfield`](nova_sim::RuleKey::FlightStarfield): `stars` from `looks`' art, `alpha` of
+/// [`RuleKey::FlightStarfield`](nova_sim_frame::RuleKey::FlightStarfield): `stars` from `looks`' art, `alpha` of
 /// the way between their last two snapshots, by the engine's; the
 /// procedural dots through `camera` by the other.
 pub(super) fn draw(

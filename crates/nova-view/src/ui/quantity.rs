@@ -318,7 +318,7 @@ mod tests {
     pub(crate) fn bet_pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
         Box::new(crate::ui::edit_dialog::EditProbe(dialog_of(
             40,
-            nova_sim::gamble::BET,
+            nova_sim_frame::gamble::BET,
         )))
     }
 
@@ -353,7 +353,7 @@ mod tests {
         use crate::text_entry::EntryAsk;
         use crate::ui::edit_dialog::pad_entry::{asked_at_open, pad_types};
         use crate::ui::entry_keyboard::KeyId;
-        let mut dialog = dialog_of(40, nova_sim::gamble::BET);
+        let mut dialog = dialog_of(40, nova_sim_frame::gamble::BET);
         assert_eq!(
             asked_at_open(&dialog),
             Some(EntryAsk {

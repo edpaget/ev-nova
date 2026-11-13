@@ -10,7 +10,7 @@ use crate::input::{Device, Surroundings};
 use crate::spaceport::bar::BarScreen;
 use crate::touch::testkit::Fingers;
 use crate::ui::touch_aids::ModifierToggle;
-use nova_sim::gamble::GambleOpening;
+use nova_sim_frame::gamble::GambleOpening;
 
 /// A host of a toggle the spaceport holds: its name, how to build the
 /// spaceport with it open, and its toggle there.

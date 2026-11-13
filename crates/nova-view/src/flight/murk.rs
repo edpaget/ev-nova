@@ -38,7 +38,7 @@
 //! - **The 8-bit depth's cap of 24** (@0x2b4b1-0x2b4c1): the engine draws
 //!   at 16-bit only.
 
-use nova_sim::Vec2;
+use nova_sim_frame::Vec2;
 
 use crate::Colorize;
 

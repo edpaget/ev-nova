@@ -2,7 +2,7 @@
 //! and target keys' component tests on [`FakeFlight`]
 //! (rdm:phase/view-sim-seam/phase-10-comm-escorts-boarding-on-port): the
 //! menu opened, timed out and drawn over the frame's rows
-//! ([`FrameHud::escort_rows`](nova_sim::flight_frame::FrameHud::escort_rows)),
+//! ([`FrameHud::escort_rows`](nova_sim_frame::flight_frame::FrameHud::escort_rows)),
 //! held between its redraws from each pass's,
 //! the commands the keys send and what the view says of the flight's
 //! answers. What a command does to the escorts is nova-sim's
@@ -13,12 +13,11 @@ use super::faked_travel::{faked_lasts, sent_but_lines};
 use super::faked_world::{world, world_list};
 use super::*;
 use crate::flight::escorts::{ABSENT_ROW, MENU_AT, MENU_HEIGHT, MENU_TIMEOUT, MENU_WIDTH};
-use nova_sim::flight_frame::{
+use nova_sim_frame::flight_frame::{
     EscortMenuPass, FlightEvent, FrameHud, PassReport, StepReport, StepRun,
 };
-use nova_sim::{
-    ClassRow, Commanded, EscortCommand, EscortGroup, EscortOrder, SimSound, TargetPick,
-};
+use nova_sim_frame::{ClassRow, Commanded, EscortCommand, EscortGroup, SimSound, TargetPick};
+use nova_sim_state::shown::fleet::EscortOrder;
 
 /// A frame in Sol, the player alone, the escort rows of `present` shown
 /// and an escort flying when there are any.
@@ -43,7 +42,7 @@ fn a_held_frame_draws_its_escort_rows() {
     press(&mut view, MENU_KEY);
     let drawn = world_list(&view);
     view.sim.set_frame(fleet_of(&[]));
-    let pass = nova_sim::flight_frame::PassReport::default();
+    let pass = nova_sim_frame::flight_frame::PassReport::default();
     view.sim
         .queue_report(super::stepping::doubled(pass.clone(), pass, first));
     view.step_frame(1, view.anchor());
@@ -613,7 +612,7 @@ fn a_jumps_arrival_shuts_the_menu_open_through_the_warp_silently() {
     assert!(view.escort_menu().is_open(), "open through the warp");
     queue_arrival(
         &mut view,
-        arrival_report(0, nova_sim::flight_frame::ShipPlace::default()),
+        arrival_report(0, nova_sim_frame::flight_frame::ShipPlace::default()),
     );
     view.tick(TICK);
     assert_eq!(
@@ -629,7 +628,8 @@ fn a_jumps_arrival_shuts_the_menu_open_through_the_warp_silently() {
 fn a_gates_exit_shuts_the_menu_silently() {
     use super::faked_landing::{arrived, at_gate, came_out_in_alpha};
     let mut view = menu_up();
-    view.sim.queue_answer(at_gate(nova_sim::GateKind::Wormhole));
+    view.sim
+        .queue_answer(at_gate(nova_sim_frame::GateKind::Wormhole));
     came_out_in_alpha(&mut view, SimMessage::PassedWormhole(SystemId(131)));
     view.sim.queue_answer(arrived());
     view.land();
@@ -641,10 +641,11 @@ fn a_gates_exit_shuts_the_menu_silently() {
 #[test]
 fn a_take_off_shuts_the_menu_silently() {
     let mut view = menu_up();
-    view.sim.queue_answer(Answer::Departed(nova_sim::Departure {
-        stellar: StellarId(128),
-        settled: nova_sim::Settled::default(),
-    }));
+    view.sim
+        .queue_answer(Answer::Departed(nova_sim_frame::Departure {
+            stellar: StellarId(128),
+            settled: nova_sim_frame::Settled::default(),
+        }));
     assert_eq!(view.take_off(), Some(StellarId(128)));
     assert!(!view.escort_menu().is_open());
     assert_eq!(ui_heard(&mut view), []);
@@ -831,10 +832,10 @@ fn f_held_while_the_flight_refuses_the_escort_keys_attacks_once_it_takes_them() 
 fn the_players_escort_or_fighter_is_bracketed_green() {
     let mut frame = among(vec![super::faked_hud::npc_of_140(0)]);
     frame.target = Some(record::target(0));
-    frame.hud.target_brackets = Some(nova_sim::brackets::TargetBrackets {
+    frame.hud.target_brackets = Some(nova_sim_frame::brackets::TargetBrackets {
         npc: NpcId(0),
         expand: 0.0,
-        standing: nova_sim::brackets::Standing::Escort,
+        standing: nova_sim_frame::brackets::Standing::Escort,
     });
     let view = super::faked_hud::barred(armed(1, &[]), frame);
     assert_eq!(
@@ -873,8 +874,8 @@ fn label_place(view: &Faked, label: &str) -> Point {
 
 /// A view over a flight targeting NPC 0 of government 140, labelled as
 /// `tag` says, its text measured by `MonoMetrics`.
-fn labelled(tag: Option<nova_sim::TargetTag>) -> Faked {
-    let target = nova_sim::flight_frame::FrameTarget {
+fn labelled(tag: Option<nova_sim_frame::TargetTag>) -> Faked {
+    let target = nova_sim_frame::flight_frame::FrameTarget {
         tag,
         ..record::target(0)
     };
@@ -889,9 +890,9 @@ fn labelled(tag: Option<nova_sim::TargetTag>) -> Faked {
 #[test]
 fn the_target_panel_labels_the_frames_escort_fighter_or_code_and_draws_none_without() {
     for (tag, label) in [
-        (nova_sim::TargetTag::Escort, target::ESCORT),
-        (nova_sim::TargetTag::Fighter, target::FIGHTER),
-        (nova_sim::TargetTag::Code(GovtId(140)), "Fed."),
+        (nova_sim_frame::TargetTag::Escort, target::ESCORT),
+        (nova_sim_frame::TargetTag::Fighter, target::FIGHTER),
+        (nova_sim_frame::TargetTag::Code(GovtId(140)), "Fed."),
     ] {
         let view = labelled(Some(tag));
         let list = super::faked_hud::flown(&view);

@@ -11,7 +11,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::Service;
+use nova_sim_frame::Service;
 
 use super::layout::{DONE_LABEL, label};
 use crate::color::Color;

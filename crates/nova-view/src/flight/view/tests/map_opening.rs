@@ -6,7 +6,7 @@
 use super::*;
 use crate::flight::fake_catalog::catalog;
 use crate::flight::view::dialog_map::MapOpener;
-use nova_sim::flight_frame::{FlightEvent, StepInput, StepReport};
+use nova_sim_frame::flight_frame::{FlightEvent, StepInput, StepReport};
 
 /// A flight that notes, in one list, each command applied and each
 /// screen asked, in order, answering every command done and every screen

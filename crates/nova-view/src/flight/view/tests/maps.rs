@@ -1,11 +1,11 @@
 use super::*;
 use crate::galaxy::place::{INITIAL_ZOOM, ZOOM_OUT_STEP};
 use crate::galaxy::update::MapUpdate;
-use nova_sim::MapClicked;
-use nova_sim::flight_frame::{FlightEvent, FloatingLinks};
-use nova_sim::galaxy_map::{MapDrawing, MapLink};
-use nova_sim::iff::SystemColorCode;
-use nova_sim::map_panel::{
+use nova_sim_frame::flight_frame::{FlightEvent, FloatingLinks};
+use nova_sim_frame::galaxy_map::{MapDrawing, MapLink};
+use nova_sim_frame::iff::SystemColorCode;
+use nova_sim_frame::map_click::MapClicked;
+use nova_sim_frame::map_panel::{
     CheatNumbers, Column, ColumnBody, Listing, MapPanel, PanelDate, PanelWords, Ports, Services,
     Strip, zoom_readout,
 };
@@ -299,7 +299,7 @@ fn over_a_held_frame_the_map_shows_what_it_changed_in_the_nav_area_with_no_step(
     ];
     for (k, was, then) in cases {
         let mut view = faked_sol(frame(was));
-        let pass = nova_sim::flight_frame::PassReport::default();
+        let pass = nova_sim_frame::flight_frame::PassReport::default();
         view.sim
             .queue_report(super::stepping::doubled(pass.clone(), pass, frame(was)));
         view.step_frame(1, view.anchor());
@@ -347,12 +347,14 @@ fn faked_nebulae_by(rules: &Rulebook) -> Vec<(i16, bool)> {
         ..catalog()
     };
     let galaxy = GalaxyShown {
-        nebulae: vec![nova_sim::NebulaId(128)],
+        nebulae: vec![nova_sim_frame::catalog::NebulaId(128)],
         ..shown_of(&catalog, &[])
     };
     let mut fake = FakeFlight::new();
     fake.set_frame(in_sol());
-    fake.queue_event(FlightEvent::Session(nova_sim::SessionEvent::GalaxyChanged));
+    fake.queue_event(FlightEvent::Session(
+        nova_sim_frame::SessionEvent::GalaxyChanged,
+    ));
     let mut view = scripted_over(catalog, fake, rules);
     view.sim.queue_screen(ScreenAnswer::Galaxy(galaxy));
     view.catch_up_then(|_, _| {});
@@ -709,7 +711,7 @@ fn a_held_frame_centres_the_floating_map_on_its_own_place() {
     let mut now = first.clone();
     now.floating.current = Vec2::new(40.0, 30.0);
     view.sim.set_frame(now);
-    let pass = nova_sim::flight_frame::PassReport::default();
+    let pass = nova_sim_frame::flight_frame::PassReport::default();
     view.sim
         .queue_report(super::stepping::doubled(pass.clone(), pass, first));
     view.step_frame(1, view.anchor());
@@ -851,14 +853,15 @@ fn in_double_time_the_fade_keeps_its_ticks() {
     // Each frame's floating map, then its step of two passes.
     let frame = |view: &mut Faked, dt| {
         floating_frame_of(view, dt);
-        let passes = vec![nova_sim::flight_frame::PassReport::default(); 2];
-        view.sim.queue_report(nova_sim::flight_frame::StepReport {
-            steps: vec![nova_sim::flight_frame::StepRun {
-                passes,
-                ..nova_sim::flight_frame::StepRun::default()
-            }],
-            stopped: false,
-        });
+        let passes = vec![nova_sim_frame::flight_frame::PassReport::default(); 2];
+        view.sim
+            .queue_report(nova_sim_frame::flight_frame::StepReport {
+                steps: vec![nova_sim_frame::flight_frame::StepRun {
+                    passes,
+                    ..nova_sim_frame::flight_frame::StepRun::default()
+                }],
+                stopped: false,
+            });
         view.step_frame(
             1,
             crate::system::camera::Anchor::in_flight(RuleSource::Engine),
@@ -1597,7 +1600,7 @@ fn the_hypergate_map_marks_its_arrows_known_and_its_next_draw_shows_them() {
         Some(&ScreenAsk::Map {
             hypergate: Some(vec![SystemId(132)]),
             missions: Vec::new(),
-            marks: nova_sim::MapMarks::NONE,
+            marks: nova_sim_frame::MapMarks::NONE,
             selected: Some(SystemId(130)),
         })
     );
@@ -1623,7 +1626,7 @@ fn the_hypergate_maps_own_mark_takes_no_redraw_a_frame_on() {
     let mut view = faked(in_sol());
     queue_map(&mut view, Some(130), gate_drawing());
     let known = FlightFrame {
-        map_key: nova_sim::flight_frame::MapKey {
+        map_key: nova_sim_frame::flight_frame::MapKey {
             known: [SystemId(132)].into(),
             ..in_sol().map_key
         },
@@ -1638,7 +1641,7 @@ fn the_hypergate_maps_own_mark_takes_no_redraw_a_frame_on() {
     view.tick(TICK);
     assert_eq!(drawings(&view), 1, "a frame on: no redraw for its own mark");
     view.sim.set_frame(FlightFrame {
-        map_key: nova_sim::flight_frame::MapKey {
+        map_key: nova_sim_frame::flight_frame::MapKey {
             known: [SystemId(131), SystemId(132)].into(),
             ..in_sol().map_key
         },
@@ -1666,7 +1669,7 @@ fn the_redraw_marks_known_what_the_flights_answer_names_and_nothing_else() {
         view.sim.queue_screen(ScreenAnswer::Map(Box::new(MapScreen {
             drawing: gate_drawing(),
             marks_known: marks_known.clone(),
-            borders: nova_sim::map_borders::BorderSources::default(),
+            borders: nova_sim_frame::map_borders::BorderSources::default(),
             panel: blank_panel(),
         })));
         view.map.offer_gates(vec![SystemId(132)]);
@@ -1733,12 +1736,12 @@ fn the_course_map_asks_its_screens_once_as_it_opens_and_not_each_frame() {
         view.sim.screens_asked()[1..],
         [
             ScreenAsk::MapOpening {
-                marks: MarksFrom::Given(nova_sim::MapMarks::NONE),
+                marks: MarksFrom::Given(nova_sim_frame::MapMarks::NONE),
             },
             ScreenAsk::Map {
                 hypergate: None,
                 missions: Vec::new(),
-                marks: nova_sim::MapMarks::NONE,
+                marks: nova_sim_frame::MapMarks::NONE,
                 selected: Some(SystemId(130)),
             },
         ],
@@ -1766,7 +1769,7 @@ fn the_course_map_draws_the_flights_drawing() {
         Some(&ScreenAsk::Map {
             hypergate: None,
             missions: Vec::new(),
-            marks: nova_sim::MapMarks::NONE,
+            marks: nova_sim_frame::MapMarks::NONE,
             selected: Some(SystemId(130)),
         })
     );
@@ -1796,7 +1799,7 @@ fn a_change_to_what_the_open_map_is_drawn_from_redraws_it_at_the_catch_up() {
     let mut explored = sol_drawing();
     explored.systems.push(drawn_system(
         132,
-        nova_sim::iff::SystemColorCode::Uninhabited,
+        nova_sim_frame::iff::SystemColorCode::Uninhabited,
     ));
     view.sim.queue_screen(redrawn(explored));
     let mut frame = in_sol();
@@ -1813,8 +1816,9 @@ fn a_change_to_what_the_open_map_is_drawn_from_redraws_it_at_the_catch_up() {
 fn a_galaxy_event_redraws_the_open_map_though_its_key_is_the_same() {
     let mut view = faked_sol(in_sol());
     view.open_map();
-    view.sim
-        .queue_event(FlightEvent::Session(nova_sim::SessionEvent::GalaxyChanged));
+    view.sim.queue_event(FlightEvent::Session(
+        nova_sim_frame::SessionEvent::GalaxyChanged,
+    ));
     view.catch_up_then(|_, _| {});
     assert_eq!(drawings_asked(&view), 2);
 }
@@ -1822,8 +1826,9 @@ fn a_galaxy_event_redraws_the_open_map_though_its_key_is_the_same() {
 #[test]
 fn a_shut_map_is_not_redrawn_at_the_catch_up() {
     let mut view = faked(in_sol());
-    view.sim
-        .queue_event(FlightEvent::Session(nova_sim::SessionEvent::GalaxyChanged));
+    view.sim.queue_event(FlightEvent::Session(
+        nova_sim_frame::SessionEvent::GalaxyChanged,
+    ));
     let mut frame = in_sol();
     frame.map_key.explored = vec![SystemId(132)];
     view.sim.set_frame(frame);
@@ -1855,7 +1860,7 @@ fn panel_strings() -> (i16, Vec<String>) {
     ] {
         list[n - 1] = word.to_owned();
     }
-    (nova_sim::news::MISC_STRINGS, list)
+    (nova_sim_frame::news::MISC_STRINGS, list)
 }
 
 /// The Geneva 9 text drawn with its baseline at (`x`, `baseline`), if
@@ -2389,7 +2394,7 @@ fn clear_route_by_its_button_sends_the_clear_shows_the_course_left_and_retakes_t
             let_go,
             NavDisplay::Hyperspace {
                 destination: hud::NavDestination::None,
-                readiness: nova_sim::JumpReadiness::Blocked,
+                readiness: nova_sim_frame::JumpReadiness::Blocked,
             }
         )),
         "the nav area retaken at once"

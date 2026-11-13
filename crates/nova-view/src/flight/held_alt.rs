@@ -22,8 +22,8 @@
 
 use std::collections::BTreeMap;
 
-use nova_sim::ShipRef;
-use nova_sim::combat::ship_frames::Alt;
+use nova_sim_frame::ShipRef;
+use nova_sim_frame::combat::ship_frames::Alt;
 
 use crate::{Blend, Color, Colorize, ImageKey, Point};
 
@@ -96,7 +96,7 @@ impl HeldAlts {
 
 #[cfg(test)]
 mod tests {
-    use nova_sim::traffic::npc::NpcId;
+    use nova_sim_frame::traffic::npc::NpcId;
 
     use super::*;
 

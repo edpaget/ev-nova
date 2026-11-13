@@ -30,8 +30,8 @@
 
 use std::collections::BTreeMap;
 
-use nova_sim::combat::ParticleBurst;
-use nova_sim::{Chance, Vec2};
+use nova_sim_frame::combat::ParticleBurst;
+use nova_sim_frame::{Chance, Vec2};
 
 use super::catalog::{WeaponId, WeaponLook};
 
@@ -102,7 +102,7 @@ pub fn trail_start(position: Vec2, heading: f32, width: u32) -> Vec2 {
     let tail = ((TAIL_TURN + heading) as i32 % 360) as i16;
     // Half an `rlëD`'s width: well within an `f32`.
     #[allow(clippy::cast_precision_loss)]
-    let back = nova_sim::trig::accel(tail, (width / 2) as f32);
+    let back = nova_sim_frame::trig::accel(tail, (width / 2) as f32);
     Vec2::new((position.x + back.x).trunc(), (position.y + back.y).trunc())
 }
 

@@ -1,6 +1,6 @@
 //! Draw commands and draw lists.
 
-use nova_sim::blink::FULL;
+use nova_sim_frame::blink::FULL;
 
 use crate::color::Color;
 use crate::colorize::Colorize;
@@ -918,7 +918,7 @@ pub fn crossed_box(list: &mut DrawList, center: Point, size: f32, color: Color) 
 }
 
 /// The tint the running lights (and flight's engine glow) are drawn with
-/// at `level` out of [`nova_sim::blink::FULL`] (32): white, with that many
+/// at `level` out of [`nova_sim_frame::blink::FULL`] (32): white, with that many
 /// 32nds of full alpha, rounded to nearest, so level 32 draws the layer as
 /// it is. Levels past 32 are 32. Under [`Blend::Or`] the alpha encodes n
 /// exactly: `round(a × 32 / 255) = n` for every n from 0 to 32.

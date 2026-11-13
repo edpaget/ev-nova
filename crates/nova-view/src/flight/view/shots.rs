@@ -4,11 +4,11 @@
 //! lightning rolls ([`StepRolls`]). The simulation keeps none of it: it
 //! is the view's, drawn on the effects' chance, never the simulation's.
 //! A shot's frame is the simulation's
-//! ([`FrameShot::frame`](nova_sim::flight_frame::FrameShot::frame)).
+//! ([`FrameShot::frame`](nova_sim_frame::flight_frame::FrameShot::frame)).
 
-use nova_sim::Chance;
-use nova_sim::flight_frame::PassReport;
-use nova_sim::player_wrap::PlayerWrap;
+use nova_sim_frame::Chance;
+use nova_sim_frame::flight_frame::PassReport;
+use nova_sim_frame::player_wrap::PlayerWrap;
 
 use crate::DrawList;
 use crate::flight::catalog::Looks;

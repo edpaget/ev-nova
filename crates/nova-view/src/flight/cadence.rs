@@ -96,12 +96,12 @@
 //!   flips show only in the arrow.
 //!
 //! The reading of
-//! [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence) says whether the
+//! [`RuleKey::HudCadence`](nova_sim_frame::RuleKey::HudCadence) says whether the
 //! HUD's content waits for these refreshes (the engine's) or follows
 //! every frame. The blink keeps this timing under both: it is a feature,
 //! not a redraw artefact.
 
-use nova_sim::{NpcId, ShipId};
+use nova_sim_frame::{NpcId, ShipId};
 
 /// Engine ticks (1/30 s) between radar refreshes: 15 Mac ticks
 /// (0.25 s) is 7.5 frames, and the `>=` test passes on the 8th (≈0.267 s).

@@ -10,7 +10,7 @@
 
 use std::rc::Rc;
 
-pub use nova_sim::StellarId;
+pub use nova_sim_frame::StellarId;
 
 use crate::outline::StellarStandIn;
 

@@ -18,14 +18,27 @@ use std::num::NonZeroU16;
 use std::num::NonZeroU16 as Frames;
 use std::rc::Rc;
 
-use nova_sim::catalog::{MissionRecord, MissionShip};
-use nova_sim::control::{Script as SetScript, Test};
-use nova_sim::landing::StellarFlags;
-use nova_sim::{
-    ALERT_CICN, AsteroidCatalog, Chance, CharacterStart, CombatCatalog, CommCatalog,
-    CommodityStrings, Controls, DateAffixes, Direction, DisasterRecord, GateSite, JunkRecord,
-    LandingSite, MissionId, OutfitId, OutfitOrder, OutfitRecord, PilotCatalog, ShipFields, ShipId,
-    ShipRecord, StarSystem, StartDate, StartError, SystemId, TrafficCatalog, Turn, Vec2, WeaponId,
+use nova_sim_base::ShipFields;
+use nova_sim_catalog::control::{Script as SetScript, Test};
+use nova_sim_frame::catalog::CharacterStart;
+use nova_sim_frame::catalog::CommCatalog;
+use nova_sim_frame::catalog::CommodityStrings;
+use nova_sim_frame::catalog::DateAffixes;
+use nova_sim_frame::catalog::DisasterRecord;
+use nova_sim_frame::catalog::GateSite;
+use nova_sim_frame::catalog::JunkRecord;
+use nova_sim_frame::catalog::LandingSite;
+use nova_sim_frame::catalog::OutfitRecord;
+use nova_sim_frame::catalog::PilotCatalog;
+use nova_sim_frame::catalog::ShipRecord;
+use nova_sim_frame::catalog::StartDate;
+use nova_sim_frame::catalog::StartError;
+use nova_sim_frame::catalog::TrafficCatalog;
+use nova_sim_frame::catalog::{MissionRecord, MissionShip};
+use nova_sim_frame::landing::StellarFlags;
+use nova_sim_frame::{
+    ALERT_CICN, AsteroidCatalog, Chance, CombatCatalog, Controls, Direction, MissionId, OutfitId,
+    OutfitOrder, ShipId, StarSystem, SystemId, Turn, Vec2, WeaponId,
 };
 
 use crate::flight::catalog::{
@@ -79,7 +92,7 @@ pub struct FakeCatalog {
     /// System 131's `Message`: no buoy (−1), by default.
     pub alpha_buoy: i16,
     /// The escorts' voices: none, by default.
-    pub voices: nova_sim::voice::Voices,
+    pub voices: nova_sim_catalog::voice::Voices,
     /// The stellars Sol lists after Earth and the Moon: none, by
     /// default.
     pub sol_more: Vec<StellarContents>,
@@ -90,7 +103,7 @@ pub struct FakeCatalog {
     /// The `dësc`s: none, by default.
     pub descriptions: Vec<(i16, String)>,
     /// The movies the `dësc`s name: none, by default.
-    pub desc_movies: Vec<(i16, nova_sim::DescMovie)>,
+    pub desc_movies: Vec<(i16, nova_sim_frame::DescMovie)>,
     /// The commodities: none, by default.
     pub commodities: CommodityStrings,
     /// The planetary events: none, by default.
@@ -110,17 +123,20 @@ pub struct FakeCatalog {
     /// Each batch of ships whose target cards were asked for.
     pub cards_asked: RefCell<Vec<Vec<ShipId>>>,
     /// Each system's traffic: none, by default.
-    pub traffic: Vec<(SystemId, nova_sim::SystemTraffic)>,
+    pub traffic: Vec<(SystemId, nova_sim_frame::catalog::SystemTraffic)>,
     /// The düdes: none, by default.
-    pub dudes: Vec<(nova_sim::DudeId, nova_sim::DudeRecord)>,
+    pub dudes: Vec<(
+        nova_sim_frame::catalog::DudeId,
+        nova_sim_frame::catalog::DudeRecord,
+    )>,
     /// The weapons: none, by default.
-    pub weapons: Vec<nova_sim::WeaponRecord>,
+    pub weapons: Vec<nova_sim_frame::catalog::WeaponRecord>,
     /// The ship types' combat fields: none, by default.
-    pub hulls: Vec<nova_sim::HullRecord>,
+    pub hulls: Vec<nova_sim_frame::catalog::HullRecord>,
     /// The governments: none, by default.
-    pub govts: Vec<nova_sim::GovtRecord>,
+    pub govts: Vec<nova_sim_frame::catalog::GovtRecord>,
     /// The ranks: none, by default.
-    pub ranks: Vec<nova_sim::catalog::RankRecord>,
+    pub ranks: Vec<nova_sim_frame::catalog::RankRecord>,
     /// The weapons' looks: none, by default.
     pub looks: Vec<(i16, Result<WeaponLook, String>)>,
     /// The explosions' looks: none, by default.
@@ -141,13 +157,13 @@ pub struct FakeCatalog {
     /// (`flight::view::tests::stars` draws them).
     pub star_dots: Option<StarDots>,
     /// The asteroid types: none, by default.
-    pub asteroid_types: Vec<nova_sim::AsteroidTypeRecord>,
+    pub asteroid_types: Vec<nova_sim_frame::catalog::AsteroidTypeRecord>,
     /// Each system's asteroid field: none, by default.
-    pub asteroid_fields: Vec<nova_sim::AsteroidFieldRecord>,
+    pub asteroid_fields: Vec<nova_sim_frame::catalog::AsteroidFieldRecord>,
     /// The string lists: none, by default.
     pub strings: Vec<(i16, Vec<String>)>,
     /// The persons: none, by default.
-    pub persons: Vec<nova_sim::PersonRecord>,
+    pub persons: Vec<nova_sim_frame::catalog::PersonRecord>,
     /// Ship 128's default items: none, by default.
     pub defaults: Vec<(OutfitId, u16)>,
     /// Ship 129's sheet in place of the one [`FakeCatalog::ship_sheet`]
@@ -190,7 +206,7 @@ pub struct FakeCatalog {
     pub nebula: bool,
     /// The stellars that can be destroyed and regenerated: none, by
     /// default.
-    pub lives: Vec<nova_sim::StellarLife>,
+    pub lives: Vec<nova_sim_frame::catalog::StellarLife>,
     /// The Moon's (129) sheets and graphic type 0's, given to the sim
     /// and the view alike: the defaults, unless set.
     pub moon: Option<MoonSheets>,
@@ -198,18 +214,18 @@ pub struct FakeCatalog {
     /// the view alike: it can, by default.
     pub moon_unreadable: Option<&'static str>,
     /// The missions: none, by default.
-    pub missions: Vec<nova_sim::catalog::MissionRecord>,
+    pub missions: Vec<nova_sim_frame::catalog::MissionRecord>,
     /// What the mission screens show of each: none, by default.
-    pub mission_texts: Vec<nova_sim::catalog::MissionTexts>,
+    pub mission_texts: Vec<nova_sim_frame::catalog::MissionTexts>,
     /// Each system's `Visibility`: none, by default, so every system
     /// is visible.
-    pub visibility: Vec<nova_sim::catalog::SystemVisibility>,
+    pub visibility: Vec<nova_sim_frame::catalog::SystemVisibility>,
     /// The session's `spöb` and `sÿst` names: none, by default.
-    pub place_names: nova_sim::catalog::PlaceNames,
+    pub place_names: nova_sim_frame::catalog::PlaceNames,
     /// The `crön`s: none, by default.
-    pub crons: Vec<nova_sim::catalog::CronRecord>,
+    pub crons: Vec<nova_sim_frame::catalog::CronRecord>,
     /// Each `bööm`'s sound, as the session reads it: none, by default.
-    pub boom_sounds: Vec<(nova_sim::BoomId, nova_sim::SoundId)>,
+    pub boom_sounds: Vec<(nova_sim_frame::BoomId, nova_sim_frame::SoundId)>,
     /// Each system's government, in the session's map and the course
     /// map's catalog: none, by default.
     pub governed: Vec<(i16, i16)>,
@@ -233,7 +249,7 @@ pub struct MoonSheets {
 }
 
 /// No strings unless a test sets them.
-impl nova_sim::CommCatalog for FakeCatalog {
+impl nova_sim_frame::catalog::CommCatalog for FakeCatalog {
     fn string_list(&self, id: i16) -> Vec<String> {
         self.strings
             .iter()
@@ -392,7 +408,7 @@ pub fn catalog() -> FakeCatalog {
         sol_murk: 0,
         sol_background: 0,
         alpha_buoy: -1,
-        voices: nova_sim::voice::Voices::default(),
+        voices: nova_sim_catalog::voice::Voices::default(),
         sol_more: Vec::new(),
         proxima_frames: 1,
         gates: RefCell::new(Vec::new()),
@@ -403,7 +419,7 @@ pub fn catalog() -> FakeCatalog {
         missions: Vec::new(),
         mission_texts: Vec::new(),
         visibility: Vec::new(),
-        place_names: nova_sim::catalog::PlaceNames::default(),
+        place_names: nova_sim_frame::catalog::PlaceNames::default(),
         crons: Vec::new(),
         boom_sounds: Vec::new(),
         governed: Vec::new(),
@@ -466,7 +482,7 @@ pub fn site(id: i16, (x, y): (f32, f32), flags: u32) -> LandingSite {
         tribute: 0,
         gravity: 0,
         fee: 0,
-        animation: nova_sim::catalog::SiteAnimation::default(),
+        animation: nova_sim_frame::catalog::SiteAnimation::default(),
         defense_dude: None,
         def_count: 0,
     }
@@ -511,7 +527,7 @@ impl PilotCatalog for FakeCatalog {
         self.character.clone()
     }
 
-    fn voices(&self) -> nova_sim::voice::Voices {
+    fn voices(&self) -> nova_sim_catalog::voice::Voices {
         self.voices.clone()
     }
 
@@ -607,13 +623,13 @@ impl PilotCatalog for FakeCatalog {
         self.commodities.clone()
     }
 
-    fn string_patch(&self, _id: i16) -> nova_sim::catalog::StringPatch {
-        nova_sim::catalog::StringPatch::Absent
+    fn string_patch(&self, _id: i16) -> nova_sim_frame::catalog::StringPatch {
+        nova_sim_frame::catalog::StringPatch::Absent
     }
 
     /// [`FakeCatalog::strings`]' `STR#` 1000.
     fn buoy_strings(&self) -> Vec<String> {
-        self.string_list(nova_sim::buoy::BUOY_STRINGS)
+        self.string_list(nova_sim_catalog::buoy::BUOY_STRINGS)
     }
 
     fn junk(&self) -> Vec<JunkRecord> {
@@ -628,7 +644,7 @@ impl PilotCatalog for FakeCatalog {
         Vec::new()
     }
 
-    fn stellar_weapons(&self) -> Vec<(StellarId, nova_sim::WeaponId)> {
+    fn stellar_weapons(&self) -> Vec<(StellarId, nova_sim_frame::WeaponId)> {
         Vec::new()
     }
 
@@ -644,11 +660,11 @@ impl PilotCatalog for FakeCatalog {
         self.gates.borrow().clone()
     }
 
-    fn stellar_lives(&self) -> Vec<nova_sim::StellarLife> {
+    fn stellar_lives(&self) -> Vec<nova_sim_frame::catalog::StellarLife> {
         self.lives.clone()
     }
 
-    fn stellar_scripts(&self) -> Vec<nova_sim::StellarScripts> {
+    fn stellar_scripts(&self) -> Vec<nova_sim_frame::catalog::StellarScripts> {
         Vec::new()
     }
 
@@ -659,17 +675,17 @@ impl PilotCatalog for FakeCatalog {
         )
     }
 
-    fn missions(&self) -> Vec<nova_sim::catalog::MissionRecord> {
+    fn missions(&self) -> Vec<nova_sim_frame::catalog::MissionRecord> {
         self.missions.clone()
     }
 
-    fn mission_texts(&self) -> Vec<nova_sim::catalog::MissionTexts> {
+    fn mission_texts(&self) -> Vec<nova_sim_frame::catalog::MissionTexts> {
         self.mission_texts.clone()
     }
 
     /// Every stellar of each system's `landing_sites`, with every
     /// system listing it, and the gates of `gate_listers`.
-    fn listed_stellars(&self) -> Vec<nova_sim::catalog::ListedStellar> {
+    fn listed_stellars(&self) -> Vec<nova_sim_frame::catalog::ListedStellar> {
         let mut systems = vec![SystemId(130), SystemId(131)];
         if self.onward {
             systems.push(SystemId(132));
@@ -684,95 +700,98 @@ impl PilotCatalog for FakeCatalog {
             .into_iter()
             .map(|system| (system, self.landing_sites(system)))
             .collect();
-        let mut listed = nova_sim::fixture::listed_stellars(
+        let mut listed = nova_sim_catalog::fixture::listed_stellars(
             sites
                 .iter()
                 .map(|(system, sites)| (*system, sites.as_slice())),
         );
-        nova_sim::fixture::list_also(&mut listed, self.gate_listers.iter().copied());
+        nova_sim_catalog::fixture::list_also(&mut listed, self.gate_listers.iter().copied());
         listed
     }
 
-    fn system_visibility(&self) -> Vec<nova_sim::catalog::SystemVisibility> {
+    fn system_visibility(&self) -> Vec<nova_sim_frame::catalog::SystemVisibility> {
         self.visibility.clone()
     }
 
-    fn place_names(&self) -> nova_sim::catalog::PlaceNames {
+    fn place_names(&self) -> nova_sim_frame::catalog::PlaceNames {
         self.place_names.clone()
     }
 
-    fn stellar_marks(&self) -> Vec<nova_sim::catalog::StellarMark> {
+    fn stellar_marks(&self) -> Vec<nova_sim_frame::catalog::StellarMark> {
         Vec::new()
     }
 
-    fn crons(&self) -> Vec<nova_sim::catalog::CronRecord> {
+    fn crons(&self) -> Vec<nova_sim_frame::catalog::CronRecord> {
         self.crons.clone()
     }
 
-    fn boom_sounds(&self) -> Vec<(nova_sim::BoomId, nova_sim::SoundId)> {
+    fn boom_sounds(&self) -> Vec<(nova_sim_frame::BoomId, nova_sim_frame::SoundId)> {
         self.boom_sounds.clone()
     }
 
-    fn ranks(&self) -> Vec<nova_sim::catalog::RankRecord> {
+    fn ranks(&self) -> Vec<nova_sim_frame::catalog::RankRecord> {
         self.ranks.clone()
     }
 
-    fn nebulae(&self) -> Vec<nova_sim::catalog::NebulaRecord> {
+    fn nebulae(&self) -> Vec<nova_sim_frame::catalog::NebulaRecord> {
         Vec::new()
     }
 }
 
 /// The weapons, ship types' combat fields and governments given.
 impl CombatCatalog for FakeCatalog {
-    fn weapons(&self) -> Vec<nova_sim::WeaponRecord> {
+    fn weapons(&self) -> Vec<nova_sim_frame::catalog::WeaponRecord> {
         self.weapons.clone()
     }
 
-    fn hulls(&self) -> Vec<nova_sim::HullRecord> {
+    fn hulls(&self) -> Vec<nova_sim_frame::catalog::HullRecord> {
         self.hulls.clone()
     }
 
-    fn governments(&self) -> Vec<nova_sim::GovtRecord> {
+    fn governments(&self) -> Vec<nova_sim_frame::catalog::GovtRecord> {
         self.govts.clone()
     }
 }
 
 /// The asteroid types and fields given.
 impl AsteroidCatalog for FakeCatalog {
-    fn asteroid_types(&self) -> Vec<nova_sim::AsteroidTypeRecord> {
+    fn asteroid_types(&self) -> Vec<nova_sim_frame::catalog::AsteroidTypeRecord> {
         self.asteroid_types.clone()
     }
 
-    fn asteroid_fields(&self) -> Vec<nova_sim::AsteroidFieldRecord> {
+    fn asteroid_fields(&self) -> Vec<nova_sim_frame::catalog::AsteroidFieldRecord> {
         self.asteroid_fields.clone()
     }
 
-    fn box_frame_sizes(&self) -> [Option<(u32, u32)>; nova_sim::BOX_GRAPHICS] {
-        [None; nova_sim::BOX_GRAPHICS]
+    fn box_frame_sizes(&self) -> [Option<(u32, u32)>; nova_sim_frame::catalog::BOX_GRAPHICS] {
+        [None; nova_sim_frame::catalog::BOX_GRAPHICS]
     }
 }
 
 /// The traffic, düdes and persons given; no fleets.
 impl TrafficCatalog for FakeCatalog {
-    fn system_traffic(&self, id: SystemId) -> Option<nova_sim::SystemTraffic> {
+    fn system_traffic(&self, id: SystemId) -> Option<nova_sim_frame::catalog::SystemTraffic> {
         self.traffic
             .iter()
             .find(|(system, _)| *system == id)
             .map(|(_, traffic)| *traffic)
     }
 
-    fn dude(&self, id: nova_sim::DudeId) -> Option<nova_sim::DudeRecord> {
+    fn dude(
+        &self,
+        id: nova_sim_frame::catalog::DudeId,
+    ) -> Option<nova_sim_frame::catalog::DudeRecord> {
         self.dudes
             .iter()
             .find(|(dude, _)| *dude == id)
             .map(|(_, record)| record.clone())
     }
 
-    fn fleets(&self) -> Vec<nova_sim::FleetRecord> {
+    fn fleets(&self) -> Vec<nova_sim_frame::catalog::FleetRecord> {
         Vec::new()
     }
 
-    fn persons(&self) -> Vec<nova_sim::PersonRecord> {
+    fn persons(&self) -> Vec<nova_sim_frame::catalog::PersonRecord> {
         self.persons.clone()
     }
 }
@@ -936,7 +955,7 @@ impl GalaxyCatalog for FakeCatalog {
         };
         let nebulae = if self.nebula {
             vec![crate::galaxy::NebulaEntry {
-                id: nova_sim::NebulaId(128),
+                id: nova_sim_frame::catalog::NebulaId(128),
                 name: "Sol Nebula".to_owned(),
                 left: -20,
                 top: -20,
@@ -1004,7 +1023,7 @@ impl ShipSprites for FakeCatalog {
 /// and there is no other explosion type. Smoke sets 0 and 1 have their
 /// sprites.
 impl CombatLooks for FakeCatalog {
-    fn weapon_look(&self, id: nova_sim::WeaponId) -> Result<WeaponLook, String> {
+    fn weapon_look(&self, id: nova_sim_frame::WeaponId) -> Result<WeaponLook, String> {
         self.looks
             .iter()
             .find(|(weapon, _)| *weapon == id.0)
@@ -1014,7 +1033,7 @@ impl CombatLooks for FakeCatalog {
             )
     }
 
-    fn boom_look(&self, id: nova_sim::BoomId) -> Option<Result<BoomLook, String>> {
+    fn boom_look(&self, id: nova_sim_frame::BoomId) -> Option<Result<BoomLook, String>> {
         self.booms
             .iter()
             .find(|(boom, _)| *boom == id.0)
@@ -1162,7 +1181,7 @@ pub const THRUST: Controls = Controls {
     thrust: true,
     turn: Turn::None,
     reverse: false,
-    face: nova_sim::flight::Face::Off,
+    face: nova_sim_frame::flight::Face::Off,
     afterburner: false,
 };
 
@@ -1185,7 +1204,7 @@ impl DescriptionGraphics for FakeCatalog {
         None
     }
 
-    fn description_movie(&self, id: i16) -> Option<nova_sim::DescMovie> {
+    fn description_movie(&self, id: i16) -> Option<nova_sim_frame::DescMovie> {
         self.desc_movies
             .iter()
             .find(|(found, _)| *found == id)
@@ -1221,13 +1240,13 @@ pub fn multi_jumping() -> FakeCatalog {
             require: 0,
             require_govt: -1,
             buy_random: 100,
-            availability: nova_sim::Test::default(),
+            availability: nova_sim_catalog::control::Test::default(),
             item_class: 0,
             lc_name: "multi-jumping organ".to_owned(),
             lc_plural: "multi-jumping organs".to_owned(),
             scan_mask: 0,
-            on_purchase: nova_sim::Script::default(),
-            on_sell: nova_sim::Script::default(),
+            on_purchase: nova_sim_catalog::control::Script::default(),
+            on_sell: nova_sim_catalog::control::Script::default(),
         }],
         defaults: vec![(OutfitId(275), 1)],
         onward: true,
@@ -1291,13 +1310,13 @@ pub fn outfitting() -> FakeCatalog {
             require: 0,
             require_govt: -1,
             buy_random: 100,
-            availability: nova_sim::Test::default(),
+            availability: nova_sim_catalog::control::Test::default(),
             item_class: 0,
             lc_name: "fuel tank".to_owned(),
             lc_plural: "fuel tanks".to_owned(),
             scan_mask: 0,
-            on_purchase: nova_sim::Script::default(),
-            on_sell: nova_sim::Script::default(),
+            on_purchase: nova_sim_catalog::control::Script::default(),
+            on_sell: nova_sim_catalog::control::Script::default(),
         }],
         ..catalog()
     }
@@ -1362,8 +1381,8 @@ pub fn shipbuying() -> FakeCatalog {
             buy_random: 100,
             hire_random: 0,
             require: 0,
-            availability: nova_sim::Test::default(),
-            appear_on: nova_sim::Test::default(),
+            availability: nova_sim_catalog::control::Test::default(),
+            appear_on: nova_sim_catalog::control::Test::default(),
             flags: 0,
             flags3: 0,
             disp_weight: 0,
@@ -1381,9 +1400,9 @@ pub fn shipbuying() -> FakeCatalog {
             upgrade_to: None,
             esc_upgrd_cost: 0,
             esc_sell_value: 0,
-            on_capture: nova_sim::Script::default(),
-            on_purchase: nova_sim::Script::default(),
-            on_retire: nova_sim::Script::default(),
+            on_capture: nova_sim_catalog::control::Script::default(),
+            on_purchase: nova_sim_catalog::control::Script::default(),
+            on_retire: nova_sim_catalog::control::Script::default(),
         }],
         ..outfitting()
     }
@@ -1468,8 +1487,8 @@ pub fn trafficked(systems: &[i16], avg: i16, ship: i16, ai_type: i16) -> FakeCat
         buy_random: 100,
         hire_random: 0,
         require: 0,
-        availability: nova_sim::Test::default(),
-        appear_on: nova_sim::Test::default(),
+        availability: nova_sim_catalog::control::Test::default(),
+        appear_on: nova_sim_catalog::control::Test::default(),
         flags: 0,
         flags3: 0,
         disp_weight: 0,
@@ -1487,9 +1506,9 @@ pub fn trafficked(systems: &[i16], avg: i16, ship: i16, ai_type: i16) -> FakeCat
         upgrade_to: None,
         esc_upgrd_cost: 0,
         esc_sell_value: 0,
-        on_capture: nova_sim::Script::default(),
-        on_purchase: nova_sim::Script::default(),
-        on_retire: nova_sim::Script::default(),
+        on_capture: nova_sim_catalog::control::Script::default(),
+        on_purchase: nova_sim_catalog::control::Script::default(),
+        on_retire: nova_sim_catalog::control::Script::default(),
     };
     FakeCatalog {
         traffic: systems
@@ -1497,7 +1516,7 @@ pub fn trafficked(systems: &[i16], avg: i16, ship: i16, ai_type: i16) -> FakeCat
             .map(|&id| {
                 (
                     SystemId(id),
-                    nova_sim::SystemTraffic {
+                    nova_sim_frame::catalog::SystemTraffic {
                         dude_types,
                         avg_ships: avg,
                         persons: Default::default(),
@@ -1506,8 +1525,8 @@ pub fn trafficked(systems: &[i16], avg: i16, ship: i16, ai_type: i16) -> FakeCat
             })
             .collect(),
         dudes: vec![(
-            nova_sim::DudeId(128),
-            nova_sim::DudeRecord {
+            nova_sim_frame::catalog::DudeId(128),
+            nova_sim_frame::catalog::DudeRecord {
                 ai_type,
                 govt: None,
                 ships: vec![(ShipId(ship), 1)],
@@ -1529,8 +1548,13 @@ pub const UNSEEN: WeaponId = WeaponId(150);
 /// `wëap` `id` firing every tick, 20 pixels a tick for 30 ticks, doing
 /// no damage, with `flags`, `guidance` and `explod_type`.
 #[must_use]
-pub fn gun(id: WeaponId, flags: u16, guidance: i16, explod_type: i16) -> nova_sim::WeaponRecord {
-    nova_sim::WeaponRecord {
+pub fn gun(
+    id: WeaponId,
+    flags: u16,
+    guidance: i16,
+    explod_type: i16,
+) -> nova_sim_frame::catalog::WeaponRecord {
+    nova_sim_frame::catalog::WeaponRecord {
         id,
         reload: 0,
         count: 30,
@@ -1581,8 +1605,8 @@ pub fn gun(id: WeaponId, flags: u16, guidance: i16, explod_type: i16) -> nova_si
 /// Ship `id` carrying one of each of `weapons`, gone at once in
 /// `bööm` 128.
 #[must_use]
-pub fn hull_of(id: i16, weapons: &[WeaponId]) -> nova_sim::HullRecord {
-    nova_sim::HullRecord {
+pub fn hull_of(id: i16, weapons: &[WeaponId]) -> nova_sim_frame::catalog::HullRecord {
+    nova_sim_frame::catalog::HullRecord {
         id: ShipId(id),
         flags: 0,
         flags2: 0,
@@ -1594,7 +1618,7 @@ pub fn hull_of(id: i16, weapons: &[WeaponId]) -> nova_sim::HullRecord {
         mass: 0,
         weapons: weapons
             .iter()
-            .map(|&weapon| nova_sim::StockWeapon {
+            .map(|&weapon| nova_sim_frame::catalog::StockWeapon {
                 weapon,
                 count: 1,
                 ammo: 0,
@@ -1610,12 +1634,12 @@ pub fn hull_of(id: i16, weapons: &[WeaponId]) -> nova_sim::HullRecord {
         speed: 0,
         exits: None,
         // Steady lights, drawn where its sheet has a lights layer.
-        display: Some(nova_sim::catalog::ShipDisplay {
+        display: Some(nova_sim_frame::catalog::ShipDisplay {
             base_sets: 1,
             lights_image: true,
-            ..nova_sim::catalog::ShipDisplay::default()
+            ..nova_sim_frame::catalog::ShipDisplay::default()
         }),
-        escort_class: nova_sim::EscortClass::Freighter,
+        escort_class: nova_sim_frame::EscortClass::Freighter,
         sprite_base: ShipId(id),
     }
 }
@@ -1644,13 +1668,13 @@ pub fn holding(id: i16, weapon: WeaponId) -> OutfitRecord {
         require: 0,
         require_govt: -1,
         buy_random: 100,
-        availability: nova_sim::Test::default(),
+        availability: nova_sim_catalog::control::Test::default(),
         item_class: 0,
         lc_name: format!("gun {id}"),
         lc_plural: format!("guns {id}"),
         scan_mask: 0,
-        on_purchase: nova_sim::Script::default(),
-        on_sell: nova_sim::Script::default(),
+        on_purchase: nova_sim_catalog::control::Script::default(),
+        on_sell: nova_sim_catalog::control::Script::default(),
     }
 }
 
@@ -1706,7 +1730,7 @@ pub fn armed(avg: i16, weapons: &[WeaponId]) -> FakeCatalog {
             Ok(BoomLook {
                 sheet: Ok(effect_sheet(400, 3)),
                 advance: 1.0,
-                sound: Some(nova_sim::SoundId(302)),
+                sound: Some(nova_sim_frame::SoundId(302)),
             }),
         )],
         cards: vec![(
@@ -1747,12 +1771,12 @@ pub fn defending() -> FakeCatalog {
         StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
     )];
     let sprite = |side| {
-        Some(nova_sim::FrameSize {
+        Some(nova_sim_frame::catalog::FrameSize {
             width: side,
             height: side,
         })
     };
-    catalog.weapons.push(nova_sim::WeaponRecord {
+    catalog.weapons.push(nova_sim_frame::catalog::WeaponRecord {
         reload: 5,
         count: 12,
         mass_dmg: 1,
@@ -1760,7 +1784,7 @@ pub fn defending() -> FakeCatalog {
         frame: sprite(35),
         ..gun(QUAD, 0, 9, -1)
     });
-    catalog.weapons.push(nova_sim::WeaponRecord {
+    catalog.weapons.push(nova_sim_frame::catalog::WeaponRecord {
         reload: 1000,
         count: 200,
         speed: 500,
@@ -1791,7 +1815,7 @@ pub fn boardable() -> FakeCatalog {
     catalog.ships.push(player);
     catalog.hulls = vec![
         hull_of(128, &[]),
-        nova_sim::HullRecord {
+        nova_sim_frame::catalog::HullRecord {
             strength: 5,
             ..hull_of(129, &[])
         },
@@ -1865,7 +1889,7 @@ pub fn errand(id: i16) -> MissionRecord {
         comp_reward: 0,
         date_post_inc: 0,
         ships: MissionShip::NONE,
-        aux: nova_sim::catalog::AuxShip::NONE,
+        aux: nova_sim_frame::catalog::AuxShip::NONE,
     }
 }
 
@@ -1877,7 +1901,7 @@ pub fn damaging() -> FakeCatalog {
     let catalog = armed(1, &[BLASTER]);
     FakeCatalog {
         weapons: vec![
-            nova_sim::WeaponRecord {
+            nova_sim_frame::catalog::WeaponRecord {
                 reload: 5,
                 mass_dmg: 10,
                 energy_dmg: 10,
@@ -1886,16 +1910,16 @@ pub fn damaging() -> FakeCatalog {
             gun(UNSEEN, 0, -1, -1),
         ],
         hulls: vec![hull_of(128, &[BLASTER]), hull_of(129, &[UNSEEN])],
-        govts: vec![nova_sim::GovtRecord {
+        govts: vec![nova_sim_frame::catalog::GovtRecord {
             id: GovtId(140),
             name: String::new(),
             flags: 0,
             flags2: 0,
             crime_tol: 0,
             initial_rec: 0,
-            penalties: nova_sim::Penalties {
+            penalties: nova_sim_frame::catalog::Penalties {
                 disable: 3,
-                ..nova_sim::Penalties::default()
+                ..nova_sim_frame::catalog::Penalties::default()
             },
             max_odds: 100,
             classes: [-1; 4],
@@ -1947,7 +1971,7 @@ pub fn look(name: &str, sound: i16, image: Option<i16>) -> WeaponLook {
     WeaponLook {
         name: name.to_owned(),
         sheet: image.map(|image| Ok(effect_sheet(image, 36))),
-        sound: Some(nova_sim::SoundId(sound)),
+        sound: Some(nova_sim_frame::SoundId(sound)),
         ..WeaponLook::default()
     }
 }

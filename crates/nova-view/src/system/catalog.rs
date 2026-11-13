@@ -5,7 +5,7 @@ use std::num::NonZeroU16;
 use std::rc::Rc;
 
 pub use nova_data::{StellarId, SystemId};
-pub use nova_sim::stellar_frames::StellarAnimation;
+pub use nova_sim_frame::stellar_frames::StellarAnimation;
 
 use crate::outline::StellarStandIn;
 use crate::sheet_image::SheetImage;
@@ -81,7 +81,7 @@ pub struct SystemContents {
     /// Graphic type 0's sheet (`spïn` 1000), or why it cannot be shown: a
     /// destroyed stellar whose `DeadType` has no sheet draws it from the
     /// next rebuild point, by
-    /// [`RuleKey::DeadTypeFallback`](nova_sim::RuleKey::DeadTypeFallback)'s
+    /// [`RuleKey::DeadTypeFallback`](nova_sim_frame::RuleKey::DeadTypeFallback)'s
     /// engine reading (story-runtime phase 9).
     pub type_zero_sprite: Result<StellarSheet, String>,
     /// What could not be read, each a message ready to display.

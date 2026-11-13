@@ -60,7 +60,7 @@ fn the_picks_roll_their_ranges_and_decide_only_their_words() {
                 welcome,
             },
             None,
-            nova_sim::RuleSource::Engine,
+            nova_sim_frame::RuleSource::Engine,
         )
     };
     assert!(greeting(0).ends_with(COMMENCE_FINAL_APPROACH));

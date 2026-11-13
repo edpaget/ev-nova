@@ -3,7 +3,7 @@
 //! glow and lights layers on top, and its name (in Charcoal), stats and
 //! description in a column beside it. The lights blink by the ship's
 //! [`Blink`](super::catalog::Blink) from the selection on, as
-//! [`nova_sim::lights_level`] says, rolling on [`HashedRolls`] from seed 0
+//! [`nova_sim_frame::lights_level`] says, rolling on [`HashedRolls`] from seed 0
 //! for random blinking. The glow (at full level) and the lights (at
 //! [`lights_tint`] of their level) are combined by OR with what is beneath
 //! ([`Blend::Or`](crate::Blend::Or)), scaled by level/32, like the
@@ -16,7 +16,7 @@
 
 use std::time::Duration;
 
-use nova_sim::{HashedRolls, lights_level};
+use nova_sim_frame::{HashedRolls, lights_level};
 
 use super::catalog::{SheetInfo, ShipCatalog, ShipEntry, ShipId};
 use crate::bound_names::{Spelling, group, name_read};

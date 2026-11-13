@@ -4,8 +4,8 @@
 use std::cell::Cell;
 use std::collections::BTreeMap;
 
-use nova_sim::Governments;
-use nova_sim::galaxy_map::GalaxyShown;
+use nova_sim_frame::Governments;
+use nova_sim_frame::galaxy_map::GalaxyShown;
 
 use super::catalog::{
     Galaxy, GalaxyCatalog, GovtId, NebulaEntry, NebulaId, NebulaPicture, StellarEntry, StellarId,

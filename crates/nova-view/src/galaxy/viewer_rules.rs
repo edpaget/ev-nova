@@ -13,8 +13,8 @@
 //! take their links from the session's drawing, so neither the gate lanes
 //! nor the rules change anything there.
 
-use nova_sim::Rulebook;
-use nova_sim::galaxy_map::MapLink;
+use nova_sim_frame::Rulebook;
+use nova_sim_frame::galaxy_map::MapLink;
 
 use super::catalog::GateLinks;
 use super::map::{GalaxyMap, MapMode};
@@ -57,9 +57,9 @@ impl GalaxyMap {
 
 #[cfg(test)]
 mod tests {
-    use nova_sim::catalog::GateStability;
-    use nova_sim::map_lanes::{Back, LaneLook};
-    use nova_sim::{RuleKey, RuleSource};
+    use nova_sim_frame::catalog::GateStability;
+    use nova_sim_frame::map_lanes::{Back, LaneLook};
+    use nova_sim_frame::{RuleKey, RuleSource};
 
     use super::*;
     use crate::draw::{DrawCommand, DrawList};

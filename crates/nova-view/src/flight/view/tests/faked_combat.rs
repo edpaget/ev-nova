@@ -7,9 +7,9 @@
 use super::faked_screen::{in_flight, sent_count, sent_since};
 use super::faked_world::raise;
 use super::*;
-use nova_sim::FireSound;
-use nova_sim::TargetPick;
-use nova_sim::flight_frame::FlightEvent;
+use nova_sim_frame::TargetPick;
+use nova_sim_frame::flight_frame::FlightEvent;
+use nova_sim_state::shown::combat::FireSound;
 
 /// The player's blaster fired at the centre, heard at the player's
 /// priority.
@@ -23,7 +23,7 @@ fn blaster_fired() -> CombatEvent {
 }
 
 /// The combat sounds `view` gives.
-fn combat_heard(view: &mut Faked) -> Vec<nova_sim::SoundId> {
+fn combat_heard(view: &mut Faked) -> Vec<nova_sim_frame::SoundId> {
     view.drained_sounds()
         .into_iter()
         .filter_map(|sound| match sound {
@@ -81,7 +81,7 @@ fn a_look_whose_sheet_cannot_be_read_still_sounds_and_is_reported_once() {
     raise(&mut view, &[blaster_fired()]);
     assert_eq!(
         combat_heard(&mut view),
-        [nova_sim::SoundId(208)],
+        [nova_sim_frame::SoundId(208)],
         "the blaster is heard"
     );
     for _ in 0..3 {
@@ -247,7 +247,7 @@ fn the_sounds_are_the_sessions_then_the_fights() {
         [
             Sound::Sim(SimSound::ThrustStarted),
             Sound::Combat(CombatSound {
-                sound: nova_sim::SoundId(208),
+                sound: nova_sim_frame::SoundId(208),
                 offset: (0, 0),
                 priority: u16::from(PLAYER_FIRE_PRIORITY),
                 until_stopped: false,

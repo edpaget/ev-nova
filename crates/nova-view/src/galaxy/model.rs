@@ -32,11 +32,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use nova_sim::Rulebook;
-use nova_sim::galaxy_map::GalaxyShown;
-use nova_sim::hyperspace::system_links;
-use nova_sim::viewer_lanes::{ViewerLinks, viewer_links};
-use nova_sim::{Governments, StarSystem, Vec2};
+use nova_sim_frame::Rulebook;
+use nova_sim_frame::galaxy_map::GalaxyShown;
+use nova_sim_frame::hyperspace::system_links;
+use nova_sim_frame::viewer_lanes::{ViewerLinks, viewer_links};
+use nova_sim_frame::{Governments, StarSystem, Vec2};
 
 use super::catalog::{Galaxy, GateLinks, GovtId, NebulaEntry, SystemEntry, SystemId};
 use super::view::{Bounds, Transform};

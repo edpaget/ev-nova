@@ -2,9 +2,9 @@ use super::*;
 
 use crate::galaxy::GalaxyMap;
 use crate::text::fixture::MonoMetrics;
-use nova_sim::GovtId;
-use nova_sim::map_borders::{BorderSources, Next};
-use nova_sim::{RuleKey, RuleSource, Rulebook};
+use nova_sim_frame::GovtId;
+use nova_sim_frame::map_borders::{BorderSources, Next};
+use nova_sim_frame::{RuleKey, RuleSource, Rulebook};
 
 // The course map's borders in flight: the session's sources, the map's
 // ticks, the rules, and the setting saved on an undocked close.
@@ -17,7 +17,7 @@ pub(super) fn sources(near: bool) -> BorderSources {
     if near {
         systems.push((SystemId(134), (40, 30), Some(GovtId(129))));
     }
-    BorderSources::unfiltered(systems, nova_sim::govt::Governments::empty())
+    BorderSources::unfiltered(systems, nova_sim_state::govt::Governments::empty())
 }
 
 /// Queues on `fake` the answers to the course map's opening and its
@@ -26,8 +26,8 @@ pub(super) fn sources(near: bool) -> BorderSources {
 fn queue_bordered(fake: &mut FakeFlight, sources: BorderSources) {
     let redraw = bordered_redraw(&sources);
     fake.queue_screen(ScreenAnswer::MapOpening(MapOpen {
-        nav: nova_sim::SavedNav::of(NavMode::Off),
-        marks: nova_sim::MapMarks::NONE,
+        nav: nova_sim_frame::SavedNav::of(NavMode::Off),
+        marks: nova_sim_frame::MapMarks::NONE,
         borders: sources,
         preselection: None,
         missions: Vec::new(),
@@ -109,7 +109,7 @@ fn faked_bordered_by(rules: &Rulebook) -> Faked {
     let mut view = scripted_over(catalog, fake, rules);
     queue_bordered(&mut view.sim, sources(true));
     view.sim.queue_screen(ScreenAnswer::Found(
-        nova_sim::map_search::SearchOutcome::Found(SystemId(130)),
+        nova_sim_frame::map_search::SearchOutcome::Found(SystemId(130)),
     ));
     view.map = view.map.clone().with_metrics(Rc::new(MonoMetrics));
     view.open_map();

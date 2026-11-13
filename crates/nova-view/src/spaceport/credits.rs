@@ -2,7 +2,7 @@
 //! `_DrawCommaNumber` (@0x4895), a space (0xd97a0) and "cr", and the
 //! column the amounts start in; and numbers of tons with their unit.
 
-use nova_sim::{ShownTons, TonUnit};
+use nova_sim_frame::{ShownTons, TonUnit};
 
 use super::grid::{self, TEXT_COLOR, text};
 use crate::draw::DrawList;

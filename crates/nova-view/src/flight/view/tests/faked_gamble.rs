@@ -4,8 +4,8 @@
 //! and pays is nova-sim's (`session/gamble.rs`).
 
 use super::*;
-use nova_sim::DescMovie;
-use nova_sim::gamble::{Bet, GambleOpening, RaceRun, winnings_line};
+use nova_sim_frame::DescMovie;
+use nova_sim_frame::gamble::{Bet, GambleOpening, RaceRun};
 
 use crate::flight::RaceShown;
 use crate::ui::mission_dialogs::DescShown;
@@ -44,7 +44,9 @@ fn gamble_opens_what_the_flight_answers_and_nothing_unanswered() {
 #[test]
 fn a_race_sends_its_bet_then_loads_the_winners_desc_with_the_winnings_line() {
     let mut view = racing();
-    let line = winnings_line(400, nova_sim::RuleSource::Engine);
+    // The line a win of 400 appends, as nova-sim words it
+    // (`nova_sim::gamble::winnings_line`); the view hands it through.
+    let line = "\r\rYour winnings:  400 credits.".to_owned();
     view.sim.queue_answer(Answer::Raced(RaceRun {
         chosen: 2,
         winner: 2,

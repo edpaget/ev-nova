@@ -39,12 +39,12 @@
 //! The block plays no sound. The 8-bit paths (no colorize, an emerging
 //! ship hidden through its fade) aren't modelled.
 //!
-//! [`enter_level`]: nova_sim::traffic::gate_entry::enter_level
-//! [`emerge_level`]: nova_sim::traffic::emerge::emerge_level
+//! [`enter_level`]: nova_sim_frame::traffic::gate_entry::enter_level
+//! [`emerge_level`]: nova_sim_frame::traffic::emerge::emerge_level
 
-use nova_sim::flight_frame::GateFade;
-use nova_sim::traffic::emerge::{FULL_LEVEL, emerge_level};
-use nova_sim::traffic::gate_entry::enter_level;
+use nova_sim_frame::flight_frame::GateFade;
+use nova_sim_frame::traffic::emerge::{FULL_LEVEL, emerge_level};
+use nova_sim_frame::traffic::gate_entry::enter_level;
 
 use crate::Colorize;
 
@@ -57,8 +57,8 @@ pub const GATE_WHITE: u16 = 0xffff;
 /// [`emerge_level`] gives; none while it waits hidden, or when it isn't
 /// at a gate (see the module docs).
 ///
-/// [`enter_level`]: nova_sim::traffic::gate_entry::enter_level
-/// [`emerge_level`]: nova_sim::traffic::emerge::emerge_level
+/// [`enter_level`]: nova_sim_frame::traffic::gate_entry::enter_level
+/// [`emerge_level`]: nova_sim_frame::traffic::emerge::emerge_level
 #[must_use]
 pub fn gate_colorize(gate: GateFade) -> Option<Colorize> {
     let fade = match gate {

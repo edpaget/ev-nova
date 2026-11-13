@@ -9,7 +9,7 @@
 //! under it, and a column of four buttons down each side (items 11, 10, 7
 //! and 13 on the left, 9, 8, 4 and 12 on the right, top to bottom).
 
-use nova_sim::Service;
+use nova_sim_frame::Service;
 
 use crate::font::Font;
 use crate::image::ImageKey;

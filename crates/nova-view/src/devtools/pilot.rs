@@ -9,8 +9,8 @@
 
 use std::fmt;
 
-use nova_sim::catalog::{StellarId, SystemId};
-use nova_sim::{Bit, DeskReading, GameDate, Gauge, Reserve};
+use nova_sim_frame::catalog::{StellarId, SystemId};
+use nova_sim_frame::{Bit, DeskReading, GameDate, Gauge, Reserve};
 
 /// The pilot flying, as the editor shows it.
 #[derive(Clone, Debug, PartialEq)]

@@ -10,11 +10,10 @@
 use super::faked_travel::{faked_lasts, sent_but_lines};
 use super::live_keys::{back, latches_its_close};
 use super::*;
-use nova_sim::escort_dialog::{EscortButton, EscortDialogView, UpgradeLine};
-use nova_sim::flight_frame::FlightEvent;
-use nova_sim::mission::screens::offer_labels;
-use nova_sim::planet_comm::PlanetCommView;
-use nova_sim::{Haggle, HailView, Hailed, OfferPrompt, SimSound, VenueOffer};
+use nova_sim_frame::escort_dialog::{EscortButton, EscortDialogView, UpgradeLine};
+use nova_sim_frame::flight_frame::FlightEvent;
+use nova_sim_frame::planet_comm::PlanetCommView;
+use nova_sim_frame::{Haggle, HailView, Hailed, OfferPrompt, SimSound, VenueOffer};
 
 /// A view over a flight in Sol, the player alone.
 fn sol() -> Faked {
@@ -40,7 +39,7 @@ pub(super) fn hail_view(reply: &str) -> HailView {
 }
 
 /// The escort dialog of a captured ship 130, marked as `mark` says.
-fn escort_view(mark: Option<nova_sim::fleet::EscortMark>) -> EscortDialogView {
+fn escort_view(mark: Option<nova_sim_frame::fleet::EscortMark>) -> EscortDialogView {
     EscortDialogView {
         ship: ShipId(130),
         hired: false,
@@ -60,7 +59,7 @@ pub(super) fn prompt(text: &str) -> OfferPrompt {
     OfferPrompt {
         mission: MissionId(130),
         text: text.to_owned(),
-        labels: offer_labels("", "", true),
+        labels: yes_no(),
         graphic: None,
         movie: None,
     }
@@ -236,7 +235,7 @@ fn the_planet_comm_dialog_draws_the_frame_the_flight_shows_of_its_stellar() {
 
 #[test]
 fn the_planet_comm_dialogs_presses_and_haggle_send_their_commands() {
-    use nova_sim::planet_comm::PlanetCommItem;
+    use nova_sim_frame::planet_comm::PlanetCommItem;
     let mut view = sol();
     let asked = PlanetCommView {
         asking: Some(3000),
@@ -271,7 +270,7 @@ fn the_planet_comm_dialogs_presses_and_haggle_send_their_commands() {
 
 #[test]
 fn the_planet_comm_dialogs_close_redraws_the_radar_and_a_press_that_keeps_it_does_not() {
-    use nova_sim::planet_comm::PlanetCommItem;
+    use nova_sim_frame::planet_comm::PlanetCommItem;
     let mut view = super::faked_hud::barred(catalog(), among(Vec::new()));
     super::faked_hud::hud_tick(&mut view);
     let stale = RadarScene::default();
@@ -472,7 +471,7 @@ fn y_on_a_fleet_escort_holds_its_dialog_once_and_its_presses_send_their_buttons(
     assert_eq!(view.take_escort_dialog(), None, "once");
     assert_eq!(view.take_hail(), None, "no comm dialog");
     assert!(view.holds_no_key(), "the flight keys let go");
-    let sold = escort_view(Some(nova_sim::fleet::EscortMark::Sell));
+    let sold = escort_view(Some(nova_sim_frame::fleet::EscortMark::Sell));
     view.sim
         .queue_answer(Answer::EscortDialog(Some(sold.clone())));
     assert_eq!(view.press_escort(EscortButton::Sell), Some(sold));

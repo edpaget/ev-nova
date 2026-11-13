@@ -1,6 +1,6 @@
 //! The mouse cursor sprite in flight: `spïn` 650, drawn on the pointer,
 //! animating while the pointer is over something the player can target
-//! ([`Session::hover`](nova_sim::Session::hover)) and fading out while the
+//! (`nova_sim::Session::hover`) and fading out while the
 //! mouse rests.
 //!
 //! The original (`_HandleMouse` @0x37fba-0x38466, run once a game frame)
@@ -27,7 +27,7 @@
 //!   the byte at `0x3b5550` is set, `_keyPressedThisFrame`, which
 //!   `_PlayGame` clears each frame @0x45b3b and `_HandlePlayer` sets past
 //!   each key block's gates, and on its own through a jump. Those gates are
-//!   [`nova_sim::key_fade`]'s, which the view reads before a frame's steps
+//!   [`nova_sim_frame::key_fade`]'s, which the view reads before a frame's steps
 //!   (`FlightView::cursor_keyed`, `FlightView::step_cursor`) and at a key's
 //!   press (`FlightView::key_fades_cursor`, [`HoverCursor::key`]).
 //!

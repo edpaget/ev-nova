@@ -9,9 +9,9 @@
 //! 0 at its spawn (@0x3e81c), which the simulation steps at the frame's
 //! gain (`nova_sim::combat::shot_fade`). The view shades a shot by the f
 //! its last visit read, before that visit's step
-//! ([`FrameShot::fade`](nova_sim::flight_frame::FrameShot::fade)), and
+//! ([`FrameShot::fade`](nova_sim_frame::flight_frame::FrameShot::fade)), and
 //! its life after that visit's count-down
-//! ([`FrameShot::life`](nova_sim::flight_frame::FrameShot::life)): a
+//! ([`FrameShot::life`](nova_sim_frame::flight_frame::FrameShot::life)): a
 //! shot not yet visited by its full life and a fade of 0.
 //!
 //! - **Fade-in, F < 0** (@0x359f0-0x35aa4), while f < 32: a plain shot is
@@ -27,7 +27,7 @@
 //!
 //! So a translucent shot with a `Falloff` is drawn opaque outside its
 //! fade, as nothing sets +0xa8 there: the engine's reading of the
-//! rulebook's [`RuleKey::TranslucentShotFade`](nova_sim::RuleKey::TranslucentShotFade).
+//! rulebook's [`RuleKey::TranslucentShotFade`](nova_sim_frame::RuleKey::TranslucentShotFade).
 //! By the other reading it is additive at 32 there, and its fade-in steps
 //! as a plain shot's does.
 //!
@@ -42,8 +42,8 @@
 //! Left out: the 8-bit depth, where a translucent shot takes the plain
 //! path (@0x35a21, @0x35ae5, @0x35bd3): the engine draws at 16-bit only.
 
-use nova_sim::RuleSource;
-use nova_sim::combat::shot_fade::FADE_FULL;
+use nova_sim_frame::RuleSource;
+use nova_sim_frame::combat::shot_fade::FADE_FULL;
 
 use super::catalog::WeaponLook;
 use super::weapons::TRANSLUCENT;
@@ -73,7 +73,7 @@ pub enum ShotShade {
 /// How a shot of a weapon that looks as `look` says is drawn, its last
 /// visit having read the fade `fade` and left it the life `life` (see the
 /// module docs), by `rule`'s reading of
-/// [`RuleKey::TranslucentShotFade`](nova_sim::RuleKey::TranslucentShotFade).
+/// [`RuleKey::TranslucentShotFade`](nova_sim_frame::RuleKey::TranslucentShotFade).
 #[must_use]
 pub fn shot_shade(look: &WeaponLook, fade: f32, life: f32, rule: RuleSource) -> ShotShade {
     let additive = look.flags3 & TRANSLUCENT != 0;
@@ -126,7 +126,7 @@ fn level(steps: i32) -> u8 {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use nova_sim::combat::shot_fade::at_full_gain;
+    use nova_sim_frame::combat::shot_fade::at_full_gain;
 
     const ENGINE: RuleSource = RuleSource::Engine;
     const MENDED: RuleSource = RuleSource::Bible;

@@ -1,7 +1,7 @@
 //! [`FlightView`]'s status bar and description reads.
 
-use nova_sim::flight_frame::{Answer, FlightCommand};
-use nova_sim::{GovtId, InterfaceLoad, StellarId};
+use nova_sim_frame::flight_frame::{Answer, FlightCommand};
+use nova_sim_frame::{GovtId, InterfaceLoad, StellarId};
 
 use crate::flight::catalog::StatusBars;
 use crate::flight::hud::{self};
@@ -22,7 +22,7 @@ impl<C: DescriptionSource + DescriptionGraphics, S: FlightSim> FlightView<C, S> 
     /// parsed, its movie the last loaded (`nova_flight::SessionFlight::loaded_after_movie`),
     /// and in the `l33t` mode its letters drawn on the flight's chance.
     /// With a session that failed, only its conditional text is resolved,
-    /// for a new pilot ([`Gate::FRESH`](nova_sim::control::Gate::FRESH)).
+    /// for a new pilot (`nova_sim::control::Gate::FRESH`).
     /// Any answer but [`Answer::Description`] is the raw text unchanged,
     /// and a missing one empty.
     ///
@@ -92,7 +92,7 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
     /// Whether a docked mission text still shown holds the status bar's
     /// graphic: a `C`, `E` or `H` staged after it loads another `ïntf` only
     /// as it closes ([`FlightView::close_mission_text`]), under
-    /// [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s engine reading, as the held scenes are.
+    /// [`RuleKey::HudCadence`](nova_sim_frame::RuleKey::HudCadence)'s engine reading, as the held scenes are.
     pub(super) fn bar_held(&self) -> bool {
         self.hud_waits() && self.bar_steps.iter().any(super::BarStep::holds_bar)
     }
@@ -116,7 +116,7 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
     /// at the next `catch_up`, a tick at most, before the next frame.
     ///
     /// The government is the flight's frame's, filled afresh
-    /// ([`FrameHud::interface_government`](nova_sim::flight_frame::FrameHud::interface_government)).
+    /// ([`FrameHud::interface_government`](nova_sim_frame::flight_frame::FrameHud::interface_government)).
     /// A flight with no bar chosen, one whose session failed, follows none.
     pub(super) fn follow_bar(&mut self) {
         if self.bar_held() || self.bar_government.is_none() {
@@ -130,7 +130,7 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
     /// when the bar shown was chosen for another: the original returns at
     /// once for the `ïntf` already loaded (@0x73663-0x73672), and asking
     /// only for another government does the same, as a ship type's
-    /// government picks its `ïntf` ([`Session::interface_government`](nova_sim::Session::interface_government)).
+    /// government picks its `ïntf` (`nova_sim::Session::interface_government`).
     pub(super) fn choose_bar(&mut self, government: Option<GovtId>) {
         if self.bar_government == Some(BarFor(government)) {
             return;
@@ -154,7 +154,7 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
 
     /// The `C`, `E` and `H` the session ran while docked since its last
     /// run of docked scripts began
-    /// ([`FlightEvent::InterfaceLoad`](nova_sim::flight_frame::FlightEvent::InterfaceLoad))
+    /// ([`FlightEvent::InterfaceLoad`](nova_sim_frame::flight_frame::FlightEvent::InterfaceLoad))
     /// that each loaded another `ïntf`, in order, from the `ïntf` loaded
     /// before them (`before`, [`FlightView::interface_now`]), as
     /// `_LoadIntfResource` compares each with the one loaded at that

@@ -601,7 +601,7 @@ mod tests {
         let mut scene = crate::system::SystemScene::load(&data, SystemId(130));
         let mut shown = std::collections::BTreeSet::new();
         for _ in 0..40 {
-            scene.step(1, &mut nova_sim::NeverFires);
+            scene.step(1, &mut nova_sim_frame::NeverFires);
             let stellar = scene
                 .stellars()
                 .iter()

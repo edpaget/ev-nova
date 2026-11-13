@@ -1,5 +1,5 @@
 //! The story the bar hosts under
-//! [`RuleKey::BarStory`](nova_sim::RuleKey::BarStory)'s other reading,
+//! [`RuleKey::BarStory`](nova_sim_frame::RuleKey::BarStory)'s other reading,
 //! the new game's: the scenes it lists, each opened from a button, and the
 //! news heard in the system, which its Holovid lists in place of the drawn
 //! news. The listing is data the bar is given
@@ -28,7 +28,7 @@
 //! item changes nothing and never panics.
 
 use nova_data::MissionGiver;
-use nova_sim::flight_frame::{BarScene, BarStory};
+use nova_sim_frame::flight_frame::{BarScene, BarStory};
 
 use super::BarScreen;
 use crate::ui::dialog::{Dialog, DialogTemplate, ItemSpec, Role};

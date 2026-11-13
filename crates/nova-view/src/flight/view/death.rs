@@ -5,13 +5,13 @@
 //! ([`FlightCommand::BeginFade`], [`FlightCommand::EndPlay`]), and the
 //! fades drawn over the view.
 //!
-//! [`FlightFrame::hold_expired`]: nova_sim::flight_frame::FlightFrame::hold_expired
-//! [`FlightFrame::fate`]: nova_sim::flight_frame::FlightFrame::fate
+//! [`FlightFrame::hold_expired`]: nova_sim_frame::flight_frame::FlightFrame::hold_expired
+//! [`FlightFrame::fate`]: nova_sim_frame::flight_frame::FlightFrame::fate
 
 use std::time::Duration;
 
-use nova_sim::PlayerFate;
-use nova_sim::flight_frame::FlightCommand;
+use nova_sim_frame::PlayerFate;
+use nova_sim_frame::flight_frame::FlightCommand;
 
 use crate::DrawList;
 use crate::fade::{DEATH_FADE_FOR, ScreenFade};
@@ -34,7 +34,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// A tick's death, as `Screen::tick` runs it after the frame's
     /// catch-up: once the hold after the player's explosion has run out
-    /// ([`FlightFrame::hold_expired`](nova_sim::flight_frame::FlightFrame::hold_expired),
+    /// ([`FlightFrame::hold_expired`](nova_sim_frame::flight_frame::FlightFrame::hold_expired),
     /// read from the kept frame, which the catch-up has just filled),
     /// flight steps no more and only the death's fade moves on, by `dt`
     /// ([`FlightView::advance_death_fade`]). Gives whether the hold had
@@ -61,7 +61,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// The `dësc` IDs a sabotaged player sees as it dies, as the kept
     /// frame holds them
-    /// ([`FlightFrame::death_descs`](nova_sim::flight_frame::FlightFrame::death_descs)):
+    /// ([`FlightFrame::death_descs`](nova_sim_frame::flight_frame::FlightFrame::death_descs)):
     /// the router asks once the hold has expired, after the step that
     /// expired it filled the frame. None for a flight that failed, whose
     /// frame is the default.

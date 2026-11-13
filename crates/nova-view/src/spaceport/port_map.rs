@@ -31,7 +31,9 @@ pub enum PortMap {
 
 #[cfg(test)]
 mod tests {
-    use nova_sim::{MissionId, MissionText, MissionTextKind};
+    use nova_sim_frame::MissionId;
+    use nova_sim_frame::mission_screens::MissionText;
+    use nova_sim_frame::mission_screens::MissionTextKind;
 
     use super::*;
     const MAP_KEY: crate::Key = crate::Key::KeyM;

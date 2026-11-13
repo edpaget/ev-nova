@@ -4,8 +4,8 @@
 //! gain that is the whole velocity, as before the gain; at zero they are
 //! drawn where they are.
 
-use nova_sim::SpeedMult;
-use nova_sim::flight_frame::{FrameAsteroid, FrameBox, FrameShot, PassReport, StepReport};
+use nova_sim_frame::SpeedMult;
+use nova_sim_frame::flight_frame::{FrameAsteroid, FrameBox, FrameShot, PassReport, StepReport};
 
 use super::stepping::{fight, frame, one_step, stepping};
 use super::*;

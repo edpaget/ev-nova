@@ -13,9 +13,9 @@
 use super::faked_travel::{faked_lasts, sent_but_lines};
 use super::live_keys::{back, latches_its_close};
 use super::*;
-use nova_sim::board_repair::Recovery;
-use nova_sim::flight_frame::FlightEvent;
-use nova_sim::{Boarding, MissionBoardLine, PlunderView, VenueOffer};
+use nova_sim_frame::flight_frame::FlightEvent;
+use nova_sim_frame::{Boarding, MissionBoardLine, PlunderView, VenueOffer};
+use nova_sim_state::shown::board_repair::Recovery;
 
 /// A view over a flight in Sol, the player alone, the flight naming
 /// commodity 0 Food ("food"), outfit 310 Rockets ("rocket pack", "rocket
@@ -26,7 +26,7 @@ fn sol() -> Faked {
     names.lc_goods.insert(Good::Commodity(0), "food".to_owned());
     names.outfits.insert(
         OutfitId(310),
-        nova_sim::flight_frame::OutfitNames {
+        nova_sim_frame::flight_frame::OutfitNames {
             name: "Rockets".to_owned(),
             lc_name: "rocket pack".to_owned(),
             lc_plural: "rocket packs".to_owned(),
@@ -34,7 +34,7 @@ fn sol() -> Faked {
     );
     names.outfits.insert(
         OutfitId(200),
-        nova_sim::flight_frame::OutfitNames {
+        nova_sim_frame::flight_frame::OutfitNames {
             name: "Rocket".to_owned(),
             lc_name: "rocket".to_owned(),
             lc_plural: "rockets".to_owned(),
@@ -53,8 +53,8 @@ const ON_BOARD: PlunderView = PlunderView {
     ship: ShipId(129),
     credits: 5750,
     cargo: Some((Good::Commodity(0), 13)),
-    ammo: Some(nova_sim::AmmoOffer {
-        slot: nova_sim::WeaponId(140),
+    ammo: Some(nova_sim_state::shown::board::AmmoOffer {
+        slot: nova_sim_frame::WeaponId(140),
         rounds: 2,
         named: Some(OutfitId(310)),
     }),
@@ -144,8 +144,8 @@ fn the_plunder_dialog_names_its_good_and_outfit_as_the_flight_names_them() {
     assert_eq!((shown.good, shown.outfit), (None, None), "nothing to name");
     view.sim.queue_screen(ScreenAnswer::Boarding(PlunderView {
         cargo: Some((Good::Commodity(3), 1)),
-        ammo: Some(nova_sim::AmmoOffer {
-            slot: nova_sim::WeaponId(140),
+        ammo: Some(nova_sim_state::shown::board::AmmoOffer {
+            slot: nova_sim_frame::WeaponId(140),
             rounds: 2,
             named: None,
         }),
@@ -158,8 +158,8 @@ fn the_plunder_dialog_names_its_good_and_outfit_as_the_flight_names_them() {
         "a good unnamed, and rounds no outfit names"
     );
     view.sim.queue_screen(ScreenAnswer::Boarding(PlunderView {
-        ammo: Some(nova_sim::AmmoOffer {
-            slot: nova_sim::WeaponId(140),
+        ammo: Some(nova_sim_state::shown::board::AmmoOffer {
+            slot: nova_sim_frame::WeaponId(140),
             rounds: 2,
             named: Some(OutfitId(999)),
         }),
@@ -362,20 +362,22 @@ fn boarding_keeps_the_message() {
 fn boarding_a_granting_person_says_what_it_retrieved_for_240_ticks() {
     let mut view = sol();
     opened(&mut view);
-    view.sim.queue_event(FlightEvent::Grant(nova_sim::Granted {
-        outfit: OutfitId(200),
-        count: 2,
-    }));
+    view.sim
+        .queue_event(FlightEvent::Grant(nova_sim_frame::Granted {
+            outfit: OutfitId(200),
+            count: 2,
+        }));
     view.board();
     let said = "You retrieved two rockets from this ship.";
     assert_eq!(view.message(), Some(said));
     faked_lasts(&mut view, said, GRANT_TICKS);
     let mut one = sol();
     opened(&mut one);
-    one.sim.queue_event(FlightEvent::Grant(nova_sim::Granted {
-        outfit: OutfitId(200),
-        count: 1,
-    }));
+    one.sim
+        .queue_event(FlightEvent::Grant(nova_sim_frame::Granted {
+            outfit: OutfitId(200),
+            count: 1,
+        }));
     one.board();
     assert_eq!(
         one.message(),
@@ -432,7 +434,7 @@ fn b_on_a_pickup_ship_without_room_says_cant_board_and_its_dialog_is_taken_at_on
     let mut view = sol();
     view.sim
         .queue_answer(Answer::BoardRefused(BoardRefusal::CantBoard));
-    let no_room = nova_sim::MissionText {
+    let no_room = nova_sim_frame::mission_screens::MissionText {
         kind: MissionTextKind::NoRoom,
         mission: MissionId(140),
         // The fake hands through whatever text it is given.
@@ -453,10 +455,10 @@ fn b_on_a_pickup_ship_without_room_says_cant_board_and_its_dialog_is_taken_at_on
 #[test]
 fn b_on_a_person_offering_on_boarding_holds_the_offer_and_no_plunder() {
     let mut view = sol();
-    let prompt = nova_sim::OfferPrompt {
+    let prompt = nova_sim_frame::OfferPrompt {
         mission: MissionId(130),
         text: "Aboard.".to_owned(),
-        labels: nova_sim::mission::screens::offer_labels("", "", true),
+        labels: yes_no(),
         graphic: None,
         movie: None,
     };
@@ -475,10 +477,10 @@ fn b_on_a_person_offering_on_boarding_holds_the_offer_and_no_plunder() {
 #[test]
 fn b_answered_with_an_offer_leaves_no_key_held_as_the_offer_takes_its_release() {
     let mut view = sol();
-    let prompt = nova_sim::OfferPrompt {
+    let prompt = nova_sim_frame::OfferPrompt {
         mission: MissionId(130),
         text: "Aboard.".to_owned(),
-        labels: nova_sim::mission::screens::offer_labels("", "", true),
+        labels: yes_no(),
         graphic: None,
         movie: None,
     };
@@ -760,8 +762,8 @@ fn a_take_the_flight_refused_takes_nothing_and_says_nothing() {
 
 #[test]
 fn the_target_panel_is_taken_afresh_once_a_press_is_made() {
-    let target = nova_sim::flight_frame::FrameTarget {
-        status: nova_sim::TargetStatus::Disabled,
+    let target = nova_sim_frame::flight_frame::FrameTarget {
+        status: nova_sim_frame::TargetStatus::Disabled,
         ..record::target(0)
     };
     let frame = targeted(vec![super::faked_hud::npc_of_140(0)], target);

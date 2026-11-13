@@ -10,10 +10,11 @@ use std::time::Duration;
 use super::faked_hud::barred;
 use super::*;
 use crate::flight::rescue_screen::RESCUE_FADE_FOR;
-use nova_sim::flight_frame::{
+use nova_sim_frame::flight_frame::{
     FlightEvent, PassExit, PassReport, RaisedLine, RescueTexts, ShipPlace, StepReport, StepRun,
 };
-use nova_sim::{MissionTextKind, PlayerFate, SessionEvent, TextBar};
+use nova_sim_frame::mission_screens::MissionTextKind;
+use nova_sim_frame::{PlayerFate, SessionEvent, TextBar};
 
 /// The pod's system's `BkgndColor`.
 const POD_BACKGROUND: u32 = 0x0000_0010;
@@ -54,7 +55,7 @@ fn rescued_frame() -> FlightFrame {
 
 /// A mission text the rescue queued.
 fn briefed() -> MissionShown {
-    MissionShown::Text(nova_sim::MissionText {
+    MissionShown::Text(nova_sim_frame::mission_screens::MissionText {
         kind: MissionTextKind::Brief,
         mission: MissionId(131),
         text: "Briefed.".to_owned(),
@@ -130,7 +131,7 @@ fn rescued_on(pass: usize) -> PassExit {
 
 /// The reserves the texts below note: unlike the pod's or the rescued
 /// frame's.
-fn noted_reserves() -> nova_sim::Reserves {
+fn noted_reserves() -> nova_sim_frame::Reserves {
     let mut reserves = sol().hud.reserves;
     reserves.fuel.now += 50.0;
     reserves.fuel.max += 100.0;
@@ -142,7 +143,7 @@ fn noted_reserves() -> nova_sim::Reserves {
 fn briefed_third() -> (MissionShown, Option<TextBar>) {
     let bar = TextBar {
         texts: 3,
-        nav: nova_sim::NavMode::Off,
+        nav: nova_sim_frame::NavMode::Off,
         reserves: noted_reserves(),
     };
     (briefed(), Some(bar))
@@ -154,7 +155,7 @@ fn briefed_third() -> (MissionShown, Option<TextBar>) {
 fn bar_noted_over(frame: FlightFrame, like: &Faked) -> DrawList {
     let mut frame = frame;
     frame.hud.reserves = noted_reserves();
-    frame.nav_mode = nova_sim::NavMode::Off;
+    frame.nav_mode = nova_sim_frame::NavMode::Off;
     let mut view = barred(catalog(), frame);
     view.hud_cadence = like.hud_cadence;
     let mut bar = DrawList::new();
@@ -446,7 +447,7 @@ fn the_reset_bars_radar_drops_the_pods_target_and_reads_the_reset_ships_gear_and
     let mut pod = FlightFrame {
         fate: PlayerFate::Ejected { ticks_left: 1 },
         system_background: Some(POD_BACKGROUND),
-        nav_mode: nova_sim::NavMode::Hyperspace(None),
+        nav_mode: nova_sim_frame::NavMode::Hyperspace(None),
         ..in_sol_with(vec![
             // Far enough out for the radar's centre arrow, which the nav's
             // hyperspace mode hides (@0x49cf5).
@@ -459,11 +460,11 @@ fn the_reset_bars_radar_drops_the_pods_target_and_reads_the_reset_ships_gear_and
             },
         ])
     };
-    pod.target = Some(nova_sim::flight_frame::FrameTarget {
+    pod.target = Some(nova_sim_frame::flight_frame::FrameTarget {
         npc: NpcId(0),
         name: "Ace".to_owned(),
         subtitle: None,
-        status: nova_sim::TargetStatus::Disabled,
+        status: nova_sim_frame::TargetStatus::Disabled,
         tag: None,
     });
     let mut view = barred(catalog(), pod.clone());
@@ -726,11 +727,11 @@ fn pod_between_passes() -> FlightFrame {
 /// [`pod_between_passes`] and said `first`, and whose second pass held
 /// `held`, rescued or not.
 fn doubled_pod_step(rescued: bool, first: Option<&str>, held: Vec<RaisedLine>) -> StepReport {
-    let note = |ship: &str| nova_sim::CommNote {
+    let note = |ship: &str| nova_sim_frame::CommNote {
         from: NpcId(0),
         comm_name: "Ally".to_owned(),
         ship_name: ship.to_owned(),
-        done: nova_sim::Help::Repair,
+        done: nova_sim_frame::Help::Repair,
     };
     let first = first.map(note);
     let first_pass = PassReport {
@@ -854,7 +855,7 @@ fn in_a_booming_pod() -> Faked {
 fn boom_by_the_rescue() -> CombatEvent {
     CombatEvent::Exploded {
         at: Vec2::new(50.0, 50.0),
-        explosion: nova_sim::catalog::Explosion::decode(0).expect("type 0"),
+        explosion: nova_sim_frame::catalog::Explosion::decode(0).expect("type 0"),
         size: 0.0,
     }
 }

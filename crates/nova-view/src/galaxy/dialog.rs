@@ -770,9 +770,9 @@ mod tests {
     use crate::galaxy::view::{MapView, PAN_STEP, SCALES};
     use crate::ui::button::ButtonSkin;
     use crate::{Font, Input, MouseButton, Screen};
-    use nova_sim::galaxy_map::{DrawnSystem, MapDrawing};
-    use nova_sim::iff::SystemColorCode;
-    use nova_sim::map_search::SearchOutcome;
+    use nova_sim_frame::galaxy_map::{DrawnSystem, MapDrawing};
+    use nova_sim_frame::iff::SystemColorCode;
+    use nova_sim_frame::map_search::SearchOutcome;
 
     /// The course map in Alpha (128) at (0, 0), looking at it.
     fn course_map() -> GalaxyMap {

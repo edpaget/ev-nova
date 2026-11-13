@@ -7,9 +7,9 @@
 //! a move raise; which sheet a rule draws; which stellars a system
 //! shows) is nova-sim's, named where a test leans on it.
 
-use nova_sim::DrawnSheet;
-use nova_sim::SessionEvent;
-use nova_sim::flight_frame::{FlightEvent, FrameStellar};
+use nova_sim_frame::DrawnSheet;
+use nova_sim_frame::SessionEvent;
+use nova_sim_frame::flight_frame::{FlightEvent, FrameStellar};
 
 use super::faked_world::{world, world_list};
 use super::nav::{faked_nav_icons, nav_at};
@@ -621,15 +621,16 @@ fn a_frame_held_between_its_passes_draws_its_own_stellar_frames() {
     first.stellars[1].frame = 1;
     flight.stellars[1].frame = 2;
     view.sim.set_frame(flight);
-    let pass = nova_sim::flight_frame::PassReport::default();
+    let pass = nova_sim_frame::flight_frame::PassReport::default();
     let report = super::stepping::doubled(pass.clone(), pass, first);
     view.sim.queue_report(report);
     view.tick(TICK);
     assert_eq!(moon_on(&view), 1, "the first pass's");
-    view.sim.queue_report(nova_sim::flight_frame::StepReport {
-        steps: Vec::new(),
-        stopped: true,
-    });
+    view.sim
+        .queue_report(nova_sim_frame::flight_frame::StepReport {
+            steps: Vec::new(),
+            stopped: true,
+        });
     view.tick(TICK);
     assert_eq!(moon_on(&view), 2, "the flight's");
 }

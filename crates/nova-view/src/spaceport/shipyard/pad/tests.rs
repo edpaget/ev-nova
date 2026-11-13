@@ -231,7 +231,7 @@ fn the_info_panel_and_the_naming_open_told() {
     let mut told_first = self::screen();
     told_first.input(&told(PAD));
     told_first.open_naming(&ShipNaming {
-        ship: nova_sim::ShipId(129),
+        ship: nova_sim_frame::ShipId(129),
         prompt: "Name it: ".to_owned(),
         default: "Ship".to_owned(),
     });

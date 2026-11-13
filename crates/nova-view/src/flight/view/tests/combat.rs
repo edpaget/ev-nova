@@ -1,7 +1,7 @@
 use super::faked_hud::{barred, barred_by, flown, hud_tick};
 use super::faked_world::{shows, world, world_list};
 use super::*;
-use nova_sim::flight_frame::{
+use nova_sim_frame::flight_frame::{
     FrameShip, FrameTarget, PassReport, RaisedLine, ShipPlace, StepReport, StepRun,
 };
 
@@ -34,16 +34,16 @@ fn an_npc_is_drawn_with_its_own_sprite_where_it_is_facing_its_heading() {
 /// NPC 0 of ship 129 at (100, -100) facing `heading`, 72 frames a turn,
 /// its glow at 32 and its steady lights at 32, as [`trafficked`]'s
 /// arrivals are drawn.
-fn lit_npc(heading: f32) -> nova_sim::flight_frame::FrameShip {
-    nova_sim::flight_frame::FrameShip {
-        frames: nova_sim::combat::ship_frames::FrameSpec {
+fn lit_npc(heading: f32) -> nova_sim_frame::flight_frame::FrameShip {
+    nova_sim_frame::flight_frame::FrameShip {
+        frames: nova_sim_frame::combat::ship_frames::FrameSpec {
             frames: NonZeroU16::new(72).expect("non-zero"),
             lights: true,
-            ..nova_sim::combat::ship_frames::FrameSpec::NONE
+            ..nova_sim_frame::combat::ship_frames::FrameSpec::NONE
         },
-        drawn: nova_sim::combat::ship_frames::Drawn {
+        drawn: nova_sim_frame::combat::ship_frames::Drawn {
             lights: Some(32),
-            ..nova_sim::combat::ship_frames::Drawn::default()
+            ..nova_sim_frame::combat::ship_frames::Drawn::default()
         },
         glow: 32,
         ..npc_129(0, Vec2::new(100.0, -100.0), heading)
@@ -86,12 +86,12 @@ fn a_ship_its_record_puts_on_the_radar_is_a_blip_and_one_it_keeps_off_is_not() {
         heavy: false,
     };
     assert_eq!(radar_ships(None, &[(&npc, at_blip, 0.0)]), [blip]);
-    let off = nova_sim::flight_frame::FrameShip {
+    let off = nova_sim_frame::flight_frame::FrameShip {
         on_radar: false,
         ..npc
     };
     assert_eq!(radar_ships(None, &[(&off, at_blip, 0.0)]), []);
-    let threat = nova_sim::flight_frame::FrameShip {
+    let threat = nova_sim_frame::flight_frame::FrameShip {
         iff: ShipIff::Threat,
         mass: 100.0,
         ..npc
@@ -105,7 +105,7 @@ fn a_ship_its_record_puts_on_the_radar_is_a_blip_and_one_it_keeps_off_is_not() {
             ..blip
         }]
     );
-    let light = nova_sim::flight_frame::FrameShip { mass: 99.0, ..npc };
+    let light = nova_sim_frame::flight_frame::FrameShip { mass: 99.0, ..npc };
     assert_eq!(
         radar_ships(Some(NpcId(1)), &[(&light, at_blip, 0.0)]),
         [blip],
@@ -118,7 +118,7 @@ fn the_play_area_is_the_screen_left_of_the_status_bar_about_the_ship() {
     let area = play_area(VIEW_SIZE, crate::system::camera::Anchor::PlayAreaCentre);
     assert_eq!(
         area,
-        nova_sim::cloak::Area {
+        nova_sim_frame::cloak::Area {
             left: -415.0,
             top: -384.0,
             right: 1024.0 - 194.0 - 415.0,
@@ -127,7 +127,7 @@ fn the_play_area_is_the_screen_left_of_the_status_bar_about_the_ship() {
     );
     assert_eq!(
         play_area(VIEW_SIZE, crate::system::camera::Anchor::ViewCentre),
-        nova_sim::cloak::Area {
+        nova_sim_frame::cloak::Area {
             left: -512.0,
             top: -384.0,
             right: 1024.0 - 194.0 - 512.0,
@@ -335,7 +335,7 @@ fn a_quote_said_on_a_second_pass_is_on_the_message_line_the_frame_after() {
         volleying(),
         in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0), lit_npc(0.0)]),
     );
-    let quote = nova_sim::PersonQuote {
+    let quote = nova_sim_frame::PersonQuote {
         npc: NpcId(0),
         text: "Ace: Prepare to die, !".to_owned(),
     };
@@ -362,11 +362,11 @@ fn a_quote_said_on_a_second_pass_is_on_the_message_line_the_frame_after() {
 /// stepping every tick (`AnimDelay` 0, as stock's), drawing `rlëD` 1141.
 fn with_hypergate(mut catalog: FakeCatalog) -> FakeCatalog {
     catalog.sites.push(LandingSite {
-        flags2: nova_sim::gate::HYPERGATE,
+        flags2: nova_sim_frame::landing::HYPERGATE,
         exit_angle: 90,
-        animation: nova_sim::catalog::SiteAnimation {
+        animation: nova_sim_frame::catalog::SiteAnimation {
             type_frames: 6,
-            ..nova_sim::catalog::SiteAnimation::default()
+            ..nova_sim_frame::catalog::SiteAnimation::default()
         },
         ..site(141, (200.0, 100.0), StellarFlags::CAN_LAND)
     });
@@ -541,8 +541,8 @@ fn trafficked_with_new_types_in_131() -> FakeCatalog {
     dude_types[0] = (129, 100);
     catalog.traffic[1].1.dude_types = dude_types;
     catalog.dudes.push((
-        nova_sim::DudeId(129),
-        nova_sim::DudeRecord {
+        nova_sim_frame::catalog::DudeId(129),
+        nova_sim_frame::catalog::DudeRecord {
             ai_type: 1,
             govt: None,
             ships: vec![(ShipId(129), 1), (ShipId(130), 1)],
@@ -619,14 +619,14 @@ fn r_targets_the_nearest_threat_over_a_nearer_ship_and_brackets_it_red() {
     assert_eq!(
         sent(&view),
         [
-            FlightCommand::SelectTarget(nova_sim::TargetPick::NearestThreat),
-            FlightCommand::SelectTarget(nova_sim::TargetPick::Nearest),
+            FlightCommand::SelectTarget(nova_sim_frame::TargetPick::NearestThreat),
+            FlightCommand::SelectTarget(nova_sim_frame::TargetPick::Nearest),
         ]
     );
     let bracketed = |view: &mut Faked, standing| {
         let mut frame = view.frame.clone();
         frame.target = Some(record::target(0));
-        frame.hud.target_brackets = Some(nova_sim::brackets::TargetBrackets {
+        frame.hud.target_brackets = Some(nova_sim_frame::brackets::TargetBrackets {
             npc: NpcId(0),
             expand: 0.0,
             standing,
@@ -680,7 +680,7 @@ fn firing_at_an_npc_with_murk(catalog: FakeCatalog, murk: u8) -> Faked {
 fn exploding_at(at: Vec2) -> CombatEvent {
     CombatEvent::Exploded {
         at,
-        explosion: nova_sim::catalog::Explosion {
+        explosion: nova_sim_frame::catalog::Explosion {
             boom: BoomId(128),
             extra: false,
         },
@@ -689,8 +689,8 @@ fn exploding_at(at: Vec2) -> CombatEvent {
 }
 
 /// [`lit_npc`] at `at`.
-fn lit_npc_at(at: Vec2, heading: f32) -> nova_sim::flight_frame::FrameShip {
-    nova_sim::flight_frame::FrameShip {
+fn lit_npc_at(at: Vec2, heading: f32) -> nova_sim_frame::flight_frame::FrameShip {
+    nova_sim_frame::flight_frame::FrameShip {
         position: at,
         ..lit_npc(heading)
     }
@@ -730,8 +730,11 @@ fn the_fight_is_drawn_between_the_stellars_in_order() {
 fn an_explosion_in_a_murky_system_is_murked_as_the_player_sees_it() {
     let view = firing_at_an_npc_with_murk(armed(1, &[BLASTER, UNDER, OVER]), 100);
     let boom = view.effects().explosions()[0].at;
-    let level =
-        crate::flight::murk::sprite_murk(nova_sim::Vec2::new(boom.x, boom.y), Vec2::ZERO, 100);
+    let level = crate::flight::murk::sprite_murk(
+        nova_sim_frame::Vec2::new(boom.x, boom.y),
+        Vec2::ZERO,
+        100,
+    );
     assert!(level > 0, "murked where it went off: {boom:?}");
     let list = world_list(&view);
     let explosion = first(&list, sprite_of(400));
@@ -758,7 +761,7 @@ fn an_explosion_in_a_murky_system_is_murked_as_the_player_sees_it() {
 fn a_shot_is_drawn_with_its_frame_where_it_flies() {
     // Turned 45 degrees right, so the shot flies across and up, at the
     // frame the simulation gives.
-    let shot = nova_sim::flight_frame::FrameShot {
+    let shot = nova_sim_frame::flight_frame::FrameShot {
         velocity: Vec2::new(14.0, -14.0),
         frame: Some(4),
         ..super::faked_world::shot_of(0, BLASTER, Vec2::new(28.0, -28.0), 45.0)
@@ -818,18 +821,18 @@ fn a_shot_is_drawn_in_its_frames_layer_whatever_its_weapon() {
     // homing shot of the same weapon in the homing layer; which layer a
     // weapon's shot takes is nova-sim-combat's rule. The view draws by the
     // frame's layer, so frame order alone (shots-layer first) loses.
-    use nova_sim::combat::shot_layer::ShotLayer;
+    use nova_sim_frame::combat::shot_layer::ShotLayer;
     let stellars = Vec2::new(0.0, -20.0);
     let ships = Vec2::new(0.0, -40.0);
     let view = world(
         armed(0, &[BLASTER]),
         FlightFrame {
             shots: vec![
-                nova_sim::flight_frame::FrameShot {
+                nova_sim_frame::flight_frame::FrameShot {
                     layer: ShotLayer::Shots,
                     ..super::faked_world::shot_of(0, BLASTER, stellars, 0.0)
                 },
-                nova_sim::flight_frame::FrameShot {
+                nova_sim_frame::flight_frame::FrameShot {
                     layer: ShotLayer::Homing,
                     ..super::faked_world::shot_of(1, BLASTER, ships, 0.0)
                 },
@@ -946,15 +949,15 @@ fn the_players_ship_is_drawn_whole_while_breaking_up_then_without_its_sprite_the
     // stays real for phase 9).
     let mut catalog = killed_in(1);
     catalog.sheet = blinking(Blink::STEADY).sheet;
-    let breaking = nova_sim::flight_frame::FrameShip {
+    let breaking = nova_sim_frame::flight_frame::FrameShip {
         glow: 12,
-        drawn: nova_sim::combat::ship_frames::Drawn {
+        drawn: nova_sim_frame::combat::ship_frames::Drawn {
             lights: Some(32),
-            ..nova_sim::combat::ship_frames::Drawn::default()
+            ..nova_sim_frame::combat::ship_frames::Drawn::default()
         },
-        frames: nova_sim::combat::ship_frames::FrameSpec {
+        frames: nova_sim_frame::combat::ship_frames::FrameSpec {
             lights: true,
-            ..nova_sim::combat::ship_frames::FrameSpec::NONE
+            ..nova_sim_frame::combat::ship_frames::FrameSpec::NONE
         },
         ..the_player_at(Vec2::ZERO, 0.0)
     };
@@ -963,14 +966,14 @@ fn the_players_ship_is_drawn_whole_while_breaking_up_then_without_its_sprite_the
     assert!(ids.contains(&2000), "the ship: {ids:?}");
     assert!(ids.contains(&2200), "its lights: {ids:?}");
     let mut frame = view.frame.clone();
-    frame.ships[0].shown = nova_sim::Drawn::SpriteHidden;
+    frame.ships[0].shown = nova_sim_frame::Drawn::SpriteHidden;
     shows(&mut view, frame.clone());
     assert_eq!(
         faked_player_layers(&view),
         [2100, 2200],
         "its glow and lights, but no ship, on the explosion's tick"
     );
-    frame.ships[0].shown = nova_sim::Drawn::Hidden;
+    frame.ships[0].shown = nova_sim_frame::Drawn::Hidden;
     shows(&mut view, frame);
     assert_eq!(
         faked_player_layers(&view),
@@ -1009,7 +1012,10 @@ fn an_exploded_player_without_a_sheet_draws_no_placeholder() {
     assert!(sprite_unavailable(&list), "while breaking up");
     assert!(draws_run(&list, &placeholder(&view)), "{list:?}");
     // The explosion's tick, then the ones after.
-    for shown in [nova_sim::Drawn::SpriteHidden, nova_sim::Drawn::Hidden] {
+    for shown in [
+        nova_sim_frame::Drawn::SpriteHidden,
+        nova_sim_frame::Drawn::Hidden,
+    ] {
         let mut frame = view.frame.clone();
         frame.ships[0].shown = shown;
         shows(&mut view, frame);
@@ -1021,7 +1027,7 @@ fn an_exploded_player_without_a_sheet_draws_no_placeholder() {
 
 #[test]
 fn a_shot_whose_look_cannot_be_read_is_a_crossed_box() {
-    let shot = nova_sim::flight_frame::FrameShot {
+    let shot = nova_sim_frame::flight_frame::FrameShot {
         velocity: Vec2::new(0.0, -20.0),
         ..super::faked_world::shot_of(0, UNSEEN, Vec2::new(0.0, -20.0), 0.0)
     };
@@ -1068,7 +1074,7 @@ fn a_destroyed_npcs_debris_is_drawn_after_its_explosion() {
             ship_type: ShipId(129),
             at: Vec2::new(0.0, -100.0),
             velocity: Vec2::ZERO,
-            explosion: Some(nova_sim::catalog::Explosion {
+            explosion: Some(nova_sim_frame::catalog::Explosion {
                 boom: BoomId(128),
                 extra: false,
             }),
@@ -1107,7 +1113,7 @@ pub(super) fn podding() -> FakeCatalog {
 fn the_target_is_bracketed_and_its_panel_shows_it() {
     let target = FrameTarget {
         name: "Ship 129".to_owned(),
-        tag: Some(nova_sim::TargetTag::Code(GovtId(140))),
+        tag: Some(nova_sim_frame::TargetTag::Code(GovtId(140))),
         ..record::target(0)
     };
     let mut frame = targeted(
@@ -1148,7 +1154,7 @@ fn the_target_is_bracketed_and_its_panel_shows_it() {
             name: "Ship 129".to_owned(),
             subtitle: "Light Transport".to_owned(),
             picture: Some(3001),
-            status: nova_sim::TargetStatus::Shield(100),
+            status: nova_sim_frame::TargetStatus::Shield(100),
             tag: Some(Tag::Code("Fed.".to_owned())),
         }),
         None,
@@ -1164,8 +1170,8 @@ fn the_target_is_bracketed_and_its_panel_shows_it() {
 fn the_nav_brackets_draw_under_the_ship_brackets() {
     // Which stellar a slot key selects is the session's.
     let mut view = firing_at_an_npc_with_murk(armed(1, &[BLASTER, UNDER, OVER]), 0);
-    let hud = nova_sim::flight_frame::FrameHud {
-        nav_brackets: Some(nova_sim::brackets::NavBrackets {
+    let hud = nova_sim_frame::flight_frame::FrameHud {
+        nav_brackets: Some(nova_sim_frame::brackets::NavBrackets {
             stellar: StellarId(128),
             position: Vec2::new(0.0, -600.0),
             expand: 0.0,
@@ -1190,11 +1196,11 @@ fn a_disabled_targets_brackets_are_grey() {
     // (`standing_is_disabled_first_then_escort_then_threat_then_neutral`),
     // and its status line (`a_fill_writes_the_targets_name_subtitle_status_and_tag`).
     let target = FrameTarget {
-        status: nova_sim::TargetStatus::Disabled,
+        status: nova_sim_frame::TargetStatus::Disabled,
         ..record::target(0)
     };
     let mut frame = targeted(vec![lit_npc(180.0)], target);
-    frame.hud.target_brackets = Some(nova_sim::brackets::TargetBrackets {
+    frame.hud.target_brackets = Some(nova_sim_frame::brackets::TargetBrackets {
         npc: NpcId(0),
         expand: 0.0,
         standing: Standing::Disabled,
@@ -1273,13 +1279,19 @@ fn the_target_panel_holds_a_disabling_until_its_next_timed_redraw() {
     let held = status_shown(&view);
     disable_the_target(&mut view);
     hud_tick(&mut view);
-    assert_eq!(status_now(&view), Some(nova_sim::TargetStatus::Disabled));
+    assert_eq!(
+        status_now(&view),
+        Some(nova_sim_frame::TargetStatus::Disabled)
+    );
     while !now_tick(&view).is_multiple_of(TARGET_PERIOD_TICKS) {
         assert_eq!(status_shown(&view), held, "tick {}", now_tick(&view));
         assert!(!texts(&flown(&view)).contains(&target::DISABLED.to_owned()));
         hud_tick(&mut view);
     }
-    assert_eq!(status_shown(&view), Some(nova_sim::TargetStatus::Disabled));
+    assert_eq!(
+        status_shown(&view),
+        Some(nova_sim_frame::TargetStatus::Disabled)
+    );
     assert!(texts(&flown(&view)).contains(&target::DISABLED.to_owned()));
 }
 
@@ -1290,7 +1302,10 @@ fn read_the_bibles_way_the_target_panel_follows_every_frame() {
     disable_the_target(&mut view);
     hud_tick(&mut view);
     assert_ne!(now_tick(&view) % TARGET_PERIOD_TICKS, 0);
-    assert_eq!(status_shown(&view), Some(nova_sim::TargetStatus::Disabled));
+    assert_eq!(
+        status_shown(&view),
+        Some(nova_sim_frame::TargetStatus::Disabled)
+    );
 }
 
 #[test]
@@ -1300,7 +1315,10 @@ fn redrawing_the_status_retakes_the_target_panel() {
     hud_tick(&mut view);
     assert_ne!(status_shown(&view), status_now(&view), "held");
     view.redraw_status();
-    assert_eq!(status_shown(&view), Some(nova_sim::TargetStatus::Disabled));
+    assert_eq!(
+        status_shown(&view),
+        Some(nova_sim_frame::TargetStatus::Disabled)
+    );
 }
 
 #[test]
@@ -1353,7 +1371,7 @@ fn a_falling_shield_shows_at_the_radar_refreshes_only() {
         let falling = 100 - u32::from(tick / 3);
         frame.ships[1].shield.now = f32::from(100 - tick / 3);
         if let Some(target) = &mut frame.target {
-            target.status = nova_sim::TargetStatus::Shield(falling);
+            target.status = nova_sim_frame::TargetStatus::Shield(falling);
         }
         shows(&mut view, frame);
         let (blink, before) = (view.hud_cadence.blink_on(), now_tick(&view));
@@ -1482,7 +1500,7 @@ fn a_missile_shot_down_is_drawn_exploding_and_unheard() {
     assert!(
         sounds
             .iter()
-            .all(|sound| sound.sound != nova_sim::SoundId(302)),
+            .all(|sound| sound.sound != nova_sim_frame::SoundId(302)),
         "{sounds:?}"
     );
 }
@@ -1539,7 +1557,10 @@ fn faked_targeting_after_a_redraw(rules: &Rulebook) -> Faked {
     hud_tick(&mut view);
     assert_eq!(status_shown(&view), status_now(&view));
     assert!(
-        matches!(status_shown(&view), Some(nova_sim::TargetStatus::Shield(_))),
+        matches!(
+            status_shown(&view),
+            Some(nova_sim_frame::TargetStatus::Shield(_))
+        ),
         "{:?}",
         status_shown(&view)
     );
@@ -1551,7 +1572,7 @@ fn disable_the_target(view: &mut Faked) {
     let mut frame = view.frame.clone();
     frame.ships[1].condition = Condition::Disabled;
     if let Some(target) = &mut frame.target {
-        target.status = nova_sim::TargetStatus::Disabled;
+        target.status = nova_sim_frame::TargetStatus::Disabled;
     }
     shows(view, frame);
 }

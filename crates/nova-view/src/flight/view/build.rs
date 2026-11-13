@@ -7,9 +7,9 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::combat::SpriteLoad;
-use nova_sim::flight_frame::{FlightCommand, FlightOpening, ScreenAnswer, ScreenAsk};
-use nova_sim::{ALERT_CICN, FixedStep, HashedRolls, Rulebook, SpeedMult};
+use nova_sim_frame::combat::SpriteLoad;
+use nova_sim_frame::flight_frame::{FlightCommand, FlightOpening, ScreenAnswer, ScreenAsk};
+use nova_sim_frame::{ALERT_CICN, FixedStep, HashedRolls, Rulebook, SpeedMult};
 
 use crate::flight::cadence::HudCadence;
 use crate::flight::catalog::{CombatLooks, Looks, ShipSprites, StatusBars};
@@ -74,7 +74,7 @@ impl<
     ) -> Self {
         // Sized as the view starts, before anything reads its field.
         sim.apply(FlightCommand::SetWindowWidth(window_width(VIEW_SIZE)));
-        let mut frame = nova_sim::flight_frame::FlightFrame::default();
+        let mut frame = nova_sim_frame::flight_frame::FlightFrame::default();
         sim.frame(&mut frame);
         let FlightOpening {
             weapons,
@@ -95,10 +95,10 @@ impl<
             .is_none()
             .then_some(BarFor(frame.hud.interface_government));
         let mut map = GalaxyMap::course(&*catalog);
-        map.set_nebula_pick(rules.source_for(nova_sim::RuleKey::NebulaPicture));
+        map.set_nebula_pick(rules.source_for(nova_sim_frame::RuleKey::NebulaPicture));
         map.set_border_rules(
-            rules.source_for(nova_sim::RuleKey::MapBorderPace),
-            rules.source_for(nova_sim::RuleKey::MapFindBorders),
+            rules.source_for(nova_sim_frame::RuleKey::MapBorderPace),
+            rules.source_for(nova_sim_frame::RuleKey::MapFindBorders),
         );
         // A flight that failed to start shows no galaxy: it answers
         // nothing.
@@ -483,10 +483,10 @@ struct Opening {
     scene: Option<crate::system::SystemScene>,
     sheet: Result<crate::flight::ShipSheet, String>,
     outline: Option<crate::outline::Outline>,
-    sheet_ship: Option<nova_sim::ShipId>,
+    sheet_ship: Option<nova_sim_frame::ShipId>,
     status_bar: Result<hud::StatusBar, String>,
     bar_government: Option<BarFor>,
-    frame: nova_sim::flight_frame::FlightFrame,
+    frame: nova_sim_frame::flight_frame::FlightFrame,
     looks: Looks,
     unread_looks: Vec<Diagnostic>,
     escort_colors: crate::flight::escorts::EscortMenuColors,
@@ -494,7 +494,7 @@ struct Opening {
     presentation: super::stepping::Presentation,
     words_chance: SharedChance,
     failure: Option<String>,
-    names: nova_sim::flight_frame::Names,
+    names: nova_sim_frame::flight_frame::Names,
 }
 
 impl<C, S: FlightSim> FlightView<C, S> {
@@ -700,7 +700,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             bar_steps: VecDeque::new(),
             bars_staged: 0,
             inbox: super::inbox::Inbox::default(),
-            step_report: nova_sim::flight_frame::StepReport::default(),
+            step_report: nova_sim_frame::flight_frame::StepReport::default(),
             presentation: opening.presentation,
             frame: opening.frame,
             failure: opening.failure,
@@ -723,7 +723,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     pub fn scripted(
         catalog: C,
         sim: S,
-        names: nova_sim::flight_frame::Names,
+        names: nova_sim_frame::flight_frame::Names,
         rules: &Rulebook,
     ) -> Self
     where
@@ -731,12 +731,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
     {
         const NO_FLIGHT: &str = "a scripted flight has none";
         let mut map = GalaxyMap::course(&catalog);
-        map.set_nebula_pick(rules.source_for(nova_sim::RuleKey::NebulaPicture));
+        map.set_nebula_pick(rules.source_for(nova_sim_frame::RuleKey::NebulaPicture));
         map.set_border_rules(
-            rules.source_for(nova_sim::RuleKey::MapBorderPace),
-            rules.source_for(nova_sim::RuleKey::MapFindBorders),
+            rules.source_for(nova_sim_frame::RuleKey::MapBorderPace),
+            rules.source_for(nova_sim_frame::RuleKey::MapFindBorders),
         );
-        let mut frame = nova_sim::flight_frame::FlightFrame::default();
+        let mut frame = nova_sim_frame::flight_frame::FlightFrame::default();
         sim.frame(&mut frame);
         map.show_course(frame.system, &frame.course_shown);
         map.recentre();
@@ -772,9 +772,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
 /// a scripted one in the component tests.
 impl<C: ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S> {
     /// Reads the sheet of each ship type the traffic can spawn
-    /// ([`FlightFrame::traffic_ships`](nova_sim::flight_frame::FlightFrame::traffic_ships))
+    /// ([`FlightFrame::traffic_ships`](nova_sim_frame::flight_frame::FlightFrame::traffic_ships))
     /// that has not been read yet, of each type a ship here is boxed by
-    /// ([`FlightFrame::framed_types`](nova_sim::flight_frame::FlightFrame::framed_types)),
+    /// ([`FlightFrame::framed_types`](nova_sim_frame::flight_frame::FlightFrame::framed_types)),
     /// such as the stale frames of a hidden ship's slot, and each NPC's
     /// government's target code, from the kept frame. The
     /// player's own type is read with its ship, so it is left out while
@@ -817,14 +817,14 @@ impl<C: ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S> {
     /// Whether the sheet and the target card of ship type `ship` are read
     /// already, so a step that brings one reads neither.
     #[must_use]
-    pub fn has_read_traffic(&self, ship: nova_sim::ShipId) -> bool {
+    pub fn has_read_traffic(&self, ship: nova_sim_frame::ShipId) -> bool {
         self.npc_sheets.contains_key(&ship) && self.cards.contains_key(&ship)
     }
 
     /// Reads ship type `ship`'s sheet unless it is read already, and with
     /// it, when the sheet cannot be shown, its outline
     /// ([`outline_for`](super::outline_for)).
-    fn read_npc_sheet(&mut self, ship: nova_sim::ShipId) {
+    fn read_npc_sheet(&mut self, ship: nova_sim_frame::ShipId) {
         if self.npc_sheets.contains_key(&ship) {
             return;
         }
@@ -838,7 +838,7 @@ impl<C: ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S> {
     /// Reads the sheet of each of `traffic` not read yet, and their target
     /// cards not read yet in one batch ([`CombatLooks::target_cards`]),
     /// none when all are read.
-    fn read_traffic_sheets(&mut self, traffic: Vec<nova_sim::ShipId>) {
+    fn read_traffic_sheets(&mut self, traffic: Vec<nova_sim_frame::ShipId>) {
         for &ship in &traffic {
             self.read_npc_sheet(ship);
         }

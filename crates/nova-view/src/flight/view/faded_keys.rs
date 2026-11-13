@@ -23,7 +23,7 @@
 //!   above 0. P and Y refuse with their beep (@0x7039a-0x703bd, @0x61f87),
 //!   and M, L and I say nothing. All are dropped.
 //! - The jump's arrival in a step's pass
-//!   ([`StepRun::arrival`](nova_sim::flight_frame::StepRun::arrival)): M's
+//!   ([`StepRun::arrival`](nova_sim_frame::flight_frame::StepRun::arrival)): M's
 //!   and L's blocks ran with +0x50 above 0, so M is latched
 //!   and lost (@0x6a89f) and L waits (@0x6a95d). The pass ends @0x6c625
 //!   before P's, Y's and I's blocks. So P and Y stay kept for the first
@@ -61,7 +61,7 @@
 //! every pass ([`FlightView::press_land`]). It is no `_SetAllKeyCmdFlags`
 //! latch, so L is held across every close (the `map_wait` module's
 //! `OWN_LATCH`), and the step carries it as the dock approach's
-//! hold ([`StepInput::dock_try`](nova_sim::flight_frame::StepInput::dock_try)).
+//! hold ([`StepInput::dock_try`](nova_sim_frame::flight_frame::StepInput::dock_try)).
 //! I's is, and a site sets it ([`FlightView::set_every_latch`]). A pass in
 //! the pod or dead reaches neither block, so neither latch clears there. Dialog keys stay press-only otherwise, by the user's decision:
 //! M, P and Y don't act on being held. A key let go of as a dialog or a
@@ -102,9 +102,9 @@
 //!   where the original has no flag: the same accepted reading.
 
 #[cfg(doc)]
-use nova_sim::flight_frame::{FlightCommand, FlightFrame, StepRun};
+use nova_sim_frame::flight_frame::{FlightCommand, FlightFrame, StepRun};
 
-use nova_sim::Takes;
+use nova_sim_frame::Takes;
 
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::escorts::EscortMenuLooks;

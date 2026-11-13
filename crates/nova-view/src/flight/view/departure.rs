@@ -6,10 +6,10 @@
 //! from the frame ([`FlightFrame::leave_due`]). The flight's messages are
 //! worded by the flight's names ([`FlightView::word`]).
 //!
-//! [`FlightFrame::leave_due`]: nova_sim::flight_frame::FlightFrame::leave_due
+//! [`FlightFrame::leave_due`]: nova_sim_frame::flight_frame::FlightFrame::leave_due
 
-use nova_sim::flight_frame::{Answer, FlightCommand};
-use nova_sim::{Departure, Settled, SimMessage, StellarId};
+use nova_sim_frame::flight_frame::{Answer, FlightCommand};
+use nova_sim_frame::{Departure, Settled, SimMessage, StellarId};
 
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::sim_port::FlightSim;
@@ -25,7 +25,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// ship where it is, at
     /// the stellar, not on its way from where it was, in the system a move
     /// made while landed went to, laid out afresh as the session tells
-    /// ([`SessionEvent`](nova_sim::SessionEvent)); it shows no message
+    /// ([`SessionEvent`](nova_sim_frame::SessionEvent)); it shows no message
     /// from before the landing, but greets the pilot past the tutorial
     /// ([`take_off_greeting`](super::take_off_greeting)), or shows a held `Q`'s message, for
     /// [`SCRIPT_MESSAGE_TICKS`], in place of the greeting
@@ -93,7 +93,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     }
 
     /// Whether a `Q` run while landed waits for the take-off
-    /// ([`FlightFrame::leave_due`](nova_sim::flight_frame::FlightFrame::leave_due)):
+    /// ([`FlightFrame::leave_due`](nova_sim_frame::flight_frame::FlightFrame::leave_due)):
     /// whoever shows the spaceport leaves it
     /// ([`FlightView::leave_if_due`]), as its Leave does, once nothing
     /// shown over it holds the leave.
@@ -118,9 +118,9 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// further from what the player sees than none.
     ///
     /// The whole bar is redrawn once the take-off has let go of the nav
-    /// selection. Under [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s engine reading, the nav
+    /// selection. Under [`RuleKey::HudCadence`](nova_sim_frame::RuleKey::HudCadence)'s engine reading, the nav
     /// area then shows the nav as the take-off began
-    /// ([`FlightEvent::TakeoffNav`](nova_sim::flight_frame::FlightEvent::TakeoffNav)) in the first frame drawn after it
+    /// ([`FlightEvent::TakeoffNav`](nova_sim_frame::flight_frame::FlightEvent::TakeoffNav)) in the first frame drawn after it
     /// and to the end of that frame's tick ([`NavFlash`],
     /// [`FlightView::advance_hud`]), when that differs from the nav now,
     /// as after a landed `M`: built by operator decision on 2026-10-15.
@@ -206,7 +206,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// it is held ([`FlightView::leave_due`]) for the router to leave the
     /// spaceport once nothing shown over it holds the leave
     /// ([`FlightView::leave_if_due`]), which shows its message. The screen
-    /// catches up with what the flight told ([`SessionEvent`](nova_sim::SessionEvent)): a
+    /// catches up with what the flight told ([`SessionEvent`](nova_sim_frame::SessionEvent)): a
     /// move in flight lays out the system the ship is in afresh, even the
     /// same one, as the original kills its explosions and smoke, and how
     /// many fighters were abandoned, if any, is shown after a `Q`'s

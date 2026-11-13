@@ -50,9 +50,9 @@
 //! arithmetic, kept one constant away until the user chooses between
 //! them. The edges are the original's 16-bit words; ours are `i32`.
 //!
-//! [`RuleKey::NebulaPicture`]: nova_sim::RuleKey::NebulaPicture
+//! [`RuleKey::NebulaPicture`]: nova_sim_frame::RuleKey::NebulaPicture
 
-use nova_sim::RuleSource;
+use nova_sim_frame::RuleSource;
 
 use super::catalog::{NebulaEntry, NebulaPicture};
 use super::panel::placed;
@@ -92,7 +92,7 @@ pub const RECT_ARITHMETIC: RectArithmetic = RectArithmetic::Original;
 
 /// Which picture fills a nebula's rect ([`RuleKey::NebulaPicture`]).
 ///
-/// [`RuleKey::NebulaPicture`]: nova_sim::RuleKey::NebulaPicture
+/// [`RuleKey::NebulaPicture`]: nova_sim_frame::RuleKey::NebulaPicture
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PicturePick {
     /// The engine's: the largest that fits in width and height, slot 0
@@ -107,7 +107,7 @@ pub enum PicturePick {
 impl PicturePick {
     /// The pick `source` reads [`RuleKey::NebulaPicture`] as.
     ///
-    /// [`RuleKey::NebulaPicture`]: nova_sim::RuleKey::NebulaPicture
+    /// [`RuleKey::NebulaPicture`]: nova_sim_frame::RuleKey::NebulaPicture
     #[must_use]
     pub fn of(source: RuleSource) -> Self {
         match source {

@@ -2,7 +2,7 @@
 //! original places them (`_HandleNavTargetSprites` @0x2fcaf-0x2ff19 and
 //! `_HandleWeapTargetSprites` @0x2ff1a-0x301b8 in the `EV Nova`
 //! executable). When they show, how far out they are and which colour a
-//! ship's take are the session's ([`nova_sim::brackets`]).
+//! ship's take are the session's ([`nova_sim_frame::brackets`]).
 //!
 //! - **Art.** Four 16 x 16 `cïcn`s, one per corner, from Nova Graphics 1,
 //!   so plug-ins can replace them: the nav brackets 10000-10003, or
@@ -32,7 +32,7 @@
 //! @0x30060-0x30085), so an odd-sized ship's are half a pixel up and left
 //! of its sprite's middle.
 
-pub use nova_sim::brackets::Standing;
+pub use nova_sim_frame::brackets::Standing;
 
 use crate::{DrawList, ImageKey, Point};
 

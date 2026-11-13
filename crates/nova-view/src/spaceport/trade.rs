@@ -12,17 +12,17 @@
 //!   (@0x4cf77-0x4d0b6; [`Market::held_in`]).
 //! - The eight list slots, items 4 to 11 (@0x4d103-0x4d5c5). Slot n holds
 //!   commodity n, slot 6 a `jünk` the stellar buys and slot 7 one it
-//!   sells ([`MarketRow::slot`](nova_sim::MarketRow::slot)). Every slot,
+//!   sells ([`MarketRow::slot`](nova_sim_frame::MarketRow::slot)). Every slot,
 //!   empty or not, is filled inset by 1 in `cölr`'s `ListHilite` when its
 //!   row is selected, else `ListBkgnd`, with dark grey edges left and
 //!   right, along the top of item 4 and the bottom of item 11. A slot's
 //!   row is drawn in `ListText` on the baseline top+10: its name at
 //!   left+7 (a `jünk`'s at left+6), the tons held ending at right-110
 //!   when above 0, its marker at right-70 ("Low", "Med", "High",
-//!   "Higher", "Lower"; [`MarketRow::marker`](nova_sim::MarketRow::marker))
+//!   "Higher", "Lower"; [`MarketRow::marker`](nova_sim_frame::MarketRow::marker))
 //!   and its price, signed, ending at right-10.
 //! - The cargo summary, item 12 (@0x4d5cb-0x4dc93): its text
-//!   ([`CargoSummary`](nova_sim::CargoSummary)) wrapped white on black in
+//!   (`nova_sim::CargoSummary`) wrapped white on black in
 //!   the item inset by 5 and 3, as `TETextBox` and `InvertRect` draw it,
 //!   and the item framed in dark grey.
 //! - The event line, item 15 (@0x4df54-0x4dfb5): only when there is one
@@ -47,14 +47,14 @@
 //! moves the dialog's button focus instead and the selection stays.
 //! The original has one row a
 //! slot, and so does the default. By the other reading of
-//! [`RuleKey::JunkListing`](nova_sim::RuleKey::JunkListing) a side can list
+//! [`RuleKey::JunkListing`](nova_sim_frame::RuleKey::JunkListing) a side can list
 //! several `jünk`, whose extra rows follow their slot, and the list then
 //! scrolls with the selection. Buy and Sell, clicked or with B and S (key repeats too, so
 //! holding a key keeps trading), ask for a plain trade of the selected
 //! good ([`Lot::Click`]), which moves up to 10 tons by the engine; Shift,
 //! Command and Control change nothing, as the original tests Option alone
 //! (`_DoTradeDialog` @0x5e211, @0x5e45c). With Alt held, by the engine's
-//! reading of [`RuleKey::TradeCount`](nova_sim::RuleKey::TradeCount)
+//! reading of [`RuleKey::TradeCount`](nova_sim_frame::RuleKey::TradeCount)
 //! ([`Market::option_asks_count`]), they open the quantity dialog over the
 //! exchange ([`QuantityDialog`], `DLOG` 1003, or its fallback) at the most
 //! the row offers ([`Market::row_max`]), even when that is 0 or less; a
@@ -80,7 +80,7 @@
 //! ([`TradeScreen::take_offer_choice`]). The quantity dialog covers the
 //! trade center, as the offer does: nothing is asked while either is
 //! open, and the wait runs on or stops as
-//! [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock) reads it
+//! [`RuleKey::OfferClock`](nova_sim_frame::RuleKey::OfferClock) reads it
 //! ([`TradeScreen::with_offer_clock`]).
 //!
 //! Done, Return and Escape close it. Without the dialog, the screen says
@@ -89,7 +89,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::{Direction, Lot, Market, MissionId, OfferPrompt, Order, RuleSource};
+use nova_sim_frame::{Direction, Lot, Market, MissionId, OfferPrompt, Order, RuleSource};
 
 use super::layout::DONE_LABEL;
 use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
@@ -213,7 +213,7 @@ pub trait ListLooks {
 /// row in that slot, in the rows' order, or `None` for an empty slot.
 /// The original has one row a slot, as the default does. Extra `jünk` rows
 /// of a side, which only the other reading of
-/// [`RuleKey::JunkListing`](nova_sim::RuleKey::JunkListing) lists, follow
+/// [`RuleKey::JunkListing`](nova_sim_frame::RuleKey::JunkListing) lists, follow
 /// their slot.
 fn positions(market: &Market) -> Vec<Option<usize>> {
     let slots = u8::try_from(ROWS).unwrap_or(u8::MAX);
@@ -386,7 +386,7 @@ impl TradeScreen {
     /// The trade center with mission offers, each shown in the offer dialog of
     /// its variant laid out by `templates` (or saying why there is none): it asks for the
     /// first as it opens, and again once rearmed
-    /// ([`TradeScreen::rearm`]), as the original's does ([`TRADE_CENTER`](nova_sim::mission::screens::TRADE_CENTER)).
+    /// ([`TradeScreen::rearm`]), as the original's does ([`TRADE_CENTER`](nova_sim_frame::mission::screens::TRADE_CENTER)).
     #[must_use]
     pub fn with_offers(self, templates: OfferTemplates) -> Self {
         Self {
@@ -400,7 +400,7 @@ impl TradeScreen {
     }
 
     /// Its offers' timer running as `clock` reads
-    /// [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock), for offers
+    /// [`RuleKey::OfferClock`](nova_sim_frame::RuleKey::OfferClock), for offers
     /// given ([`TradeScreen::with_offers`]) before it.
     #[must_use]
     pub fn with_offer_clock(self, clock: RuleSource) -> Self {
@@ -545,7 +545,7 @@ impl TradeScreen {
 
     /// The list position shown first: slot 0 and up, counting the extra
     /// `jünk` rows of the other reading of
-    /// [`RuleKey::JunkListing`](nova_sim::RuleKey::JunkListing) (see the
+    /// [`RuleKey::JunkListing`](nova_sim_frame::RuleKey::JunkListing) (see the
     /// module docs). By the default it is 0.
     #[must_use]
     pub fn top(&self) -> usize {
@@ -770,12 +770,18 @@ impl TradeScreen {
     }
 
     /// `row`'s text in its `slot`: name, tons held, marker and price.
-    fn draw_row(&self, laid: &Laid, list: &mut DrawList, slot: Bounds, row: &nova_sim::MarketRow) {
+    fn draw_row(
+        &self,
+        laid: &Laid,
+        list: &mut DrawList,
+        slot: Bounds,
+        row: &nova_sim_frame::MarketRow,
+    ) {
         let color = self.colors.text;
         let baseline = slot.min.y + ROW_BASELINE;
         let name_x = match row.good {
-            nova_sim::Good::Commodity(_) => NAME_X,
-            nova_sim::Good::Junk(_) => JUNK_NAME_X,
+            nova_sim_frame::Good::Commodity(_) => NAME_X,
+            nova_sim_frame::Good::Junk(_) => JUNK_NAME_X,
         };
         text_at(list, &row.name, slot.min.x + name_x, baseline, color);
         let ending = |list: &mut DrawList, text: &str, end: f32| {
@@ -1002,10 +1008,11 @@ pub(crate) mod touch;
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use nova_sim::trade_dialog::cargo_summary;
-    use nova_sim::{
-        Good, JunkId, MarketRow, PriceMarker, RuleKey, RuleSource, Rulebook, TradeWords,
-    };
+    use nova_sim_frame::catalog::JunkId;
+    use nova_sim_frame::{Good, MarketRow, RuleKey, RuleSource, Rulebook};
+    use nova_sim_state::trade_dialog::PriceMarker;
+    use nova_sim_state::trade_dialog::TradeWords;
+    use nova_sim_state::trade_dialog::cargo_summary;
 
     use super::*;
     use crate::draw::DrawCommand;

@@ -9,8 +9,8 @@ use super::*;
 use crate::flight::escorts::fighters_abandoned_message;
 use crate::flight::fake_catalog::scripted;
 use crate::flight::jump::{FADE_IN_FOR, FADE_OUT_FOR, JumpEffect, JumpPhase};
-use nova_sim::flight_frame::{FlightEvent, PassExit, PassReport, ShipPlace};
-use nova_sim::{SessionEvent, SimSound};
+use nova_sim_frame::flight_frame::{FlightEvent, PassExit, PassReport, ShipPlace};
+use nova_sim_frame::{SessionEvent, SimSound};
 
 /// One tick of flight time on `view`'s clock, as a frame's tick moves it
 /// ([`FlightView::advance_clock`]): the message line counts it.
@@ -363,7 +363,7 @@ pub(super) fn now_shows(view: &mut Faked, frame: FlightFrame) {
 
 #[test]
 fn j_says_a_refusal_the_player_is_told_in_its_words_for_its_ticks_and_beeps_as_drained() {
-    use nova_sim::JumpRefusal;
+    use nova_sim_frame::JumpRefusal;
     for (refusal, text, ticks) in [
         (JumpRefusal::NoDestination, NO_DESTINATION, 360),
         (JumpRefusal::TooClose { distance: 0.0 }, TOO_CLOSE, 360),
@@ -402,7 +402,7 @@ fn a_no_gate_line_drained_after_j_is_said_for_its_ticks_with_no_beep() {
     // That the flight raises it, by which readings, is nova-sim's
     // (`session::no_gate_refusal`); that it lasts 360 ticks is
     // nova-sim-combat's (`each_sim_message_lasts_its_callers_ticks`).
-    use nova_sim::{JumpRefusal, SimMessage};
+    use nova_sim_frame::{JumpRefusal, SimMessage};
     let mut view = faked(in_sol());
     view.sim.queue_answer(Answer::JumpRefused {
         refusal: JumpRefusal::NoDestination,
@@ -535,7 +535,7 @@ pub(super) fn arrived_in_alpha(view: &mut Faked) {
 /// double-time step, its frame between the passes in the system left
 /// ([`under_way`]).
 ///
-/// [`StepRun::arrival`]: nova_sim::flight_frame::StepRun::arrival
+/// [`StepRun::arrival`]: nova_sim_frame::flight_frame::StepRun::arrival
 pub(super) fn arrival_report(pass: usize, place: ShipPlace) -> StepReport {
     let mut report = if pass == 0 {
         super::stepping::one_step(vec![PassReport::default()])
@@ -664,7 +664,7 @@ fn a_second_pass_line_stands_over_its_own_passs_arrival() {
     // of that pass raises the held line after it, so frame 98 shows it.
     let mut view = warping();
     let mut report = arrival_report(1, ShipPlace::default());
-    report.steps[0].second_pass_lines = vec![nova_sim::flight_frame::RaisedLine::Message(
+    report.steps[0].second_pass_lines = vec![nova_sim_frame::flight_frame::RaisedLine::Message(
         SimMessage::NoActiveMissions,
     )];
     queue_arrival(&mut view, report);
@@ -735,7 +735,7 @@ fn a_second_pass_line_stands_over_a_first_pass_arrival_on_the_frame_after() {
     let mut view = warping();
     let mut report = doubled_from(in_alpha());
     report.steps[0].arrival = Some(exit_on(0, ShipPlace::default()));
-    report.steps[0].second_pass_lines = vec![nova_sim::flight_frame::RaisedLine::Message(
+    report.steps[0].second_pass_lines = vec![nova_sim_frame::flight_frame::RaisedLine::Message(
         SimMessage::NoActiveMissions,
     )];
     queue_arrival(&mut view, report);
@@ -744,7 +744,7 @@ fn a_second_pass_line_stands_over_a_first_pass_arrival_on_the_frame_after() {
     let line = view.message().expect("the arrival's line on its frame");
     assert!(line.contains("Alpha Centauri"), "{line}");
     view.sim.queue_report(StepReport {
-        steps: vec![nova_sim::flight_frame::StepRun::default()],
+        steps: vec![nova_sim_frame::flight_frame::StepRun::default()],
         stopped: false,
     });
     view.tick(TICK);
@@ -777,13 +777,15 @@ fn a_double_time_arrival_on_the_first_pass_lays_out_on_that_tick_and_holds_its_f
 fn the_fight_before_the_arrival_is_heard_and_not_drawn() {
     // `_HandleShot`'s `PlaySound` started it in its pass (@0x44385), and
     // the arrival stops no sound (F6); the system it was drawn in is left.
-    let boom = nova_sim::catalog::Explosion::decode(0).expect("type 0");
+    let boom = nova_sim_frame::catalog::Explosion::decode(0).expect("type 0");
     let before = vec![
         CombatEvent::Fired {
             ship: ShipRef::Player,
             weapon: BLASTER,
             at: Vec2::ZERO,
-            sound: Some(nova_sim::FireSound::at(PLAYER_FIRE_PRIORITY)),
+            sound: Some(nova_sim_state::shown::combat::FireSound::at(
+                PLAYER_FIRE_PRIORITY,
+            )),
         },
         CombatEvent::Exploded {
             at: Vec2::ZERO,
@@ -819,7 +821,7 @@ fn the_fight_before_the_arrival_is_heard_and_not_drawn() {
             })
             .collect();
         assert!(
-            heard.contains(&nova_sim::SoundId(208)),
+            heard.contains(&nova_sim_frame::SoundId(208)),
             "pass {pass}: the blaster's `snd `, heard: {heard:?}"
         );
     }
@@ -827,13 +829,13 @@ fn the_fight_before_the_arrival_is_heard_and_not_drawn() {
 
 #[test]
 fn comm_before_the_arrival_shows_before_its_line_and_a_quote_after_it_stands_over_it() {
-    let note = |ship: &str| nova_sim::CommNote {
+    let note = |ship: &str| nova_sim_frame::CommNote {
         from: NpcId(0),
         comm_name: "Ally".to_owned(),
         ship_name: ship.to_owned(),
-        done: nova_sim::Help::Repair,
+        done: nova_sim_frame::Help::Repair,
     };
-    let quote = nova_sim::PersonQuote {
+    let quote = nova_sim_frame::PersonQuote {
         npc: NpcId(0),
         text: "Halt!".to_owned(),
     };
@@ -1101,7 +1103,7 @@ fn without_hyperspace_effects_a_second_pass_arrival_shows_the_frame_between_then
 
 #[test]
 fn a_held_arrivals_second_pass_effects_show_after_its_layout() {
-    let boom = nova_sim::catalog::Explosion::decode(0).expect("type 0");
+    let boom = nova_sim_frame::catalog::Explosion::decode(0).expect("type 0");
     let mut view = world(
         armed(0, &[BLASTER]),
         in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]),
@@ -1266,7 +1268,7 @@ fn j_held_through_a_jump_does_nothing_after_it() {
 
 #[test]
 fn an_arrivals_pending_explosions_are_drawn_on_its_first_frame_and_unheard_from_the_view() {
-    let boom = nova_sim::catalog::Explosion::decode(0).expect("type 0");
+    let boom = nova_sim_frame::catalog::Explosion::decode(0).expect("type 0");
     let mut view = world(
         armed(0, &[BLASTER]),
         in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]),
@@ -1308,7 +1310,9 @@ fn a_fights_sound_on_an_arrivals_tick_is_still_taken_after_its_layout() {
         ship: ShipRef::Player,
         weapon: BLASTER,
         at: Vec2::ZERO,
-        sound: Some(nova_sim::FireSound::at(PLAYER_FIRE_PRIORITY)),
+        sound: Some(nova_sim_state::shown::combat::FireSound::at(
+            PLAYER_FIRE_PRIORITY,
+        )),
     };
     // Fired in the rest of the arrival's pass, among the new system.
     let mut report = arrival_report(0, ShipPlace::default());
@@ -1323,7 +1327,11 @@ fn a_fights_sound_on_an_arrivals_tick_is_still_taken_after_its_layout() {
             _ => None,
         })
         .collect();
-    assert_eq!(heard, [nova_sim::SoundId(208)], "the blaster's `snd `");
+    assert_eq!(
+        heard,
+        [nova_sim_frame::SoundId(208)],
+        "the blaster's `snd `"
+    );
 }
 
 #[test]
@@ -1336,7 +1344,7 @@ fn arriving_lays_out_the_new_system_letting_go_of_the_effects_and_smoke() {
         &mut view,
         &[CombatEvent::Exploded {
             at: Vec2::ZERO,
-            explosion: nova_sim::catalog::Explosion::decode(0).expect("type 0"),
+            explosion: nova_sim_frame::catalog::Explosion::decode(0).expect("type 0"),
             size: 0.0,
         }],
     );
@@ -1407,7 +1415,7 @@ fn an_arrival_shows_the_new_systems_stellars_on_the_radar_at_once_leaving_the_ca
 fn the_escape_pods_rescue_lays_the_view_out_where_it_put_the_ship_once_faded_out_and_gives_its_desc()
  {
     use crate::flight::rescue_screen::RESCUE_FADE_FOR;
-    use nova_sim::flight_frame::{StepReport, StepRun};
+    use nova_sim_frame::flight_frame::{StepReport, StepRun};
     let mut view = faked(sol());
     view.map.centre_on_system(SystemId(132));
     let there = ShipPlace {
@@ -1620,7 +1628,7 @@ fn an_empty_buoy_replaces_the_line_shown_before_the_jump() {
 #[test]
 fn fighters_abandoned_in_a_jump_are_told_on_arrival() {
     let mut view = arriving_with(vec![FlightEvent::FighterNote(
-        nova_sim::FighterNote::Abandoned(2),
+        nova_sim_frame::FighterNote::Abandoned(2),
     )]);
     step_the_arrival(&mut view);
     let said = format!("{}  {}", alpha_arrival(), fighters_abandoned_message(2));
@@ -1661,7 +1669,7 @@ fn a_flight_message_on_an_arrival_comes_after_the_fighters_abandoned() {
     // The abandoned count is the arrival line's own tail (@0x6c3c4-0x6c42b).
     let mut view = arriving_with(vec![
         FlightEvent::Message(SimMessage::CargoJettisoned),
-        FlightEvent::FighterNote(nova_sim::FighterNote::Abandoned(2)),
+        FlightEvent::FighterNote(nova_sim_frame::FighterNote::Abandoned(2)),
     ]);
     step_the_arrival(&mut view);
     let said = view.message().expect("the arrival").to_owned();
@@ -1672,7 +1680,9 @@ fn a_flight_message_on_an_arrival_comes_after_the_fighters_abandoned() {
 
 #[test]
 fn an_escort_left_unpaid_by_a_jump_is_kept_for_a_dialog_off_the_message_line() {
-    let mut view = arriving_with(vec![FlightEvent::PayNote(nova_sim::PayNote::Defected(1))]);
+    let mut view = arriving_with(vec![FlightEvent::PayNote(
+        nova_sim_frame::PayNote::Defected(1),
+    )]);
     step_the_arrival(&mut view);
     assert_eq!(
         view.message(),
@@ -1686,8 +1696,8 @@ fn an_escort_left_unpaid_by_a_jump_is_kept_for_a_dialog_off_the_message_line() {
 #[test]
 fn fighters_abandoned_are_said_and_escorts_defected_kept_on_one_arrival() {
     let mut view = arriving_with(vec![
-        FlightEvent::PayNote(nova_sim::PayNote::Defected(1)),
-        FlightEvent::FighterNote(nova_sim::FighterNote::Abandoned(2)),
+        FlightEvent::PayNote(nova_sim_frame::PayNote::Defected(1)),
+        FlightEvent::FighterNote(nova_sim_frame::FighterNote::Abandoned(2)),
     ]);
     step_the_arrival(&mut view);
     let said = format!("{}  {}", alpha_arrival(), fighters_abandoned_message(2));
@@ -1711,7 +1721,7 @@ fn relaying(message: SimMessage) -> Faked {
 
 #[test]
 fn the_land_hint_names_the_stellar_and_l() {
-    let hint = SimMessage::Tutorial(nova_sim::TutorialHint::Land {
+    let hint = SimMessage::Tutorial(nova_sim_frame::TutorialHint::Land {
         stellar: StellarId(129),
         station: false,
     });
@@ -1724,7 +1734,7 @@ fn the_land_hint_names_the_stellar_and_l() {
 fn the_hyperspace_hint_names_m_and_j() {
     let hint = "Now you should probably hyperspace to another system. Hit 'M' to access the map, select a nearby system, then move outward and hit 'J' to begin your jump.";
     assert_eq!(hyperspace_hint("M", "J"), hint);
-    let message = SimMessage::Tutorial(nova_sim::TutorialHint::Hyperspace);
+    let message = SimMessage::Tutorial(nova_sim_frame::TutorialHint::Hyperspace);
     let mut view = relaying(message.clone());
     faked_lasts(&mut view, hint, message.ticks());
 }
@@ -1738,7 +1748,7 @@ fn the_hints_name_the_keys_flight_s_bindings_bind() {
             .rebound(PlayCommand::GalaxyMap, KeyCombo::key(Key::KeyQ))
             .rebound(Fc::HyperJump, KeyCombo::key(Key::KeyY)),
     );
-    let hint = SimMessage::Tutorial(nova_sim::TutorialHint::Land {
+    let hint = SimMessage::Tutorial(nova_sim_frame::TutorialHint::Land {
         stellar: StellarId(129),
         station: false,
     });
@@ -1752,7 +1762,7 @@ fn the_hints_name_the_keys_flight_s_bindings_bind() {
     assert_eq!(view.message(), Some(land_hint(false, "Moon", "T").as_str()));
     view.sim
         .queue_event(FlightEvent::Message(SimMessage::Tutorial(
-            nova_sim::TutorialHint::Hyperspace,
+            nova_sim_frame::TutorialHint::Hyperspace,
         )));
     view.relay_messages();
     assert_eq!(view.message(), Some(hyperspace_hint("Q", "Y").as_str()));
@@ -1760,10 +1770,10 @@ fn the_hints_name_the_keys_flight_s_bindings_bind() {
 
 #[test]
 fn far_enough_and_nothing_out_here_last_512() {
-    let far = SimMessage::Tutorial(nova_sim::TutorialHint::FarEnough);
+    let far = SimMessage::Tutorial(nova_sim_frame::TutorialHint::FarEnough);
     let mut view = relaying(far.clone());
     assert_eq!(view.message(), Some(FAR_ENOUGH));
-    let nothing = SimMessage::Tutorial(nova_sim::TutorialHint::NothingOutHere);
+    let nothing = SimMessage::Tutorial(nova_sim_frame::TutorialHint::NothingOutHere);
     view.sim.queue_event(FlightEvent::Message(nothing.clone()));
     view.relay_messages();
     assert_eq!(nothing.ticks(), 512);

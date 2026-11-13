@@ -27,7 +27,7 @@
 //! closes once the movie has ended, as the original leaves its loop
 //! (@0x5da33) only after `_ShowTextDialog` returns.
 
-use nova_sim::MissionShown;
+use nova_sim_frame::MissionShown;
 
 use super::{Open, SpaceportView};
 #[cfg(doc)]
@@ -68,7 +68,7 @@ impl SpaceportView {
 mod tests {
     use std::rc::Rc;
 
-    use nova_sim::{DescMovie, Reselection};
+    use nova_sim_frame::{DescMovie, Reselection};
 
     use super::super::tests::{
         alert, click_item, done, drinking_with_info, hirelings, key, movies_of, ms, serve_openings,
@@ -81,8 +81,8 @@ mod tests {
     use crate::screen::Screen;
     use crate::spaceport::outfitter::NO_ITEMS;
     use crate::spaceport::shipyard::NO_SHIPS;
-    use nova_sim::hire::NONE_FOR_HIRE;
-    use nova_sim::{Outfitter, Shipyard};
+    use nova_sim_frame::hire::NONE_FOR_HIRE;
+    use nova_sim_frame::{Outfitter, Shipyard};
 
     fn after(file: &str) -> Option<DescMovie> {
         DescMovie::from_desc(file, 0x0001)

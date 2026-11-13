@@ -465,9 +465,9 @@ fn a_site_that_opened_no_dialog_latches_the_keys_held_at_the_next_pass_and_no_la
 /// fits (`_DoMissionCargoPickup` @0x6533d, site @0x6535a).
 fn picks_up(view: &mut Faked) {
     view.sim
-        .queue_answer(Answer::Boarded(nova_sim::Boarding::MissionShip(Some(
-            MissionBoardLine::Retrieved { cargo: None },
-        ))));
+        .queue_answer(Answer::Boarded(nova_sim_frame::Boarding::MissionShip(
+            Some(MissionBoardLine::Retrieved { cargo: None }),
+        )));
 }
 
 #[test]
@@ -510,8 +510,8 @@ fn i_pressed_in_the_frame_an_offer_is_accepted_at_once_waits() {
     // Y's site @0x622ac runs before I's read @0x70411.
     let mut view = in_flight();
     view.sim
-        .queue_answer(Answer::Hailed(nova_sim::Hailed::Offer(
-            nova_sim::VenueOffer::Accepted {
+        .queue_answer(Answer::Hailed(nova_sim_frame::Hailed::Offer(
+            nova_sim_frame::VenueOffer::Accepted {
                 mission: MissionId(130),
                 accepted: Ok(0),
             },
@@ -808,12 +808,12 @@ fn a_latched_jump_key_held_into_a_disable_jumps_once_intact() {
     view.held_keys_frame();
     assert!(!jumped_since(&view, from), "latched");
     super::faked_hud::changes(&mut view, |frame| {
-        frame.ships[0].condition = nova_sim::Condition::Disabled;
+        frame.ships[0].condition = nova_sim_frame::Condition::Disabled;
     });
     view.held_keys_frame();
     assert!(!jumped_since(&view, from), "disabled");
     super::faked_hud::changes(&mut view, |frame| {
-        frame.ships[0].condition = nova_sim::Condition::Intact;
+        frame.ships[0].condition = nova_sim_frame::Condition::Intact;
     });
     view.held_keys_frame();
     assert!(jumped_since(&view, from), "{:?}", &sent(&view)[from..]);
@@ -908,7 +908,7 @@ fn l_pressed_under_a_dialog_presses_the_land_key_at_its_close() {
 // group block at 0x316958 (@0x61efd-0x61f44).
 
 /// The escort commands `view` sent from `from` of its commands on.
-fn escort_commands_since(view: &Faked, from: usize) -> Vec<nova_sim::EscortCommand> {
+fn escort_commands_since(view: &Faked, from: usize) -> Vec<nova_sim_frame::EscortCommand> {
     sent(view)[from..]
         .iter()
         .filter_map(|sent| match sent {
@@ -928,7 +928,7 @@ fn an_escort_command_pressed_under_a_sites_dialog_and_still_down_commands_on_the
     view.tick(TICK);
     assert_eq!(
         escort_commands_since(&view, from),
-        [nova_sim::EscortCommand::Attack]
+        [nova_sim_frame::EscortCommand::Attack]
     );
     view.tick(TICK);
     view.tick(TICK);
@@ -949,7 +949,7 @@ fn an_escort_command_that_acted_before_a_dialog_waits_for_its_release() {
     view.input(&key(ESCORT_ATTACK_KEY, true));
     assert_eq!(
         escort_commands_since(&view, from),
-        [nova_sim::EscortCommand::Attack],
+        [nova_sim_frame::EscortCommand::Attack],
         "let go and pressed afresh"
     );
 }
@@ -968,7 +968,7 @@ fn an_escort_command_pressed_under_an_unlatching_dialog_comes_back_held_not_as_a
     view.tick(TICK);
     assert_eq!(
         escort_commands_since(&view, from),
-        [nova_sim::EscortCommand::Defend]
+        [nova_sim_frame::EscortCommand::Defend]
     );
 }
 
@@ -1010,7 +1010,7 @@ fn the_keys_read_live_act_after_a_site_with_no_dialog() {
     view.input(&key(ESCORT_HOLD_KEY, true));
     assert_eq!(
         escort_commands_since(&view, from),
-        [nova_sim::EscortCommand::Hold]
+        [nova_sim_frame::EscortCommand::Hold]
     );
 }
 

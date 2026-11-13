@@ -25,7 +25,7 @@
 //! [`ButtonSkin::disabled`]: crate::ui::button::ButtonSkin
 //! [`Dialog`]: crate::ui::dialog::Dialog
 
-use nova_sim::Service;
+use nova_sim_frame::Service;
 
 use super::layout::{LEAVE_ITEM, LEAVE_LABEL, RECHARGE_ITEM, RECHARGE_LABEL, label, service_item};
 use crate::ui::dialog::Role;
@@ -108,7 +108,7 @@ mod tests {
 /// The buttons as the spaceport draws and tracks them.
 #[cfg(test)]
 mod view_tests {
-    use nova_sim::landing::StellarFlags;
+    use nova_sim_frame::landing::StellarFlags;
 
     use super::*;
     use crate::color::Color;

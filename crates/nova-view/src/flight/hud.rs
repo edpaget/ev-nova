@@ -37,7 +37,7 @@
 //!
 //! Which `ïntf`: as `_LoadIntfResource` (@0x735f2) picks it, the player's
 //! ship type does, not the pilot. Its `InherentGovt` names a government
-//! ([`Session::interface_government`](nova_sim::Session::interface_government)),
+//! (`nova_sim::Session::interface_government`),
 //! whose `gövt` `Interface` is the bar. A ship type with no government, a
 //! government with no `gövt` record, or an `Interface` below 128 means
 //! `ïntf` 128, the "Default status bar" ([`interface_id`]), and the same
@@ -64,10 +64,10 @@
 //! as wide as its background picture (194 pixels in every stock bar) and
 //! sits against the right edge of the screen, at the top.
 
-use nova_sim::hyperspace::max_jumps;
-use nova_sim::{JumpReadiness, Reserves, Special, StatusCargo};
+use nova_sim_frame::hyperspace::max_jumps;
+use nova_sim_frame::{JumpReadiness, Reserves, Special, StatusCargo};
 
-use nova_sim::Gauge;
+use nova_sim_frame::Gauge;
 
 use super::catalog::{GovtId, StatusBarLayout, StatusBars};
 use super::pen::Pen;
@@ -87,8 +87,8 @@ pub const DEFAULT_INTERFACE: i16 = 128;
 /// the camera's, which the play area's anchor shares.
 pub use crate::system::camera::STATUS_BAR_WIDTH;
 /// Fuel for one jump (the Bible: "100 is one jump"): the simulation's
-/// [`JUMP_FUEL`](nova_sim::hyperspace::JUMP_FUEL).
-pub const FUEL_PER_JUMP: f32 = nova_sim::hyperspace::JUMP_FUEL;
+/// [`JUMP_FUEL`](nova_sim_frame::hyperspace::JUMP_FUEL).
+pub const FUEL_PER_JUMP: f32 = nova_sim_frame::hyperspace::JUMP_FUEL;
 /// The size of the message shown when no status bar can be read.
 pub const MESSAGE_SIZE: f32 = 12.0;
 
@@ -780,7 +780,7 @@ pub fn draw_unavailable(list: &mut DrawList, reason: &str, view_width: f32) {
 mod tests {
     use std::cell::RefCell;
 
-    use nova_sim::Gauge;
+    use nova_sim_frame::Gauge;
 
     use super::*;
     use crate::DrawCommand;
@@ -804,7 +804,7 @@ mod tests {
     }
     use crate::system::camera::VIEW_SIZE;
     use crate::text::fixture::MonoMetrics;
-    use nova_sim::{ShipIff, StellarIff};
+    use nova_sim_frame::{ShipIff, StellarIff};
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
@@ -2138,7 +2138,7 @@ mod tests {
 
     // The cargo area.
 
-    use nova_sim::CommodityRow;
+    use nova_sim_frame::status_cargo::CommodityRow;
 
     fn row(label: &str, tons: i64) -> CommodityRow {
         CommodityRow {

@@ -37,7 +37,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::planet_comm::{
+use nova_sim_frame::planet_comm::{
     PlanetCommButton, PlanetCommItem, PlanetCommView, PlanetStatus, STATUS_LABEL,
 };
 
@@ -497,7 +497,7 @@ pub(crate) use tests::pad_probe;
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use nova_sim::StellarId;
+    use nova_sim_frame::StellarId;
 
     use super::*;
     use crate::input::Key;

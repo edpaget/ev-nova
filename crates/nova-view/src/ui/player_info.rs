@@ -3,7 +3,7 @@
 //! executable): the pilot, the ship and its cargo, extras, ranks and
 //! honors, on four tabs. What it shows is the session's
 //! [`PlayerInfo`], decided in `nova-sim`
-//! ([`player_info`](nova_sim::player_info)).
+//! ([`player_info`](nova_sim_frame::player_info)).
 //!
 //! **Layout** (`_PlayerInfoDialogUpdate` 0x5244f). The stock dialog is
 //! 413 x 227, centred: Done (item 1), the General, Cargo, Extras and
@@ -87,8 +87,8 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::PlayerInfo;
-use nova_sim::player_info::{EnergyShown, IncomeLine, Reach, Words, cheat_suffix};
+use nova_sim_frame::PlayerInfo;
+use nova_sim_frame::player_info::{EnergyShown, IncomeLine, Reach, Words, cheat_suffix};
 
 use super::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
 use super::catalog::PictureSizes;
@@ -1057,7 +1057,7 @@ mod tests {
     use super::*;
     use crate::keymap::KeyMap;
     use crate::keymap::test_keys::PLAYER_INFO_KEY;
-    use nova_sim::player_info::CheatIds;
+    use nova_sim_state::shown::player_info::CheatIds;
 
     use crate::keymap::{Bindings, KeyCombo};
     use crate::sound::Sound;

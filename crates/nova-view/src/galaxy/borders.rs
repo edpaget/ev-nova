@@ -1,5 +1,5 @@
 //! The maps' government borders, as `_DrawMapInfluence` paints them
-//! (@0xe360-0xe567): each lattice cell [`nova_sim::map_borders`] works
+//! (@0xe360-0xe567): each lattice cell [`nova_sim_frame::map_borders`] works
 //! out, an opaque square of 2 × step pixels in its strongest government's
 //! colour at half the cell's value.
 //!
@@ -20,8 +20,8 @@
 
 use std::collections::BTreeMap;
 
-use nova_sim::RuleSource;
-use nova_sim::map_borders::{BorderPasses, BorderSources, GridFrame, NullEvent, PaintedCell};
+use nova_sim_frame::RuleSource;
+use nova_sim_frame::map_borders::{BorderPasses, BorderSources, GridFrame, NullEvent, PaintedCell};
 
 use super::catalog::GovtId;
 use super::dialog::{MAP_ITEM, MapDialog, map_area};
@@ -105,16 +105,16 @@ pub fn draw_cells(
 /// view changes, the fine pass on its ticks at the engine's pace, and
 /// takes the cells at each pass's end.
 ///
-/// [`RuleKey::MapBorderPace`]: nova_sim::RuleKey::MapBorderPace
+/// [`RuleKey::MapBorderPace`]: nova_sim_frame::RuleKey::MapBorderPace
 #[derive(Clone, Debug)]
 pub struct MapBorders {
     passes: BorderPasses,
     sources: BorderSources,
     /// The cells as last taken.
     shown: Vec<PaintedCell>,
-    /// [`RuleKey::MapBorderPace`](nova_sim::RuleKey::MapBorderPace).
+    /// [`RuleKey::MapBorderPace`](nova_sim_frame::RuleKey::MapBorderPace).
     pace: RuleSource,
-    /// [`RuleKey::MapFindBorders`](nova_sim::RuleKey::MapFindBorders).
+    /// [`RuleKey::MapFindBorders`](nova_sim_frame::RuleKey::MapFindBorders).
     find: RuleSource,
     /// Whether the borders were shown as the in-flight map last opened.
     at_open: bool,
@@ -172,8 +172,8 @@ impl MapBorders {
     /// Sets the readings of [`RuleKey::MapBorderPace`] and
     /// [`RuleKey::MapFindBorders`].
     ///
-    /// [`RuleKey::MapBorderPace`]: nova_sim::RuleKey::MapBorderPace
-    /// [`RuleKey::MapFindBorders`]: nova_sim::RuleKey::MapFindBorders
+    /// [`RuleKey::MapBorderPace`]: nova_sim_frame::RuleKey::MapBorderPace
+    /// [`RuleKey::MapFindBorders`]: nova_sim_frame::RuleKey::MapFindBorders
     pub fn set_rules(&mut self, pace: RuleSource, find: RuleSource) {
         self.pace = pace;
         self.find = find;
@@ -226,7 +226,7 @@ impl MapBorders {
     /// engine reading nothing, as `_DoSystemSearch` runs no pass; by the
     /// other, the coarse pass and item 3 redrawn, as Space does.
     ///
-    /// [`RuleKey::MapFindBorders`]: nova_sim::RuleKey::MapFindBorders
+    /// [`RuleKey::MapFindBorders`]: nova_sim_frame::RuleKey::MapFindBorders
     pub fn found(&mut self, dialog: &mut MapDialog) {
         if self.find == RuleSource::Bible {
             dialog.redraw();
@@ -240,7 +240,7 @@ impl MapBorders {
     /// its redraw redraws item 3 (@0x1479a), which repairs a kept partial
     /// frame too.
     ///
-    /// [`RuleKey::MapBorderPace`]: nova_sim::RuleKey::MapBorderPace
+    /// [`RuleKey::MapBorderPace`]: nova_sim_frame::RuleKey::MapBorderPace
     pub fn tick(&mut self, dialog: &mut MapDialog) {
         if !dialog.borders_shown() {
             return;
@@ -511,9 +511,9 @@ mod on_the_maps {
     use std::collections::BTreeMap;
     use std::rc::Rc;
 
-    use nova_sim::map_borders::{BorderSource, BorderSources, Next, PaintedCell};
-    use nova_sim::map_search::SearchOutcome;
-    use nova_sim::{Governments, RuleSource};
+    use nova_sim_frame::map_borders::{BorderSource, BorderSources, Next, PaintedCell};
+    use nova_sim_frame::map_search::SearchOutcome;
+    use nova_sim_frame::{Governments, RuleSource};
 
     use super::draw_cells;
     use crate::flight::radar::IRect;
@@ -1168,22 +1168,22 @@ mod on_the_maps {
         galaxy.systems[1].govt = Some(GovtId(129));
         galaxy.systems.truncate(2);
         galaxy.govts = Governments::new([
-            flagged(128, nova_sim::govt::NO_INFLUENCE),
-            flagged(129, nova_sim::govt::SMALL_INFLUENCE),
+            flagged(128, nova_sim_state::govt::NO_INFLUENCE),
+            flagged(129, nova_sim_state::govt::SMALL_INFLUENCE),
         ]);
         galaxy
     }
 
     /// Government `id` of `Flags2` `flags2`, with no classes.
-    fn flagged(id: i16, flags2: u16) -> nova_sim::GovtRecord {
-        nova_sim::GovtRecord {
+    fn flagged(id: i16, flags2: u16) -> nova_sim_frame::catalog::GovtRecord {
+        nova_sim_frame::catalog::GovtRecord {
             id: GovtId(id),
             name: String::new(),
             flags: 0,
             flags2,
             crime_tol: 0,
             initial_rec: 0,
-            penalties: nova_sim::Penalties::default(),
+            penalties: nova_sim_frame::catalog::Penalties::default(),
             max_odds: 100,
             classes: [-1; 4],
             allies: [-1; 4],

@@ -10,15 +10,15 @@
 //! - **m ≥ v**: by the engine (@0x2bf78-0x2bf82) the level stays m and the
 //!   colour becomes `32 − m` as an RGB555 pixel, a dark blue of 32 − m out
 //!   of 31; by the other reading of
-//!   [`RuleKey::IonTintMurkColour`](nova_sim::RuleKey::IonTintMurkColour),
+//!   [`RuleKey::IonTintMurkColour`](nova_sim_frame::RuleKey::IonTintMurkColour),
 //!   at level m toward the ion colour, as the 8-bit path (@0x2bf70) has it.
 //!
 //! The colorize replaces the murk's in the sprite's one slot (+0xb0/+0xb4).
 //! The layers that copy the hull's colorize take it too (see the
 //! [`ship_layers`](super::ship_layers) module).
 
-use nova_sim::RuleSource;
-use nova_sim::combat::ion_tint::IonTint;
+use nova_sim_frame::RuleSource;
+use nova_sim_frame::combat::ion_tint::IonTint;
 
 use crate::Colorize;
 use crate::colorize::COLORIZE_STEPS;

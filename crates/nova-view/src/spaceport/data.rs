@@ -11,7 +11,7 @@ use nova_data::records::colors::Colors;
 use nova_data::records::ship::Ship;
 use nova_data::records::stellar::Stellar;
 use nova_data::{GameData, StandInOf};
-use nova_sim::ShipId;
+use nova_sim_frame::ShipId;
 
 use super::catalog::{PortRecord, SpaceportCatalog, StellarId};
 use super::grid::{GridColors, GridLooks};

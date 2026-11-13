@@ -5,11 +5,11 @@
 
 use super::faked_shops::docked;
 use super::*;
-use nova_sim::flight_frame::{
+use nova_sim_frame::flight_frame::{
     BarScene, BarStory, FlightEvent, RoomRefusal, ScreenAnswer, ScreenAsk, StoryObjective, StoryRow,
 };
-use nova_sim::storylines::news::HeardNews;
-use nova_sim::{MissionInfo, MissionInfoPress, SystemId};
+use nova_sim_frame::storylines::news::HeardNews;
+use nova_sim_frame::{MissionInfo, MissionInfoPress, SystemId};
 
 /// A job of 10 tons refused with `room` free.
 fn refused(room: i64) -> RoomRefusal {
@@ -112,7 +112,7 @@ fn i_opening_on_storyline_rows_alone_hands_the_info_to_the_router() {
 #[test]
 fn the_names_are_the_opening_s() {
     let mut fake = FakeFlight::new();
-    let mut names = nova_sim::flight_frame::Names::default();
+    let mut names = nova_sim_frame::flight_frame::Names::default();
     names.systems.insert(SystemId(130), "Hearth".to_owned());
     fake.set_names(names.clone());
     let view = scripted_over(catalog(), fake, &Rulebook::default());

@@ -746,8 +746,8 @@ impl Screen for MainMenu {
 mod tests {
     use std::cell::RefCell;
 
-    use nova_sim::Chance;
-    use nova_sim::mission::screens::mac_ticks;
+    use nova_sim_frame::Chance;
+    use nova_sim_frame::mission::screens::mac_ticks;
 
     use super::*;
     use crate::draw::{Blend, lights_tint};
@@ -1475,7 +1475,7 @@ mod tests {
             panel_looks()
         }
 
-        fn panel_ship(&self, _ship: nova_sim::catalog::ShipId) -> PanelShip {
+        fn panel_ship(&self, _ship: nova_sim_frame::catalog::ShipId) -> PanelShip {
             PanelShip {
                 subtitle: "Variant".to_owned(),
                 picture: Some(ShipPicture {
@@ -1496,11 +1496,11 @@ mod tests {
     }
 
     fn alive() -> PanelPilot {
-        PanelPilot::Alive(Box::new(nova_sim::pilot_panel::PilotPanel {
+        PanelPilot::Alive(Box::new(nova_sim_frame::pilot_panel::PilotPanel {
             pilot_name: "Ada".to_owned(),
             ship_name: String::new(),
             ship_class: String::new(),
-            ship: nova_sim::catalog::ShipId(128),
+            ship: nova_sim_frame::catalog::ShipId(128),
             legal_status: String::new(),
             combat_rating: String::new(),
             date: String::new(),

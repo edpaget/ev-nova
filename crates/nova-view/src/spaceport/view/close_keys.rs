@@ -44,7 +44,7 @@ impl SpaceportView {
 
     /// Hides the offer dialog answered, at the spaceport or over the venue
     /// open: whoever flies the ship hides it once the refusal showed a
-    /// `RefuseText` ([`RefuseShown`](nova_sim::RefuseShown),
+    /// `RefuseText` ([`RefuseShown`](nova_sim_frame::RefuseShown),
     /// `_OfferOneMission` @0xa2e8e). It is disposed of as any answer is.
     pub fn hide_answered_offer(&mut self) {
         self.each_offers(VenueOffers::hide_answered);

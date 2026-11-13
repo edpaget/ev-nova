@@ -6,8 +6,8 @@
 //! it doesn't offer, or a flight that never started). What a
 //! conversation plays is nova-sim's (`session/apply/conversation.rs`).
 
-use nova_sim::ConversationPage;
-use nova_sim::flight_frame::{Answer, Converse, FlightCommand};
+use nova_sim_frame::ConversationPage;
+use nova_sim_frame::flight_frame::{Answer, Converse, FlightCommand};
 
 use crate::flight::sim_port::FlightSim;
 

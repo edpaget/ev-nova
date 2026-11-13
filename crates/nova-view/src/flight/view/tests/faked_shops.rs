@@ -12,15 +12,16 @@ use super::faked_travel::{faked_lasts, sent_but_lines};
 use super::*;
 use crate::flight::radar::RadarScene;
 use crate::flight::target::TargetPanel;
-use nova_sim::capture_naming::CaptureNaming;
-use nova_sim::flight_frame::{FlightEvent, PortShops};
-use nova_sim::navigation::NavMode;
-use nova_sim::order_loop::{OrderRun, Stopped};
-use nova_sim::status_cargo::CommodityRow;
-use nova_sim::{
-    Gauge, InterfaceLoad, MissionText, MissionTextKind, OutfitRefusal, OutfitRun, RechargeRefusal,
-    Reselection, SessionEvent, ShipNaming, ShipPurchase, ShipRefusal, SimMessage, TextBar,
-    TradeRefusal,
+use nova_sim_frame::capture_naming::CaptureNaming;
+use nova_sim_frame::flight_frame::{FlightEvent, PortShops};
+use nova_sim_frame::mission_screens::MissionText;
+use nova_sim_frame::mission_screens::MissionTextKind;
+use nova_sim_frame::navigation::NavMode;
+use nova_sim_frame::order_loop::{OrderRun, Stopped};
+use nova_sim_frame::status_cargo::CommodityRow;
+use nova_sim_frame::{
+    Gauge, InterfaceLoad, OutfitRefusal, OutfitRun, RechargeRefusal, Reselection, SessionEvent,
+    ShipNaming, ShipPurchase, ShipRefusal, SimMessage, TextBar, TradeRefusal,
 };
 
 /// Ship 128's full gauges: a 40 shield, a 30 armour, 250 fuel.
@@ -91,8 +92,8 @@ pub(super) fn leaves(view: &Faked, change: impl FnOnce(&mut FlightFrame)) -> Fli
 // The exchange.
 
 /// A shipyard listing nothing, of the player flying ship 128.
-fn empty_shipyard() -> nova_sim::Shipyard {
-    nova_sim::Shipyard {
+fn empty_shipyard() -> nova_sim_frame::Shipyard {
+    nova_sim_frame::Shipyard {
         rows: Vec::new(),
         trade_in: 5000,
         cash: 1000,
@@ -105,11 +106,11 @@ fn empty_shipyard() -> nova_sim::Shipyard {
 fn the_shops_are_the_flights_asked_once_and_not_each_frame() {
     let mut view = docked();
     let shops = PortShops {
-        market: Some(nova_sim::Market::default()),
-        outfitter: Some(nova_sim::Outfitter::default()),
+        market: Some(nova_sim_frame::Market::default()),
+        outfitter: Some(nova_sim_frame::Outfitter::default()),
         shipyard: Some(empty_shipyard()),
         can_hire_escorts: true,
-        empty: nova_sim::flight_frame::EmptyServices {
+        empty: nova_sim_frame::flight_frame::EmptyServices {
             mission_bbs: true,
             hire_escort: false,
         },
@@ -344,7 +345,7 @@ pub(super) fn stale(view: &mut Faked) {
             name: "Stale".to_owned(),
             subtitle: String::new(),
             picture: None,
-            status: nova_sim::TargetStatus::Hidden,
+            status: nova_sim_frame::TargetStatus::Hidden,
             tag: None,
         }),
     ));
@@ -421,7 +422,7 @@ fn the_outfitter_alone_and_a_ships_naming_are_the_flights() {
         .queue_screen(ScreenAnswer::ShipNaming(Ok(naming.clone())));
     view.sim
         .queue_screen(ScreenAnswer::ShipNaming(Err(ShipRefusal::AlreadyFlown)));
-    assert_eq!(view.outfitter(), Some(nova_sim::Outfitter::default()));
+    assert_eq!(view.outfitter(), Some(nova_sim_frame::Outfitter::default()));
     assert_eq!(view.ship_naming(ShipId(129)), Ok(naming));
     assert_eq!(
         view.ship_naming(ShipId(128)),
@@ -1069,14 +1070,14 @@ fn opening_the_bar_sends_its_command_and_says_whether_it_opened() {
 #[test]
 fn the_bars_news_its_picture_and_its_hire_list_are_the_flights() {
     let mut view = docked();
-    let news = nova_sim::flight_frame::BarNews {
-        news: nova_sim::News {
+    let news = nova_sim_frame::flight_frame::BarNews {
+        news: nova_sim_frame::News {
             commercial: "C2".to_owned(),
             story: "G2".to_owned(),
         },
         picture: 9000,
     };
-    let list = nova_sim::HireList {
+    let list = nova_sim_frame::HireList {
         rows: Vec::new(),
         cash: 1000,
         room: true,
@@ -1096,7 +1097,7 @@ fn the_bars_news_its_picture_and_its_hire_list_are_the_flights() {
 #[test]
 fn a_hire_sends_its_class_and_hands_back_the_flights_answer() {
     let mut view = docked();
-    let hired = nova_sim::Hired {
+    let hired = nova_sim_frame::Hired {
         ship: ShipId(129),
         fee: 90,
         wage: 9,
@@ -1105,14 +1106,14 @@ fn a_hire_sends_its_class_and_hands_back_the_flights_answer() {
     view.sim.queue_answer(Answer::Hired(Ok(hired)));
     assert_eq!(view.hire(ShipId(129)), Ok(hired));
     view.sim
-        .queue_answer(Answer::Hired(Err(nova_sim::HireRefusal::NotForHire)));
+        .queue_answer(Answer::Hired(Err(nova_sim_frame::HireRefusal::NotForHire)));
     assert_eq!(
         view.hire(ShipId(129)),
-        Err(nova_sim::HireRefusal::NotForHire)
+        Err(nova_sim_frame::HireRefusal::NotForHire)
     );
     assert_eq!(
         view.hire(ShipId(129)),
-        Err(nova_sim::HireRefusal::NoBar),
+        Err(nova_sim_frame::HireRefusal::NoBar),
         "refused: a flight that never started has no bar"
     );
     assert_eq!(sent(&view), vec![FlightCommand::Hire(ShipId(129)); 3]);
@@ -1201,14 +1202,15 @@ fn the_player_infos_jettison_sends_everything_and_says_what_the_flight_said() {
 
 #[test]
 fn a_jettisons_boxes_are_drawn_back_along_their_drift_under_the_ship_and_it_sounds() {
-    let drifting = |at: Vec2| nova_sim::flight_frame::FrameBox {
+    let drifting = |at: Vec2| nova_sim_frame::flight_frame::FrameBox {
         velocity: Vec2::new(2.0, -3.0),
         ..super::faked_world::box_at(at)
     };
     let mut view =
         super::faked_world::world(trading(), in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]));
-    view.sim
-        .queue_event(FlightEvent::Sound(nova_sim::SimSound::CargoJettisoned));
+    view.sim.queue_event(FlightEvent::Sound(
+        nova_sim_frame::SimSound::CargoJettisoned,
+    ));
     let dropped = leaves(&view, |frame| {
         frame.cargo_boxes = vec![
             drifting(Vec2::new(-20.0, 20.0)),
@@ -1219,7 +1221,7 @@ fn a_jettisons_boxes_are_drawn_back_along_their_drift_under_the_ship_and_it_soun
     view.jettison_all();
     assert_eq!(
         view.drained_sounds(),
-        [Sound::Sim(nova_sim::SimSound::CargoJettisoned)],
+        [Sound::Sim(nova_sim_frame::SimSound::CargoJettisoned)],
         "snd 154"
     );
     // A quarter of the way from the last step to this one.
@@ -1294,7 +1296,7 @@ fn use_as_my_ship_draws_the_captured_ship_where_it_is_reading_its_sheet_once() {
     );
     view.alpha = 0.5;
     // Where the old ship was drawn from, a step ago.
-    view.previous = nova_sim::flight_frame::ShipPlace {
+    view.previous = nova_sim_frame::flight_frame::ShipPlace {
         position: Vec2::new(-40.0, 30.0),
         heading: 90.0,
     };
@@ -1313,7 +1315,7 @@ fn use_as_my_ship_draws_the_captured_ship_where_it_is_reading_its_sheet_once() {
     assert_eq!(view.assign(Assignment::MyShip), Some(Assigned::MyShip));
     assert_eq!(
         view.previous,
-        nova_sim::flight_frame::ShipPlace {
+        nova_sim_frame::flight_frame::ShipPlace {
             position: Vec2::new(60.0, -10.0),
             heading: 45.0,
         },
@@ -1373,7 +1375,7 @@ fn naming_the_capture_flies_it_where_it_is_reading_its_sheet_once() {
         in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]),
     );
     view.alpha = 0.5;
-    view.previous = nova_sim::flight_frame::ShipPlace {
+    view.previous = nova_sim_frame::flight_frame::ShipPlace {
         position: Vec2::new(-40.0, 30.0),
         heading: 90.0,
     };
@@ -1458,15 +1460,15 @@ fn docked_shipbuying(catalog: FakeCatalog) -> Faked {
 }
 
 /// `ship` with its lights on, as the frame draws a lit hull.
-fn lit(ship: nova_sim::flight_frame::FrameShip) -> nova_sim::flight_frame::FrameShip {
-    nova_sim::flight_frame::FrameShip {
-        drawn: nova_sim::combat::ship_frames::Drawn {
+fn lit(ship: nova_sim_frame::flight_frame::FrameShip) -> nova_sim_frame::flight_frame::FrameShip {
+    nova_sim_frame::flight_frame::FrameShip {
+        drawn: nova_sim_frame::combat::ship_frames::Drawn {
             lights: Some(32),
-            ..nova_sim::combat::ship_frames::Drawn::default()
+            ..nova_sim_frame::combat::ship_frames::Drawn::default()
         },
-        frames: nova_sim::combat::ship_frames::FrameSpec {
+        frames: nova_sim_frame::combat::ship_frames::FrameSpec {
             lights: true,
-            ..nova_sim::combat::ship_frames::FrameSpec::NONE
+            ..nova_sim_frame::combat::ship_frames::FrameSpec::NONE
         },
         ..ship
     }
@@ -1548,7 +1550,7 @@ fn a_ship_bought_redraws_the_nav_area_and_the_target_panel() {
         name: "Stale".to_owned(),
         subtitle: String::new(),
         picture: None,
-        status: nova_sim::TargetStatus::Hidden,
+        status: nova_sim_frame::TargetStatus::Hidden,
         tag: None,
     };
     view.nav_scene = Some((view.nav_mode(), stale_nav.clone()));

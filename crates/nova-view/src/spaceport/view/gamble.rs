@@ -30,8 +30,8 @@
 //! tick ([`SpaceportView::settle_gamble`]), so it is settled before the
 //! next frame.
 
-use nova_sim::DescMovie;
-use nova_sim::gamble::{Bet, GambleOpening, NO_CASH_TO_BET};
+use nova_sim_frame::DescMovie;
+use nova_sim_frame::gamble::{Bet, GambleOpening, NO_CASH_TO_BET};
 
 use super::{Open, SpaceportView};
 use crate::flight::RaceShown;

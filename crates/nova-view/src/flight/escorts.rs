@@ -103,10 +103,10 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::bay::{ABANDONED_MANY, ABANDONED_ONE};
-use nova_sim::escort::{ESCORT_COMMANDS, NEW_ORDERS, WILL_ATTACK, order_label};
-use nova_sim::flight_frame::EscortMenuPass;
-use nova_sim::{ClassRow, Commanded, EscortCommand, EscortGroup};
+use nova_sim_frame::bay::{ABANDONED_MANY, ABANDONED_ONE};
+use nova_sim_frame::escort::{ESCORT_COMMANDS, NEW_ORDERS, WILL_ATTACK, order_label};
+use nova_sim_frame::flight_frame::EscortMenuPass;
+use nova_sim_frame::{ClassRow, Commanded, EscortCommand, EscortGroup};
 
 use crate::bound_names::{Spelling, name_read};
 use crate::color::Color;
@@ -118,7 +118,7 @@ use crate::keymap::{CommandReader, EscortMenuCommand};
 use crate::text::TextMetrics;
 use crate::time::sixtieths;
 
-pub use nova_sim::escort::NO_ESCORTS;
+pub use nova_sim_frame::escort::NO_ESCORTS;
 
 /// How long the menu stays open after it opens, or after the last
 /// selection or command: 480 ticks of 60 Hz.
@@ -740,7 +740,7 @@ pub fn escort_command_message(commanded: &Commanded) -> String {
 
 /// `STR#` 137 #29-#38 of `Nova-DF.rsrc`: the numbers one to ten in
 /// words, which `_StrcatOrdinalNumber` @0x8ab4 writes counts in.
-pub use nova_sim::player_info::NUMBER_WORDS;
+pub use nova_sim_frame::player_info::NUMBER_WORDS;
 
 /// What the flight says of `count` fighters abandoned as the player
 /// jumped (`_HandlePlayer` @0x6c3c4-0x6c42b): in brackets, the count in
@@ -780,7 +780,8 @@ mod tests {
     use crate::keymap::{
         Bindings, EscortMenuCommand, FlightCommand, KeyCombo, KeyMap, SharedBindings, contexts,
     };
-    use nova_sim::{EscortClass, EscortOrder};
+    use nova_sim_frame::EscortClass;
+    use nova_sim_state::shown::fleet::EscortOrder;
 
     /// Flight's keys under the default bindings.
     fn keys() -> CommandReader {
@@ -826,7 +827,7 @@ mod tests {
 
     /// `ticks` sixtieths after `at`.
     fn after(at: Duration, ticks: u32) -> Duration {
-        at + nova_sim::mission::screens::mac_ticks(ticks)
+        at + nova_sim_frame::mission::screens::mac_ticks(ticks)
     }
 
     /// A menu opened at [`AT`] with an escort flying, its first frame run.

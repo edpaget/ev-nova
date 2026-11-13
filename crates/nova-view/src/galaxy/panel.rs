@@ -1,6 +1,6 @@
 //! The galaxy map's two info panels, laid out as `_MapDialogUpdate`
 //! draws them (@0x10136-0x111bf): what they say is the session's
-//! ([`MapPanel`], `nova_sim`'s [`map_panel`](nova_sim::map_panel)
+//! ([`MapPanel`], `nova_sim`'s [`map_panel`](nova_sim_frame::map_panel)
 //! decides it); this module puts each line at its DITL 2000 offset.
 //!
 //! Every line is a baseline in Geneva 9 (`_smallTextFont`,
@@ -51,7 +51,7 @@
 //! ([`DIALOG_ORIGIN`](super::dialog::DIALOG_ORIGIN)), over `PICT` 8509,
 //! the dialog's background: neither is filled.
 
-use nova_sim::map_panel::{
+use nova_sim_frame::map_panel::{
     ColumnBody, Listing, MapPanel, PanelDate, PanelWords, Ports, Services, Strip, zoom_readout,
 };
 
@@ -296,7 +296,7 @@ fn rows(pen: &mut Pen, items: &[String], set: impl Fn(&mut Pen, &str, f32), firs
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use nova_sim::map_panel::{CheatNumbers, Column, PanelDate};
+    use nova_sim_frame::map_panel::{CheatNumbers, Column, PanelDate};
 
     use super::*;
     use crate::DrawCommand;

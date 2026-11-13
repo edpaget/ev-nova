@@ -61,8 +61,8 @@ mod tests {
     use std::rc::Rc;
     use std::time::Duration;
 
-    use nova_sim::mission::OfferLabels;
-    use nova_sim::{MissionId, OfferPrompt};
+    use nova_sim_frame::mission::OfferLabels;
+    use nova_sim_frame::{MissionId, OfferPrompt};
 
     use super::*;
     use crate::draw::{DrawCommand, DrawList};

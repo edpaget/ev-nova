@@ -61,7 +61,7 @@ pub fn solid_overlay(list: &mut DrawList, cut: BoxCut, sheet: SheetImage, frame:
 mod tests {
     use std::num::NonZeroU16;
 
-    use nova_sim::combat::ship_frames::{Alt, Drawn, FrameSpec};
+    use nova_sim_frame::combat::ship_frames::{Alt, Drawn, FrameSpec};
 
     use super::*;
     use crate::flight::catalog::{LayerSheet, ShipSheet};

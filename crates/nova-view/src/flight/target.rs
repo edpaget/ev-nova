@@ -38,7 +38,7 @@
 //! The secondary weapon's line fills the `WeapArea`, nothing for an empty
 //! one (@0x4c022-0x4c038): the weapon's name, bright, centred, 12 below
 //! the top, followed by " - " and the count the session gives
-//! ([`FrameHud::secondary_line_count`](nova_sim::flight_frame::FrameHud::secondary_line_count));
+//! ([`FrameHud::secondary_line_count`](nova_sim_frame::flight_frame::FrameHud::secondary_line_count));
 //! or "No Secondary Weapon" (#350), dim (@0x4c105).
 //!
 //! Text is placed by its baseline, as the original places it: a line's
@@ -50,8 +50,8 @@
 //! [`brackets`](super::brackets) module's; [`Standing`] is the frame
 //! choice they take from the session.
 
-use nova_sim::TargetStatus;
-pub use nova_sim::brackets::Standing;
+use nova_sim_frame::TargetStatus;
+pub use nova_sim_frame::brackets::Standing;
 
 use super::catalog::StatusBarLayout;
 use super::pen::Pen;

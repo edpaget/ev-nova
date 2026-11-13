@@ -12,9 +12,9 @@ use super::faked_movies::{filmed, filming, run_out};
 use super::faked_travel::{now_shows, sent_but_lines};
 use super::frames::{sol, under_way};
 use super::*;
-use nova_sim::flight_frame::{GateEntry, GatePilotShown};
-use nova_sim::landing::LandOutcome;
-use nova_sim::{GateKind, LandPress, LandingRefusal, SimMessage};
+use nova_sim_frame::flight_frame::{GateEntry, GatePilotShown};
+use nova_sim_frame::landing::LandOutcome;
+use nova_sim_frame::{GateKind, LandPress, LandingRefusal, SimMessage};
 
 /// Alpha Centauri, where the autopilot flies.
 const ALPHA: SystemId = SystemId(131);

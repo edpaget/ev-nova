@@ -76,9 +76,9 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::escort_dialog::{CREDIT, CREDITS};
-use nova_sim::hire::{ESCORT, HIRED_ESCORT};
-use nova_sim::{Haggle, HailView, ShipId};
+use nova_sim_frame::escort_dialog::{CREDIT, CREDITS};
+use nova_sim_frame::hire::{ESCORT, HIRED_ESCORT};
+use nova_sim_frame::{Haggle, HailView, ShipId};
 
 use crate::color::Color;
 use crate::draw::DrawList;
@@ -968,7 +968,9 @@ pub(crate) use tests::{comm_pad_probe, haggle_pad_probe};
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use nova_sim::{EscortStatus, HailButton, NpcId};
+    use nova_sim_frame::NpcId;
+    use nova_sim_state::shown::hail::EscortStatus;
+    use nova_sim_state::shown::hail::HailButton;
 
     use super::*;
     use crate::draw::fill_rect;

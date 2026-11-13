@@ -1,7 +1,7 @@
 //! The flight view's sprite stack: the ships and the shots, bottom first,
 //! each in the layer the simulation puts it in.
 //!
-//! The order is the simulation's ([`nova_sim::sprite_layer::layered_stack`]):
+//! The order is the simulation's ([`nova_sim_frame::sprite_layer::layered_stack`]):
 //! the disabled ships, the point-defence shots, the homing shots, the
 //! other shots, the ships the player leads, the other ships and the
 //! player, and a `Flags3` 0x0040 ship's turret shots, as
@@ -9,15 +9,15 @@
 //! `_SWAddSpriteLayer` @0xb71b0) and `_SpawnShot` fills them
 //! (@0x3f0a9-0x3f143). Each layer keeps the order it is given in: the
 //! ships the session's draw order, the shots the session's
-//! ([`FlightFrame::shots`](nova_sim::flight_frame::FlightFrame::shots), each layer in the order its shot
+//! ([`FlightFrame::shots`](nova_sim_frame::flight_frame::FlightFrame::shots), each layer in the order its shot
 //! slots entered it). Each sprite keeps its [`SpriteLayer`], so the world
 //! draws each layer in its place among the others
-//! ([`nova_sim::sprite_layer::WORLD_PASSES`]). The view only draws what the
+//! ([`nova_sim_frame::sprite_layer::WORLD_PASSES`]). The view only draws what the
 //! stack gives.
 
-use nova_sim::ShipRef;
-use nova_sim::ship_layer::ShipLayer;
-use nova_sim::sprite_layer::{SpriteLayer, layered_stack};
+use nova_sim_frame::ShipRef;
+use nova_sim_frame::ship_layer::ShipLayer;
+use nova_sim_frame::sprite_layer::{SpriteLayer, layered_stack};
 
 use crate::flight::weapons::ShotShown;
 
@@ -50,16 +50,16 @@ mod tests {
     use super::*;
     use crate::Point;
     use crate::flight::catalog::WeaponId;
-    use nova_sim::NpcId;
+    use nova_sim_frame::NpcId;
 
     fn shot(weapon: i16, layer: SpriteLayer) -> ShotShown {
         ShotShown {
-            id: nova_sim::combat::projectile::ShotId(0),
+            id: nova_sim_frame::combat::projectile::ShotId(0),
             frame: Some(0),
             colorize: crate::Colorize::default(),
             at: Point::new(0.0, 0.0),
-            life: nova_sim::combat::shot_fade::at_full_gain(0, 0, 0).0,
-            fade: nova_sim::combat::shot_fade::at_full_gain(0, 0, 0).1,
+            life: nova_sim_frame::combat::shot_fade::at_full_gain(0, 0, 0).0,
+            fade: nova_sim_frame::combat::shot_fade::at_full_gain(0, 0, 0).1,
             weapon: WeaponId(weapon),
             layer,
         }

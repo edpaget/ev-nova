@@ -61,7 +61,7 @@ impl EntryHost for NewPilotDialog {
 mod tests {
     use std::rc::Rc;
 
-    use nova_sim::Gender;
+    use nova_sim_frame::Gender;
 
     use super::super::tests::stock;
     use super::super::{NAME_ITEM, NICKNAME_ITEM, NewPilotOutcome};

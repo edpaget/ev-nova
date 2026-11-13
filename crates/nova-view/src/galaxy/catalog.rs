@@ -3,10 +3,10 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use nova_sim::Governments;
+use nova_sim_frame::Governments;
 /// A fresh pilot's gate lanes, which the catalog doesn't hand over: the
 /// viewer is handed them ([`GalaxyMap::with_gate_links`](super::GalaxyMap::with_gate_links)).
-pub use nova_sim::viewer_lanes::GateLinks;
+pub use nova_sim_frame::viewer_lanes::GateLinks;
 
 pub use nova_data::{GovtId, NebulaId, StellarId, SystemId};
 

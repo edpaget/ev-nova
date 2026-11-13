@@ -1,7 +1,7 @@
 //! The radar's view model: what `_DrawStatusRadar` (@0x496e0) draws,
 //! worked out in whole pixels from a [`RadarScene`] snapshot.
 //! [`hud`](super::hud) draws the [`RadarMark`]s. The colour decisions are
-//! the simulation's ([`nova_sim::iff`]); this maps them to colours.
+//! the simulation's ([`nova_sim_frame::iff`]); this maps them to colours.
 //!
 //! - **Rect and centre:** the `ïntf` `RadarArea`, placed with the bar. An
 //!   empty one (top ≥ bottom or left ≥ right, @0x496f6-0x4970b) draws
@@ -77,7 +77,7 @@
 
 use std::ops::RangeInclusive;
 
-use nova_sim::{Chance, ShipIff, StellarIff};
+use nova_sim_frame::{Chance, ShipIff, StellarIff};
 
 use crate::Color;
 use crate::geometry::{Bounds, Point};
@@ -343,14 +343,14 @@ pub const ARROW_HEAD: f32 = 6.0;
 /// How far each head turns from the shaft, in degrees (`leal ±0x87`).
 pub const ARROW_HEAD_TURN: i16 = 135;
 
-pub use nova_sim::trig::{table_arctan, table_cos, table_sin};
+pub use nova_sim_frame::trig::{table_arctan, table_cos, table_sin};
 
 /// `_Accel` (@0x2ade6): `point` moved `magnitude` along `angle`, x by
 /// `magnitude · sin` and y by `−magnitude · cos`, in `f32`
-/// ([`nova_sim::trig::accel`]).
+/// ([`nova_sim_frame::trig::accel`]).
 #[must_use]
 pub fn accel(angle: i16, magnitude: f32, point: (f32, f32)) -> (f32, f32) {
-    let push = nova_sim::trig::accel(angle, magnitude);
+    let push = nova_sim_frame::trig::accel(angle, magnitude);
     (push.x + point.0, point.1 + push.y)
 }
 

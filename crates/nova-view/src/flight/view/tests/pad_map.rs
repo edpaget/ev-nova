@@ -17,7 +17,7 @@ use super::*;
 use crate::flight::PortScreen;
 use crate::input::{ControllerFamily, Device, PadButton, Surroundings};
 use crate::keymap::{Bindings, PadBinding, PadEntry, PlayCommand, SharedBindings};
-use nova_sim::MissionId;
+use nova_sim_frame::MissionId;
 
 const PAD: Device = Device::Gamepad(ControllerFamily::Generic);
 
@@ -400,7 +400,7 @@ fn steer_onto(
 }
 
 fn clicked(selected: i16) -> Answer {
-    Answer::Clicked(nova_sim::MapClicked {
+    Answer::Clicked(nova_sim_frame::map_click::MapClicked {
         selected: Some(SystemId(selected)),
         gate_pick: None,
         clear_route: None,

@@ -10,8 +10,8 @@ use super::faked_travel::{jump_now, lit};
 use super::faked_world::world;
 use super::*;
 use crate::SoundPrefs;
-use nova_sim::flight_frame::FlightEvent;
-use nova_sim::{MissionInfoPress, SessionEvent, StellarPick, TargetPick};
+use nova_sim_frame::flight_frame::FlightEvent;
+use nova_sim_frame::{MissionInfoPress, SessionEvent, StellarPick, TargetPick};
 
 /// A view of Sol's flight, its ship alone and intact at the centre.
 pub(super) fn in_flight() -> Faked {
@@ -464,7 +464,7 @@ fn hail_is_refused_silently_through_a_jump() {
         tap(&mut view, HAIL_KEY);
         assert_eq!(sent_since(&view, from), [], "{stage}: kept for its pass");
         view.sim.queue_report(StepReport {
-            steps: vec![nova_sim::flight_frame::StepRun::default()],
+            steps: vec![nova_sim_frame::flight_frame::StepRun::default()],
             stopped: false,
         });
         view.tick(TICK);
@@ -588,7 +588,7 @@ fn i_in_the_escape_pod_does_nothing_and_says_nothing() {
 #[test]
 fn i_while_disabled_is_taken() {
     let mut view = in_flight();
-    view.sim.frame_mut().ships[0].condition = nova_sim::Condition::Disabled;
+    view.sim.frame_mut().ships[0].condition = nova_sim_frame::Condition::Disabled;
     view.refresh_frame();
     view.sim
         .queue_answer(Answer::MissionInfo(MissionInfoPress::NoActiveMissions));
@@ -612,7 +612,7 @@ pub(super) fn warp_ends(view: &mut Faked) {
     view.sim.set_frame(under_way(true));
     view.refresh_frame();
     view.sim.queue_report_telling(
-        super::faked_travel::arrival_report(0, nova_sim::flight_frame::ShipPlace::default()),
+        super::faked_travel::arrival_report(0, nova_sim_frame::flight_frame::ShipPlace::default()),
         in_alpha(),
         vec![FlightEvent::Session(SessionEvent::SystemChanged)],
     );
@@ -818,7 +818,7 @@ fn double_time_survives_the_events_that_let_go_of_the_flight_keys() {
     view.tick(TICK);
     assert!(double_time_stepped(&view), "a jump");
     view.sim
-        .queue_answer(Answer::Hailed(nova_sim::Hailed::Stellar(
+        .queue_answer(Answer::Hailed(nova_sim_frame::Hailed::Stellar(
             super::planet_view(140),
         )));
     tap(&mut view, HAIL_KEY);
@@ -1436,7 +1436,7 @@ fn the_sound_prefs_reach_the_session_when_set() {
 
 #[test]
 fn the_sprite_load_reaches_the_session_as_the_flight_is_built_and_when_set() {
-    use nova_sim::combat::SpriteLoad;
+    use nova_sim_frame::combat::SpriteLoad;
     let still = SpriteLoad {
         ship_animations: false,
         running_lights: true,
@@ -1484,7 +1484,7 @@ fn a_missing_alert_icon_draws_nothing_and_says_so_once() {
         diagnostics.iter().filter(|&d| *d == missing).count()
     };
     assert_eq!(told(&mut view), 1);
-    view.sim.frame_mut().hud.red_alert = Some(nova_sim::AlertIcon::Red);
+    view.sim.frame_mut().hud.red_alert = Some(nova_sim_frame::AlertIcon::Red);
     for _ in 0..10 {
         view.tick(TICK);
         assert_eq!(super::nav::icons_drawn(&view), []);
@@ -1526,7 +1526,7 @@ fn a_pilot_flown_with_a_galaxy_overlay_shows_it_on_the_course_map() {
 fn the_status_bar_follows_the_ship_type_on_the_next_frame() {
     let mut view = super::faked_hud::barred(governed(catalog(), 128, 129), sol());
     assert_eq!(bar_shown(&view), Some(700));
-    view.sim.frame_mut().hud.interface_government = Some(nova_sim::GovtId(150));
+    view.sim.frame_mut().hud.interface_government = Some(nova_sim_frame::GovtId(150));
     view.sim
         .queue_event(FlightEvent::Session(SessionEvent::ShipChanged));
     assert_eq!(bar_shown(&view), Some(700), "not before the frame");

@@ -5,14 +5,15 @@
 //! stars, the comm and quotes, the ships kept for the drawing and the
 //! rescue.
 
-use nova_sim::catalog::Explosion;
-use nova_sim::combat::projectile::ShotId;
-use nova_sim::flight_frame::{
+use nova_sim_frame::catalog::Explosion;
+use nova_sim_frame::combat::projectile::ShotId;
+use nova_sim_frame::flight_frame::{
     FlightEvent, FrameShip, FrameShot, PassReport, RaisedLine, StepInput, StepReport, StepRun,
 };
-use nova_sim::flight_frame::{PassExit, ShipPlace};
-use nova_sim::player_wrap::{PlayerWrap, WRAP_EDGE, WRAP_SHIFT};
-use nova_sim::{CommNote, FireSound, Gauge, PersonQuote};
+use nova_sim_frame::flight_frame::{PassExit, ShipPlace};
+use nova_sim_frame::player_wrap::{PlayerWrap, WRAP_EDGE, WRAP_SHIFT};
+use nova_sim_frame::{CommNote, Gauge, PersonQuote};
+use nova_sim_state::shown::combat::FireSound;
 
 use super::faked_travel::{faked_lasts, shown_to_flight};
 
@@ -204,7 +205,7 @@ fn each_frame_hands_the_flight_the_keys_held_steps_or_none() {
                 thrust: true,
                 ..Controls::default()
             },
-            amounts: nova_sim::Amounts {
+            amounts: nova_sim_frame::Amounts {
                 turn: 0.0,
                 thrust: 1.0,
             },
@@ -354,7 +355,7 @@ fn each_pass_of_each_step_reaches_the_effects() {
     };
     frame(&mut view, report);
     let heard = CombatSound {
-        sound: nova_sim::SoundId(208),
+        sound: nova_sim_frame::SoundId(208),
         offset: (0, 0),
         priority: u16::from(PLAYER_FIRE_PRIORITY),
         until_stopped: false,
@@ -396,7 +397,7 @@ fn a_ships_flash_is_dropped_once_a_pass_reports_it_gone() {
 
 /// A burst of `count` orange particles of life 30 on the NPC.
 fn orange(count: u32) -> CombatEvent {
-    CombatEvent::Particles(nova_sim::combat::ParticleBurst {
+    CombatEvent::Particles(nova_sim_frame::combat::ParticleBurst {
         at: Vec2::new(0.0, -100.0),
         speed: 1.0,
         variation: 0,
@@ -460,7 +461,7 @@ fn a_destroyed_ship_explodes_heard_from_the_player_and_scatters_debris() {
     assert!(
         heard
             .iter()
-            .any(|sound| sound.sound == nova_sim::SoundId(302) && sound.offset == (0, -60)),
+            .any(|sound| sound.sound == nova_sim_frame::SoundId(302) && sound.offset == (0, -60)),
         "heard from where the pass left the player: {heard:?}"
     );
 }
@@ -567,7 +568,7 @@ fn a_breakup_on_a_held_second_pass_is_heard_on_its_frame_and_goes_off_the_frame_
             .iter()
             .map(|sound| (sound.sound, sound.offset))
             .collect::<Vec<_>>(),
-        [(nova_sim::SoundId(302), (13, -105))],
+        [(nova_sim_frame::SoundId(302), (13, -105))],
         "heard from where the held pass left the player"
     );
     assert_eq!(view.effects.explosions(), [], "not yet shown");
@@ -629,7 +630,7 @@ fn looped_beam(rules: &Rulebook) -> (Faked, CombatEvent) {
     let mut catalog = armed(0, &[UNDER]);
     catalog.looks[4].1 = Ok(WeaponLook {
         flags: weapons::LOOPED_SOUND,
-        sound: Some(nova_sim::SoundId(220)),
+        sound: Some(nova_sim_frame::SoundId(220)),
         sound_ticks: Some(3),
         ..WeaponLook::default()
     });
@@ -714,7 +715,7 @@ fn a_detonation_on_the_second_pass_is_shown_the_frame_after() {
 fn of_sound(heard: &[CombatSound], id: i16) -> usize {
     heard
         .iter()
-        .filter(|sound| sound.sound == nova_sim::SoundId(id))
+        .filter(|sound| sound.sound == nova_sim_frame::SoundId(id))
         .count()
 }
 
@@ -773,8 +774,9 @@ fn a_held_pass_dropped_by_a_layout_was_heard() {
 /// entered the system ([`FlightView::catch_up`]).
 fn lays_out_alpha(view: &mut Faked) {
     view.sim.set_frame(in_alpha());
-    view.sim
-        .queue_event(FlightEvent::Session(nova_sim::SessionEvent::SystemChanged));
+    view.sim.queue_event(FlightEvent::Session(
+        nova_sim_frame::SessionEvent::SystemChanged,
+    ));
     view.catch_up();
 }
 
@@ -949,11 +951,11 @@ fn a_double_time_frame_steps_shots_boxes_and_asteroids_back_two_passes() {
             velocity,
             ..record::shot()
         }],
-        cargo_boxes: vec![nova_sim::flight_frame::FrameBox {
+        cargo_boxes: vec![nova_sim_frame::flight_frame::FrameBox {
             velocity,
             ..super::faked_world::box_at(at)
         }],
-        asteroids: vec![nova_sim::flight_frame::FrameAsteroid {
+        asteroids: vec![nova_sim_frame::flight_frame::FrameAsteroid {
             velocity,
             ..super::faked_world::asteroid_at(at)
         }],
@@ -1498,7 +1500,7 @@ fn effects_about(view: &mut Faked, near: Vec2, far: Vec2) {
         },
         size: 0.0,
     };
-    let burst = CombatEvent::Particles(nova_sim::combat::ParticleBurst {
+    let burst = CombatEvent::Particles(nova_sim_frame::combat::ParticleBurst {
         at: near,
         speed: 0.0,
         variation: 0,
@@ -1566,7 +1568,7 @@ fn repaired() -> CommNote {
         from: NpcId(0),
         comm_name: "Ship 129".to_owned(),
         ship_name: "Shuttle".to_owned(),
-        done: nova_sim::Help::Repair,
+        done: nova_sim_frame::Help::Repair,
     }
 }
 

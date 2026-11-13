@@ -28,7 +28,7 @@
 
 use std::time::Duration;
 
-use nova_sim::{RuleKey, RuleSource, Rulebook};
+use nova_sim_frame::{RuleKey, RuleSource, Rulebook};
 
 use super::grid::CellGrid;
 use super::grid_arrows::ArrowMoves;
@@ -143,7 +143,7 @@ impl ShipyardGrid {
 
 #[cfg(test)]
 mod tests {
-    use nova_sim::mission::screens::mac_ticks;
+    use nova_sim_frame::mission::screens::mac_ticks;
 
     use super::*;
     use crate::keymap::UiCommand;

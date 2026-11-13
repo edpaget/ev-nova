@@ -36,7 +36,7 @@
 //! - **The opener's restore**, after the map's own close
 //!   ([`FlightView::close_map`]): the offer (@0xa3108-0xa3110), the
 //!   computer (@0xa3d86-0xa3d9e) and the text dialog (@0x5b169-0x5b17d)
-//!   write back the nav saved before the map ([`Session::restore_map_nav`](nova_sim::Session::restore_map_nav)),
+//!   write back the nav saved before the map (`nova_sim::Session::restore_map_nav`),
 //!   over a plain click's mode 3 in flight or the close's cue; the course
 //!   stays. The computer then redraws the nav area (`_DrawStatus`,
 //!   @0xa3da2-0xa3daa). Mission info's restore is dead (@0x9e45f-0x9e476),
@@ -49,9 +49,9 @@
 //! `_mapDialog` guards (@0x98dc0, @0x9f80a), which nothing can trip.
 
 #[cfg(doc)]
-use nova_sim::flight_frame::ScreenAsk;
-use nova_sim::flight_frame::{FlightCommand, MarksFrom};
-use nova_sim::{MapMarks, MissionId, SavedNav};
+use nova_sim_frame::flight_frame::ScreenAsk;
+use nova_sim_frame::flight_frame::{FlightCommand, MarksFrom};
+use nova_sim_frame::{MapMarks, MissionId, SavedNav};
 
 use super::FlightView;
 use super::port_screen_map::{self, PortScreen};
@@ -70,7 +70,7 @@ pub enum MapOpener {
     /// (`_DoMissionInfoDialog` item 6, @0x9e45a).
     MissionInfo(Option<u8>),
     /// The accept's briefing text, with the marks the session set on it as
-    /// it queued it ([`MissionText::map`](nova_sim::MissionText::map),
+    /// it queued it (`nova_sim::MissionText::map`,
     /// `_ShowTextDialog` item 4, @0x5b164).
     Briefing(MapMarks),
     /// The new game's story log, with the index of its selected mission
@@ -174,7 +174,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// The restore of the map's opener, after its close (see the module
-    /// docs): the bar's ([`Session::restore_bar_nav`](nova_sim::Session::restore_bar_nav)), a port screen's
+    /// docs): the bar's (`nova_sim::Session::restore_bar_nav`), a port screen's
     /// ([`PortScreen`]), or a mission dialog's.
     pub(super) fn restore_opener_nav(&mut self, opened: Option<MapOpened>) {
         let Some(opened) = opened else {

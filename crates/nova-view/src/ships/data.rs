@@ -6,7 +6,7 @@ use std::num::NonZeroU16;
 use nova_data::graphics::SpriteSheet;
 use nova_data::records::ship::Ship;
 use nova_data::{GameData, LayerError, LayerSprite, Record, ShipImage, StoreEntry};
-use nova_sim::data::ship_blink;
+use nova_sim_frame::data::ship_blink;
 
 use super::catalog::{SheetInfo, ShipCatalog, ShipEntry, ShipId, ShipStats};
 use crate::SheetImage;
@@ -122,7 +122,7 @@ mod tests {
 
     use nova_rsrc::ResType;
     use nova_rsrc::fixture::ForkBuilder;
-    use nova_sim::Blink;
+    use nova_sim_frame::Blink;
 
     use super::*;
     use crate::ships::catalog::{SheetInfo, ShipStats};

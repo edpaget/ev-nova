@@ -18,8 +18,8 @@
 //!
 //! [`DrawCommand::Model`]: crate::DrawCommand::Model
 
-use nova_sim::combat::hull_turn::HullTurn;
-use nova_sim::combat::ship_frames::FrameSpec;
+use nova_sim_frame::combat::hull_turn::HullTurn;
+use nova_sim_frame::combat::ship_frames::FrameSpec;
 
 use crate::model::Orientation;
 

@@ -10,7 +10,7 @@ use crate::input::{ControllerFamily, Device, Input, PadButton, Surroundings};
 use crate::screen::Screen;
 use crate::ui::dialog::{Dialog, FocusRing};
 use crate::ui::pad_focus::every_screen::PadProbe;
-use nova_sim::OutfitRefusal;
+use nova_sim_frame::OutfitRefusal;
 
 const PAD: Device = Device::Gamepad(ControllerFamily::Generic);
 

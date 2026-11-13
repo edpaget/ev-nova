@@ -8,8 +8,8 @@
 //! value is the effect's own step at the same gain, on a clone of the
 //! state before the pass.
 
-use nova_sim::SpeedMult;
-use nova_sim::flight_frame::{PassReport, StepReport, StepRun};
+use nova_sim_frame::SpeedMult;
+use nova_sim_frame::flight_frame::{PassReport, StepReport, StepRun};
 
 use super::stepping::{fight, frame, one_step, stepping};
 use super::*;
@@ -30,7 +30,7 @@ fn at(gain: SpeedMult, combat: Vec<CombatEvent>) -> PassReport {
 fn exploded() -> CombatEvent {
     CombatEvent::Exploded {
         at: Vec2::ZERO,
-        explosion: nova_sim::catalog::Explosion::decode(0).expect("type 0"),
+        explosion: nova_sim_frame::catalog::Explosion::decode(0).expect("type 0"),
         size: 0.0,
     }
 }
@@ -97,7 +97,7 @@ fn a_puff_ages_at_its_passs_gain() {
 #[test]
 fn the_arrival_passs_explosion_shows_in_the_new_scene_and_steps_once_at_its_gain() {
     use super::faked_travel::{arrival_report, arrived_in_alpha, jump_now, now_shows};
-    let boom = nova_sim::catalog::Explosion::decode(0).expect("type 0");
+    let boom = nova_sim_frame::catalog::Explosion::decode(0).expect("type 0");
     let event = CombatEvent::ExplodedHeard {
         at: Vec2::ZERO,
         explosion: boom,
@@ -110,7 +110,7 @@ fn the_arrival_passs_explosion_shows_in_the_new_scene_and_steps_once_at_its_gain
     now_shows(&mut view, super::frames::under_way(true));
     // The arrival's days raised a `Y` (@0x43e19), reported with the rest
     // of its pass, which runs at half gain.
-    let mut report = arrival_report(0, nova_sim::flight_frame::ShipPlace::default());
+    let mut report = arrival_report(0, nova_sim_frame::flight_frame::ShipPlace::default());
     report.steps[0].passes[0].combat = vec![event];
     report.steps[0].passes[0].speed_mult = HALF;
     view.sim.queue_report(report);

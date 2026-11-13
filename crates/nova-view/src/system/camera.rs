@@ -19,7 +19,7 @@
 //!   at 1024 x 768: `_screenCenter`, which `_SetupWind` sets
 //!   (@0x1b720-0x1b78a) and the original draws all of flight's world
 //!   from. Flight draws from it by
-//!   [`RuleKey::FlightAnchor`](nova_sim::RuleKey::FlightAnchor)'s engine
+//!   [`RuleKey::FlightAnchor`](nova_sim_frame::RuleKey::FlightAnchor)'s engine
 //!   reading, from the view's centre by the other.
 //!
 //! Either way:
@@ -36,9 +36,9 @@
 //!   alone) and [`Camera::pixel_centre`] (a beam's ends, the whole screen
 //!   coordinate truncated)
 
-use nova_sim::navigation::SpriteRect;
-use nova_sim::sprite_place::Placement;
-use nova_sim::{RuleSource, Vec2};
+use nova_sim_frame::navigation::SpriteRect;
+use nova_sim_frame::sprite_place::Placement;
+use nova_sim_frame::{RuleSource, Vec2};
 
 use crate::Point;
 use crate::geometry::Bounds;
@@ -76,7 +76,7 @@ pub enum Anchor {
 
 impl Anchor {
     /// The anchor flight draws from by `source`'s reading of
-    /// [`RuleKey::FlightAnchor`](nova_sim::RuleKey::FlightAnchor): the
+    /// [`RuleKey::FlightAnchor`](nova_sim_frame::RuleKey::FlightAnchor): the
     /// play area's centre by the original's, the view's by the other.
     #[must_use]
     pub fn in_flight(source: RuleSource) -> Self {
@@ -201,7 +201,7 @@ impl Camera {
     /// the offset truncated toward zero and the half size halved toward
     /// zero, so an odd size's extra pixel falls right and below. The rule
     /// is the simulation's standard placement
-    /// ([`Placement::Standard`](nova_sim::sprite_place::Placement::Standard)),
+    /// ([`Placement::Standard`](nova_sim_frame::sprite_place::Placement::Standard)),
     /// not forked here.
     ///
     /// `_HandleExplods` places an explosion this way (@0x2f6a1-0x2f73c),
@@ -272,7 +272,7 @@ impl Camera {
 
     /// The point a shot whose frame is `size` is centred on, placed by the
     /// simulation's shot rule
-    /// ([`Placement::Shot`](nova_sim::sprite_place::Placement::Shot)), the
+    /// ([`Placement::Shot`](nova_sim_frame::sprite_place::Placement::Shot)), the
     /// one the contact passes touch it by.
     #[must_use]
     pub fn shot_centre(&self, at: Point, size: (u32, u32)) -> Point {
@@ -281,7 +281,7 @@ impl Camera {
 
     /// The point a cargo box whose frame is `size` is centred on, placed by
     /// the simulation's box rule
-    /// ([`Placement::CargoBox`](nova_sim::sprite_place::Placement::CargoBox)),
+    /// ([`Placement::CargoBox`](nova_sim_frame::sprite_place::Placement::CargoBox)),
     /// the one a scoop touches it by: the frame's bottom right is the
     /// [whole point](Camera::whole_point) of the box's position.
     #[must_use]

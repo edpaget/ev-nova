@@ -15,9 +15,9 @@ use std::collections::BTreeSet;
 use std::num::NonZeroU16;
 
 use super::camera::{CAMERA_MARGIN, Camera};
-use nova_sim::landing::UNKNOWN_STELLAR_RADIUS;
-use nova_sim::stellar_frames::{StellarAnimation, StellarFrames};
-use nova_sim::{Chance, DrawnSheet, SpeedMult, Vec2};
+use nova_sim_frame::landing::UNKNOWN_STELLAR_RADIUS;
+use nova_sim_frame::stellar_frames::{StellarAnimation, StellarFrames};
+use nova_sim_frame::{Chance, DrawnSheet, SpeedMult, Vec2};
 
 use super::catalog::{StellarContents, StellarId, StellarSheet, SystemCatalog, SystemId};
 use crate::box_cut::{BoxCut, SheetEdge};
@@ -296,8 +296,8 @@ impl SystemScene {
     /// when it cannot be read and some stellar might fall back to it (one
     /// with no `DeadType` sheet that could be read, or with a `Type` sheet
     /// that cannot be), whatever the readings of
-    /// [`RuleKey::DeadTypeFallback`](nova_sim::RuleKey::DeadTypeFallback)
-    /// and [`RuleKey::TypeSheetFallback`](nova_sim::RuleKey::TypeSheetFallback):
+    /// [`RuleKey::DeadTypeFallback`](nova_sim_frame::RuleKey::DeadTypeFallback)
+    /// and [`RuleKey::TypeSheetFallback`](nova_sim_frame::RuleKey::TypeSheetFallback):
     /// the sheet is broken either way.
     pub fn load(catalog: &impl SystemCatalog, id: SystemId) -> Self {
         Self::loaded(catalog, id, |_| true)
@@ -617,7 +617,7 @@ pub fn draw_stellars_clipped_to(
 mod tests {
     use std::cell::RefCell;
 
-    use nova_sim::NeverFires;
+    use nova_sim_frame::NeverFires;
 
     use super::*;
     use crate::ImageKey;
@@ -1122,7 +1122,7 @@ mod tests {
         // whatever frame its session reports, gate or not.
         let gate = StellarContents {
             animation: StellarAnimation {
-                flags2: nova_sim::gate::HYPERGATE,
+                flags2: nova_sim_frame::landing::HYPERGATE,
                 ..WORMHOLE
             },
             ..stellar(151, 100, 0, Ok(sheet(1151, 4)))

@@ -6,11 +6,11 @@
 //! space, and the brackets round them. Any flight draws them, a scripted
 //! one in the component tests.
 
-use nova_sim::brackets::{NavBrackets, TargetBrackets};
-use nova_sim::flight_frame::{DrawnBoxes, FlightCommand, FrameShip};
-use nova_sim::sprite_layer::SpriteLayer;
-use nova_sim::{Drawn as ShipDrawn, NpcId};
-use nova_sim::{ShipRef, Vec2, WeaponId, glow_level};
+use nova_sim_frame::brackets::{NavBrackets, TargetBrackets};
+use nova_sim_frame::flight_frame::{DrawnBoxes, FlightCommand, FrameShip};
+use nova_sim_frame::sprite_layer::SpriteLayer;
+use nova_sim_frame::{Drawn as ShipDrawn, NpcId};
+use nova_sim_frame::{ShipRef, Vec2, WeaponId, glow_level};
 
 use crate::draw::crossed_box;
 use crate::flight::asteroids::AsteroidShown;
@@ -53,7 +53,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     #[must_use]
     pub fn stellar_frame(
         &self,
-        stellar: nova_sim::StellarId,
+        stellar: nova_sim_frame::StellarId,
     ) -> Option<crate::ui::planet_comm::StellarFrame> {
         self.scene.as_ref()?.shown_frame(stellar)
     }
@@ -127,7 +127,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Where flight draws the player's ship, as its rules read
-    /// [`RuleKey::FlightAnchor`](nova_sim::RuleKey::FlightAnchor)
+    /// [`RuleKey::FlightAnchor`](nova_sim_frame::RuleKey::FlightAnchor)
     /// ([`Presentation`](super::stepping::Presentation)).
     pub(super) fn anchor(&self) -> Anchor {
         Anchor::in_flight(self.presentation.anchor)
@@ -248,10 +248,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// Whether the pointer, while the cursor shows, is over something the
     /// player can target, asked of the flight
-    /// ([`FlightCommand::Hover`](nova_sim::flight_frame::FlightCommand::Hover),
+    /// ([`FlightCommand::Hover`](nova_sim_frame::flight_frame::FlightCommand::Hover),
     /// `nova_sim::Session::hover`) after the steps, the ships boxed where
     /// the frame they left draws them ([`FlightView::drawn_boxes`]). Any
-    /// answer but [`Answer::Hovered`](nova_sim::flight_frame::Answer::Hovered)
+    /// answer but [`Answer::Hovered`](nova_sim_frame::flight_frame::Answer::Hovered)
     /// with something under it, a failed flight's refusal among them, is
     /// nothing hovered.
     pub(super) fn hovering(&mut self) -> bool {
@@ -259,13 +259,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
             return false;
         };
         let world = self.camera().screen_to_world(at);
-        let hover = nova_sim::flight_frame::FlightCommand::Hover {
+        let hover = nova_sim_frame::flight_frame::FlightCommand::Hover {
             at: Vec2::new(world.x, world.y),
             drawn: self.drawn_boxes(),
         };
         matches!(
             self.send(hover),
-            nova_sim::flight_frame::Answer::Hovered(Some(_))
+            nova_sim_frame::flight_frame::Answer::Hovered(Some(_))
         )
     }
 
@@ -285,7 +285,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// @0x2cd17) and `_HandleMouse` skips only a slot with no sprite
     /// (@0x38171), by the frames its slot last cloned, as
     /// `_SWCloneFramesFromMaster` (@0x2b824) is skipped for it: often the
-    /// previous ship's at that slot ([`nova_sim::RuleKey::HiddenShipHoverBox`]
+    /// previous ship's at that slot ([`nova_sim_frame::RuleKey::HiddenShipHoverBox`]
     /// chooses). A ship its slot has not displayed yet is boxed where its
     /// slot was last laid out, at that offset from where the player is
     /// drawn, in its slot's last frames, or at the view's top-left, the
@@ -293,7 +293,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// `_InitSprites`' clone left its rect
     /// ([`Camera::sprite_rect_at_window_origin`]; [`FrameShip::hover`],
     /// `nova_sim::Session::hover_place`;
-    /// [`nova_sim::RuleKey::UndisplayedShips`] chooses). The sheet that
+    /// [`nova_sim_frame::RuleKey::UndisplayedShips`] chooses). The sheet that
     /// sizes such a box, often `shïp` 128's, is read with the frame that
     /// names it, as every framed type's is
     /// ([`FlightView::read_npc_sheets`]).
@@ -316,29 +316,29 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// The box NPC `npc` is drawn in, or none for a ship whose slot holds
     /// no frames (see [`FlightView::drawn_boxes`]).
-    fn npc_box(&self, npc: &FrameShip) -> Option<nova_sim::DrawnBox> {
+    fn npc_box(&self, npc: &FrameShip) -> Option<nova_sim_frame::DrawnBox> {
         let framed = npc.framed?;
         let size = drawn_size(self.npc_sheets.get(&framed), self.npc_outlines.get(&framed));
         let camera = self.camera();
         let rect = match npc.hover {
-            nova_sim::HoverPlace::Own => camera.sprite_rect(self.shown_npc(npc).0, size),
-            nova_sim::HoverPlace::Stale(offset) => camera.sprite_rect_from(offset, size),
-            nova_sim::HoverPlace::Cloned => camera.sprite_rect_at_window_origin(size),
+            nova_sim_frame::HoverPlace::Own => camera.sprite_rect(self.shown_npc(npc).0, size),
+            nova_sim_frame::HoverPlace::Stale(offset) => camera.sprite_rect_from(offset, size),
+            nova_sim_frame::HoverPlace::Cloned => camera.sprite_rect_at_window_origin(size),
         };
-        Some(nova_sim::DrawnBox::at(rect))
+        Some(nova_sim_frame::DrawnBox::at(rect))
     }
 
     /// The box the player's ship is drawn in: a frame of its own sheet
     /// while its slot holds its own type's frames, otherwise of the type's
     /// whose frames it holds (see [`FlightView::drawn_boxes`]).
-    fn player_box(&self) -> nova_sim::DrawnBox {
+    fn player_box(&self) -> nova_sim_frame::DrawnBox {
         let player = self.drawn().player();
         let size = if player.framed == Some(player.class) {
             drawn_size(Some(&self.sheet), self.outline.as_ref())
         } else {
             self.npc_drawn_size(player.framed)
         };
-        nova_sim::DrawnBox::at(self.camera().sprite_rect(self.shown_position(), size))
+        nova_sim_frame::DrawnBox::at(self.camera().sprite_rect(self.shown_position(), size))
     }
 
     /// A click at screen point `at`, as the original's in space
@@ -366,10 +366,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// The ships and the shots, bottom first, each in its layer as the
     /// flight stacks them ([`sprites`](super::sprites)): the ships as the
-    /// frame draws them ([`FlightFrame::drawn`](nova_sim::flight_frame::FlightFrame::drawn),
-    /// `nova_sim::Session::draw_layers`; see [`nova_sim::ship_layer`]),
+    /// frame draws them ([`FlightFrame::drawn`](nova_sim_frame::flight_frame::FlightFrame::drawn),
+    /// `nova_sim::Session::draw_layers`; see [`nova_sim_frame::ship_layer`]),
     /// each layer in the order the flight's rules overlap them, and the
-    /// shots among them by their layers ([`nova_sim::sprite_layer`]). A
+    /// shots among them by their layers ([`nova_sim_frame::sprite_layer`]). A
     /// flight that failed to start draws the player alone, in the ships'
     /// layer.
     pub(super) fn sprites_stacked(&self, camera: &Camera) -> Vec<(SpriteLayer, Sprite)> {
@@ -380,7 +380,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// player, as much of it as its record shows
     /// ([`FrameShip::shown`]), the NPCs among `npcs` (as
     /// [`FlightView::shown_npcs`] places them) and the shots, translucent
-    /// as [`RuleKey::TranslucentShotFade`](nova_sim::RuleKey::TranslucentShotFade)
+    /// as [`RuleKey::TranslucentShotFade`](nova_sim_frame::RuleKey::TranslucentShotFade)
     /// reads.
     pub(super) fn draw_sprite_layer(
         &self,
@@ -495,7 +495,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// The frame size of ships of type `framed` ([`drawn_size`]): its
     /// sheet's, its outline's or the crossed box's.
-    fn npc_drawn_size(&self, framed: Option<nova_sim::ShipId>) -> (u32, u32) {
+    fn npc_drawn_size(&self, framed: Option<nova_sim_frame::ShipId>) -> (u32, u32) {
         drawn_size(
             framed.and_then(|ship| self.npc_sheets.get(&ship)),
             framed.and_then(|ship| self.npc_outlines.get(&ship)),
@@ -554,7 +554,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// Draws the player's ship where `place` puts each of its sprites (see
     /// [`ShipDraw::draw`]), as much of it as `drawn` says
-    /// (see [`nova_sim::player_fate`]): its hull, as translucent as its
+    /// (see `nova_sim::player_fate`): its hull, as translucent as its
     /// `BaseTransp` and in its paint ([`FrameShip::paint`], see
     /// [`paint`](crate::flight::paint)), its engine glow, running lights at the level its
     /// display drew them (`nova_sim::combat::ship_lights`), weapon glow
@@ -654,7 +654,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// The shots in flight in the order they are drawn
-    /// ([`FlightFrame::shots`](nova_sim::flight_frame::FlightFrame::shots)),
+    /// ([`FlightFrame::shots`](nova_sim_frame::flight_frame::FlightFrame::shots)),
     /// each where it is drawn: `alpha` of the way along the move it last
     /// made, `velocity × g` at the last pass's gain
     /// ([`FlightView::moved_behind`]), as the ships are, placed from that point by its sheet's width

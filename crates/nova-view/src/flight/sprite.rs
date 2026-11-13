@@ -16,7 +16,7 @@
 
 use std::num::NonZeroU16;
 
-use nova_sim::combat::exits::drawn_frame;
+use nova_sim_frame::combat::exits::drawn_frame;
 
 /// The frame of set 0 a ship facing `heading_deg` (degrees clockwise from
 /// up, any value) is drawn on, of a sheet of `rotations` frames a turn.
@@ -82,7 +82,7 @@ mod tests {
                 let heading = tenth as f32 / 10.0;
                 assert_eq!(
                     rotation_frame(heading, rotations(n)),
-                    nova_sim::combat::exits::drawn_frame(heading, rotations(n), None),
+                    nova_sim_frame::combat::exits::drawn_frame(heading, rotations(n), None),
                     "{heading} of {n}"
                 );
             }

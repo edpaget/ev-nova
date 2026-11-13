@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use nova_sim::Direction;
+use nova_sim_frame::Direction;
 
 use super::super::tests::{
     alt_click, click, click_item, key, market, quantity, quantity_item, screen, template,

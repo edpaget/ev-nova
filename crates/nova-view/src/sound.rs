@@ -58,7 +58,7 @@
 //! and `_TrackSingleMissionButtons` @0x28188. Open Pilot is Navigation
 //! Services (`_MyOpenDocument` @0x731c5), which plays nothing either.
 
-pub use nova_sim::{SimSound, SoundCue, SoundId};
+pub use nova_sim_frame::{SimSound, SoundCue, SoundId};
 
 pub use crate::ui_sound_cue::MAIN_SCREEN_SOUNDS;
 

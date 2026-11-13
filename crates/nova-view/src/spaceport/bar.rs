@@ -63,7 +63,7 @@
 //! through the bar ([`BarScreen::take_offer_choice`]), and the bar asks
 //! again once rearmed. Nothing is asked while the hire screen, the news,
 //! the race or an offer is open; the wait runs on or stops under them as
-//! [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock) reads it
+//! [`RuleKey::OfferClock`](nova_sim_frame::RuleKey::OfferClock) reads it
 //! ([`BarScreen::with_offer_clock`]), and by the engine the hire screen
 //! restarts it as it opens ([`BarScreen::take_offer_restart`]).
 //! [the mission info key](crate::keymap::PlayCommand::MissionInfo) asks for the mission info screen
@@ -90,7 +90,7 @@
 //! Leave, Return, Enter and Escape leave the bar. Without its dialog, the
 //! bar says why, and Return or Escape still leaves.
 //!
-//! Under [`RuleKey::BarStory`](nova_sim::RuleKey::BarStory)'s other
+//! Under [`RuleKey::BarStory`](nova_sim_frame::RuleKey::BarStory)'s other
 //! reading, the new game's, the bar is also given the story it hosts
 //! ([`BarScreen::set_story`]): its slots, items 9 to 12, list the scenes
 //! to open, and Holovid asks for the news heard in the system in place of
@@ -99,11 +99,11 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::flight_frame::BarStory;
-use nova_sim::gamble::Bet;
-use nova_sim::hire::HIRE_ESCORT;
-use nova_sim::mission::screens::{FIRST_OFFER_TICKS, mac_ticks};
-use nova_sim::{HireList, MissionId, News, OfferPrompt, RuleSource, ShipId};
+use nova_sim_frame::flight_frame::BarStory;
+use nova_sim_frame::gamble::Bet;
+use nova_sim_frame::hire::HIRE_ESCORT;
+use nova_sim_frame::mission::screens::{FIRST_OFFER_TICKS, mac_ticks};
+use nova_sim_frame::{HireList, MissionId, News, OfferPrompt, RuleSource, ShipId};
 
 use super::catalog::StellarId;
 use super::hire::HireScreen;
@@ -619,7 +619,7 @@ impl BarScreen {
     }
 
     /// Its offers' timer running as `clock` reads
-    /// [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock), for offers
+    /// [`RuleKey::OfferClock`](nova_sim_frame::RuleKey::OfferClock), for offers
     /// given ([`BarScreen::with_offers`]) before it.
     #[must_use]
     pub fn with_offer_clock(self, clock: RuleSource) -> Self {
@@ -709,7 +709,7 @@ impl BarScreen {
 
     /// Whether the bar's offer timer restarted since this was last asked,
     /// as the hire screen opening restarts it by the engine
-    /// ([`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock)): whoever
+    /// ([`RuleKey::OfferClock`](nova_sim_frame::RuleKey::OfferClock)): whoever
     /// holds the session rearms it ([`BarScreen::rearm`]) with a new gap.
     pub fn take_offer_restart(&mut self) -> bool {
         self.offering
@@ -1212,7 +1212,8 @@ mod tests {
     use std::cell::RefCell;
     use std::collections::BTreeSet;
 
-    use nova_sim::{HireRefusal, HireRow, ShipFields, ShipSpecs};
+    use nova_sim_base::ShipFields;
+    use nova_sim_frame::{HireRefusal, HireRow, ShipSpecs};
 
     use super::*;
     const MAP_KEY: crate::Key = crate::Key::KeyM;
@@ -1337,7 +1338,7 @@ mod tests {
         }
 
         /// Names no movie: these screens never play one.
-        fn description_movie(&self, _id: i16) -> Option<nova_sim::DescMovie> {
+        fn description_movie(&self, _id: i16) -> Option<nova_sim_frame::DescMovie> {
             None
         }
     }
@@ -1442,7 +1443,7 @@ mod tests {
     /// A list of `rows` ships, all hireable, the fleet with room.
     pub(super) fn list(rows: usize) -> HireList {
         HireList {
-            rules: nova_sim::Rulebook::default(),
+            rules: nova_sim_frame::Rulebook::default(),
             rows: (0..rows)
                 .map(|n| HireRow {
                     id: ShipId(128 + n as i16),
@@ -1457,7 +1458,7 @@ mod tests {
                         length: 0,
                         crew: 0,
                         space: 0,
-                        rounding: nova_sim::RuleSource::Engine,
+                        rounding: nova_sim_frame::RuleSource::Engine,
                         weapons: Vec::new(),
                         long_name: String::new(),
                     },
@@ -1695,7 +1696,7 @@ mod tests {
         }
         assert_eq!(
             screen.take_race_bet(),
-            Some((1, nova_sim::gamble::Bet::House))
+            Some((1, nova_sim_frame::gamble::Bet::House))
         );
         assert!(!screen.race_revealing(), "nothing run yet");
         screen.show_race_result(1, 3_000);
@@ -1777,7 +1778,7 @@ mod tests {
         }
         assert_eq!(
             screen.take_race_bet(),
-            Some((0, nova_sim::gamble::Bet::House)),
+            Some((0, nova_sim_frame::gamble::Bet::House)),
             "Alt let go: no ask"
         );
     }
@@ -2155,7 +2156,7 @@ mod tests {
         assert_eq!(screen.take_hire(), Some(ShipId(128)));
         assert_eq!(screen.take_hire(), None, "once");
         let full = HireList {
-            rules: nova_sim::Rulebook::default(),
+            rules: nova_sim_frame::Rulebook::default(),
             room: false,
             rows: vec![HireRow {
                 hire: Err(HireRefusal::FleetFull),
@@ -2344,7 +2345,7 @@ mod tests {
     /// the gap between two presses.
     #[test]
     fn the_bar_ticks_its_hire_screen_for_the_double_click() {
-        use nova_sim::mission::screens::mac_ticks;
+        use nova_sim_frame::mission::screens::mac_ticks;
         for (gap, opens, covered) in [
             (mac_ticks(10), true, false),
             (mac_ticks(16), false, false),
@@ -2395,8 +2396,8 @@ mod tests {
     // The bar's mission offers.
 
     use crate::spaceport::offer::{OfferChoice, REFUSE_ITEM};
-    use nova_sim::mission::OfferLabels;
-    use nova_sim::{MissionId, OfferPrompt, RuleSource};
+    use nova_sim_frame::mission::OfferLabels;
+    use nova_sim_frame::{MissionId, OfferPrompt, RuleSource};
 
     /// The offer dialog's shape, smaller: 300 x 200, fixed at (0, 0),
     /// with accept (1), refuse (2), the text (3) and the one button (6).
@@ -2677,7 +2678,7 @@ mod tests {
     // The news.
 
     use crate::sound::UiSound;
-    use nova_sim::News;
+    use nova_sim_frame::News;
 
     /// "News": 300 x 230, centred, with no items.
     fn news_template() -> DialogTemplate {
