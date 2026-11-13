@@ -10,14 +10,17 @@
 //! view vocabulary below the layer crates (`nova_sim_frame::flight_frame`
 //! and its siblings), and `nova_sim` re-exports each at the path named
 //! here, while the session code that fills and answers them stays in
-//! `nova_sim`. Every other name of `nova_sim` the view's prod code
-//! reaches is re-exported by `nova_sim_frame` at the same path, but the
-//! adapter's four: `nova_sim::Session`, `nova_sim::SessionSetup`,
-//! `nova_sim::SimCatalog` and `nova_sim::Pilot`. `nova_sim_frame`'s
-//! crate docs keep the list.
+//! `nova_sim`. nova-view depends on `nova_sim_frame`, never on
+//! `nova_sim`: every other name of `nova_sim` the view reaches is
+//! re-exported by `nova_sim_frame` at the same path, and the adapter's
+//! four (`nova_sim::Session`, `nova_sim::SessionSetup`,
+//! `nova_sim::SimCatalog` and `nova_sim::Pilot`) are nova-flight's to
+//! name. `nova_sim_frame`'s crate docs keep the list.
 //!
 //! `nova_flight::SessionFlight` is the adapter over a real
-//! `nova_sim::Session`, and the edge builds it (`nova_flight::open_flight`).
+//! `nova_sim::Session`, and the edge builds it (`nova_flight::open_flight`),
+//! both in nova-flight, the crate above nova-view and nova-sim
+//! (rdm:phase/faster-builds/phase-6-nova-view-off-nova-sim).
 //!
 //! # How the view reads the flight
 //!
@@ -199,12 +202,11 @@
 //!
 //! # Testing the view
 //!
-//! View code goes in `impl<C, S: FlightSim> FlightView<C, S>` blocks,
-//! names no `Session` and adds no block over `SessionFlight<C>`. The
-//! only concrete members are two fixture-only ones
-//! (`cfg(any(test, feature = "fixture"))`): `FlightView::session`, which
-//! reads a real session behind the port, and `FlightView::from_session`,
-//! which wires a view over a session a test built.
+//! View code goes in `impl<C, S: FlightSim> FlightView<C, S>` blocks and
+//! names no `Session`: nova-view can't, as it doesn't depend on nova-sim.
+//! The two reads of a real session the wiring tests make,
+//! `view.session()` and `FlightView::from_session`, are
+//! `nova_flight::SessionViewExt`'s, over `nova_flight::SessionView`.
 //!
 //! The `fixture` feature (and this crate's tests) exposes `fixture`:
 //! `FakeFlight`, a scripted sim for the view's component tests, and
@@ -218,15 +220,17 @@
 //!
 //! The view's component tests run on `FakeFlight`: they set a frame (the
 //! builders in `flight/view/tests/frames.rs`), script its answers and
-//! events, and assert what the view draws, plays and sends. A real
-//! `Session` starts in nova-view's tests only in:
+//! events, and assert what the view draws, plays and sends. nova-view's
+//! tests, and nova-view-it's, never start a real `Session`. Those tests
+//! are nova-flight's:
 //!
-//! - `nova-view-it`'s `tests/it/flight_seam.rs`, one test per port surface
-//!   or router handoff, as its module doc says;
+//! - its `tests/it/flight_seam.rs`, one test per port surface or router
+//!   handoff, as its module doc says;
 //! - the adapter's checks, `sim_adapter`'s tests and
 //!   `sim_adapter/fake_catalog_checks.rs`;
-//! - the edge's checks, `flight/view/build/edge_checks.rs`;
-//! - `nova-view-it`'s `stock_*` tests.
+//! - the edge's checks, `edge::edge_checks`, which read the view through
+//!   its fixture-only reads (`flight::view`'s `edge_reads`);
+//! - its `tests/it` `stock_*` tests.
 //!
 //! The developer tools reach the flight through
 //! [`DevDesk`](crate::devtools::DevDesk), not this port.

@@ -12,8 +12,6 @@ publish.workspace = true
 nova-data.workspace = true
 # Resource type codes, for the developer tools' resource catalog.
 nova-rsrc.workspace = true
-# The flight simulation the flight screen runs and draws.
-nova-sim.workspace = true
 # The view vocabulary: the flight port's frame, commands, events and
 # screen asks, the view models and the session's value types.
 nova-sim-frame.workspace = true
@@ -32,9 +30,6 @@ nova-data = { workspace = true, features = ["fixture"] }
 nova-rsrc = { workspace = true, features = ["fixture"] }
 # The developer tools' record view is checked by parsing its JSON.
 serde_json.workspace = true
-# The fake catalogs' listed stellars, derived from their landing sites,
-# and setting a ship's condition directly, for flight-view tests.
-nova-sim = { workspace = true, features = ["fixture"] }
 # The saved nav's builder (`SavedNav::of`) for the fake's map nav.
 nova-sim-frame = { workspace = true, features = ["fixture"] }
 # The chance port's contract (`fixture::chance::check_contract`).
@@ -53,12 +48,13 @@ nova-sim-state.workspace = true
 # nova-data's and nova-rsrc's fixture builders) and the flight's fake
 # catalog (`flight::fake_catalog`) to other crates' tests,
 # nova-view-it's among them.
-# The fake's scripted map nav is built with nova-sim's fixture
-# (`SavedNav::of`).
+# The fake's scripted map nav is built with nova-sim-frame's fixture
+# (`SavedNav::of`), and the fake catalog's records with nova-sim-catalog's
+# and nova-sim-base's. nova-view never depends on nova-sim: the adapter
+# over a real `Session` is nova-flight's.
 fixture = [
     "nova-data/fixture",
     "nova-rsrc/fixture",
-    "nova-sim/fixture",
     "nova-sim-frame/fixture",
     "dep:nova-sim-catalog",
     "nova-sim-catalog/fixture",

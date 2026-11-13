@@ -76,7 +76,10 @@
 //! The facade: everything else of nova-sim that nova-view's prod code
 //! names, at the path nova-sim gives it, but the session's adapter's
 //! four names: `nova_sim::Session`, `nova_sim::SessionSetup`,
-//! `nova_sim::SimCatalog` and `nova_sim::Pilot`. (The galaxy viewer's
+//! `nova_sim::SimCatalog` and `nova_sim::Pilot`. nova-view depends on
+//! this crate directly and never on nova-sim; the adapter that names
+//! those four lives in nova-flight, above both
+//! (rdm:phase/faster-builds/phase-6-nova-view-off-nova-sim). (The galaxy viewer's
 //! gate lanes come from `nova_sim::viewer_lanes::gate_links`, a builder
 //! that reads a fresh story, so it stays above the layers; the app calls
 //! it and hands nova-view the [`GateLinks`](viewer_lanes::GateLinks) it

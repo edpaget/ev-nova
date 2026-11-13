@@ -52,7 +52,8 @@ deny = [
     #   story), with frame, the view vocabulary, on state beside combat;
     # - nova-ink (on nova-sim-story; the dialog adapter, wired by nova);
     # - nova-sim (the facade);
-    # - nova-view;
+    # - nova-view (on nova-sim-frame and, for its fake catalog under
+    #   `fixture`, nova-sim-catalog and nova-sim-base; never on nova-sim);
     # - nova-flight (on nova-view and nova-sim: the flight's adapter over a
     #   real Session and the edge that builds a flight);
     # - nova-render (also on nova-galaxy-format and nova-galaxy-media, for
@@ -81,7 +82,7 @@ deny = [
     { crate = "nova-galaxy-format", wrappers = ["nova-data", "nova-galaxy-media", "nova-render"], reason = "the new game's data format sits at the bottom, below the game data store and the renderer's model adapter; game-bible's galaxy tool reaches it by git" },
     { crate = "nova-galaxy-media", wrappers = ["nova-data", "nova-render"], reason = "the new game's media reading sits on the format, below the game data store and the renderer's model adapter; game-bible's galaxy tool may reach it by git" },
     { crate = "nova-data", wrappers = ["nova", "nova-audio", "nova-data", "nova-dump", "nova-flight", "nova-render", "nova-sim-catalog", "nova-sim-frame", "nova-sim-it", "nova-sim-state", "nova-view", "nova-view-it"], reason = "the game data sits on nova-rsrc, below the nova-sim layers and everything above them" },
-    { crate = "nova-view", wrappers = ["nova", "nova-audio", "nova-flight", "nova-movie", "nova-render", "nova-view-it"], reason = "the view sits on the nova-sim facade, below the flight's adapter, the renderer, the audio and the game; nova-view-it holds its integration tests" },
+    { crate = "nova-view", wrappers = ["nova", "nova-audio", "nova-flight", "nova-movie", "nova-render", "nova-view-it"], reason = "the view sits on the view vocabulary (`nova-sim-frame`), below the flight's adapter, the renderer, the audio and the game; nova-view-it holds its integration tests" },
     { crate = "nova-flight", wrappers = ["nova"], reason = "the flight's adapter over a real Session sits on the view and the nova-sim facade; only the game wires it" },
     { crate = "nova-render", wrappers = ["nova", "nova-render"], reason = "only the game draws through the renderer" },
     { crate = "nova-audio", wrappers = ["nova", "nova-audio"], reason = "only the game plays sound through the audio crate" },
@@ -114,7 +115,7 @@ deny = [
     # API, and that only by the movie decoder.
     { crate = "ffmpeg-next", wrappers = ["nova-movie"], reason = "FFmpeg is reached only through the movie decoder" },
     { crate = "ffmpeg-sys-next", wrappers = ["ffmpeg-next"], reason = "FFmpeg's bindings are reached only through ffmpeg-next" },
-    { crate = "nova-sim", wrappers = ["nova", "nova-flight", "nova-sim-it", "nova-view", "nova-view-it"], reason = "a layered nova-sim crate must never depend on the facade above it" },
+    { crate = "nova-sim", wrappers = ["nova", "nova-flight", "nova-sim-it", "nova-view-it"], reason = "a layered nova-sim crate must never depend on the facade above it" },
     { crate = "nova-sim-base", wrappers = ["nova-sim", "nova-sim-ai", "nova-sim-catalog", "nova-sim-combat", "nova-sim-frame", "nova-sim-it", "nova-sim-port", "nova-sim-save", "nova-sim-state", "nova-sim-story", "nova-view"], reason = "the foundation sits below every nova-sim crate and is reached through the nova-sim facade" },
     { crate = "nova-sim-catalog", wrappers = ["nova-sim", "nova-sim-ai", "nova-sim-combat", "nova-sim-frame", "nova-sim-port", "nova-sim-save", "nova-sim-state", "nova-sim-story", "nova-view"], reason = "the catalog layer sits below every nova-sim crate but the foundation and is reached through the nova-sim facade" },
     { crate = "nova-sim-state", wrappers = ["nova-sim", "nova-sim-ai", "nova-sim-combat", "nova-sim-frame", "nova-sim-port", "nova-sim-save", "nova-sim-story", "nova-view"], reason = "the state layer sits on the foundation and the catalog, below every other nova-sim crate, and is reached through the nova-sim facade" },

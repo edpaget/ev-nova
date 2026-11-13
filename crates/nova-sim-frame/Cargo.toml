@@ -37,8 +37,8 @@ nova-sim-catalog = { workspace = true, features = ["fixture"] }
 [features]
 # Test support for other crates' tests: `nav::SavedNav::of`, a saved nav
 # built without a session to take it from, which nova-sim's `fixture`
-# turns on for the view's tests. This crate's own unit tests reach it
-# through `cfg(test)`.
+# turns on, and nova-view's `fixture` for the view's tests and fake.
+# This crate's own unit tests reach it through `cfg(test)`.
 fixture = []
 
 [lints]
