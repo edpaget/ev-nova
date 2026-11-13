@@ -26,8 +26,8 @@ use nova_render::planet::{
 };
 use nova_render::planet_files::FakePlanetFiles;
 use nova_render::{
-    GalaxyPlanets, Light, LoadedPlanet, LogicalSize, Mesh, PlanetError, PlanetRequest,
-    PlanetSource, RenderReport, Renderer, Viewport,
+    GalaxyPlanetFiles, GalaxyPlanets, Light, LoadedPlanet, LogicalSize, Mesh, PlanetError,
+    PlanetRequest, PlanetSource, RenderReport, Renderer, Viewport,
 };
 use nova_view::{
     Color, DrawCommand, DrawList, ModelKey, ModelPose, Orientation, PlanetKey, PlanetPose, Point,
@@ -128,11 +128,14 @@ fn answered(source: &MemSource, stellar: &str) -> LoadedPlanet {
 /// draws with: a look is baked here, since each test reads the surface to
 /// work out the pixels it expects ([`surface_of`]).
 fn loaded(source: &MemSource, stellar: &str) -> LoadedPlanet {
-    LoadedPlanet::surface(made(&answered(source, stellar)))
+    let made = answered(source, stellar)
+        .make(&GalaxyPlanetFiles::new(source))
+        .unwrap_or_else(|e| panic!("{stellar} is made: {e}"));
+    LoadedPlanet::surface(made)
 }
 
-/// What `planet` draws with, made as the renderer makes it: a look baked,
-/// a surface as it is.
+/// What `planet`, a look or a surface, draws with, made as the renderer
+/// makes it: a look baked, a surface as it is.
 fn made(planet: &LoadedPlanet) -> Surface {
     planet
         .make(&FakePlanetFiles::default())

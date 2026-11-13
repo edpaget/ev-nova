@@ -127,7 +127,10 @@
 //!   here.
 //! - [`galaxy_planets`]: [`PlanetSource`] for the new game's data,
 //!   [`GalaxyPlanets`], a thin adapter over `nova_galaxy_media`'s planet
-//!   bake and texture reading and its art budgets; it needs no GPU.
+//!   bake, texture checks and art budgets that leaves a texture unread,
+//!   and [`PlanetFiles`] for it, [`GalaxyPlanetFiles`] (over a folder,
+//!   [`planet_files_in`]), which reads it at its first draw; they need no
+//!   GPU.
 //! - [`new_game_world`]: [`world_assets`], the new game's world models at
 //!   the program's edge: the flight's table of keys and the meshes and
 //!   planets they name, for the app to register, with the systems' sky
@@ -233,7 +236,7 @@ pub use camera::Light;
 pub use enlarge::{Enlarger, NativeDetail, enlarger_for};
 pub use fonts::{FALLBACK_FONT, Face, FontFaces, Loaded, SERIF_FONT, face_for};
 pub use galaxy_models::{GalaxyModels, ship_livery, ship_request, station_livery};
-pub use galaxy_planets::GalaxyPlanets;
+pub use galaxy_planets::{GalaxyPlanetFiles, GalaxyPlanets, planet_files_in};
 pub use gpu::{
     Batch, Frame, Gpu, MAX_TEXTURE_SIDE, ModelInstance, PlanetId, PlanetImage, PlanetInstance,
     PlanetTextures, QuadInstance, Rect, SkyImageId, SkyImageInstance, SolidQuad, StarInstance,
@@ -248,6 +251,7 @@ pub use model_texture::{ModelTexture, ModelTextureError, ModelTextureId};
 pub use new_game_sky::sky_looks;
 pub use new_game_sky_images::{SkyDecorations, sky_decorations};
 pub use new_game_world::{WorldAssets, world_assets, world_assets_from, world_assets_in};
+pub use planet_files::{PlanetFiles, TextureFile};
 pub use planet_source::{LoadedPlanet, PlanetError, PlanetRequest, PlanetSource};
 pub use present::{AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action};
 pub use render_scale::{RenderScale, scaled_size};

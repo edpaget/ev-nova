@@ -799,7 +799,7 @@ mod tests {
     }
 
     #[test]
-    fn a_textured_planet_is_still_read_at_load_and_one_that_fails_is_a_problem() {
+    fn a_textured_planet_is_handed_on_unread_and_one_failing_its_header_is_a_problem() {
         let source = with_a_textured_moon(&nova_galaxy_media::fixture::png(4, 2, &[50; 32]));
         let game = load(&source, Path::new("sample"));
         let assets = world_assets(&game, &source);
@@ -814,9 +814,10 @@ mod tests {
             .find(|(k, _)| *k == key)
             .expect("it")
             .1;
+        assert_eq!(pale.baked(), None, "left for its first draw");
         let surface = pale
-            .baked()
-            .expect("read here, not left for the first draw");
+            .make(&crate::galaxy_planets::GalaxyPlanetFiles::new(&source))
+            .expect("it reads");
         assert_eq!(surface.surface.rgba, [50, 50, 50, 0].repeat(8));
         assert_eq!(assets.planets.len(), 2, "and Kestrel Reach, unbaked");
 
