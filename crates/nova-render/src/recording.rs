@@ -10,7 +10,7 @@ use std::hash::{Hash, Hasher};
 use nova_data::graphics::Image;
 use nova_view::ImageKind;
 
-use crate::gpu::{Frame, Gpu, PageId, PlanetId, PlanetTextures};
+use crate::gpu::{Frame, Gpu, PageId, PlanetId, PlanetImage, PlanetTextures};
 use crate::images::{ImageError, ImageSource};
 use crate::model::{Mesh, MeshId};
 use crate::model_texture::{ModelTexture, ModelTextureId};
@@ -187,6 +187,25 @@ impl RecordingGpu {
     pub fn take(&mut self) -> Vec<GpuCall> {
         std::mem::take(&mut self.calls)
     }
+
+    /// The bytes of planet textures it holds: every level of the latest
+    /// textures uploaded under each planet id, surface, clouds and rings.
+    #[must_use]
+    pub fn planet_bytes_held(&self) -> usize {
+        let mut held = std::collections::BTreeMap::new();
+        for call in &self.calls {
+            if let GpuCall::UploadPlanet { planet, textures } = call {
+                held.insert(*planet, textures);
+            }
+        }
+        held.values()
+            .map(|textures| {
+                let levels =
+                    |chain: &[PlanetImage]| chain.iter().map(|i| i.rgba.len()).sum::<usize>();
+                levels(&textures.surface) + levels(&textures.clouds) + textures.rings.rgba.len()
+            })
+            .sum::<usize>()
+    }
 }
 
 impl Gpu for RecordingGpu {
@@ -347,6 +366,42 @@ mod tests {
                 data: image,
             }]
         );
+    }
+
+    /// Planet textures whose surface is `width` by `width / 2`, with no
+    /// clouds (a 2 by 1 clear layer) and a ring profile of `ring` texels.
+    fn planet_textures(width: u32, ring: u32) -> PlanetTextures {
+        let image = |width: u32, height: u32| crate::gpu::PlanetImage {
+            width,
+            height,
+            rgba: vec![0; (width * height * 4) as usize],
+        };
+        PlanetTextures {
+            surface: vec![image(width, width / 2), image(width / 2, width / 4)],
+            clouds: vec![image(2, 1), image(1, 1)],
+            rings: image(ring, 1),
+        }
+    }
+
+    #[test]
+    fn recording_gpu_counts_the_planet_bytes_the_gpu_holds() {
+        let mut gpu = RecordingGpu::new();
+        assert_eq!(gpu.planet_bytes_held(), 0);
+        // 8x4 + 4x2 surface, 2x1 + 1x1 clouds, 3x1 rings: 4 bytes a texel.
+        gpu.upload_planet(PlanetId(0), &planet_textures(8, 3));
+        let first = (32 + 8 + 2 + 1 + 3) * 4;
+        assert_eq!(gpu.planet_bytes_held(), first);
+        // 16x8 + 8x4 surface, the same clouds, 2x1 rings.
+        gpu.upload_planet(PlanetId(1), &planet_textures(16, 2));
+        let second = (128 + 32 + 2 + 1 + 2) * 4;
+        assert_eq!(
+            gpu.planet_bytes_held(),
+            first + second,
+            "every level of both"
+        );
+        // A second upload under one id replaces the first.
+        gpu.upload_planet(PlanetId(0), &planet_textures(16, 2));
+        assert_eq!(gpu.planet_bytes_held(), 2 * second);
     }
 
     #[test]

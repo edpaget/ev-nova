@@ -150,6 +150,14 @@ impl<S: ImageSource> Renderer<S> {
         self.planets.add(key, planet);
     }
 
+    /// The bytes of planet pixels it holds on the CPU: each planet's
+    /// surface, clouds and ring profile, for those that hold them. A
+    /// readout, for the load-cost measurements.
+    #[must_use]
+    pub fn planet_bytes_held(&self) -> usize {
+        self.planets.bytes_held()
+    }
+
     /// The planets held, for the planets' own tests.
     #[cfg(test)]
     pub(crate) fn planets(&self) -> &Planets {

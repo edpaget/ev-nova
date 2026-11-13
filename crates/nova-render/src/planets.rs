@@ -124,6 +124,19 @@ impl Planets {
         }
         push(batches, instance, clip);
     }
+
+    /// The bytes of planet pixels held: each surface's, clouds' and ring
+    /// profile's, for the planets that hold one.
+    pub(crate) fn bytes_held(&self) -> usize {
+        (self.held.values())
+            .filter_map(|held| held.planet.baked())
+            .map(|surface| {
+                surface.surface.rgba.len()
+                    + surface.clouds.as_ref().map_or(0, |c| c.rgba.len())
+                    + surface.rings.as_ref().map_or(0, |r| r.profile.len())
+            })
+            .sum()
+    }
 }
 
 /// Appends `planet`, drawn only inside `clip` when it has one, extending
@@ -357,6 +370,38 @@ mod tests {
         let second = frame_of(&mut renderer, &list, &mut gpu);
         assert_eq!(second.batches, expected);
         assert_eq!(uploads(&gpu).len(), 1, "the second frame uploads nothing");
+    }
+
+    /// The bytes of `surface`'s pixels: its surface, clouds and ring
+    /// profile.
+    fn pixel_bytes(surface: &Surface) -> usize {
+        surface.surface.rgba.len()
+            + surface.clouds.as_ref().map_or(0, |c| c.rgba.len())
+            + surface.rings.as_ref().map_or(0, |r| r.profile.len())
+    }
+
+    #[test]
+    fn the_renderer_counts_the_planet_pixels_it_holds() {
+        let mut renderer = Renderer::new(OneSprite);
+        assert_eq!(renderer.planet_bytes_held(), 0);
+        renderer.add_planet(GLOBE, planet(9));
+        assert_eq!(renderer.planet_bytes_held(), pixel_bytes(&surface(9)));
+        renderer.add_planet(PlanetKey(2), unbaked(77));
+        assert_eq!(
+            renderer.planet_bytes_held(),
+            pixel_bytes(&surface(9)),
+            "an unbaked planet holds no pixels"
+        );
+        let mut list = DrawList::new();
+        list.planet(PlanetKey(2), pose(20.0, 20.0));
+        frame_of(&mut renderer, &list, &mut RecordingGpu::new());
+        let baked = bake(&look(77), SMALL);
+        assert!(pixel_bytes(&baked) > 0);
+        assert_eq!(
+            renderer.planet_bytes_held(),
+            pixel_bytes(&surface(9)) + pixel_bytes(&baked),
+            "a baked one holds its bake's"
+        );
     }
 
     #[test]
