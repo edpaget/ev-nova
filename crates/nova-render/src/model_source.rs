@@ -427,7 +427,8 @@ pub enum ModelError {
         /// Every limit it breaks.
         over: Vec<Overrun>,
     },
-    /// One of its base-colour images is over the art budget for a
+    /// One of the images a part samples ([`Part::sampling_material`]) is
+    /// over the art budget for a
     /// texture: its longest side ([`Measure::Side`]). It is not
     /// [`OverBudget`](Self::OverBudget), which says nothing of which
     /// image to shrink.
@@ -440,9 +441,10 @@ pub enum ModelError {
         /// Every limit the image breaks.
         over: Vec<Overrun>,
     },
-    /// One of its base-colour images doesn't decode: it is neither a PNG
-    /// nor a JPEG, its header gives no size, or its data is cut short or
-    /// corrupt. The model itself read, so this is not
+    /// One of the images a part samples doesn't decode: it is neither a
+    /// PNG nor a JPEG, its header gives no size, or its data is cut short
+    /// or corrupt. An image nothing samples is never decoded, so it is
+    /// never this error. The model itself read, so this is not
     /// [`Unreadable`](Self::Unreadable): nothing before the model source
     /// decodes a model's images.
     #[error("asset `{asset}`'s {image} doesn't decode: {why}")]
@@ -454,7 +456,7 @@ pub enum ModelError {
         /// Why.
         why: String,
     },
-    /// One of its base-colour images is larger than the renderer draws
+    /// One of the images a part samples is larger than the renderer draws
     /// ([`crate::gpu::MAX_TEXTURE_SIDE`]), whatever its budget allows.
     #[error(
         "asset `{asset}`'s {image} is {side} pixels on its longest side, over the {most} the \

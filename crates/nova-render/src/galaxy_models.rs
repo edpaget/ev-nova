@@ -13,8 +13,11 @@
 //!
 //! It only chains decisions made elsewhere: which file is the model and
 //! how it is read (`nova_galaxy_media::scene`), which budget covers it and
-//! what it breaks (`nova_galaxy_media::budget`), how each image a
-//! material's base colour names is sniffed, held to the default budget's
+//! what it breaks (`nova_galaxy_media::budget`), how each image a part
+//! samples
+//! ([`Part::sampling_material`](crate::model_source::Part::sampling_material):
+//! an image nothing samples is never decoded) is sniffed, held to the
+//! default budget's
 //! `texture` side and to the renderer's largest
 //! ([`MAX_TEXTURE_SIDE`]) and decoded (`nova_galaxy_media::image`), how
 //! its mip chain is built ([`ModelTexture::new`]), which sampler, which
@@ -63,7 +66,7 @@ use crate::model::MeshError;
 use crate::model_sampler::{Filter, Mip, ModelSampler, Wrap};
 use crate::model_source::{
     self, ImageRef, LoadedModel, Material, Measure, ModelError, ModelRequest, ModelSource, Overrun,
-    PaintSlot, Texture,
+    PaintSlot, Part, Texture,
 };
 use crate::model_texture::ModelTexture;
 
@@ -138,34 +141,50 @@ impl<S: Source> ModelSource for GalaxyModels<'_, S> {
                 .ok_or_else(|| ModelError::NoDepth(name.clone()))?,
             None => Placement::unscaled_bounds(scene.bounds, front),
         };
-        let textures = textures(name, scene, &texture_limits(self.galaxy))?;
-        loaded(scene, &placement, asset.paint.as_ref(), textures).map_err(|error| {
-            ModelError::Mesh {
-                asset: name.clone(),
-                error,
-            }
+        let parts = parts(scene, &placement).map_err(|error| ModelError::Mesh {
+            asset: name.clone(),
+            error,
+        })?;
+        let (textures, places) = textures(name, scene, &parts, &texture_limits(self.galaxy))?;
+        Ok(LoadedModel {
+            materials: materials(scene, asset.paint.as_ref(), &places),
+            parts,
+            textures,
         })
     }
 }
 
 /// A scene's base-colour textures, decoded, and which of them each of the
-/// scene's images became (`None` for an image no base colour names).
+/// scene's images became (`None` for an image no part samples).
 type Textures = (Vec<Texture>, Vec<Option<usize>>);
 
-/// The textures of `asset`'s `scene`: each image a material's base colour
-/// names, in the images' order, read by `nova_galaxy_media::read_image`
-/// held to `limits` (the default budget's `texture`) and to the largest
-/// side the renderer draws ([`MAX_TEXTURE_SIDE`]). An image nothing's base
-/// colour names is not decoded, so it can't refuse the model.
-fn textures(asset: &str, scene: &Scene, limits: &Limits) -> Result<Textures, ModelError> {
-    let named: BTreeSet<usize> = scene
-        .materials
+/// The textures of `asset`'s `scene`, drawn as `parts`: each image some
+/// part samples (the base colour of a material
+/// [`Part::sampling_material`] gives, the port's one definition), in the
+/// images' order, read by `nova_galaxy_media::read_image` held to `limits`
+/// (the default budget's `texture`) and to the largest side the renderer
+/// draws ([`MAX_TEXTURE_SIDE`]).
+///
+/// An image no part samples is not decoded: one no base colour names, and
+/// one named only by materials on parts with no coordinates to sample it
+/// by. Nothing is drawn from it, so it costs no decode and no memory, and
+/// it can't refuse the model, whether it wouldn't decode, is over the
+/// budget or is larger than the renderer draws.
+fn textures(
+    asset: &str,
+    scene: &Scene,
+    parts: &[Part],
+    limits: &Limits,
+) -> Result<Textures, ModelError> {
+    let sampled: BTreeSet<usize> = parts
         .iter()
-        .filter_map(|m| m.base_color_texture.map(|texture| texture.image))
+        .filter_map(Part::sampling_material)
+        .filter_map(|at| scene.materials.get(at)?.base_color_texture)
+        .map(|texture| texture.image)
         .collect();
     let mut textures = Vec::new();
     let mut places = vec![None; scene.images.len()];
-    for at in named {
+    for at in sampled {
         let Some(image) = scene.images.get(at) else {
             continue;
         };
@@ -339,23 +358,16 @@ pub(crate) fn overrun(over: &budget::Overrun) -> Overrun {
     }
 }
 
-/// `scene` placed by `placement`, its materials in the slots `paint`
-/// puts them in and naming their base colours' textures among
-/// `textures`, each through its own sampler, as the port hands it over.
-/// A primitive's coordinates are forwarded as the scene resolved them
-/// (the set its base colour names, transformed).
-fn loaded(
-    scene: &Scene,
-    placement: &Placement,
-    paint: Option<&Paint>,
-    (textures, places): Textures,
-) -> Result<LoadedModel, MeshError> {
+/// `scene`'s primitives placed by `placement`, as the port's parts. A
+/// primitive's coordinates are forwarded as the scene resolved them (the
+/// set its base colour names, transformed).
+fn parts(scene: &Scene, placement: &Placement) -> Result<Vec<Part>, MeshError> {
     #[allow(
         clippy::cast_possible_truncation,
         reason = "a placed model's metres are well inside f32"
     )]
     let narrow = |v: [f64; 3]| v.map(|c| c as f32);
-    let parts = scene
+    scene
         .primitives
         .iter()
         .map(|p| {
@@ -383,37 +395,42 @@ fn loaded(
                 p.uvs.clone(),
             )
         })
-        .collect::<Result<_, _>>()?;
-    Ok(LoadedModel {
-        parts,
-        materials: scene
-            .materials
-            .iter()
-            .map(|m| {
-                // The texture it draws, among those decoded, and the
-                // sampler it draws it through: the default for a material
-                // that draws none.
-                let drawn = m.base_color_texture.and_then(|texture| {
-                    let at = places.get(texture.image).copied().flatten()?;
-                    Some((at, sampler(texture.sampler)))
-                });
-                Material {
-                    name: m.name.clone(),
-                    paint: paint
-                        .zip(m.name.as_deref())
-                        .and_then(|(paint, name)| slot_of(paint, name))
-                        .map(paint_slot),
-                    base_color: m.base_color,
-                    metallic: m.metallic,
-                    roughness: m.roughness,
-                    unlit: m.unlit,
-                    base_color_texture: drawn.map(|(at, _)| at),
-                    base_color_sampler: drawn.map_or(ModelSampler::DEFAULT, |(_, sampler)| sampler),
-                }
-            })
-            .collect(),
-        textures,
-    })
+        .collect()
+}
+
+/// `scene`'s materials as the port hands them over: each in the slot
+/// `paint` puts it in, and naming its base colour's texture through its
+/// own sampler. `places` says which decoded texture each of the scene's
+/// images became ([`textures`]). A material whose image was decoded names
+/// it even if its own parts have no coordinates (another part samples
+/// it); one whose image was not names no texture.
+fn materials(scene: &Scene, paint: Option<&Paint>, places: &[Option<usize>]) -> Vec<Material> {
+    scene
+        .materials
+        .iter()
+        .map(|m| {
+            // The texture it draws, among those decoded, and the sampler
+            // it draws it through: the default for a material that draws
+            // none.
+            let drawn = m.base_color_texture.and_then(|texture| {
+                let at = places.get(texture.image).copied().flatten()?;
+                Some((at, sampler(texture.sampler)))
+            });
+            Material {
+                name: m.name.clone(),
+                paint: paint
+                    .zip(m.name.as_deref())
+                    .and_then(|(paint, name)| slot_of(paint, name))
+                    .map(paint_slot),
+                base_color: m.base_color,
+                metallic: m.metallic,
+                roughness: m.roughness,
+                unlit: m.unlit,
+                base_color_texture: drawn.map(|(at, _)| at),
+                base_color_sampler: drawn.map_or(ModelSampler::DEFAULT, |(_, sampler)| sampler),
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -854,6 +871,151 @@ mod tests {
         assert_eq!(named, [Some(0), None, Some(0)]);
     }
 
+    /// A box with no texture coordinates in one textured material.
+    fn bare() -> Builder {
+        Builder::new([1.0; 3]).material(Mat {
+            textured: true,
+            sampler: Some(sharp().0),
+            ..Mat::new("hull", [1.0; 4])
+        })
+    }
+
+    /// A box with the first coordinate set in one material textured by
+    /// the second, which the box lacks.
+    fn missing_set() -> Builder {
+        Builder::new([1.0; 3]).texcoords().material(Mat {
+            textured: true,
+            tex_coord: 1,
+            sampler: Some(sharp().0),
+            ..Mat::new("hull", [1.0; 4])
+        })
+    }
+
+    /// Asserts `source`'s hull loads having decoded nothing: no texture,
+    /// its one material naming none through the default sampler.
+    fn assert_decodes_nothing(source: &MemSource) {
+        let model = ask(source, "hull", None).unwrap();
+        assert_eq!(model.textures, []);
+        assert_eq!(model.materials.len(), 1);
+        assert_eq!(model.materials[0].base_color_texture, None);
+        assert_eq!(model.materials[0].base_color_sampler, ModelSampler::DEFAULT);
+        let mesh = model.mesh();
+        assert!(mesh.textures().is_empty());
+        assert!(mesh.sections().iter().all(|s| s.texture.is_none()));
+    }
+
+    #[test]
+    fn a_textured_material_on_a_model_with_no_coordinates_decodes_nothing() {
+        // The stub doesn't decode, and nothing asks it to.
+        assert_decodes_nothing(&with_glb_hull(bare(), PNG));
+        assert_decodes_nothing(&with_gltf_hull(bare(), PNG));
+    }
+
+    #[test]
+    fn a_material_naming_a_coordinate_set_the_mesh_lacks_decodes_nothing() {
+        assert_decodes_nothing(&with_glb_hull(missing_set(), PNG));
+        assert_decodes_nothing(&with_gltf_hull(missing_set(), PNG));
+    }
+
+    #[test]
+    fn an_unsampled_image_cannot_refuse_the_model() {
+        // A default budget that gives textures no limits at all.
+        let unlimited = "---\nmodel: {triangles: 20000, kib: 4096}\n---\n";
+        let too_large = declaring(MAX_TEXTURE_SIDE + 1, 2);
+        // Each image refuses a model that samples it, its own way.
+        let sampled = |image: &[u8]| ask(&with_glb_hull(skinned(), image), "hull", None);
+        assert!(matches!(
+            sampled(PNG),
+            Err(ModelError::TextureUndecodable { .. })
+        ));
+        assert!(matches!(
+            sampled(&too_large),
+            Err(ModelError::TextureOverBudget { .. })
+        ));
+        let unbudgeted = with_glb_hull(skinned(), &too_large).with("budgets/default.md", unlimited);
+        assert!(matches!(
+            ask(&unbudgeted, "hull", None),
+            Err(ModelError::TextureTooLarge { .. })
+        ));
+        // Unsampled, none does.
+        assert_decodes_nothing(&with_glb_hull(bare(), PNG));
+        assert_decodes_nothing(&with_glb_hull(bare(), &too_large));
+        assert_decodes_nothing(
+            &with_glb_hull(bare(), &too_large).with("budgets/default.md", unlimited),
+        );
+    }
+
+    /// A box with the first coordinate set in two materials on one image:
+    /// the first sampled by that set, the second by one the box lacks.
+    fn half_sampled() -> Builder {
+        skinned().material(Mat {
+            textured: true,
+            tex_coord: 1,
+            ..Mat::new("other", [1.0; 4])
+        })
+    }
+
+    #[test]
+    fn an_image_one_part_samples_and_another_does_not_is_decoded_once() {
+        let source = with_glb_hull(half_sampled(), &png(2, 2, &SKIN));
+        let model = ask(&source, "hull", None).unwrap();
+        assert_eq!(model.textures.len(), 1);
+        let named: Vec<_> = model
+            .materials
+            .iter()
+            .map(|m| m.base_color_texture)
+            .collect();
+        assert_eq!(named, [Some(0), Some(0)]);
+        let mesh = model.mesh();
+        let drawn: Vec<_> = mesh.sections().iter().map(|s| s.texture).collect();
+        assert_eq!(drawn, [Some(0), None]);
+        assert_eq!(mesh.textures().len(), 1);
+    }
+
+    #[test]
+    fn only_the_sampled_image_of_two_is_decoded_and_its_material_names_it() {
+        // The fixture writes one image, so the second is added to the
+        // scene as read: the stub, which doesn't decode, named by the
+        // material no part samples.
+        let glb = half_sampled()
+            .image(ImageAt::Embedded)
+            .image_bytes(&png(2, 2, &SKIN))
+            .glb();
+        let mut scene = nova_galaxy_media::read_scene("hull.glb", &glb, |_| None).unwrap();
+        let stub = nova_galaxy_media::scene::Image {
+            bytes: PNG.to_vec(),
+            mime: None,
+            path: None,
+        };
+        scene.images.push(stub);
+        let image_of = |scene: &mut Scene, material: usize, image: usize| {
+            let texture = scene.materials[material].base_color_texture.as_mut();
+            texture.expect("textured").image = image;
+        };
+        image_of(&mut scene, 1, 1);
+        let placement = Placement::unscaled_bounds(scene.bounds, Front::MinusZ);
+        let (galaxy, _) = load(&galaxy());
+        let limits = texture_limits(&galaxy);
+        let read = |scene: &Scene| {
+            let parts = parts(scene, &placement).unwrap();
+            let (textures, places) = textures("hull", scene, &parts, &limits).unwrap();
+            (textures, materials(scene, None, &places))
+        };
+        let check = |scene: &Scene| {
+            let (textures, materials) = read(scene);
+            assert_eq!(textures.len(), 1);
+            assert_eq!(textures[0].image.levels()[0].rgba, SKIN);
+            assert_eq!(materials[0].base_color_texture, Some(0));
+            assert_eq!(materials[1].base_color_texture, None);
+        };
+        check(&scene);
+        // The unsampled image first: the sampled one is still texture 0.
+        scene.images.swap(0, 1);
+        image_of(&mut scene, 0, 1);
+        image_of(&mut scene, 1, 0);
+        check(&scene);
+    }
+
     /// A real PNG whose header is rewritten to declare `width` by
     /// `height`: its size reads, and it doesn't decode.
     fn declaring(width: u32, height: u32) -> Vec<u8> {
@@ -1264,20 +1426,12 @@ mod tests {
             .image(ImageAt::Embedded);
         let scene = nova_galaxy_media::read_scene("hull.glb", &builder.glb(), |_| None).unwrap();
         assert_eq!(scene.images.len(), 1);
-        let placement = Placement::unscaled_bounds(scene.bounds, Front::MinusZ);
-        let texture = Texture {
-            image: Arc::new(ModelTexture::new(1, 1, vec![9; 4]).unwrap()),
-            path: None,
-        };
-        let decoded = loaded(&scene, &placement, None, (vec![texture], vec![Some(0)])).unwrap();
-        assert_eq!(decoded.materials[0].base_color_texture, Some(0));
-        assert_eq!(decoded.materials[0].base_color_sampler, sharp);
-        let undecoded = loaded(&scene, &placement, None, (Vec::new(), vec![None])).unwrap();
-        assert_eq!(undecoded.materials[0].base_color_texture, None);
-        assert_eq!(
-            undecoded.materials[0].base_color_sampler,
-            ModelSampler::DEFAULT
-        );
+        let decoded = materials(&scene, None, &[Some(0)]);
+        assert_eq!(decoded[0].base_color_texture, Some(0));
+        assert_eq!(decoded[0].base_color_sampler, sharp);
+        let undecoded = materials(&scene, None, &[None]);
+        assert_eq!(undecoded[0].base_color_texture, None);
+        assert_eq!(undecoded[0].base_color_sampler, ModelSampler::DEFAULT);
     }
 
     /// The box with both coordinate sets, its one material sampled as
@@ -1358,12 +1512,16 @@ mod tests {
         check_contract(&models, &ModelRequest::new("hull", Some(8.0)), "nothing");
         check_contract(&models, &ModelRequest::new("hull", None), "nothing");
         // Textured and unlit, a `.glb` and a `.gltf`; and sampled its own
-        // way, by the second set, transformed.
+        // way, by the second set, transformed; and textured with nothing
+        // to sample by, or only on some of its parts.
         for source in [
             with_glb_hull(skinned(), &png(2, 2, &SKIN)),
             with_gltf_hull(skinned(), &png(2, 2, &SKIN)),
             with_glb_hull(sampled(), &png(2, 2, &SKIN)),
             with_gltf_hull(sampled(), &png(2, 2, &SKIN)),
+            with_glb_hull(bare(), &png(2, 2, &SKIN)),
+            with_gltf_hull(missing_set(), &png(2, 2, &SKIN)),
+            with_glb_hull(half_sampled(), &png(2, 2, &SKIN)),
         ] {
             let (galaxy, _) = load(&source);
             let models = GalaxyModels::new(&galaxy, &source);
