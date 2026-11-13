@@ -155,6 +155,15 @@ fn the_closing_repaint_draws_a_modelled_station_and_planet_clipped_to_the_play_a
 }
 
 #[test]
+fn the_rescue_s_repaint_names_its_system() {
+    let view = closing_over(pod_with(table()), rescued_3d());
+    assert!(view.rescuing(), "the closing");
+    let system = view.scene().map(SystemScene::id);
+    assert!(system.is_some());
+    assert_eq!(drawn(&view).system(), system);
+}
+
+#[test]
 fn with_an_empty_table_the_closing_repaint_draws_the_stand_ins_as_before() {
     let view = closing_over(pod_with(WorldModels::default()), rescued_3d());
     let list: Vec<DrawCommand> = drawn(&view).iter().cloned().collect();

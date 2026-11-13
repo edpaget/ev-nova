@@ -50,6 +50,15 @@ pub(crate) fn stellar_stand_in(stand_in: &StandIn) -> StellarStandIn {
     }
 }
 
+/// A stellar's stand-in from the data, for a caller outside the view (the
+/// renderer draws a planet's stand-in when its texture won't read): the
+/// same as the screens' own.
+impl From<&StandIn> for StellarStandIn {
+    fn from(stand_in: &StandIn) -> Self {
+        stellar_stand_in(stand_in)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,5 +109,16 @@ mod tests {
             stellar_stand_in(&StandIn::Outline(data_outline())),
             StellarStandIn::Outline(view_outline())
         );
+    }
+
+    #[test]
+    fn a_stellar_s_stand_in_converts_from_the_data_s() {
+        for data in [
+            StandIn::Disc { color: [4, 5, 6] },
+            StandIn::Ring { color: [7, 8, 9] },
+            StandIn::Outline(data_outline()),
+        ] {
+            assert_eq!(StellarStandIn::from(&data), stellar_stand_in(&data));
+        }
     }
 }

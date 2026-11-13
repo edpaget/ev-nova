@@ -1,5 +1,6 @@
 //! Draw commands and draw lists.
 
+use nova_data::SystemId;
 use nova_sim::blink::FULL;
 
 use crate::color::Color;
@@ -605,6 +606,9 @@ pub struct DrawList {
     /// What the frame asks of the platform's text entry, if a focused
     /// field asks ([`DrawList::ask_text_entry`]).
     text_entry: Option<EntryAsk>,
+    /// The system whose stellars the frame flies among, if it names one
+    /// ([`DrawList::in_system`]).
+    system: Option<SystemId>,
 }
 
 impl DrawList {
@@ -692,6 +696,27 @@ impl DrawList {
     #[must_use]
     pub fn text_entry(&self) -> Option<EntryAsk> {
         self.text_entry
+    }
+
+    /// Names `system` as the one the frame flies in: a readout of where
+    /// the frame is, as the text-entry ask is, which the renderer reads to
+    /// tell a visit to a system from the next (`nova_render`'s `visits`:
+    /// it lets go of the planets of systems the pilot has left). Only
+    /// flight names one, in the passes that draw its system's stellars;
+    /// a screen that shows a system without flying in it (the galaxy
+    /// map's system viewer, the spaceport) names none. A screen that flies
+    /// must name its system, or the renderer never lets a planet go. The
+    /// last one named wins.
+    pub fn in_system(&mut self, system: SystemId) -> &mut Self {
+        self.system = Some(system);
+        self
+    }
+
+    /// The system the frame flies in, if it names one
+    /// ([`DrawList::in_system`]).
+    #[must_use]
+    pub fn system(&self) -> Option<SystemId> {
+        self.system
     }
 
     /// The commands, in draw order.
@@ -857,8 +882,12 @@ impl DrawList {
     /// widened view so. Each keeps its layer. `other`'s world clip, moved
     /// by `by`, replaces this list's if `other` has one, and so does its
     /// world tail, moved past this list's commands, and its text-entry ask,
-    /// moved by `by` too.
+    /// moved by `by` too, and the system it names
+    /// ([`DrawList::in_system`]).
     pub fn extend_translated(&mut self, other: &Self, by: Point) -> &mut Self {
+        if let Some(system) = other.system {
+            self.system = Some(system);
+        }
         if let Some(tail) = other.world_tail {
             self.world_tail = Some(self.commands.len() + tail);
         }
@@ -1546,6 +1575,33 @@ mod tests {
             list.text_entry(),
             Some(ask(10.0, 4).offset(at(170.0, -2.0)))
         );
+    }
+
+    #[test]
+    fn a_list_names_no_system_until_told_and_the_last_told_wins() {
+        let mut list = DrawList::new();
+        assert_eq!(list.system(), None);
+        list.in_system(SystemId(130));
+        assert_eq!(list.system(), Some(SystemId(130)));
+        list.in_system(SystemId(131));
+        assert_eq!(list.system(), Some(SystemId(131)));
+        assert!(list.is_empty(), "a system is no command");
+    }
+
+    #[test]
+    fn extending_a_list_carries_the_other_list_s_system() {
+        let mut flight = DrawList::new();
+        flight.in_system(SystemId(130));
+        let mut list = DrawList::new();
+        list.extend_translated(&flight, at(170.0, 0.0));
+        assert_eq!(list.system(), Some(SystemId(130)));
+        // A list that names none keeps the one named.
+        list.extend_translated(&DrawList::new(), at(170.0, 0.0));
+        assert_eq!(list.system(), Some(SystemId(130)));
+        let mut other = DrawList::new();
+        other.in_system(SystemId(131));
+        list.extend_translated(&other, at(0.0, 0.0));
+        assert_eq!(list.system(), Some(SystemId(131)), "the last named wins");
     }
 
     #[test]

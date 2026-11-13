@@ -140,6 +140,19 @@ fn commands(list: &DrawList) -> Vec<DrawCommand> {
 }
 
 #[test]
+fn the_stellars_pass_marks_the_list_with_the_system_it_draws() {
+    for models in [table(), WorldModels::default()] {
+        let view = view_of(models);
+        let scene = view.scene().expect("laid out");
+        let mut list = DrawList::new();
+        view.draw_stellar_layer(&mut list, scene, &view.camera());
+        assert_eq!(list.system(), Some(scene.id()));
+        assert_eq!(scene.id(), SystemId(130), "Sol");
+        assert_eq!(world_list(&view).system(), Some(SystemId(130)));
+    }
+}
+
+#[test]
 fn a_station_with_a_model_draws_it_unturned_at_its_stand_ins_centre_and_reach() {
     let view = view_of(table());
     let list = commands(&world_list(&view));

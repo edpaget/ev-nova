@@ -244,12 +244,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// `_HandleStellarSystemVisibility` showed (@0x32e54-0x3306b). A
     /// stellar with a model or planet in the table draws it, as flight
     /// does ([`FlightView::stellar_model_drawn`]), cut to the play area.
-    /// Not world, as the repaint's space area is overlay.
+    /// Not world, as the repaint's space area is overlay. It names the
+    /// scene's system, as flight's pass does ([`DrawList::in_system`]).
     fn repaint_stellars(&self) -> DrawList {
         let mut list = DrawList::new();
         let Some(scene) = &self.scene else {
             return list;
         };
+        list.in_system(scene.id());
         let (camera, murk) = (self.camera(), Some(self.seen_murk()));
         scene::draw_stellars_clipped_instead(
             &mut list,

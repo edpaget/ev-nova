@@ -172,6 +172,36 @@ fn the_first_frame_out_of_a_hypergate_draws_the_new_system_s_planet_under_the_fa
     draws_the_planet_under_solid_white(&view, "fading in");
 }
 
+/// The system the frame `view` draws now names on its list
+/// ([`DrawList::system`]), so the renderer counts a new visit there.
+fn named(view: &Faked) -> Option<SystemId> {
+    let mut list = DrawList::new();
+    Screen::draw(view, &mut list);
+    assert!(planet_in(&list).is_some(), "the frame commands the planet");
+    list.system()
+}
+
+#[test]
+fn the_first_frame_after_a_jump_names_the_new_system() {
+    for fades in [true, false] {
+        // Sol before the jump.
+        let view = faked_in(alpha_with_a_planet(), sol())
+            .with_hyperspace_effects(fades)
+            .with_world_models(table());
+        let mut list = DrawList::new();
+        Screen::draw(&view, &mut list);
+        assert_eq!(list.system(), Some(SystemId(130)), "Sol, fades {fades}");
+        let arrived = arrived_by_jump(fades);
+        assert_eq!(
+            named(&arrived),
+            Some(SystemId(131)),
+            "jumped, fades {fades}"
+        );
+        let gated = come_out_of_the_gate(fades);
+        assert_eq!(named(&gated), Some(SystemId(131)), "gated, fades {fades}");
+    }
+}
+
 #[test]
 fn with_no_fades_the_first_frame_out_of_a_hypergate_draws_it_under_the_flash() {
     // The close comes in input, so the next tick's frame is the white's.

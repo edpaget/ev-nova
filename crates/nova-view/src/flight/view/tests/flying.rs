@@ -313,6 +313,8 @@ fn it_draws_the_stars_the_stellars_the_ship_then_the_hud() {
             expected.push(star);
         }
         let scene = view.scene().expect("a scene");
+        // The stellars' pass names its system.
+        expected.in_system(scene.id());
         scene::draw_stellars(expected, scene, &view.camera(), Some(view.seen_murk()));
         expected.sprite(ImageKey::sprite(2000, 0), PLAYER_AT, Color::WHITE);
         // The floaters and the particles, none of them up.

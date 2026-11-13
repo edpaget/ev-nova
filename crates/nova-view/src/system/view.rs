@@ -513,6 +513,17 @@ mod tests {
         assert_eq!(view.frame(3), None);
     }
 
+    #[test]
+    fn the_system_viewer_names_no_system() {
+        // Browsing systems isn't flying in them: naming one would have the
+        // renderer let flight's planets go (`nova_render`'s `visits`).
+        let view = sol();
+        let mut list = DrawList::new();
+        Screen::draw(&view, &mut list);
+        assert!(!list.is_empty());
+        assert_eq!(list.system(), None);
+    }
+
     // Moving the camera.
 
     #[test]

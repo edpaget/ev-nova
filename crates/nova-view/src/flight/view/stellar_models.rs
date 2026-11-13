@@ -41,6 +41,17 @@
 //! replacement would be a side datum on the draw list naming the planets a
 //! screen will draw, for the renderer to make ready from.
 //!
+//! # The pass names its system
+//!
+//! The pass names its system on the list ([`DrawList::in_system`]), as
+//! the rescue's repaint does. The renderer counts a visit for each new
+//! system named, and lets go of the planets not drawn in this visit or the
+//! one before, two flight systems back (`nova_render`'s `visits`); going
+//! back there makes them ready again in the first frame, as a first visit
+//! does. So a cull would need its replacement here too: a planet it left
+//! uncommanded through two systems is let go, and made again at its next
+//! command.
+//!
 //! Not every first frame has a white over it: a pilot's first frame in
 //! flight, the first after a take-off or a wormhole, and a stellar that
 //! starts hidden and shows later pause with nothing covering them. Each is
@@ -70,13 +81,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Draws the stellars' pass: each stellar as [`scene::draw_stellars`]
     /// draws it, murked as the player sees it, but one with a model or
     /// planet in the table draws that in its stand-in's place (see the
-    /// module docs).
+    /// module docs). It names `scene`'s system on the list
+    /// ([`DrawList::in_system`]): the frame's flight system.
     pub(super) fn draw_stellar_layer(
         &self,
         list: &mut DrawList,
         scene: &SystemScene,
         camera: &Camera,
     ) {
+        list.in_system(scene.id());
         scene::draw_stellars_instead(
             list,
             scene,
