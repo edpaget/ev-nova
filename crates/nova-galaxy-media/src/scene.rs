@@ -1058,6 +1058,23 @@ mod tests {
     }
 
     #[test]
+    fn a_coordinate_that_is_not_finite_reaches_the_primitive() {
+        let scene = scene(&sampled(&[skin()]).bad_texcoord(f32::NAN));
+        let uvs = scene.primitives[0].uvs.as_ref().expect("coordinates");
+        assert!(uvs.iter().flatten().any(|c| c.is_nan()), "{uvs:?}");
+    }
+
+    #[test]
+    fn a_texture_with_no_source_makes_the_model_unreadable() {
+        let through = Mat {
+            only_through: Some("KHR_texture_basisu"),
+            ..skin()
+        };
+        let err = read_scene("m.glb", &sampled(&[through]).glb(), no_files).unwrap_err();
+        assert!(err.starts_with("not a readable glTF model"), "{err}");
+    }
+
+    #[test]
     fn a_malformed_texture_transform_makes_the_model_unreadable() {
         let material = Mat {
             transform: Some(TransformJson::default()),

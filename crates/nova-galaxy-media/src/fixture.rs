@@ -7,9 +7,11 @@
 //! reader ([`scene`](crate::scene)): normals, texture coordinates,
 //! materials with metallic, roughness, unlit and a texture ([`Mat`]), that
 //! texture's sampler ([`SamplerCodes`]), `texCoord` set and
-//! `KHR_texture_transform` ([`TransformJson`]), a tree of nodes
-//! ([`Node`]), an image embedded or beside it ([`ImageAt`]), and a
-//! primitive that isn't triangles.
+//! `KHR_texture_transform` ([`TransformJson`]), a texture that names its
+//! image only through a format extension ([`Mat::only_through`]), a
+//! tree of nodes ([`Node`]), an image embedded or beside it
+//! ([`ImageAt`]), a texture coordinate that isn't finite
+//! ([`Builder::bad_texcoord`]), and a primitive that isn't triangles.
 //!
 //! [`png`] encodes a real PNG from pixels, for the texture reader
 //! ([`texture`](crate::texture)) and the image reader
@@ -73,6 +75,13 @@ pub struct Mat {
     pub tex_coord: u32,
     /// The `KHR_texture_transform` its base colour is given, if any.
     pub transform: Option<TransformJson>,
+    /// The texture-format extension (`KHR_texture_basisu`, say) through
+    /// which its base colour's texture names the model's image, if any:
+    /// that texture is its own, written with no `source` and no sampler,
+    /// and the image only under the extension. Needs
+    /// [`textured`](Self::textured); its [`sampler`](Self::sampler) is
+    /// then not written.
+    pub only_through: Option<&'static str>,
 }
 
 /// glTF's codes for a sampler's wrap and filter modes.
@@ -140,6 +149,7 @@ impl Mat {
             sampler: None,
             tex_coord: 0,
             transform: None,
+            only_through: None,
         }
     }
 }
@@ -268,6 +278,8 @@ pub struct Builder {
     normals: bool,
     /// Whether it writes `TEXCOORD_0`, and `TEXCOORD_1`.
     texcoords: [bool; 2],
+    /// What `TEXCOORD_0` holds in place of vertex 0's u, if anything.
+    bad_texcoord: Option<f32>,
     lines: bool,
     image: Option<ImageAt>,
     image_bytes: Vec<u8>,
@@ -285,6 +297,7 @@ impl Builder {
             nodes: vec![Node::at([0.0; 3])],
             normals: false,
             texcoords: [false; 2],
+            bad_texcoord: None,
             lines: false,
             image: None,
             image_bytes: PNG.to_vec(),
@@ -326,6 +339,17 @@ impl Builder {
     #[must_use]
     pub fn texcoords(mut self) -> Self {
         self.texcoords[0] = true;
+        self
+    }
+
+    /// Writes `value` in place of vertex 0's u in `TEXCOORD_0`, which
+    /// [`texcoords`](Self::texcoords) must ask for: a NaN or an infinity,
+    /// a coordinate that isn't finite. The buffer holds the raw float; the
+    /// JSON never does, as texture-coordinate accessors carry no
+    /// `min`/`max`.
+    #[must_use]
+    pub fn bad_texcoord(mut self, value: f32) -> Self {
+        self.bad_texcoord = Some(value);
         self
     }
 
@@ -509,8 +533,14 @@ impl Builder {
         }
         let side = |c: f32| if c > 0.0 { 1.0 } else { 0.0 };
         if self.texcoords[0] {
-            let uvs = positions.iter().flat_map(|p| [side(p[0]), side(p[2])]);
-            write("TEXCOORD_0", "VEC2", uvs.collect());
+            let mut uvs: Vec<f32> = positions
+                .iter()
+                .flat_map(|p| [side(p[0]), side(p[2])])
+                .collect();
+            if let Some(bad) = self.bad_texcoord {
+                uvs[0] = bad;
+            }
+            write("TEXCOORD_0", "VEC2", uvs);
         }
         if self.texcoords[1] {
             let uvs = positions.iter().flat_map(|p| [side(p[2]), side(p[0])]);
@@ -521,14 +551,15 @@ impl Builder {
 
     /// The textures' and the samplers' JSON, the model's own image being
     /// image `source`: texture 0 on it with no sampler, then one more on
-    /// it for each textured material that has a sampler, in the
-    /// materials' order ([`texture_of`](Self::texture_of)).
+    /// it for each textured material that has a sampler, then one naming
+    /// it only through its extension for each material
+    /// [`only_through`](Mat::only_through) one, each in the materials'
+    /// order ([`texture_of`](Self::texture_of)).
     fn textures_json(&self, source: usize) -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
         use serde_json::json;
         let mut textures = vec![json!({ "source": source })];
         let mut samplers = Vec::new();
-        let sampled = self.materials.iter().filter(|m| m.textured);
-        for codes in sampled.filter_map(|m| m.sampler) {
+        for codes in sampled(&self.materials).filter_map(|m| m.sampler) {
             let mut written = json!({});
             for (name, code) in [
                 ("wrapS", codes.wrap_s),
@@ -543,21 +574,27 @@ impl Builder {
             textures.push(json!({ "source": source, "sampler": samplers.len() }));
             samplers.push(written);
         }
+        for extension in through(&self.materials).filter_map(|m| m.only_through) {
+            textures.push(json!({ "extensions": { extension: { "source": source } } }));
+        }
         (textures, samplers)
     }
 
     /// The texture material `at`'s base colour names: its own, after
-    /// texture 0 and those of the sampled materials before it, when it
-    /// has a sampler; texture 0 otherwise.
+    /// texture 0, every sampled material's and those of the materials
+    /// before it that name the image only through an extension, when it
+    /// does that; its own, after texture 0 and those of the sampled
+    /// materials before it, when it has a sampler; texture 0 otherwise.
     fn texture_of(&self, at: usize) -> usize {
-        if self.materials[at].sampler.is_none() {
+        let with_sampler = |ms: &[Mat]| sampled(ms).filter(|m| m.sampler.is_some()).count();
+        let (m, before) = (&self.materials[at], &self.materials[..at]);
+        if m.only_through.is_some() {
+            return 1 + with_sampler(&self.materials) + through(before).count();
+        }
+        if m.sampler.is_none() {
             return 0;
         }
-        let before = &self.materials[..at];
-        1 + before
-            .iter()
-            .filter(|m| m.textured && m.sampler.is_some())
-            .count()
+        1 + with_sampler(before)
     }
 
     /// Material `at`'s `baseColorTexture`: its texture, its `texCoord`
@@ -588,20 +625,22 @@ impl Builder {
         info
     }
 
-    /// Writes `extensionsUsed` (what the materials use, then what the
-    /// model requires, each once) and `extensionsRequired` into `json`,
+    /// Writes `extensionsUsed` (what the materials use, then the formats
+    /// their textures name the image only through, then what the model
+    /// requires, each once) and `extensionsRequired` into `json`,
     /// each only when it lists something.
     fn write_extensions(&self, json: &mut serde_json::Value) {
-        let mut used = Vec::new();
+        let mut used: Vec<String> = Vec::new();
         if self.materials.iter().any(|m| m.unlit) {
             used.push("KHR_materials_unlit".to_owned());
         }
         if self.materials.iter().any(|m| m.transform.is_some()) {
             used.push("KHR_texture_transform".to_owned());
         }
-        for extension in &self.required {
-            if !used.contains(extension) {
-                used.push(extension.clone());
+        let formats = through(&self.materials).filter_map(|m| m.only_through);
+        for extension in formats.map(str::to_owned).chain(self.required.clone()) {
+            if !used.contains(&extension) {
+                used.push(extension);
             }
         }
         if !used.is_empty() {
@@ -688,6 +727,22 @@ impl Builder {
             .collect();
         (roots, nodes)
     }
+}
+
+/// The textured `materials` whose texture names the image through
+/// `source`.
+fn sampled(materials: &[Mat]) -> impl Iterator<Item = &Mat> {
+    materials
+        .iter()
+        .filter(|m| m.textured && m.only_through.is_none())
+}
+
+/// The textured `materials` whose texture names the image only through an
+/// extension.
+fn through(materials: &[Mat]) -> impl Iterator<Item = &Mat> {
+    materials
+        .iter()
+        .filter(|m| m.textured && m.only_through.is_some())
 }
 
 /// The MIME type an embedded image holding `bytes` is given: a JPEG's by
@@ -1069,5 +1124,79 @@ mod tests {
         let (normals, uvs) = attributes([0.0, 2.0, 0.0]);
         assert_eq!(normals[2], [0.0, 1.0, 0.0]);
         assert!(uvs.iter().all(|uv| *uv == [0.0, 0.0]), "{uvs:?}");
+    }
+
+    /// The `TEXCOORD_0`s `builder` writes, as stored.
+    fn stored_texcoords(builder: &Builder) -> Vec<[f32; 2]> {
+        let parsed = gltf::Gltf::from_slice(&builder.glb()).unwrap();
+        let blob = parsed.blob.clone().unwrap();
+        let primitive = parsed.meshes().next().unwrap().primitives().next().unwrap();
+        let reader = primitive.reader(|_| Some(blob.as_slice()));
+        reader.read_tex_coords(0).unwrap().into_f32().collect()
+    }
+
+    #[test]
+    fn a_bad_texcoord_is_written_at_the_first_vertex() {
+        let plain = stored_texcoords(&Builder::new([2.0, 1.0, 4.0]).texcoords());
+        for bad in [f32::NAN, f32::INFINITY] {
+            let got =
+                stored_texcoords(&Builder::new([2.0, 1.0, 4.0]).texcoords().bad_texcoord(bad));
+            assert_eq!(got.len(), plain.len());
+            assert_eq!(got[0][0].to_bits(), bad.to_bits(), "{bad}");
+            assert_eq!(got[0][1], plain[0][1], "{bad}");
+            assert_eq!(got[1..], plain[1..], "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_texture_only_through_an_extension_has_no_source() {
+        use serde_json::json;
+        let builder = Builder::new([1.0; 3])
+            .texcoords()
+            .material(Mat {
+                textured: true,
+                sampler: Some(SamplerCodes::default()),
+                ..Mat::new("sampled", [1.0; 4])
+            })
+            .material(Mat {
+                textured: true,
+                only_through: Some("KHR_texture_basisu"),
+                ..Mat::new("basis", [1.0; 4])
+            })
+            .material(Mat {
+                textured: true,
+                ..Mat::new("plain", [1.0; 4])
+            })
+            .material(Mat {
+                textured: true,
+                only_through: Some("KHR_texture_basisu"),
+                ..Mat::new("again", [1.0; 4])
+            })
+            .image(ImageAt::Embedded);
+        let (text, _) = builder.gltf("a.bin");
+        let model: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let extension = json!({ "KHR_texture_basisu": { "source": 0 } });
+        assert_eq!(
+            model["textures"],
+            json!([
+                { "source": 0 },
+                { "source": 0, "sampler": 0 },
+                { "extensions": extension },
+                { "extensions": extension }
+            ])
+        );
+        let index = |at: usize| {
+            model["materials"][at]["pbrMetallicRoughness"]["baseColorTexture"]["index"].clone()
+        };
+        assert_eq!(
+            [index(0), index(1), index(2), index(3)],
+            [json!(1), json!(2), json!(0), json!(3)]
+        );
+        assert_eq!(model["extensionsUsed"], json!(["KHR_texture_basisu"]));
+        assert_eq!(model.get("extensionsRequired"), None);
+        // Required too, it is still listed as used once.
+        let (text, _) = builder.requires("KHR_texture_basisu").gltf("a.bin");
+        let model: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(model["extensionsUsed"], json!(["KHR_texture_basisu"]));
     }
 }
