@@ -85,22 +85,12 @@ nova-render = { workspace = true, features = ["recording"] }
 nova-rsrc = { workspace = true, features = ["fixture"] }
 # The text-metrics mock for the router's dialog tests.
 nova-view = { workspace = true, features = ["fixture"] }
-# The checked-in movie the movie wiring test plays.
-nova-movie = { workspace = true, features = ["fixture"] }
 # The router and integration tests save pilots in the in-memory store.
 nova-sim = { workspace = true, features = ["fixture"] }
-# This crate's own `fixture` feature, for its integration tests under
-# `tests/`, which build the library without `cfg(test)`: the mutable
-# screen their harnesses ask the flight's screens through.
-nova = { path = ".", features = ["fixture"] }
 # The pilot file adapter's tests write into a temporary directory.
 tempfile.workspace = true
 # The runner tests build the wgpu errors a GPU set-up can fail with.
 wgpu.workspace = true
-
-# The Windows-only tests of the built nova.exe read its PE structures.
-[target.'cfg(windows)'.dev-dependencies]
-object.workspace = true
 
 [features]
 # The developer tools overlay (egui), toggled with the backquote key. Off by

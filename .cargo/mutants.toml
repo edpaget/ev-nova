@@ -76,7 +76,7 @@ exclude_re = [
     "nova-bundle/src/linux/links\\.rs:[0-9]+:[0-9]+: replace > with >= in Links::parse$",
     # Windows-only code (`cfg(windows)`): off Windows it is never compiled,
     # so no mutant of it can fail a build or a test here. The windows-2025
-    # CI leg runs its tests (`nova-win32/tests/it`, `nova/tests/it/windows_exe.rs`).
+    # CI leg runs its tests (`nova-win32/tests/it`, `nova-it/tests/it/windows_exe.rs`).
     "nova-win32/src/console\\.rs:",
     "nova-win32/src/winsparkle\\.rs:",
     # The keyboard layout's key names (`key_label`, `keyboard_layout_language`):

@@ -14,7 +14,8 @@ license = "GPL-3.0-or-later"
 publish = false
 
 [workspace.dependencies]
-nova-rsrc = { path = "crates/nova-rsrc" }
+nova = { path = "crates/nova" }
+nova-rsrc ={ path = "crates/nova-rsrc" }
 nova-data = { path = "crates/nova-data" }
 nova-view = { path = "crates/nova-view" }
 nova-flight = { path = "crates/nova-flight" }

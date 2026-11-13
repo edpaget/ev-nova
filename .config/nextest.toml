@@ -14,8 +14,17 @@ test-threads = 8
 gpu = { max-threads = 2 }
 
 [[profile.default.overrides]]
-filter = 'binary_id(nova-render::it) | (package(nova-render) & test(/^wgpu::/)) | (binary_id(nova::it) & test(/^(dev_tools_paint|stock_take_off_cost)::/))'
+filter = 'binary_id(nova-render::it) | (package(nova-render) & test(/^wgpu::/)) | (binary_id(nova-it::it) & test(/^(dev_tools_paint|stock_take_off_cost)::/))'
 test-group = 'gpu'
+
+# windows_exe (Windows only) builds nova.exe itself on its first call: a
+# second feature variant of nova and the crates the tests' dev-dependencies
+# change, which on a cold target dir compiles much of the workspace, while
+# the module's other tests wait on cargo's build lock. Give it 15 minutes
+# instead of 2. The default profile's overrides apply to every profile.
+[[profile.default.overrides]]
+filter = 'binary_id(nova-it::it) & test(/^windows_exe::/)'
+slow-timeout = { period = "60s", terminate-after = 15 }
 
 [profile.ci]
 fail-fast = false

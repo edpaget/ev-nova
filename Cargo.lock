@@ -1834,7 +1834,6 @@ dependencies = [
  "egui-wgpu",
  "embed-resource",
  "gilrs",
- "nova",
  "nova-appkit",
  "nova-audio",
  "nova-data",
@@ -1847,7 +1846,6 @@ dependencies = [
  "nova-view",
  "nova-win32",
  "nova-winres",
- "object",
  "pollster 1.0.1",
  "rfd",
  "serde",
@@ -1973,6 +1971,27 @@ version = "0.1.0"
 dependencies = [
  "bladeink",
  "nova-sim-story",
+]
+
+[[package]]
+name = "nova-it"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "nova",
+ "nova-audio",
+ "nova-data",
+ "nova-flight",
+ "nova-movie",
+ "nova-render",
+ "nova-rsrc",
+ "nova-sim",
+ "nova-view",
+ "nova-winres",
+ "object",
+ "serde_json",
+ "tempfile",
+ "winit",
 ]
 
 [[package]]

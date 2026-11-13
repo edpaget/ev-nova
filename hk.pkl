@@ -52,6 +52,7 @@ local crates = List(
 // either crate runs. hk's built-in evaluator can't call a string method
 // with arguments, so the list names `<x>` and the step adds `-it`.
 local tested = List(
+    "nova",
     "nova-sim",
     "nova-view",
 )
