@@ -10,6 +10,8 @@
 //! - A held game whose session failed draws no panel and no message: that
 //!   state is the engine's alone, as the original has no game in progress
 //!   without its player globals.
+//! - A ship with no picture draws as its model from the world models'
+//!   table the router gives the menu ([`AppScreen::with_world_models`]).
 //!
 //! **Under the #52 note** (`_MainScreenChoice` @0x1a82f-0x1a83b): the
 //! original redraws the main screen before the note, once `_OpenPilotFile`
