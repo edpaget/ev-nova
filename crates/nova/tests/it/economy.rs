@@ -39,6 +39,7 @@ use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
 use nova_data::store::fixture::{one_file, one_file_at};
 use nova_data::{GameData, InterfaceData, Record};
+use nova_flight::SessionViewExt as _;
 use nova_render::recording::RecordingGpu;
 use nova_render::wgpu::GlyphonMetrics;
 use nova_render::{FontFaces, Frame};

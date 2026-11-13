@@ -19,9 +19,9 @@
 //! rules alike, and the collaborators' chance is the flight's and the
 //! view's wording's.
 //!
-//! The `fixture` feature (and this crate's tests) exposes `test_flight`:
-//! the conveniences that build a bare flight with no setup, as the view's
-//! old constructors did.
+//! [`test_flight`] holds the conveniences that build a bare flight with no
+//! setup, as the view's old constructors did. Wiring-only: for the tests
+//! that wire a real session behind the port.
 
 use std::rc::Rc;
 
@@ -29,12 +29,14 @@ use nova_sim::{
     AsteroidCatalog, CombatCatalog, Pilot, Rulebook, SessionSetup, SimCatalog, SpeedMult,
 };
 
-use super::catalog::{CombatLooks, ShipSprites, StatusBars};
-use super::escorts::EscortMenuLooks;
-use super::sim_adapter::{Collaborators, SessionFlight};
-use super::view::FlightView;
-use crate::galaxy::GalaxyCatalog;
-use crate::system::catalog::SystemCatalog;
+use nova_view::flight::FlightView;
+use nova_view::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
+use nova_view::flight::escorts::EscortMenuLooks;
+use nova_view::galaxy::GalaxyCatalog;
+use nova_view::system::catalog::SystemCatalog;
+
+use crate::session_view::SessionView;
+use crate::sim_adapter::{Collaborators, SessionFlight};
 
 /// How a flight starts: the pilot it flies, and whether it is loaded.
 #[derive(Clone, Debug)]
@@ -88,7 +90,7 @@ pub fn open_flight<C: EdgeCatalog + 'static>(
     start: FlightStart,
     setup: SessionSetup,
     collaborators: Collaborators,
-) -> FlightView<C> {
+) -> SessionView<C> {
     let slots_carried = setup.carry.slot_sprites.is_some();
     let mut view = opened(Rc::new(catalog), start, &setup.rules, collaborators);
     view.change_sim(|flight| flight.set_up(setup));
@@ -101,7 +103,7 @@ pub fn open_flight<C: EdgeCatalog + 'static>(
 /// chance) paired with the view's ([`FlightView::begin`]), which draws the
 /// ship where the beginning put it and scatters the stars afresh. A flight
 /// that begins nothing changes nothing.
-pub fn begin_game<C: SystemCatalog + ShipSprites + CombatLooks>(flight: &mut FlightView<C>) {
+pub fn begin_game<C: SystemCatalog + ShipSprites + CombatLooks>(flight: &mut SessionView<C>) {
     flight.begin(SessionFlight::begin);
 }
 
@@ -111,7 +113,7 @@ pub fn begin_game<C: SystemCatalog + ShipSprites + CombatLooks>(flight: &mut Fli
 /// ([`FlightView::enter_game`]), which scatters the stars afresh. A flight
 /// that enters nothing changes nothing.
 pub fn enter_game<C: SystemCatalog + ShipSprites + CombatLooks>(
-    flight: &mut FlightView<C>,
+    flight: &mut SessionView<C>,
     gain: SpeedMult,
 ) {
     flight.enter_game(|sim| sim.enter_game(gain));
@@ -127,7 +129,7 @@ fn opened<C: EdgeCatalog + 'static>(
     start: FlightStart,
     rules: &Rulebook,
     collaborators: Collaborators,
-) -> FlightView<C> {
+) -> SessionView<C> {
     let chance = collaborators.chance.clone();
     let sim = match start {
         FlightStart::New => SessionFlight::start_ruled(&catalog, rules),
@@ -143,19 +145,20 @@ fn opened<C: EdgeCatalog + 'static>(
 /// Conveniences for tests: a bare flight, built as the view's constructors
 /// once built it, with no setup applied and Nova's collaborators unless
 /// given; each the view of a [`SessionFlight`] read by
-/// [`FlightView::over`].
-#[cfg(any(test, feature = "fixture"))]
+/// [`FlightView::over`]. Wiring-only: for the tests that wire a real
+/// session behind the port; the view's component tests run on
+/// `FakeFlight`.
 pub mod test_flight {
     use std::rc::Rc;
 
     use nova_sim::Rulebook;
 
-    use super::{Collaborators, EdgeCatalog, FlightStart, FlightView};
+    use super::{Collaborators, EdgeCatalog, FlightStart, SessionView};
 
     /// A new, unnamed pilot's flight over `catalog`, shown by the default
     /// rulebook, with Nova's collaborators.
     #[must_use]
-    pub fn new<C: EdgeCatalog + 'static>(catalog: C) -> FlightView<C> {
+    pub fn new<C: EdgeCatalog + 'static>(catalog: C) -> SessionView<C> {
         flown(catalog, FlightStart::New, Collaborators::default())
     }
 
@@ -168,7 +171,10 @@ pub mod test_flight {
         catalog: C,
         start: FlightStart,
         collaborators: Collaborators,
-    ) -> FlightView<C> {
+    ) -> SessionView<C> {
         super::opened(Rc::new(catalog), start, &Rulebook::default(), collaborators)
     }
 }
+
+#[cfg(test)]
+mod edge_checks;

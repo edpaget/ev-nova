@@ -2,7 +2,7 @@
 //! and plunder, trade, the outfitter, bar, hiring, news, the mission
 //! computer and offers, and the shipyard.
 
-#[cfg(any(doc, test, feature = "fixture"))]
+#[cfg(doc)]
 use nova_sim::Session;
 use nova_sim::StellarId;
 use nova_sim::flight_frame::{ScreenAnswer, ScreenAsk};
@@ -346,18 +346,6 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
                 }
             }
         }
-    }
-}
-
-impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
-    /// The flight's session, or why it could not start. Wiring-only: for
-    /// the integration tests that read a real session behind the port
-    /// (`crates/nova/tests/it`, `flight_seam`, the edge's checks) until
-    /// rdm:phase/crate-decoupling/phase-10-app-tests-wiring-only retires
-    /// the app tests' reads. View code and component tests never call it.
-    #[cfg(any(test, feature = "fixture"))]
-    pub fn session(&self) -> Result<&Session, &str> {
-        self.sim.session.as_ref().map_err(String::as_str)
     }
 }
 

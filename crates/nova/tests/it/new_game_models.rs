@@ -34,6 +34,7 @@ use nova_audio::SettingsStore;
 use nova_audio::recording::MemorySettings;
 use nova_data::GameData;
 use nova_data::new_game::{self, NewGame};
+use nova_flight::SessionViewExt as _;
 use nova_render::recording::GpuCall;
 use nova_render::{WorldAssets, world_assets};
 use nova_sim::fixture::{MemoryPilots, place, put_player_at};

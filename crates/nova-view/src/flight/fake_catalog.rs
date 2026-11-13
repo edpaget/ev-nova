@@ -1,14 +1,16 @@
 //! The view's [`FakeCatalog`], and the data builders and fakes that the
-//! adapter's checks (`sim_adapter`), the edge's and the view's component
-//! tests (`flight::view::tests`) share
+//! view's component tests here (`flight::view::tests`) and nova-flight's
+//! adapter and edge checks (`sim_adapter`'s tests,
+//! `sim_adapter/fake_catalog_checks.rs`, `edge::edge_checks`) share
 //! (rdm:phase/view-sim-seam/phase-15-integration-test-set).
 //!
-//! Test code only, published under the `fixture` feature so that the
-//! adapter's and the edge's checks can share it from the crate above
-//! nova-view that they move to
+//! Test code only, published under the `fixture` feature for nova-flight
 //! (rdm:phase/faster-builds/phase-6-nova-view-off-nova-sim): the fake
 //! implements nova-sim's catalog traits as well as the view's ports, and
-//! the orphan rule keeps those impls here.
+//! the orphan rule keeps those impls here. The fakes of the session's
+//! collaborators (behaviours, the disable rule) name nova-sim's AI and
+//! combat traits and the adapter's `Collaborators`, so they are
+//! nova-flight's own.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -20,14 +22,12 @@ use nova_sim::catalog::{MissionRecord, MissionShip};
 use nova_sim::control::{Script as SetScript, Test};
 use nova_sim::landing::StellarFlags;
 use nova_sim::{
-    ALERT_CICN, AsteroidCatalog, Behaviour, Chance, CharacterStart, CombatCatalog, CommCatalog,
-    CommodityStrings, Controls, DateAffixes, Direction, DisableRule, DisasterRecord, GateSite,
-    Goal, JunkRecord, LandingSite, MissionId, OutfitId, OutfitOrder, OutfitRecord, PilotCatalog,
-    ShipFields, ShipId, ShipRecord, StarSystem, StartDate, StartError, SystemId, TrafficCatalog,
-    Turn, Vec2, WeaponId,
+    ALERT_CICN, AsteroidCatalog, Chance, CharacterStart, CombatCatalog, CommCatalog,
+    CommodityStrings, Controls, DateAffixes, Direction, DisasterRecord, GateSite, JunkRecord,
+    LandingSite, MissionId, OutfitId, OutfitOrder, OutfitRecord, PilotCatalog, ShipFields, ShipId,
+    ShipRecord, StarSystem, StartDate, StartError, SystemId, TrafficCatalog, Turn, Vec2, WeaponId,
 };
 
-use crate::flight::Collaborators;
 use crate::flight::catalog::{
     BoomLook, CombatLooks, EffectSheet, GovtId, LayerSheet, ShipSheet, ShipSprites, StarDots,
     StarSheet, StatusBarLayout, StatusBars, TargetCard, WeaponLook,
@@ -667,7 +667,7 @@ impl PilotCatalog for FakeCatalog {
         self.mission_texts.clone()
     }
 
-    /// Every stellar of each system's [`landing_sites`], with every
+    /// Every stellar of each system's `landing_sites`, with every
     /// system listing it, and the gates of `gate_listers`.
     fn listed_stellars(&self) -> Vec<nova_sim::catalog::ListedStellar> {
         let mut systems = vec![SystemId(130), SystemId(131)];
@@ -1201,16 +1201,6 @@ pub fn tap(view: &mut FlightView<FakeCatalog, impl FlightSim>, k: Key) {
     view.input(&key(k, false));
 }
 
-/// Nova's collaborators, rolling on `chance`, the NPCs deciding as
-/// `behaviour` says.
-pub fn on(chance: SharedChance, behaviour: Rc<dyn Behaviour>) -> Collaborators {
-    Collaborators {
-        chance,
-        behaviour,
-        ..Collaborators::default()
-    }
-}
-
 /// Ship 128 carrying the stock Multi-Jumping Organ (`oütf` 275,
 /// multi-jump 10), with Alpha Centauri linked on to Barnard.
 #[must_use]
@@ -1454,21 +1444,6 @@ pub fn placed(x: u32, y: u32, heading: u32) -> [u32; 8] {
     [6, 6, 0, 0, x, y, heading, 2]
 }
 
-/// Decides nothing: every NPC idles.
-#[derive(Debug)]
-pub struct Still;
-
-impl Behaviour for Still {
-    fn decide(
-        &self,
-        _npc: &nova_sim::Npc,
-        _around: &nova_sim::Surroundings,
-        _chance: &mut dyn Chance,
-    ) -> Goal {
-        Goal::Idle
-    }
-}
-
 /// [`catalog`] with `avg` ships on average in each of `systems`, all of
 /// düde 128's ship `ship` with AI `ai_type`; ships 129 and 130 are
 /// records the traffic can fly.
@@ -1542,42 +1517,6 @@ pub fn trafficked(systems: &[i16], avg: i16, ship: i16, ai_type: i16) -> FakeCat
         )],
         ships: vec![record(129), record(130)],
         ..catalog()
-    }
-}
-
-/// Says no ship is disabled, counting the times it is asked.
-#[derive(Debug, Default)]
-pub struct Counting {
-    pub asked: std::cell::Cell<usize>,
-}
-
-impl DisableRule for Counting {
-    fn disabled(&self, _armor: nova_sim::Gauge, _hull: &nova_sim::HullSpec) -> bool {
-        self.asked.set(self.asked.get() + 1);
-        false
-    }
-}
-
-/// Every NPC idles and picks its first weapon each time it thinks.
-#[derive(Debug)]
-pub struct Firing;
-
-impl Behaviour for Firing {
-    fn decide(
-        &self,
-        _npc: &nova_sim::Npc,
-        _around: &nova_sim::Surroundings,
-        _chance: &mut dyn Chance,
-    ) -> Goal {
-        Goal::Idle
-    }
-
-    fn trigger(&self, npc: &nova_sim::Npc, _around: &nova_sim::Surroundings) -> nova_sim::Trigger {
-        // Its pick, its first weapon.
-        nova_sim::Trigger {
-            only: npc.armament.mounts().first().map(|mount| mount.spec.id),
-            ..nova_sim::Trigger::default()
-        }
     }
 }
 

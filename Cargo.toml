@@ -17,6 +17,7 @@ publish = false
 nova-rsrc = { path = "crates/nova-rsrc" }
 nova-data = { path = "crates/nova-data" }
 nova-view = { path = "crates/nova-view" }
+nova-flight = { path = "crates/nova-flight" }
 nova-render = { path = "crates/nova-render" }
 nova-metalfx = { path = "crates/nova-metalfx" }
 nova-appkit = { path = "crates/nova-appkit" }

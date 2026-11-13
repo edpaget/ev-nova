@@ -16,9 +16,8 @@
 //! `nova_sim::SimCatalog` and `nova_sim::Pilot`. `nova_sim_frame`'s
 //! crate docs keep the list.
 //!
-//! [`SessionFlight`](super::sim_adapter::SessionFlight) is the adapter
-//! over a real `nova_sim::Session`, and the edge builds it
-//! (`crate::flight::open_flight`).
+//! `nova_flight::SessionFlight` is the adapter over a real
+//! `nova_sim::Session`, and the edge builds it (`nova_flight::open_flight`).
 //!
 //! # How the view reads the flight
 //!

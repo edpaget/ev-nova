@@ -14,6 +14,10 @@ publish.workspace = true
 # (`text::fixture::MonoMetrics`) and the flight port's contract
 # (`flight::sim_port::fixture::check_contract`).
 nova-view = { workspace = true, features = ["fixture"] }
+# The flight view over a real session (`SessionFlight`, `open_flight`,
+# `test_flight`), which the seam and stock tests build until they move
+# to nova-flight.
+nova-flight.workspace = true
 # The flight simulation the seam tests start (`Session`), with its
 # `fixture` module: `set_player_condition` and the fake catalogs.
 nova-sim = { workspace = true, features = ["fixture"] }

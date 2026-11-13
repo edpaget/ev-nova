@@ -10,7 +10,7 @@
 //! (@0x5b40b-0x5b44f) runs whatever the third argument says, so each plays
 //! the after-movie (`Flags` 0x0001) of the last `dësc` loaded, which
 //! whoever flies the ship reads as it answers
-//! ([`SessionFlight::loaded_after_movie`](crate::flight::SessionFlight::loaded_after_movie),
+//! (`nova_flight::SessionFlight::loaded_after_movie`,
 //! under the `desc_movie_globals` rule) and hands in as data: `after` on
 //! [`SpaceportView::show_text`], [`SpaceportView::set_opened_outfitter`],
 //! [`SpaceportView::set_opened_shipyard`], [`SpaceportView::open_hire`]

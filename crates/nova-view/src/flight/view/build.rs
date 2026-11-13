@@ -7,8 +7,6 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::rc::Rc;
 use std::time::Duration;
 
-#[cfg(any(test, feature = "fixture"))]
-use nova_sim::SimCatalog;
 use nova_sim::combat::SpriteLoad;
 use nova_sim::flight_frame::{FlightCommand, FlightOpening, ScreenAnswer, ScreenAsk};
 use nova_sim::{ALERT_CICN, FixedStep, HashedRolls, Rulebook, SpeedMult};
@@ -20,8 +18,6 @@ use crate::flight::effects::Effects;
 use crate::flight::escorts::{EscortMenu, EscortMenuLooks};
 use crate::flight::floating::FloatingMap;
 use crate::flight::hud::{self};
-#[cfg(any(test, feature = "fixture"))]
-use crate::flight::sim_adapter::SessionFlight;
 use crate::flight::sim_port::FlightSim;
 use crate::galaxy::{GalaxyCatalog, GalaxyMap};
 use crate::keymap::{CommandReader, SharedBindings, contexts};
@@ -476,42 +472,6 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 }
 
-/// The view of a [`SessionFlight`] that a test built itself, for the
-/// tests whose session a builder put into the state they need.
-#[cfg(any(test, feature = "fixture"))]
-impl<
-    C: SimCatalog
-        + CombatLooks
-        + SystemCatalog
-        + ShipSprites
-        + StatusBars
-        + GalaxyCatalog
-        + EscortMenuLooks
-        + 'static,
-> FlightView<C, SessionFlight<C>>
-{
-    /// The view of `sim` over `catalog`, read as the edge reads a flight
-    /// ([`FlightView::over`]) and shown by `rules`, the rulebook its
-    /// session was built with (`nova_sim::fixture::SessionBuilder`), so
-    /// the view and the session read one: for a test whose session a
-    /// builder put into the state it needs, passed as
-    /// `builder.build().into()` for Nova's collaborators
-    /// ([`SessionFlight::new`]). The catalog is shared with the flight
-    /// first, and the wording picks on the flight's chance.
-    ///
-    /// Wiring-only: for the integration tests that wire a real session
-    /// behind the port (`flight_seam`, the stock tests, the edge's
-    /// checks). View code and component tests never call it; they open
-    /// the view over `FakeFlight`.
-    pub fn from_session(catalog: C, mut sim: SessionFlight<C>, rules: &Rulebook) -> Self {
-        let catalog = Rc::new(catalog);
-        sim.share_catalog(Rc::clone(&catalog) as Rc<dyn SimCatalog>);
-        let chance = sim.chance.clone();
-        let opening = sim.opening();
-        Self::over(catalog, sim, opening, rules, chance)
-    }
-}
-
 /// What reading a flight gives the view as it opens, besides the catalog
 /// and the flight: the course map, the scene, the player's sheet and bar,
 /// the flight's first frame, the looks and what of them could not be read,
@@ -892,6 +852,3 @@ impl<C: ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S> {
         }
     }
 }
-
-#[cfg(test)]
-mod edge_checks;

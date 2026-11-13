@@ -35,7 +35,7 @@ mod travel;
 /// What [`Session::apply`] is handed: the catalog the travel commands
 /// and the hail read, what they draw on, and the rules the comm's and
 /// the boardings' commands are judged by. The adapter shares the catalog
-/// only once the view has (`nova_view`'s `SessionFlight::share_catalog`);
+/// only once the view has (`nova_flight`'s `SessionFlight::share_catalog`);
 /// before that, `catalog` is `None`, and the commands that read one are
 /// refused (see [`Session::apply`]).
 pub struct ApplyCollaborators<'a> {

@@ -8,7 +8,7 @@
 //! player's ship's name and the date its frame holds. That the session
 //! names each as its records do is nova-sim's (`session/frame/names.rs`,
 //! `session/frame.rs`); that the adapter hands the session's on is
-//! `sim_adapter/fake_catalog_checks.rs`'.
+//! nova-flight's `sim_adapter/fake_catalog_checks.rs`'.
 
 use super::*;
 use nova_sim::flight_frame::{FlightEvent, OutfitNames, ShipNames};
@@ -766,7 +766,7 @@ fn a_dominated_stellars_or_a_hypergates_greeting_states_no_fee() {
 
 /// A hypergate's greeting is one of its own, picked on the view's
 /// wording's chance, which the edge makes the flight's
-/// (`build::edge_checks::the_edge_hands_the_flight_and_the_wording_one_chance`); when
+/// (nova-flight's `edge::edge_checks::the_edge_hands_the_flight_and_the_wording_one_chance`); when
 /// the flight greets is its own.
 #[test]
 fn a_hypergates_greeting_is_one_of_its_own_by_a_roll() {

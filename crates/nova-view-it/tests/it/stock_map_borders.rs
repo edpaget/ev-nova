@@ -19,10 +19,10 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_data::GameData;
+use nova_flight::test_flight;
 use nova_sim::govt::{NO_INFLUENCE, SMALL_INFLUENCE};
 use nova_sim::{CombatCatalog, Governments, GovtId};
 use nova_view::flight::radar::IRect;
-use nova_view::flight::test_flight;
 use nova_view::galaxy::borders::{draw_cells, shade};
 use nova_view::galaxy::dialog::map_area;
 use nova_view::galaxy::{GalaxyCatalog, GalaxyMap};

@@ -37,6 +37,7 @@ use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 use nova_data::store::fixture::one_file;
 use nova_data::{GameData, InterfaceData, Record, SoundId};
+use nova_flight::SessionViewExt as _;
 use nova_render::WorldSpace;
 use nova_render::recording::{GpuCall, RecordingGpu};
 use nova_render::wgpu::GlyphonMetrics;
@@ -760,7 +761,7 @@ fn quicktime_movies_clicked_off_is_saved_and_survives_a_restart() {
 }
 
 /// The flight view under the harness.
-fn flight(harness: &Harness) -> &nova_view::flight::FlightView<Rc<GameData>> {
+fn flight(harness: &Harness) -> &nova_flight::SessionView<Rc<GameData>> {
     harness.app.screen().flight_view().expect("flying")
 }
 

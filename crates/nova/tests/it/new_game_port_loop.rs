@@ -66,6 +66,7 @@ use nova_data::MissionObjective;
 use nova_data::new_game::fixture::folder;
 use nova_data::records::outfit::Outfit;
 use nova_data::records::ship::Ship;
+use nova_flight::SessionViewExt as _;
 use nova_sim::fixture::MemoryPilots;
 use nova_sim::flight_frame::FlightFrame;
 use nova_sim::market::CLICK_TONS;

@@ -47,6 +47,7 @@ use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 use nova_data::store::fixture::{one_file, one_file_at};
 use nova_data::{GameData, InterfaceData, Record};
+use nova_flight::SessionViewExt as _;
 use nova_render::Frame;
 use nova_render::recording::RecordingGpu;
 use nova_rsrc::ResType;

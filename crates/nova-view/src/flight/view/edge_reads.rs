@@ -1,6 +1,6 @@
 //! The reads of the view's own state that the edge's checks over a real
-//! flight make (`edge_checks`, which sit with the adapter above
-//! nova-view: rdm:phase/faster-builds/phase-6-nova-view-off-nova-sim).
+//! flight make (nova-flight's `edge::edge_checks`:
+//! rdm:phase/faster-builds/phase-6-nova-view-off-nova-sim).
 //! Fixture-only: view code never calls them. Each one is the view's
 //! private state, or the private step, the check reached while it sat in
 //! this crate.

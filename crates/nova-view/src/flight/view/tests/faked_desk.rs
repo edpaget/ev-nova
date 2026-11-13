@@ -1,7 +1,7 @@
 //! The developer tools' desk and the view's catch-up after an edit, on
 //! `FakeFlight`, converted from pilot.rs (rdm:phase/view-sim-seam/phase-13-lifecycle-at-the-edge).
 //! The edits themselves are the session's (`nova_sim::session::edit`'s
-//! tests) and the adapter's forwards `sim_adapter`'s; a desk edit on a
+//! tests) and the adapter's forwards nova-flight's `sim_adapter`'s; a desk edit on a
 //! real flight, then a resync, is `nova-view-it`'s
 //! `tests/it/flight_seam.rs`'s.
 

@@ -60,7 +60,7 @@
 //! landed; in flight by default only on taking off and on a Strict Play
 //! rescue, a save due there waiting for the next landing, so a pilot
 //! ended in space reopens as it was at its last landing (`in_flight_save`,
-//! [`SessionFlight::saves_on_ending_play`](nova_view::flight::SessionFlight::saves_on_ending_play)),
+//! [`SessionFlight::saves_on_ending_play`](nova_flight::SessionFlight::saves_on_ending_play)),
 //! never on an open, nor when the app quits with the game only held;
 //! each failure is a warning
 //! ([`Screen::take_warnings`](nova_view::Screen::take_warnings)). Tab on the menu goes to the developer's
@@ -70,13 +70,13 @@
 //! the top quits.
 //!
 //! A pilot whose ship is breaking up or destroyed is never saved
-//! ([`SessionFlight::may_save`](nova_view::flight::SessionFlight::may_save)): not on going back to the menu, not when the
+//! ([`SessionFlight::may_save`](nova_flight::SessionFlight::may_save)): not on going back to the menu, not when the
 //! app quits, and not when a save comes due, which is dropped. The
 //! original saves only on creation, landing and pod rescue
 //! (`_SavePilotFile` @0x76876), so a dead pilot reopens as it was at its
 //! last landing. A Strict Play pilot whose ship is breaking up or
 //! destroyed, outside the escape pod, is deleted instead as play ends
-//! ([`SessionFlight::deletes_pilot_on_ending_play`](nova_view::flight::SessionFlight::deletes_pilot_on_ending_play)): on the death's return
+//! ([`SessionFlight::deletes_pilot_on_ending_play`](nova_flight::SessionFlight::deletes_pilot_on_ending_play)): on the death's return
 //! to the menu, on Escape's put-away and when the app quits, as
 //! `_EnterGameFromMainScreen` deletes it (@0x1a4ab-0x1a4e1); a failed
 //! delete is a warning. Once the player's ship has exploded, the scene runs on
@@ -355,6 +355,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_data::GameData;
+use nova_flight::SessionView;
 use nova_sim::ship_layer::SlotSprites;
 use nova_sim::story::sprite_pool::StellarSpritePool;
 use nova_sim::{
@@ -364,7 +365,9 @@ use nova_sim::{
 use nova_sim::{KeptBerths, LastRefresh};
 pub use nova_view::Showing;
 use nova_view::fade::ScreenFade;
-use nova_view::flight::{FlightOverlays, FlightView, SharedChance};
+#[cfg(doc)]
+use nova_view::flight::FlightView;
+use nova_view::flight::{FlightOverlays, SharedChance};
 use nova_view::menu::appear::Appear;
 use nova_view::menu::intro::CharacterIntro;
 use nova_view::menu::{MainMenu, MenuChoice, PilotList};
@@ -563,10 +566,10 @@ pub struct AppScreen {
     galaxy: Navigator<Rc<GameData>>,
     /// Flight, once entered, reading the same game data: the flight
     /// shown, or hidden behind the developer's sides.
-    flight: Option<FlightView<Rc<GameData>>>,
+    flight: Option<SessionView<Rc<GameData>>>,
     /// The game in progress the main menu holds, not flying: a pilot
     /// created or opened, or back from play (see `game`).
-    game: Option<FlightView<Rc<GameData>>>,
+    game: Option<SessionView<Rc<GameData>>>,
     /// The ship slots' draw-layer and cloned-frame history the last
     /// flight put away left, which each new flight starts from: the
     /// original's sprites outlive a pilot, `_InitSprites` running once at

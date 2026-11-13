@@ -22,6 +22,7 @@ local crates = List(
     "nova-data",
     "nova-disasm",
     "nova-dump",
+    "nova-flight",
     "nova-galaxy-format",
     "nova-galaxy-media",
     "nova-ink",

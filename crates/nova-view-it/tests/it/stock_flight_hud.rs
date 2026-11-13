@@ -20,12 +20,14 @@ use std::rc::Rc;
 use nova_data::records::interface::Interface;
 use nova_data::records::weapon::Weapon;
 use nova_data::{GameData, Record};
+use nova_flight::SessionViewExt as _;
+use nova_flight::test_flight;
 use nova_sim::Rulebook;
 use nova_sim::fixture::SessionBuilder;
 use nova_sim::{BoomId, ShipId, SoundId, WeaponId};
 use nova_view::flight::hud::{Background, bar_origin, interface_id};
 use nova_view::flight::{
-    CombatLooks, FlightView, LayerSheet, Looks, ShipSheet, ShipSprites, StatusBars, test_flight,
+    CombatLooks, FlightView, LayerSheet, Looks, ShipSheet, ShipSprites, StatusBars,
 };
 use nova_view::geometry::Bounds;
 use nova_view::{DrawCommand, DrawList, ImageKey, Point, Screen, SheetImage};

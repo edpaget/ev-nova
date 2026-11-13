@@ -32,17 +32,19 @@ use nova_sim::{
     ShipId, ShipRecord, ShipRef, SimCatalog, StellarPick, SystemId, VenueOffer,
 };
 
-use crate::flight::catalog::GovtId;
-use crate::flight::fake_catalog::{
-    Always, BLASTER, BUY_TANK, FakeCatalog, Firing, ROCKET, RollsOne, Still, THRUST, armed,
-    boardable, catalog, comm_strings, damaging, defending, errand, hiring, holding, killed_in,
-    multi_jumping, on, outfitting, placed, rolling_one, scripted, shipbuying, site, trading,
-    trafficked,
+use nova_view::flight::SharedChance;
+use nova_view::flight::catalog::GovtId;
+use nova_view::flight::fake_catalog::{
+    Always, BLASTER, BUY_TANK, FakeCatalog, ROCKET, RollsOne, THRUST, armed, boardable, catalog,
+    comm_strings, damaging, defending, errand, hiring, holding, killed_in, multi_jumping,
+    outfitting, placed, rolling_one, scripted, shipbuying, site, trading, trafficked,
 };
-use crate::flight::sim_port::FlightSim;
-use crate::flight::sim_port::fixture::check_contract;
-use crate::flight::{Collaborators, SessionFlight, SharedChance};
-use crate::system::catalog::StellarId;
+use nova_view::flight::sim_port::FlightSim;
+use nova_view::flight::sim_port::fixture::check_contract;
+use nova_view::system::catalog::StellarId;
+
+use crate::fakes::{Firing, Still, on};
+use crate::{Collaborators, SessionFlight};
 
 /// `catalog`, shared as the edge shares it.
 fn shared(catalog: FakeCatalog) -> Rc<FakeCatalog> {
@@ -961,7 +963,7 @@ fn a_real_flights_screen_answers_are_its_sessions() {
     let mut flight = SessionFlight::start(&catalog);
     flight.apply(FlightCommand::CycleMapSelection);
     let mut answered = 0;
-    for ask in crate::flight::sim_port::fixture::sample_screen_asks() {
+    for ask in nova_view::flight::sim_port::fixture::sample_screen_asks() {
         let expected = screen_by_hand(&flight, &catalog, ask.clone());
         if expected != ScreenAnswer::Nothing {
             answered += 1;

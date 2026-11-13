@@ -30,8 +30,11 @@
 use std::rc::Rc;
 
 use nova_data::GameData;
+use nova_flight::SessionView;
+use nova_flight::{FlightStart, begin_game};
 use nova_sim::{LastRefresh, Pilot};
-use nova_view::flight::{FlightStart, FlightView, begin_game};
+#[cfg(doc)]
+use nova_view::flight::FlightView;
 
 use super::{AppScreen, Side};
 
@@ -47,7 +50,7 @@ impl AppScreen {
         pilot: Pilot,
         loaded: bool,
         last_refresh: Option<LastRefresh>,
-    ) -> FlightView<Rc<GameData>> {
+    ) -> SessionView<Rc<GameData>> {
         if loaded {
             self.flight(FlightStart::Loaded(pilot), None)
         } else {
@@ -58,7 +61,7 @@ impl AppScreen {
     /// Holds `flight` as the game in progress, in place of any game held
     /// before, whose ship slots' history, course map zoom and borders are
     /// kept for the flights after it ([`AppScreen::remember_flight`]).
-    pub(super) fn hold_game(&mut self, flight: FlightView<Rc<GameData>>) {
+    pub(super) fn hold_game(&mut self, flight: SessionView<Rc<GameData>>) {
         if let Some(old) = self.game.replace(flight) {
             self.remember_flight(&old);
         }
@@ -105,7 +108,7 @@ impl AppScreen {
 
     /// The flights alive, shown or held: what reaches every flight (double
     /// time, the preferences, the widened size) reaches both.
-    pub(super) fn flights_mut(&mut self) -> impl Iterator<Item = &mut FlightView<Rc<GameData>>> {
+    pub(super) fn flights_mut(&mut self) -> impl Iterator<Item = &mut SessionView<Rc<GameData>>> {
         self.flight.iter_mut().chain(self.game.iter_mut())
     }
 
@@ -136,7 +139,7 @@ impl AppScreen {
     /// ([`AppScreen::pilot_flight`]).
     pub(super) fn hold_new_pilot(
         &mut self,
-        mut flight: FlightView<Rc<GameData>>,
+        mut flight: SessionView<Rc<GameData>>,
         replaces: Option<&str>,
     ) {
         self.remember_new_pilot_intro();

@@ -7,12 +7,14 @@ use crate::common;
 use std::rc::Rc;
 
 use nova_data::GameData;
+use nova_flight::SessionViewExt as _;
+use nova_flight::{Collaborators, FlightStart, open_flight};
 use nova_sim::control::Bit;
 use nova_sim::flight_frame::FlightFrame;
 use nova_sim::{HyperlinkRule, Pilot, RuleKey, RuleSource, Rulebook, SessionSetup, SystemId};
 use nova_view::Point;
+use nova_view::flight::FlightSim;
 use nova_view::flight::sim_port::fixture::check_contract;
-use nova_view::flight::{Collaborators, FlightSim, FlightStart, open_flight};
 
 fn open() -> Option<GameData> {
     let dir = common::nova_data()?;

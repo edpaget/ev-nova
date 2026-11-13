@@ -27,6 +27,7 @@ use nova_audio::recording::MemorySettings;
 use nova_data::GameData;
 use nova_data::new_game;
 use nova_data::new_game::fixture::sample_folder;
+use nova_flight::SessionViewExt as _;
 use nova_sim::fixture::MemoryPilots;
 use nova_sim::flight_frame::FlightFrame;
 use nova_sim::{SystemId, Vec2};

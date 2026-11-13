@@ -31,6 +31,7 @@ use crate::common::EntryHarness;
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_data::records::desc::Desc;
 use nova_data::{GameData, Record};
+use nova_flight::SessionViewExt as _;
 use nova_render::FontFaces;
 use nova_render::recording::RecordingGpu;
 use nova_render::wgpu::GlyphonMetrics;

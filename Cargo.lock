@@ -1839,6 +1839,7 @@ dependencies = [
  "nova-appkit",
  "nova-audio",
  "nova-data",
+ "nova-flight",
  "nova-ink",
  "nova-movie",
  "nova-render",
@@ -1934,6 +1935,14 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "nova-flight"
+version = "0.1.0"
+dependencies = [
+ "nova-sim",
+ "nova-view",
 ]
 
 [[package]]
@@ -2154,6 +2163,7 @@ name = "nova-view-it"
 version = "0.1.0"
 dependencies = [
  "nova-data",
+ "nova-flight",
  "nova-rsrc",
  "nova-sim",
  "nova-view",

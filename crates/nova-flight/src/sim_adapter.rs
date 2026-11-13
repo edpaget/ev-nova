@@ -47,14 +47,16 @@
 //! adapter hands it the collaborators and maps a failed session to its
 //! answer. A decision found here belongs in nova-sim, pinned by its tests.
 //!
-//! **Three fields are visible to `crate::flight`**: `session`, which
-//! the fixture-only `FlightView::session` and the edge's checks read;
-//! `chance`, which the fixture-only `FlightView::from_session` shares
-//! with the view it wires; and `disable_rule`, which the edge's checks
-//! (`flight/view/build/edge_checks.rs`) compare with the setup's rule to
-//! show the fight and the session read one. Other code reads the session
-//! through [`SessionFlight::session`]; tests change it through
-//! `SessionFlight::session_mut`. The other fields are private.
+//! **Two fields are visible to the crate** (`pub(crate)`): `chance`,
+//! which [`SessionViewExt::from_session`](crate::SessionViewExt::from_session)
+//! shares with the view it wires and the edge's checks compare with the
+//! view's wording's; and `disable_rule`, which the edge's checks
+//! (`edge/edge_checks.rs`) compare with the setup's rule to show the
+//! fight and the session read one. Everything reads the session through
+//! [`SessionFlight::session`] (as
+//! [`SessionViewExt::session`](crate::SessionViewExt::session) does, and
+//! the edge's checks through `FlightView::sim`); tests change it through
+//! [`SessionFlight::session_mut`]. The other fields are private.
 
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -74,9 +76,8 @@ use nova_sim::{
     SessionSetup, SpeedMult, StartError,
 };
 
-use super::SharedChance;
-use super::sim_port::FlightSim;
-use crate::devtools::{DevDesk, EditRefusal, PilotEdit};
+use nova_view::devtools::{DevDesk, EditRefusal, PilotEdit};
+use nova_view::flight::{FlightSim, SharedChance};
 
 /// The flight of a real `nova_sim::Session`, or why it could not start,
 /// with the collaborators its calls are handed (see the module docs).
@@ -87,13 +88,13 @@ use crate::devtools::{DevDesk, EditRefusal, PilotEdit};
 #[derive(Debug)]
 pub struct SessionFlight<C> {
     /// The flight, or why it could not start.
-    pub(in crate::flight) session: Result<Session, String>,
+    session: Result<Session, String>,
     /// What each day's events and the traffic are rolled on.
-    pub(in crate::flight) chance: SharedChance,
+    pub(crate) chance: SharedChance,
     /// How the NPCs decide.
     behaviour: Rc<dyn Behaviour>,
     /// When a ship in the fight is disabled.
-    pub(in crate::flight) disable_rule: Rc<dyn DisableRule>,
+    pub(crate) disable_rule: Rc<dyn DisableRule>,
     /// Which missiles the ships' point defence engages.
     defence_rule: Rc<dyn PointDefenceRule>,
     /// What the player's crimes do to its legal record.
@@ -251,14 +252,14 @@ impl<C> SessionFlight<C> {
     /// Shares the view's catalog with the flight: the view's own handle,
     /// so the flight's answers read the catalog the view draws from, and
     /// a test that records a read on it sees the flight's too.
-    pub(in crate::flight) fn share_catalog(&mut self, catalog: Rc<dyn SimCatalog>) {
+    pub(crate) fn share_catalog(&mut self, catalog: Rc<dyn SimCatalog>) {
         self.catalog = Some(SharedCatalog(catalog));
     }
 
     /// The catalog the view shared, if it has
     /// ([`SessionFlight::share_catalog`]).
     #[cfg(test)]
-    pub(in crate::flight) fn shared_catalog(&self) -> Option<&Rc<dyn SimCatalog>> {
+    pub(crate) fn shared_catalog(&self) -> Option<&Rc<dyn SimCatalog>> {
         self.catalog.as_ref().map(|shared| &shared.0)
     }
 
@@ -268,8 +269,7 @@ impl<C> SessionFlight<C> {
     }
 
     /// The flight to change, or why it could not start: for tests, which
-    /// put the session into a state behind the port.
-    #[cfg(any(test, feature = "fixture"))]
+    /// put the session into a state behind the port. Wiring-only.
     pub fn session_mut(&mut self) -> Result<&mut Session, &str> {
         self.session.as_mut().map_err(|reason| reason.as_str())
     }
@@ -436,7 +436,7 @@ impl<C> SessionFlight<C> {
     /// `nova_sim::Session::transact` does, and says whether it did; a
     /// failed session changes nothing. The adapter's own API, for tests:
     /// a closure over the pilot is no command a sim could carry.
-    #[cfg(any(test, feature = "fixture"))]
+    /// Wiring-only.
     pub fn transact(&mut self, change: impl FnOnce(&mut Pilot)) -> bool {
         self.session
             .as_mut()
@@ -594,7 +594,7 @@ mod tests {
     use nova_sim::{DescMovie, MissionId, ShipId, StellarId, StellarPick, SystemId, Vec2};
 
     use super::*;
-    use crate::flight::sim_port::fixture::unlike;
+    use nova_view::flight::sim_port::fixture::unlike;
 
     fn failed() -> SessionFlight<()> {
         SessionFlight::new(Err("no chär".to_owned()))
@@ -637,7 +637,7 @@ mod tests {
     #[test]
     fn a_failed_flight_answers_every_screen_nothing() {
         let mut flight = failed();
-        for ask in crate::flight::sim_port::fixture::sample_screen_asks() {
+        for ask in nova_view::flight::sim_port::fixture::sample_screen_asks() {
             let sent = format!("{ask:?}");
             assert_eq!(flight.screen(ask), ScreenAnswer::Nothing, "{sent}");
         }
@@ -950,7 +950,8 @@ mod tests {
     fn a_failed_flight_meets_the_contract() {
         let mut flight = failed();
         let opening = flight.opening();
-        crate::flight::sim_port::fixture::check_contract(&mut flight, &opening).expect("meets it");
+        nova_view::flight::sim_port::fixture::check_contract(&mut flight, &opening)
+            .expect("meets it");
     }
 
     #[test]

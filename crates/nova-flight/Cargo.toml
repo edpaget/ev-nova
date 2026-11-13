@@ -1,0 +1,28 @@
+[package]
+name = "nova-flight"
+description = "The flight view's adapter over a real nova-sim `Session`, and the edge that builds a flight"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The flight simulation the adapter wraps (`Session`) and the
+# collaborators its calls are handed.
+nova-sim.workspace = true
+# The flight view the edge builds, and the port (`FlightSim`) the
+# adapter implements.
+nova-view.workspace = true
+
+[dev-dependencies]
+# The session builder (`fixture::SessionBuilder`) and the fake catalogs'
+# listed stellars, for the adapter's and the edge's checks.
+nova-sim = { workspace = true, features = ["fixture"] }
+# The view's fixtures: the flight's fake catalog
+# (`flight::fake_catalog`), the port's contract and `FakeFlight`
+# (`flight::sim_port::fixture`) and the text-metrics mock.
+nova-view = { workspace = true, features = ["fixture"] }
+
+[lints]
+workspace = true

@@ -5,6 +5,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_data::GameData;
+use nova_flight::SessionView;
 use nova_sim::flight_frame::LoadedDesc;
 use nova_sim::{PilotKeeper, PilotStore, RuleKey, pilot_key};
 use nova_view::fade::{DEATH_FADE_FOR, ScreenFade};
@@ -353,7 +354,7 @@ impl AppScreen {
     /// refresh left hidden, its comm dialog's release flag, its frame
     /// gain, its course map's zoom and whether the map
     /// shows the borders, for the next flight in this run.
-    pub(super) fn remember_flight(&mut self, flight: &FlightView<Rc<GameData>>) {
+    pub(super) fn remember_flight(&mut self, flight: &SessionView<Rc<GameData>>) {
         if let Some(carry) = flight.sim().carry_over() {
             if let Some(slot_sprites) = carry.slot_sprites {
                 self.slot_sprites = slot_sprites;
@@ -387,11 +388,11 @@ impl AppScreen {
 
     /// Puts the pilot flying away as play ends: deletes it, when there
     /// is somewhere it is kept and it is a strict pilot dying outside the
-    /// escape pod ([`SessionFlight::deletes_pilot_on_ending_play`](nova_view::flight::SessionFlight::deletes_pilot_on_ending_play)), as
+    /// escape pod ([`SessionFlight::deletes_pilot_on_ending_play`](nova_flight::SessionFlight::deletes_pilot_on_ending_play)), as
     /// `_EnterGameFromMainScreen` does once `_PlayGame` returns
     /// (@0x1a4ab-0x1a4e1), and otherwise saves it
     /// ([`AppScreen::save_pilot`]) when ending play saves it
-    /// ([`SessionFlight::saves_on_ending_play`](nova_view::flight::SessionFlight::saves_on_ending_play)):
+    /// ([`SessionFlight::saves_on_ending_play`](nova_flight::SessionFlight::saves_on_ending_play)):
     /// landed, but by default not in flight, so the file keeps the pilot as
     /// it was at its last landing. A failed delete becomes a warning.
     /// Nothing writes the pilot back afterwards: a dying pilot may not be
@@ -415,7 +416,7 @@ impl AppScreen {
     }
 
     /// Saves the pilot flying, when it has a name, there is somewhere to
-    /// keep it and it may be saved ([`SessionFlight::may_save`](nova_view::flight::SessionFlight::may_save): not while its
+    /// keep it and it may be saved ([`SessionFlight::may_save`](nova_flight::SessionFlight::may_save): not while its
     /// ship breaks up or after it is destroyed); a failure becomes a
     /// warning. Pilots without a name, which the developer's F flies, are
     /// never saved.
@@ -435,7 +436,7 @@ impl AppScreen {
     /// failure gives.
     pub(super) fn save_warning(
         &self,
-        flight: &FlightView<Rc<GameData>>,
+        flight: &SessionView<Rc<GameData>>,
         replaces: Option<&str>,
     ) -> Option<String> {
         let keeper = self.keeper()?;
@@ -545,7 +546,7 @@ impl AppScreen {
     /// frame, as `_PlayerLandOnStellar` runs them inside the take-off.
     fn leave_port_by(
         &mut self,
-        leave: impl FnOnce(&mut FlightView<Rc<GameData>>) -> Option<nova_sim::StellarId>,
+        leave: impl FnOnce(&mut SessionView<Rc<GameData>>) -> Option<nova_sim::StellarId>,
     ) {
         self.close_spaceport();
         if let Some(flight) = self.flight.as_mut() {

@@ -16,6 +16,7 @@ use std::time::Duration;
 use crate::common::EntryHarness;
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_data::{GameData, ShipId, SystemId};
+use nova_flight::SessionViewExt as _;
 use nova_render::recording::RecordingGpu;
 use nova_render::wgpu::GlyphonMetrics;
 use nova_render::{Batch, FontFaces};
@@ -477,7 +478,7 @@ impl Driver {
         self.app.screen().showing()
     }
 
-    fn flight(&self) -> &nova_view::flight::FlightView<Rc<GameData>> {
+    fn flight(&self) -> &nova_flight::SessionView<Rc<GameData>> {
         self.app.screen().flight_view().expect("flying")
     }
 }

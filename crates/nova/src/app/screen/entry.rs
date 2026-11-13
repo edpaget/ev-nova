@@ -77,11 +77,13 @@
 
 use std::time::Duration;
 
+#[cfg(doc)]
+use nova_flight::SessionFlight;
+use nova_flight::enter_game;
 use nova_sim::{RuleKey, RuleSource};
 use nova_view::fade::whole_view;
-use nova_view::flight::enter_game;
 #[cfg(doc)]
-use nova_view::flight::{FlightView, SessionFlight};
+use nova_view::flight::FlightView;
 use nova_view::menu::entry::{Deferred, Entry, Verdict};
 use nova_view::menu::intro::{CharacterIntro, Intro, IntroSource};
 use nova_view::ui::DescDialog;

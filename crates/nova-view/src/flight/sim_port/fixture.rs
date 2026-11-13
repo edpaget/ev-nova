@@ -4,9 +4,8 @@
 //!
 //! Available to this crate's tests and, through the `fixture` feature, to
 //! other crates' tests. A component test of the view runs on a
-//! [`FakeFlight`]; `nova-view-it`'s `tests/it/flight_seam.rs` runs
-//! [`check_contract`] on a real
-//! [`SessionFlight`](crate::flight::SessionFlight).
+//! [`FakeFlight`]; nova-flight's `tests/it/flight_seam.rs` runs
+//! [`check_contract`] on a real `nova_flight::SessionFlight`.
 
 use std::cell::Cell;
 use std::collections::VecDeque;

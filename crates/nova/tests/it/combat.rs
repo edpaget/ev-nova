@@ -61,6 +61,8 @@ use nova_data::records::weapon::Weapon;
 use nova_data::sound::fixture::{Header, SndBuilder, SndFormat};
 use nova_data::store::fixture::{one_file, one_file_at};
 use nova_data::{GameData, Record, SoundId};
+use nova_flight::SessionView;
+use nova_flight::SessionViewExt as _;
 use nova_render::recording::RecordingGpu;
 use nova_render::{Batch, Frame, Rect, TextRun};
 use nova_rsrc::ResType;
@@ -71,7 +73,7 @@ use nova_sim::{
     Surroundings,
 };
 use nova_view::Key;
-use nova_view::flight::{FlightView, SharedChance};
+use nova_view::flight::SharedChance;
 use nova_view::text::fixture::MonoMetrics;
 use nova_view::ui::catalog::fixture::NoDialogs;
 
@@ -524,7 +526,7 @@ impl Harness {
         self.key(key, false);
     }
 
-    fn flight(&self) -> &FlightView<Rc<GameData>> {
+    fn flight(&self) -> &SessionView<Rc<GameData>> {
         self.app.screen().flight_view().expect("flight entered")
     }
 

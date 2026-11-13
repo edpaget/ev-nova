@@ -17,6 +17,7 @@ use nova::ruleset::Ruleset;
 use nova_audio::SettingsStore;
 use nova_audio::recording::MemorySettings;
 use nova_data::new_game;
+use nova_flight::SessionViewExt as _;
 use nova_sim::Vec2;
 use nova_sim::fixture::MemoryPilots;
 use nova_view::{DrawCommand, DrawLayer, DrawList, Key, Screen, SkyPose};

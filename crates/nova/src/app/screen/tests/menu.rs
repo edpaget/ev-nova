@@ -1,4 +1,5 @@
 use super::*;
+use nova_flight::SessionView;
 
 // The main menu and pilots.
 
@@ -594,7 +595,7 @@ fn carry_on(screen: &mut AppScreen, carry: nova_sim::CarryOver) {
 }
 
 /// What `flight` hands on to the next flight of the run, as it stands.
-fn carried(flight: &FlightView<Rc<GameData>>) -> nova_sim::CarryOver {
+fn carried(flight: &SessionView<Rc<GameData>>) -> nova_sim::CarryOver {
     flight.sim().carry_over().unwrap_or_default()
 }
 

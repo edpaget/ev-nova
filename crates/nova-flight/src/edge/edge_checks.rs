@@ -19,16 +19,21 @@ use nova_sim::{
     SessionSetup, ShipId, SimMessage, StartError, SystemId, TICK, Vec2,
 };
 
-use crate::flight::fake_catalog::{Counting, FakeCatalog, MAP, catalog, key, rolling_one, tap};
-use crate::flight::view::FlightView;
-use crate::flight::{Collaborators, FlightStart, begin_game, enter_game, open_flight, test_flight};
-use crate::system::catalog::StellarId;
-use crate::text::fixture::MonoMetrics;
-use crate::{Input, Key, Point, Screen};
+use nova_view::flight::FlightView;
+use nova_view::flight::fake_catalog::{FakeCatalog, MAP, catalog, key, rolling_one, tap};
+use nova_view::system::catalog::StellarId;
+use nova_view::text::fixture::MonoMetrics;
+use nova_view::{Input, Key, Point, Screen};
+
+use crate::fakes::Counting;
+use crate::{
+    Collaborators, FlightStart, SessionView, SessionViewExt as _, begin_game, enter_game,
+    open_flight, test_flight,
+};
 
 /// A view over a real flight built at the edge, for the edge's own
 /// checks: the view's tests run on [`FakeFlight`].
-type View = FlightView<FakeCatalog>;
+type View = SessionView<FakeCatalog>;
 
 /// Ticks `view` `n` times.
 fn ticks(view: &mut View, n: u32) {

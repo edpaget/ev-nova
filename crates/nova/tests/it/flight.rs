@@ -32,12 +32,13 @@ use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 use nova_data::store::fixture::one_file;
 use nova_data::{GameData, Record};
+use nova_flight::SessionView;
+use nova_flight::SessionViewExt as _;
 use nova_render::recording::RecordingGpu;
 use nova_render::{Batch, Frame};
 use nova_rsrc::fixture::ForkBuilder;
 use nova_sim::ShipState;
 use nova_view::Key;
-use nova_view::flight::FlightView;
 
 /// A 1024x768 window at scale 1: window pixels are logical units.
 struct FakeWindow;
@@ -290,7 +291,7 @@ impl Harness {
         self.app.screen().showing()
     }
 
-    fn flight(&self) -> &FlightView<Rc<GameData>> {
+    fn flight(&self) -> &SessionView<Rc<GameData>> {
         self.app.screen().flight_view().expect("flight entered")
     }
 

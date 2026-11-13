@@ -35,6 +35,9 @@ use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
 use nova_data::store::fixture::one_file;
 use nova_data::{GameData, Record};
+use nova_flight::SessionView;
+use nova_flight::SessionViewExt as _;
+use nova_flight::{Collaborators, FlightStart, SessionFlight, open_flight};
 use nova_rsrc::fixture::ForkBuilder;
 use nova_sim::Rulebook;
 use nova_sim::fixture::SessionBuilder;
@@ -48,10 +51,10 @@ use nova_sim::{
 };
 use nova_sim::{MissionId, TICK};
 use nova_view::devtools::{PilotDesk, PilotEdit};
+use nova_view::flight::FlightSim;
 use nova_view::flight::FlightView;
 use nova_view::flight::MapOpener;
 use nova_view::flight::sim_port::fixture::check_contract;
-use nova_view::flight::{Collaborators, FlightSim, FlightStart, SessionFlight, open_flight};
 use nova_view::galaxy::SystemId as MapSystemId;
 use nova_view::{Diagnostic, Input, Key, MouseButton, Point, Screen, Sound};
 
@@ -557,7 +560,7 @@ fn data() -> Rc<GameData> {
 }
 
 /// A whole flight view over a real session of [`data`], flying in Alpha.
-fn view() -> FlightView<Rc<GameData>> {
+fn view() -> SessionView<Rc<GameData>> {
     let data = data();
     let session = SessionBuilder::flying(&data).build();
     FlightView::from_session(data, session.into(), &Rulebook::default())
@@ -571,13 +574,13 @@ fn key(key: Key, pressed: bool) -> Input {
     }
 }
 
-fn tap(view: &mut FlightView<Rc<GameData>>, k: Key) {
+fn tap(view: &mut SessionView<Rc<GameData>>, k: Key) {
     view.input(&key(k, true));
     view.input(&key(k, false));
 }
 
 /// A left click at `at`.
-fn click(view: &mut FlightView<Rc<GameData>>, at: Point) {
+fn click(view: &mut SessionView<Rc<GameData>>, at: Point) {
     for pressed in [true, false] {
         view.input(&Input::PointerButton {
             button: MouseButton::Left,
@@ -588,13 +591,13 @@ fn click(view: &mut FlightView<Rc<GameData>>, at: Point) {
 }
 
 /// Where the open course map draws system `id`.
-fn on_map(view: &FlightView<Rc<GameData>>, id: i16) -> Point {
+fn on_map(view: &SessionView<Rc<GameData>>, id: i16) -> Point {
     let map = view.course_map();
     let system = map.model().system(MapSystemId(id)).expect("on the map");
     map.transform().world_to_screen(system.position())
 }
 
-fn nav_mode(view: &FlightView<Rc<GameData>>) -> NavMode {
+fn nav_mode(view: &SessionView<Rc<GameData>>) -> NavMode {
     view.session().expect("flying").nav_mode()
 }
 
@@ -678,7 +681,7 @@ fn a_mission_dialogs_map_puts_back_the_nav_it_opened_with_as_it_closes() {
 
 /// Presses L until the ship lands, as the view's own tests do: the
 /// request, a frame, then the landing.
-fn land(view: &mut FlightView<Rc<GameData>>) {
+fn land(view: &mut SessionView<Rc<GameData>>) {
     tap(view, Key::KeyL);
     view.tick(TICK);
     tap(view, Key::KeyL);
@@ -761,7 +764,7 @@ fn a_real_landing_hands_the_router_the_stellar_and_a_take_off_gives_it_back() {
 }
 
 /// The systems the open course map draws.
-fn drawn(view: &FlightView<Rc<GameData>>) -> Vec<SystemId> {
+fn drawn(view: &SessionView<Rc<GameData>>) -> Vec<SystemId> {
     view.course_map()
         .picture()
         .map(|picture| picture.systems.iter().map(|system| system.id).collect())
@@ -838,7 +841,7 @@ fn begin_on_an_edge_built_flight_places_the_ship_where_the_session_began_it() {
         nova_sim::SessionSetup::default(),
         Collaborators::default(),
     );
-    nova_view::flight::begin_game(&mut view);
+    nova_flight::begin_game(&mut view);
     let player = view.session().expect("started").player().position;
     assert_eq!(player, nova_sim::Vec2::new(50.0, 50.0));
     assert_eq!(view.shown_position(), Point::new(50.0, 50.0));
@@ -1086,7 +1089,7 @@ const TRADER_ABOVE: [u32; 8] = [6, 6, 0, 0, 750, 650, 180, 2];
 
 /// A whole flight view over a real session of `data`, its chance
 /// placing the trader 100 pixels above the player, idling.
-fn fighting(data: Rc<GameData>, session: nova_sim::Session) -> FlightView<Rc<GameData>> {
+fn fighting(data: Rc<GameData>, session: nova_sim::Session) -> SessionView<Rc<GameData>> {
     fighting_with(
         data,
         session,
@@ -1104,7 +1107,7 @@ fn fighting_with(
     data: Rc<GameData>,
     session: nova_sim::Session,
     collaborators: Collaborators,
-) -> FlightView<Rc<GameData>> {
+) -> SessionView<Rc<GameData>> {
     let sim = SessionFlight::from(session).with_collaborators(collaborators);
     let mut view = FlightView::from_session(data, sim, &Rulebook::default());
     // The first step sets the system up.
@@ -1293,7 +1296,7 @@ fn a_real_click_in_space_targets_the_ship_drawn_under_it() {
 
 /// The lines `view`'s status bar draws in `color`, alone, as the port's
 /// bar draws it.
-fn bar_lines(view: &FlightView<Rc<GameData>>, color: nova_view::Color) -> Vec<(f32, f32)> {
+fn bar_lines(view: &SessionView<Rc<GameData>>, color: nova_view::Color) -> Vec<(f32, f32)> {
     let mut list = nova_view::DrawList::new();
     view.draw_status_bar(&mut list);
     list.iter()
@@ -1411,7 +1414,7 @@ fn a_gate_the_session_refuses_keeps_the_views_key_from_acting() {
 }
 
 /// The frame of the mouse cursor `view` draws, if it draws one.
-fn cursor_frame(view: &FlightView<Rc<GameData>>) -> Option<u16> {
+fn cursor_frame(view: &SessionView<Rc<GameData>>) -> Option<u16> {
     let mut list = nova_view::DrawList::new();
     view.draw(&mut list);
     list.iter().find_map(|command| {
@@ -1681,7 +1684,7 @@ fn port_data() -> Rc<GameData> {
 
 /// A whole flight view over a real session of [`port_data`], landed on
 /// Alpha Prime, its landing settled.
-fn docked_view() -> FlightView<Rc<GameData>> {
+fn docked_view() -> SessionView<Rc<GameData>> {
     let data = port_data();
     let session = SessionBuilder::flying(&data)
         .landed_at(SystemId(128), StellarId(128))

@@ -63,6 +63,7 @@ use std::time::{Duration, Instant};
 use nova::app::{App, Control, WindowEvent, WindowPort, start_screen};
 use nova_data::GameData;
 use nova_data::graphics::Image;
+use nova_flight::SessionViewExt as _;
 use nova_render::recording::RecordingGpu;
 use nova_render::upscale::{Upscaler, WorldResolution};
 use nova_render::wgpu::{GlyphonMetrics, InitError, OffscreenGpu};

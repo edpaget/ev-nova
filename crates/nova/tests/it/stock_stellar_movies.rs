@@ -18,6 +18,7 @@ use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 use nova_data::{GameData, Record};
+use nova_flight::SessionViewExt as _;
 use nova_render::recording::RecordingGpu;
 use nova_sim::fixture::MemoryPilots;
 use nova_sim::{Pilot, PilotCatalog, PilotKeeper, PilotStore, Session, SystemId, is_landable};

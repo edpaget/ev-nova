@@ -22,6 +22,9 @@ nova-render.workspace = true
 # the router saves pilots through.
 nova-sim.workspace = true
 nova-view.workspace = true
+# The flight view over a real session: the adapter (`SessionFlight`)
+# and the edge that builds a flight (`open_flight`).
+nova-flight.workspace = true
 pollster.workspace = true
 # The settings file's format: JSON, through a private record.
 serde.workspace = true
