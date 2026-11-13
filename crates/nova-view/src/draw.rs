@@ -336,6 +336,15 @@ pub enum DrawCommand {
     /// ([`DrawCommand::Mounted`]) fade with it at the same alpha. An alpha
     /// that isn't finite or is 0 or less draws nothing, its parts with it;
     /// one above 1 draws as 1.
+    ///
+    /// It draws mixed toward `colorize`, as a sprite is
+    /// ([`DrawCommand::Colorized`]): the murk a ship is seen through, its
+    /// ion tint, a gate's white wash. The mix is the sprite's, on 5-bit
+    /// channels ([`Colorize::mix`]), of the colour the model would
+    /// otherwise show: after its lighting, so a level of 32 is the flat
+    /// colour whatever the light, and before its alpha. Its parts take the
+    /// same colorize. A model with none, or with one that doesn't mix
+    /// ([`Colorize::mixes`]), draws in its own colours, unnarrowed.
     Model {
         /// Which model.
         model: ModelKey,
@@ -343,6 +352,9 @@ pub enum DrawCommand {
         pose: ModelPose,
         /// How opaque it draws, 0 to 1 (straight alpha), its parts with it.
         alpha: f32,
+        /// The colour it is mixed toward and by how much, its parts with
+        /// it; `None` draws it as it is ([`DrawCommand::with_colorize`]).
+        colorize: Option<Colorize>,
     },
     /// A planet: the globe registered under `planet`, with its clouds,
     /// rings and atmosphere, centred at `pose`'s centre at its radius and
@@ -412,10 +424,32 @@ impl DrawCommand {
         Self::faded_model(model, pose, 1.0)
     }
 
-    /// A [`DrawCommand::Model`]: `model` drawn at `pose` at `alpha`.
+    /// A [`DrawCommand::Model`]: `model` drawn at `pose` at `alpha`, in
+    /// its own colours.
     #[must_use]
     pub fn faded_model(model: ModelKey, pose: ModelPose, alpha: f32) -> Self {
-        Self::Model { model, pose, alpha }
+        Self::Model {
+            model,
+            pose,
+            alpha,
+            colorize: None,
+        }
+    }
+
+    /// The command with a [`DrawCommand::Model`]'s colorize set to
+    /// `colorize`, or to none when it doesn't mix ([`Colorize::mixes`]),
+    /// as [`DrawCommand::mixed_sprite`] draws a plain sprite; any other
+    /// command as it is, a part ([`DrawCommand::Mounted`]) included, since
+    /// it takes its model's.
+    #[must_use]
+    pub fn with_colorize(mut self, colorize: Option<Colorize>) -> Self {
+        if let Self::Model {
+            colorize: drawn, ..
+        } = &mut self
+        {
+            *drawn = colorize.filter(|colorize| colorize.mixes());
+        }
+        self
     }
 
     /// The command with a [`DrawCommand::Model`]'s alpha set to `alpha`;
@@ -1288,6 +1322,7 @@ mod tests {
                 model: ModelKey(7),
                 pose: pose_at(1.0, 2.0),
                 alpha: 1.0,
+                colorize: None,
             }]
         );
     }
@@ -1310,6 +1345,7 @@ mod tests {
                 model: ModelKey(7),
                 pose: pose_at(1.0, 2.0),
                 alpha: 0.375,
+                colorize: None,
             }
         );
     }
@@ -1345,6 +1381,100 @@ mod tests {
             DrawCommand::faded_model(ModelKey(7), pose_at(1.0, 2.0), 0.25)
                 .translated(at(10.0, -4.0)),
             DrawCommand::faded_model(ModelKey(7), pose_at(11.0, -2.0), 0.25)
+        );
+    }
+
+    /// The colorize a model's hull takes of `model`, a model command.
+    fn colorize_of(model: &DrawCommand) -> Option<Colorize> {
+        let DrawCommand::Model { colorize, .. } = model else {
+            panic!("not a model: {model:?}")
+        };
+        *colorize
+    }
+
+    fn half_toward_blue() -> Colorize {
+        Colorize {
+            level: 16,
+            rgb5: [0, 4, 31],
+        }
+    }
+
+    #[test]
+    fn a_model_is_built_with_no_colorize() {
+        assert_eq!(colorize_of(&model_at(1.0, 2.0)), None);
+        assert_eq!(
+            colorize_of(&DrawCommand::faded_model(
+                ModelKey(7),
+                pose_at(1.0, 2.0),
+                0.375
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn with_colorize_sets_a_models_colorize_only_when_it_mixes() {
+        let mixed = model_at(1.0, 2.0).with_colorize(Some(half_toward_blue()));
+        assert_eq!(
+            mixed,
+            DrawCommand::Model {
+                model: ModelKey(7),
+                pose: pose_at(1.0, 2.0),
+                alpha: 1.0,
+                colorize: Some(half_toward_blue()),
+            }
+        );
+        for level in [0, 33] {
+            let none = Colorize {
+                level,
+                ..half_toward_blue()
+            };
+            assert_eq!(
+                model_at(1.0, 2.0).with_colorize(Some(none)),
+                model_at(1.0, 2.0),
+                "{level}"
+            );
+            // And it takes one already there away.
+            assert_eq!(
+                mixed.clone().with_colorize(Some(none)),
+                model_at(1.0, 2.0),
+                "{level}"
+            );
+        }
+        assert_eq!(model_at(1.0, 2.0).with_colorize(None), model_at(1.0, 2.0));
+        assert_eq!(mixed.with_colorize(None), model_at(1.0, 2.0));
+    }
+
+    #[test]
+    fn with_colorize_leaves_any_command_but_a_model() {
+        let part = DrawCommand::Mounted {
+            model: ModelKey(8),
+            mounting: mounting(),
+        };
+        assert_eq!(part.clone().with_colorize(Some(half_toward_blue())), part);
+        let sprite = DrawCommand::Sprite {
+            image: ImageKey::sprite(3, 0),
+            center: at(1.0, 2.0),
+            tint: Color::WHITE,
+            blend: Blend::Normal,
+        };
+        assert_eq!(
+            sprite.clone().with_colorize(Some(half_toward_blue())),
+            sprite
+        );
+    }
+
+    #[test]
+    fn at_alpha_and_translated_keep_a_models_colorize() {
+        let mixed = model_at(1.0, 2.0).with_colorize(Some(half_toward_blue()));
+        assert_eq!(
+            mixed.clone().at_alpha(0.25),
+            DrawCommand::faded_model(ModelKey(7), pose_at(1.0, 2.0), 0.25)
+                .with_colorize(Some(half_toward_blue()))
+        );
+        assert_eq!(
+            mixed.translated(at(10.0, -4.0)),
+            model_at(11.0, -2.0).with_colorize(Some(half_toward_blue()))
         );
     }
 

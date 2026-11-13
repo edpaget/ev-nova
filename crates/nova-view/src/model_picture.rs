@@ -346,6 +346,7 @@ mod tests {
                 scale: FIT * 64.0 / 2.0 / 4.0,
             },
             alpha: 1.0,
+            colorize: None,
         }];
         want.extend(portrait.parts.iter().cloned());
         assert_eq!(commands, want);

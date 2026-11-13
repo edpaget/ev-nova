@@ -522,6 +522,7 @@ impl<S: ImageSource> Renderer<S> {
                 model,
                 ref pose,
                 alpha,
+                ..
             } => {
                 let missing = &mut report.missing_models;
                 (self.models).draw_model(model, (pose, alpha), logical, batches, gpu, missing);
