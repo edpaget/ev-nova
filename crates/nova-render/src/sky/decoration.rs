@@ -974,6 +974,15 @@ mod tests {
             lit(&image, &glow, Point::new(10.5, 20.5)),
             [half, half * 0.5, half * 0.25, 0.0],
         );
+        // A colour dim in red dims the red texel's red.
+        let dim = Placement {
+            color: [0.5, 1.0, 1.0],
+            ..placement
+        };
+        assert_lit(
+            lit(&image, &dim, Point::new(9.5, 19.5)),
+            [0.5, 0.0, 0.0, 1.0],
+        );
         // Outside on each side.
         for outside in [(8.9, 20.0), (11.1, 20.0), (10.0, 18.9), (10.0, 21.1)] {
             let point = Point::new(outside.0, outside.1);
