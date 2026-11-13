@@ -90,6 +90,11 @@
 //!   model's depth first, then its colour.
 //! - `resident`: the one table behind both: what the [`Renderer`] has
 //!   uploaded of one kind, numbered and uploaded once by its pointer.
+//! - `visits`: the flight systems the [`Renderer`] has drawn frames in,
+//!   counted from the system each list names
+//!   ([`nova_view::DrawList::system`]), which decide what it keeps on the
+//!   GPU: what was drawn in this visit or the one before. Planets not
+//!   kept are released ([`Gpu::release_planet`]).
 //! - [`streams`]: the movie frames ([`nova_view::DrawCommand::MovieFrame`])
 //!   the [`Renderer`] streams onto pages of their own, numbered down from
 //!   the top so they never take an atlas page's id, and uploads again only
@@ -229,6 +234,7 @@ pub mod streams;
 pub mod super_xbr;
 pub mod upscale;
 pub mod viewport;
+mod visits;
 pub mod wgpu;
 
 pub use atlas::{Atlas, AtlasEntry, GUTTER, PAGE_SIZE, PackError, PageId, ShelfPacker, Uv};

@@ -29,6 +29,19 @@
 //! A planet given as a surface ([`LoadedPlanet::surface`], tests) is
 //! spent once uploaded, and has nothing to be made again from.
 //!
+//! # A planet is let go when its system is left
+//!
+//! Each planet notes the visit it was last drawn in
+//! ([`crate::visits`]: a visit begins with each frame that flies in
+//! another system). After the frame that begins a visit is submitted, the
+//! renderer releases ([`Gpu::release_planet`]) the textures of every
+//! planet not drawn in this visit or the one before, that can be made
+//! again, and it counts as not ready: the first frame that draws it again
+//! makes and uploads it again, as a first draw does, under the same
+//! number. So the GPU holds the planets of the last two flight systems
+//! (and those another screen drew meanwhile), not every planet ever
+//! drawn. A planet given as a surface is never released.
+//!
 //! # A planet that can't be made
 //!
 //! A bake can't fail, but a read can (a file that doesn't decode, or one
@@ -67,6 +80,7 @@ use crate::gpu::{Batch, Gpu, PlanetId, PlanetInstance, Rect};
 use crate::planet::{self, Figure, PLANET_LIGHT};
 use crate::planet_files::{NoFiles, PlanetFiles};
 use crate::planet_source::{LoadedPlanet, PlanetError};
+use crate::visits::Visits;
 
 /// A planet the renderer was given: how to make it, and what of it is
 /// ready. It holds no pixels once they are uploaded.
@@ -87,6 +101,11 @@ struct Held {
     /// Whether making it failed: it draws its stand-in, and isn't made
     /// again until its key is given a new planet.
     failed: bool,
+    /// Whether the GPU holds textures under its id: its own, or those of
+    /// the planet it replaced.
+    on_gpu: bool,
+    /// The visit it was last drawn in ([`Visits`]).
+    drawn_in: u64,
 }
 
 /// The planets the renderer was given, by key.
@@ -141,6 +160,8 @@ impl Planets {
                 reach,
                 figure: None,
                 failed: false,
+                on_gpu: false,
+                drawn_in: 0,
             },
         );
     }
@@ -160,7 +181,8 @@ impl Planets {
     /// from then on gives back its stand-in for the caller to draw in its
     /// place (`None` when it has none). A pose [`planet::quad`] refuses
     /// draws nothing, and makes nothing. A planet wholly outside its clip
-    /// is still made ready: the GPU's scissor, not the core, cuts it.
+    /// is still made ready: the GPU's scissor, not the core, cuts it. A
+    /// planet drawn is noted as drawn in `visit`, the current one.
     pub(crate) fn draw(
         &mut self,
         key: PlanetKey,
@@ -168,6 +190,7 @@ impl Planets {
         batches: &mut Vec<Batch>,
         gpu: &mut impl Gpu,
         (missing, failed): (&mut Vec<PlanetKey>, &mut Vec<(PlanetKey, PlanetError)>),
+        visit: u64,
     ) -> Option<StellarStandIn> {
         let Some(held) = self.held.get_mut(&key) else {
             if self.reported.insert(key) {
@@ -181,11 +204,13 @@ impl Planets {
         if held.failed {
             return held.stand_in.clone();
         }
+        held.drawn_in = visit;
         if held.figure.is_none() {
             let made = (held.planet.as_ref()).map(|planet| planet.make(self.files.as_ref()));
             match made {
                 Some(Ok(surface)) => {
                     gpu.upload_planet(held.id, &planet::textures(&surface));
+                    held.on_gpu = true;
                     held.figure = Some(Figure::of(&surface));
                     // A given surface is spent: holding it would hold
                     // its pixels.
@@ -208,6 +233,26 @@ impl Planets {
             clip,
         );
         None
+    }
+
+    /// Releases through `gpu` the textures of every planet `visits` no
+    /// longer keeps ([`Visits::kept`]): held on the GPU, able to be made
+    /// again, and not drawn in this visit or the one before. Each counts
+    /// as not ready from then on, so its next draw makes it again. A
+    /// planet given as a surface can't be made again, and one that failed
+    /// holds nothing, so neither is released. Called once a frame that
+    /// began a new visit is submitted, so no frame names a planet
+    /// released; the releases go in the order of the planets' ids.
+    pub(crate) fn release_left(&mut self, visits: &Visits, gpu: &mut impl Gpu) {
+        let mut left: Vec<&mut Held> = (self.held.values_mut())
+            .filter(|held| held.on_gpu && held.planet.is_some() && !visits.kept(held.drawn_in))
+            .collect();
+        left.sort_by_key(|held| held.id);
+        for held in left {
+            gpu.release_planet(held.id);
+            held.on_gpu = false;
+            held.figure = None;
+        }
     }
 
     /// The bytes of planet pixels held: those of each planet given as a
@@ -1127,5 +1172,297 @@ mod tests {
         assert_eq!(frame.batches, []);
         assert_eq!(uploads(&gpu), []);
         assert!(!is_baked(&renderer, PlanetKey(2)));
+    }
+
+    // Leaving systems.
+
+    /// System A's planets: a look and a texture.
+    const A1: PlanetKey = PlanetKey(10);
+    const A2: PlanetKey = PlanetKey(11);
+    /// System B's and system C's.
+    const B1: PlanetKey = PlanetKey(20);
+    const C1: PlanetKey = PlanetKey(30);
+    /// A planet drawn on a screen that flies in no system.
+    const PORT: PlanetKey = PlanetKey(40);
+    /// The systems flown in, by their ids.
+    const SYSTEM_A: i16 = 130;
+    const SYSTEM_B: i16 = 131;
+    const SYSTEM_C: i16 = 132;
+    const SYSTEM_D: i16 = 133;
+
+    /// A renderer reading `files`, with A's, B's and C's planets and
+    /// [`PORT`], numbered 1 to 5 in that order after the globe's 0.
+    fn galaxy(files: &Rc<FakePlanetFiles>) -> Renderer<OneSprite> {
+        let mut renderer = reading(files);
+        renderer.add_planet(A1, unbaked(70));
+        renderer.add_planet(A2, unread());
+        renderer.add_planet(B1, unbaked(71));
+        renderer.add_planet(C1, unbaked(72));
+        renderer.add_planet(PORT, unbaked(73));
+        renderer
+    }
+
+    /// A frame flying in `system`, drawing `keys` side by side.
+    fn flying(system: i16, keys: &[PlanetKey]) -> DrawList {
+        let mut list = elsewhere(keys);
+        list.in_system(nova_data::SystemId(system));
+        list
+    }
+
+    /// A frame that names no system, drawing `keys` side by side.
+    fn elsewhere(keys: &[PlanetKey]) -> DrawList {
+        let mut list = DrawList::new();
+        for (n, key) in keys.iter().enumerate() {
+            list.planet(*key, pose(10.0 + 12.0 * n as f32, 20.0));
+        }
+        list
+    }
+
+    /// The calls `gpu` receives while `renderer` draws `list`.
+    fn calls_drawing(
+        renderer: &mut Renderer<OneSprite>,
+        list: &DrawList,
+        gpu: &mut RecordingGpu,
+    ) -> Vec<GpuCall> {
+        let before = gpu.calls.len();
+        renderer.render(list, &viewport(), gpu);
+        gpu.calls[before..].to_vec()
+    }
+
+    /// The planets `calls` release, in order.
+    fn released(calls: &[GpuCall]) -> Vec<PlanetId> {
+        (calls.iter())
+            .filter_map(|call| match call {
+                GpuCall::ReleasePlanet { planet } => Some(*planet),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The planets `calls` upload, in order.
+    fn uploaded(calls: &[GpuCall]) -> Vec<PlanetId> {
+        (calls.iter())
+            .filter_map(|call| match call {
+                GpuCall::UploadPlanet { planet, .. } => Some(*planet),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The planets `calls`' one frame draws.
+    fn drawn_in(calls: &[GpuCall]) -> Vec<PlanetId> {
+        let [frame] = &(calls.iter())
+            .filter_map(|call| match call {
+                GpuCall::Submit(frame) => Some(frame),
+                _ => None,
+            })
+            .collect::<Vec<_>>()[..]
+        else {
+            panic!("one frame");
+        };
+        (frame.batches.iter())
+            .flat_map(|batch| match batch {
+                Batch::Planets { planets, .. } => planets.iter().map(|p| p.planet).collect(),
+                _ => Vec::new(),
+            })
+            .collect()
+    }
+
+    /// Whether every release in `calls` comes after its frame's submit.
+    fn released_after_the_submit(calls: &[GpuCall]) -> bool {
+        let submit = (calls.iter()).position(|call| matches!(call, GpuCall::Submit(_)));
+        calls.iter().enumerate().all(|(at, call)| {
+            !matches!(call, GpuCall::ReleasePlanet { .. }) || submit.is_some_and(|s| at > s)
+        })
+    }
+
+    #[test]
+    fn leaving_a_system_releases_its_planets_two_systems_on() {
+        let files = files();
+        let mut renderer = galaxy(&files);
+        let mut gpu = RecordingGpu::new();
+        let in_a = calls_drawing(&mut renderer, &flying(SYSTEM_A, &[A1, A2]), &mut gpu);
+        assert_eq!(uploaded(&in_a), [PlanetId(1), PlanetId(2)]);
+        let in_b = calls_drawing(&mut renderer, &flying(SYSTEM_B, &[B1]), &mut gpu);
+        assert_eq!(released(&in_b), [], "the system before is kept");
+        let still_b = calls_drawing(&mut renderer, &flying(SYSTEM_B, &[B1]), &mut gpu);
+        assert_eq!(released(&still_b), []);
+        let in_c = calls_drawing(&mut renderer, &flying(SYSTEM_C, &[C1]), &mut gpu);
+        assert_eq!(
+            released(&in_c),
+            [PlanetId(1), PlanetId(2)],
+            "A's, and only A's"
+        );
+        assert!(released_after_the_submit(&in_c), "{in_c:?}");
+        assert_eq!(drawn_in(&in_c), [PlanetId(4)], "C's planet drawn");
+        assert_eq!(
+            gpu.planets_held(),
+            [PlanetId(3), PlanetId(4)].into_iter().collect(),
+            "B's and C's"
+        );
+        assert_eq!(gpu.unheld_planets_drawn(), []);
+        let still_c = calls_drawing(&mut renderer, &flying(SYSTEM_C, &[C1]), &mut gpu);
+        assert_eq!(released(&still_c), [], "once a visit");
+    }
+
+    #[test]
+    fn returning_draws_them_again_in_the_first_frame_uploaded_again_equal() {
+        let files = files();
+        let mut renderer = galaxy(&files);
+        let mut gpu = RecordingGpu::new();
+        let first = calls_drawing(&mut renderer, &flying(SYSTEM_A, &[A1, A2]), &mut gpu);
+        calls_drawing(&mut renderer, &flying(SYSTEM_B, &[B1]), &mut gpu);
+        calls_drawing(&mut renderer, &flying(SYSTEM_C, &[C1]), &mut gpu);
+        assert_eq!(files.reads(FILE), 1);
+        let back = calls_drawing(&mut renderer, &flying(SYSTEM_A, &[A1, A2]), &mut gpu);
+        let uploads_of = |calls: &[GpuCall]| -> Vec<GpuCall> {
+            (calls.iter())
+                .filter(|call| matches!(call, GpuCall::UploadPlanet { .. }))
+                .cloned()
+                .collect()
+        };
+        assert_eq!(
+            uploads_of(&back),
+            uploads_of(&first),
+            "equal, generated and textured"
+        );
+        assert_eq!(
+            uploads_of(&back),
+            [
+                GpuCall::UploadPlanet {
+                    planet: PlanetId(1),
+                    textures: planet::textures(&bake(&look(70), SMALL)),
+                },
+                GpuCall::UploadPlanet {
+                    planet: PlanetId(2),
+                    textures: planet::textures(&textured(7)),
+                },
+            ]
+        );
+        assert_eq!(files.reads(FILE), 2, "the texture read again");
+        let submit = (back.iter())
+            .position(|call| matches!(call, GpuCall::Submit(_)))
+            .expect("a frame");
+        assert!(
+            (back.iter().take(submit)).all(|call| matches!(call, GpuCall::UploadPlanet { .. })),
+            "uploaded before the frame: {back:?}"
+        );
+        assert_eq!(drawn_in(&back), drawn_in(&first), "drawn in that frame");
+        assert_eq!(drawn_in(&back), [PlanetId(1), PlanetId(2)]);
+        assert_eq!(released(&back), [PlanetId(3)], "and B's let go");
+        assert_eq!(gpu.unheld_planets_drawn(), []);
+    }
+
+    #[test]
+    fn flying_back_and_forth_between_two_systems_makes_nothing_again() {
+        let files = files();
+        let mut renderer = galaxy(&files);
+        let mut gpu = RecordingGpu::new();
+        for system in [SYSTEM_A, SYSTEM_B, SYSTEM_A, SYSTEM_B, SYSTEM_A] {
+            let keys: &[PlanetKey] = if system == SYSTEM_A { &[A1, A2] } else { &[B1] };
+            calls_drawing(&mut renderer, &flying(system, keys), &mut gpu);
+        }
+        assert_eq!(
+            uploaded(&gpu.calls),
+            [PlanetId(1), PlanetId(2), PlanetId(3)],
+            "each once"
+        );
+        assert_eq!(released(&gpu.calls), []);
+        assert_eq!(files.reads(FILE), 1);
+    }
+
+    #[test]
+    fn frames_naming_no_system_start_no_visit_and_their_planets_count_in_the_current_one() {
+        let files = files();
+        let mut renderer = galaxy(&files);
+        let mut gpu = RecordingGpu::new();
+        calls_drawing(&mut renderer, &flying(SYSTEM_A, &[A1]), &mut gpu);
+        // Landed in A: the port shows its planet, and A's own.
+        calls_drawing(&mut renderer, &elsewhere(&[PORT, A1]), &mut gpu);
+        // Taken off in A again: no new visit, nothing made again.
+        calls_drawing(&mut renderer, &flying(SYSTEM_A, &[A1]), &mut gpu);
+        let in_b = calls_drawing(&mut renderer, &flying(SYSTEM_B, &[B1]), &mut gpu);
+        assert_eq!(released(&in_b), []);
+        calls_drawing(&mut renderer, &elsewhere(&[]), &mut gpu);
+        let in_c = calls_drawing(&mut renderer, &flying(SYSTEM_C, &[C1]), &mut gpu);
+        assert_eq!(
+            released(&in_c),
+            [PlanetId(1), PlanetId(5)],
+            "A's and the port's"
+        );
+        assert_eq!(
+            uploaded(&gpu.calls),
+            [PlanetId(1), PlanetId(5), PlanetId(3), PlanetId(4)],
+            "each once"
+        );
+    }
+
+    #[test]
+    fn a_planet_drawn_only_on_another_screen_is_released_two_systems_later() {
+        let files = files();
+        let mut renderer = galaxy(&files);
+        let mut gpu = RecordingGpu::new();
+        // The main menu, before any flight.
+        calls_drawing(&mut renderer, &elsewhere(&[PORT]), &mut gpu);
+        let in_a = calls_drawing(&mut renderer, &flying(SYSTEM_A, &[A1]), &mut gpu);
+        assert_eq!(released(&in_a), []);
+        let in_b = calls_drawing(&mut renderer, &flying(SYSTEM_B, &[B1]), &mut gpu);
+        assert_eq!(released(&in_b), [PlanetId(5)]);
+    }
+
+    #[test]
+    fn a_planet_given_as_a_surface_is_never_released() {
+        let mut renderer = galaxy(&files());
+        let mut gpu = RecordingGpu::new();
+        calls_drawing(&mut renderer, &flying(SYSTEM_A, &[GLOBE]), &mut gpu);
+        for system in [SYSTEM_B, SYSTEM_C, SYSTEM_D] {
+            calls_drawing(&mut renderer, &flying(system, &[]), &mut gpu);
+        }
+        assert_eq!(
+            released(&gpu.calls),
+            [],
+            "it has nothing to be made again from"
+        );
+        let back = calls_drawing(&mut renderer, &flying(SYSTEM_A, &[GLOBE]), &mut gpu);
+        assert_eq!(uploaded(&back), []);
+        assert_eq!(drawn_in(&back), [PlanetId(0)]);
+        assert_eq!(gpu.unheld_planets_drawn(), []);
+    }
+
+    #[test]
+    fn a_failed_planet_releases_nothing_and_stays_failed() {
+        let files = failing();
+        let mut renderer = galaxy(&files);
+        let mut gpu = RecordingGpu::new();
+        let report = renderer.render(&flying(SYSTEM_A, &[A2]), &viewport(), &mut gpu);
+        assert_eq!(report.failed_planets.len(), 1);
+        for system in [SYSTEM_B, SYSTEM_C] {
+            calls_drawing(&mut renderer, &flying(system, &[]), &mut gpu);
+        }
+        assert_eq!(released(&gpu.calls), []);
+        let report = renderer.render(&flying(SYSTEM_A, &[A2]), &viewport(), &mut gpu);
+        assert_eq!(report.failed_planets, [], "still failed, not asked again");
+        assert_eq!(files.reads(FILE), 1);
+    }
+
+    #[test]
+    fn a_replaced_planet_never_drawn_again_has_its_old_textures_released_on_leaving() {
+        let mut renderer = galaxy(&files());
+        let mut gpu = RecordingGpu::new();
+        calls_drawing(&mut renderer, &flying(SYSTEM_A, &[A1]), &mut gpu);
+        renderer.add_planet(A1, unbaked(99));
+        calls_drawing(&mut renderer, &flying(SYSTEM_B, &[]), &mut gpu);
+        let in_c = calls_drawing(&mut renderer, &flying(SYSTEM_C, &[]), &mut gpu);
+        assert_eq!(released(&in_c), [PlanetId(1)]);
+        assert!(gpu.planets_held().is_empty());
+        // Drawn again, its new look is made.
+        let back = calls_drawing(&mut renderer, &flying(SYSTEM_A, &[A1]), &mut gpu);
+        assert_eq!(
+            back[0],
+            GpuCall::UploadPlanet {
+                planet: PlanetId(1),
+                textures: planet::textures(&bake(&look(99), SMALL)),
+            }
+        );
     }
 }

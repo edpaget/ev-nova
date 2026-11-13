@@ -211,6 +211,42 @@ impl RecordingGpu {
         held
     }
 
+    /// Each planet a submitted frame draws (an instance of a
+    /// [`Batch::Planets`](crate::gpu::Batch::Planets)) that it did not hold
+    /// when the frame was submitted, with the frame's place among the
+    /// submits ([`submits`](Self::submits)): one never uploaded, or
+    /// released since. An adapter draws such a planet as nothing.
+    #[must_use]
+    pub fn unheld_planets_drawn(&self) -> Vec<(usize, PlanetId)> {
+        let mut held = std::collections::BTreeSet::new();
+        let mut unheld = Vec::new();
+        let mut submits = 0;
+        for call in &self.calls {
+            match call {
+                GpuCall::UploadPlanet { planet, .. } => {
+                    held.insert(*planet);
+                }
+                GpuCall::ReleasePlanet { planet } => {
+                    held.remove(planet);
+                }
+                GpuCall::Submit(frame) => {
+                    for batch in &frame.batches {
+                        if let crate::gpu::Batch::Planets { planets, .. } = batch {
+                            unheld.extend(
+                                (planets.iter())
+                                    .filter(|instance| !held.contains(&instance.planet))
+                                    .map(|instance| (submits, instance.planet)),
+                            );
+                        }
+                    }
+                    submits += 1;
+                }
+                _ => {}
+            }
+        }
+        unheld
+    }
+
     /// The planets it holds textures for: uploaded, and not released
     /// since.
     #[must_use]
@@ -463,6 +499,67 @@ mod tests {
         gpu.release_planet(PlanetId(0));
         assert!(gpu.planets_held().is_empty());
         assert_eq!(gpu.planet_bytes_held(), 0);
+    }
+
+    /// A frame drawing planets `ids`, each in a batch of its own.
+    fn drawing(ids: &[u32]) -> Frame {
+        let figure = crate::planet::Figure {
+            rings: None,
+            atmosphere: None,
+            day: 10.0,
+            tilt: 0.0,
+        };
+        let pose = nova_view::PlanetPose {
+            center: nova_view::Point::new(10.0, 10.0),
+            radius: 4.0,
+            time: 0.0,
+        };
+        let batches = ids
+            .iter()
+            .map(|&id| crate::gpu::Batch::Planets {
+                light: crate::planet::PLANET_LIGHT,
+                planets: vec![
+                    crate::planet::figure_instance(PlanetId(id), &figure, &pose).expect("drawable"),
+                ],
+                clip: None,
+            })
+            .collect();
+        Frame {
+            target: (64, 48),
+            viewport: PixelRect {
+                x: 0,
+                y: 0,
+                w: 64,
+                h: 48,
+            },
+            logical: crate::viewport::LogicalSize { w: 32, h: 24 },
+            clear: nova_view::Color::BLACK,
+            world_space: crate::gpu::WorldSpace::Target,
+            batches,
+            world: Vec::new(),
+            world_clip: None,
+            world_tail: None,
+        }
+    }
+
+    #[test]
+    fn recording_gpu_finds_each_planet_a_frame_draws_that_it_did_not_hold() {
+        let mut gpu = RecordingGpu::new();
+        gpu.submit(&drawing(&[]));
+        gpu.upload_planet(PlanetId(0), &planet_textures(8, 3));
+        gpu.submit(&drawing(&[0]));
+        assert_eq!(gpu.unheld_planets_drawn(), []);
+        gpu.submit(&drawing(&[0, 1]));
+        gpu.release_planet(PlanetId(0));
+        gpu.submit(&drawing(&[0]));
+        gpu.upload_planet(PlanetId(0), &planet_textures(8, 3));
+        gpu.upload_planet(PlanetId(1), &planet_textures(8, 3));
+        gpu.submit(&drawing(&[1, 0]));
+        assert_eq!(
+            gpu.unheld_planets_drawn(),
+            [(2, PlanetId(1)), (3, PlanetId(0))],
+            "by the frame's place among the submits"
+        );
     }
 
     #[test]

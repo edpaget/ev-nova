@@ -46,6 +46,7 @@
 //! in-memory sources, with no other files or environment.
 
 use std::collections::BTreeMap;
+use std::fmt::Debug;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
@@ -57,7 +58,9 @@ use nova_galaxy_format::source::{DirSource, MemSource, Source};
 use nova_galaxy_media::fixture::png;
 use nova_render::recording::{NoImages, RecordingGpu};
 use nova_render::sky::galaxy;
-use nova_render::{LOGICAL, LoadedPlanet, Renderer, Viewport, WorldAssets, world_assets};
+use nova_render::{
+    GalaxyPlanetFiles, LOGICAL, LoadedPlanet, Renderer, Viewport, WorldAssets, world_assets,
+};
 use nova_view::flight::StellarModel;
 use nova_view::flight::sky::sky_seed;
 use nova_view::{DrawList, PlanetKey, PlanetPose, Point};
@@ -279,9 +282,16 @@ fn planets_by_system(game: &NewGame, assets: &WorldAssets) -> BTreeMap<String, V
     systems
 }
 
-/// A list that draws `keys`' planets side by side.
-fn planets_list(keys: &[PlanetKey]) -> DrawList {
+/// A list that draws `keys`' planets side by side, flying in the system
+/// `id` of `game` when it is given.
+fn planets_list(keys: &[PlanetKey], in_system: Option<(&NewGame, &str)>) -> DrawList {
     let mut list = DrawList::new();
+    if let Some((game, id)) = in_system {
+        let nova = (game.ids.systems.iter())
+            .find_map(|(system, &nova)| (system.as_str() == id).then_some(nova))
+            .expect("a system of the game");
+        list.in_system(SystemId(nova));
+    }
     for (n, key) in keys.iter().enumerate() {
         list.planet(
             *key,
@@ -295,9 +305,14 @@ fn planets_list(keys: &[PlanetKey]) -> DrawList {
     list
 }
 
-/// A renderer holding `assets`' meshes and planets.
-fn renderer_of(assets: WorldAssets) -> Renderer<NoImages> {
+/// A renderer holding `assets`' meshes and planets, reading textures left
+/// unread from `source`.
+fn renderer_of(
+    assets: WorldAssets,
+    source: &(impl Source + Clone + Debug + 'static),
+) -> Renderer<NoImages> {
     let mut renderer = Renderer::new(NoImages);
+    renderer.set_planet_files(Box::new(GalaxyPlanetFiles::new(source.clone())));
     for (key, mesh) in assets.meshes {
         renderer.add_model(key, mesh);
     }
@@ -322,15 +337,16 @@ fn mb(bytes: usize) -> f64 {
 /// on one renderer and one recording Gpu; then draws the first system
 /// again. Prints what the renderer holds on the CPU and the Gpu holds
 /// after the last system, and what that return frame took.
-fn tour(name: &str, source: &impl Source, dir: &Path) {
+fn tour(name: &str, source: &(impl Source + Clone + Debug + 'static), dir: &Path) {
     let game = load(source, dir);
     let assets = world_assets(&game, source);
     let systems = planets_by_system(&game, &assets);
-    let mut renderer = renderer_of(assets);
+    let mut renderer = renderer_of(assets, source);
     let mut gpu = RecordingGpu::new();
     let start = Instant::now();
-    for keys in systems.values() {
-        renderer.render(&planets_list(keys), &viewport(), &mut gpu);
+    for (system, keys) in &systems {
+        let list = planets_list(keys, Some((&game, system)));
+        renderer.render(&list, &viewport(), &mut gpu);
     }
     let tour_ms = ms(start);
     let (cpu, held) = (renderer.planet_bytes_held(), gpu.planet_bytes_held());
@@ -338,8 +354,9 @@ fn tour(name: &str, source: &impl Source, dir: &Path) {
         println!("{name}: no system draws a planet");
         return;
     };
+    let list = planets_list(keys, Some((&game, first)));
     let start = Instant::now();
-    renderer.render(&planets_list(keys), &viewport(), &mut gpu);
+    renderer.render(&list, &viewport(), &mut gpu);
     let return_ms = ms(start);
     let build = if cfg!(debug_assertions) {
         "debug"
@@ -368,7 +385,8 @@ fn tour(name: &str, source: &impl Source, dir: &Path) {
 struct Run {
     load_ms: f64,
     world_ms: f64,
-    /// The planets handed over holding their surface, and those unbaked.
+    /// The planets handed over holding their surface, and those left for
+    /// their first draw (unbaked or unread).
     planets: (usize, usize),
     planet_mb: f64,
     /// The distinct sky images read, and the megabytes they hold.
@@ -381,7 +399,7 @@ struct Run {
 
 /// Loads and builds `source` once, then draws its busiest system's
 /// planets twice.
-fn run(source: &impl Source, dir: &Path) -> Run {
+fn run(source: &(impl Source + Clone + Debug + 'static), dir: &Path) -> Run {
     let start = Instant::now();
     let game = load(source, dir);
     let load_ms = ms(start);
@@ -399,8 +417,8 @@ fn run(source: &impl Source, dir: &Path) -> Run {
     let sky_images = sky_images(&game, &assets);
     let problems = game.problems.len() + assets.problems.len();
     let system = busiest_system(&game, &assets);
-    let list = planets_list(system.as_ref().map_or(&[][..], |(_, keys)| keys));
-    let mut renderer = renderer_of(assets);
+    let list = planets_list(system.as_ref().map_or(&[][..], |(_, keys)| keys), None);
+    let mut renderer = renderer_of(assets, source);
     let viewport = viewport();
     let mut gpu = RecordingGpu::new();
     let start = Instant::now();
@@ -424,7 +442,7 @@ fn run(source: &impl Source, dir: &Path) -> Run {
 
 /// Runs `source` up to [`RUNS`] times and prints the least of each
 /// number, under `name`.
-fn report(name: &str, source: &impl Source, dir: &Path) {
+fn report(name: &str, source: &(impl Source + Clone + Debug + 'static), dir: &Path) {
     let started = Instant::now();
     let mut runs = Vec::new();
     while runs.len() < RUNS as usize && (runs.is_empty() || ms(started) < ENOUGH_MS) {
@@ -441,7 +459,7 @@ fn report(name: &str, source: &impl Source, dir: &Path) {
     println!("  new_game::load  {:10.2} ms", least(|r| r.load_ms));
     println!("  world_assets    {:10.2} ms", least(|r| r.world_ms));
     println!(
-        "  planets         {} baked or read holding {:.1} MB, {} unbaked",
+        "  planets         {} baked or read holding {:.1} MB, {} unbaked or unread",
         shown.planets.0, shown.planet_mb, shown.planets.1
     );
     println!(

@@ -29,6 +29,7 @@ use crate::sky_images::SkyImages;
 use crate::streams::{Owner, Streams};
 use crate::upscale::world_space;
 use crate::viewport::{LogicalSize, PixelRect, Viewport};
+use crate::visits::Visits;
 
 /// What went wrong while rendering one frame.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -97,6 +98,9 @@ pub struct Renderer<S> {
     models: Models,
     /// The planets planets are drawn as ([`Renderer::add_planet`]).
     planets: Planets,
+    /// The flight systems visited, which decide what of the uploads is
+    /// let go ([`crate::visits`]).
+    visits: Visits,
     /// Each system's own sky look, by its sky's seed
     /// ([`Renderer::set_sky_looks`]).
     skies: SkyLooks,
@@ -130,6 +134,7 @@ impl<S: ImageSource> Renderer<S> {
             stretches: HashMap::new(),
             models: Models::default(),
             planets: Planets::default(),
+            visits: Visits::default(),
             skies: SkyLooks::new(),
             sky_images: SkyImages::default(),
             render_scale: RenderScale::Auto,
@@ -281,7 +286,12 @@ impl<S: ImageSource> Renderer<S> {
     /// draws nothing and is reported once
     /// ([`RenderReport::missing_planets`]). One that can't be made is
     /// reported in that frame ([`RenderReport::failed_planets`]) and draws
-    /// its stand-in in its place, clipped alike, from that frame on.
+    /// its stand-in in its place, clipped alike, from that frame on. A
+    /// list that names a flight system other than the last one named
+    /// ([`DrawList::system`]) begins a new visit ([`crate::visits`]): once
+    /// that frame is submitted, the planets not drawn in this visit or the
+    /// one before are released ([`Gpu::release_planet`]), to be made
+    /// again in the first frame that draws them again.
     ///
     /// A sky ([`DrawCommand::Sky`]) is a [`Batch::Sky`] of its own, the
     /// core's backdrop puffs then stars ([`crate::sky::instances`]) in the
@@ -306,6 +316,7 @@ impl<S: ImageSource> Renderer<S> {
             return report;
         };
         self.rebuild(gpu);
+        let new_visit = self.visits.arrive(list.system());
         let logical = viewport.logical();
         let space = world_space(gpu.world_resolution(), self.render_scale, viewport);
         let target = Target {
@@ -354,6 +365,11 @@ impl<S: ImageSource> Renderer<S> {
             world_clip: list.world_clip().map(rect_of),
             world_tail: tail,
         });
+        // Once a visit, after the frame that began it, so no frame names
+        // a planet released.
+        if new_visit {
+            self.planets.release_left(&self.visits, gpu);
+        }
         report
     }
 
@@ -562,7 +578,8 @@ impl<S: ImageSource> Renderer<S> {
             DrawCommand::Planet { planet, ref pose } => {
                 let told = (&mut report.missing_planets, &mut report.failed_planets);
                 let placed = (pose, clip.map(rect_of));
-                let instead = (self.planets).draw(planet, placed, batches, gpu, told);
+                let visit = self.visits.current();
+                let instead = (self.planets).draw(planet, placed, batches, gpu, told, visit);
                 if let Some(stand_in) = instead {
                     let mut drawn = DrawList::new();
                     let (center, radius) = (pose.center, pose.radius);
