@@ -41,12 +41,14 @@ Each rung runs only when the one below passes and the work has reached it.
    with staged changes. Don't run them yourself just before committing.
 3. **Before needs-review, once, one at a time**:
    - the full gate, `mise run ci`, once;
-   - the stock tests of the crates the change touches and their `<crate>-it`
-     siblings, one crate at a time
+   - the stock tests of the crates the change touches and of every crate
+     their integration tests moved to (the `<crate>-it` sibling, and any
+     crate whose `tests/it/main.rs` says its stock modules came from one of
+     them), one crate at a time
      (`NOVA_DATA=... cargo nextest run -p <crate> --no-tests=warn -E 'test(/^stock(_|::)/)'`,
      or every crate's at once with `NOVA_DATA=... mise run stock`). A crate
-     with no stock tests of its own (they moved to its `-it` sibling) then
-     passes with a warning instead of failing;
+     with no stock tests of its own then passes with a warning instead of
+     failing;
    - mutants once over the phase's own commits
      (`--in-diff <(git diff <previous commit>...HEAD)`, `.claude/rules/mutants.md`).
    Run these one after another, never alongside each other. Rerun only the
