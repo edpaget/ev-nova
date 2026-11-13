@@ -353,7 +353,7 @@ impl AppScreen {
     /// and planets as the 3D models `models` names
     /// ([`FlightView::with_world_models`]), and the other screens that
     /// show one (the spaceport's shipyard, hire screen and landscape, the
-    /// escort and comm dialogs) drawing it as
+    /// escort, comm and planet comm dialogs) drawing it as
     /// its model in their pictures (`nova_view::model_picture`): an
     /// empty table, the default, until it is given. `main` gives the
     /// renderer the meshes and planets its keys name

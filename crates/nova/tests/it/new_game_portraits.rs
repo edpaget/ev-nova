@@ -4,8 +4,9 @@
 //! wired as `main` wires it (the world models' table on the router, their
 //! meshes on the app), the status bar's target panel draws the target's
 //! class's model in its picture's place, in the overlay; the comm dialog
-//! Y opens on it draws the same class's model in item 11; and landed at
-//! Luyten Exchange, the spaceport's landscape draws the station hub. The
+//! Y opens on it draws the same class's model in item 11; the planet comm
+//! dialog Y opens on Luyten Exchange draws the station hub in item 5; and
+//! landed there, the spaceport's landscape draws the hub. The
 //! escort dialog's wiring is pinned in `combat.rs`, whose harness flies
 //! with an escort.
 //!
@@ -141,6 +142,39 @@ fn the_comm_dialog_draws_the_hailed_ship_s_class_as_its_model() {
     }
     let comm = harness.app.screen().comm().expect("hailed");
     assert_eq!(models_of(comm), [key], "the hailed ship's portrait");
+}
+
+#[test]
+fn the_planet_comm_dialog_draws_the_hailed_station_s_model() {
+    let (game, assets) = sample();
+    let exchange = StellarId(nova_id(&game.ids.stellars, "luyten-exchange"));
+    let Some(StellarModel::Model { key: hub, .. }) = assets.models.stellar(exchange) else {
+        panic!("the exchange's model");
+    };
+    let data = std::rc::Rc::new(game.data);
+    let pilots = MemoryPilots::new();
+    let mut harness = flying_over(Ruleset::NewGame, &data, &assets, &pilots);
+    harness
+        .app
+        .screen_mut()
+        .flight_view_mut()
+        .expect("flying")
+        .change_sim(|sim| {
+            let session = sim.session_mut().expect("a session");
+            put_player_at(session, Vec2::ZERO);
+        });
+    // 1 selects the crossing's first stellar, the exchange, and Y hails
+    // it; pressed again each frame until it takes.
+    for _ in 0..2000 {
+        if harness.app.screen().planet_comm().is_some() {
+            break;
+        }
+        tap(&mut harness, Key::Digit1);
+        tap(&mut harness, Key::KeyY);
+        draw(&mut harness);
+    }
+    let dialog = harness.app.screen().planet_comm().expect("hailed");
+    assert_eq!(models_of(dialog), [hub], "the hub in item 5");
 }
 
 /// The Nova ID `table` gives the bible id `name`.

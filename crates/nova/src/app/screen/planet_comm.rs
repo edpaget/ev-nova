@@ -27,7 +27,9 @@ impl AppScreen {
     /// rulebook's `dialog_focus_ring`. With no metrics to lay
     /// it out, the dialog is closed at once, with a warning. Flight's
     /// cursor hides first, as `_HandlePlayerCommunication` hides its sprite
-    /// before `_DoPlanetCommDialog` (@0x62035).
+    /// before `_DoPlanetCommDialog` (@0x62035). A stellar with no frame
+    /// draws its model or planet when the world models' table has one
+    /// (`PlanetCommDialog::with_stellar_model`).
     pub(super) fn open_planet_comm(&mut self, view: &PlanetCommView) {
         self.hide_flight_cursor();
         let Some(metrics) = self.metrics() else {
@@ -66,7 +68,8 @@ impl AppScreen {
         self.planet_comm = Some(
             dialog
                 .with_focus_ring(self.dialog_focus_ring())
-                .with_bindings(self.bindings.clone()),
+                .with_bindings(self.bindings.clone())
+                .with_stellar_model(self.world_models.stellar(view.stellar)),
         );
     }
 
