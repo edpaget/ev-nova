@@ -1,5 +1,6 @@
-//! nova's integration tests, built as one test binary, run by the full
-//! gate (`mise run ci`) and by the pre-commit hook only when nova changes.
+//! nova's integration tests, built as one test binary in nova-it, run by
+//! the full gate (`mise run ci`) and by the pre-commit hook when nova or
+//! nova-it changes.
 //!
 //! They test **wiring** only: a window event reaches the screen, the app
 //! routes between screens, game data loads into the view, preferences,

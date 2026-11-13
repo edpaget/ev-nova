@@ -12,8 +12,8 @@
 //! hand, in debug and in release:
 //!
 //! ```text
-//! NOVA_DATA=".../Nova Files" cargo nextest run -p nova --test it --run-ignored only --no-capture --test-threads 1 stock_take_off_cost::
-//! NOVA_DATA=".../Nova Files" CARGO_TARGET_DIR=<a directory outside the worktree> cargo nextest run --release --build-jobs 2 -p nova --test it --run-ignored only --no-capture --test-threads 1 stock_take_off_cost::
+//! NOVA_DATA=".../Nova Files" cargo nextest run -p nova-it --test it --run-ignored only --no-capture --test-threads 1 stock_take_off_cost::
+//! NOVA_DATA=".../Nova Files" CARGO_TARGET_DIR=<a directory outside the worktree> cargo nextest run --release --build-jobs 2 -p nova-it --test it --run-ignored only --no-capture --test-threads 1 stock_take_off_cost::
 //! ```
 //!
 //! They skip, passing, without `NOVA_DATA`; the `OffscreenGpu` ones also

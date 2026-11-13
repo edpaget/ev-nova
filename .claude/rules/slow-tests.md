@@ -33,8 +33,11 @@ ran without trouble.
 
 - Run a GPU crate's mutants (`nova-render`, `nova`) with `-j 1` or `-j 2`,
   keeping its integration tests out, since they drive wgpu:
-  `-- -E 'not binary_id(<crate>::it)' --test-threads 4`. Its unit tests carry
-  the logic. The gate still runs the integration tests once.
+  `-- -E 'not binary_id(<it>::it)' --test-threads 4`, where `<it>` is the
+  binary that holds them: the crate's own (`nova-render::it`), or its
+  `<crate>-it` sibling's (`nova-it::it`), which the run reaches through
+  `--test-package` (`mutants.md`). Its unit tests carry the logic. The gate
+  still runs the integration tests once.
 - Run stock tests one crate at a time (`-p <crate> --test-threads 4`), not
   `--workspace`.
 - Cap `CARGO_BUILD_JOBS` (6–8) for these runs, and run `mise run ci` once,

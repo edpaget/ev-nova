@@ -23,7 +23,7 @@ pub type SessionView<C> = FlightView<C, SessionFlight<C>>;
 
 /// The reads of a [`SessionView`]'s session. Wiring-only: for the tests
 /// that wire a real session behind the port (this crate's, and the app's
-/// in `crates/nova/tests/it` until
+/// in `crates/nova-it/tests/it` until
 /// rdm:phase/crate-decoupling/phase-10-app-tests-wiring-only retires
 /// them). View code and component tests never call them; they open the
 /// view over `FakeFlight`.
