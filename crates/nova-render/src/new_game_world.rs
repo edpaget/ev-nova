@@ -37,7 +37,13 @@
 //!   every look at start-up is what made start-up slow, so the renderer
 //!   bakes each the first frame that draws it
 //!   ([`Renderer::add_planet`](crate::Renderer::add_planet)). A textured
-//!   planet is read and decoded here, where a failure can be reported.
+//!   planet is checked here from its file's head and size, where a
+//!   failure is reported, and handed on unread: the renderer reads and
+//!   decodes it the first frame that draws it. Each planet carries its
+//!   stellar's stand-in (its disc), which the renderer draws in its place
+//!   if it fails then: only a file that doesn't decode, or one changed
+//!   since, fails that late, and the renderer reports it
+//!   (`RenderReport::failed_planets`), not this builder.
 //! - **Skies**: each system's own sky look, from its `sky` block, keyed
 //!   by its sky's seed ([`sky_looks`]), for the app to hand the renderer
 //!   ([`Renderer::set_sky_looks`](crate::Renderer::set_sky_looks)); and
@@ -60,8 +66,8 @@
 //! builder finds is a problem, once: over its budget, no depth, no mesh,
 //! not a model, a base-colour image that doesn't decode or is larger than
 //! the renderer draws (the loader decodes no image, so it can't have
-//! reported one); for a planet, a texture that doesn't read or fails its
-//! budget or its shape. A model that doesn't read is not: the loader read
+//! reported one); for a planet, a texture whose header doesn't read as a
+//! PNG or fails its budget or its shape. A model that doesn't read is not: the loader read
 //! it first and reported it in [`NewGame::problems`]. Nor is a
 //! placeholder, a missing file or a Git LFS pointer: the loader's
 //! stand-ins fall back unreported the same way, and the LFS list names the
@@ -209,6 +215,11 @@ pub fn world_assets_from(
         }
         match planets.planet(&PlanetRequest::new(id.as_str())) {
             Ok(planet) => {
+                // What it draws if it can't be made at its first draw.
+                let planet = match game.data.stand_in(StandInOf::Stellar(stellar)) {
+                    Some(stand_in) => planet.with_stand_in(stand_in.into()),
+                    None => planet,
+                };
                 let key = PlanetKey(next(planet_list.len()));
                 let reach = planet.reach();
                 table
@@ -428,6 +439,7 @@ mod tests {
     use nova_data::new_game::load;
     use nova_galaxy_format::source::{CountingSource, MemSource};
     use nova_galaxy_media::planet::Sizes;
+    use nova_view::outline::StellarStandIn;
 
     use super::*;
 
@@ -766,11 +778,16 @@ mod tests {
         else {
             panic!("Kestrel Reach is generated");
         };
+        let disc = game
+            .data
+            .stand_in(StandInOf::Stellar(stellar(&game, "kestrel-reach")))
+            .expect("a stand-in");
         assert_eq!(
             assets.planets,
             [(
                 PlanetKey(1),
                 LoadedPlanet::unbaked(look.clone(), Sizes::ENGINE)
+                    .with_stand_in(StellarStandIn::from(disc))
             )]
         );
         assert_eq!(assets.planets[0].1.baked(), None, "nothing baked here");
@@ -798,29 +815,72 @@ mod tests {
             .with_bytes("media/export/pack/pale.png", png)
     }
 
-    #[test]
-    fn a_textured_planet_is_handed_on_unread_and_one_failing_its_header_is_a_problem() {
-        let source = with_a_textured_moon(&nova_galaxy_media::fixture::png(4, 2, &[50; 32]));
-        let game = load(&source, Path::new("sample"));
-        let assets = world_assets(&game, &source);
-        assert_eq!(assets.problems, Vec::<String>::new());
-        let Some(StellarModel::Planet { key, .. }) = assets.models.stellar(stellar(&game, "pale"))
+    /// Pale's planet in `assets`, as `game` keys it.
+    fn pale<'a>(game: &NewGame, assets: &'a WorldAssets) -> (PlanetKey, f32, &'a LoadedPlanet) {
+        let Some(StellarModel::Planet { key, reach }) =
+            assets.models.stellar(stellar(game, "pale"))
         else {
             panic!("Pale's planet");
         };
-        let pale = &assets
-            .planets
-            .iter()
+        let planet = &(assets.planets.iter())
             .find(|(k, _)| *k == key)
             .expect("it")
             .1;
-        assert_eq!(pale.baked(), None, "left for its first draw");
-        let surface = pale
-            .make(&crate::galaxy_planets::GalaxyPlanetFiles::new(&source))
+        (key, reach, planet)
+    }
+
+    const PALE_PNG: &str = "media/export/pack/pale.png";
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn a_textured_planet_is_checked_at_load_and_handed_on_unread() {
+        let memory = with_a_textured_moon(&nova_galaxy_media::fixture::png(4, 2, &[50; 32]));
+        let counting = CountingSource::new(&memory);
+        let game = load(&counting, Path::new("sample"));
+        let assets = world_assets(&game, &counting);
+        assert_eq!(counting.bytes_asked(PALE_PNG), 0, "not read at start-up");
+        assert!(counting.heads_asked(PALE_PNG) >= 1, "its head checked");
+        assert_eq!(assets.problems, Vec::<String>::new());
+        let (_, reach, planet) = pale(&game, &assets);
+        assert_eq!(reach, 1.0, "a texture has no rings or atmosphere");
+        assert_eq!(planet.baked(), None, "left for its first draw");
+        let surface = planet
+            .make(&crate::galaxy_planets::GalaxyPlanetFiles::new(&memory))
             .expect("it reads");
         assert_eq!(surface.surface.rgba, [50, 50, 50, 0].repeat(8));
         assert_eq!(assets.planets.len(), 2, "and Kestrel Reach, unbaked");
+    }
 
+    #[test]
+    fn every_planet_carries_its_stellar_s_stand_in() {
+        let source = with_a_textured_moon(&nova_galaxy_media::fixture::png(4, 2, &[50; 32]));
+        let game = load(&source, Path::new("sample"));
+        let assets = world_assets(&game, &source);
+        for name in ["pale", "kestrel-reach"] {
+            let Some(StellarModel::Planet { key, .. }) =
+                assets.models.stellar(stellar(&game, name))
+            else {
+                panic!("{name}'s planet");
+            };
+            let planet = &(assets.planets.iter())
+                .find(|(k, _)| *k == key)
+                .expect("it")
+                .1;
+            let data = game
+                .data
+                .stand_in(StandInOf::Stellar(stellar(&game, name)))
+                .expect("a stand-in");
+            assert!(matches!(data, StandIn::Disc { .. }), "{name}: a disc");
+            assert_eq!(
+                planet.stand_in(),
+                Some(&StellarStandIn::from(data)),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_texture_failing_its_header_is_a_problem_at_load_and_gets_no_key() {
         let broken = with_a_textured_moon(b"not a png");
         let game = load(&broken, Path::new("sample"));
         let assets = world_assets(&game, &broken);
@@ -834,6 +894,21 @@ mod tests {
                 && problem.ends_with("; it draws its disc"),
             "{problem}"
         );
+    }
+
+    #[test]
+    fn a_texture_that_only_fails_to_decode_gets_a_key_and_no_problem_at_load() {
+        let mut corrupt = nova_galaxy_media::fixture::png(4, 2, &[50; 32])[..33].to_vec();
+        corrupt.extend([0xA5; 40]);
+        let source = with_a_textured_moon(&corrupt);
+        let game = load(&source, Path::new("sample"));
+        let assets = world_assets(&game, &source);
+        assert_eq!(assets.problems, Vec::<String>::new());
+        let (_, _, planet) = pale(&game, &assets);
+        assert!(matches!(
+            planet.make(&crate::galaxy_planets::GalaxyPlanetFiles::new(&source)),
+            Err(PlanetError::Unreadable { .. })
+        ));
     }
 
     #[test]
