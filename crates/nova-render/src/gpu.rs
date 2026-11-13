@@ -290,21 +290,33 @@ pub enum Batch {
     /// 3D models ([`nova_view::DrawCommand::Model`]), drawn in order with
     /// depth and `light` (see [`crate::camera`]): each model's depth is in
     /// its own band, every later one nearer, and the depth buffer is
-    /// cleared at the batch's start.
+    /// cleared at the batch's start. They draw only inside `clip`'s pixels
+    /// ([`Frame::clip_scissor_in`]) when it has one.
     Models {
         /// The light they are lit by.
         light: Light,
         /// The models, in draw order.
         models: Vec<ModelInstance>,
+        /// Where they may draw, in logical units, when they were clipped
+        /// ([`nova_view::DrawCommand::Clipped`]): the meet of every clip
+        /// around each model, all alike in one batch. `None` when they
+        /// weren't.
+        clip: Option<Rect>,
     },
     /// Planets ([`nova_view::DrawCommand::Planet`]), drawn in order lit by
     /// `light` (see [`crate::planet`]), blended as sprites are. They test
-    /// no depth and write none.
+    /// no depth and write none. They draw only inside `clip`'s pixels
+    /// ([`Frame::clip_scissor_in`]) when it has one.
     Planets {
         /// The light they are lit by.
         light: Light,
         /// The planets, in draw order.
         planets: Vec<PlanetInstance>,
+        /// Where they may draw, in logical units, when they were clipped
+        /// ([`nova_view::DrawCommand::Clipped`]): the meet of every clip
+        /// around each planet, all alike in one batch. `None` when they
+        /// weren't.
+        clip: Option<Rect>,
     },
     /// The layered sky ([`nova_view::DrawCommand::Sky`]): its distant
     /// backdrop's puffs, then its stars, far layer first (see
@@ -364,6 +376,17 @@ impl Batch {
             Self::Planets { planets, .. } => planets.len(),
             Self::Sky(stars) => stars.len(),
             Self::SkyImages(images) => images.len(),
+        }
+    }
+
+    /// Where it may draw, in logical units, besides the world's clip: a
+    /// clipped models or planets batch's clip, and `None` for any other
+    /// (a clipped sprite, picture, text run or fill is cut in the core).
+    #[must_use]
+    pub fn clip(&self) -> Option<Rect> {
+        match self {
+            Self::Models { clip, .. } | Self::Planets { clip, .. } => *clip,
+            _ => None,
         }
     }
 }
@@ -1066,10 +1089,12 @@ mod tests {
             Batch::Models {
                 light: Light::STANDARD,
                 models: vec![model; 6],
+                clip: None,
             },
             Batch::Planets {
                 light: Light::STANDARD,
                 planets: vec![planet; 7],
+                clip: None,
             },
             Batch::Sky(vec![
                 StarInstance {
@@ -1112,6 +1137,40 @@ mod tests {
                 ("sky-images", 9)
             ]
         );
+    }
+
+    #[test]
+    fn batch_clip_is_a_models_or_planets_clip_and_none_for_other_kinds() {
+        let clip = Some(logical(1.0, 2.0, 3.0, 4.0));
+        let models = |clip| Batch::Models {
+            light: Light::STANDARD,
+            models: Vec::new(),
+            clip,
+        };
+        let planets = |clip| Batch::Planets {
+            light: Light::STANDARD,
+            planets: Vec::new(),
+            clip,
+        };
+        assert_eq!(models(clip).clip(), clip);
+        assert_eq!(planets(clip).clip(), clip);
+        assert_eq!(models(None).clip(), None);
+        assert_eq!(planets(None).clip(), None);
+        let others = [
+            solid(1.0),
+            Batch::OrFill(vec![quad(0.0, 0.0, 1.0, 1.0)]),
+            Batch::Text(Vec::new()),
+            Batch::Sky(Vec::new()),
+            Batch::SkyImages(Vec::new()),
+            Batch::Sprites {
+                page: PageId(0),
+                blend: Blend::Normal,
+                quads: Vec::new(),
+            },
+        ];
+        for other in others {
+            assert_eq!(other.clip(), None, "{}", other.kind());
+        }
     }
 
     #[test]

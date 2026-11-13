@@ -241,12 +241,16 @@ impl<S: ImageSource> Renderer<S> {
     /// batches are settled ([`crate::camera::band`]). A key with no mesh
     /// draws nothing and is reported once ([`RenderReport::missing_models`]).
     /// A part ([`DrawCommand::Mounted`]) joins the model just before it,
-    /// in its band ([`crate::models`]).
+    /// in its band ([`crate::models`]). A clipped model
+    /// ([`DrawCommand::Clipped`]) is not cropped: its batch carries the
+    /// clip ([`Batch::clip`]), models clipped alike sharing one, and the
+    /// GPU cuts it there ([`Frame::clip_scissor_in`]), its parts with it.
     ///
     /// A planet ([`DrawCommand::Planet`]) is baked, if it was added
     /// unbaked, and uploads its textures the first
     /// frame that draws it ([`Renderer::add_planet`]); consecutive planets
-    /// share a [`Batch::Planets`] ([`crate::planets`]). A key with no
+    /// share a [`Batch::Planets`] ([`crate::planets`]), and a clipped one
+    /// carries its clip as a model does. A key with no
     /// planet draws nothing and is reported once
     /// ([`RenderReport::missing_planets`]).
     ///
@@ -318,12 +322,7 @@ impl<S: ImageSource> Renderer<S> {
             world_space: space,
             batches,
             world,
-            world_clip: list.world_clip().map(|clip| Rect {
-                x: clip.min.x,
-                y: clip.min.y,
-                w: clip.width(),
-                h: clip.height(),
-            }),
+            world_clip: list.world_clip().map(rect_of),
             world_tail: tail,
         });
         report
@@ -517,7 +516,8 @@ impl<S: ImageSource> Renderer<S> {
                     push_or_fill(batches, area, color);
                 }
             }
-            // Drawn uncut by a clip, as a line or a triangle is.
+            // Cut by a clip on the GPU: its batch carries the clip, which
+            // the adapter scissors it to.
             DrawCommand::Model {
                 model,
                 ref pose,
@@ -525,15 +525,16 @@ impl<S: ImageSource> Renderer<S> {
                 colorize,
             } => {
                 let missing = &mut report.missing_models;
-                let shown = (pose, alpha, colorize);
+                let shown = (pose, alpha, colorize, clip.map(rect_of));
                 (self.models).draw_model(model, shown, logical, batches, gpu, missing);
             }
-            // Drawn uncut by a clip, as a model is.
+            // Cut by a clip on the GPU, as a model is.
             DrawCommand::Planet { planet, ref pose } => {
                 let missing = &mut report.missing_planets;
-                (self.planets).draw(planet, pose, batches, gpu, missing);
+                let placed = (pose, clip.map(rect_of));
+                (self.planets).draw(planet, placed, batches, gpu, missing);
             }
-            // Drawn uncut by a clip, as a model is, in a batch of its own.
+            // Drawn uncut by a clip, as a line is, in a batch of its own.
             DrawCommand::Sky { ref sky } => {
                 let look = self.skies.look(sky.seed);
                 let stars = sky::instances(sky, &look, logical, texels);
@@ -553,10 +554,7 @@ impl<S: ImageSource> Renderer<S> {
                 clip: inner,
                 ref command,
             } => {
-                let clip = match clip {
-                    Some(outer) => meet(outer, inner),
-                    None => Some(inner),
-                };
+                let clip = meet(clip.unwrap_or(inner), inner);
                 // A clip with no area draws nothing at all.
                 if let Some(clip) = clip {
                     self.draw(command, Some(clip), target, batches, gpu, report);
@@ -928,6 +926,16 @@ impl Layers {
 }
 
 /// Where `a` and `b` overlap, if they share any area.
+/// `bounds` as a frame carries a logical rect.
+fn rect_of(bounds: Bounds) -> Rect {
+    Rect {
+        x: bounds.min.x,
+        y: bounds.min.y,
+        w: bounds.width(),
+        h: bounds.height(),
+    }
+}
+
 fn meet(a: Bounds, b: Bounds) -> Option<Bounds> {
     let min = Point::new(a.min.x.max(b.min.x), a.min.y.max(b.min.y));
     let max = Point::new(a.max.x.min(b.max.x), a.max.y.min(b.max.y));

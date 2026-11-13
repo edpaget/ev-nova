@@ -29,15 +29,21 @@
 //! each bake to the frame the planet scrolls into view.
 //!
 //! Consecutive planets share one [`Batch::Planets`], lit by
-//! [`PLANET_LIGHT`]; any other batch between them splits it, so the list's
-//! order holds: planets test no depth and write none, and a models batch
-//! after them clears its own.
+//! [`PLANET_LIGHT`], while they are clipped alike
+//! ([`nova_view::DrawCommand::Clipped`]): the batch carries their clip
+//! ([`Batch::clip`]), which the adapter scissors it to, so a planet with
+//! another clip, or none, opens a batch of its own. Any other batch
+//! between them splits it too, so the list's order holds: planets test no
+//! depth and write none, and a models batch after them clears its own. A
+//! planet clipped to no area draws nothing and is not made ready; one
+//! inside a clip with area is made ready even when it lies wholly outside
+//! the clip.
 
 use std::collections::{HashMap, HashSet};
 
 use nova_view::{PlanetKey, PlanetPose};
 
-use crate::gpu::{Batch, Gpu, PlanetId, PlanetInstance};
+use crate::gpu::{Batch, Gpu, PlanetId, PlanetInstance, Rect};
 use crate::planet::{self, PLANET_LIGHT};
 use crate::planet_source::LoadedPlanet;
 
@@ -82,15 +88,17 @@ impl Planets {
         );
     }
 
-    /// Draws planet `key` at `pose` onto `batches`: its instance, the
-    /// planet baked first if it was added unbaked and its textures
-    /// uploaded through `gpu` if need be, and a key with no planet pushed
-    /// onto `missing` once. A pose [`planet::quad`] refuses draws nothing,
-    /// and bakes and uploads nothing.
+    /// Draws planet `key` at `pose`, only inside `clip` when it has one,
+    /// onto `batches`: its instance, the planet baked first if it was
+    /// added unbaked and its textures uploaded through `gpu` if need be,
+    /// and a key with no planet pushed onto `missing` once. A pose
+    /// [`planet::quad`] refuses draws nothing, and bakes and uploads
+    /// nothing. A planet wholly outside its clip is still made ready: the
+    /// GPU's scissor, not the core, cuts it.
     pub(crate) fn draw(
         &mut self,
         key: PlanetKey,
-        pose: &PlanetPose,
+        (pose, clip): (&PlanetPose, Option<Rect>),
         batches: &mut Vec<Batch>,
         gpu: &mut impl Gpu,
         missing: &mut Vec<PlanetKey>,
@@ -114,19 +122,24 @@ impl Planets {
             gpu.upload_planet(held.id, &planet::textures(surface));
             held.uploaded = true;
         }
-        push(batches, instance);
+        push(batches, instance, clip);
     }
 }
 
-/// Appends `planet`, extending the last batch when it is a planets batch.
-fn push(batches: &mut Vec<Batch>, planet: PlanetInstance) {
-    if let Some(Batch::Planets { planets, .. }) = batches.last_mut() {
-        planets.push(planet);
-    } else {
-        batches.push(Batch::Planets {
+/// Appends `planet`, drawn only inside `clip` when it has one, extending
+/// the last batch when it is a planets batch clipped alike.
+fn push(batches: &mut Vec<Batch>, planet: PlanetInstance, clip: Option<Rect>) {
+    match batches.last_mut() {
+        Some(Batch::Planets {
+            planets,
+            clip: last,
+            ..
+        }) if *last == clip => planets.push(planet),
+        _ => batches.push(Batch::Planets {
             light: PLANET_LIGHT,
             planets: vec![planet],
-        });
+            clip,
+        }),
     }
 }
 
@@ -264,6 +277,7 @@ mod tests {
         let expected = vec![Batch::Planets {
             light: PLANET_LIGHT,
             planets: vec![instance(&pose(20.0, 20.0))],
+            clip: None,
         }];
         assert_eq!(first.batches, expected);
         assert_eq!(second.batches, expected);
@@ -337,6 +351,7 @@ mod tests {
         let expected = vec![Batch::Planets {
             light: PLANET_LIGHT,
             planets: vec![instance],
+            clip: None,
         }];
         assert_eq!(first.batches, expected);
         let second = frame_of(&mut renderer, &list, &mut gpu);
@@ -401,6 +416,7 @@ mod tests {
             [Batch::Planets {
                 light: PLANET_LIGHT,
                 planets: vec![instance(1, &first, 20.0), instance(2, &second, 40.0)],
+                clip: None,
             }]
         );
     }
@@ -482,6 +498,7 @@ mod tests {
             [Batch::Planets {
                 light: PLANET_LIGHT,
                 planets: vec![instance(&pose(10.0, 10.0)), instance(&pose(30.0, 10.0))],
+                clip: None,
             }]
         );
         let mut list = DrawList::new();
@@ -577,32 +594,113 @@ mod tests {
         assert_eq!(frame.batches[1].kind(), "planets");
     }
 
+    fn bounds(x0: f32, y0: f32, x1: f32, y1: f32) -> Bounds {
+        Bounds {
+            min: Point::new(x0, y0),
+            max: Point::new(x1, y1),
+        }
+    }
+
+    /// `bounds` as a batch carries it.
+    fn rect_of(bounds: Bounds) -> crate::Rect {
+        crate::Rect {
+            x: bounds.min.x,
+            y: bounds.min.y,
+            w: bounds.width(),
+            h: bounds.height(),
+        }
+    }
+
+    fn globe_at(pose: PlanetPose) -> DrawCommand {
+        DrawCommand::Planet {
+            planet: GLOBE,
+            pose,
+        }
+    }
+
     #[test]
-    fn a_clipped_planet_draws_uncut() {
+    fn a_clipped_planet_carries_its_clip_on_its_batch() {
         // A clip far smaller than the planet's square.
-        let clip = Bounds {
-            min: Point::new(0.0, 0.0),
-            max: Point::new(13.0, 13.0),
-        };
+        let clip = bounds(0.0, 0.0, 13.0, 13.0);
         let mut clipped = DrawList::new();
-        clipped.clipped(
-            clip,
-            DrawCommand::Planet {
-                planet: GLOBE,
-                pose: pose(12.0, 12.0),
-            },
-        );
-        let mut plain = DrawList::new();
-        plain.planet(GLOBE, pose(12.0, 12.0));
-        let a = frame_of(&mut renderer(), &clipped, &mut RecordingGpu::new());
-        let b = frame_of(&mut renderer(), &plain, &mut RecordingGpu::new());
-        assert_eq!(a.batches, b.batches);
+        clipped.clipped(clip, globe_at(pose(12.0, 12.0)));
+        let frame = frame_of(&mut renderer(), &clipped, &mut RecordingGpu::new());
         assert_eq!(
-            a.batches,
+            frame.batches,
             [Batch::Planets {
                 light: PLANET_LIGHT,
                 planets: vec![instance(&pose(12.0, 12.0))],
+                clip: Some(crate::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 13.0,
+                    h: 13.0
+                }),
             }]
         );
+    }
+
+    #[test]
+    fn planets_clipped_alike_share_a_batch_and_another_clip_splits_it() {
+        let (c1, c2) = (bounds(0.0, 0.0, 20.0, 20.0), bounds(10.0, 0.0, 40.0, 30.0));
+        let mut list = DrawList::new();
+        list.clipped(c1, globe_at(pose(10.0, 10.0)))
+            .clipped(c1, globe_at(pose(14.0, 10.0)))
+            .clipped(c2, globe_at(pose(30.0, 10.0)))
+            .planet(GLOBE, pose(40.0, 10.0));
+        let frame = frame_of(&mut renderer(), &list, &mut RecordingGpu::new());
+        let batch = |clip, poses: &[PlanetPose]| Batch::Planets {
+            light: PLANET_LIGHT,
+            planets: poses.iter().map(instance).collect(),
+            clip,
+        };
+        assert_eq!(
+            frame.batches,
+            [
+                batch(Some(rect_of(c1)), &[pose(10.0, 10.0), pose(14.0, 10.0)]),
+                batch(Some(rect_of(c2)), &[pose(30.0, 10.0)]),
+                batch(None, &[pose(40.0, 10.0)]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_clipped_planet_wholly_outside_its_clip_is_still_made_ready() {
+        let mut renderer = renderer();
+        renderer.add_planet(PlanetKey(2), unbaked(77));
+        let clip = bounds(0.0, 0.0, 10.0, 10.0);
+        let mut list = DrawList::new();
+        list.clipped(
+            clip,
+            DrawCommand::Planet {
+                planet: PlanetKey(2),
+                pose: pose(40.0, 30.0),
+            },
+        );
+        let mut gpu = RecordingGpu::new();
+        let frame = frame_of(&mut renderer, &list, &mut gpu);
+        assert!(is_baked(&renderer, PlanetKey(2)));
+        assert_eq!(uploads(&gpu).len(), 1);
+        assert_eq!(frame.batches[0].clip(), Some(rect_of(clip)));
+        assert_eq!(frame.batches[0].draws(), 1);
+        frame_of(&mut renderer, &list, &mut gpu);
+        assert_eq!(uploads(&gpu).len(), 1, "once");
+    }
+
+    #[test]
+    fn a_planet_clipped_to_no_area_draws_bakes_and_uploads_nothing() {
+        let mut renderer = renderer();
+        renderer.add_planet(PlanetKey(2), unbaked(77));
+        let mut list = DrawList::new();
+        let planet = DrawCommand::Planet {
+            planet: PlanetKey(2),
+            pose: pose(12.0, 12.0),
+        };
+        list.clipped(bounds(5.0, 0.0, 30.0, 0.0), planet);
+        let mut gpu = RecordingGpu::new();
+        let frame = frame_of(&mut renderer, &list, &mut gpu);
+        assert_eq!(frame.batches, []);
+        assert_eq!(uploads(&gpu), []);
+        assert!(!is_baked(&renderer, PlanetKey(2)));
     }
 }

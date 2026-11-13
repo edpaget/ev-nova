@@ -1256,7 +1256,7 @@ impl<'a> Layout<'a> {
                     renderer: self.text.len() - 1,
                 }
             }
-            Batch::Models { light, models } => {
+            Batch::Models { light, models, .. } => {
                 let start = self.models.len() as u32;
                 self.models
                     .extend(models.iter().map(|model| ModelData::new(model, *light)));
@@ -1266,7 +1266,7 @@ impl<'a> Layout<'a> {
                     runs: draw_runs(models),
                 }
             }
-            Batch::Planets { light, planets } => {
+            Batch::Planets { light, planets, .. } => {
                 let start = self.planets.len() as u32;
                 self.planets
                     .extend(planets.iter().map(|planet| PlanetData::new(planet, *light)));
@@ -2449,6 +2449,7 @@ mod tests {
         Batch::Models {
             light: Light::STANDARD,
             models: meshes.iter().copied().map(model).collect(),
+            clip: None,
         }
     }
 
@@ -2517,6 +2518,7 @@ mod tests {
             Batch::Models {
                 light: Light::STANDARD,
                 models: batch.clone(),
+                clip: None,
             },
         ]);
         let layout = lay_out(&frame);
@@ -2923,6 +2925,7 @@ mod tests {
             ..frame_of(vec![Batch::Models {
                 light: Light::STANDARD,
                 models: vec![instance],
+                clip: None,
             }])
         };
         // Straight on, only +z shows.
@@ -2984,6 +2987,7 @@ mod tests {
             ..frame_of(vec![Batch::Models {
                 light: Light::STANDARD,
                 models: vec![instance],
+                clip: None,
             }])
         };
         let texture = ModelTexture::new(1, 1, GREEN.to_vec()).expect("one texel");
@@ -3067,6 +3071,7 @@ mod tests {
             ..frame_of(vec![Batch::Models {
                 light: Light::STANDARD,
                 models: vec![instance],
+                clip: None,
             }])
         };
         let texture =
@@ -3170,6 +3175,7 @@ mod tests {
             ..frame_of(vec![Batch::Models {
                 light: Light::STANDARD,
                 models: vec![instance],
+                clip: None,
             }])
         };
         let drawn = |upscaler| {
@@ -3207,16 +3213,19 @@ mod tests {
             Batch::Models {
                 light: Light::STANDARD,
                 models: vec![cube(8.0)],
+                clip: None,
             },
             sprites(Blend::Normal, vec![quad(1.0)]),
             Batch::Models {
                 light: Light::STANDARD,
                 models: vec![cube(12.0), cube(20.0)],
+                clip: None,
             },
             sprites(Blend::Or, vec![quad(3.0)]),
             Batch::Models {
                 light: Light::STANDARD,
                 models: vec![cube(24.0)],
+                clip: None,
             },
         ];
         for batch in &mut batches {

@@ -20,17 +20,25 @@
 //! sit only on parts with no texture coordinates uploads none either.
 //!
 //! Consecutive models share one [`Batch::Models`], lit by
-//! [`Light::STANDARD`]. Once a frame's batches are settled, each models
-//! batch's instances get their depth bands ([`camera::band`]).
+//! [`Light::STANDARD`], while they are clipped alike
+//! ([`nova_view::DrawCommand::Clipped`]): the batch carries their clip
+//! ([`Batch::clip`]), which the adapter scissors it to, so a model with
+//! another clip, or none, opens a batch of its own, and a pass with it. A
+//! model clipped to no area draws nothing and uploads nothing; one inside
+//! a clip with area stays in its batch even when it lies wholly outside
+//! the clip. Once a frame's batches are settled, each models batch's
+//! instances get their depth bands ([`camera::band`]).
 //!
 //! A part ([`nova_view::DrawCommand::Mounted`]) mounts on the model drawn
 //! just before it ([`Models::draw_model`], [`Models::draw_part`]): while
 //! nothing else has been drawn since, each part joins that model's
 //! instances in its batch, and the model and its parts are placed again
 //! over the furthest any of them reaches ([`camera::reach`]), sharing one
-//! band. Any other command ([`Models::end_group`]), a model that draws
-//! nothing, a new layer's run or a new frame, each starting with no
-//! batch, leaves the next part nothing to mount on.
+//! band. A part is cut by its model's clip, whatever its own clip, as it
+//! takes its model's alpha and colorize. Any other command
+//! ([`Models::end_group`]), a model that draws nothing, a new layer's run
+//! or a new frame, each starting with no batch, leaves the next part
+//! nothing to mount on.
 //!
 //! A model drawn at an alpha ([`nova_view::DrawCommand::Model`]) carries
 //! it on its instance, held as [`camera::alpha`] holds it, and its parts
@@ -51,7 +59,7 @@ use std::ops::Range;
 use nova_view::{Colorize, ModelKey, ModelPose, Mounting};
 
 use crate::camera::{self, Light};
-use crate::gpu::{Batch, Gpu, ModelInstance, ModelTextureId, NO_COLORIZE, colorize_instance};
+use crate::gpu::{Batch, Gpu, ModelInstance, ModelTextureId, NO_COLORIZE, Rect, colorize_instance};
 use crate::model::{Mesh, MeshId};
 use crate::model_texture::ModelTexture;
 use crate::resident::Resident;
@@ -112,16 +120,17 @@ impl Group {
 
 impl Models {
     /// Draws model `key` at `pose` and `alpha`, mixed toward `colorize`
-    /// when it has one that mixes ([`colorize_instance`]), onto `batches`
-    /// in the `logical` space: its instance, uploaded first through `gpu`
-    /// if need be, and a key with no mesh pushed onto `missing` once. It
-    /// is the model the parts drawn next mount on, at its alpha and with
-    /// its colorize, or, drawing nothing (an alpha [`camera::alpha`]
-    /// refuses among the rest), leaves them nothing to mount on.
+    /// when it has one that mixes ([`colorize_instance`]), and only inside
+    /// `clip` when it has one, onto `batches` in the `logical` space: its
+    /// instance, uploaded first through `gpu` if need be, and a key with no
+    /// mesh pushed onto `missing` once. It is the model the parts drawn
+    /// next mount on, at its alpha, with its colorize and in its clip, or,
+    /// drawing nothing (an alpha [`camera::alpha`] refuses among the rest),
+    /// leaves them nothing to mount on.
     pub(crate) fn draw_model(
         &mut self,
         key: ModelKey,
-        (pose, alpha, colorize): (&ModelPose, f32, Option<Colorize>),
+        (pose, alpha, colorize, clip): (&ModelPose, f32, Option<Colorize>, Option<Rect>),
         logical: LogicalSize,
         batches: &mut Vec<Batch>,
         gpu: &mut impl Gpu,
@@ -145,7 +154,7 @@ impl Models {
             alpha,
             colorize: colorize.map_or(NO_COLORIZE, colorize_instance),
         };
-        push(batches, group.shown(instance));
+        push(batches, group.shown(instance), clip);
         if let Some(Batch::Models { models, .. }) = batches.last() {
             group.start = models.len() - 1;
             self.group = Some(group);
@@ -252,15 +261,18 @@ impl Models {
     }
 }
 
-/// Appends `model`, extending the last batch when it is a models batch.
-pub(crate) fn push(batches: &mut Vec<Batch>, model: ModelInstance) {
-    if let Some(Batch::Models { models, .. }) = batches.last_mut() {
-        models.push(model);
-    } else {
-        batches.push(Batch::Models {
+/// Appends `model`, drawn only inside `clip` when it has one, extending
+/// the last batch when it is a models batch clipped alike.
+pub(crate) fn push(batches: &mut Vec<Batch>, model: ModelInstance, clip: Option<Rect>) {
+    match batches.last_mut() {
+        Some(Batch::Models {
+            models, clip: last, ..
+        }) if *last == clip => models.push(model),
+        _ => batches.push(Batch::Models {
             light: Light::STANDARD,
             models: vec![model],
-        });
+            clip,
+        }),
     }
 }
 
@@ -429,6 +441,7 @@ mod tests {
         let expected = vec![Batch::Models {
             light: Light::STANDARD,
             models: banded(vec![instance(&pose(12.0, 12.0))]),
+            clip: None,
         }];
         assert_eq!(first.batches, expected);
         assert_eq!(second.batches, expected);
@@ -450,6 +463,7 @@ mod tests {
                     instance(&pose(30.0, 20.0)),
                     instance(&pose(40.0, 10.0)),
                 ]),
+                clip: None,
             }]
         );
     }
@@ -469,6 +483,7 @@ mod tests {
             Batch::Models {
                 light: Light::STANDARD,
                 models: banded(vec![instance(&pose(30.0, 20.0))]),
+                clip: None,
             }
         );
     }
@@ -619,20 +634,162 @@ mod tests {
         assert_eq!(uploads(&gpu), [MeshId(1), MeshId(0)]);
     }
 
+    fn bounds(x0: f32, y0: f32, x1: f32, y1: f32) -> Bounds {
+        Bounds {
+            min: Point::new(x0, y0),
+            max: Point::new(x1, y1),
+        }
+    }
+
+    /// `bounds` as a batch carries it.
+    fn rect_of(bounds: Bounds) -> crate::Rect {
+        crate::Rect {
+            x: bounds.min.x,
+            y: bounds.min.y,
+            w: bounds.width(),
+            h: bounds.height(),
+        }
+    }
+
+    /// The clip of each of `frame`'s models batches, and its instances.
+    fn clipped_models(frame: &Frame) -> Vec<(Option<crate::Rect>, Vec<ModelInstance>)> {
+        (frame.batches.iter())
+            .map(|batch| match batch {
+                Batch::Models { models, clip, .. } => (*clip, models.clone()),
+                other => panic!("a models batch: {other:?}"),
+            })
+            .collect()
+    }
+
     #[test]
-    fn a_clipped_model_draws_uncut() {
-        let clip = Bounds {
-            min: Point::new(0.0, 0.0),
-            max: Point::new(13.0, 13.0),
-        };
+    fn a_clipped_model_carries_its_clip_on_its_batch() {
+        let clip = bounds(0.0, 0.0, 13.0, 13.0);
         let mut clipped = DrawList::new();
         clipped.clipped(clip, DrawCommand::model(CUBE, pose(12.0, 12.0)));
         let mut plain = DrawList::new();
         plain.model(CUBE, pose(12.0, 12.0));
         let a = frame_of(&mut renderer(), &clipped, &mut RecordingGpu::new());
         let b = frame_of(&mut renderer(), &plain, &mut RecordingGpu::new());
-        assert_eq!(a.batches, b.batches);
-        assert_eq!(a.batches.len(), 1);
+        assert_eq!(models_of(&a), models_of(&b), "the instances are uncut");
+        assert_eq!(
+            clipped_models(&a),
+            [(
+                Some(crate::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 13.0,
+                    h: 13.0
+                }),
+                models_of(&b)
+            )]
+        );
+        assert_eq!(clipped_models(&b)[0].0, None);
+    }
+
+    #[test]
+    fn models_clipped_alike_share_a_batch_and_another_clip_splits_it() {
+        let (c1, c2) = (bounds(0.0, 0.0, 20.0, 20.0), bounds(10.0, 0.0, 40.0, 30.0));
+        let mut list = DrawList::new();
+        list.clipped(c1, DrawCommand::model(CUBE, pose(12.0, 12.0)))
+            .clipped(c1, DrawCommand::model(CUBE, pose(14.0, 12.0)))
+            .clipped(c2, DrawCommand::model(CUBE, pose(30.0, 20.0)))
+            .model(CUBE, pose(40.0, 10.0));
+        let frame = frame_of(&mut renderer(), &list, &mut RecordingGpu::new());
+        assert_eq!(
+            clipped_models(&frame),
+            [
+                (
+                    Some(rect_of(c1)),
+                    banded(vec![
+                        instance(&pose(12.0, 12.0)),
+                        instance(&pose(14.0, 12.0))
+                    ])
+                ),
+                (Some(rect_of(c2)), banded(vec![instance(&pose(30.0, 20.0))])),
+                (None, banded(vec![instance(&pose(40.0, 10.0))])),
+            ]
+        );
+    }
+
+    #[test]
+    fn nested_clips_meet_on_a_models_batch() {
+        let (outer, inner) = (bounds(0.0, 0.0, 20.0, 20.0), bounds(10.0, 5.0, 40.0, 30.0));
+        let mut list = DrawList::new();
+        list.clipped(
+            outer,
+            DrawCommand::Clipped {
+                clip: inner,
+                command: Box::new(DrawCommand::model(CUBE, pose(12.0, 12.0))),
+            },
+        );
+        let frame = frame_of(&mut renderer(), &list, &mut RecordingGpu::new());
+        let met = rect_of(bounds(10.0, 5.0, 20.0, 20.0));
+        assert_eq!(clipped_models(&frame)[0].0, Some(met));
+    }
+
+    #[test]
+    fn a_model_clipped_to_no_area_draws_and_uploads_nothing() {
+        let model = || DrawCommand::model(CUBE, pose(12.0, 12.0));
+        // A clip with no width, and two clips that meet nowhere.
+        let mut list = DrawList::new();
+        list.clipped(bounds(5.0, 0.0, 5.0, 13.0), model()).clipped(
+            bounds(0.0, 0.0, 4.0, 4.0),
+            DrawCommand::Clipped {
+                clip: bounds(8.0, 8.0, 12.0, 12.0),
+                command: Box::new(model()),
+            },
+        );
+        let mut gpu = RecordingGpu::new();
+        let frame = frame_of(&mut renderer(), &list, &mut gpu);
+        assert_eq!(frame.batches, []);
+        assert_eq!(uploads(&gpu), []);
+    }
+
+    #[test]
+    fn a_clipped_faded_model_keeps_its_runs() {
+        let part = on([0.0, 0.0, 0.5], 0.0);
+        let clip = bounds(0.0, 0.0, 30.0, 30.0);
+        let draw = |list: &mut DrawList, clip: Option<Bounds>| {
+            let commands = [
+                DrawCommand::model(CUBE, pose(12.0, 12.0)),
+                DrawCommand::faded_model(CUBE, pose(20.0, 12.0), 0.5),
+                DrawCommand::Mounted {
+                    model: PART,
+                    mounting: part,
+                },
+                DrawCommand::model(CUBE, pose(30.0, 20.0)),
+            ];
+            for command in commands {
+                match clip {
+                    Some(clip) => list.clipped(clip, command),
+                    None => list.push(command),
+                };
+            }
+        };
+        let (mut clipped, mut plain) = (DrawList::new(), DrawList::new());
+        draw(&mut clipped, Some(clip));
+        draw(&mut plain, None);
+        let a = frame_of(&mut with_part(), &clipped, &mut RecordingGpu::new());
+        let b = frame_of(&mut with_part(), &plain, &mut RecordingGpu::new());
+        assert_eq!(models_of(&a), models_of(&b));
+        assert_eq!(
+            draw_runs(&models_of(&a)),
+            [run(0..1, false), run(1..3, true), run(3..4, false)]
+        );
+    }
+
+    #[test]
+    fn a_clipped_world_model_is_world_and_keeps_its_clip() {
+        let (world, clip) = (bounds(0.0, 0.0, 50.0, 40.0), bounds(4.0, 4.0, 20.0, 20.0));
+        let mut list = DrawList::new();
+        list.sprite(ImageKey::sprite(1, 0), Point::new(4.0, 4.0), Color::WHITE)
+            .world_in(world, |list| {
+                list.clipped(clip, DrawCommand::model(CUBE, pose(12.0, 12.0)));
+            });
+        let frame = frame_of(&mut renderer(), &list, &mut RecordingGpu::new());
+        assert_eq!(frame.world, [1]);
+        assert_eq!(frame.batches[1].clip(), Some(rect_of(clip)));
+        assert_eq!(frame.world_clip, Some(rect_of(world)));
     }
 
     #[test]
@@ -648,6 +805,7 @@ mod tests {
         let one = |pose| Batch::Models {
             light: Light::STANDARD,
             models: banded(vec![instance(&pose)]),
+            clip: None,
         };
         assert_eq!(
             frame.batches,
@@ -996,6 +1154,7 @@ mod tests {
             [Batch::Models {
                 light: Light::STANDARD,
                 models: banded(vec![instance(&pose(12.0, 12.0))]),
+                clip: None,
             }]
         );
         // With no model before it, it is still reported.
@@ -1036,34 +1195,33 @@ mod tests {
     }
 
     #[test]
-    fn a_clipped_hull_and_its_clipped_part_draw_as_unclipped() {
-        let clip = Bounds {
-            min: Point::new(0.0, 0.0),
-            max: Point::new(13.0, 13.0),
-        };
+    fn a_part_takes_its_models_clip() {
+        let clip = bounds(0.0, 0.0, 13.0, 13.0);
         let part = on([0.3, 0.0, 0.5], 0.4);
-        let mut clipped = DrawList::new();
-        clipped
-            .clipped(clip, DrawCommand::model(CUBE, pose(12.0, 12.0)))
-            .clipped(
-                clip,
-                DrawCommand::Mounted {
-                    model: PART,
-                    mounting: part,
-                },
-            );
-        let mut plain = DrawList::new();
-        plain.model(CUBE, pose(12.0, 12.0)).mounted(PART, part);
-        assert_eq!(batches(with_part(), &clipped), batches(with_part(), &plain));
-        assert_eq!(
-            models_of(&frame_of(
-                &mut with_part(),
-                &plain,
-                &mut RecordingGpu::new()
-            ))
-            .len(),
-            2
-        );
+        let mounted = || DrawCommand::Mounted {
+            model: PART,
+            mounting: part,
+        };
+        let expected = [(
+            Some(rect_of(clip)),
+            banded(group(&pose(12.0, 12.0), &[part])),
+        )];
+        // The part clipped alike, unclipped, or clipped to another rect
+        // that overlaps its model's: it joins the model's batch, in its
+        // band, cut by the model's clip.
+        let other = bounds(5.0, 5.0, 30.0, 30.0);
+        for (at, part_clip) in [Some(clip), None, Some(other)].into_iter().enumerate() {
+            let mut list = DrawList::new();
+            list.clipped(clip, DrawCommand::model(CUBE, pose(12.0, 12.0)));
+            match part_clip {
+                Some(part_clip) => list.clipped(part_clip, mounted()),
+                None => list.push(mounted()),
+            };
+            let frame = frame_of(&mut with_part(), &list, &mut RecordingGpu::new());
+            let models = clipped_models(&frame);
+            assert_eq!(models, expected, "part {at}");
+            assert!(models[0].1[1].shares_band, "part {at}");
+        }
     }
 
     #[test]
