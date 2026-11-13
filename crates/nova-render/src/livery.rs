@@ -48,7 +48,7 @@
 //! crate's slot ([`crate::galaxy_models`]).
 
 use crate::model::{Mesh, Vertex};
-use crate::model_source::{LoadedModel, Material, linear, vertex_color};
+use crate::model_source::{LoadedModel, Material, Part, linear, vertex_color};
 
 /// A livery slot: which of a livery's colours paints a material.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -113,10 +113,7 @@ pub fn painted(model: &LoadedModel, livery: &Livery) -> LoadedModel {
         .parts
         .iter()
         .map(|part| {
-            let painted = part
-                .material
-                .and_then(|at| materials.get(at))
-                .filter(|m| m.paint.is_some());
+            let painted = paint_of(part, &materials);
             let mut part = part.clone();
             if let Some(material) = painted {
                 part.mesh = recolored(&part.mesh, vertex_color(material.base_color));
@@ -129,6 +126,27 @@ pub fn painted(model: &LoadedModel, livery: &Livery) -> LoadedModel {
         materials,
         textures: model.textures.clone(),
     }
+}
+
+/// Whether a livery would paint any of `model`: some part of it is drawn
+/// in a material with a slot. When none is, [`painted`] leaves every part,
+/// and so the model's mesh, as it was.
+#[must_use]
+pub(crate) fn takes_paint(model: &LoadedModel) -> bool {
+    model
+        .parts
+        .iter()
+        .any(|part| paint_of(part, &model.materials).is_some())
+}
+
+/// The material of `materials` that paints `part`: the one it is drawn
+/// in, when that has a slot. The one rule for which parts a livery paints
+/// (see the [module docs](self)): [`painted`] rebakes the parts it names,
+/// and [`takes_paint`] asks whether it names any.
+fn paint_of<'a>(part: &Part, materials: &'a [Material]) -> Option<&'a Material> {
+    part.material
+        .and_then(|at| materials.get(at))
+        .filter(|material| material.paint.is_some())
 }
 
 /// `mesh` with every vertex coloured `color`.
@@ -147,7 +165,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::model_source::{Part, Texture};
+    use crate::model_source::Texture;
     use crate::model_texture::ModelTexture;
 
     /// Three liveries' colours apart in every slot and channel.
@@ -338,6 +356,49 @@ mod tests {
             [Some(0), Some(1), None, Some(0), Some(1), None],
         );
         assert_eq!(painted(&model, &LEAGUE), model);
+    }
+
+    #[test]
+    fn a_model_with_a_part_in_a_slotted_material_takes_paint() {
+        assert!(takes_paint(&slotted()));
+        // One painted part among unpainted ones is enough.
+        let one = cube(
+            vec![
+                material("dark", None),
+                material("metal", Some(PaintSlot::Trim)),
+            ],
+            [Some(0), None, Some(9), Some(0), None, Some(1)],
+        );
+        assert!(takes_paint(&one));
+        assert_ne!(painted(&one, &LEAGUE).mesh(), one.mesh());
+    }
+
+    #[test]
+    fn a_model_with_no_part_in_a_slotted_material_takes_no_paint() {
+        // Materials with no slot, no material, and an index out of range.
+        let unslotted = cube(
+            vec![material("dark", None), material("glass", None)],
+            [Some(0), Some(1), None, Some(9), Some(1), None],
+        );
+        assert!(!takes_paint(&unslotted));
+        assert_eq!(painted(&unslotted, &LEAGUE), unslotted);
+        // A slotted material no part is drawn in paints no part.
+        let undrawn = cube(
+            vec![
+                material("dark", None),
+                material("metal", Some(PaintSlot::Primary)),
+            ],
+            [Some(0), None, Some(9), Some(0), None, Some(2)],
+        );
+        assert!(!takes_paint(&undrawn));
+        assert_eq!(painted(&undrawn, &LEAGUE).parts, undrawn.parts);
+        assert_eq!(painted(&undrawn, &LEAGUE).mesh(), undrawn.mesh());
+        // No parts at all.
+        assert!(!takes_paint(&LoadedModel {
+            parts: Vec::new(),
+            materials: vec![material("metal", Some(PaintSlot::Primary))],
+            textures: Vec::new(),
+        }));
     }
 
     #[test]

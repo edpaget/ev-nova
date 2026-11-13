@@ -69,7 +69,7 @@ use nova_view::{ModelKey, PlanetKey};
 
 use crate::galaxy_models::{GalaxyModels, ship_livery, ship_request, station_livery};
 use crate::galaxy_planets::GalaxyPlanets;
-use crate::livery::{Livery, painted};
+use crate::livery::{Livery, painted, takes_paint};
 use crate::model::Mesh;
 use crate::model_source::{LoadedModel, ModelError, ModelRequest, ModelSource};
 use crate::new_game_sky::sky_looks;
@@ -310,9 +310,9 @@ impl<'a, M: ModelSource> Keyring<'a, M> {
 
     /// The key of `request`'s model in `livery`, handing one out with its
     /// mesh the first time; none when the model doesn't load. A livery on
-    /// a model that draws no part in a material with a slot paints
-    /// nothing, so it takes the unpainted key, and no copy of its mesh is
-    /// made.
+    /// a model that takes no paint ([`takes_paint`], the livery module's
+    /// rule) paints nothing, so it takes the unpainted key, and no copy of
+    /// its mesh is made.
     fn key(&mut self, request: &ModelRequest, livery: Option<Livery>) -> Option<ModelKey> {
         let length = request.length.map(f32::to_bits);
         let read = (request.asset.clone(), length);
@@ -365,16 +365,6 @@ impl<'a, M: ModelSource> Keyring<'a, M> {
     fn finish(self) -> (Vec<(ModelKey, Mesh)>, Vec<String>) {
         (self.meshes, self.problems)
     }
-}
-
-/// Whether a livery would paint any of `model`: some part of it is drawn
-/// in a material with a slot.
-fn takes_paint(model: &LoadedModel) -> bool {
-    model.parts.iter().any(|part| {
-        part.material
-            .and_then(|at| model.materials.get(at))
-            .is_some_and(|material| material.paint.is_some())
-    })
 }
 
 /// Whether `error` is news to report (see the module docs). A model that
