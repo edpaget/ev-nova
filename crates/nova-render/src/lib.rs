@@ -34,14 +34,15 @@
 //!   carried (metallic, roughness); its fake and contract check behind
 //!   the `recording` feature.
 //! - `planets`: the [`Renderer`]'s planets by [`nova_view::PlanetKey`]
-//!   ([`Renderer::add_planet`]), their textures uploaded the first frame
-//!   that draws them ([`Gpu::upload_planet`]), and the [`Batch::Planets`]
-//!   a list's planets become.
+//!   ([`Renderer::add_planet`]), each baked, if it was added unbaked, and
+//!   its textures uploaded the first frame that draws it
+//!   ([`Gpu::upload_planet`]), and the [`Batch::Planets`] a list's planets
+//!   become.
 //! - [`planet_source`]: the [`PlanetSource`] port, the new game's planets
 //!   and moons by stellar ([`PlanetRequest`]) as [`LoadedPlanet`]s, a
-//!   generated look baked or a texture asset read, in one shape, or why
-//!   not ([`PlanetError`]); its fake and contract check behind the
-//!   `recording` feature.
+//!   texture asset read or a generated look left unbaked for its first
+//!   draw, or why not ([`PlanetError`]); its fake and contract check
+//!   behind the `recording` feature.
 //! - [`camera`]: the models' orthographic camera, which puts a model where
 //!   a sprite at its centre goes at the 2D view's scale, their depth
 //!   bands, each later model of a batch nearer, the [`Light`] they are

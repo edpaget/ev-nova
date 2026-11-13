@@ -743,6 +743,86 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
+    fn a_generated_planet_is_keyed_and_handed_on_unbaked_at_the_engine_s_sizes() {
+        let source = modelled_sample_3d();
+        let game = load(&source, Path::new("sample"));
+        let assets = world_assets(&game, &source);
+        assert_eq!(assets.problems, Vec::<String>::new());
+        let Some(Visual::Generated(look)) = &game.galaxy.stellars[&id("kestrel-reach")].data.visual
+        else {
+            panic!("Kestrel Reach is generated");
+        };
+        assert_eq!(
+            assets.planets,
+            [(
+                PlanetKey(1),
+                LoadedPlanet::unbaked(look.clone(), Sizes::ENGINE)
+            )]
+        );
+        assert_eq!(assets.planets[0].1.baked(), None, "nothing baked here");
+        // Its reach is its look's: rings to 2.3.
+        assert_eq!(
+            assets.models.stellar(stellar(&game, "kestrel-reach")),
+            Some(StellarModel::planet(PlanetKey(1), 2.3))
+        );
+    }
+
+    /// The 3D sample with Pale, a moon in the start system on the texture
+    /// `pale-surface`, its file holding `png`.
+    fn with_a_textured_moon(png: &[u8]) -> MemSource {
+        modelled_sample_3d()
+            .with(
+                "stellars/pale.md",
+                "---\nname: Pale\nkind: moon\nsystem: luyten-crossing\nposition: [30, 30]\n\
+                 visual: {asset: pale-surface}\n---\n",
+            )
+            .with(
+                "assets/pale-surface.md",
+                "---\nkind: texture\nplaceholder: false\nfiles: [media/export/pack/pale.png]\n\
+                 licence: CC0-1.0\nauthor: test\n---\n",
+            )
+            .with_bytes("media/export/pack/pale.png", png)
+    }
+
+    #[test]
+    fn a_textured_planet_is_still_read_at_load_and_one_that_fails_is_a_problem() {
+        let source = with_a_textured_moon(&nova_galaxy_media::fixture::png(4, 2, &[50; 32]));
+        let game = load(&source, Path::new("sample"));
+        let assets = world_assets(&game, &source);
+        assert_eq!(assets.problems, Vec::<String>::new());
+        let Some(StellarModel::Planet { key, .. }) = assets.models.stellar(stellar(&game, "pale"))
+        else {
+            panic!("Pale's planet");
+        };
+        let pale = &assets
+            .planets
+            .iter()
+            .find(|(k, _)| *k == key)
+            .expect("it")
+            .1;
+        let surface = pale
+            .baked()
+            .expect("read here, not left for the first draw");
+        assert_eq!(surface.surface.rgba, [50, 50, 50, 0].repeat(8));
+        assert_eq!(assets.planets.len(), 2, "and Kestrel Reach, unbaked");
+
+        let broken = with_a_textured_moon(b"not a png");
+        let game = load(&broken, Path::new("sample"));
+        let assets = world_assets(&game, &broken);
+        assert_eq!(assets.models.stellar(stellar(&game, "pale")), None);
+        assert_eq!(assets.planets.len(), 1, "Kestrel Reach alone");
+        let [problem] = &assets.problems[..] else {
+            panic!("one problem: {:?}", assets.problems);
+        };
+        assert!(
+            problem.starts_with("stellar `pale`'s texture `pale-surface` doesn't read")
+                && problem.ends_with("; it draws its disc"),
+            "{problem}"
+        );
+    }
+
+    #[test]
     fn a_generated_stellar_gets_a_planet_and_one_with_no_visual_none() {
         let source = modelled_sample_3d().with(
             "stellars/pebble.md",
