@@ -39,6 +39,11 @@
 //!   otherwise, as the sRGB curve is nearly a power law and a power law
 //!   is multiplicative. Decoding to linear in the shader would mean
 //!   rebaking every vertex colour for a difference in the curve's toe.
+//!   A base-colour texture with no image the source can read as PNG or
+//!   JPEG through its `source` (one given only through
+//!   `KHR_texture_basisu`, `EXT_texture_webp` or `MSFT_texture_dds`) is
+//!   no texture: its material draws in its base colour, and the model's
+//!   other materials as they would anyway.
 //! - **Its base colour's sampler.** A texture is sampled as the model
 //!   says ([`Material::base_color_sampler`], a [`ModelSampler`]): its
 //!   wrap along each axis, its filters and the mip levels it reads, as
@@ -51,8 +56,9 @@
 //!   set the base colour names (`texCoord`), with its
 //!   `KHR_texture_transform` applied: the source resolves both when it
 //!   reads the model, so the coordinates here are final and nothing later
-//!   applies either. A part whose named set is missing has no
-//!   coordinates, and draws untextured.
+//!   applies either. A part whose named set is missing, or holds a
+//!   coordinate that isn't finite (in the file or after the transform),
+//!   has no coordinates, and draws untextured.
 //! - **`unlit`.** An unlit material's parts draw at that product whatever
 //!   the light; every other part is lit by it ([`crate::camera::shade`]).
 //! - **Metallic and roughness are carried and unused.** The light is one

@@ -917,6 +917,88 @@ mod tests {
         assert_decodes_nothing(&with_gltf_hull(missing_set(), PNG));
     }
 
+    /// A base colour that isn't white, so a vertex shows it.
+    const OCHRE: [f32; 4] = [0.5, 0.25, 0.125, 1.0];
+
+    /// A box with texture coordinates in one textured material of
+    /// [`OCHRE`], made by `material` from it.
+    fn ochre(material: impl FnOnce(Mat) -> Mat) -> Builder {
+        let base = Mat {
+            textured: true,
+            ..Mat::new("hull", OCHRE)
+        };
+        Builder::new([1.0; 3]).texcoords().material(material(base))
+    }
+
+    /// Asserts `source`'s hull decodes nothing, meets the contract, and
+    /// draws every vertex in [`OCHRE`].
+    fn assert_untextured_ochre(source: &MemSource) {
+        assert_decodes_nothing(source);
+        let (galaxy, _) = load(source);
+        let models = GalaxyModels::new(&galaxy, source);
+        check_contract(&models, &ModelRequest::new("hull", None), "nothing");
+        let model = ask(source, "hull", None).unwrap();
+        let mesh = model.mesh();
+        assert!(
+            mesh.vertices()
+                .iter()
+                .all(|v| v.color == vertex_color(OCHRE))
+        );
+    }
+
+    #[test]
+    fn a_texture_coordinate_that_is_not_finite_decodes_nothing_and_meets_the_contract() {
+        // The stub doesn't decode: a texture that slipped through would
+        // refuse the model.
+        let builder = ochre(|m| m).bad_texcoord(f32::NAN);
+        assert_untextured_ochre(&with_glb_hull(builder.clone(), PNG));
+        assert_untextured_ochre(&with_gltf_hull(builder, PNG));
+    }
+
+    #[test]
+    fn a_texture_with_no_source_decodes_nothing_and_meets_the_contract() {
+        let through = || {
+            ochre(|m| Mat {
+                only_through: Some("EXT_texture_webp"),
+                ..m
+            })
+        };
+        for builder in [through(), through().requires("EXT_texture_webp")] {
+            assert_untextured_ochre(&with_glb_hull(builder.clone(), PNG));
+            assert_untextured_ochre(&with_gltf_hull(builder, PNG));
+        }
+    }
+
+    #[test]
+    fn a_texture_with_no_source_leaves_another_material_s_texture_drawn() {
+        let builder = ochre(|m| Mat {
+            only_through: Some("EXT_texture_webp"),
+            ..m
+        })
+        .material(Mat {
+            textured: true,
+            ..Mat::new("skin", [1.0; 4])
+        });
+        for source in [
+            with_glb_hull(builder.clone(), &png(2, 2, &SKIN)),
+            with_gltf_hull(builder, &png(2, 2, &SKIN)),
+        ] {
+            let model = ask(&source, "hull", None).unwrap();
+            assert_eq!(model.textures.len(), 1);
+            assert_eq!(first_level(&model, 0), (2, 2, &SKIN[..]));
+            let named: Vec<_> = model
+                .materials
+                .iter()
+                .map(|m| m.base_color_texture)
+                .collect();
+            assert_eq!(named, [None, Some(0)]);
+            let mesh = model.mesh();
+            let drawn: Vec<_> = mesh.sections().iter().map(|s| s.texture).collect();
+            assert_eq!(drawn, [None, Some(0)]);
+            assert_eq!(mesh.textures().len(), 1);
+        }
+    }
+
     #[test]
     fn an_unsampled_image_cannot_refuse_the_model() {
         // A default budget that gives textures no limits at all.
