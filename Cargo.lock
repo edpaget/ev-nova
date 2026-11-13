@@ -2169,7 +2169,6 @@ version = "0.1.0"
 dependencies = [
  "nova-data",
  "nova-rsrc",
- "nova-sim",
  "nova-sim-frame",
  "nova-sim-state",
  "nova-view",

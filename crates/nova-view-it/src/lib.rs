@@ -6,6 +6,11 @@
 //! nova-view's unit tests waited on a second build of its library, the one
 //! with `fixture` on, which the integration tests link (faster-builds).
 //!
-//! No test here starts a real `nova_sim::Session`: the seam tests and the
-//! stock tests over a real session moved to nova-flight's `tests/it` with
-//! the adapter (rdm:phase/faster-builds/phase-6-nova-view-off-nova-sim).
+//! The crate doesn't depend on nova-sim, so a nova-sim change doesn't
+//! rebuild it. Its tests name the simulation's vocabulary through
+//! `nova_sim_frame`, and three test-only names frame doesn't carry through
+//! `nova_sim_state`
+//! (rdm:phase/faster-builds/phase-7-nova-view-it-off-nova-sim). The tests
+//! over a real `nova_sim::Session`, the seam tests and the stock tests,
+//! are in nova-flight's `tests/it` with the adapter
+//! (rdm:phase/faster-builds/phase-6-nova-view-off-nova-sim).

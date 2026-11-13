@@ -14,10 +14,6 @@ publish.workspace = true
 # (`text::fixture::MonoMetrics`) and the flight port's contract
 # (`flight::sim_port::fixture::check_contract`).
 nova-view = { workspace = true, features = ["fixture"] }
-# The simulation's names the stock tests read (`Governments`,
-# `CombatCatalog`, the story's news picture). No test here starts a
-# real `Session`: those are nova-flight's.
-nova-sim.workspace = true
 # The view's vocabulary of the simulation the tests name (`Governments`,
 # `CombatCatalog`, `Rulebook`, the mission screens, `escape_pod::Pod`,
 # `hyperspace::system_links` and the like).
