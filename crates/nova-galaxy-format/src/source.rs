@@ -12,13 +12,21 @@
 //! its first bytes with [`Source::head`], for a caller that needs to know
 //! how it starts and no more (the LFS check). `head` has a default cut
 //! from `bytes`, so an adapter that doesn't override it still compiles,
-//! but reads the file whole.
+//! but reads the file whole. So has [`Source::size`], a file's length in
+//! bytes for a caller that holds it to a budget without reading it (a
+//! texture checked from its header); the default reads it whole and
+//! counts it.
+//!
+//! A borrowed source (`&S`) and a shared one (`Rc<S>`) are sources too,
+//! answering with the source's own methods, so a caller can keep a source
+//! another part of the program reads as well.
 //!
 //! Every adapter is checked against `TREE` with `check_contract`, and one
 //! that lists per file against `TREE` plus `UNREADABLE` with
-//! `check_unreadable_contract`. `CountingSource` wraps a source and counts
-//! the files asked of it, for tests that a file is read once (all behind
-//! the `fixture` feature).
+//! `check_unreadable_contract`. `CountingSource` wraps a source, borrowed
+//! or its own, and counts the files asked of it whole, by their heads and
+//! by their sizes, for tests that a file is read once (all behind the
+//! `fixture` feature).
 
 use std::collections::BTreeMap;
 use std::io;
@@ -85,6 +93,63 @@ pub trait Source {
             bytes.truncate(len);
             bytes
         }))
+    }
+
+    /// The length in bytes of the file at `path`, or `None` if there is no
+    /// such file: for a caller that holds a file to a budget of bytes on
+    /// disk without reading it (a texture checked from its header).
+    ///
+    /// The default reads the file whole with [`bytes`](Self::bytes) and
+    /// counts it, so a source that doesn't override it still compiles; an
+    /// adapter over real files overrides it to read none of it.
+    fn size(&self, path: &str) -> io::Result<Option<u64>> {
+        Ok(self.bytes(path)?.map(|bytes| bytes.len() as u64))
+    }
+}
+
+/// A borrowed source is a source, answering with its own methods.
+impl<S: Source + ?Sized> Source for &S {
+    fn files(&self, dir: &str, ext: &str) -> io::Result<Vec<SourceFile>> {
+        (**self).files(dir, ext)
+    }
+
+    fn listing(&self, dir: &str, ext: &str) -> io::Result<Vec<Listed>> {
+        (**self).listing(dir, ext)
+    }
+
+    fn bytes(&self, path: &str) -> io::Result<Option<Vec<u8>>> {
+        (**self).bytes(path)
+    }
+
+    fn head(&self, path: &str, len: usize) -> io::Result<Option<Vec<u8>>> {
+        (**self).head(path, len)
+    }
+
+    fn size(&self, path: &str) -> io::Result<Option<u64>> {
+        (**self).size(path)
+    }
+}
+
+/// A shared source is a source, answering with its own methods.
+impl<S: Source + ?Sized> Source for std::rc::Rc<S> {
+    fn files(&self, dir: &str, ext: &str) -> io::Result<Vec<SourceFile>> {
+        (**self).files(dir, ext)
+    }
+
+    fn listing(&self, dir: &str, ext: &str) -> io::Result<Vec<Listed>> {
+        (**self).listing(dir, ext)
+    }
+
+    fn bytes(&self, path: &str) -> io::Result<Option<Vec<u8>>> {
+        (**self).bytes(path)
+    }
+
+    fn head(&self, path: &str, len: usize) -> io::Result<Option<Vec<u8>>> {
+        (**self).head(path, len)
+    }
+
+    fn size(&self, path: &str) -> io::Result<Option<u64>> {
+        (**self).size(path)
     }
 }
 
@@ -220,6 +285,20 @@ impl Source for DirSource {
         });
         absent_is_none(read)
     }
+
+    /// Reads none of the file: its length is its metadata's, following a
+    /// link as reading it would.
+    fn size(&self, path: &str) -> io::Result<Option<u64>> {
+        match std::fs::metadata(self.file(path)) {
+            Ok(meta) if meta.is_dir() => Err(io::Error::new(
+                io::ErrorKind::IsADirectory,
+                format!("`{path}` is a folder, not a file"),
+            )),
+            Ok(meta) => Ok(Some(meta.len())),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
 }
 
 impl DirSource {
@@ -259,21 +338,30 @@ fn texts(listed: Vec<Listed>) -> io::Result<Vec<SourceFile>> {
 /// at all. Listings aren't counted.
 #[cfg(any(test, feature = "fixture"))]
 #[derive(Debug)]
-pub struct CountingSource<'a, S> {
-    source: &'a S,
+pub struct CountingSource<S> {
+    source: S,
     bytes: std::cell::RefCell<BTreeMap<String, u32>>,
     heads: std::cell::RefCell<BTreeMap<String, u32>>,
+    sizes: std::cell::RefCell<BTreeMap<String, u32>>,
 }
 
 #[cfg(any(test, feature = "fixture"))]
-impl<'a, S: Source> CountingSource<'a, S> {
-    /// `source`, with nothing asked of it yet.
-    pub fn new(source: &'a S) -> Self {
+impl<S: Source> CountingSource<S> {
+    /// `source`, with nothing asked of it yet: a borrowed one (`&source`),
+    /// or one it owns, which a test can share by wrapping the counter in
+    /// an `Rc`.
+    pub fn new(source: S) -> Self {
         CountingSource {
             source,
             bytes: std::cell::RefCell::default(),
             heads: std::cell::RefCell::default(),
+            sizes: std::cell::RefCell::default(),
         }
+    }
+
+    /// How often the size of the file at `path` was asked for.
+    pub fn sizes_asked(&self, path: &str) -> u32 {
+        self.sizes.borrow().get(path).copied().unwrap_or(0)
     }
 
     /// How often the file at `path` was asked for whole.
@@ -294,7 +382,7 @@ impl<'a, S: Source> CountingSource<'a, S> {
 }
 
 #[cfg(any(test, feature = "fixture"))]
-impl<S: Source> Source for CountingSource<'_, S> {
+impl<S: Source> Source for CountingSource<S> {
     fn files(&self, dir: &str, ext: &str) -> io::Result<Vec<SourceFile>> {
         self.source.files(dir, ext)
     }
@@ -311,6 +399,11 @@ impl<S: Source> Source for CountingSource<'_, S> {
     fn head(&self, path: &str, len: usize) -> io::Result<Option<Vec<u8>>> {
         *self.heads.borrow_mut().entry(path.to_owned()).or_default() += 1;
         self.source.head(path, len)
+    }
+
+    fn size(&self, path: &str) -> io::Result<Option<u64>> {
+        *self.sizes.borrow_mut().entry(path.to_owned()).or_default() += 1;
+        self.source.size(path)
     }
 }
 
@@ -380,6 +473,20 @@ pub fn check_contract(source: &impl Source) {
         None,
         "a missing file has no head"
     );
+    assert_eq!(
+        source
+            .size("media/export/pack/hull.glb")
+            .expect("reads a file's size"),
+        Some(5),
+        "a file's size is its length in bytes"
+    );
+    assert_eq!(
+        source
+            .size("media/export/pack/gone.glb")
+            .expect("reads a missing file's size"),
+        None,
+        "a missing file has no size"
+    );
 }
 
 /// A file every adapter must list with its error rather than fail its
@@ -441,6 +548,7 @@ mod tests {
         assert!(source.files("systems", "md").is_err(), "not a folder");
         assert!(source.bytes("media").is_err(), "a folder, not a file");
         assert!(source.head("media", 4).is_err(), "nor has a folder a head");
+        assert!(source.size("media").is_err(), "nor a size");
     }
 
     #[test]
@@ -504,7 +612,9 @@ mod tests {
         check_unreadable_contract(&CountingSource::new(&fake));
     }
 
-    /// A source whose `head` is its own, not a cut of its `bytes`.
+    /// A source whose `head` and `size` are its own, not a cut or the
+    /// length of its `bytes`.
+    #[derive(Debug)]
     struct OwnHead;
     impl Source for OwnHead {
         fn files(&self, _: &str, _: &str) -> io::Result<Vec<SourceFile>> {
@@ -516,6 +626,9 @@ mod tests {
         fn head(&self, _: &str, _: usize) -> io::Result<Option<Vec<u8>>> {
             Ok(Some(b"own".to_vec()))
         }
+        fn size(&self, _: &str) -> io::Result<Option<u64>> {
+            Ok(Some(77))
+        }
     }
 
     #[test]
@@ -524,6 +637,56 @@ mod tests {
         assert_eq!(counting.head("any", 9).unwrap(), Some(b"own".to_vec()));
         assert_eq!(counting.bytes_asked("any"), 0);
         assert_eq!(counting.heads_asked("any"), 1);
+    }
+
+    #[test]
+    fn the_counting_source_counts_sizes_and_asks_its_source_for_its_own() {
+        let counting = CountingSource::new(&OwnHead);
+        assert_eq!(counting.size("any").unwrap(), Some(77));
+        assert_eq!(counting.size("any").unwrap(), Some(77));
+        assert_eq!(counting.sizes_asked("any"), 2);
+        assert_eq!(counting.sizes_asked("other"), 0);
+        assert_eq!(counting.bytes_asked("any"), 0, "not read whole");
+        assert_eq!(counting.heads_asked("any"), 0);
+    }
+
+    #[test]
+    fn a_borrowed_or_shared_source_answers_with_its_source_s_own_head_and_size() {
+        let borrowed = &OwnHead;
+        let answers = |source: &dyn Source| {
+            (
+                source.head("any", 9).unwrap(),
+                source.size("any").unwrap(),
+                source.bytes("any").unwrap(),
+            )
+        };
+        let own = (Some(b"own".to_vec()), Some(77), Some(b"whole".to_vec()));
+        assert_eq!(answers(&borrowed), own);
+        assert_eq!(answers(&std::rc::Rc::new(OwnHead)), own);
+        // Listings go through too.
+        let mut fake = MemSource::default();
+        for (path, text) in TREE {
+            fake = fake.with(path, text);
+        }
+        for (path, bytes) in UNREADABLE {
+            fake = fake.with_bytes(path, bytes);
+        }
+        check_unreadable_contract(&&fake);
+        check_unreadable_contract(&std::rc::Rc::new(fake));
+    }
+
+    #[test]
+    fn a_counting_source_may_own_its_source() {
+        let mut fake = MemSource::default();
+        for (path, text) in TREE {
+            fake = fake.with(path, text);
+        }
+        let counting = std::rc::Rc::new(CountingSource::new(fake));
+        let reader = std::rc::Rc::clone(&counting);
+        check_contract(&reader);
+        assert_eq!(counting.bytes_asked("media/export/pack/hull.glb"), 1);
+        assert_eq!(counting.sizes_asked("media/export/pack/hull.glb"), 1);
+        assert_eq!(counting.sizes_asked("media/export/pack/gone.glb"), 1);
     }
 
     #[test]
