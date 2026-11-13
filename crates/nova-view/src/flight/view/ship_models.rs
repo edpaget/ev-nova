@@ -28,7 +28,13 @@
 //!   carries ([`FlightFrame::player_kits`](nova_sim::flight_frame::FlightFrame::player_kits)),
 //!   an NPC's its class's as built ([`WorldModels::built_kits`]).
 //! - **Turrets**: every turning mount faces the ship's
-//!   [`FrameShip::turret_facing`], or the nose with none.
+//!   [`FrameShip::turret_facing`], or the nose with none, swung toward it
+//!   on the hull at
+//!   [`TURRET_TURN_PER_PASS`](crate::flight::turret_swing::TURRET_TURN_PER_PASS)
+//!   a pass shown rather than snapped to it
+//!   ([`TurretSwings`](crate::flight::turret_swing::TurretSwings), stepped
+//!   by the `stepping` module, let go with the NPCs' displays at a change
+//!   of system or a landing).
 //! - **Faded ships**: a ship its cloak, a gate or its class's `BaseTransp`
 //!   ([`ShipModel::base_transp`]) fades draws its model faded, at the
 //!   alpha [`model_alpha`] gives (the new game's reading of the 2D hull's
@@ -123,7 +129,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// Draws `ship`, shown at `centre` facing `heading`, as its class's
     /// `model` with the outfits of its class and `kits` on their mounts,
-    /// each turret facing its record's turret facing, at the alpha its
+    /// each turret facing its record's turret facing as its swing has
+    /// reached it ([`TurretSwings::facing`](crate::flight::turret_swing::TurretSwings::facing)), at the alpha its
     /// cloak, `gate` and the model's `BaseTransp` give it ([`model_alpha`])
     /// and moved by its cloak's jitter (see the module docs); nothing at
     /// all, its outfits included, when that draws nothing.
@@ -146,7 +153,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         };
         let angle = ship.frames.hull_angle(heading, turn);
         let mounts = self.world_models.mounts(ship.class, kits);
-        let facings = vec![ship.turret_facing; mounts.len()];
+        let facings = vec![self.turret_swings.facing(ship, angle); mounts.len()];
         let commands = mounted_outfits(model.key, pose, angle, &mounts, &facings, |asset| {
             self.world_models.outfit(asset)
         });

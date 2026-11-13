@@ -317,8 +317,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.sky_shift.carry(wrap);
     }
 
-    /// Steps the view's effects, flashes, glows, shot looks and stars
-    /// after `pass`, as the view stepped them after each pass: `first`
+    /// Steps the view's effects, flashes, glows, turret swings, shot looks
+    /// and stars after `pass`, as the view stepped them after each pass
+    /// (the swings, the new game's own, are stepped beside the glows):
+    /// `first`
     /// the ship's position before the step on its first pass, the ship
     /// drawn at `anchor`. The post-animate a frame left moves the
     /// particles first, and a first pass leaves one, as a frame stands
@@ -369,6 +371,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
             |ship| glow_decay(&pass.ships, player, sheets, ship),
             gain,
         );
+        // The turrets swing at the pass's gain, as its glows fade.
+        let models = &self.world_models;
+        self.turret_swings
+            .step(&pass.ships, self.frame.hull_turn, gain, |class| {
+                models.ship(class).is_some()
+            });
         let effects = (&mut self.effects, scene.caps);
         let trails = self.smoke_trails;
         self.shot_looks

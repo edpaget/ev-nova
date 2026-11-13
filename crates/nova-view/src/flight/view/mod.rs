@@ -1521,6 +1521,9 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     held_alts: RefCell<crate::flight::held_alt::HeldAlts>,
     /// Each ship's weapon glow while it is lit ([`WeaponGlows`]).
     glows: WeaponGlows,
+    /// Each modelled ship's turret swing toward its aim, stepped once a
+    /// pass shown ([`TurretSwings`](crate::flight::turret_swing::TurretSwings)).
+    turret_swings: crate::flight::turret_swing::TurretSwings,
     /// The NPCs' flashes and glows let go of at the last change of system
     /// or landing, held for the escorts the fleet keeps
     /// ([`HeldDisplays`](crate::flight::carried_displays::HeldDisplays)).

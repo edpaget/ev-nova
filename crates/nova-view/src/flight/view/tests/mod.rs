@@ -149,6 +149,7 @@ mod stellars;
 mod stepping;
 mod touch_flight;
 mod touch_hover;
+mod turret_swing;
 mod whole_pixels;
 mod widescreen;
 mod world_layers;

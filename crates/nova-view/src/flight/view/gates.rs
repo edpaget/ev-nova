@@ -89,6 +89,7 @@ impl<
                 // `carried_displays` module).
                 self.held_displays.hold(&mut self.flashes, &mut self.glows);
                 self.held_alts.get_mut().clear();
+                self.turret_swings.clear();
                 self.shot_looks.clear();
                 self.land_with_movie(stellar);
             }

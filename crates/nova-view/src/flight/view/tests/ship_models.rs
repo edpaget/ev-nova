@@ -31,11 +31,11 @@ use crate::model::{ModelKey, ModelPose};
 use crate::outline::{Outline, OutlineTriangle};
 
 const PLAYER_HULL: ModelKey = ModelKey(1);
-const NPC_HULL: ModelKey = ModelKey(2);
+pub(super) const NPC_HULL: ModelKey = ModelKey(2);
 const TURRET: ModelKey = ModelKey(3);
 const GUN: ModelKey = ModelKey(4);
 /// The kit that adds a turret bed.
-const BED: OutfitId = OutfitId(200);
+pub(super) const BED: OutfitId = OutfitId(200);
 /// How many logical units a model unit spans.
 const SCALE: f32 = 1.5;
 
@@ -50,7 +50,7 @@ fn dart() -> Outline {
 }
 
 /// The dart's frame: 20 by 20.
-const DART: (u32, u32) = (20, 20);
+pub(super) const DART: (u32, u32) = (20, 20);
 
 fn mount(hardpoint: &str, turns: bool, asset: &str) -> Mount {
     Mount {
@@ -67,7 +67,7 @@ fn mount(hardpoint: &str, turns: bool, asset: &str) -> Mount {
 
 /// Ship 128, the player's, with a fixed gun on its nose and a turret on
 /// the [`BED`] kit; ship 130, an NPC's, built with the bed.
-fn table() -> WorldModels {
+pub(super) fn table() -> WorldModels {
     let model = |key| ShipModel {
         key,
         scale: SCALE,
@@ -103,7 +103,11 @@ fn sheetless() -> FakeCatalog {
 
 /// The player at the centre facing `heading` and NPC 0, of ship 130, at
 /// (100, -100) facing 90°, as `edit` leaves them, under `turn`.
-fn frame(heading: f32, turn: HullTurn, edit: impl FnOnce(&mut [FrameShip])) -> FlightFrame {
+pub(super) fn frame(
+    heading: f32,
+    turn: HullTurn,
+    edit: impl FnOnce(&mut [FrameShip]),
+) -> FlightFrame {
     let mut ships = vec![
         the_player_at(Vec2::ZERO, heading),
         record::npc(0, 130, Vec2::new(100.0, -100.0), 90.0),
@@ -116,12 +120,12 @@ fn frame(heading: f32, turn: HullTurn, edit: impl FnOnce(&mut [FrameShip])) -> F
 }
 
 /// `frame`'s view, drawing `models`.
-fn view_of(frame: FlightFrame, models: WorldModels) -> Faked {
+pub(super) fn view_of(frame: FlightFrame, models: WorldModels) -> Faked {
     world(sheetless(), frame).with_world_models(Rc::new(models))
 }
 
 /// The 3D commands `list` draws, in order.
-fn models(list: &DrawList) -> Vec<DrawCommand> {
+pub(super) fn models(list: &DrawList) -> Vec<DrawCommand> {
     list.iter()
         .filter(|c| matches!(c, DrawCommand::Model { .. } | DrawCommand::Mounted { .. }))
         .cloned()
@@ -137,7 +141,7 @@ fn triangles(list: &DrawList) -> Vec<DrawCommand> {
 
 /// The commands `ship`, drawn at `centre` facing `heading` under `turn`
 /// as `hull` with `kits`, gives by the table.
-fn expected(
+pub(super) fn expected(
     ship: &FrameShip,
     (centre, heading, turn): (Point, f32, HullTurn),
     hull: ModelKey,
@@ -174,7 +178,7 @@ fn expected_npc(view: &Faked, turn: HullTurn) -> Vec<DrawCommand> {
 }
 
 /// The player's commands, as `view` draws them opaque by the table.
-fn expected_player(view: &Faked, turn: HullTurn) -> Vec<DrawCommand> {
+pub(super) fn expected_player(view: &Faked, turn: HullTurn) -> Vec<DrawCommand> {
     expected(
         &view.drawn().player(),
         (
@@ -188,7 +192,7 @@ fn expected_player(view: &Faked, turn: HullTurn) -> Vec<DrawCommand> {
 }
 
 /// The player's commands and the NPC's, as `view` draws them by the table.
-fn expected_both(view: &Faked, turn: HullTurn) -> Vec<DrawCommand> {
+pub(super) fn expected_both(view: &Faked, turn: HullTurn) -> Vec<DrawCommand> {
     let mut all = expected_npc(view, turn);
     all.extend(expected_player(view, turn));
     all
@@ -236,7 +240,7 @@ fn the_players_mounts_follow_the_kits_it_carries_and_an_npcs_its_class_built() {
 }
 
 /// The turn of each turret `list` draws.
-fn turret_turns(list: &DrawList) -> Vec<f32> {
+pub(super) fn turret_turns(list: &DrawList) -> Vec<f32> {
     models(list)
         .iter()
         .filter_map(|c| match c {
@@ -372,7 +376,7 @@ fn a_catalog_sheet_or_the_stock_look_wins_over_a_model() {
 
 /// `commands` jittered by `offset` and faded to `alpha`: the hull's centre
 /// moved and its alpha set, its parts following it.
-fn faded(commands: Vec<DrawCommand>, offset: Point, alpha: f32) -> Vec<DrawCommand> {
+pub(super) fn faded(commands: Vec<DrawCommand>, offset: Point, alpha: f32) -> Vec<DrawCommand> {
     commands
         .into_iter()
         .map(|command| command.translated(offset).at_alpha(alpha))
@@ -385,7 +389,7 @@ fn tick(view: &Faked) -> u64 {
 }
 
 /// The jitter NPC 0's cloak, shown as `cloak`, takes in `view`.
-fn npc_jitter(view: &Faked, cloak: CloakShown) -> Point {
+pub(super) fn npc_jitter(view: &Faked, cloak: CloakShown) -> Point {
     CloakDraw::of(cloak, None, tick(view), &cloak_rolls(NpcId(0)))
         .map_or(at(0.0, 0.0), |c| c.offset)
 }
@@ -397,7 +401,7 @@ fn player_jitter(view: &Faked, cloak: CloakShown) -> Point {
 
 /// The alpha a model of `BaseTransp` 0 draws at, as `cloak` and `gate` fade
 /// it ([`model_alpha`], whose own tests pin it).
-fn alpha_of(cloak: CloakShown, gate: GateFade) -> f32 {
+pub(super) fn alpha_of(cloak: CloakShown, gate: GateFade) -> f32 {
     model_alpha(cloak, None, gate, 0).expect("drawn")
 }
 

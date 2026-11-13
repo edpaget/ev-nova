@@ -133,6 +133,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S
         self.effects.clear();
         self.held_displays.hold(&mut self.flashes, &mut self.glows);
         self.held_alts.get_mut().clear();
+        self.turret_swings.clear();
         self.shot_looks.clear();
         self.read_npc_sheets();
     }
