@@ -20,7 +20,8 @@
 //! Only a stellar that draws its stand-in, having no sheet, is replaced:
 //! stock stellars have sheets, and stock data has no models, so it draws
 //! as it always did. The data picks the model, not a rulebook key. The
-//! system view draws no models.
+//! system viewer draws its stellars the same way, by its own clock
+//! ([`SystemView::with_world_models`](crate::system::SystemView::with_world_models)).
 //!
 //! [`DrawCommand::Model`]: crate::DrawCommand::Model
 //! [`DrawCommand::Planet`]: crate::DrawCommand::Planet

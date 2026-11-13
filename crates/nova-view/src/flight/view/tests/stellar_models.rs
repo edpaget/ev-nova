@@ -4,8 +4,8 @@
 //! centre, scaled to reach as far as the stand-in, and one with a planet
 //! draws the planet at the stand-in disc's radius and the flight clock; any
 //! other draws its stand-in, its name and order as before. On
-//! [`FakeFlight`], with a hand-built table. The system view draws no
-//! models: `system::scene`'s own tests pin its drawing, unchanged.
+//! [`FakeFlight`], with a hand-built table. The system viewer's models are
+//! pinned by `system::view`'s own tests.
 
 use std::collections::BTreeMap;
 use std::rc::Rc;

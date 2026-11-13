@@ -353,14 +353,15 @@ impl AppScreen {
     /// and planets as the 3D models `models` names
     /// ([`FlightView::with_world_models`]), and the other screens that
     /// show one (the spaceport's shipyard, hire screen and landscape, the
-    /// escort, comm and planet comm dialogs) drawing it as
-    /// its model in their pictures (`nova_view::model_picture`): an
+    /// escort, comm and planet comm dialogs, the navigator's system
+    /// viewer) drawing it as its model (`nova_view::model_picture`): an
     /// empty table, the default, until it is given. `main` gives the
     /// renderer the meshes and planets its keys name
     /// (`App::with_world_assets`).
     #[must_use]
     pub fn with_world_models(self, models: Rc<nova_view::flight::WorldModels>) -> Self {
         Self {
+            galaxy: self.galaxy.with_world_models(Rc::clone(&models)),
             world_models: models,
             ..self
         }

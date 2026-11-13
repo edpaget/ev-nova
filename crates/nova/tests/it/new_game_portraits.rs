@@ -6,7 +6,9 @@
 //! class's model in its picture's place, in the overlay; the comm dialog
 //! Y opens on it draws the same class's model in item 11; the planet comm
 //! dialog Y opens on Luyten Exchange draws the station hub in item 5; and
-//! landed there, the spaceport's landscape draws the hub. The
+//! landed there, the spaceport's landscape draws the hub; and the
+//! navigator's system viewer, entered on the crossing from the main
+//! menu's galaxy map, draws the hub and Kestrel Reach's planet. The
 //! escort dialog's wiring is pinned in `combat.rs`, whose harness flies
 //! with an escort.
 //!
@@ -175,6 +177,53 @@ fn the_planet_comm_dialog_draws_the_hailed_station_s_model() {
     }
     let dialog = harness.app.screen().planet_comm().expect("hailed");
     assert_eq!(models_of(dialog), [hub], "the hub in item 5");
+}
+
+#[test]
+fn the_system_viewer_draws_the_start_system_s_station_and_planet() {
+    let (game, assets) = sample();
+    let exchange = StellarId(nova_id(&game.ids.stellars, "luyten-exchange"));
+    let reach = StellarId(nova_id(&game.ids.stellars, "kestrel-reach"));
+    let Some(StellarModel::Model { key: hub, .. }) = assets.models.stellar(exchange) else {
+        panic!("the exchange's model");
+    };
+    let Some(StellarModel::Planet { key: giant }) = assets.models.stellar(reach) else {
+        panic!("Kestrel Reach's planet");
+    };
+    let crossing = nova_sim::SystemId(nova_id(&game.ids.systems, "luyten-crossing"));
+    let data = std::rc::Rc::new(game.data);
+    let pilots = MemoryPilots::new();
+    let table = std::rc::Rc::new(assets.models.clone());
+    let mut harness = Harness::built_wired(data, &pilots, |screen| screen.with_world_models(table));
+    // Tab steps from the main menu through the developer viewers to the
+    // galaxy map; a click selects the crossing, and Return enters it.
+    for _ in 0..4 {
+        if harness.showing() == Showing::GalaxyMap {
+            break;
+        }
+        tap(&mut harness, Key::Tab);
+    }
+    assert_eq!(harness.showing(), Showing::GalaxyMap);
+    let map = harness.app.screen().galaxy_map();
+    let system = map.model().system(crossing).expect("the crossing");
+    let at = map.transform().world_to_screen(system.position());
+    harness.click(at);
+    tap(&mut harness, Key::Enter);
+    assert_eq!(harness.showing(), Showing::System);
+    let view = harness.app.screen().system_view().expect("open");
+    let mut list = DrawList::new();
+    view.draw(&mut list);
+    assert!(
+        list.iter()
+            .any(|command| matches!(command, DrawCommand::Model { model, .. } if *model == hub)),
+        "the hub"
+    );
+    assert!(
+        list.iter().any(
+            |command| matches!(command, DrawCommand::Planet { planet, .. } if *planet == giant)
+        ),
+        "Kestrel Reach"
+    );
 }
 
 /// The Nova ID `table` gives the bible id `name`.
