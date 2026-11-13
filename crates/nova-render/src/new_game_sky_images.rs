@@ -36,10 +36,18 @@
 //! keep their places. A failure that is news is a problem, once for each
 //! asset, naming the first system that lists it: an asset that is a
 //! model, a `.png` that doesn't read, one over its art budget, and one
-//! over [`SKY_IMAGE_SIDE`]. As for a planet's texture, an asset the
-//! manifest lacks, a placeholder with no file, a missing file and a Git
-//! LFS pointer are not news. Stock data is never a new game, so it has
-//! none of this.
+//! over [`SKY_IMAGE_SIDE`].
+//!
+//! An asset the manifest lacks is not news here, because the loader has
+//! told it already: it reports the id against each system's file that
+//! lists it ([`nova_data::new_game::skies`]), among the game's own
+//! problems, which the start-up shows with these. As for a planet's
+//! texture, a placeholder with no file, a missing file and a Git LFS
+//! pointer are not news either: a placeholder is no fault, a missing
+//! file is left to `galaxy check` as other missing media are
+//! ([`nova_data::new_game::looks`]), and the loader lists the pointers
+//! ([`NewGame::lfs_pointers`]). Stock data is never a new game, so it
+//! has none of this.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -150,6 +158,7 @@ fn decorated(
 /// has none, as the end of a line to report, `None` for what is not
 /// news (see the module docs).
 fn read(game: &NewGame, source: &impl Source, asset: &Id) -> Result<Arc<SkyImage>, Option<String>> {
+    // An id the manifest lacks is the loader's to report, and it has.
     let doc = &game.galaxy.assets.get(asset).ok_or(None)?.data;
     if doc.kind != AssetKind::Texture {
         return Err(Some("is a model, not a texture".to_owned()));
@@ -342,12 +351,17 @@ mod tests {
         )
     }
 
-    /// The problems of `source`, and how many decorations each of its two
-    /// listing systems keeps.
+    /// The problems of `source`, which loads with none of its own, and
+    /// how many decorations each of its two listing systems keeps.
     fn problems(source: &MemSource) -> (Vec<String>, (usize, usize)) {
-        let game = loaded(source);
-        let built = sky_decorations(&game, source);
-        let kept = |system: &str| built.lists[&seed_of(&game, system)].len();
+        problems_of(&loaded(source), source)
+    }
+
+    /// The problems reading the decorations of `game`, loaded from
+    /// `source`, and how many each of its two listing systems keeps.
+    fn problems_of(game: &NewGame, source: &MemSource) -> (Vec<String>, (usize, usize)) {
+        let built = sky_decorations(game, source);
+        let kept = |system: &str| built.lists[&seed_of(game, system)].len();
         (
             built.problems.clone(),
             (kept("luyten-crossing"), kept("marrow")),
@@ -422,13 +436,16 @@ mod tests {
     #[test]
     fn what_is_not_news_leaves_the_decoration_out_unreported() {
         let none = (Vec::<String>::new(), (1, 1));
-        // An asset the manifest lacks.
+        // An asset the manifest lacks: the loader's to report, against
+        // the system's file, so its game loads with a problem of its own
+        // and reading the decorations adds none.
         let unknown = with_sky(
             listed_twice(),
             "luyten-crossing",
             "sky:\n  decorations:\n    - image: no-such-thing\n    - image: far-galaxy\n",
         );
-        assert_eq!(problems(&unknown), (Vec::new(), (1, 2)));
+        let game = load(&unknown, Path::new("sample"));
+        assert_eq!(problems_of(&game, &unknown), (Vec::new(), (1, 2)));
         // A placeholder with no file.
         let placeholder = listed_twice().with(
             &format!("assets/{SKY_HULK}.md"),
@@ -453,13 +470,14 @@ mod tests {
     fn a_decoration_left_out_leaves_the_others_their_own_places() {
         // The first of the list fails, and the second leaves its place
         // to the seed: it takes the place of the list's second, not the
-        // first.
+        // first. The loader reports the id its manifest lacks, so the
+        // game isn't held to loading with no problem.
         let source = with_sky(
             decorated_sample(),
             "luyten-crossing",
             "sky:\n  decorations:\n    - image: no-such-thing\n    - image: far-galaxy\n",
         );
-        let game = loaded(&source);
+        let game = load(&source, Path::new("sample"));
         let seed = seed_of(&game, "luyten-crossing");
         let built = sky_decorations(&game, &source);
         let [galaxy] = &built.lists[&seed][..] else {

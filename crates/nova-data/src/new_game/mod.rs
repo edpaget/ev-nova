@@ -186,6 +186,8 @@
 //!   box or its disc; an asset whose model file doesn't decode, or names
 //!   a buffer or an image file that isn't there, is reported once, against
 //!   the asset ([`looks`]).
+//! - A system's sky decoration whose `image` isn't in `assets/` is not
+//!   drawn, reported against the system ([`skies`]).
 //! - A hardpoint over no surface of its hull's model stands on the plane,
 //!   reported against the file that adds it, naming the hardpoint and the
 //!   model; an outfit's `model` that isn't in `assets/` shows nothing
@@ -333,6 +335,7 @@ pub mod outfits;
 pub mod pins;
 pub mod records;
 pub mod relations;
+pub mod skies;
 pub mod sounds;
 pub mod strings;
 #[cfg(test)]
@@ -412,7 +415,8 @@ pub fn open(dir: &Path) -> Result<NewGame, ListError> {
 /// media, the mapping under the table's pins, then the stand-ins
 /// ([`looks`]) and the mounts ([`mounts`]), whose models are read from
 /// `source` too, each once and whole, its scene kept
-/// ([`NewGame::scenes`]), the sounds' clips ([`sounds`]), each once, the
+/// ([`NewGame::scenes`]), the check of each system's sky decorations
+/// ([`skies`]), the sounds' clips ([`sounds`]), each once, the
 /// music ([`music`]), and the built bracket corners ([`brackets`]). The
 /// LFS check reads only how each media file starts. It never writes the
 /// table.
@@ -435,6 +439,7 @@ pub fn load(source: &impl Source, dir: &Path) -> NewGame {
     let stand_ins = looks::stand_ins(&galaxy, &ids, &mut models, &mut problems);
     let mounted = mounts::mounted(&galaxy, &ids, &mut models, &mut problems);
     let scenes = models.into_scenes();
+    skies::unknown_images(&galaxy, &ids, &mut problems);
     let ship_lines = looks::ship_lines(&galaxy, &ids);
     let collision_radii = fleet::collision_radii(&galaxy, &ids);
     let gate_fuels = fleet::gate_fuels(&galaxy, &ids);
