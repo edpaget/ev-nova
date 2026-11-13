@@ -794,7 +794,7 @@ fn the_new_pilot_dialog_takes_a_name_in_its_full_name_field() {
             Some(NewPilotOutcome::Create {
                 name: "Ada".to_owned(),
                 nickname: String::new(),
-                gender: nova_sim::Gender::Female,
+                gender: nova_sim_frame::Gender::Female,
                 strict_play: false,
             }),
             "{name}"
@@ -829,7 +829,7 @@ fn the_new_pilot_dialogs_nickname_field_is_live() {
             Some(NewPilotOutcome::Create {
                 name: "Shane Merrol".to_owned(),
                 nickname: "Ace".to_owned(),
-                gender: nova_sim::Gender::Male,
+                gender: nova_sim_frame::Gender::Male,
                 strict_play: false,
             }),
             "{name}"
@@ -874,7 +874,7 @@ fn the_new_pilot_dialogs_strict_play_box_is_live() {
             Some(NewPilotOutcome::Create {
                 name: "Ada".to_owned(),
                 nickname: String::new(),
-                gender: nova_sim::Gender::Male,
+                gender: nova_sim_frame::Gender::Male,
                 strict_play: true,
             }),
             "{name}: the stock box is live"
@@ -889,7 +889,7 @@ fn mono() -> Rc<dyn nova_view::text::TextMetrics> {
 
 #[test]
 fn the_mission_computer_lays_out_with_its_items_where_recorded() {
-    use nova_sim::{ComputerRow, MissionComputer, MissionId};
+    use nova_sim_frame::{ComputerRow, MissionComputer, MissionId};
     use nova_view::spaceport::missions::{
         ACCEPT_ITEM, COMPUTER_DIALOG, DATE_ITEM, HEADING_ITEM, LEAVE_ITEM, LIST_ITEM,
         MissionComputerScreen, NAME_ITEM, TEXT_ITEM as COMPUTER_TEXT_ITEM,
@@ -936,7 +936,7 @@ fn the_mission_computer_lays_out_with_its_items_where_recorded() {
 
 #[test]
 fn the_mission_info_screen_lays_out_with_its_items_where_recorded() {
-    use nova_sim::{InfoRow, MissionInfo};
+    use nova_sim_frame::{InfoRow, MissionInfo};
     use nova_view::spaceport::missions::{
         ABORT_ITEM, INFO_DIALOG, INFO_DONE_ITEM, INFO_LIST_ITEM, INFO_TEXT_ITEM, MissionInfoScreen,
     };
@@ -1002,8 +1002,8 @@ fn the_escort_dialog_lays_out_with_its_items_where_recorded() {
 
 #[test]
 fn the_offer_dialog_lays_out_with_its_items_where_recorded_its_buttons_enabled() {
-    use nova_sim::mission::OfferLabels;
-    use nova_sim::{MissionId, OfferPrompt};
+    use nova_sim_frame::mission::OfferLabels;
+    use nova_sim_frame::{MissionId, OfferPrompt};
     use nova_view::spaceport::OfferChoice;
     use nova_view::spaceport::offer::{
         ACCEPT_ITEM as OFFER_ACCEPT_ITEM, OFFER_DIALOG, OfferDialog, REFUSE_ITEM, SINGLE_ITEM,
@@ -1076,8 +1076,8 @@ fn offer_of(
     graphic: Option<i16>,
     (accept, refuse): (&str, &str),
 ) -> nova_view::spaceport::offer::OfferDialog {
-    use nova_sim::mission::OfferLabels;
-    use nova_sim::{MissionId, OfferPrompt};
+    use nova_sim_frame::mission::OfferLabels;
+    use nova_sim_frame::{MissionId, OfferPrompt};
     nova_view::spaceport::offer::OfferDialog::new(
         Ok((template, mono())),
         OfferPrompt {
@@ -1328,8 +1328,8 @@ fn the_picture_variants_frames_decode_at_their_sizes() {
 }
 
 /// A player info with nothing in it but the pilot's name.
-fn blank_player_info() -> nova_sim::PlayerInfo {
-    nova_sim::PlayerInfo {
+fn blank_player_info() -> nova_sim_frame::PlayerInfo {
+    nova_sim_frame::PlayerInfo {
         pilot_name: "Ada".to_owned(),
         date: String::new(),
         system: String::new(),
@@ -1350,8 +1350,8 @@ fn blank_player_info() -> nova_sim::PlayerInfo {
         extras: None,
         honors: None,
         jettisonable: false,
-        words: nova_sim::player_info::Words::STOCK,
-        cheat_ids: nova_sim::player_info::CheatIds::default(),
+        words: nova_sim_frame::player_info::Words::STOCK,
+        cheat_ids: nova_sim_state::shown::player_info::CheatIds::default(),
         cheats: false,
     }
 }

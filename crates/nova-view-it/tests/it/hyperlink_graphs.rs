@@ -9,8 +9,8 @@ use nova_data::records::system::System;
 use nova_data::store::fixture::one_file;
 use nova_data::{GameData, Record};
 use nova_rsrc::fixture::ForkBuilder;
-use nova_sim::PilotCatalog;
-use nova_sim::hyperspace::system_links;
+use nova_sim_frame::catalog::PilotCatalog;
+use nova_sim_frame::hyperspace::system_links;
 use nova_view::galaxy::{GalaxyCatalog, GalaxyModel, SystemId};
 
 fn put_i16s(bytes: &mut [u8], at: usize, values: &[i16]) {

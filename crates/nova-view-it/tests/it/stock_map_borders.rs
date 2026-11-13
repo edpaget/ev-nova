@@ -14,8 +14,8 @@
 use crate::common;
 
 use nova_data::GameData;
-use nova_sim::govt::{NO_INFLUENCE, SMALL_INFLUENCE};
-use nova_sim::{CombatCatalog, Governments, GovtId};
+use nova_sim_frame::{CombatCatalog, Governments, GovtId};
+use nova_sim_state::govt::{NO_INFLUENCE, SMALL_INFLUENCE};
 use nova_view::galaxy::GalaxyCatalog;
 
 fn open() -> Option<GameData> {

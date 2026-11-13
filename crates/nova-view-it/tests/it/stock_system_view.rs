@@ -14,8 +14,8 @@ use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 use nova_data::{GameData, SystemId};
-use nova_sim::gate::HYPERGATE;
-use nova_sim::stellar_frames::is_animated;
+use nova_sim_frame::landing::HYPERGATE;
+use nova_sim_state::shown::stellar_frames::is_animated;
 use nova_view::system::SystemScene;
 use nova_view::{
     DrawCommand, DrawList, ImageKey, Input, Key, MouseButton, Navigator, Point, Screen,

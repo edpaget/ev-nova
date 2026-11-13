@@ -157,7 +157,7 @@ fn the_stock_slides_start_at_minus_1_minus_6_and_minus_11() {
         Rc::new(MonoMetrics),
     );
     menu.appear();
-    let tick = nova_sim::mission::screens::mac_ticks(1);
+    let tick = nova_sim_frame::mission::screens::mac_ticks(1);
     let mut first_frames = Vec::new();
     for at in 1..=12 {
         menu.tick(tick);
@@ -366,7 +366,7 @@ fn every_stock_ship_has_a_picture_over_black() {
     let mut lit = Vec::new();
     assert_eq!(data.ids(Ship::TYPE).len(), 288, "every stock shïp");
     for &id in data.ids(Ship::TYPE) {
-        let Some(picture) = data.panel_ship(nova_sim::ShipId(id)).picture else {
+        let Some(picture) = data.panel_ship(nova_sim_frame::ShipId(id)).picture else {
             missing.push(id);
             continue;
         };

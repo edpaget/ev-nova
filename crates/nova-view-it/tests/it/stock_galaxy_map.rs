@@ -10,7 +10,7 @@ use nova_data::records::govt::Govt;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 use nova_data::{GameData, Record};
-use nova_sim::RuleSource;
+use nova_sim_frame::RuleSource;
 use nova_view::flight::radar::IRect;
 use nova_view::galaxy::borders::draw_cells;
 use nova_view::galaxy::map::{LESS_DARK_GREY, NAME_SIZE};
@@ -554,7 +554,7 @@ fn the_stock_rules_leave_the_stock_viewer_as_it_was() {
         return;
     };
     let before = GalaxyMap::new(&data);
-    let after = GalaxyMap::new(&data).with_rules(&nova_sim::Rulebook::default());
+    let after = GalaxyMap::new(&data).with_rules(&nova_sim_frame::Rulebook::default());
     assert_eq!(after.picture(), before.picture());
     assert_eq!(
         drawn(&after).iter().collect::<Vec<_>>(),

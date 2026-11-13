@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use nova_data::GameData;
-use nova_sim::{HashedRolls, lights_level};
+use nova_sim_frame::{HashedRolls, lights_level};
 use nova_view::ships::{SheetInfo, ShipBrowser, ShipCatalog, ShipEntry, ShipId};
 use nova_view::{DrawCommand, DrawList, ImageKey, Input, Key, Screen};
 

@@ -18,7 +18,8 @@ use crate::common;
 use nova_data::records::interface::Interface;
 use nova_data::records::weapon::Weapon;
 use nova_data::{GameData, Record};
-use nova_sim::{BoomId, ShipId, SoundId, WeaponId};
+use nova_sim_frame::catalog::CommCatalog;
+use nova_sim_frame::{BoomId, ShipId, SoundId, WeaponId};
 use nova_view::flight::hud::interface_id;
 use nova_view::flight::{CombatLooks, LayerSheet, Looks, ShipSheet, ShipSprites, StatusBars};
 use nova_view::geometry::Bounds;
@@ -341,7 +342,7 @@ fn a_grants_message_reads_its_stock_strings() {
     let Some(data) = open() else {
         return;
     };
-    let strings = nova_sim::CommCatalog::string_list(&data, 2002);
+    let strings = CommCatalog::string_list(&data, 2002);
     assert_eq!(
         [
             &strings[105],
@@ -374,7 +375,7 @@ fn the_dock_requests_and_the_approachs_words_read_their_stock_strings() {
     let Some(data) = open() else {
         return;
     };
-    let strings = nova_sim::CommCatalog::string_list(&data, 2002);
+    let strings = CommCatalog::string_list(&data, 2002);
     assert_eq!(strings[52], NO_RESPONSE);
     assert_eq!(
         &strings[64..72],
@@ -442,7 +443,7 @@ fn the_sabotage_notices_read_their_stock_strings() {
     let Some(data) = open() else {
         return;
     };
-    let strings = nova_sim::CommCatalog::string_list(&data, 2002);
+    let strings = CommCatalog::string_list(&data, 2002);
     assert_eq!(
         [&strings[37], &strings[38], &strings[39], &strings[40]],
         [BOMB_EXPLODED_ONBOARD, YOUR, HAS_EXPLODED, HAVE_EXPLODED]
@@ -460,7 +461,7 @@ fn the_self_destructs_lines_read_their_stock_strings() {
     let Some(data) = open() else {
         return;
     };
-    let strings = nova_sim::CommCatalog::string_list(&data, 2002);
+    let strings = CommCatalog::string_list(&data, 2002);
     assert_eq!(
         [
             &strings[384],
@@ -491,7 +492,7 @@ fn the_frame_rate_readouts_lines_read_their_stock_strings() {
     let Some(data) = open() else {
         return;
     };
-    let strings = nova_sim::CommCatalog::string_list(&data, 2002);
+    let strings = CommCatalog::string_list(&data, 2002);
     assert_eq!([&strings[281], &strings[282]], [CALCULATING_FPS, FPS]);
 }
 
@@ -503,7 +504,7 @@ fn the_jump_collapse_notice_reads_its_stock_string() {
     let Some(data) = open() else {
         return;
     };
-    let strings = nova_sim::CommCatalog::string_list(&data, 2002);
+    let strings = CommCatalog::string_list(&data, 2002);
     assert_eq!(strings[34], JUMP_COLLAPSED);
 }
 
@@ -515,7 +516,7 @@ fn a_tractored_jump_says_its_stock_string() {
     let Some(data) = open() else {
         return;
     };
-    let strings = nova_sim::CommCatalog::string_list(&data, 2002);
+    let strings = CommCatalog::string_list(&data, 2002);
     assert_eq!(strings[35], TRACTORED);
 }
 
@@ -527,7 +528,7 @@ fn the_propulsion_repaired_notice_reads_its_stock_string() {
     let Some(data) = open() else {
         return;
     };
-    let strings = nova_sim::CommCatalog::string_list(&data, 2002);
+    let strings = CommCatalog::string_list(&data, 2002);
     assert_eq!(strings[36], PROPULSION_REPAIRED);
 }
 
@@ -542,7 +543,7 @@ fn a_scans_notices_read_their_stock_strings() {
     let Some(data) = open() else {
         return;
     };
-    let strings = nova_sim::CommCatalog::string_list(&data, 2002);
+    let strings = CommCatalog::string_list(&data, 2002);
     assert_eq!(
         &strings[374..380],
         [
@@ -568,7 +569,7 @@ fn the_tutorial_and_the_greeting_read_their_stock_strings() {
     let Some(data) = open() else {
         return;
     };
-    let strings = nova_sim::CommCatalog::string_list(&data, 2002);
+    let strings = CommCatalog::string_list(&data, 2002);
     assert_eq!(
         &strings[21..28],
         [

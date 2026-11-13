@@ -18,6 +18,15 @@ nova-view = { workspace = true, features = ["fixture"] }
 # `CombatCatalog`, the story's news picture). No test here starts a
 # real `Session`: those are nova-flight's.
 nova-sim.workspace = true
+# The view's vocabulary of the simulation the tests name (`Governments`,
+# `CombatCatalog`, `Rulebook`, the mission screens, `escape_pod::Pod`,
+# `hyperspace::system_links` and the like).
+nova-sim-frame.workspace = true
+# Three test-only names the view vocabulary doesn't carry, from the
+# crate that owns them: `shown::stellar_frames::is_animated`,
+# `govt::{NO_INFLUENCE, SMALL_INFLUENCE}` and
+# `shown::player_info::CheatIds`.
+nova-sim-state.workspace = true
 # The game data loader the stock tests read, and its fixtures
 # (`store::fixture`, `graphics::fixture`).
 nova-data = { workspace = true, features = ["fixture"] }

@@ -10,9 +10,9 @@
 use crate::common;
 
 use nova_data::GameData;
-use nova_sim::catalog::Explosion;
-use nova_sim::combat::shot_fade::at_full_gain;
-use nova_sim::{
+use nova_sim_frame::catalog::Explosion;
+use nova_sim_frame::combat::shot_fade::at_full_gain;
+use nova_sim_frame::{
     BoomId, CombatCatalog, CombatEvent, NeverFires, NpcId, RuleSource, ShipId, ShipRef, Vec2,
     WeaponId,
 };
@@ -202,7 +202,7 @@ fn a_stock_escape_pod_draws_on_shan_895s_sheet_of_36_rotations() {
         .collect();
     assert_eq!(heard, [372]);
     // The simulation sets it adrift; the view draws it from the frame.
-    let pod = nova_sim::escape_pod::Pod {
+    let pod = nova_sim_frame::escape_pod::Pod {
         position: Vec2::new(40.0, 0.0),
         velocity: Vec2::new(1.0, 0.0),
         life: 150.0,

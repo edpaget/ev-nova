@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use nova_data::graphics::{PICT, decode_pict};
 use nova_data::{GameData, InterfaceData};
-use nova_sim::Service;
+use nova_sim_frame::Service;
 use nova_view::geometry::{Bounds, Point};
 use nova_view::image::ImageKey;
 use nova_view::sound::{Sound, SoundId, UiSound};
