@@ -20,6 +20,13 @@
 //! makes the model unreadable, as any malformed field does. The
 //! metallic-roughness, normal, occlusion and emissive textures are not
 //! read, with their samplers, sets and transforms.
+//!
+//! A primitive whose set is missing, isn't one coordinate per vertex, or
+//! holds a coordinate that isn't finite (a NaN or an infinity in the
+//! file, or one the transform makes) has no coordinates
+//! ([`Primitive::uvs`] is `None`) and draws untextured, in its
+//! material's base colour. Set 0 is never used in its place. The rest of
+//! the model reads as it would otherwise.
 
 use std::collections::BTreeMap;
 
@@ -46,9 +53,9 @@ pub struct Primitive {
     /// (set 0 for a primitive whose material has no base-colour texture,
     /// or with no material), with the base colour's
     /// `KHR_texture_transform` applied. `None` when the primitive has no
-    /// such set, the set isn't one coordinate per vertex, or the
-    /// transform leaves a coordinate that isn't finite: it then draws
-    /// untextured. A missing set is never replaced by set 0, whose
+    /// such set, the set isn't one coordinate per vertex, or it holds a
+    /// coordinate that isn't finite, in the file or after the transform:
+    /// it then draws untextured. A missing set is never replaced by set 0, whose
     /// coordinates lay out a different image.
     pub uvs: Option<Vec<[f32; 2]>>,
     /// Indices into the vertices, three a triangle.
@@ -1058,10 +1065,29 @@ mod tests {
     }
 
     #[test]
-    fn a_coordinate_that_is_not_finite_reaches_the_primitive() {
-        let scene = scene(&sampled(&[skin()]).bad_texcoord(f32::NAN));
-        let uvs = scene.primitives[0].uvs.as_ref().expect("coordinates");
-        assert!(uvs.iter().flatten().any(|c| c.is_nan()), "{uvs:?}");
+    fn a_coordinate_that_is_not_finite_leaves_the_primitive_no_coordinates() {
+        let second = Mat {
+            tex_coord: 1,
+            ..skin()
+        };
+        let welded = sampled(&[skin(), second.clone()]);
+        let flat = Builder::new([2.0, 1.0, 4.0])
+            .texcoords()
+            .texcoords1()
+            .image(ImageAt::Embedded)
+            .material(skin())
+            .material(second);
+        for builder in [welded, flat] {
+            let good = scene(&builder);
+            for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                let read = scene(&builder.clone().bad_texcoord(bad));
+                assert_eq!(read.primitives[0].uvs, None, "{bad}");
+                // The other primitive, on set 1, is unchanged.
+                assert_set(&read.primitives[1], 1);
+                assert_eq!(read.primitives[1], good.primitives[1], "{bad}");
+                assert_eq!(read.materials, good.materials, "{bad}");
+            }
+        }
     }
 
     #[test]

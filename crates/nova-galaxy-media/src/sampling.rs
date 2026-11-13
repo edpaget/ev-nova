@@ -230,14 +230,15 @@ pub(crate) fn texture_ref(info: &gltf::texture::Info<'_>) -> TextureRef {
 }
 
 /// `uvs` as a primitive is sampled by them: under `transform`, if there
-/// is one. `None` when the transform leaves a coordinate that isn't
-/// finite (a scale near the largest float, say): the primitive then has
-/// no coordinates, and draws untextured.
+/// is one. `None` when any coordinate isn't finite, whether the file holds
+/// a NaN or an infinity (at any vertex, used or not) or the transform
+/// leaves one (a scale near the largest float, say): the primitive then
+/// has no coordinates, and draws untextured.
 pub(crate) fn resolved(uvs: Vec<[f32; 2]>, transform: Option<&Transform>) -> Option<Vec<[f32; 2]>> {
-    let Some(transform) = transform else {
-        return Some(uvs);
+    let moved: Vec<[f32; 2]> = match transform {
+        Some(transform) => uvs.iter().map(|uv| transform.apply(*uv)).collect(),
+        None => uvs,
     };
-    let moved: Vec<[f32; 2]> = uvs.iter().map(|uv| transform.apply(*uv)).collect();
     moved
         .iter()
         .flatten()
@@ -399,9 +400,20 @@ mod tests {
         };
         assert_eq!(resolved(vec![[0.5, 4.0]], Some(&tall)), None);
         assert!(resolved(vec![[0.5, 0.5]], Some(&huge)).is_some());
-        // Coordinates that aren't finite in the file are not this
-        // function's to refuse: without a transform they pass.
-        assert!(resolved(vec![[f32::NAN, 0.0]], None).is_some());
+    }
+
+    #[test]
+    fn coordinates_that_are_not_finite_resolve_to_nothing_with_or_without_a_transform() {
+        for transform in [None, Some(&Transform::IDENTITY)] {
+            for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                for uv in [[bad, 0.5], [0.5, bad]] {
+                    let uvs = vec![[0.0, 0.0], uv, [1.0, 1.0]];
+                    assert_eq!(resolved(uvs, transform), None, "{uv:?}, {transform:?}");
+                }
+            }
+            let fine = vec![[0.0, 0.0], [0.25, 0.75]];
+            assert_eq!(resolved(fine.clone(), transform), Some(fine));
+        }
     }
 
     #[test]
