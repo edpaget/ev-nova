@@ -308,7 +308,7 @@ under `tests/`, or doctests) so `cargo` runs them.
   needs-review; `rdm:land` runs it again before landing. `hk check` runs it
   too.
 - The pre-commit hook is lighter: `cargo fmt --check`, then clippy and nextest
-  with `-p <crate>` for each crate with staged changes (and the workspace lint
+  side by side (clippy in `target/clippy`) with `-p <crate>` for each crate with staged changes (and the workspace lint
   and tests when `Cargo.toml`, `Cargo.lock`, `mise.toml`, `clippy.toml`,
   `.config/nextest.toml` or `.cargo/` change). It skips dependent crates
   (except a crate's `<x>-it` sibling), doctests and the dev-tools legs, which

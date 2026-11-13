@@ -59,31 +59,50 @@ local tested = List(
 // The pre-commit gate: fmt, then clippy and nextest over each crate with
 // staged changes, one `-p` at a time. A single `-p <crate>` keeps one
 // feature-resolved build of each crate warm; a combined `-p a -p b` would
-// build a new variant for every combination. `exclusive` runs the crates
-// one after another rather than contending for the target-dir lock.
+// build a new variant for every combination. Each crate is a `Group`, so
+// crates still run one after another. Within a group, clippy (in
+// `target/clippy`, as the dev-tools legs use their own target dir) runs
+// alongside nextest (in `target/debug`), so neither waits on the other's
+// build lock, and a failure in either fails the hook. Both builds are
+// capped at 8 jobs, so with nextest's 8 test threads the hook never runs
+// more than 16 at once (.claude/rules/resource-limits.md).
 // Dependent crates, the dev-tools legs and doctests are left to the full
 // gate (`hk check`, `mise run ci`), run before review and on landing. The
 // one exception is an `<x>-it` crate: it holds `<x>`'s own integration
 // tests, not a dependent's, so a commit to `<x>` runs them as it did when
 // they lived in `<x>`. Every other dependent still waits for the full gate.
-local changed = new Mapping<String, Step> {
+local changed = new Mapping<String, Step | Group> {
     ["fmt"] {
         glob = List("**/*.rs")
         check = "cargo fmt --all --check"
         exclusive = true
     }
     for (c in crates) {
-        [c] {
-            glob = List("crates/\(c)/**")
-            check = "cargo clippy -p \(c) --all-targets --locked -- -D warnings && cargo nextest run -p \(c) --locked --no-tests=pass"
-            exclusive = true
+        [c] = new Group {
+            steps {
+                ["\(c)-clippy"] {
+                    glob = List("crates/\(c)/**")
+                    check = "cargo clippy -p \(c) --all-targets --locked -j 8 --target-dir target/clippy -- -D warnings"
+                }
+                ["\(c)-test"] {
+                    glob = List("crates/\(c)/**")
+                    check = "cargo nextest run -p \(c) --locked --build-jobs 8 --no-tests=pass"
+                }
+            }
         }
     }
     for (t in tested) {
-        ["\(t)-it"] {
-            glob = List("crates/\(t)-it/**", "crates/\(t)/**")
-            check = "cargo clippy -p \(t)-it --all-targets --locked -- -D warnings && cargo nextest run -p \(t)-it --locked --no-tests=pass"
-            exclusive = true
+        ["\(t)-it"] = new Group {
+            steps {
+                ["\(t)-it-clippy"] {
+                    glob = List("crates/\(t)-it/**", "crates/\(t)/**")
+                    check = "cargo clippy -p \(t)-it --all-targets --locked -j 8 --target-dir target/clippy -- -D warnings"
+                }
+                ["\(t)-it-test"] {
+                    glob = List("crates/\(t)-it/**", "crates/\(t)/**")
+                    check = "cargo nextest run -p \(t)-it --locked --build-jobs 8 --no-tests=pass"
+                }
+            }
         }
     }
     // Fails when a staged file sits in a crate this list doesn't name, so a

@@ -14,6 +14,8 @@ minutes.
 
 - `.config/nextest.toml`: 8 test threads per run (CI uses every core), and at
   most 2 wgpu tests at a time (the `gpu` test group).
+- `hk.pkl`: the pre-commit hook runs each crate's clippy and nextest at the
+  same time, each build capped at 8 jobs.
 - `mise run mutants`: 2 mutants at a time, 8 jobserver tasks, and the
   `mutants` nextest profile, which kills a test after 20 s and runs 4 at once.
 - `.claude/hooks/heavy-job-guard.sh`: refuses to start the full gate, a
