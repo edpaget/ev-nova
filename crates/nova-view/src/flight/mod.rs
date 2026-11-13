@@ -80,8 +80,8 @@ pub mod data;
 pub mod edge;
 pub mod effects;
 pub mod escorts;
-#[cfg(test)]
-mod fake_catalog;
+#[cfg(any(test, feature = "fixture"))]
+pub mod fake_catalog;
 pub mod flash;
 pub mod floating;
 pub mod frame_rate;

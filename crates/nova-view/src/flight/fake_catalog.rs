@@ -1,7 +1,14 @@
 //! The view's [`FakeCatalog`], and the data builders and fakes that the
 //! adapter's checks (`sim_adapter`), the edge's and the view's component
 //! tests (`flight::view::tests`) share
-//! (rdm:phase/view-sim-seam/phase-15-integration-test-set). Test-only.
+//! (rdm:phase/view-sim-seam/phase-15-integration-test-set).
+//!
+//! Test code only, published under the `fixture` feature so that the
+//! adapter's and the edge's checks can share it from the crate above
+//! nova-view that they move to
+//! (rdm:phase/faster-builds/phase-6-nova-view-off-nova-sim): the fake
+//! implements nova-sim's catalog traits as well as the view's ports, and
+//! the orphan rule keeps those impls here.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -27,7 +34,7 @@ use crate::flight::catalog::{
 };
 use crate::flight::escorts::{EscortMenuColors, EscortMenuLooks};
 use crate::flight::sim_port::FlightSim;
-use crate::flight::view::*;
+use crate::flight::view::{FlightView, SharedChance};
 use crate::flight::weapons::BEAM_UNDER_SHIPS;
 use crate::galaxy::{Galaxy, GalaxyCatalog, SystemEntry};
 use crate::system::catalog::{
@@ -45,170 +52,170 @@ use crate::{Color, Font, Input, Key, Point, Screen};
 /// Records the systems read.
 // Each flag adds a system or a link of its own, read on its own.
 #[allow(clippy::struct_excessive_bools)]
-pub(in crate::flight) struct FakeCatalog {
-    pub(in crate::flight) character: Result<CharacterStart, StartError>,
-    pub(in crate::flight) fields: ShipFields,
-    pub(in crate::flight) sheet: Result<ShipSheet, String>,
+pub struct FakeCatalog {
+    pub character: Result<CharacterStart, StartError>,
+    pub fields: ShipFields,
+    pub sheet: Result<ShipSheet, String>,
     /// `ïntf` 128: stock-like, or why it cannot be read.
-    pub(in crate::flight) bar: Result<StatusBarLayout, String>,
+    pub bar: Result<StatusBarLayout, String>,
     /// `cicn` 18000's size: 24 x 24, by default.
-    pub(in crate::flight) alert_icon: Option<(u32, u32)>,
+    pub alert_icon: Option<(u32, u32)>,
     /// Each `gövt`'s `Interface`: none, by default.
-    pub(in crate::flight) interfaces: Vec<(i16, i16)>,
+    pub interfaces: Vec<(i16, i16)>,
     /// The `ïntf`s past 128: none, by default.
-    pub(in crate::flight) other_bars: Vec<(i16, StatusBarLayout)>,
+    pub other_bars: Vec<(i16, StatusBarLayout)>,
     /// The `ïntf`s asked for.
-    pub(in crate::flight) bars_asked: RefCell<Vec<i16>>,
+    pub bars_asked: RefCell<Vec<i16>>,
     /// System 130's landing sites: Earth and Moon, by default.
-    pub(in crate::flight) sites: Vec<LandingSite>,
+    pub sites: Vec<LandingSite>,
     /// System 130's `NavDefs` slots on the map: none, by default.
-    pub(in crate::flight) sol_navs: Vec<Option<(u32, u16)>>,
+    pub sol_navs: Vec<Option<(u32, u16)>>,
     /// System 130's `Interference`: none, by default.
-    pub(in crate::flight) sol_interference: i16,
+    pub sol_interference: i16,
     /// System 130's `Murk`: none, by default.
-    pub(in crate::flight) sol_murk: i16,
+    pub sol_murk: i16,
     /// System 130's `BkgndColor`: black, by default.
-    pub(in crate::flight) sol_background: u32,
+    pub sol_background: u32,
     /// System 131's `Message`: no buoy (−1), by default.
-    pub(in crate::flight) alpha_buoy: i16,
+    pub alpha_buoy: i16,
     /// The escorts' voices: none, by default.
-    pub(in crate::flight) voices: nova_sim::voice::Voices,
+    pub voices: nova_sim::voice::Voices,
     /// The stellars Sol lists after Earth and the Moon: none, by
     /// default.
-    pub(in crate::flight) sol_more: Vec<StellarContents>,
+    pub sol_more: Vec<StellarContents>,
     /// How many frames Proxima's (140's) `Type` sheet has in Alpha
     /// Centauri: 1, by default.
-    pub(in crate::flight) proxima_frames: u16,
-    pub(in crate::flight) systems_read: RefCell<Vec<SystemId>>,
+    pub proxima_frames: u16,
+    pub systems_read: RefCell<Vec<SystemId>>,
     /// The `dësc`s: none, by default.
-    pub(in crate::flight) descriptions: Vec<(i16, String)>,
+    pub descriptions: Vec<(i16, String)>,
     /// The movies the `dësc`s name: none, by default.
-    pub(in crate::flight) desc_movies: Vec<(i16, nova_sim::DescMovie)>,
+    pub desc_movies: Vec<(i16, nova_sim::DescMovie)>,
     /// The commodities: none, by default.
-    pub(in crate::flight) commodities: CommodityStrings,
+    pub commodities: CommodityStrings,
     /// The planetary events: none, by default.
-    pub(in crate::flight) disasters: Vec<DisasterRecord>,
+    pub disasters: Vec<DisasterRecord>,
     /// The outfits: none, by default.
-    pub(in crate::flight) outfits: Vec<OutfitRecord>,
+    pub outfits: Vec<OutfitRecord>,
     /// The `jünk`s: none, by default.
-    pub(in crate::flight) junk: Vec<JunkRecord>,
+    pub junk: Vec<JunkRecord>,
     /// The ship classes the shipyard reads: none, by default.
-    pub(in crate::flight) ships: Vec<ShipRecord>,
+    pub ships: Vec<ShipRecord>,
     /// The ships whose sheets were asked for.
-    pub(in crate::flight) sheets_asked: RefCell<Vec<ShipId>>,
+    pub sheets_asked: RefCell<Vec<ShipId>>,
     /// Each ship type's outline: none, by default.
-    pub(in crate::flight) outlines: Vec<(i16, crate::outline::Outline)>,
+    pub outlines: Vec<(i16, crate::outline::Outline)>,
     /// The ships whose outlines were asked for.
-    pub(in crate::flight) outlines_asked: RefCell<Vec<ShipId>>,
+    pub outlines_asked: RefCell<Vec<ShipId>>,
     /// Each batch of ships whose target cards were asked for.
-    pub(in crate::flight) cards_asked: RefCell<Vec<Vec<ShipId>>>,
+    pub cards_asked: RefCell<Vec<Vec<ShipId>>>,
     /// Each system's traffic: none, by default.
-    pub(in crate::flight) traffic: Vec<(SystemId, nova_sim::SystemTraffic)>,
+    pub traffic: Vec<(SystemId, nova_sim::SystemTraffic)>,
     /// The düdes: none, by default.
-    pub(in crate::flight) dudes: Vec<(nova_sim::DudeId, nova_sim::DudeRecord)>,
+    pub dudes: Vec<(nova_sim::DudeId, nova_sim::DudeRecord)>,
     /// The weapons: none, by default.
-    pub(in crate::flight) weapons: Vec<nova_sim::WeaponRecord>,
+    pub weapons: Vec<nova_sim::WeaponRecord>,
     /// The ship types' combat fields: none, by default.
-    pub(in crate::flight) hulls: Vec<nova_sim::HullRecord>,
+    pub hulls: Vec<nova_sim::HullRecord>,
     /// The governments: none, by default.
-    pub(in crate::flight) govts: Vec<nova_sim::GovtRecord>,
+    pub govts: Vec<nova_sim::GovtRecord>,
     /// The ranks: none, by default.
-    pub(in crate::flight) ranks: Vec<nova_sim::catalog::RankRecord>,
+    pub ranks: Vec<nova_sim::catalog::RankRecord>,
     /// The weapons' looks: none, by default.
-    pub(in crate::flight) looks: Vec<(i16, Result<WeaponLook, String>)>,
+    pub looks: Vec<(i16, Result<WeaponLook, String>)>,
     /// The explosions' looks: none, by default.
-    pub(in crate::flight) booms: Vec<(i16, Result<BoomLook, String>)>,
+    pub booms: Vec<(i16, Result<BoomLook, String>)>,
     /// The ship types' target cards: none, by default.
-    pub(in crate::flight) cards: Vec<(i16, TargetCard)>,
+    pub cards: Vec<(i16, TargetCard)>,
     /// The governments' target codes: none, by default.
-    pub(in crate::flight) codes: Vec<(i16, String)>,
+    pub codes: Vec<(i16, String)>,
     /// The jettisoned cargo box's sheet: `rlëD` 500 of 36 frames, by
     /// default.
-    pub(in crate::flight) box_sheet: Result<EffectSheet, String>,
+    pub box_sheet: Result<EffectSheet, String>,
     /// The mouse cursor's sheet: `rlëD` 651 of 8 frames, by default.
-    pub(in crate::flight) cursor_sheet: Result<EffectSheet, String>,
+    pub cursor_sheet: Result<EffectSheet, String>,
     /// The stars' sheet: none, by default, so no star is drawn
     /// (`flight::view::tests::star_sheet` draws them).
-    pub(in crate::flight) star_sheet: Result<StarSheet, String>,
+    pub star_sheet: Result<StarSheet, String>,
     /// The stars' stand-in dots: none, by default, as stock data has
     /// (`flight::view::tests::stars` draws them).
-    pub(in crate::flight) star_dots: Option<StarDots>,
+    pub star_dots: Option<StarDots>,
     /// The asteroid types: none, by default.
-    pub(in crate::flight) asteroid_types: Vec<nova_sim::AsteroidTypeRecord>,
+    pub asteroid_types: Vec<nova_sim::AsteroidTypeRecord>,
     /// Each system's asteroid field: none, by default.
-    pub(in crate::flight) asteroid_fields: Vec<nova_sim::AsteroidFieldRecord>,
+    pub asteroid_fields: Vec<nova_sim::AsteroidFieldRecord>,
     /// The string lists: none, by default.
-    pub(in crate::flight) strings: Vec<(i16, Vec<String>)>,
+    pub strings: Vec<(i16, Vec<String>)>,
     /// The persons: none, by default.
-    pub(in crate::flight) persons: Vec<nova_sim::PersonRecord>,
+    pub persons: Vec<nova_sim::PersonRecord>,
     /// Ship 128's default items: none, by default.
-    pub(in crate::flight) defaults: Vec<(OutfitId, u16)>,
+    pub defaults: Vec<(OutfitId, u16)>,
     /// Ship 129's sheet in place of the one [`FakeCatalog::ship_sheet`]
     /// gives: none, by default.
-    pub(in crate::flight) npc_sheet: Option<ShipSheet>,
+    pub npc_sheet: Option<ShipSheet>,
     /// Whether Alpha Centauri links on to Barnard, which has no
     /// stellars: not by default.
-    pub(in crate::flight) onward: bool,
+    pub onward: bool,
     /// Whether Sol lists Barnard too, after Alpha Centauri, so that
     /// Hyper Select has two systems to cycle through: not by default.
-    pub(in crate::flight) fan: bool,
+    pub fan: bool,
     /// Whether Proxima Near (134) exists at (40, 30), close enough to
     /// Sol to show on the floating map, listed by Sol after its other
     /// links and linking back, with no stellars: not by default.
-    pub(in crate::flight) near: bool,
+    pub near: bool,
     /// Every stellar a gate may lead to: none, by default. Behind a
     /// `RefCell`, so a test can change a gate's links behind a view
     /// already built, which shares the catalog with its flight.
-    pub(in crate::flight) gates: RefCell<Vec<GateSite>>,
+    pub gates: RefCell<Vec<GateSite>>,
     /// The gates each system lists beyond its stellars: none, by
     /// default.
-    pub(in crate::flight) gate_listers: Vec<(SystemId, StellarId)>,
+    pub gate_listers: Vec<(SystemId, StellarId)>,
     /// Whether Alpha Reborn (133) exists, at Alpha Centauri's place,
     /// with no links and Proxima Reborn (141) at its centre: not by
     /// default.
-    pub(in crate::flight) reborn: bool,
+    pub reborn: bool,
     /// Whether Sol lists Alpha Reborn too, after its other links, so that
     /// a place's two systems link differently by
     /// `RuleKey::ColocatedResolution`: not by default. It needs
     /// [`reborn`](Self::reborn).
-    pub(in crate::flight) sol_lists_reborn: bool,
+    pub sol_lists_reborn: bool,
     /// Whether system 128 exists, the escape pod's rescue's fallback,
     /// with no links and no stellars: not by default.
-    pub(in crate::flight) home: bool,
+    pub home: bool,
     /// Whether the map's catalog has nebula 128, (−20, −20) 60 × 60 over
     /// Sol, with a 30 × 30 picture in slot 0 (`PICT` 9500) and a
     /// 120 × 120 one in slot 2 (9502): not by default. The session's
     /// catalog has no `nëbu`, so it is active, and unexplored until a
     /// test explores it.
-    pub(in crate::flight) nebula: bool,
+    pub nebula: bool,
     /// The stellars that can be destroyed and regenerated: none, by
     /// default.
-    pub(in crate::flight) lives: Vec<nova_sim::StellarLife>,
+    pub lives: Vec<nova_sim::StellarLife>,
     /// The Moon's (129) sheets and graphic type 0's, given to the sim
     /// and the view alike: the defaults, unless set.
-    pub(in crate::flight) moon: Option<MoonSheets>,
+    pub moon: Option<MoonSheets>,
     /// Why the Moon's (129) `Type` sheet cannot be read, in the sim and
     /// the view alike: it can, by default.
-    pub(in crate::flight) moon_unreadable: Option<&'static str>,
+    pub moon_unreadable: Option<&'static str>,
     /// The missions: none, by default.
-    pub(in crate::flight) missions: Vec<nova_sim::catalog::MissionRecord>,
+    pub missions: Vec<nova_sim::catalog::MissionRecord>,
     /// What the mission screens show of each: none, by default.
-    pub(in crate::flight) mission_texts: Vec<nova_sim::catalog::MissionTexts>,
+    pub mission_texts: Vec<nova_sim::catalog::MissionTexts>,
     /// Each system's `Visibility`: none, by default, so every system
     /// is visible.
-    pub(in crate::flight) visibility: Vec<nova_sim::catalog::SystemVisibility>,
+    pub visibility: Vec<nova_sim::catalog::SystemVisibility>,
     /// The session's `spöb` and `sÿst` names: none, by default.
-    pub(in crate::flight) place_names: nova_sim::catalog::PlaceNames,
+    pub place_names: nova_sim::catalog::PlaceNames,
     /// The `crön`s: none, by default.
-    pub(in crate::flight) crons: Vec<nova_sim::catalog::CronRecord>,
+    pub crons: Vec<nova_sim::catalog::CronRecord>,
     /// Each `bööm`'s sound, as the session reads it: none, by default.
-    pub(in crate::flight) boom_sounds: Vec<(nova_sim::BoomId, nova_sim::SoundId)>,
+    pub boom_sounds: Vec<(nova_sim::BoomId, nova_sim::SoundId)>,
     /// Each system's government, in the session's map and the course
     /// map's catalog: none, by default.
-    pub(in crate::flight) governed: Vec<(i16, i16)>,
+    pub governed: Vec<(i16, i16)>,
     /// The systems besides Sol with a lived-in `NavDefs` slot on the
     /// map: none, by default.
-    pub(in crate::flight) lived: Vec<i16>,
+    pub lived: Vec<i16>,
 }
 
 /// The sizes of the Moon's (129) `Type` sheet (1129) and `DeadType`
@@ -216,13 +223,13 @@ pub(in crate::flight) struct FakeCatalog {
 /// each square; the frames of its `Type` and `DeadType` sheets; and
 /// its `Flags2` (0x0080 to animate only when destroyed).
 #[derive(Clone, Copy, Debug)]
-pub(in crate::flight) struct MoonSheets {
-    pub(in crate::flight) width: u32,
-    pub(in crate::flight) dead_width: Option<u32>,
-    pub(in crate::flight) zero_width: u32,
-    pub(in crate::flight) frames: u16,
-    pub(in crate::flight) dead_frames: u16,
-    pub(in crate::flight) flags2: u16,
+pub struct MoonSheets {
+    pub width: u32,
+    pub dead_width: Option<u32>,
+    pub zero_width: u32,
+    pub frames: u16,
+    pub dead_frames: u16,
+    pub flags2: u16,
 }
 
 /// No strings unless a test sets them.
@@ -261,7 +268,7 @@ impl FakeCatalog {
     }
 }
 
-pub(in crate::flight) const FIELDS: ShipFields = ShipFields {
+pub const FIELDS: ShipFields = ShipFields {
     speed: 300,
     accel: 300,
     maneuver: 30,
@@ -282,7 +289,8 @@ pub(in crate::flight) const FIELDS: ShipFields = ShipFields {
     gate_fuel: None,
 };
 
-pub(in crate::flight) fn sheet() -> ShipSheet {
+#[must_use]
+pub fn sheet() -> ShipSheet {
     ShipSheet {
         weapon: None,
         weap_decay: 0,
@@ -302,7 +310,8 @@ pub(in crate::flight) fn sheet() -> ShipSheet {
     }
 }
 
-pub(in crate::flight) fn catalog() -> FakeCatalog {
+#[must_use]
+pub fn catalog() -> FakeCatalog {
     FakeCatalog {
         character: Ok(CharacterStart {
             ship: Some(ShipId(128)),
@@ -433,7 +442,8 @@ impl FakeCatalog {
 }
 
 /// Stellar `id` at `(x, y)`, 20 x 20 (radius 10), with `flags`.
-pub(in crate::flight) fn site(id: i16, (x, y): (f32, f32), flags: u32) -> LandingSite {
+#[must_use]
+pub fn site(id: i16, (x, y): (f32, f32), flags: u32) -> LandingSite {
     LandingSite {
         id: StellarId(id),
         position: Vec2::new(x, y),
@@ -463,10 +473,11 @@ pub(in crate::flight) fn site(id: i16, (x, y): (f32, f32), flags: u32) -> Landin
 }
 
 /// The start's date, with stock's affixes.
-pub(in crate::flight) const DATE: &str = "June 23rd, 1177 NC";
+pub const DATE: &str = "June 23rd, 1177 NC";
 
 /// Stock `ïntf` 128's areas, with background `PICT` 700.
-pub(in crate::flight) fn layout() -> StatusBarLayout {
+#[must_use]
+pub fn layout() -> StatusBarLayout {
     let rect = |left, top, right, bottom| crate::geometry::Bounds {
         min: at(left, top),
         max: at(right, bottom),
@@ -766,12 +777,8 @@ impl TrafficCatalog for FakeCatalog {
     }
 }
 
-pub(in crate::flight) fn stellar(
-    id: i16,
-    name: &str,
-    (x, y): (i16, i16),
-    frames: u16,
-) -> StellarContents {
+#[must_use]
+pub fn stellar(id: i16, name: &str, (x, y): (i16, i16), frames: u16) -> StellarContents {
     StellarContents {
         id: StellarId(id),
         name: name.to_owned(),
@@ -798,16 +805,12 @@ pub(in crate::flight) fn stellar(
 
 /// Graphic type 0's sheet (`spïn` 1000) in every system: one 40 x 40
 /// frame.
-pub(in crate::flight) const TYPE_ZERO: i16 = 3000;
+pub const TYPE_ZERO: i16 = 3000;
 
 /// `stellar`, drawing `DeadType` sheet 2000 + `id` (one 30 x 30 frame)
 /// while destroyed.
-pub(in crate::flight) fn dying(
-    id: i16,
-    name: &str,
-    at: (i16, i16),
-    frames: u16,
-) -> StellarContents {
+#[must_use]
+pub fn dying(id: i16, name: &str, at: (i16, i16), frames: u16) -> StellarContents {
     StellarContents {
         dead_sprite: Some(Ok(StellarSheet {
             image: crate::SheetImage::Rled(2000 + id),
@@ -1108,7 +1111,7 @@ impl EscortMenuLooks for FakeCatalog {
     }
 }
 
-pub(in crate::flight) const MENU_COLORS: EscortMenuColors = EscortMenuColors {
+pub const MENU_COLORS: EscortMenuColors = EscortMenuColors {
     border: Color::from_rgb24(0x0012_3456),
     hilite: Color::from_rgb24(0x0065_4321),
 };
@@ -1146,7 +1149,8 @@ impl StatusBars for FakeCatalog {
     }
 }
 
-pub(in crate::flight) fn key(key: Key, pressed: bool) -> Input {
+#[must_use]
+pub fn key(key: Key, pressed: bool) -> Input {
     Input::Key {
         key,
         pressed,
@@ -1154,7 +1158,7 @@ pub(in crate::flight) fn key(key: Key, pressed: bool) -> Input {
     }
 }
 
-pub(in crate::flight) const THRUST: Controls = Controls {
+pub const THRUST: Controls = Controls {
     thrust: true,
     turn: Turn::None,
     reverse: false,
@@ -1189,17 +1193,17 @@ impl DescriptionGraphics for FakeCatalog {
     }
 }
 
-pub(in crate::flight) const MAP: Key = Key::KeyM;
+pub const MAP: Key = Key::KeyM;
 
 /// Presses and releases `k`.
-pub(in crate::flight) fn tap(view: &mut FlightView<FakeCatalog, impl FlightSim>, k: Key) {
+pub fn tap(view: &mut FlightView<FakeCatalog, impl FlightSim>, k: Key) {
     view.input(&key(k, true));
     view.input(&key(k, false));
 }
 
 /// Nova's collaborators, rolling on `chance`, the NPCs deciding as
 /// `behaviour` says.
-pub(in crate::flight) fn on(chance: SharedChance, behaviour: Rc<dyn Behaviour>) -> Collaborators {
+pub fn on(chance: SharedChance, behaviour: Rc<dyn Behaviour>) -> Collaborators {
     Collaborators {
         chance,
         behaviour,
@@ -1209,7 +1213,8 @@ pub(in crate::flight) fn on(chance: SharedChance, behaviour: Rc<dyn Behaviour>) 
 
 /// Ship 128 carrying the stock Multi-Jumping Organ (`oütf` 275,
 /// multi-jump 10), with Alpha Centauri linked on to Barnard.
-pub(in crate::flight) fn multi_jumping() -> FakeCatalog {
+#[must_use]
+pub fn multi_jumping() -> FakeCatalog {
     FakeCatalog {
         outfits: vec![OutfitRecord {
             id: OutfitId(275),
@@ -1242,7 +1247,8 @@ pub(in crate::flight) fn multi_jumping() -> FakeCatalog {
 
 /// Earth at the centre, a trade center trading food at 75, the first
 /// `chär` holding 1000 credits, and its ship 10 tons.
-pub(in crate::flight) fn trading() -> FakeCatalog {
+#[must_use]
+pub fn trading() -> FakeCatalog {
     let flags = StellarFlags::CAN_LAND | StellarFlags::TRADE_CENTER | 2 << 28;
     FakeCatalog {
         character: Ok(CharacterStart {
@@ -1268,7 +1274,8 @@ pub(in crate::flight) fn trading() -> FakeCatalog {
 
 /// Earth at the centre, an outfitter selling a fuel tank (+100 fuel,
 /// a ton, 1000 credits), the first `chär` holding 1000 credits.
-pub(in crate::flight) fn outfitting() -> FakeCatalog {
+#[must_use]
+pub fn outfitting() -> FakeCatalog {
     FakeCatalog {
         character: Ok(CharacterStart {
             cash: 1000,
@@ -1306,7 +1313,7 @@ pub(in crate::flight) fn outfitting() -> FakeCatalog {
     }
 }
 
-pub(in crate::flight) const BUY_TANK: OutfitOrder = OutfitOrder {
+pub const BUY_TANK: OutfitOrder = OutfitOrder {
     outfit: OutfitId(200),
     direction: Direction::Buy,
 };
@@ -1314,9 +1321,9 @@ pub(in crate::flight) const BUY_TANK: OutfitOrder = OutfitOrder {
 /// Fires every time, and records each percent it is asked; each draw
 /// is 0, and records its `n`.
 #[derive(Default)]
-pub(in crate::flight) struct Always {
-    pub(in crate::flight) asked: Vec<u8>,
-    pub(in crate::flight) drawn: Vec<u32>,
+pub struct Always {
+    pub asked: Vec<u8>,
+    pub drawn: Vec<u32>,
 }
 
 impl Chance for Always {
@@ -1338,7 +1345,8 @@ impl Chance for Always {
 
 /// [`outfitting`], where Earth is a shipyard too, selling ship 129 for
 /// 900 credits: twice as fast, with a fuel tank.
-pub(in crate::flight) fn shipbuying() -> FakeCatalog {
+#[must_use]
+pub fn shipbuying() -> FakeCatalog {
     let mut earth = site(
         128,
         (0.0, 0.0),
@@ -1393,7 +1401,7 @@ pub(in crate::flight) fn shipbuying() -> FakeCatalog {
 
 /// Rolls the second outcome of every roll, so `R(a b)` takes `a`.
 #[derive(Debug)]
-pub(in crate::flight) struct RollsOne;
+pub struct RollsOne;
 
 impl Chance for RollsOne {
     fn fires(&mut self, _percent: u8) -> bool {
@@ -1405,16 +1413,17 @@ impl Chance for RollsOne {
     }
 }
 
-pub(in crate::flight) fn rolling_one() -> SharedChance {
+#[must_use]
+pub fn rolling_one() -> SharedChance {
     SharedChance::new(Rc::new(RefCell::new(RollsOne)))
 }
 
 /// Draws its script, then the last outcome, so no roll fires;
 /// records each `n` asked.
 #[derive(Default)]
-pub(in crate::flight) struct Script {
-    pub(in crate::flight) draws: VecDeque<u32>,
-    pub(in crate::flight) asked: Vec<u32>,
+pub struct Script {
+    pub draws: VecDeque<u32>,
+    pub asked: Vec<u32>,
 }
 
 impl Chance for Script {
@@ -1428,7 +1437,8 @@ impl Chance for Script {
     }
 }
 
-pub(in crate::flight) fn scripted(draws: &[u32]) -> (Rc<RefCell<Script>>, SharedChance) {
+#[must_use]
+pub fn scripted(draws: &[u32]) -> (Rc<RefCell<Script>>, SharedChance) {
     let script = Rc::new(RefCell::new(Script {
         draws: draws.iter().copied().collect(),
         asked: Vec::new(),
@@ -1439,13 +1449,14 @@ pub(in crate::flight) fn scripted(draws: &[u32]) -> (Rc<RefCell<Script>>, Shared
 
 /// One setup pass placing the düde's ship at (`x` - 750, `y` - 750)
 /// facing `heading`, of aggression 0.
-pub(in crate::flight) fn placed(x: u32, y: u32, heading: u32) -> [u32; 8] {
+#[must_use]
+pub fn placed(x: u32, y: u32, heading: u32) -> [u32; 8] {
     [6, 6, 0, 0, x, y, heading, 2]
 }
 
 /// Decides nothing: every NPC idles.
 #[derive(Debug)]
-pub(in crate::flight) struct Still;
+pub struct Still;
 
 impl Behaviour for Still {
     fn decide(
@@ -1461,12 +1472,8 @@ impl Behaviour for Still {
 /// [`catalog`] with `avg` ships on average in each of `systems`, all of
 /// düde 128's ship `ship` with AI `ai_type`; ships 129 and 130 are
 /// records the traffic can fly.
-pub(in crate::flight) fn trafficked(
-    systems: &[i16],
-    avg: i16,
-    ship: i16,
-    ai_type: i16,
-) -> FakeCatalog {
+#[must_use]
+pub fn trafficked(systems: &[i16], avg: i16, ship: i16, ai_type: i16) -> FakeCatalog {
     let mut dude_types = [(-1, 0); 8];
     dude_types[0] = (128, 100);
     let record = |id| ShipRecord {
@@ -1540,8 +1547,8 @@ pub(in crate::flight) fn trafficked(
 
 /// Says no ship is disabled, counting the times it is asked.
 #[derive(Debug, Default)]
-pub(in crate::flight) struct Counting {
-    pub(in crate::flight) asked: std::cell::Cell<usize>,
+pub struct Counting {
+    pub asked: std::cell::Cell<usize>,
 }
 
 impl DisableRule for Counting {
@@ -1553,7 +1560,7 @@ impl DisableRule for Counting {
 
 /// Every NPC idles and picks its first weapon each time it thinks.
 #[derive(Debug)]
-pub(in crate::flight) struct Firing;
+pub struct Firing;
 
 impl Behaviour for Firing {
     fn decide(
@@ -1574,20 +1581,16 @@ impl Behaviour for Firing {
     }
 }
 
-pub(in crate::flight) const BLASTER: WeaponId = WeaponId(128);
+pub const BLASTER: WeaponId = WeaponId(128);
 
-pub(in crate::flight) const ROCKET: WeaponId = WeaponId(140);
+pub const ROCKET: WeaponId = WeaponId(140);
 
-pub(in crate::flight) const UNSEEN: WeaponId = WeaponId(150);
+pub const UNSEEN: WeaponId = WeaponId(150);
 
 /// `wëap` `id` firing every tick, 20 pixels a tick for 30 ticks, doing
 /// no damage, with `flags`, `guidance` and `explod_type`.
-pub(in crate::flight) fn gun(
-    id: WeaponId,
-    flags: u16,
-    guidance: i16,
-    explod_type: i16,
-) -> nova_sim::WeaponRecord {
+#[must_use]
+pub fn gun(id: WeaponId, flags: u16, guidance: i16, explod_type: i16) -> nova_sim::WeaponRecord {
     nova_sim::WeaponRecord {
         id,
         reload: 0,
@@ -1638,7 +1641,8 @@ pub(in crate::flight) fn gun(
 
 /// Ship `id` carrying one of each of `weapons`, gone at once in
 /// `bööm` 128.
-pub(in crate::flight) fn hull_of(id: i16, weapons: &[WeaponId]) -> nova_sim::HullRecord {
+#[must_use]
+pub fn hull_of(id: i16, weapons: &[WeaponId]) -> nova_sim::HullRecord {
     nova_sim::HullRecord {
         id: ShipId(id),
         flags: 0,
@@ -1678,7 +1682,8 @@ pub(in crate::flight) fn hull_of(id: i16, weapons: &[WeaponId]) -> nova_sim::Hul
 }
 
 /// `oütf` `id`, "Gun `id`", holding a `weapon`: a ton, 1000 credits.
-pub(in crate::flight) fn holding(id: i16, weapon: WeaponId) -> OutfitRecord {
+#[must_use]
+pub fn holding(id: i16, weapon: WeaponId) -> OutfitRecord {
     OutfitRecord {
         id: OutfitId(id),
         name: format!("Gun {id}"),
@@ -1715,7 +1720,8 @@ pub(in crate::flight) fn holding(id: i16, weapon: WeaponId) -> OutfitRecord {
 /// blaster, rockets, missiles and torch have looks, and `bööm` 128 shows `rlëD` 400's 3 frames at a frame
 /// a step, sounding `snd ` 302. Ship 129 is a "Light Transport" with
 /// picture 3001, and govt 140's code is "Fed.".
-pub(in crate::flight) fn armed(avg: i16, weapons: &[WeaponId]) -> FakeCatalog {
+#[must_use]
+pub fn armed(avg: i16, weapons: &[WeaponId]) -> FakeCatalog {
     let mut catalog = trafficked(&[130], avg, 129, 3);
     catalog.dudes[0].1.govt = Some(GovtId(140));
     FakeCatalog {
@@ -1779,7 +1785,8 @@ pub(in crate::flight) fn armed(avg: i16, weapons: &[WeaponId]) -> FakeCatalog {
 /// [`armed`] where the NPC, straight above the player and facing it,
 /// fires a blaster that kills at a hit, and the player's ship breaks
 /// up in `death_delay` ticks, then explodes as `bööm` 128 (`rlëD` 400).
-pub(in crate::flight) fn killed_in(death_delay: i16) -> FakeCatalog {
+#[must_use]
+pub fn killed_in(death_delay: i16) -> FakeCatalog {
     let mut catalog = armed(1, &[]);
     catalog.weapons[0].mass_dmg = 1000;
     catalog.weapons[0].flags = 0x0020;
@@ -1792,7 +1799,8 @@ pub(in crate::flight) fn killed_in(death_delay: i16) -> FakeCatalog {
 /// [`armed`] with the player, over a planet at the centre, carrying a
 /// point-defence turret (held by outfit 250), and its traffic a
 /// missile it fires once, 5 pixels a tick.
-pub(in crate::flight) fn defending() -> FakeCatalog {
+#[must_use]
+pub fn defending() -> FakeCatalog {
     let mut catalog = armed(1, &[QUAD]);
     catalog.sites = vec![site(
         140,
@@ -1827,7 +1835,8 @@ pub(in crate::flight) fn defending() -> FakeCatalog {
 /// [`trafficked`] with its ship 129 (of strength 5, a crew of 3 and a
 /// `Cost` of 150,000, and no speed, so it starts at rest) carrying
 /// money (`Booty` 0x0040), and the player's ship 128 a crew of 10.
-pub(in crate::flight) fn boardable() -> FakeCatalog {
+#[must_use]
+pub fn boardable() -> FakeCatalog {
     let mut catalog = trafficked(&[130], 1, 129, 1);
     catalog.dudes[0].1.booty = 0x0040;
     for record in &mut catalog.ships {
@@ -1853,7 +1862,8 @@ pub(in crate::flight) fn boardable() -> FakeCatalog {
 
 /// [`boardable`]'s ship comm strings: "c<n>" for each, with "Channel
 /// open." in every variant of the first group.
-pub(in crate::flight) fn comm_strings() -> Vec<String> {
+#[must_use]
+pub fn comm_strings() -> Vec<String> {
     (1..=200)
         .map(|n| {
             if n <= 5 {
@@ -1867,7 +1877,8 @@ pub(in crate::flight) fn comm_strings() -> Vec<String> {
 
 /// [`shipbuying`] with its stellar a bar too, and ship 129 (`Cost`
 /// 900) for hire half the days.
-pub(in crate::flight) fn hiring() -> FakeCatalog {
+#[must_use]
+pub fn hiring() -> FakeCatalog {
     let mut catalog = shipbuying();
     catalog.sites[0].flags |= StellarFlags::BAR;
     for record in &mut catalog.ships {
@@ -1880,7 +1891,8 @@ pub(in crate::flight) fn hiring() -> FakeCatalog {
 
 /// Mission `id`, offered at the mission computer of any stellar on
 /// every visit, to anyone, going nowhere.
-pub(in crate::flight) fn errand(id: i16) -> MissionRecord {
+#[must_use]
+pub fn errand(id: i16) -> MissionRecord {
     MissionRecord {
         id: MissionId(id),
         avail_stel: -1,
@@ -1921,7 +1933,8 @@ pub(in crate::flight) fn errand(id: i16) -> MissionRecord {
 /// [`armed`] with a blaster doing 10 energy and 10 mass damage, the
 /// warship armed with a harmless gun of unlimited ammunition, and govt 140
 /// that costs 3 to disable a ship of.
-pub(in crate::flight) fn damaging() -> FakeCatalog {
+#[must_use]
+pub fn damaging() -> FakeCatalog {
     let catalog = armed(1, &[BLASTER]);
     FakeCatalog {
         weapons: vec![
@@ -1963,13 +1976,15 @@ pub(in crate::flight) fn damaging() -> FakeCatalog {
     }
 }
 
-pub(in crate::flight) fn at(x: f32, y: f32) -> Point {
+#[must_use]
+pub fn at(x: f32, y: f32) -> Point {
     Point::new(x, y)
 }
 
 /// A layer `rlëD` `image_id` of `frames` frames, each [`LAYER_SIDE`]
 /// square.
-pub(in crate::flight) fn layer(image_id: i16, frames: u16) -> LayerSheet {
+#[must_use]
+pub fn layer(image_id: i16, frames: u16) -> LayerSheet {
     LayerSheet {
         image: crate::SheetImage::Rled(image_id),
         frames: NonZeroU16::new(frames).expect("non-zero"),
@@ -1984,11 +1999,12 @@ pub(in crate::flight) fn layer(image_id: i16, frames: u16) -> LayerSheet {
 
 /// The side of a [`layer`]'s frames: even, so a layer stood at a whole
 /// pixel is centred on it.
-pub(in crate::flight) const LAYER_SIDE: u32 = 40;
+pub const LAYER_SIDE: u32 = 40;
 
 /// A look named `name` sounding `snd ` `sound`, its shots on `rlëD`
 /// `image` of 36 frames, if any.
-pub(in crate::flight) fn look(name: &str, sound: i16, image: Option<i16>) -> WeaponLook {
+#[must_use]
+pub fn look(name: &str, sound: i16, image: Option<i16>) -> WeaponLook {
     WeaponLook {
         name: name.to_owned(),
         sheet: image.map(|image| Ok(effect_sheet(image, 36))),
@@ -1997,19 +2013,20 @@ pub(in crate::flight) fn look(name: &str, sound: i16, image: Option<i16>) -> Wea
     }
 }
 
-pub(in crate::flight) const QUAD: WeaponId = WeaponId(133);
+pub const QUAD: WeaponId = WeaponId(133);
 
-pub(in crate::flight) const IR: WeaponId = WeaponId(134);
+pub const IR: WeaponId = WeaponId(134);
 
-pub(in crate::flight) const MISSILE: WeaponId = WeaponId(141);
+pub const MISSILE: WeaponId = WeaponId(141);
 
-pub(in crate::flight) const TORCH: WeaponId = WeaponId(142);
+pub const TORCH: WeaponId = WeaponId(142);
 
-pub(in crate::flight) const UNDER: WeaponId = WeaponId(146);
+pub const UNDER: WeaponId = WeaponId(146);
 
-pub(in crate::flight) const OVER: WeaponId = WeaponId(147);
+pub const OVER: WeaponId = WeaponId(147);
 
-pub(in crate::flight) fn effect_sheet(image_id: i16, frames: u16) -> EffectSheet {
+#[must_use]
+pub fn effect_sheet(image_id: i16, frames: u16) -> EffectSheet {
     EffectSheet {
         frame_width: 0,
         frame_height: 0,
