@@ -3,4 +3,4 @@
 //! live: the same items at the same path, so the view can name them through
 //! this crate instead of nova-sim.
 
-pub use nova_sim_state::shown::hyperspace::{JUMP_FUEL, max_jumps};
+pub use nova_sim_state::shown::hyperspace::{JUMP_FUEL, max_jumps, system_links};

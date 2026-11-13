@@ -30,7 +30,8 @@ pub struct SystemEntry {
     pub y: i16,
     /// Its hyperlinks, raw and in record order: they may repeat, point at
     /// itself or at a system that does not exist. The simulation's
-    /// `StarMap` normalises them, and the map draws its links.
+    /// `system_links` normalises them, as its `StarMap` does, and the map
+    /// draws those links.
     pub links: Vec<SystemId>,
     /// The government that owns it, or `None` for an independent system.
     pub govt: Option<GovtId>,

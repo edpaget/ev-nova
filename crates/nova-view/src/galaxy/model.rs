@@ -14,7 +14,8 @@
 //! - Each system's colour comes from its own government's map colour;
 //!   independent systems, and systems whose government is missing, are
 //!   [`NEUTRAL`].
-//! - The hyperlinks are the [`StarMap`]'s [`StarMap::links`]: every pair
+//! - The hyperlinks are the catalog's [`system_links`], the star map's
+//!   links (`nova_sim::StarMap::links`) without building one: every pair
 //!   either system lists, drawn once and undirected, as the original's
 //!   `_DrawMap` (@0xe7a8) draws them, while the session's jumps follow its
 //!   `HyperlinkRule` (by the engine's, one way along each system's own
@@ -33,8 +34,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use nova_sim::Rulebook;
 use nova_sim::galaxy_map::GalaxyShown;
+use nova_sim::hyperspace::system_links;
 use nova_sim::viewer_lanes::{ViewerLinks, viewer_links};
-use nova_sim::{Governments, StarMap, StarSystem, Vec2};
+use nova_sim::{Governments, StarSystem, Vec2};
 
 use super::catalog::{Galaxy, GateLinks, GovtId, NebulaEntry, SystemEntry, SystemId};
 use super::view::{Bounds, Transform};
@@ -140,7 +142,7 @@ impl GalaxyModel {
                 }
             }
         }
-        let links = StarMap::new(systems.iter().map(star_system).collect()).links();
+        let links = system_links(&systems.iter().map(star_system).collect::<Vec<_>>());
         let systems: Vec<MapSystem> = systems
             .into_iter()
             .map(|entry| {
