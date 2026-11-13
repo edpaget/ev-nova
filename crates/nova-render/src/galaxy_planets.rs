@@ -1,8 +1,16 @@
-//! [`PlanetSource`] for the new game's data: [`GalaxyPlanets`] bakes a
-//! stellar's generated look, or reads its texture asset's `.png` through
-//! the format's [`Source`] port, needing no GPU.
+//! [`PlanetSource`] for the new game's data: [`GalaxyPlanets`] answers a
+//! stellar's generated look unbaked, with the sizes to bake it at, or
+//! reads its texture asset's `.png` through the format's [`Source`] port,
+//! needing no GPU.
 //!
-//! It only chains decisions made elsewhere: how a look bakes
+//! A look isn't baked here: a bake takes tens of milliseconds, a galaxy
+//! has hundreds of planets, and a pilot sees a few of them in a session.
+//! So the answer for a generated stellar costs nothing, and the renderer
+//! bakes it the first frame that draws it (`crate::planets`). A texture is
+//! read and decoded here, since reading can fail and the caller reports
+//! that at start-up.
+//!
+//! It only chains decisions made elsewhere: how a look bakes, later
 //! (`nova_galaxy_media::planet::bake`), how a texture is read and checked
 //! (`nova_galaxy_media::texture::read_texture`), which budget covers it
 //! (`nova_galaxy_media::budget::limits`), and how a texture becomes a
@@ -18,7 +26,7 @@ use nova_galaxy_format::load::Galaxy;
 use nova_galaxy_format::model::{StellarKind, Visual};
 use nova_galaxy_format::source::Source;
 use nova_galaxy_media::budget::limits;
-use nova_galaxy_media::planet::{Sizes, Surface, bake};
+use nova_galaxy_media::planet::{Sizes, Surface};
 use nova_galaxy_media::{NoTexture, read_texture};
 
 use crate::galaxy_models::overrun;
@@ -26,7 +34,8 @@ use crate::gpu::MAX_TEXTURE_SIDE;
 use crate::planet_source::{LoadedPlanet, PlanetError, PlanetRequest, PlanetSource};
 
 /// The new game's planets: the stellars, asset manifest and budgets of
-/// `galaxy`, texture files read through `source`, looks baked at `sizes`.
+/// `galaxy`, texture files read through `source`, looks answered unbaked,
+/// to be baked at `sizes`.
 #[derive(Clone, Copy, Debug)]
 pub struct GalaxyPlanets<'a, S: Source> {
     galaxy: &'a Galaxy,
@@ -36,7 +45,7 @@ pub struct GalaxyPlanets<'a, S: Source> {
 
 impl<'a, S: Source> GalaxyPlanets<'a, S> {
     /// The planets `galaxy` names, textures read through `source`, looks
-    /// baked at the engine's sizes ([`Sizes::ENGINE`]).
+    /// to be baked at the engine's sizes ([`Sizes::ENGINE`]).
     #[must_use]
     pub fn new(galaxy: &'a Galaxy, source: &'a S) -> Self {
         GalaxyPlanets {
@@ -46,7 +55,8 @@ impl<'a, S: Source> GalaxyPlanets<'a, S> {
         }
     }
 
-    /// The same planets with looks baked at `sizes`: smaller, for tests.
+    /// The same planets with looks to be baked at `sizes`: smaller, for
+    /// tests.
     #[must_use]
     pub fn baked_at(self, sizes: Sizes) -> Self {
         GalaxyPlanets { sizes, ..self }
@@ -62,12 +72,11 @@ impl<S: Source> PlanetSource for GalaxyPlanets<'_, S> {
         if matches!(stellar.kind, StellarKind::Station | StellarKind::Outpost) {
             return Err(PlanetError::NotAPlanet(name.clone()));
         }
-        let surface = match &stellar.visual {
-            None => return Err(PlanetError::NotAPlanet(name.clone())),
-            Some(Visual::Generated(look)) => bake(look, self.sizes),
-            Some(Visual::Asset(asset)) => self.texture(name, asset)?,
-        };
-        Ok(LoadedPlanet { surface })
+        match &stellar.visual {
+            None => Err(PlanetError::NotAPlanet(name.clone())),
+            Some(Visual::Generated(look)) => Ok(LoadedPlanet::unbaked(look.clone(), self.sizes)),
+            Some(Visual::Asset(asset)) => self.texture(name, asset).map(LoadedPlanet::surface),
+        }
     }
 }
 
@@ -142,7 +151,7 @@ mod tests {
     use nova_galaxy_format::load::load;
     use nova_galaxy_format::source::MemSource;
     use nova_galaxy_media::fixture::png;
-    use nova_galaxy_media::planet::TEXTURE_DAY;
+    use nova_galaxy_media::planet::{TEXTURE_DAY, bake};
 
     use super::*;
     use crate::model_source::{Measure, Overrun};
@@ -190,7 +199,7 @@ mod tests {
     }
 
     #[test]
-    fn a_generated_stellar_is_its_look_baked() {
+    fn a_generated_stellar_is_its_look_unbaked_with_the_sizes_to_bake_it_at() {
         let source = sample();
         let (galaxy, problems) = load(&source);
         assert_eq!(problems, [], "the sample loads cleanly");
@@ -198,15 +207,23 @@ mod tests {
         else {
             panic!("generated");
         };
-        assert_eq!(
-            ask(&source, "kestrel-reach"),
-            Ok(LoadedPlanet {
-                surface: bake(look, SMALL),
-            })
-        );
+        let small = ask(&source, "kestrel-reach").expect("a planet");
+        assert_eq!(small, LoadedPlanet::unbaked(look.clone(), SMALL));
+        assert_eq!(small.baked(), None, "not baked here");
+        assert_eq!(small.into_surface(), bake(look, SMALL));
         // The engine's sizes, unless told otherwise.
         let engine = GalaxyPlanets::new(&galaxy, &source);
-        assert_eq!(engine.sizes, Sizes::ENGINE);
+        assert_eq!(
+            engine.planet(&PlanetRequest::new("kestrel-reach")),
+            Ok(LoadedPlanet::unbaked(look.clone(), Sizes::ENGINE))
+        );
+    }
+
+    #[test]
+    fn an_unbaked_stellar_reaches_as_far_as_its_look_s_rings_and_atmosphere() {
+        // Kestrel Reach: rings to 2.3, an atmosphere 0.04 thick.
+        let planet = ask(&sample(), "kestrel-reach").expect("a planet");
+        assert!((planet.reach() - 2.3).abs() < 1e-6, "{}", planet.reach());
     }
 
     fn id(s: &str) -> Id {
@@ -215,7 +232,9 @@ mod tests {
 
     #[test]
     fn a_texture_planet_is_its_texture_with_no_extras() {
-        let planet = ask(&sample(), "alpha-prime").unwrap().surface;
+        let read = ask(&sample(), "alpha-prime").unwrap();
+        assert!(read.baked().is_some(), "read at load, not left for later");
+        let planet = read.into_surface();
         let opaque: Vec<u8> = pattern()
             .chunks(4)
             .flat_map(|t| [t[0], t[1], t[2], 0])
@@ -422,6 +441,9 @@ mod tests {
             )
             .with_bytes("media/export/pack/moon.png", &png(4, 2, &[50; 32]));
         let planet = ask(&source, "pale").unwrap();
-        assert_eq!(planet.surface.surface.rgba, [50, 50, 50, 0].repeat(8));
+        assert_eq!(
+            planet.into_surface().surface.rgba,
+            [50, 50, 50, 0].repeat(8)
+        );
     }
 }

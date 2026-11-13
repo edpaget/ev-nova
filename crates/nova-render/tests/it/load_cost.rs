@@ -105,10 +105,13 @@ fn ms(start: Instant) -> f64 {
     start.elapsed().as_secs_f64() * 1000.0
 }
 
-/// The megabytes `planet` holds on the CPU: its surface, its clouds and
-/// its ring profile.
+/// The megabytes `planet` holds on the CPU as the builder hands it over:
+/// its surface, its clouds and its ring profile, or nothing to speak of
+/// for a look not baked yet.
 fn megabytes(planet: &LoadedPlanet) -> f64 {
-    let surface = &planet.surface;
+    let Some(surface) = planet.baked() else {
+        return 0.0;
+    };
     let bytes = surface.surface.rgba.len()
         + surface.clouds.as_ref().map_or(0, |c| c.rgba.len())
         + surface.rings.as_ref().map_or(0, |r| r.profile.len());
@@ -134,7 +137,8 @@ fn busiest_system(game: &NewGame, assets: &WorldAssets) -> Option<(String, Vec<P
 struct Run {
     load_ms: f64,
     world_ms: f64,
-    planets: usize,
+    /// The planets handed over holding their surface, and those unbaked.
+    planets: (usize, usize),
     planet_mb: f64,
     system: Option<(String, usize)>,
     first_frame_ms: f64,
@@ -152,7 +156,12 @@ fn run(source: &impl Source, dir: &Path) -> Run {
     let assets = world_assets(&game, source);
     let world_ms = ms(start);
 
-    let planets = assets.planets.len();
+    let baked = assets
+        .planets
+        .iter()
+        .filter(|(_, planet)| planet.baked().is_some())
+        .count();
+    let planets = (baked, assets.planets.len() - baked);
     let planet_mb = assets.planets.iter().map(|(_, p)| megabytes(p)).sum();
     let problems = game.problems.len() + assets.problems.len();
     let system = busiest_system(&game, &assets);
@@ -213,8 +222,8 @@ fn report(name: &str, source: &impl Source, dir: &Path) {
     println!("  new_game::load  {:10.2} ms", least(|r| r.load_ms));
     println!("  world_assets    {:10.2} ms", least(|r| r.world_ms));
     println!(
-        "  planets         {} holding {:.1} MB",
-        shown.planets, shown.planet_mb
+        "  planets         {} baked or read holding {:.1} MB, {} unbaked",
+        shown.planets.0, shown.planet_mb, shown.planets.1
     );
     match &shown.system {
         Some((system, drawn)) => {

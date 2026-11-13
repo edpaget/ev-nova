@@ -1343,20 +1343,18 @@ mod batch_tests {
 
     /// A bare 4 by 2 grey planet.
     fn planet() -> LoadedPlanet {
-        LoadedPlanet {
-            surface: Surface {
-                surface: Layer {
-                    width: 4,
-                    height: 2,
-                    rgba: vec![9; 32],
-                },
-                clouds: None,
-                rings: None,
-                atmosphere: None,
-                day: 100.0,
-                tilt: 0.0,
+        LoadedPlanet::surface(Surface {
+            surface: Layer {
+                width: 4,
+                height: 2,
+                rgba: vec![9; 32],
             },
-        }
+            clouds: None,
+            rings: None,
+            atmosphere: None,
+            day: 100.0,
+            tilt: 0.0,
+        })
     }
 
     #[test]

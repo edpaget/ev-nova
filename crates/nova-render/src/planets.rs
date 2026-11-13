@@ -21,13 +21,13 @@ use nova_view::{PlanetKey, PlanetPose};
 
 use crate::gpu::{Batch, Gpu, PlanetId, PlanetInstance};
 use crate::planet::{self, PLANET_LIGHT};
-use crate::planet_source::LoadedPlanet;
+use crate::planet_source::{LoadedPlanet, Surface};
 
 /// A planet the renderer was given, and whether the GPU holds it as it is.
 #[derive(Debug)]
 struct Held {
     id: PlanetId,
-    planet: LoadedPlanet,
+    surface: Surface,
     uploaded: bool,
 }
 
@@ -45,8 +45,9 @@ impl Planets {
     /// Gives `key` `planet`, replacing any planet it had: the replacement
     /// keeps the old one's number and is uploaded at its next draw.
     pub(crate) fn add(&mut self, key: PlanetKey, planet: LoadedPlanet) {
+        let surface = planet.into_surface();
         if let Some(held) = self.held.get_mut(&key) {
-            held.planet = planet;
+            held.surface = surface;
             held.uploaded = false;
             return;
         }
@@ -56,7 +57,7 @@ impl Planets {
             key,
             Held {
                 id,
-                planet,
+                surface,
                 uploaded: false,
             },
         );
@@ -80,11 +81,11 @@ impl Planets {
             }
             return;
         };
-        let Some(instance) = planet::instance(held.id, &held.planet.surface, pose) else {
+        let Some(instance) = planet::instance(held.id, &held.surface, pose) else {
             return;
         };
         if !held.uploaded {
-            gpu.upload_planet(held.id, &planet::textures(&held.planet.surface));
+            gpu.upload_planet(held.id, &planet::textures(&held.surface));
             held.uploaded = true;
         }
         push(batches, instance);
@@ -106,7 +107,7 @@ fn push(batches: &mut Vec<Batch>, planet: PlanetInstance) {
 #[cfg(test)]
 mod tests {
     use nova_data::graphics::Image;
-    use nova_galaxy_media::planet::{Image as Layer, Surface};
+    use nova_galaxy_media::planet::Image as Layer;
     use nova_view::geometry::Bounds;
     use nova_view::{
         Color, DrawCommand, DrawList, ImageKey, ImageKind, ModelKey, ModelPose, Mounting,
@@ -143,22 +144,25 @@ mod tests {
         Viewport::new(LOGICAL, (128, 96), 2.0)
     }
 
-    /// A bare 4 by 2 planet in grey `level`.
-    fn planet(level: u8) -> LoadedPlanet {
-        LoadedPlanet {
-            surface: Surface {
-                surface: Layer {
-                    width: 4,
-                    height: 2,
-                    rgba: vec![level; 32],
-                },
-                clouds: None,
-                rings: None,
-                atmosphere: None,
-                day: 100.0,
-                tilt: 0.0,
+    /// A bare 4 by 2 surface in grey `level`.
+    fn surface(level: u8) -> Surface {
+        Surface {
+            surface: Layer {
+                width: 4,
+                height: 2,
+                rgba: vec![level; 32],
             },
+            clouds: None,
+            rings: None,
+            atmosphere: None,
+            day: 100.0,
+            tilt: 0.0,
         }
+    }
+
+    /// A planet that draws with [`surface`] `level`.
+    fn planet(level: u8) -> LoadedPlanet {
+        LoadedPlanet::surface(surface(level))
     }
 
     /// A renderer whose key [`GLOBE`] is [`planet`] 9 and [`CUBE`] the cube.
@@ -187,7 +191,7 @@ mod tests {
 
     /// The instance the core makes for [`planet`] 9, as planet 0, at `pose`.
     fn instance(pose: &PlanetPose) -> PlanetInstance {
-        planet::instance(PlanetId(0), &planet(9).surface, pose).expect("drawable")
+        planet::instance(PlanetId(0), &surface(9), pose).expect("drawable")
     }
 
     fn frame_of(
@@ -226,7 +230,7 @@ mod tests {
         let second = frame_of(&mut renderer, &list, &mut gpu);
         assert_eq!(
             uploads(&gpu),
-            [(PlanetId(0), planet::textures(&planet(9).surface))],
+            [(PlanetId(0), planet::textures(&surface(9)))],
             "once, before the frame that draws it"
         );
         assert!(matches!(gpu.calls[0], GpuCall::UploadPlanet { .. }));
@@ -258,7 +262,7 @@ mod tests {
         let frame = frame_of(&mut renderer, &list, &mut gpu);
         assert_eq!(
             uploads(&gpu),
-            [(PlanetId(0), planet::textures(&planet(50).surface))],
+            [(PlanetId(0), planet::textures(&surface(50)))],
             "the replacement, under the same number, and only it"
         );
         let Batch::Planets { planets, .. } = &frame.batches[0] else {

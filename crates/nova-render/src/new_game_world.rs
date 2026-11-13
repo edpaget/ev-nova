@@ -32,8 +32,12 @@
 //!   its outline (the model didn't read for the loader) has none.
 //! - **Planets and moons**: each [`GalaxyPlanets`] answers with a planet,
 //!   one key each, with how far its rings and atmosphere reach in its
-//!   radii ([`planet::surface_reach`]), so a picture can fit the whole of
-//!   it.
+//!   radii ([`LoadedPlanet::reach`]), so a picture can fit the whole of
+//!   it. A generated planet is keyed here and handed on unbaked: baking
+//!   every look at start-up is what made start-up slow, so the renderer
+//!   bakes each the first frame that draws it
+//!   ([`Renderer::add_planet`](crate::Renderer::add_planet)). A textured
+//!   planet is read and decoded here, where a failure can be reported.
 //! - **Skies**: each system's own sky look, from its `sky` block, keyed
 //!   by its sky's seed ([`sky_looks`]), for the app to hand the renderer
 //!   ([`Renderer::set_sky_looks`](crate::Renderer::set_sky_looks)).
@@ -79,7 +83,6 @@ use crate::livery::{Livery, painted, takes_paint};
 use crate::model::Mesh;
 use crate::model_source::{LoadedModel, ModelError, ModelRequest, ModelSource};
 use crate::new_game_sky::sky_looks;
-use crate::planet;
 use crate::planet_source::{LoadedPlanet, PlanetError, PlanetRequest, PlanetSource};
 use crate::sky::SkyLooks;
 
@@ -194,7 +197,7 @@ pub fn world_assets_from(
         match planets.planet(&PlanetRequest::new(id.as_str())) {
             Ok(planet) => {
                 let key = PlanetKey(next(planet_list.len()));
-                let reach = planet::surface_reach(&planet.surface);
+                let reach = planet.reach();
                 table
                     .stellars
                     .insert(stellar, StellarModel::planet(key, reach));
@@ -802,7 +805,7 @@ mod tests {
             let [(key, planet)] = &assets.planets[..] else {
                 panic!("one planet: {:?}", assets.planets.len());
             };
-            let surface = &planet.surface;
+            let surface = &planet.clone().into_surface();
             #[allow(clippy::cast_possible_truncation, reason = "as the renderer reads it")]
             let reach = crate::planet::reach(
                 surface.atmosphere.as_ref().map(|a| a.thickness as f32),

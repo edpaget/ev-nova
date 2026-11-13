@@ -3,11 +3,17 @@
 //!
 //! [`PlanetSource::planet`] answers a [`PlanetRequest`] (a stellar's id:
 //! a generated look belongs to a stellar, not to an asset) with a
-//! [`LoadedPlanet`] or a [`PlanetError`]. A loaded planet is either its
-//! look baked (`nova_galaxy_media::planet::bake`) or its texture asset
-//! read (`nova_galaxy_media::texture`), in one shape: an equirectangular
-//! surface twice as wide as tall with power-of-two sides, and its clouds,
-//! rings, atmosphere, day and tilt. Models have their own port
+//! [`LoadedPlanet`] or a [`PlanetError`]. A loaded planet draws with one
+//! shape, a [`Surface`]: an equirectangular surface twice as wide as tall
+//! with power-of-two sides, and its clouds, rings, atmosphere, day and
+//! tilt. It holds either that surface already (a texture asset read,
+//! `nova_galaxy_media::texture`, or a look somebody baked) or a generated
+//! look not baked yet, with the sizes to bake it at
+//! (`nova_galaxy_media::planet::bake`). A bake is the slow part of a
+//! planet and can't fail, so a source may leave it to whoever draws the
+//! planet: the renderer bakes one the first frame that draws it
+//! (`crate::planets`). How far a planet reaches
+//! ([`LoadedPlanet::reach`]) needs no bake. Models have their own port
 //! ([`crate::model_source`]).
 //!
 //! # Where an addition goes
@@ -19,6 +25,12 @@
 //! - Something more a planet draws with: a field of
 //!   `nova_galaxy_media::planet::Surface`, baked or read there, and drawn
 //!   by the renderer's planets (`crate::planet`).
+//! - Another way a planet is handed over before it is ready to draw (a
+//!   texture read lazily, say): a kind of [`LoadedPlanet`], which stays
+//!   plain data, with its constructor, its turn in
+//!   [`LoadedPlanet::into_surface`] and a [`LoadedPlanet::reach`] it can
+//!   give without the work. `check_contract` checks what it makes. Its
+//!   shape is private, so nothing outside this module changes with it.
 //!
 //! `FakePlanets` is the hand-written fake (with this crate's tests, or the
 //! `recording` feature), and `check_contract` the contract every source
@@ -27,9 +39,12 @@
 
 use std::rc::Rc;
 
+use nova_galaxy_format::model::Look;
 pub use nova_galaxy_media::planet::Surface;
+use nova_galaxy_media::planet::{Sizes, bake};
 
 use crate::model_source::Overrun;
+use crate::planet;
 
 /// A planet wanted: the stellar (`stellars/<id>.md`) it draws.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -49,11 +64,79 @@ impl PlanetRequest {
 }
 
 /// A planet, ready for the renderer
-/// ([`Renderer::add_planet`](crate::Renderer::add_planet)).
+/// ([`Renderer::add_planet`](crate::Renderer::add_planet)): either what it
+/// draws with ([`LoadedPlanet::surface`]) or a generated look not baked
+/// yet ([`LoadedPlanet::unbaked`]), which whoever draws it bakes
+/// ([`into_surface`](Self::into_surface)). How far it reaches is known
+/// either way ([`reach`](Self::reach)). Its shape is private, so build one
+/// with its constructors.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LoadedPlanet {
-    /// What it draws with.
-    pub surface: Surface,
+    kind: Kind,
+}
+
+/// What a [`LoadedPlanet`] holds.
+#[derive(Clone, Debug, PartialEq)]
+enum Kind {
+    /// What it draws with: a texture read, or a look baked already.
+    Surface(Surface),
+    /// A generated look, and the sizes to bake it at.
+    Unbaked { look: Look, sizes: Sizes },
+}
+
+impl LoadedPlanet {
+    /// A planet that draws with `surface`.
+    #[must_use]
+    pub fn surface(surface: Surface) -> Self {
+        LoadedPlanet {
+            kind: Kind::Surface(surface),
+        }
+    }
+
+    /// A planet that draws `look` baked at `sizes`, not baked yet: a bake
+    /// is the slow part of loading a planet, so it is left to the first
+    /// frame that draws it.
+    #[must_use]
+    pub fn unbaked(look: Look, sizes: Sizes) -> Self {
+        LoadedPlanet {
+            kind: Kind::Unbaked { look, sizes },
+        }
+    }
+
+    /// What it draws with, when it holds that already; `None` for a look
+    /// not baked yet.
+    #[must_use]
+    pub fn baked(&self) -> Option<&Surface> {
+        match &self.kind {
+            Kind::Surface(surface) => Some(surface),
+            Kind::Unbaked { .. } => None,
+        }
+    }
+
+    /// How far it reaches, in its radii ([`planet::reach`]): from its
+    /// surface, or, unbaked, from its look's atmosphere and rings, which
+    /// is what its bake's surface reaches.
+    #[must_use]
+    pub fn reach(&self) -> f32 {
+        match &self.kind {
+            Kind::Surface(surface) => planet::surface_reach(surface),
+            #[allow(clippy::cast_possible_truncation, reason = "a shader's sizes")]
+            Kind::Unbaked { look, .. } => planet::reach(
+                look.atmosphere.as_ref().map(|a| a.thickness.get() as f32),
+                look.rings.as_ref().map(|r| r.outer as f32),
+            ),
+        }
+    }
+
+    /// What it draws with: its surface, or its look baked at its sizes
+    /// (`nova_galaxy_media::planet::bake`, which can't fail).
+    #[must_use]
+    pub fn into_surface(self) -> Surface {
+        match self.kind {
+            Kind::Surface(surface) => surface,
+            Kind::Unbaked { look, sizes } => bake(&look, sizes),
+        }
+    }
 }
 
 /// Why a stellar's planet can't be had. The caller keeps drawing its
@@ -262,6 +345,8 @@ mod fake {
     /// stellar it holds a planet for, and `absent`, one it doesn't:
     ///
     /// - `request` loads;
+    /// - what it draws with (its surface, or its look baked, which this
+    ///   check does) reaches as far as the answer said before any bake;
     /// - its surface, and its clouds when it has them, are twice as wide
     ///   as tall with power-of-two sides, four bytes a texel;
     /// - its rings, when it has them, start outside the globe, end beyond
@@ -277,7 +362,13 @@ mod fake {
         let planet = source
             .planet(request)
             .unwrap_or_else(|e| panic!("`{stellar}` loads: {e}"));
-        let surface = &planet.surface;
+        let surface = &planet.clone().into_surface();
+        let reach = crate::planet::surface_reach(surface);
+        assert!(
+            (planet.reach() - reach).abs() < f32::EPSILON,
+            "`{stellar}` reaches {} before it is baked and {reach} after",
+            planet.reach()
+        );
         check_layer(stellar, "surface", &surface.surface);
         if let Some(clouds) = &surface.clouds {
             check_layer(stellar, "cloud layer", clouds);
@@ -330,29 +421,107 @@ mod tests {
     use crate::model_source::Measure;
 
     /// A 4 by 2 surface with a ring and an atmosphere.
-    fn planet() -> LoadedPlanet {
-        LoadedPlanet {
-            surface: Surface {
-                surface: Image {
-                    width: 4,
-                    height: 2,
-                    rgba: vec![9; 32],
-                },
-                clouds: None,
-                rings: Some(RingBand {
-                    inner: 1.5,
-                    outer: 2.0,
-                    color: [1, 2, 3],
-                    profile: vec![0, 200, 0],
-                }),
-                atmosphere: Some(Glow {
-                    color: [4, 5, 6],
-                    thickness: 0.1,
-                }),
-                day: 300.0,
-                tilt: 0.1,
+    fn surface() -> Surface {
+        Surface {
+            surface: Image {
+                width: 4,
+                height: 2,
+                rgba: vec![9; 32],
             },
+            clouds: None,
+            rings: Some(RingBand {
+                inner: 1.5,
+                outer: 2.0,
+                color: [1, 2, 3],
+                profile: vec![0, 200, 0],
+            }),
+            atmosphere: Some(Glow {
+                color: [4, 5, 6],
+                thickness: 0.1,
+            }),
+            day: 300.0,
+            tilt: 0.1,
         }
+    }
+
+    /// A planet that draws with [`surface`].
+    fn planet() -> LoadedPlanet {
+        LoadedPlanet::surface(surface())
+    }
+
+    /// Looks baked small, so the tests stay fast.
+    const SMALL: Sizes = Sizes {
+        surface: 32,
+        clouds: 16,
+        ring: 16,
+    };
+
+    /// A garden world's look with `extra`, lines of its `generated` block
+    /// indented four spaces.
+    fn look(extra: &str) -> Look {
+        use nova_galaxy_format::model::{Stellar, Visual};
+        let text = format!(
+            "---\nname: Verdance\nkind: planet\nsystem: alpha\nposition: [0, 0]\nvisual:\n\
+             \x20 generated:\n    type: garden\n    palette: [\"#3a7a3a\", \"#2a4a8a\"]\n\
+             \x20   clouds: 0.5\n{extra}    seed: 77\n---\n"
+        );
+        let stellar = nova_galaxy_format::frontmatter::parse::<Stellar>(&text).expect("a stellar");
+        match stellar.0.visual {
+            Some(Visual::Generated(look)) => look,
+            other => panic!("a generated look: {other:?}"),
+        }
+    }
+
+    const RINGS: &str = "    rings: {inner: 1.4, outer: 2.3, color: \"#d8c8a8\"}\n";
+    const ATMOSPHERE: &str = "    atmosphere: {color: \"#f0e0c0\", thickness: 0.25}\n";
+
+    #[test]
+    fn a_planet_with_a_surface_holds_it_and_reaches_as_far_as_it_does() {
+        let planet = planet();
+        assert_eq!(planet.baked(), Some(&surface()));
+        assert!((planet.reach() - 2.0).abs() < f32::EPSILON, "its rings'");
+        assert_eq!(planet.into_surface(), surface());
+    }
+
+    #[test]
+    fn an_unbaked_planet_bakes_to_its_look_at_its_sizes() {
+        let look = look(&format!("{RINGS}{ATMOSPHERE}"));
+        let planet = LoadedPlanet::unbaked(look.clone(), SMALL);
+        assert_eq!(planet.baked(), None);
+        assert_eq!(planet.clone().into_surface(), bake(&look, SMALL));
+        let smaller = Sizes {
+            surface: 16,
+            ..SMALL
+        };
+        assert_ne!(planet, LoadedPlanet::unbaked(look.clone(), smaller));
+        assert_eq!(
+            LoadedPlanet::unbaked(look.clone(), smaller).into_surface(),
+            bake(&look, smaller)
+        );
+    }
+
+    #[test]
+    fn an_unbaked_planet_reaches_as_far_as_its_bake_does() {
+        for (extra, want) in [
+            (format!("{RINGS}{ATMOSPHERE}"), 2.3),
+            (RINGS.to_owned(), 2.3),
+            (ATMOSPHERE.to_owned(), 1.25),
+            (String::new(), 1.0),
+        ] {
+            let look = look(&extra);
+            let planet = LoadedPlanet::unbaked(look.clone(), SMALL);
+            let baked = crate::planet::surface_reach(&bake(&look, SMALL));
+            assert!((planet.reach() - baked).abs() < f32::EPSILON, "{extra}");
+            assert!((planet.reach() - want).abs() < 1e-6, "{extra}");
+        }
+    }
+
+    #[test]
+    fn the_fake_holds_an_unbaked_planet_and_it_meets_the_contract() {
+        let unbaked = LoadedPlanet::unbaked(look(&format!("{RINGS}{ATMOSPHERE}")), SMALL);
+        let fake = FakePlanets::default().with("verdance", unbaked.clone());
+        assert_eq!(fake.planet(&PlanetRequest::new("verdance")), Ok(unbaked));
+        check_contract(&fake, &PlanetRequest::new("verdance"), "nothing");
     }
 
     #[test]
@@ -391,46 +560,46 @@ mod tests {
     #[test]
     #[should_panic(expected = "twice as wide as tall")]
     fn the_contract_fails_a_square_surface() {
-        let mut square = planet();
-        square.surface.surface = Image {
+        let mut square = surface();
+        square.surface = Image {
             width: 2,
             height: 2,
             rgba: vec![0; 16],
         };
-        let fake = FakePlanets::default().with("p", square);
+        let fake = FakePlanets::default().with("p", LoadedPlanet::surface(square));
         check_contract(&fake, &PlanetRequest::new("p"), "nothing");
     }
 
     #[test]
     #[should_panic(expected = "cloud layer is twice as wide as tall")]
     fn the_contract_fails_clouds_that_aren_t_a_power_of_two() {
-        let mut odd = planet();
-        odd.surface.clouds = Some(Image {
+        let mut odd = surface();
+        odd.clouds = Some(Image {
             width: 6,
             height: 3,
             rgba: vec![0; 72],
         });
-        let fake = FakePlanets::default().with("p", odd);
+        let fake = FakePlanets::default().with("p", LoadedPlanet::surface(odd));
         check_contract(&fake, &PlanetRequest::new("p"), "nothing");
     }
 
     #[test]
     #[should_panic(expected = "rings start outside the globe")]
     fn the_contract_fails_rings_inside_the_globe() {
-        let mut low = planet();
-        if let Some(rings) = &mut low.surface.rings {
+        let mut low = surface();
+        if let Some(rings) = &mut low.rings {
             rings.inner = 0.5;
         }
-        let fake = FakePlanets::default().with("p", low);
+        let fake = FakePlanets::default().with("p", LoadedPlanet::surface(low));
         check_contract(&fake, &PlanetRequest::new("p"), "nothing");
     }
 
     #[test]
     #[should_panic(expected = "day is a positive number")]
     fn the_contract_fails_a_day_of_no_length() {
-        let mut still = planet();
-        still.surface.day = 0.0;
-        let fake = FakePlanets::default().with("p", still);
+        let mut still = surface();
+        still.day = 0.0;
+        let fake = FakePlanets::default().with("p", LoadedPlanet::surface(still));
         check_contract(&fake, &PlanetRequest::new("p"), "nothing");
     }
 
