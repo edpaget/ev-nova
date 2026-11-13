@@ -81,6 +81,8 @@
 //!   ([`Gpu::upload_model_texture`]), the [`Batch::Models`] a list's
 //!   models become, and the runs the adapter draws them in: a faded
 //!   model's depth first, then its colour.
+//! - `resident`: the one table behind both: what the [`Renderer`] has
+//!   uploaded of one kind, numbered and uploaded once by its pointer.
 //! - [`streams`]: the movie frames ([`nova_view::DrawCommand::MovieFrame`])
 //!   the [`Renderer`] streams onto pages of their own, numbered down from
 //!   the top so they never take an atlas page's id, and uploads again only
@@ -208,6 +210,7 @@ pub mod quickdraw_stretch;
 #[cfg(any(test, feature = "recording"))]
 pub mod recording;
 pub mod render_scale;
+mod resident;
 pub mod sky;
 mod sky_images;
 pub mod source;

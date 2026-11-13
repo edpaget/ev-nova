@@ -11,7 +11,7 @@
 //!
 //! A mesh's textures are uploaded just before it
 //! ([`Gpu::upload_model_texture`]), each once however many meshes hold
-//! its pointer (`crate::model_texture::Resident`), and the mesh is
+//! its pointer ([`Resident`]), and the mesh is
 //! uploaded with the numbers they took. An untextured mesh uploads none.
 //! Every texture a mesh holds is uploaded, whether or not a section
 //! names it; a model's merged mesh
@@ -49,7 +49,8 @@ use nova_view::{ModelKey, ModelPose, Mounting};
 use crate::camera::{self, Light};
 use crate::gpu::{Batch, Gpu, ModelInstance, ModelTextureId};
 use crate::model::{Mesh, MeshId};
-use crate::model_texture::Resident;
+use crate::model_texture::ModelTexture;
+use crate::resident::Resident;
 use crate::viewport::LogicalSize;
 
 /// A mesh the renderer was given, and whether the GPU holds it as it is.
@@ -69,7 +70,7 @@ pub(crate) struct Models {
     /// The keys with no mesh already reported.
     reported: HashSet<ModelKey>,
     /// The textures of the meshes uploaded so far, as the GPU holds them.
-    textures: Resident,
+    textures: Resident<ModelTexture, ModelTextureId>,
     /// The model the parts drawn next mount on, while nothing else has
     /// been drawn since it.
     group: Option<Group>,
@@ -216,7 +217,11 @@ impl Models {
         }
         if !held.uploaded {
             let textures: Vec<ModelTextureId> = (held.mesh.textures().iter())
-                .map(|texture| self.textures.id(texture, gpu))
+                .map(|texture| {
+                    (self.textures).id(texture, |id, texture| {
+                        gpu.upload_model_texture(id, texture);
+                    })
+                })
                 .collect();
             gpu.upload_mesh(held.id, &held.mesh, &textures);
             held.uploaded = true;

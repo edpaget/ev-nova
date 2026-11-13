@@ -30,6 +30,12 @@ use crate::model_texture::{ModelTexture, ModelTextureError};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SkyImageId(pub u32);
 
+impl From<u32> for SkyImageId {
+    fn from(number: u32) -> Self {
+        Self(number)
+    }
+}
+
 /// The most texels a sky image read from data may have on its longer
 /// side, whatever its art budget allows: 5.6 MB with its mips at this
 /// side squared.

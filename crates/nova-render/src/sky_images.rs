@@ -24,43 +24,33 @@
 //! ([`Gpu::upload_sky_image`]) the first frame that draws a decoration
 //! holding its pointer, before that frame is submitted, and every later
 //! decoration holding the same pointer names the same number: systems
-//! that list one asset share one upload, as meshes share a model texture
-//! (`crate::model_texture`). Nothing is hashed or compared. An image never
-//! drawn is never uploaded. Sky images are not atlas pages, so a new
+//! that list one asset share one upload, as meshes share a model
+//! texture, each kept by a table of the one kind ([`Resident`]). Nothing
+//! is hashed or compared. An image never drawn is never uploaded. Sky
+//! images are not atlas pages, so a new
 //! enlarger leaves them where they are, and a new set of looks
 //! ([`Renderer::set_sky_looks`](crate::Renderer::set_sky_looks)) holding
 //! the same pointers uploads nothing again. An image no look holds any
 //! more stays on the GPU: the port has no call that drops one.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 use nova_view::SkyPose;
 
 use crate::gpu::{Batch, Gpu, SkyImageInstance};
+use crate::resident::Resident;
 use crate::sky::{self, SkyDecoration, SkyImage, SkyImageId, SkyLooks, galaxy};
 use crate::viewport::LogicalSize;
 
 /// The renderer's sky images (see the [module docs](self)).
 #[derive(Debug, Default)]
 pub(crate) struct SkyImages {
-    /// The images the GPU holds.
-    resident: Resident,
+    /// The images the GPU holds, by pointer.
+    resident: Resident<SkyImage, SkyImageId>,
     /// Each sky's default decorations, by its seed, made the first frame
     /// that draws it with no list: its seed's galaxy, baked, or none.
     defaults: HashMap<u64, Vec<SkyDecoration>>,
-}
-
-/// The sky images the GPU holds, by pointer.
-#[derive(Debug, Default)]
-struct Resident {
-    /// Each image uploaded, by its pointer's address, with the number it
-    /// took. The weak pointer keeps the address its own: an address is
-    /// not handed to another image while any pointer to its first
-    /// holder, weak or strong, is alive.
-    held: HashMap<usize, (Weak<SkyImage>, SkyImageId)>,
-    /// The number the next new image takes.
-    next: u32,
 }
 
 impl SkyImages {
@@ -90,7 +80,9 @@ impl SkyImages {
         let images: Vec<SkyImageInstance> = sky::placed(pose, list, logical, texels)
             .into_iter()
             .map(|(index, placement)| SkyImageInstance {
-                image: self.resident.id(&list[index].image, gpu),
+                image: (self.resident).id(&list[index].image, |id, image| {
+                    gpu.upload_sky_image(id, image);
+                }),
                 placement,
             })
             .collect();
@@ -107,22 +99,6 @@ fn default_of(seed: u64) -> Vec<SkyDecoration> {
         .map(|far| galaxy::decoration(&far, Arc::new(galaxy::bake(&far))))
         .into_iter()
         .collect()
-}
-
-impl Resident {
-    /// The number `image` is uploaded under, uploading it through `gpu`
-    /// first if this pointer hasn't been.
-    fn id(&mut self, image: &Arc<SkyImage>, gpu: &mut impl Gpu) -> SkyImageId {
-        let address = Arc::as_ptr(image) as usize;
-        if let Some((_, id)) = self.held.get(&address) {
-            return *id;
-        }
-        let id = SkyImageId(self.next);
-        self.next += 1;
-        gpu.upload_sky_image(id, image);
-        self.held.insert(address, (Arc::downgrade(image), id));
-        id
-    }
 }
 
 #[cfg(test)]
@@ -581,21 +557,6 @@ mod tests {
             frame.batches.last(),
             Some(&Batch::SkyImages(expected(SEED + 5, &list, &[0])))
         );
-    }
-
-    #[test]
-    fn a_dropped_image_s_number_is_never_another_image_s() {
-        let mut images = Resident::default();
-        let mut gpu = RecordingGpu::new();
-        // Each image is dropped before the next is made, so without the
-        // table keeping its address, the next could be given the same one.
-        for expected in 0..8 {
-            let image = image(expected as u8);
-            assert_eq!(images.id(&image, &mut gpu), SkyImageId(expected));
-            assert_eq!(images.id(&image, &mut gpu), SkyImageId(expected));
-        }
-        let numbers: Vec<u32> = uploads(&gpu).iter().map(|(id, _)| id.0).collect();
-        assert_eq!(numbers, [0, 1, 2, 3, 4, 5, 6, 7]);
     }
 
     #[test]
