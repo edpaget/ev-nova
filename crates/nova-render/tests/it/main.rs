@@ -25,6 +25,7 @@ mod prefs_labels;
 mod render_scale;
 mod sample_models;
 mod sample_world;
+mod sampled_models;
 mod sharp_bilinear;
 mod sky_backdrop;
 mod station_livery;

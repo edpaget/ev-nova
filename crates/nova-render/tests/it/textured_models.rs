@@ -36,17 +36,17 @@ use super::wgpu_offscreen::{Images, gpu_with};
 
 /// A 2 by 2 image: red and green on the top row, blue and half-clear
 /// white on the bottom.
-const SKIN: [u8; 16] = [
+pub(super) const SKIN: [u8; 16] = [
     230, 40, 40, 255, 40, 200, 60, 255, 50, 70, 240, 255, 255, 255, 255, 128,
 ];
 
 /// Texel (`column`, `row`) of [`SKIN`], each channel 0 to 1.
-fn texel(column: usize, row: usize) -> [f32; 4] {
+pub(super) fn texel(column: usize, row: usize) -> [f32; 4] {
     let at = (row * 2 + column) * 4;
     [0, 1, 2, 3].map(|channel| f32::from(SKIN[at + channel]) / 255.0)
 }
 
-fn skin() -> Texture {
+pub(super) fn skin() -> Texture {
     Texture {
         image: Arc::new(ModelTexture::new(2, 2, SKIN.to_vec()).expect("four texels")),
         path: None,
@@ -160,7 +160,12 @@ fn a_textured_unlit_model_from_data_uploads_its_texture_then_its_mesh_and_draws(
 /// A quad facing the camera, a unit a side, in a material of the linear
 /// `base` colour on `texture`, its texture coordinates running from
 /// `from` at its top left to `to` at its bottom right, each way.
-fn quad_on(texture: Texture, (from, to): (f32, f32), base: [f32; 4], unlit: bool) -> LoadedModel {
+pub(super) fn quad_on(
+    texture: Texture,
+    (from, to): (f32, f32),
+    base: [f32; 4],
+    unlit: bool,
+) -> LoadedModel {
     let color = vertex_color(base);
     let corners = [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)];
     let vertices = corners
@@ -196,15 +201,15 @@ fn quad(base: [f32; 4], unlit: bool) -> LoadedModel {
 
 /// The quads' side, in logical units: 18 pixels, so each quadrant's
 /// middle is a pixel's centre, where the sampler reads one texel alone.
-const SIDE: f32 = 9.0;
+pub(super) const SIDE: f32 = 9.0;
 /// The lit and the unlit quad's centres.
-const LIT_AT: (f32, f32) = (6.5, 12.5);
-const UNLIT_AT: (f32, f32) = (22.5, 12.5);
+pub(super) const LIT_AT: (f32, f32) = (6.5, 12.5);
+pub(super) const UNLIT_AT: (f32, f32) = (22.5, 12.5);
 
 /// Each of `quads` (a model, its centre and its side in logical units)
 /// drawn offscreen facing the camera, and read back; `None` with no
 /// adapter.
-fn drawn(quads: &[(LoadedModel, (f32, f32), f32)]) -> Option<Vec<u8>> {
+pub(super) fn drawn(quads: &[(LoadedModel, (f32, f32), f32)]) -> Option<Vec<u8>> {
     let mut gpu = gpu_with(SIZE, SIZE, &FontFaces::bundled())?;
     let mut renderer = Renderer::new(Images);
     let mut list = DrawList::new();
@@ -235,7 +240,7 @@ fn quads_drawn(base: [f32; 4]) -> Option<Vec<u8>> {
 
 /// What a fragment of `color` shows over the black the frame is cleared
 /// to: its red, green and blue times its alpha, as bytes.
-fn over_black([red, green, blue, alpha]: [f32; 4]) -> [u8; 3] {
+pub(super) fn over_black([red, green, blue, alpha]: [f32; 4]) -> [u8; 3] {
     [red, green, blue].map(|c| (c * alpha * 255.0).round() as u8)
 }
 
@@ -337,18 +342,18 @@ fn texture_coordinates_outside_zero_to_one_repeat_the_texture() {
 
 /// How far a channel filtered between two texels may be from the blend
 /// worked out here: a GPU keeps a filter's weights to a few bits.
-const FILTERED: u8 = 4;
+pub(super) const FILTERED: u8 = 4;
 
 /// Whether each channel of `a` is within `tolerance` of `b`'s.
-fn within(a: [u8; 3], b: [u8; 3], tolerance: u8) -> bool {
+pub(super) fn within(a: [u8; 3], b: [u8; 3], tolerance: u8) -> bool {
     a.iter().zip(&b).all(|(p, q)| p.abs_diff(*q) <= tolerance)
 }
 
 /// The two colours of [`checker`], which average to (120, 40, 120).
-const CHECKS: [[u8; 4]; 2] = [[240, 40, 0, 255], [0, 40, 240, 255]];
+pub(super) const CHECKS: [[u8; 4]; 2] = [[240, 40, 0, 255], [0, 40, 240, 255]];
 
 /// An 8 by 8 texture of one-texel checks in [`CHECKS`].
-fn checker() -> Texture {
+pub(super) fn checker() -> Texture {
     let rgba = (0..8)
         .flat_map(|row| (0..8).flat_map(move |column| CHECKS[(row + column) % 2]))
         .collect();
