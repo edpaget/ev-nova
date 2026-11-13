@@ -1,14 +1,16 @@
 //! The galaxy map draws the session's star-map hyperlinks and reports
 //! links to missing systems. Over synthetic game data read through the
-//! real adapters, `GalaxyModel`'s links are exactly those of the
-//! `StarMap` built from `PilotCatalog::star_map`, and each link to a
-//! system that is missing or does not decode is a problem.
+//! real adapters, `GalaxyModel`'s links are exactly `system_links` of
+//! `PilotCatalog::star_map`, the links nova-sim-ai pins
+//! `nova_sim::StarMap` to, and each link to a system that is missing or
+//! does not decode is a problem.
 
 use nova_data::records::system::System;
 use nova_data::store::fixture::one_file;
 use nova_data::{GameData, Record};
 use nova_rsrc::fixture::ForkBuilder;
-use nova_sim::{PilotCatalog, StarMap};
+use nova_sim::PilotCatalog;
+use nova_sim::hyperspace::system_links;
 use nova_view::galaxy::{GalaxyCatalog, GalaxyModel, SystemId};
 
 fn put_i16s(bytes: &mut [u8], at: usize, values: &[i16]) {
@@ -60,7 +62,7 @@ fn the_galaxy_map_draws_the_star_maps_links_and_reports_missing_systems() {
     let model = GalaxyModel::new(data.galaxy());
     let systems: Vec<SystemId> = model.systems().iter().map(|s| s.entry.id).collect();
     assert_eq!(systems, (128..=134).map(SystemId).collect::<Vec<_>>());
-    assert_eq!(model.links(), StarMap::new(data.star_map()).links());
+    assert_eq!(model.links(), system_links(&data.star_map()));
     let pair = |a, b| (SystemId(a), SystemId(b));
     assert_eq!(
         model.links(),

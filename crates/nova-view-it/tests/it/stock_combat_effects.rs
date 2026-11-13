@@ -1,5 +1,5 @@
 //! The fight's effects over the stock data: the Hellhound's explosion,
-//! as the fight raises it, scatters 5 of `bööm` 129 and 23 of `bööm` 128
+//! as `wëap` 230's record gives it, scatters 5 of `bööm` 129 and 23 of `bööm` 128
 //! about its main explosion through the stock looks; the stock shots'
 //! fades and trails, the graviton beam's zig-zag and a weapon glow layer
 //! (rdm weapons-fidelity phase 24); a dying ship's escape pod draws on
@@ -10,8 +10,8 @@
 use crate::common;
 
 use nova_data::GameData;
+use nova_sim::catalog::Explosion;
 use nova_sim::combat::shot_fade::at_full_gain;
-use nova_sim::combat::weapon::WeaponSpec;
 use nova_sim::{
     BoomId, CombatCatalog, CombatEvent, NeverFires, NpcId, RuleSource, ShipId, ShipRef, Vec2,
     WeaponId,
@@ -32,13 +32,15 @@ fn the_stock_hellhounds_explosion_scatters_5_small_and_23_large_extras() {
         return;
     };
     let data = GameData::open(&dir, None).expect("the stock data opens");
+    // The explosion and blast radius `nova_sim::combat::weapon::WeaponSpec::new`
+    // reads from the record, as nova-sim-combat's tests pin.
     let hellhound = data
         .weapons()
-        .iter()
-        .map(WeaponSpec::new)
-        .find(|spec| spec.id == WeaponId(230))
+        .into_iter()
+        .find(|record| record.id == WeaponId(230))
         .expect("the Hellhound");
-    let explosion = hellhound.explosion.expect("an explosion");
+    let explosion = Explosion::decode(hellhound.explod_type).expect("an explosion");
+    let blast_radius = f32::from(hellhound.blast_radius.max(0));
     let looks = Looks::read(&data, [WeaponId(230)]);
     let mut effects = Effects::default();
     let scene = Scene {
@@ -50,7 +52,7 @@ fn the_stock_hellhounds_explosion_scatters_5_small_and_23_large_extras() {
     let event = CombatEvent::Exploded {
         at: Vec2::new(100.0, 50.0),
         explosion,
-        size: hellhound.blast_radius,
+        size: blast_radius,
     };
     effects.apply(&event, &scene, &looks, &mut NeverFires);
     let count = |boom| {
@@ -204,7 +206,9 @@ fn a_stock_escape_pod_draws_on_shan_895s_sheet_of_36_rotations() {
         position: Vec2::new(40.0, 0.0),
         velocity: Vec2::new(1.0, 0.0),
         life: 150.0,
-        frame: nova_sim::escape_pod::pod_frame(Vec2::new(1.0, 0.0), sheet.frames),
+        // A pod moving right faces frame 9 of the 36, by
+        // `nova_sim::escape_pod::pod_frame`, which nova-sim-ai pins.
+        frame: 9,
         shown: true,
     };
     let mut list = DrawList::new();
