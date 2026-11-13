@@ -59,6 +59,8 @@
 //!   scattered, wrapped and scrolled about the ship.
 //! - [`target`]: the target panel and the secondary weapon's line.
 //! - [`trails`]: the particle trail a shot leaves at its tail.
+//! - [`turret_swing`]: [`TurretSwings`](turret_swing::TurretSwings), each
+//!   ship's mounted turret swung toward its aim at a rate.
 //! - [`view`]: the [`FlightView`] screen, which runs the flight and draws
 //!   it.
 //! - [`weapon_glow`]: a ship's weapon glow, lit by a `Flags2` 0x0200
@@ -117,6 +119,7 @@ pub mod stock_looks;
 pub mod target;
 pub mod touch_controls;
 pub mod trails;
+pub mod turret_swing;
 pub mod view;
 pub mod weapon_glow;
 pub mod weapons;
