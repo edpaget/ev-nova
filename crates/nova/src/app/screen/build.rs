@@ -351,9 +351,12 @@ impl AppScreen {
 
     /// The router with each flight drawing the new game's ships, stations
     /// and planets as the 3D models `models` names
-    /// ([`FlightView::with_world_models`]): an empty table, the default,
-    /// until it is given. `main` gives the renderer the meshes and planets
-    /// its keys name (`App::with_world_assets`).
+    /// ([`FlightView::with_world_models`]), and the other screens that
+    /// show one (the spaceport's shipyard and hire screen) drawing it as
+    /// its model in their pictures (`nova_view::model_picture`): an
+    /// empty table, the default, until it is given. `main` gives the
+    /// renderer the meshes and planets its keys name
+    /// (`App::with_world_assets`).
     #[must_use]
     pub fn with_world_models(self, models: Rc<nova_view::flight::WorldModels>) -> Self {
         Self {

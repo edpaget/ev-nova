@@ -54,7 +54,8 @@ impl AppScreen {
         };
         let mut spaceport =
             SpaceportView::new(self.data.as_ref(), stellar, template(SPACEPORT_DIALOG))
-                .with_bindings(self.bindings.clone());
+                .with_bindings(self.bindings.clone())
+                .with_world_models(Rc::clone(&self.world_models));
         // The exchange, the outfitter, the shipyard and the room to hire,
         // read together as the spaceport opens.
         let shops = self

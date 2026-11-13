@@ -195,6 +195,7 @@ use crate::bound_names::{CONFIRM_OR_BACK, press_clause};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
 use crate::flight::PortScreen;
+use crate::flight::world_models::WorldModels;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
@@ -1040,6 +1041,9 @@ pub struct ShipyardScreen {
     /// Each listed ship's picture, by row, read once a list (none without
     /// the dialog).
     pictures: Vec<ShipPicture>,
+    /// The world models its pictures draw a class's model by
+    /// ([`ShipyardScreen::with_world_models`]); empty by default.
+    models: Rc<WorldModels>,
     style: ButtonStyle,
     /// Whether its dialogs' buttons take the keyboard focus.
     focus_ring: FocusRing,
@@ -1139,6 +1143,7 @@ impl ShipyardScreen {
             catalog: CatalogHandle(catalog),
             looks,
             pictures: Vec::new(),
+            models: Rc::default(),
             style,
             focus_ring: FocusRing::default(),
             grid,
@@ -1161,6 +1166,15 @@ impl ShipyardScreen {
         screen.selected_changed();
         screen.sync_pad_cells();
         screen
+    }
+
+    /// The shipyard drawing a class with no `PICT` as its model from
+    /// `models`, when it has one ([`picture`]); its pictures read again.
+    #[must_use]
+    pub fn with_world_models(mut self, models: Rc<WorldModels>) -> Self {
+        self.models = models;
+        self.read_pictures();
+        self
     }
 
     /// The shipyard with its dialogs' buttons taking the keyboard focus
@@ -1528,7 +1542,11 @@ impl ShipyardScreen {
             .shipyard
             .rows
             .iter()
-            .map(|row| ShipPicture::read(row.id, &self.looks, |id| catalog.picture_exists(id)))
+            .map(|row| {
+                ShipPicture::read(row.id, &self.looks, &self.models, |id| {
+                    catalog.picture_exists(id)
+                })
+            })
             .collect();
     }
 
@@ -1699,17 +1717,14 @@ impl ShipyardScreen {
             text(list, NO_SHIPS, origin, TEXT_COLOR);
             return;
         }
-        let count = self.shipyard.rows.len();
         let selected = self.selected();
-        self.grid.cells().draw_cells(
+        picture::draw_grid_pictures(
             list,
-            area,
-            count,
-            selected,
-            self.colors,
+            self.grid.cells(),
+            (area, selected, self.colors),
+            &self.pictures,
             |list, index, cell| {
                 let row = &self.shipyard.rows[index];
-                self.pictures[index].draw_cell(list, cell);
                 if row.id == self.shipyard.current {
                     grid::draw_corner_text(list, metrics, cell, CURRENT_MARK, false);
                 }
@@ -1995,6 +2010,7 @@ mod tests {
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
 
+    mod models;
     mod movie;
     mod stand_in;
     mod unplaced_pad;
