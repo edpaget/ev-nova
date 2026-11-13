@@ -7,6 +7,17 @@
 //! into, as one batch after the sky's own. A sky whose decorations place
 //! none (an empty list, or every one off the view) is no batch.
 //!
+//! # A sky with no list
+//!
+//! A sky whose seed has no list draws its seed's default: the far galaxy
+//! [`galaxy::seeded`] gives it, about three seeds in ten, or nothing. An
+//! empty list is a list, and draws none. The galaxy is baked
+//! ([`galaxy::bake`]) the first frame that draws its sky, before that
+//! frame is submitted, as a planet's look is, so no start-up pays for
+//! it; it is kept by its seed from then on, whatever looks are set
+//! after, and uploaded once like any other image. A sky at level 0, or
+//! one that has a list, bakes none.
+//!
 //! # Which images the GPU holds
 //!
 //! An image is numbered ([`SkyImageId`]) and uploaded
@@ -27,12 +38,22 @@ use std::sync::{Arc, Weak};
 use nova_view::SkyPose;
 
 use crate::gpu::{Batch, Gpu, SkyImageInstance};
-use crate::sky::{self, SkyImage, SkyImageId, SkyLooks};
+use crate::sky::{self, SkyDecoration, SkyImage, SkyImageId, SkyLooks, galaxy};
 use crate::viewport::LogicalSize;
 
-/// The sky images the GPU holds, by pointer (see the [module docs](self)).
+/// The renderer's sky images (see the [module docs](self)).
 #[derive(Debug, Default)]
 pub(crate) struct SkyImages {
+    /// The images the GPU holds.
+    resident: Resident,
+    /// Each sky's default decorations, by its seed, made the first frame
+    /// that draws it with no list: its seed's galaxy, baked, or none.
+    defaults: HashMap<u64, Vec<SkyDecoration>>,
+}
+
+/// The sky images the GPU holds, by pointer.
+#[derive(Debug, Default)]
+struct Resident {
     /// Each image uploaded, by its pointer's address, with the number it
     /// took. The weak pointer keeps the address its own: an address is
     /// not handed to another image while any pointer to its first
@@ -44,10 +65,11 @@ pub(crate) struct SkyImages {
 
 impl SkyImages {
     /// Draws the decorations of sky `pose` onto `batches`, as `looks`
-    /// lists them for its seed, in a view of `logical` size drawn into a
-    /// canvas of `texels` texels a logical unit: one
-    /// [`Batch::SkyImages`], each image uploaded through `gpu` first if
-    /// its pointer hasn't been. Nothing when none is placed.
+    /// lists them for its seed, or its seed's default when it lists
+    /// none, in a view of `logical` size drawn into a canvas of `texels`
+    /// texels a logical unit: one [`Batch::SkyImages`], each image
+    /// uploaded through `gpu` first if its pointer hasn't been. Nothing
+    /// when none is placed.
     pub(crate) fn draw(
         &mut self,
         pose: &SkyPose,
@@ -57,13 +79,18 @@ impl SkyImages {
         batches: &mut Vec<Batch>,
         gpu: &mut impl Gpu,
     ) {
-        let Some(list) = looks.decorations(pose.seed) else {
-            return;
+        let list = match looks.decorations(pose.seed) {
+            Some(list) => list,
+            // A sky at level 0 draws nothing, so its galaxy waits.
+            None if pose.level == 0 => return,
+            None => (self.defaults)
+                .entry(pose.seed)
+                .or_insert_with(|| default_of(pose.seed)),
         };
         let images: Vec<SkyImageInstance> = sky::placed(pose, list, logical, texels)
             .into_iter()
             .map(|(index, placement)| SkyImageInstance {
-                image: self.id(&list[index].image, gpu),
+                image: self.resident.id(&list[index].image, gpu),
                 placement,
             })
             .collect();
@@ -71,7 +98,18 @@ impl SkyImages {
             batches.push(Batch::SkyImages(images));
         }
     }
+}
 
+/// What sky `seed` draws when its data lists no decorations: its seed's
+/// far galaxy ([`galaxy::seeded`]), baked now, or nothing.
+fn default_of(seed: u64) -> Vec<SkyDecoration> {
+    galaxy::seeded(seed)
+        .map(|far| galaxy::decoration(&far, Arc::new(galaxy::bake(&far))))
+        .into_iter()
+        .collect()
+}
+
+impl Resident {
     /// The number `image` is uploaded under, uploading it through `gpu`
     /// first if this pointer hasn't been.
     fn id(&mut self, image: &Arc<SkyImage>, gpu: &mut impl Gpu) -> SkyImageId {
@@ -97,6 +135,7 @@ mod tests {
     use crate::enlarge::NativeDetail;
     use crate::gpu::Frame;
     use crate::recording::{GpuCall, NoImages, RecordingGpu};
+    use crate::sky::galaxy::{Galaxy, bake, decoration, seeded};
     use crate::sky::{BackdropLook, SkyBlend, SkyDecoration, SkyLook, instances};
     use crate::viewport::Viewport;
 
@@ -368,24 +407,149 @@ mod tests {
         renderer(list)
     }
 
+    /// The first seed whose own galaxy shows in these tests' small view,
+    /// and that galaxy.
+    fn seed_with_a_galaxy() -> (u64, Galaxy) {
+        (0..10_000)
+            .find_map(|seed| {
+                let galaxy = seeded(seed)?;
+                let list = [decoration(&galaxy, image(1))];
+                (sky::placed(&sky(seed), &list, SMALL, 0.5).len() == 1).then_some((seed, galaxy))
+            })
+            .expect("a galaxy in view")
+    }
+
+    /// The first seed with no galaxy.
+    fn seed_without_a_galaxy() -> u64 {
+        (0..10_000)
+            .find(|seed| seeded(*seed).is_none())
+            .expect("a bare seed")
+    }
+
+    fn kinds(frame: &Frame) -> Vec<&'static str> {
+        frame.batches.iter().map(Batch::kind).collect()
+    }
+
     #[test]
-    fn a_seed_with_no_list_draws_no_images() {
+    fn a_seed_with_a_galaxy_and_no_list_draws_it_baked_at_its_first_frame() {
+        let (seed, far) = seed_with_a_galaxy();
         let grey = image(90);
         // Another seed's list is not this one's.
         let mut renderer = Renderer::new(NoImages);
         let mut looks = SkyLooks::new();
-        looks.set_decorations(SEED + 1, vec![galaxy(&grey)]);
+        looks.set_decorations(seed + 1, vec![hulk(&grey)]);
         renderer.set_sky_looks(looks);
         let mut gpu = RecordingGpu::new();
-        let frame = frame_of(&mut renderer, SEED, &mut gpu);
-        let kinds: Vec<&str> = frame.batches.iter().map(Batch::kind).collect();
-        assert_eq!(kinds, ["sky"]);
+        let frame = frame_of(&mut renderer, seed, &mut gpu);
+        // Its seed's galaxy, as the core bakes and places it.
+        let baked = Arc::new(bake(&far));
+        let list = [decoration(&far, Arc::clone(&baked))];
+        let images = expected(seed, &list, &[0]);
+        assert_eq!(images.len(), 1);
+        assert_eq!(kinds(&frame), ["sky", "sky-images"]);
+        assert_eq!(frame.batches.last(), Some(&Batch::SkyImages(images)));
+        // Baked and uploaded before that frame is submitted, once.
+        assert!(matches!(
+            gpu.calls[..],
+            [GpuCall::UploadSkyImage { .. }, GpuCall::Submit(_)]
+        ));
+        assert_eq!(uploads(&gpu), [(SkyImageId(0), (*baked).clone())]);
+        // Later frames, and new looks, draw the one kept: nothing more
+        // is uploaded.
+        gpu.take();
+        frame_of(&mut renderer, seed, &mut gpu);
+        renderer.set_sky_looks(SkyLooks::new());
+        let again = frame_of(&mut renderer, seed, &mut gpu);
         assert_eq!(uploads(&gpu), []);
-        // Nor does a renderer with no looks at all.
+        assert_eq!(again.batches, frame.batches);
+        // A renderer with no looks at all draws it too.
         let mut plain = Renderer::new(NoImages);
-        let frame = frame_of(&mut plain, SEED, &mut gpu);
-        let kinds: Vec<&str> = frame.batches.iter().map(Batch::kind).collect();
-        assert_eq!(kinds, ["sky"]);
+        let frame = frame_of(&mut plain, seed, &mut RecordingGpu::new());
+        assert_eq!(kinds(&frame), ["sky", "sky-images"]);
+    }
+
+    #[test]
+    fn a_seed_without_a_galaxy_and_no_list_draws_no_images_and_bakes_nothing() {
+        let seed = seed_without_a_galaxy();
+        let mut renderer = Renderer::new(NoImages);
+        let mut gpu = RecordingGpu::new();
+        let frame = frame_of(&mut renderer, seed, &mut gpu);
+        assert_eq!(kinds(&frame), ["sky"]);
+        assert_eq!(uploads(&gpu), []);
+        // The table holds no default for it but the lack of one.
+        let mut images = SkyImages::default();
+        let mut batches = Vec::new();
+        images.draw(
+            &sky(seed),
+            &SkyLooks::new(),
+            SMALL,
+            0.5,
+            &mut batches,
+            &mut gpu,
+        );
+        assert_eq!(batches, []);
+        assert_eq!(images.defaults.get(&seed), Some(&Vec::new()));
+        assert_eq!(images.resident.next, 0);
+    }
+
+    #[test]
+    fn a_sky_that_draws_nothing_bakes_no_galaxy() {
+        let (seed, _) = seed_with_a_galaxy();
+        let mut images = SkyImages::default();
+        let (mut batches, mut gpu) = (Vec::new(), RecordingGpu::new());
+        // Level 0: no sky at all.
+        let dark = SkyPose::new(seed, Point::new(0.0, 0.0), Point::new(128.0, 96.0), 0);
+        images.draw(&dark, &SkyLooks::new(), SMALL, 0.5, &mut batches, &mut gpu);
+        assert_eq!(batches, []);
+        assert_eq!(images.defaults.get(&seed), None, "nothing baked");
+        // A sky that lists its own decorations bakes none either.
+        let mut looks = SkyLooks::new();
+        looks.set_decorations(seed, Vec::new());
+        images.draw(&sky(seed), &looks, SMALL, 0.5, &mut batches, &mut gpu);
+        assert_eq!(images.defaults.get(&seed), None);
+        assert_eq!(gpu.calls, []);
+        // Drawn with no list, it is baked and kept.
+        images.draw(
+            &sky(seed),
+            &SkyLooks::new(),
+            SMALL,
+            0.5,
+            &mut batches,
+            &mut gpu,
+        );
+        assert_eq!(images.defaults.get(&seed).map(Vec::len), Some(1));
+        assert_eq!(batches.len(), 1);
+    }
+
+    #[test]
+    fn an_empty_list_draws_none_though_the_seed_has_a_galaxy() {
+        let (seed, _) = seed_with_a_galaxy();
+        let mut renderer = Renderer::new(NoImages);
+        let mut looks = SkyLooks::new();
+        looks.set_decorations(seed, Vec::new());
+        renderer.set_sky_looks(looks);
+        let mut gpu = RecordingGpu::new();
+        let frame = frame_of(&mut renderer, seed, &mut gpu);
+        assert_eq!(kinds(&frame), ["sky"]);
+        assert_eq!(uploads(&gpu), []);
+    }
+
+    #[test]
+    fn a_list_draws_the_list_and_not_the_seeds_galaxy() {
+        let (seed, _) = seed_with_a_galaxy();
+        let grey = image(90);
+        let list = vec![hulk(&grey)];
+        let mut renderer = Renderer::new(NoImages);
+        let mut looks = SkyLooks::new();
+        looks.set_decorations(seed, list.clone());
+        renderer.set_sky_looks(looks);
+        let mut gpu = RecordingGpu::new();
+        let frame = frame_of(&mut renderer, seed, &mut gpu);
+        assert_eq!(
+            frame.batches.last(),
+            Some(&Batch::SkyImages(expected(seed, &list, &[0])))
+        );
+        assert_eq!(uploads(&gpu), [(SkyImageId(0), (*grey).clone())]);
     }
 
     #[test]
@@ -421,7 +585,7 @@ mod tests {
 
     #[test]
     fn a_dropped_image_s_number_is_never_another_image_s() {
-        let mut images = SkyImages::default();
+        let mut images = Resident::default();
         let mut gpu = RecordingGpu::new();
         // Each image is dropped before the next is made, so without the
         // table keeping its address, the next could be given the same one.

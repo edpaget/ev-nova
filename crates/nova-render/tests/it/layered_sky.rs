@@ -52,7 +52,8 @@ fn moved() -> (f32, f32) {
     (EYE.0 + DELTA.0, EYE.1 + DELTA.1)
 }
 
-/// The looks these tests draw in: their sky's stars, and no backdrop.
+/// The looks these tests draw in: their sky's stars, no backdrop, and
+/// no decorations (so not its seed's galaxy either, if it has one).
 fn starry() -> SkyLooks {
     let mut looks = SkyLooks::new();
     let look = SkyLook {
@@ -62,7 +63,9 @@ fn starry() -> SkyLooks {
         },
         ..SkyLook::default()
     };
-    looks.insert(pose(EYE, 32).seed, look);
+    let seed = pose(EYE, 32).seed;
+    looks.insert(seed, look);
+    looks.set_decorations(seed, Vec::new());
     looks
 }
 

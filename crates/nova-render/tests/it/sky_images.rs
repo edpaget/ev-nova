@@ -12,6 +12,7 @@
 use std::sync::Arc;
 
 use nova_render::fonts::FontFaces;
+use nova_render::sky::galaxy::{bake, decoration, seeded};
 use nova_render::sky::{
     BackdropLook, Placement, SkyBlend, SkyDecoration, SkyLook, SkyLooks, StarInstance, backdrop,
     instances, lit, over, placed, streak_coverage,
@@ -508,4 +509,50 @@ fn at_the_lowest_render_scale_an_image_still_lights_its_pixels() {
         .count();
     assert_eq!(lit_pixels, 56 * 56);
     assert_eq!(rgb(&pixels, (10, 10)), [0, 0, 0]);
+}
+
+#[test]
+fn a_sky_with_no_list_draws_its_seeds_galaxy_over_its_stars_and_backdrop() {
+    // The first seed whose galaxy lies whole within this small view from
+    // over the system's centre.
+    let (own, far) = (0..10_000)
+        .find_map(|seed| {
+            let far = seeded(seed)?;
+            let reach = 128.0 - far.size / 2.0 - 4.0;
+            (far.at.x.abs() < reach && far.at.y.abs() < reach).then_some((seed, far))
+        })
+        .expect("a galaxy in view");
+    let sky = SkyPose::new(own, Point::new(0.0, 0.0), Point::new(128.0, 128.0), 32);
+    // No looks at all: the default stars and backdrop, and no list.
+    let Some(mut gpu) = gpu_with(SIDE, SIDE, &FontFaces::bundled()) else {
+        return;
+    };
+    let mut renderer = Renderer::new(Images);
+    let mut draws = DrawList::new();
+    draws.world(|draws| {
+        draws.sky(sky);
+    });
+    let viewport = Viewport::new(LOGICAL, (SIDE, SIDE), 1.0);
+    let report = renderer.render(&draws, &viewport, &mut gpu);
+    assert_eq!(report, RenderReport::default());
+    let pixels = gpu.read_pixels().expect("read back");
+    // The core's galaxy, baked and placed, laid as a glow over the
+    // core's default sky.
+    let list = [decoration(&far, Arc::new(bake(&far)))];
+    let look = SkyLook::default();
+    let touched = assert_as_predicted(&pixels, &sky, &look, &list, "the seed's galaxy");
+    assert!(touched > 1500, "{touched}");
+    // Its middle shows most of its core's light (its mips soften the
+    // peak) over whatever is beneath.
+    let middle = ((128.0 + far.at.x) as u32, (128.0 + far.at.y) as u32);
+    let core = (far.light * 255.0) as i32;
+    let seen = rgb(&pixels, middle);
+    let brightest = i32::from(seen[0].max(seen[1]).max(seen[2]));
+    assert!(brightest * 10 >= core * 7, "{seen:?} for a core of {core}");
+    // With an empty list, the same sky draws no galaxy there.
+    let Some(bare) = drawn(sky, look, &[], RenderScale::Auto) else {
+        return;
+    };
+    assert_ne!(rgb(&bare, middle), seen);
+    assert_as_predicted(&bare, &sky, &look, &[], "no galaxy");
 }

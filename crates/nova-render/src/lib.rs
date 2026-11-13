@@ -68,10 +68,13 @@
 //!   the stars (`sky::backdrop`); and its decorations, images drawn as
 //!   far scenery over the stars ([`sky::SkyDecoration`], each a
 //!   premultiplied [`SkyImage`]), placed by the core and checked against
-//!   its reference ([`sky::lit`], [`sky::over`]).
+//!   its reference ([`sky::lit`], [`sky::over`]); and the far galaxy a
+//!   seed may give a sky that lists none ([`sky::galaxy`]), painted by
+//!   the core.
 //! - `sky_images`: the [`Renderer`]'s sky images, each uploaded the first
 //!   frame that draws it ([`Gpu::upload_sky_image`]), once by its
-//!   pointer, and the [`Batch::SkyImages`] a sky's decorations become.
+//!   pointer, the [`Batch::SkyImages`] a sky's decorations become, and
+//!   the seeded galaxy of a sky with no list, baked at its first draw.
 //! - `models`: the [`Renderer`]'s meshes by [`nova_view::ModelKey`]
 //!   ([`Renderer::add_model`]), uploaded the first frame that draws them
 //!   ([`Gpu::upload_mesh`]) after their textures, each once

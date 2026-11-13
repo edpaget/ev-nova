@@ -107,7 +107,12 @@
 //!
 //! - **The list.** A system's data lists them, and the renderer holds
 //!   each sky's list beside its look ([`SkyLooks::decorations`]). An
-//!   empty list draws none, and a sky with no list draws none either.
+//!   empty list draws none.
+//! - **The default.** A sky with no list draws its seed's default
+//!   ([`galaxy`](mod@galaxy)): about three seeds in ten have one far
+//!   galaxy, a faint spiral or elliptical the engine paints from the
+//!   seed, and the rest have none. So a game with no art still has skies
+//!   of their own.
 //! - **Order.** After the backdrop and the stars, far to near by
 //!   parallax, so no star is drawn over one.
 //! - **Blends.** [`SkyBlend::Over`] hides the sky behind it by its
@@ -134,6 +139,7 @@ use crate::viewport::LogicalSize;
 
 mod backdrop;
 mod decoration;
+pub mod galaxy;
 mod image;
 mod look;
 
@@ -1226,6 +1232,23 @@ mod batch_tests {
         assert!(!backdrop(&sky(), &SkyLook::default(), SMALL).is_empty());
     }
 
+    /// The looks these tests draw in: no look, so the default stars and
+    /// backdrop, and an empty list of decorations for [`sky`], so its
+    /// seed's galaxy (if it has one) adds no batch to the stars' these
+    /// tests are about. The decorations' batch is `sky_images`'s.
+    fn undecorated() -> SkyLooks {
+        let mut looks = SkyLooks::new();
+        looks.set_decorations(sky().seed, Vec::new());
+        looks
+    }
+
+    /// A renderer of no images that draws [`sky`] undecorated.
+    fn bare() -> Renderer<NoImages> {
+        let mut renderer = Renderer::new(NoImages);
+        renderer.set_sky_looks(undecorated());
+        renderer
+    }
+
     fn frame_of(
         renderer: &mut Renderer<NoImages>,
         list: &DrawList,
@@ -1246,17 +1269,13 @@ mod batch_tests {
     fn a_sky_is_one_batch_of_the_cores_stars_at_the_targets_texels() {
         let mut list = DrawList::new();
         list.sky(sky());
-        let frame = frame_of(
-            &mut Renderer::new(NoImages),
-            &list,
-            &mut RecordingGpu::new(),
-        );
+        let frame = frame_of(&mut bare(), &list, &mut RecordingGpu::new());
         let expected = drawn(SMALL, 0.5);
         assert!(!expected.is_empty());
         assert_eq!(frame.batches, [Batch::Sky(expected.clone())]);
         // An overlay sky keeps the target's texels whatever the world's.
         let mut gpu = RecordingGpu::answering(WorldResolution::Logical);
-        let frame = frame_of(&mut Renderer::new(NoImages), &list, &mut gpu);
+        let frame = frame_of(&mut bare(), &list, &mut gpu);
         assert_eq!(frame.batches, [Batch::Sky(expected)]);
     }
 
@@ -1267,21 +1286,17 @@ mod batch_tests {
             list.sky(sky());
         });
         let mut gpu = RecordingGpu::answering(WorldResolution::Logical);
-        let frame = frame_of(&mut Renderer::new(NoImages), &list, &mut gpu);
+        let frame = frame_of(&mut bare(), &list, &mut gpu);
         assert_eq!(frame.world, [0]);
         assert_eq!(frame.batches, [Batch::Sky(drawn(SMALL, 1.0))]);
         // At a quarter of the 128-wide backing, a 32-texel world: an
         // eighth of a texel a unit.
-        let mut renderer = Renderer::new(NoImages);
+        let mut renderer = bare();
         renderer.set_render_scale(RenderScale::Percent(25));
         let frame = frame_of(&mut renderer, &list, &mut RecordingGpu::new());
         assert_eq!(frame.batches, [Batch::Sky(drawn(SMALL, 0.125))]);
         // Drawn at the target's resolution, a world sky has its texels.
-        let frame = frame_of(
-            &mut Renderer::new(NoImages),
-            &list,
-            &mut RecordingGpu::new(),
-        );
+        let frame = frame_of(&mut bare(), &list, &mut RecordingGpu::new());
         assert_eq!(frame.batches, [Batch::Sky(drawn(SMALL, 0.5))]);
     }
 
@@ -1294,7 +1309,7 @@ mod batch_tests {
             list.sky(sky());
         });
         let mut gpu = RecordingGpu::answering(WorldResolution::Logical);
-        let frame = frame_of(&mut Renderer::new(NoImages), &list, &mut gpu);
+        let frame = frame_of(&mut bare(), &list, &mut gpu);
         assert_eq!(
             frame.batches,
             [Batch::Sky(drawn(SMALL, 1.0)), Batch::Sky(drawn(SMALL, 0.5))]
@@ -1330,7 +1345,7 @@ mod batch_tests {
                 list.sky(sky());
             });
             let mut gpu = RecordingGpu::answering(WorldResolution::Logical);
-            Renderer::new(NoImages).render(&list, &viewport, &mut gpu);
+            bare().render(&list, &viewport, &mut gpu);
             let frame = gpu.submits().last().map(|frame| (*frame).clone());
             assert_eq!(
                 frame.expect("a frame").batches,
@@ -1342,7 +1357,7 @@ mod batch_tests {
 
     #[test]
     fn a_sky_splits_from_its_neighbours_in_list_order() {
-        let mut renderer = Renderer::new(NoImages);
+        let mut renderer = bare();
         renderer.add_model(ModelKey(1), Mesh::cube([Color::WHITE; 6]));
         let mut list = DrawList::new();
         list.dot(Point::new(4.0, 4.0), 2.0, Color::WHITE)
@@ -1398,6 +1413,7 @@ mod batch_tests {
     #[test]
     fn a_planet_before_a_sky_and_a_sprite_after_it_keep_their_places() {
         let mut renderer = Renderer::new(OneSprite);
+        renderer.set_sky_looks(undecorated());
         renderer.add_planet(PlanetKey(1), planet());
         let mut list = DrawList::new();
         list.planet(
@@ -1428,11 +1444,7 @@ mod batch_tests {
             eye: Point::new(f32::NAN, 0.0),
             ..sky()
         });
-        let frame = frame_of(
-            &mut Renderer::new(NoImages),
-            &list,
-            &mut RecordingGpu::new(),
-        );
+        let frame = frame_of(&mut bare(), &list, &mut RecordingGpu::new());
         assert_eq!(frame.batches, []);
         let mut clipped = DrawList::new();
         clipped.clipped(
@@ -1442,11 +1454,7 @@ mod batch_tests {
             },
             DrawCommand::Sky { sky: sky() },
         );
-        let frame = frame_of(
-            &mut Renderer::new(NoImages),
-            &clipped,
-            &mut RecordingGpu::new(),
-        );
+        let frame = frame_of(&mut bare(), &clipped, &mut RecordingGpu::new());
         assert_eq!(frame.batches, [Batch::Sky(drawn(SMALL, 0.5))]);
     }
 }

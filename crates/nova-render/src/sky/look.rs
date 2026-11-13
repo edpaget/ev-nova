@@ -467,10 +467,19 @@ mod batch_tests {
         }
     }
 
+    /// Looks in which sky 21, the one these tests draw, lists no
+    /// decorations: its seed's galaxy, if it has one, would add a batch
+    /// to the stars' these tests are about.
+    fn undecorated() -> SkyLooks {
+        let mut looks = SkyLooks::new();
+        looks.set_decorations(21, Vec::new());
+        looks
+    }
+
     #[test]
     fn a_look_registered_for_the_poses_seed_is_the_one_drawn() {
         let mut renderer = Renderer::new(NoImages);
-        let mut looks = SkyLooks::new();
+        let mut looks = undecorated();
         looks.insert(21, red_and_sparse());
         renderer.set_sky_looks(looks);
         let expected = instances(&sky(21), &red_and_sparse(), SMALL, 0.5);
@@ -484,7 +493,7 @@ mod batch_tests {
     #[test]
     fn another_seeds_look_is_not_drawn() {
         let mut renderer = Renderer::new(NoImages);
-        let mut looks = SkyLooks::new();
+        let mut looks = undecorated();
         looks.insert(22, red_and_sparse());
         renderer.set_sky_looks(looks);
         let expected = instances(&sky(21), &SkyLook::default(), SMALL, 0.5);
@@ -494,7 +503,7 @@ mod batch_tests {
     #[test]
     fn a_look_that_draws_nothing_is_no_batch() {
         let mut renderer = Renderer::new(NoImages);
-        let mut looks = SkyLooks::new();
+        let mut looks = undecorated();
         let nothing = SkyLook {
             stars: 0.0,
             tint: None,

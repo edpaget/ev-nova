@@ -38,15 +38,18 @@ fn pose(eye: (f32, f32), level: u8) -> SkyPose {
 }
 
 /// `sky` drawn alone in the world layer at `scale`, in `look` (none: the
-/// default), read back; `None` with no adapter.
+/// default), read back; `None` with no adapter. Its sky lists no
+/// decorations, so its seed's galaxy (if it has one) adds nothing to the
+/// pixels these tests predict from the puffs and the stars.
 fn drawn(sky: SkyPose, look: Option<SkyLook>, scale: RenderScale) -> Option<Vec<u8>> {
     let mut gpu = gpu_with(SIDE, SIDE, &FontFaces::bundled())?;
     let mut renderer = Renderer::new(Images);
+    let mut looks = SkyLooks::new();
+    looks.set_decorations(sky.seed, Vec::new());
     if let Some(look) = look {
-        let mut looks = SkyLooks::new();
         looks.insert(sky.seed, look);
-        renderer.set_sky_looks(looks);
     }
+    renderer.set_sky_looks(looks);
     renderer.set_render_scale(scale);
     let mut list = DrawList::new();
     list.world(|list| {

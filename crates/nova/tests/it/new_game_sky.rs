@@ -14,7 +14,8 @@
 //! Under the stock readings the looks registered draw nothing. A system
 //! whose data lists decorations (`fixture::decorated_sample`) draws them
 //! as one sky-images batch after its stars, each image uploaded once, and
-//! under the stock readings none.
+//! under the stock readings none. A system that lists none draws its
+//! seed's default, the far galaxy the renderer gives it or nothing.
 //!
 //! Wiring only: the layered sky's rule is nova-view's (`flight::sky` and
 //! the view's `sky` module), its look nova-render's (`sky`, and
@@ -25,6 +26,7 @@
 
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use nova::app::screen::AppScreen;
 use nova::app::{Control, WindowEvent};
@@ -35,7 +37,7 @@ use nova_audio::recording::MemorySettings;
 use nova_data::new_game;
 use nova_render::gpu::Batch;
 use nova_render::recording::GpuCall;
-use nova_render::sky::{Placement, SkyLook, StarInstance, backdrop, placed};
+use nova_render::sky::{Placement, SkyLook, StarInstance, backdrop, galaxy, placed};
 use nova_render::{
     Frame, LogicalSize, SkyImage, SkyImageInstance, WorldAssets, WorldSpace, world_assets,
 };
@@ -380,6 +382,81 @@ fn a_system_that_lists_decorations_draws_them_after_its_stars() {
         world_texels(&frame),
     );
     assert_ne!(turned, then, "the hulk turned with the clock");
+}
+
+/// What the renderer's core draws by default for the sky `pose` sees in
+/// `frame`: its seed's galaxy, baked and placed, or nothing.
+fn seeded_default(pose: &SkyPose, frame: &Frame) -> Vec<(SkyImage, Placement)> {
+    let Some(far) = galaxy::seeded(pose.seed) else {
+        return Vec::new();
+    };
+    let image = Arc::new(galaxy::bake(&far));
+    let list = [galaxy::decoration(&far, Arc::clone(&image))];
+    placed(pose, &list, frame.logical, world_texels(frame))
+        .into_iter()
+        .map(|(_, placement)| ((*image).clone(), placement))
+        .collect()
+}
+
+/// The frame `game` draws next shows `expected` as its sky images, each
+/// uploaded once.
+#[track_caller]
+fn assert_draws_default(game: &mut Harness, assets: &WorldAssets, galaxy: bool) {
+    let frame = frame_drawn(game);
+    let pose = skies(game)[0];
+    assert_eq!(assets.skies.decorations(pose.seed), None, "no list");
+    let expected = seeded_default(&pose, &frame);
+    assert_eq!(expected.len(), usize::from(galaxy), "seed {}", pose.seed);
+    let drawn: Vec<Placement> = sky_image_batches(&frame)
+        .into_iter()
+        .flat_map(|(after_sky, images)| {
+            assert!(after_sky.is_some(), "after the sky's own batch");
+            images
+        })
+        .map(|image| image.placement)
+        .collect();
+    let placements: Vec<Placement> = expected.iter().map(|(_, placement)| *placement).collect();
+    assert_eq!(drawn, placements);
+    frame_drawn(game);
+    let images: Vec<SkyImage> = expected.into_iter().map(|(image, _)| image).collect();
+    assert_eq!(sky_image_uploads(game), images);
+}
+
+#[test]
+fn a_system_that_lists_no_decorations_draws_its_seeds_default() {
+    let pilots = MemoryPilots::new();
+    // The sample's start system, Luyten Crossing, has a seed with no
+    // galaxy: its sky draws no images.
+    let loaded = loaded!(new_game::fixture::modelled_sample());
+    let (mut game, assets) = flying_with_looks(loaded, Ruleset::NewGame, &pilots);
+    assert_draws_default(&mut game, &assets, false);
+    // The same sample with the start system pinned at Brightwater's ID,
+    // a seed that has one: its sky draws it, baked at its first frame.
+    let pilots = MemoryPilots::new();
+    let ids = std::fs::read_to_string(new_game::fixture::sample_folder().join("nova-ids.json"))
+        .expect("the sample's ID table");
+    let swapped = ids
+        .replacen("\"brightwater\": 128", "\"brightwater\": 129", 1)
+        .replacen("\"luyten-crossing\": 129", "\"luyten-crossing\": 128", 1);
+    assert_ne!(swapped, ids);
+    let loaded = loaded!(new_game::fixture::modelled_sample().with("nova-ids.json", &swapped));
+    let (mut game, assets) = flying_with_looks(loaded, Ruleset::NewGame, &pilots);
+    assert_draws_default(&mut game, &assets, true);
+}
+
+#[test]
+fn the_stock_readings_draw_no_seeded_galaxy() {
+    let pilots = MemoryPilots::new();
+    let ids = std::fs::read_to_string(new_game::fixture::sample_folder().join("nova-ids.json"))
+        .expect("the sample's ID table");
+    let swapped = ids
+        .replacen("\"brightwater\": 128", "\"brightwater\": 129", 1)
+        .replacen("\"luyten-crossing\": 129", "\"luyten-crossing\": 128", 1);
+    let loaded = loaded!(new_game::fixture::modelled_sample().with("nova-ids.json", &swapped));
+    let (mut game, _) = flying_with_looks(loaded, Ruleset::Stock, &pilots);
+    let frame = frame_drawn(&mut game);
+    assert_eq!(sky_image_batches(&frame), []);
+    assert_eq!(sky_image_uploads(&game), []);
 }
 
 #[test]
