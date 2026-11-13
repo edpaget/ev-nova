@@ -4,8 +4,8 @@
 //! viewer draws ([`ViewerLinks`]) and the pick by the rulebook
 //! ([`viewer_links`]). From `nova_sim::viewer_lanes`, which re-exports
 //! them and keeps the builder that reads a fresh story's gate lanes
-//! (`nova_sim::viewer_lanes::gate_links`), with the module docs on what
-//! each reading draws.
+//! (`nova_sim::viewer_lanes::gate_links`, which the app calls and hands
+//! the viewer), with the module docs on what each reading draws.
 
 use nova_sim_base::rulebook::{RuleKey, RuleSource, Rulebook};
 use nova_sim_catalog::catalog::SystemId;

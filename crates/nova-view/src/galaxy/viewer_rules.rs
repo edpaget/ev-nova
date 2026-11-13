@@ -1,21 +1,35 @@
-//! The viewer's links by the rules: [`GalaxyMap::with_rules`].
+//! The viewer's links by the rules: [`GalaxyMap::with_gate_links`] and
+//! [`GalaxyMap::with_rules`].
 //!
-//! The viewer is built before any rulebook is known, from a catalog that
-//! hands it both the `sÿst` Con links and a fresh pilot's gate lanes
-//! ([`Galaxy::gate_links`](super::catalog::Galaxy::gate_links)). Once the
-//! rulebook arrives, `nova_sim::viewer_lanes::viewer_links` picks the
-//! links by `RuleKey::GateLanes` and their looks and the closed lanes by
+//! The viewer is built before any rulebook is known. Its catalog hands it
+//! the `sÿst` Con links, and whoever builds it hands it a fresh pilot's
+//! gate lanes ([`GalaxyMap::with_gate_links`]): the app passes
+//! `nova_sim::viewer_lanes::gate_links`, which reads the story, so the
+//! catalog can't. Once the rulebook arrives,
+//! `nova_sim::viewer_lanes::viewer_links` picks the links by
+//! `RuleKey::GateLanes` and their looks and the closed lanes by
 //! `RuleKey::MapLaneStyle`; this module forwards that one call and
 //! rebuilds the viewer's picture from it. The course and hypergate maps
-//! take their links from the session's drawing, so the rules change
-//! nothing there.
+//! take their links from the session's drawing, so neither the gate lanes
+//! nor the rules change anything there.
 
 use nova_sim::Rulebook;
 use nova_sim::galaxy_map::MapLink;
 
+use super::catalog::GateLinks;
 use super::map::{GalaxyMap, MapMode};
 
 impl GalaxyMap {
+    /// The map with `gates` as a fresh pilot's gate lanes, which the
+    /// viewer draws by the rules (see the module docs): none until
+    /// handed in. Hand them in before the rules
+    /// ([`with_rules`](Self::with_rules)), which pick the links drawn.
+    #[must_use]
+    pub fn with_gate_links(mut self, gates: GateLinks) -> Self {
+        self.model.set_gate_links(gates);
+        self
+    }
+
     /// The viewer with its links drawn by `rules` (see the module docs);
     /// an in-flight map unchanged.
     #[must_use]
@@ -65,16 +79,24 @@ mod tests {
     }
 
     /// The testkit's galaxy, whose Con links join Alpha (128) to Beta
-    /// (129) and Gamma (130), with a stable gate lane from Alpha to
-    /// Gamma and a dead closed one from Beta to Gamma.
+    /// (129) and Gamma (130).
     fn catalog() -> FakeCatalog {
-        let mut galaxy = galaxy();
-        galaxy.gate_links = GateLinks {
+        FakeCatalog::new(galaxy())
+    }
+
+    /// A stable gate lane from Alpha to Gamma and a dead closed one from
+    /// Beta to Gamma.
+    fn gates() -> GateLinks {
+        GateLinks {
             links: vec![(SystemId(128), SystemId(130))],
             looks: vec![look(128, 130, GateStability::Stable)],
             closed: vec![look(129, 130, GateStability::Dead)],
-        };
-        FakeCatalog::new(galaxy)
+        }
+    }
+
+    /// The viewer of [`catalog`], handed [`gates`].
+    fn viewer() -> GalaxyMap {
+        GalaxyMap::new(&catalog()).with_gate_links(gates())
     }
 
     fn new_game() -> Rulebook {
@@ -97,8 +119,8 @@ mod tests {
 
     #[test]
     fn the_stock_rules_leave_the_viewers_picture_as_it_was() {
-        let before = GalaxyMap::new(&catalog());
-        let after = GalaxyMap::new(&catalog()).with_rules(&Rulebook::default());
+        let before = viewer();
+        let after = viewer().with_rules(&Rulebook::default());
         assert_eq!(
             after.picture(),
             Some(&MapPicture::viewer(&before.model)),
@@ -110,7 +132,7 @@ mod tests {
 
     #[test]
     fn the_new_games_rules_draw_the_gate_lanes_in_their_looks() {
-        let map = GalaxyMap::new(&catalog()).with_rules(&new_game());
+        let map = viewer().with_rules(&new_game());
         let picture = map.picture().expect("the viewer's");
         let links: Vec<(SystemId, SystemId)> = picture
             .links
@@ -124,9 +146,19 @@ mod tests {
     }
 
     #[test]
+    fn the_catalog_alone_hands_the_viewer_no_gate_lanes() {
+        let map = GalaxyMap::new(&catalog()).with_rules(&new_game());
+        let picture = map.picture().expect("the viewer's");
+        assert_eq!(picture.links, []);
+        assert_eq!(picture.lanes, []);
+        assert_eq!(picture.closed_lanes, []);
+        assert_eq!(map.model.links(), []);
+    }
+
+    #[test]
     fn a_gate_lane_is_drawn_in_its_stabilitys_colour() {
-        let stock = drawn(&GalaxyMap::new(&catalog()));
-        let laned = drawn(&GalaxyMap::new(&catalog()).with_rules(&new_game()));
+        let stock = drawn(&viewer());
+        let laned = drawn(&viewer().with_rules(&new_game()));
         assert_eq!(colored(&stock, lanes::STABLE), 0);
         assert!(colored(&laned, lanes::STABLE) > 0);
         assert!(colored(&laned, lanes::DEAD) > 0, "the closed lane");
@@ -134,8 +166,10 @@ mod tests {
 
     #[test]
     fn a_course_maps_links_are_untouched_by_the_rules() {
-        let before = GalaxyMap::course(&catalog());
-        let after = GalaxyMap::course(&catalog()).with_rules(&new_game());
+        let before = GalaxyMap::course(&catalog()).with_gate_links(gates());
+        let after = GalaxyMap::course(&catalog())
+            .with_gate_links(gates())
+            .with_rules(&new_game());
         assert_eq!(after.model.links(), before.model.links());
         assert_eq!(after.picture(), before.picture());
     }

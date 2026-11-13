@@ -88,6 +88,16 @@ impl<C> Navigator<C> {
         self
     }
 
+    /// The navigator with its map handed `gates`, a fresh pilot's gate
+    /// lanes, before its rules ([`GalaxyMap::with_gate_links`]).
+    #[must_use]
+    pub fn with_gate_links(self, gates: crate::galaxy::GateLinks) -> Self {
+        Self {
+            map: self.map.with_gate_links(gates),
+            ..self
+        }
+    }
+
     /// The navigator with each system view it opens drawing its stellars'
     /// random frames on `chance` ([`SystemView::with_chance`]).
     #[must_use]
@@ -238,10 +248,6 @@ mod tests {
         fn galaxy(&self) -> Galaxy {
             Galaxy {
                 systems: vec![entry(128, "Alpha", 0), entry(129, "Beta", 600)],
-                gate_links: crate::galaxy::catalog::GateLinks {
-                    links: vec![(SystemId(128), SystemId(129))],
-                    ..Default::default()
-                },
                 ..Galaxy::default()
             }
         }
@@ -664,10 +670,16 @@ mod tests {
     }
 
     #[test]
-    fn the_rules_reach_the_maps_links() {
+    fn the_gate_links_handed_in_and_the_rules_reach_the_maps_links() {
         use nova_sim::{RuleKey, RuleSource, Rulebook};
         let laned = Rulebook::default().with_override(RuleKey::GateLanes, RuleSource::Bible);
-        let navigator = Navigator::new(FakeCatalog).with_rules(&laned);
+        let gates = crate::galaxy::catalog::GateLinks {
+            links: vec![(SystemId(128), SystemId(129))],
+            ..Default::default()
+        };
+        let navigator = Navigator::new(FakeCatalog)
+            .with_gate_links(gates)
+            .with_rules(&laned);
         let links: Vec<(SystemId, SystemId)> = navigator
             .map()
             .picture()

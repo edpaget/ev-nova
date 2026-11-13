@@ -57,7 +57,6 @@ impl GalaxyCatalog for GameData {
             govts: Governments::read(self),
             nebulae,
             problems,
-            gate_links: nova_sim::viewer_lanes::gate_links(self),
         }
     }
 }

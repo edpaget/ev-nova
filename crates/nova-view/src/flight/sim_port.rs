@@ -11,12 +11,10 @@
 //! and its siblings), and `nova_sim` re-exports each at the path named
 //! here, while the session code that fills and answers them stays in
 //! `nova_sim`. Every other name of `nova_sim` the view's prod code
-//! reaches is re-exported by `nova_sim_frame` at the same path, but five:
-//! the adapter's four (`nova_sim::Session`, `nova_sim::SessionSetup`,
-//! `nova_sim::SimCatalog` and `nova_sim::Pilot`) and the galaxy viewer's
-//! `nova_sim::viewer_lanes::gate_links` (called by `galaxy/data.rs`),
-//! which reads a fresh story's gate lanes. `nova_sim_frame`'s crate docs
-//! keep the list.
+//! reaches is re-exported by `nova_sim_frame` at the same path, but the
+//! adapter's four: `nova_sim::Session`, `nova_sim::SessionSetup`,
+//! `nova_sim::SimCatalog` and `nova_sim::Pilot`. `nova_sim_frame`'s
+//! crate docs keep the list.
 //!
 //! [`SessionFlight`](super::sim_adapter::SessionFlight) is the adapter
 //! over a real `nova_sim::Session`, and the edge builds it

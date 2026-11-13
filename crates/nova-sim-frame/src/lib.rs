@@ -74,12 +74,13 @@
 //!   land key did, from `nova_sim::session` itself.
 //!
 //! The facade: everything else of nova-sim that nova-view's prod code
-//! names, at the path nova-sim gives it, but five names: the session's
-//! adapter (`nova_sim::Session`, `nova_sim::SessionSetup`,
-//! `nova_sim::SimCatalog` and `nova_sim::Pilot`) and the galaxy viewer's
-//! `nova_sim::viewer_lanes::gate_links`, a builder that reads a fresh
-//! story's gate lanes (the story's overlaid galaxy, its gate points and
-//! the ai's star map), so it stays above the layers. Each name is the
+//! names, at the path nova-sim gives it, but the session's adapter's
+//! four names: `nova_sim::Session`, `nova_sim::SessionSetup`,
+//! `nova_sim::SimCatalog` and `nova_sim::Pilot`. (The galaxy viewer's
+//! gate lanes come from `nova_sim::viewer_lanes::gate_links`, a builder
+//! that reads a fresh story, so it stays above the layers; the app calls
+//! it and hands nova-view the [`GateLinks`](viewer_lanes::GateLinks) it
+//! builds.) Each name is the
 //! same item, re-exported here from the crate below the layers it now
 //! lives in. A root name (`nova_sim::Vec2`, `nova_sim::NpcId`) is
 //! re-exported at this crate's root, a lower crate's module the view

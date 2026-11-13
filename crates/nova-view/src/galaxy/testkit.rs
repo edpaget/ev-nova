@@ -90,7 +90,6 @@ pub(crate) fn galaxy() -> Galaxy {
         systems: vec![alpha, beta, gamma, alternate],
         govt_colors: BTreeMap::from([(GovtId(128), BLUE)]),
         govts: Governments::default(),
-        gate_links: super::catalog::GateLinks::default(),
         nebulae: vec![NebulaEntry {
             id: NebulaId(128),
             name: "Holpa Nebula".to_owned(),

@@ -103,7 +103,7 @@ pub struct GalaxyModel {
     /// by the gate lanes' engine reading.
     con_links: Vec<(SystemId, SystemId)>,
     /// A fresh pilot's gate lanes, what the viewer draws by their other
-    /// reading.
+    /// reading: none until handed in ([`GalaxyModel::set_gate_links`]).
     gate_links: GateLinks,
     /// Every government's map colour.
     govt_colors: BTreeMap<GovtId, u32>,
@@ -128,7 +128,6 @@ impl GalaxyModel {
             govts,
             nebulae,
             mut problems,
-            gate_links,
         } = galaxy;
         systems.sort_by_key(|system| system.id);
         let known: BTreeSet<SystemId> = systems.iter().map(|system| system.id).collect();
@@ -177,7 +176,7 @@ impl GalaxyModel {
             systems,
             con_links: links.clone(),
             links,
-            gate_links,
+            gate_links: GateLinks::default(),
             govt_colors,
             govts,
             catalog_nebulae: nebulae.clone(),
@@ -258,9 +257,16 @@ impl GalaxyModel {
         &self.links
     }
 
+    /// The model with `gates` as a fresh pilot's gate lanes, which
+    /// [`apply_viewer_rules`](Self::apply_viewer_rules) picks from.
+    pub(super) fn set_gate_links(&mut self, gates: GateLinks) {
+        self.gate_links = gates;
+    }
+
     /// The links the viewer draws by `rules`, from the catalog's Con
-    /// links and gate lanes (`nova_sim::viewer_lanes::viewer_links`),
-    /// which become its [`links`](Self::links).
+    /// links and the gate lanes handed in
+    /// (`nova_sim::viewer_lanes::viewer_links`), which become its
+    /// [`links`](Self::links).
     pub fn apply_viewer_rules(&mut self, rules: &Rulebook) -> ViewerLinks {
         let drawn = viewer_links(&self.con_links, &self.gate_links, rules);
         self.links.clone_from(&drawn.links);

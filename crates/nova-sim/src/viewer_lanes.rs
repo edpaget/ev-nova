@@ -4,9 +4,11 @@
 //!
 //! The viewer (`nova_view::galaxy::GalaxyMap` in viewer mode) has no
 //! session: it shows every system of the catalog. It is built before any
-//! rulebook is known, so its catalog hands it both sets of links: the
-//! `sÿst` Con links, and a fresh pilot's gate lanes ([`GateLinks`],
-//! [`gate_links`]). [`viewer_links`] then picks one by the rulebook.
+//! rulebook is known, so it is handed both sets of links: its catalog
+//! hands it the `sÿst` Con links, and the app a fresh pilot's gate lanes
+//! ([`GateLinks`], [`gate_links`], through
+//! `nova_view::galaxy::GalaxyMap::with_gate_links`). [`viewer_links`]
+//! then picks one by the rulebook.
 //!
 //! - By `GateLanes`' engine reading (stock), the viewer draws the Con
 //!   links, grey, and no closed lanes, whatever `MapLaneStyle` reads. The

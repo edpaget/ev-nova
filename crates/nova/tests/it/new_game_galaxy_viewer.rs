@@ -10,7 +10,8 @@
 //!
 //! Which links the viewer chooses by which rule is nova-sim's
 //! (`viewer_lanes`), pinned there; this pins that the data, the ruleset
-//! and the app meet.
+//! and the app meet: the app hands the viewer `gate_links` over the data
+//! (`AppScreen::new`), as nova-view's catalog can't build them.
 
 use std::collections::BTreeSet;
 use std::rc::Rc;

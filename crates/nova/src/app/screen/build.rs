@@ -50,14 +50,19 @@ use super::{ABOUT_TEXT, AppScreen, CLASSIC_VIEW, Dialogs, ENTERED, LANDED, MENU,
 impl AppScreen {
     /// Every screen over `data`, showing the ship browser, reading the
     /// keys through one handle on the original's default bindings
-    /// ([`AppScreen::with_bindings`] gives it another).
+    /// ([`AppScreen::with_bindings`] gives it another). The galaxy viewer
+    /// is handed a fresh pilot's gate lanes over `data`
+    /// (`nova_sim::viewer_lanes::gate_links`), which it draws by the rules
+    /// ([`Navigator::with_gate_links`]).
     #[must_use]
     pub fn new(data: Rc<GameData>) -> Self {
         let bindings = SharedBindings::default();
         Self {
             side: Side::Ships,
             return_to: Side::Ships,
-            galaxy: Navigator::new(Rc::clone(&data)).with_bindings(bindings.clone()),
+            galaxy: Navigator::new(Rc::clone(&data))
+                .with_gate_links(nova_sim::viewer_lanes::gate_links(&*data))
+                .with_bindings(bindings.clone()),
             ships: ShipBrowser::new(Rc::clone(&data)).with_bindings(bindings.clone()),
             data,
             flight: None,
