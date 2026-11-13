@@ -3,11 +3,13 @@
 //! liveried-stations sample
 //! (`nova_data::new_game::fixture::liveried_stations_3d`), wired as `main`
 //! wires it (the world models' table on the router, their meshes on the
-//! app, as `nova_render::world_assets` builds them), flying in Luyten
-//! Crossing the world layer draws Luyten Exchange under the key the table
-//! gives it, which names the hub in the commonwealth's livery, not Marrow
-//! Yard's unpainted hub; that key's mesh is uploaded; and landed at the
-//! exchange, the spaceport's landscape draws the same key.
+//! app, as `nova_render::world_assets` builds them), with a second,
+//! unowned hub station put in Luyten Crossing here: flying there, the
+//! world layer draws Luyten Exchange under the key the table gives it,
+//! which names the hub in the commonwealth's livery, and the unowned
+//! station under its own, which names the hub unpainted; both keys'
+//! meshes are uploaded; and landed at the exchange, the spaceport's
+//! landscape draws the exchange's key.
 //!
 //! Wiring only: which mesh a station's key names, and the colours it
 //! shows, are nova-render's (`new_game_world`'s tests and the offscreen
@@ -31,9 +33,20 @@ use crate::common::draw;
 use crate::new_game_models::{flying_over, world};
 use crate::new_game_portraits::landed_at_the_exchange;
 
-/// The liveried-stations sample, loaded, and its world models.
+/// The stellar [`sample`] adds to Luyten Crossing: a second station
+/// drawing the hub, owned by nobody, so it wears no livery.
+const DRIFTING_HUB: &str = "drifting-hub";
+
+/// The liveried-stations sample with [`DRIFTING_HUB`] put in Luyten
+/// Crossing beside the exchange, loaded, and its world models. So one
+/// system holds the hub twice, once in the commonwealth's livery and once
+/// unpainted.
 fn sample() -> (NewGame, WorldAssets) {
-    let source = new_game::fixture::liveried_stations_3d();
+    let source = new_game::fixture::liveried_stations_3d().with(
+        &format!("stellars/{DRIFTING_HUB}.md"),
+        "---\nname: Drifting Hub\nkind: station\nsystem: luyten-crossing\n\
+         position: [120, 0]\nvisual: {asset: station-hub}\n---\n",
+    );
     let game = new_game::load(&source, Path::new("sample"));
     let assets = world_assets(&game, &source);
     assert_eq!(assets.problems, Vec::<String>::new());
@@ -63,23 +76,25 @@ fn mesh(assets: &WorldAssets, key: ModelKey) -> &Mesh {
         .1
 }
 
-/// The exchange's key and the yard's, checked to name different meshes.
+/// The exchange's key and the drifting hub's, checked to name different
+/// meshes. Both come from the one table `assets` holds: a key means
+/// nothing outside the table that handed it out.
 fn keys(game: &NewGame, assets: &WorldAssets) -> (ModelKey, ModelKey) {
     let exchange = station_key(game, assets, "luyten-exchange");
-    let yard = station_key(game, assets, "marrow-yard");
-    assert_ne!(exchange, yard);
+    let drifting = station_key(game, assets, DRIFTING_HUB);
+    assert_ne!(exchange, drifting);
     assert_ne!(
         mesh(assets, exchange),
-        mesh(assets, yard),
-        "the exchange's hub is painted, the yard's not"
+        mesh(assets, drifting),
+        "the exchange's hub is painted, the drifting one's not"
     );
-    (exchange, yard)
+    (exchange, drifting)
 }
 
 #[test]
-fn flying_in_the_crossing_draws_and_uploads_the_exchange_s_painted_key() {
+fn flying_in_the_crossing_draws_each_hub_at_its_own_key_and_uploads_both() {
     let (game, assets) = sample();
-    let (exchange, yard) = keys(&game, &assets);
+    let (exchange, drifting) = keys(&game, &assets);
     let data = std::rc::Rc::new(game.data);
     let pilots = MemoryPilots::new();
     let mut harness = flying_over(Ruleset::NewGame, &data, &assets, &pilots);
@@ -91,16 +106,21 @@ fn flying_in_the_crossing_draws_and_uploads_the_exchange_s_painted_key() {
             _ => None,
         })
         .collect();
-    assert!(drawn.contains(&exchange), "the exchange: {drawn:?}");
-    assert!(!drawn.contains(&yard), "not the yard's: {drawn:?}");
-    let painted = mesh(&assets, exchange);
-    assert!(
-        harness.gpu_calls().iter().any(|call| matches!(
-            call,
-            GpuCall::UploadMesh { data, .. } if data == painted
-        )),
-        "the painted hub uploaded"
-    );
+    // Two stations on one model, side by side: each draws under its own
+    // key, the exchange's painted and the drifting hub's not.
+    let hubs = |key| drawn.iter().filter(|drawn| **drawn == key).count();
+    assert_eq!(hubs(exchange), 1, "the exchange, painted: {drawn:?}");
+    assert_eq!(hubs(drifting), 1, "the drifting hub, unpainted: {drawn:?}");
+    for (key, what) in [(exchange, "painted"), (drifting, "unpainted")] {
+        let mesh = mesh(&assets, key);
+        assert!(
+            harness.gpu_calls().iter().any(|call| matches!(
+                call,
+                GpuCall::UploadMesh { data, .. } if data == mesh
+            )),
+            "the {what} hub uploaded"
+        );
+    }
 }
 
 #[test]
