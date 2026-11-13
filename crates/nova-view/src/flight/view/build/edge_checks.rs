@@ -87,11 +87,11 @@ fn the_edges_rulebook_is_the_views_wording_too() {
         credits: 1_234_567,
     };
     let mut view = flight();
-    let said = view.word(vec![stolen.clone()]);
+    let said = view.worded(vec![stolen.clone()]);
     assert_eq!(said[0].0, "2 tons of cargo and 1.23M credits stolen!");
     let bible = Rulebook::default().with_override(RuleKey::PayMillions, RuleSource::Bible);
     let mut view = ruled(catalog(), bible);
-    let said = view.word(vec![stolen]);
+    let said = view.worded(vec![stolen]);
     assert_eq!(said[0].0, "2 tons of cargo and 1,234,567 credits stolen!");
 }
 
@@ -240,7 +240,7 @@ fn a_view_from_a_session_words_by_the_rules_the_session_was_built_with() {
     let session = SessionBuilder::flying(&catalog()).with_rules(bible).build();
     let mut view = FlightView::from_session(catalog(), session.into(), &bible);
     assert_eq!(view.session().map(Session::rules), Ok(&bible));
-    let said = view.word(vec![stolen]);
+    let said = view.worded(vec![stolen]);
     assert_eq!(said[0].0, "2 tons of cargo and 1,234,567 credits stolen!");
 }
 
@@ -259,8 +259,8 @@ fn the_edge_hands_the_flight_and_the_wording_one_chance() {
             ..Collaborators::default()
         },
     );
-    assert!(Rc::ptr_eq(&view.sim().chance.0, &chance.0), "the flight's");
-    assert!(Rc::ptr_eq(&view.words_chance.0, &chance.0), "the wording's");
+    assert!(view.sim().chance.shares(&chance), "the flight's");
+    assert!(view.words_chance().shares(&chance), "the wording's");
 }
 
 /// Phase 13's fold-in: the edge's beginning pairs the view's half with the
@@ -270,19 +270,19 @@ fn the_edge_hands_the_flight_and_the_wording_one_chance() {
 #[test]
 fn the_edges_beginning_places_the_ship_where_the_session_began_it() {
     let mut view = test_flight::new(catalog());
-    view.stars_due = false;
+    view.clear_stars_due();
     begin_game(&mut view);
     let begun = view.session().expect("flying").player().position;
     assert_eq!(begun, Vec2::new(50.0, 50.0), "the session began");
     assert_eq!(view.shown_position(), Point::new(50.0, 50.0), "drawn there");
-    assert!(view.stars_due, "the stars scattered afresh");
+    assert!(view.stars_due(), "the stars scattered afresh");
     let mut failed = test_flight::new(FakeCatalog {
         character: Err(StartError::NoCharacter),
         ..catalog()
     });
-    failed.stars_due = false;
+    failed.clear_stars_due();
     begin_game(&mut failed);
-    assert!(!failed.stars_due, "a flight that begins nothing");
+    assert!(!failed.stars_due(), "a flight that begins nothing");
 }
 
 /// Phase 13's fold-in: the edge's entering play pairs the view's half
@@ -290,16 +290,16 @@ fn the_edges_beginning_places_the_ship_where_the_session_began_it() {
 #[test]
 fn the_edges_entering_play_scatters_the_stars_once_the_session_entered() {
     let mut view = test_flight::new(catalog());
-    view.stars_due = false;
+    view.clear_stars_due();
     enter_game(&mut view, SpeedMult::FULL);
-    assert!(view.stars_due, "the stars scattered afresh");
+    assert!(view.stars_due(), "the stars scattered afresh");
     let mut failed = test_flight::new(FakeCatalog {
         character: Err(StartError::NoCharacter),
         ..catalog()
     });
-    failed.stars_due = false;
+    failed.clear_stars_due();
     enter_game(&mut failed, SpeedMult::FULL);
-    assert!(!failed.stars_due, "a flight that enters nothing");
+    assert!(!failed.stars_due(), "a flight that enters nothing");
 }
 
 /// The edge hands the session the gain the run carried: the frame
@@ -309,7 +309,7 @@ fn the_edge_enters_play_at_the_gain_it_is_handed() {
     for gain in [SpeedMult::ZERO, SpeedMult::FULL] {
         let mut view = test_flight::new(catalog());
         enter_game(&mut view, gain);
-        assert_eq!(view.frame.speed_mult, gain, "held at entry");
+        assert_eq!(view.kept_frame().speed_mult, gain, "held at entry");
     }
 }
 
@@ -340,12 +340,12 @@ fn the_slot_sprites_carried_have_the_view_read_their_ships_sheets() {
         },
     );
     assert!(
-        !carried.frame.traffic_ships.contains(&ShipId(131)),
+        !carried.kept_frame().traffic_ships.contains(&ShipId(131)),
         "no traffic carries it"
     );
-    assert!(carried.npc_sheets.contains_key(&ShipId(131)), "read");
+    assert!(carried.reads_npc_sheet(ShipId(131)), "read");
     let bare = set_up(hidden(), SessionSetup::default());
-    assert!(!bare.npc_sheets.contains_key(&ShipId(131)), "none carried");
+    assert!(!bare.reads_npc_sheet(ShipId(131)), "none carried");
 }
 
 // The edge's rules reach the course map's borders.
@@ -370,13 +370,14 @@ fn bordered() -> FakeCatalog {
 
 /// `view` with Proxima Near explored and known.
 fn known(mut view: View) -> View {
-    let session = view.sim.session.as_mut().expect("flying");
-    session.run_set(
-        &nova_sim::SetExpr::parse("X134").expect("parses"),
-        &mut NeverFires,
-    );
-    session.mark_known([SystemId(134)]);
-    view.refresh_frame();
+    view.change_sim(|flight| {
+        let session = flight.session_mut().expect("flying");
+        session.run_set(
+            &nova_sim::SetExpr::parse("X134").expect("parses"),
+            &mut NeverFires,
+        );
+        session.mark_known([SystemId(134)]);
+    });
     view
 }
 
@@ -424,12 +425,12 @@ fn the_edges_rules_reach_the_course_map() {
 fn the_view_shares_its_catalog_with_its_flight() {
     let view = flight();
     let shared = view
-        .sim
+        .sim()
         .shared_catalog()
         .expect("shared as the view is read");
     assert!(std::ptr::addr_eq(
         Rc::as_ptr(shared),
-        Rc::as_ptr(&view.catalog)
+        std::ptr::from_ref(view.catalog())
     ));
 }
 
@@ -548,20 +549,20 @@ fn gated_to_barnard() -> FakeCatalog {
 #[test]
 fn the_hypergate_maps_borders_are_the_sessions_once_its_arrows_are_marked_known() {
     let mut view = test_flight::new(gated_to_barnard());
-    view.sim.session.as_mut().expect("flying").run_set(
-        &nova_sim::SetExpr::parse("X132").expect("parses"),
-        &mut NeverFires,
-    );
-    view.refresh_frame();
-    let session = view.sim.session().expect("flying");
+    view.change_sim(|flight| {
+        flight.session_mut().expect("flying").run_set(
+            &nova_sim::SetExpr::parse("X132").expect("parses"),
+            &mut NeverFires,
+        );
+    });
+    let session = view.sim().session().expect("flying");
     assert!(
         !session.known().contains(&SystemId(132)),
         "precondition: Barnard explored, not known"
     );
     let unknown = session.map_border_sources();
-    view.map.offer_gates(vec![SystemId(132)]);
-    view.open_map();
-    let session = view.sim.session().expect("flying");
+    view.open_gate_map(vec![SystemId(132)]);
+    let session = view.sim().session().expect("flying");
     assert!(
         session.known().contains(&SystemId(132)),
         "the arrow's system marked known"

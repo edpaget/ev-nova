@@ -535,9 +535,12 @@ pub fn refused_command() -> FlightCommand {
 /// A frame unlike `frame` in every field, to fill over: a fill that
 /// leaves a field unwritten then shows in the comparison. The
 /// destructuring names every field, so a field added to [`FlightFrame`]
-/// doesn't compile until it is changed here.
+/// doesn't compile until it is changed here. Public for the adapter's
+/// checks above nova-view (nova-flight's `sim_adapter` tests), which fill
+/// a real session's frame over it.
 #[allow(clippy::too_many_lines)] // a few lines for each of the frame's fields
-pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
+#[must_use]
+pub fn unlike(frame: &FlightFrame) -> FlightFrame {
     let FlightFrame {
         nav_mode,
         system,

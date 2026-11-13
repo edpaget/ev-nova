@@ -748,6 +748,8 @@ mod dialog_latch;
 mod dialog_map;
 mod docked;
 mod drawing;
+#[cfg(any(test, feature = "fixture"))]
+mod edge_reads;
 mod faded_keys;
 mod frame_rate;
 mod gamble;
@@ -870,6 +872,15 @@ impl SharedChance {
     #[must_use]
     pub fn new(chance: Rc<RefCell<dyn Chance>>) -> Self {
         Self(chance)
+    }
+
+    /// Whether `other` is a copy of this one: one source, shared. The
+    /// edge's checks' read (`edge_checks`, above nova-view): view code
+    /// never calls it.
+    #[cfg(any(test, feature = "fixture"))]
+    #[must_use]
+    pub fn shares(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
     }
 }
 
