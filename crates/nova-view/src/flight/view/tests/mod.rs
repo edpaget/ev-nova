@@ -125,6 +125,7 @@ mod map_opening;
 mod map_safe_area;
 mod maps;
 mod missions;
+mod model_colorize;
 mod murk_sprites;
 mod nav;
 mod outputs;

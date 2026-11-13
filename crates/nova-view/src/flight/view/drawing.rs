@@ -415,8 +415,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// Draws NPC `npc` where `place` puts each of its sprites (see
     /// [`ShipDraw::draw`]) facing `heading` with its own ship's sheet,
-    /// or when its sheet cannot be read its class's model faded as its hull
-    /// would be (the `ship_models` module), or its type's outline turned to
+    /// or when its sheet cannot be read its class's model faded and
+    /// colorized as its hull would be (the `ship_models` module, by
+    /// [`FlightView::npc_colorize`]), or its type's outline turned to
     /// `heading` ([`draw_outline`]), or else a crossed box, as its cloak leaves
     /// it ([`CloakDraw`], see [`cloak_fade`](crate::flight::cloak_fade)):
     /// jittered and faint while fading, faint or, but for a lit weapon
@@ -477,8 +478,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
                         .shown(npc.ship, ship.drawn.alt, live, ship.hull);
                 ship.draw(list, place, alt);
             }
-            // With no sheet, its class's model before its outline, faded as
-            // its hull would be (see the `ship_models` module).
+            // With no sheet, its class's model before its outline, faded
+            // and colorized as its hull would be (see the `ship_models`
+            // module).
             _ if let Some(model) = self.npc_model(npc) => {
                 self.draw_npc_model(list, npc, place, (model, heading, cloak));
             }
@@ -627,8 +629,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 ship.draw(list, place, alt);
             }
             Err(_) if drawn != ShipDrawn::Full => {}
-            // Its class's model before its outline, faded as its hull
-            // would be (see the `ship_models` module).
+            // Its class's model before its outline, faded and colorized as
+            // its hull would be (see the `ship_models` module).
             Err(_) if let Some(model) = self.player_model() => {
                 let tick = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
                 let player = self.drawn().player();

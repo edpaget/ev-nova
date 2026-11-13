@@ -46,9 +46,21 @@
 //!   alpha comes out 0, draws nothing, outfits and outline included; a
 //!   player not drawn in full draws nothing, as before. Only a class with
 //!   no model draws its outline, unfaded, as it always did.
-//! - **Colour**: a model takes none of the sprite's colorize (the murk,
-//!   the ion tint, the gate's white wash), faded or not
-//!   (rdm:phase/rendering-3d/phase-15-model-colorize-like-its-sprite).
+//! - **Colour**: a model takes the colorize its sprite's hull would
+//!   (rdm:phase/rendering-3d/phase-15-model-colorize-like-its-sprite),
+//!   from the one place the sprite's comes from: an NPC's the murk the
+//!   player sees it through, its ion tint over that, or a gate's white
+//!   wash in place of both while it fades at one
+//!   (`FlightView::npc_colorize`); the player's its ion tint alone
+//!   (`FlightView::player_colorize`). A cloak leaves it, as it leaves the
+//!   hull's. It rides on the hull's command
+//!   ([`DrawCommand::Model`](crate::DrawCommand::Model)), which draws it
+//!   mixed as a sprite is, after its lighting and before its alpha; its
+//!   outfits take it whole in the renderer, as they take its alpha. The
+//!   sprite's light layers (glow, lights, shield), which copy the
+//!   colorize at levels of their own, have no counterpart on a model. A
+//!   colorize that mixes nothing (a clear system, a gate's wash at level
+//!   0) leaves the commands as they are without one.
 
 use std::rc::Rc;
 
@@ -65,7 +77,7 @@ use crate::flight::sim_port::FlightSim;
 use crate::flight::world_models::{ShipModel, WorldModels};
 use crate::model::ModelPose;
 use crate::outline::{self, Outline};
-use crate::{DrawList, Point};
+use crate::{Colorize, DrawList, Point};
 
 use super::{FlightView, placeholder_size};
 
@@ -107,8 +119,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
         let player = frame.player();
         let centre = model_centre(place, self.outline.as_ref());
         let shown = (&player, centre, self.shown_heading());
-        let fade = (GateFade::None, cloak);
-        self.draw_ship_model(list, shown, (model, fade), &frame.player_kits);
+        let look = (GateFade::None, cloak, self.player_colorize());
+        self.draw_ship_model(list, shown, (model, look), &frame.player_kits);
     }
 
     /// Draws NPC `npc` as `model`, facing `heading`, where `place` centres
@@ -123,8 +135,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     ) {
         let centre = model_centre(place, self.npc_outlines.get(&npc.class));
         let kits = self.world_models.built_kits(npc.class);
-        let fade = (npc.gate, cloak);
-        self.draw_ship_model(list, (npc, centre, heading), (model, fade), kits);
+        let look = (npc.gate, cloak, self.npc_colorize(npc));
+        self.draw_ship_model(list, (npc, centre, heading), (model, look), kits);
     }
 
     /// Draws `ship`, shown at `centre` facing `heading`, as its class's
@@ -132,13 +144,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// each turret facing its record's turret facing as its swing has
     /// reached it ([`TurretSwings::facing`](crate::flight::turret_swing::TurretSwings::facing)), at the alpha its
     /// cloak, `gate` and the model's `BaseTransp` give it ([`model_alpha`])
-    /// and moved by its cloak's jitter (see the module docs); nothing at
-    /// all, its outfits included, when that draws nothing.
+    /// and moved by its cloak's jitter, its hull mixed toward `colorize`
+    /// (see the module docs); nothing at all, its outfits included, when
+    /// that draws nothing.
     fn draw_ship_model(
         &self,
         list: &mut DrawList,
         (ship, centre, heading): (&FrameShip, Point, f32),
-        (model, (gate, cloak)): (ShipModel, (GateFade, Option<CloakDraw>)),
+        (model, (gate, cloak, colorize)): (ShipModel, ShipLook),
         kits: &[OutfitId],
     ) {
         let Some(alpha) = model_alpha(ship.cloak, ship.paint, gate, model.base_transp) else {
@@ -158,10 +171,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
             self.world_models.outfit(asset)
         });
         for command in commands {
-            list.push(command.at_alpha(alpha));
+            list.push(command.at_alpha(alpha).with_colorize(colorize));
         }
     }
 }
+
+/// How a ship's model is changed from its class's: the gate it fades at,
+/// its cloak as drawn, and the colorize its hull takes.
+type ShipLook = (GateFade, Option<CloakDraw>, Option<Colorize>);
 
 /// Where a ship's model is centred: where `place` centres the frame of
 /// its `outline`, which holds it at every heading ([`outline::extent`]),

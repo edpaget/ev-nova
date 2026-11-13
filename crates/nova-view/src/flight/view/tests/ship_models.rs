@@ -40,7 +40,7 @@ pub(super) const BED: OutfitId = OutfitId(200);
 const SCALE: f32 = 1.5;
 
 /// A dart 10 long from its centre to its nose, so 20 across as it turns.
-fn dart() -> Outline {
+pub(super) fn dart() -> Outline {
     Outline {
         triangles: vec![OutlineTriangle {
             corners: [at(0.0, 10.0), at(3.0, -4.0), at(-3.0, -4.0)],
@@ -94,7 +94,7 @@ pub(super) fn table() -> WorldModels {
 
 /// The fake catalog with ship 128's sheet unreadable and the dart as the
 /// outline of 128 and 130, with ship 130's traffic.
-fn sheetless() -> FakeCatalog {
+pub(super) fn sheetless() -> FakeCatalog {
     FakeCatalog {
         sheet: Err("no shän 128 for shïp 128".to_owned()),
         outlines: vec![(128, dart()), (130, dart())],
@@ -167,7 +167,7 @@ pub(super) fn expected(
 }
 
 /// The NPC's commands, as `view` draws them opaque by the table.
-fn expected_npc(view: &Faked, turn: HullTurn) -> Vec<DrawCommand> {
+pub(super) fn expected_npc(view: &Faked, turn: HullTurn) -> Vec<DrawCommand> {
     let npc = *view.drawn().npcs().next().expect("the npc");
     let (at, heading) = view.shown_npc(&npc);
     expected(
@@ -318,7 +318,7 @@ fn a_class_with_no_model_draws_its_outline_as_before() {
 }
 
 /// Answers the fake catalog's own sheet for ship 130 alone.
-struct StockLook;
+pub(super) struct StockLook;
 
 impl ShipSprites for StockLook {
     fn ship_sheet(&self, id: ShipId) -> Result<ShipSheet, String> {
@@ -396,7 +396,7 @@ pub(super) fn npc_jitter(view: &Faked, cloak: CloakShown) -> Point {
 }
 
 /// The jitter the player's cloak, shown as `cloak`, takes in `view`.
-fn player_jitter(view: &Faked, cloak: CloakShown) -> Point {
+pub(super) fn player_jitter(view: &Faked, cloak: CloakShown) -> Point {
     CloakDraw::of(cloak, None, tick(view), &player_cloak_rolls()).map_or(at(0.0, 0.0), |c| c.offset)
 }
 
@@ -551,11 +551,16 @@ fn an_npc_entering_or_coming_out_of_a_gate_draws_at_the_gates_alpha() {
         );
         let alpha = alpha_of(CloakShown::Opaque, gate);
         assert!(alpha < 1.0, "{gate:?}");
-        let mut want = faded(
+        // Washed white as its sprite is (the `model_colorize` tests).
+        let wash = crate::flight::gate_colorize::gate_colorize(gate);
+        let mut want: Vec<_> = faded(
             expected_npc(&view, HullTurn::Continuous),
             at(0.0, 0.0),
             alpha,
-        );
+        )
+        .into_iter()
+        .map(|command| command.with_colorize(wash))
+        .collect();
         want.extend(expected_player(&view, HullTurn::Continuous));
         assert_eq!(models(&world_list(&view)), want, "{gate:?}");
     }
