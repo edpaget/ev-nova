@@ -63,9 +63,11 @@ local tested = List(
 // crates still run one after another. Within a group, clippy (in
 // `target/clippy`, as the dev-tools legs use their own target dir) runs
 // alongside nextest (in `target/debug`), so neither waits on the other's
-// build lock, and a failure in either fails the hook. Both builds are
-// capped at 8 jobs, so with nextest's 8 test threads the hook never runs
-// more than 16 at once (.claude/rules/resource-limits.md).
+// build lock, and a failure in either fails the hook. Each cargo is capped
+// at 8 jobs, build scripts included (FFmpeg's make joins cargo's
+// jobserver), so the two builds stay within 16 jobs, plus nextest's 8 test
+// threads once its build is done. On a cold worktree FFmpeg builds once in
+// each target dir (.claude/rules/resource-limits.md).
 // Dependent crates, the dev-tools legs and doctests are left to the full
 // gate (`hk check`, `mise run ci`), run before review and on landing. The
 // one exception is an `<x>-it` crate: it holds `<x>`'s own integration
