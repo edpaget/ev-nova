@@ -6,8 +6,9 @@
 //! screens that show one draw it here, by the same table
 //! ([`WorldModels`]): the target panel, the shipyard's and the hire
 //! screen's picture and grid icons, the escort and comm dialogs' item 11,
-//! the spaceport's landscape, the planet comm dialog's item 5 and the
-//! system viewer.
+//! the spaceport's landscape, the planet comm dialog's item 5, the system
+//! viewer and the main menu's pilot panel
+//! (rdm:phase/rendering-3d/phase-16-pilot-panel-ship-model).
 //!
 //! - **A ship** draws as its [`ShipPortrait`]: its hull and the outfits
 //!   its class's own and as-built kits' mounts show, turrets facing the
