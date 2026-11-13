@@ -168,7 +168,6 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::outfitter::OutfitterRules;
 use nova_sim::{
     Direction, LcNames, MissionId, OfferPrompt, OutfitId, OutfitOrder, OutfitRefusal, OutfitRow,
     Outfitter, Reselection, RuleSource, SaleAlert,

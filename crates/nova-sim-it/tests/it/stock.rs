@@ -42,7 +42,6 @@ use nova_data::records::stellar::Stellar;
 use nova_sim::Test;
 use nova_sim::fuel::FUEL_SCOOP;
 use nova_sim::market::commodities;
-use nova_sim::outfitter::OutfitterRules;
 use nova_sim::{
     Chance, Direction, DisasterId, DisasterRecord, GameDate, GateKind, Gauge, Good, GovtId, JunkId,
     LandOutcome, LandPress, NeverFires, OutfitId, OutfitMod, OutfitOrder, OutfitRefusal, Pilot,

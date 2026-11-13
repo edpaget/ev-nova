@@ -115,6 +115,7 @@ pub mod gamble;
 pub mod gate;
 pub mod grant;
 pub mod hail;
+pub mod has_max;
 pub mod hire;
 pub mod hover;
 pub mod hyperspace;

@@ -184,8 +184,9 @@ pub use secondary_select::{empty_lets_go, select_secondary, selectable_guidance}
 /// The `oütf` `ModType` that is a weapon: its `ModVal` is the `wëap`.
 pub const MOD_WEAPON: i16 = 1;
 /// The `oütf` `ModType` that is ammunition: its `ModVal` is the `wëap` it
-/// is the rounds of.
-pub const MOD_AMMO: i16 = 3;
+/// is the rounds of. The state layer's, as the outfitter's ammunition cap
+/// reads it.
+pub use nova_sim_state::shown::outfitter::MOD_AMMO;
 
 /// The original's weapon and rounds arrays: how many of each weapon, and
 /// of each weapon's rounds, as the outfits owned make them ([`Arrays::of`])

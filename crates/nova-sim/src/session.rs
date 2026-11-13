@@ -859,7 +859,7 @@ use crate::nebula;
 use crate::order_loop::{self, Onward, OrderRun, Pass};
 use crate::outfitter::{
     self, FIRST_OUTFIT, Hardpoints, LIST_SLOTS, OutfitFlags, OutfitOrder, OutfitRefusal, OutfitRun,
-    OutfitVisit, Outfitter, OutfitterRules, Reselection, SaleAlert, Shop, outfit_mods,
+    OutfitVisit, Outfitter, Reselection, SaleAlert, Shop, outfit_mods,
 };
 use crate::person::PersonWorld;
 use crate::pilot::{self, Escort, ExploredLevel, Pilot};
@@ -870,8 +870,7 @@ use crate::red_alert::RedAlert;
 use crate::reserves::{Gauge, Reserves};
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::shipyard::{
-    self, Purchase, Quote, Sale, ShipNaming, ShipPurchase, ShipRefusal, Shipyard, ShipyardRules,
-    Yard,
+    self, Purchase, Quote, Sale, ShipNaming, ShipPurchase, ShipRefusal, Shipyard, Yard,
 };
 use crate::sound::SimSound;
 use crate::stats::ShipStats;

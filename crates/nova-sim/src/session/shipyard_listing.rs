@@ -75,7 +75,6 @@ mod tests {
     use crate::control::{Bit, Test};
     use crate::landing::StellarFlags;
     use crate::session::tests::{NEW, NameLists, outfitted, rolling, shipbuying};
-    use crate::shipyard::ShipyardRules;
     use crate::shipyard::{ShipFlags3, ShipRefusal};
     use crate::testkit::{FakePilotCatalog, Scripted, catalog, land_now, planet};
 

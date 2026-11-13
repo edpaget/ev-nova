@@ -5,9 +5,10 @@
 //! visit's once-an-opening flags ([`OutfitVisit`], [`Bought`]) and the
 //! ship's guns and turrets ([`Armed`], [`Hardpoints`]), from
 //! `nova_sim_port::outfitter`, which re-exports them and keeps the shop's
-//! building, its buy and sell checks
-//! (`nova_sim_port::outfitter::OutfitterRules`), the prices and the
-//! settling.
+//! building, the prices and the settling. The outfitter's rules, its buy
+//! and sell checks, words, cap, refund and counts ([`Outfitter::can`] and
+//! its siblings, in the `rules` submodule), are here too: they read only
+//! the facts the port settled on each row when it built the outfitter.
 
 use std::collections::BTreeMap;
 
@@ -17,6 +18,18 @@ use nova_sim_catalog::catalog::{OutfitId, OutfitRecord};
 
 use super::order_loop::OrderRun;
 use crate::market::Direction;
+
+mod rules;
+
+pub use rules::{
+    COUNT_CAP, RAISES_MAX, RESALE_PERCENT, raise_multiplier, raised_max, refund, resale,
+};
+
+/// The `oütf` `ModType` that is ammunition: its `ModVal` is the `wëap` it
+/// is the rounds of. From `nova_sim_combat::combat::armament`, which
+/// re-exports it, as the outfitter's ammunition cap
+/// ([`has_max`](super::has_max)) reads it.
+pub const MOD_AMMO: i16 = 3;
 
 /// The `oütf` `Flags` bits the outfitter reads (the Bible).
 #[derive(Clone, Copy, Debug)]
@@ -108,7 +121,7 @@ pub enum OutfitRefusal {
     /// `_CanBuyOutfitItem` (@0x4e938), not from `_HasMaxOfItem`, so its info
     /// box gives this none of the #219/#220 words the other `Max` refusals get;
     /// it still shows the mass words #221/#222 when the fighter also lacks the
-    /// mass (`nova_sim_port::outfitter::OutfitterRules::words`).
+    /// mass ([`Outfitter::words`]).
     BaysFull,
     /// The ship has not the free mass for another.
     NoSpace,
@@ -166,7 +179,7 @@ pub enum OutfitRefusal {
 
 /// The refusal text a sale refused inside the sell loop shows (`DLOG`
 /// 3003, `_DoOutfitDialog` @0x5c735-0x5ce6c; see
-/// `nova_sim_port::outfitter::OutfitterRules::sale_alert`).
+/// [`Outfitter::sale_alert`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SaleAlert {
     /// The outfit sold.
@@ -175,7 +188,7 @@ pub struct SaleAlert {
     /// [`OutfitRefusal::RaisedFirst`] or [`OutfitRefusal::AmmunitionFirst`].
     pub refusal: OutfitRefusal,
     /// The names the words need, as
-    /// `nova_sim_port::outfitter::OutfitterRules::lc_names` gives them: the
+    /// [`Outfitter::lc_names`] gives them: the
     /// sold outfit's, and the ammunition's or the target's.
     pub names: BTreeMap<OutfitId, LcNames>,
     /// Whether the sold outfit is named in `LCPlural`: passes remain after
@@ -184,7 +197,7 @@ pub struct SaleAlert {
 }
 
 /// What an outfit order did: the order loop's run, the alert its refused sale
-/// shows, if any (`nova_sim_port::outfitter::OutfitterRules::sale_alert`), and
+/// shows, if any ([`Outfitter::sale_alert`]), and
 /// what it leaves the outfitter's selection at.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OutfitRun {
@@ -196,7 +209,7 @@ pub struct OutfitRun {
     /// [`RuleKey::RelistedSelection`](crate::RuleKey::RelistedSelection)).
     pub after: Reselection,
     /// Whether the order's Buy or Sell button passed its own check
-    /// (`nova_sim_port::outfitter::OutfitterRules::can`), so `_DoOutfitDialog`
+    /// ([`Outfitter::can`]), so `_DoOutfitDialog`
     /// falls through its loop to the buy's reset and draw (@0x5c2fc-0x5c2ff,
     /// @0x5c305, @0x5c5a1) or the sale's draw (@0x5d328), however many passes
     /// went through.
@@ -391,7 +404,7 @@ impl Outfitter {
     /// The ship's free mass as `_ShipFreeMass` reads it, clamped at none
     /// (@0xb506-0xb50a): what the buy's free mass check, the info box's mass
     /// words, its "Available:" line
-    /// (`nova_sim_port::outfitter::OutfitterRules::free_mass_shown`) and the
+    /// ([`Outfitter::free_mass_shown`]) and the
     /// engine's reading of a sale read.
     #[must_use]
     pub fn free_mass_clamped(&self) -> i64 {
