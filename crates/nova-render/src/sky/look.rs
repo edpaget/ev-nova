@@ -27,6 +27,8 @@
 
 use std::collections::HashMap;
 
+use super::decoration::SkyDecoration;
+
 /// How far each star's palette tint moves toward a system's tint.
 pub const TINT_SHARE: f32 = 0.35;
 
@@ -96,13 +98,18 @@ pub fn normalised(color: [f32; 3]) -> Option<[f32; 3]> {
     (top.is_finite() && top > 0.0).then(|| color.map(|c| c.max(0.0) / top))
 }
 
-/// The looks of the systems whose data sets one, keyed by their skies'
-/// seeds.
+/// The looks of the systems whose data sets one, and the decorations of
+/// those whose data lists them, each keyed by its sky's seed.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct SkyLooks(HashMap<u64, SkyLook>);
+pub struct SkyLooks {
+    looks: HashMap<u64, SkyLook>,
+    /// Each sky's decorations, beside its look and not in it, so a look
+    /// stays plain numbers.
+    decorations: HashMap<u64, Vec<SkyDecoration>>,
+}
 
 impl SkyLooks {
-    /// No looks: every sky draws the default.
+    /// No looks and no decorations: every sky draws the default.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -110,36 +117,54 @@ impl SkyLooks {
 
     /// Sky `seed` draws `look`, in place of any it drew before.
     pub fn insert(&mut self, seed: u64, look: SkyLook) {
-        self.0.insert(seed, look);
+        self.looks.insert(seed, look);
     }
 
     /// The look sky `seed` draws: its own, or the default.
     #[must_use]
     pub fn look(&self, seed: u64) -> SkyLook {
-        self.0.get(&seed).copied().unwrap_or_default()
+        self.looks.get(&seed).copied().unwrap_or_default()
     }
 
-    /// How many skies have a look of their own.
+    /// Sky `seed` draws the decorations `list`, in place of any list it
+    /// had. An empty list draws none, which is not the same as having no
+    /// list ([`SkyLooks::decorations`]).
+    pub fn set_decorations(&mut self, seed: u64, list: Vec<SkyDecoration>) {
+        self.decorations.insert(seed, list);
+    }
+
+    /// The decorations sky `seed`'s data lists, in its order: `None` for
+    /// a sky with no list, which draws the engine's default for its seed
+    /// (see [`super`](super#the-decorations)).
+    #[must_use]
+    pub fn decorations(&self, seed: u64) -> Option<&[SkyDecoration]> {
+        self.decorations.get(&seed).map(Vec::as_slice)
+    }
+
+    /// How many skies have a look of their own. Decorations are not
+    /// counted.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.0.len()
+        self.looks.len()
     }
 
     /// Whether no sky has a look of its own.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.looks.is_empty()
     }
 }
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use std::sync::Arc;
+
     use nova_view::{Point, SkyPose};
 
     use super::super::{
-        CELL, DENSITY_AREA, LAYERS, StarInstance, cell_bound, layer_stars_of, rushing_cell_bound,
-        stars, stars_of,
+        CELL, DENSITY_AREA, LAYERS, SkyImage, StarInstance, cell_bound, layer_stars_of,
+        rushing_cell_bound, stars, stars_of,
     };
     use super::*;
     use crate::viewport::{LOGICAL, LogicalSize};
@@ -365,6 +390,34 @@ mod tests {
         looks.insert(78, sparse);
         assert_eq!(looks.len(), 2);
         assert_eq!(SkyLooks::new().len(), 0);
+    }
+
+    fn decoration(x: f32) -> SkyDecoration {
+        let image = SkyImage::new(1, 1, vec![9, 9, 9, 255]).expect("one texel");
+        SkyDecoration::new(Arc::new(image), Point::new(x, 0.0))
+    }
+
+    #[test]
+    fn a_seed_with_a_decorations_list_holds_it_and_another_none() {
+        let mut looks = SkyLooks::new();
+        assert_eq!(looks.decorations(77), None);
+        let list = vec![decoration(1.0), decoration(2.0)];
+        looks.set_decorations(77, list.clone());
+        assert_eq!(looks.decorations(77), Some(&list[..]));
+        assert_eq!(looks.decorations(78), None);
+        // An empty list is a list: it is not the same as none.
+        looks.set_decorations(78, Vec::new());
+        assert_eq!(looks.decorations(78), Some(&[][..]));
+        // A new list takes the old one's place.
+        looks.set_decorations(77, vec![decoration(3.0)]);
+        assert_eq!(looks.decorations(77), Some(&[decoration(3.0)][..]));
+        // Decorations are no look: the seed still draws the default
+        // stars and backdrop, and isn't counted.
+        assert_eq!(looks.look(77), SkyLook::default());
+        assert_eq!((looks.len(), looks.is_empty()), (0, true));
+        // And a look is no list.
+        looks.insert(79, with_stars(0.5));
+        assert_eq!(looks.decorations(79), None);
     }
 }
 

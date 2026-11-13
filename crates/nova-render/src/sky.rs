@@ -97,12 +97,41 @@
 //! its light, instance count and shaded area within bounds it holds by
 //! construction ([`backdrop_instance_bound`], [`backdrop_area_bound`],
 //! [`BACKDROP_LIGHT_BOUND`]).
+//!
+//! # The decorations
+//!
+//! Over the backdrop and every star, a sky draws its decorations
+//! ([`decoration`](mod@decoration)): images as far scenery, such as a
+//! distant hulk or a far galaxy, each a textured quad
+//! ([`SkyDecoration`], its image a [`SkyImage`]). They are scenery only.
+//!
+//! - **The list.** A system's data lists them, and the renderer holds
+//!   each sky's list beside its look ([`SkyLooks::decorations`]). An
+//!   empty list draws none, and a sky with no list draws none either.
+//! - **Order.** After the backdrop and the stars, far to near by
+//!   parallax, so no star is drawn over one.
+//! - **Blends.** [`SkyBlend::Over`] hides the sky behind it by its
+//!   image's alpha; [`SkyBlend::Glow`] adds its light ([`lit`],
+//!   [`over`]).
+//! - **The warp and murk.** They don't streak, as the backdrop doesn't.
+//!   Murk dims their light with the stars' and leaves their cover.
+//! - **The bound.** At most [`MOST_DECORATIONS`] a sky, each at most 512
+//!   units on its longer side: 2.0 more view areas shaded at 1024×768
+//!   ([`decoration_area_bound`]), 5.5 with the backdrop's and the stars'
+//!   3.5 at the lowest render scale.
+//!
+//! They reach the GPU as their own batch
+//! ([`Batch::SkyImages`](crate::gpu::Batch::SkyImages)) after the sky's,
+//! made by the renderer's table of the images it has uploaded
+//! (`crate::sky_images`).
 
 use nova_view::{Point, SkyPose};
 
 use crate::viewport::LogicalSize;
 
 mod backdrop;
+mod decoration;
+mod image;
 mod look;
 
 pub use backdrop::{
@@ -110,6 +139,12 @@ pub use backdrop::{
     CLOUD_LIGHT, Cloud, PUFF_RADIUS, PUFF_SPREAD, PUFFS, Puff, SEEDED_AMOUNT, backdrop,
     backdrop_area_bound, backdrop_instance_bound, cloud, instances, resolved, seeded,
 };
+pub use decoration::{
+    DECORATION_PARALLAX, DECORATION_SIZE, DEFAULT_PARALLAX, DEFAULT_SIZE, MOST_DECORATIONS,
+    Placement, SEEDED_REACH, SkyBlend, SkyDecoration, decoration_area_bound, lit, over, placed,
+    placement, seeded_place,
+};
+pub use image::{SKY_IMAGE_SIDE, SKY_SAMPLER, SkyImage, SkyImageId};
 pub use look::{BackdropLook, SkyLook, SkyLooks, TINT_SHARE, normalised};
 
 /// How high above the play plane the eye is, in world units.

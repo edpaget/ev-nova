@@ -347,10 +347,23 @@ pub fn instances(
     all
 }
 
+/// The most stars the layers give at twice the stars, in `cells` cells
+/// each: the star bound the sky's bound tests share.
+#[cfg(test)]
+pub(super) fn star_bound(cells: usize) -> usize {
+    use super::{CELL, DENSITY_AREA};
+    LAYERS
+        .iter()
+        .map(|layer| {
+            cells * ((2.0 * layer.density * CELL * CELL / DENSITY_AREA).floor() as usize + 1)
+        })
+        .sum()
+}
+
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use super::super::{CELL, DENSITY_AREA, cell_bound, coverage, rushing_cell_bound};
+    use super::super::{cell_bound, coverage, rushing_cell_bound};
     use super::*;
     use crate::viewport::LOGICAL;
 
@@ -860,16 +873,6 @@ mod tests {
         };
         span(instance.centre.x, instance.trail.x, logical.w)
             * span(instance.centre.y, instance.trail.y, logical.h)
-    }
-
-    /// The most stars a layer gives at twice the stars, in `cells`.
-    fn star_bound(cells: usize) -> usize {
-        LAYERS
-            .iter()
-            .map(|layer| {
-                cells * ((2.0 * layer.density * CELL * CELL / DENSITY_AREA).floor() as usize + 1)
-            })
-            .sum()
     }
 
     /// The most share of a 1024×768 or a 2560×1080 view the whole sky
