@@ -15,8 +15,11 @@
 //! ([`draw_stellar_model`]): a station's model unturned, seen from above
 //! as its stand-in is, a planet's globe still at time 0, centred in the
 //! item and reaching [`FIT`] of half its shorter side, as the stand-in
-//! does (a planet's rings and atmosphere reach beyond its globe). A model
-//! no radius can size draws its stand-in instead, as in flight.
+//! does. A planet's rings and atmosphere reach beyond its globe, so its
+//! globe is shrunk by their reach ([`StellarModel::overhang`]) and their
+//! outer edge lands there instead: nothing cuts a planet to the item, so
+//! this is what keeps it inside. A model no radius can size draws its
+//! stand-in instead, as in flight.
 //!
 //! The picture comes first, so a stock stellar keeps its `PICT`, and a
 //! stock stellar whose `PICT` is missing keeps its blank box: a stock
@@ -109,7 +112,8 @@ impl Landscape {
 
     /// Draws it into `area`, the landscape item: the picture stretched to
     /// fill it, or the model or the stand-in round its centre reaching
-    /// [`FIT`] of half its shorter side, or nothing.
+    /// [`FIT`] of half its shorter side (a planet's rings and atmosphere
+    /// with it), or nothing.
     pub fn draw(&self, list: &mut DrawList, area: Bounds) {
         let radius = FIT * area.width().min(area.height()) / 2.0;
         match self {
@@ -124,7 +128,7 @@ impl Landscape {
             Self::Model {
                 model, stand_in, ..
             } => {
-                if !draw_stellar_model(list, *model, area.center(), radius, 0.0)
+                if !draw_stellar_model(list, *model, area.center(), radius / model.overhang(), 0.0)
                     && let Some(stand_in) = stand_in
                 {
                     outline::draw_stellar(list, stand_in, area.center(), radius);
@@ -292,7 +296,48 @@ mod tests {
         key: ModelKey(3),
         reach: 4.0,
     };
-    const GIANT: StellarModel = StellarModel::Planet { key: PlanetKey(1) };
+    const GIANT: StellarModel = StellarModel::planet(PlanetKey(1), 1.0);
+
+    /// The radius each planet drawn in `list` is drawn at.
+    fn planet_radii(list: &DrawList) -> Vec<f32> {
+        list.iter()
+            .map(|command| match command {
+                DrawCommand::Planet { pose, .. } => pose.radius,
+                other => panic!("a planet: {other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_planet_s_rings_and_atmosphere_reach_the_fit_of_the_shorter_side() {
+        for (area, shorter) in [
+            (area(), 285.0),
+            (Bounds::at(Point::new(10.0, 20.0), 100.0, 300.0), 100.0),
+        ] {
+            let room = FIT * shorter / 2.0;
+            for reach in [2.3, 2.0, 1.04] {
+                let ringed = StellarModel::planet(PlanetKey(1), reach);
+                let landscape = Landscape::of(1, false, Some(disc())).with_model(Some(ringed));
+                let radii = planet_radii(&drawn(&landscape, area));
+                assert_eq!(radii.len(), 1, "{reach} in {area:?}");
+                assert!(
+                    (radii[0] * reach - room).abs() < 1e-3,
+                    "{reach} in {area:?}: {} reaches {}, not {room}",
+                    radii[0],
+                    radii[0] * reach
+                );
+            }
+            for reach in [1.0, 0.5, f32::NAN, f32::INFINITY] {
+                let globe = StellarModel::planet(PlanetKey(1), reach);
+                let landscape = Landscape::of(1, false, None).with_model(Some(globe));
+                assert_eq!(
+                    planet_radii(&drawn(&landscape, area)),
+                    [room],
+                    "{reach} draws the globe at the fit"
+                );
+            }
+        }
+    }
 
     #[test]
     fn a_model_comes_after_a_picture_and_before_a_stand_in_or_nothing() {

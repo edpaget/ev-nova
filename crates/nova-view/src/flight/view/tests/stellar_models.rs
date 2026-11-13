@@ -96,7 +96,9 @@ fn table() -> WorldModels {
                     reach: REACH,
                 },
             ),
-            (StellarId(PLANET), StellarModel::Planet { key: GIANT }),
+            // Ringed: the flight draws the globe at its stand-in's
+            // radius whatever its rings reach.
+            (StellarId(PLANET), StellarModel::planet(GIANT, 2.3)),
         ]),
         ..WorldModels::default()
     }

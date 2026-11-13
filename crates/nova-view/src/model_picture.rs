@@ -21,7 +21,10 @@
 //!   ([`DrawCommand::Clipped`]), so this fitting is what keeps it inside.
 //! - **A stellar** draws as flight draws it ([`draw_stellar_model`]): a
 //!   station's model unturned, seen from above as its stand-in is, a
-//!   planet's globe turned by a clock, at a radius the screen gives.
+//!   planet's globe turned by a clock, at a radius the screen gives. A
+//!   planet's rings and atmosphere reach beyond that radius, so a picture
+//!   divides its room by their reach ([`StellarModel::overhang`]) to keep
+//!   the whole planet inside: a planet is drawn uncut by a clip too.
 //!
 //! Each screen tries its own picture first (a `PICT`, a sheet's frame),
 //! so stock data, which has no models and so an empty table, draws as it
@@ -153,7 +156,8 @@ impl ShipPortrait {
 /// a planet at the clock's `time`, and says whether it drew: a station's
 /// model unturned, scaled so its footprint (its stand-in outline's reach)
 /// reaches `radius`, or a planet's globe of `radius` (its rings and
-/// atmosphere reach beyond it). A model whose scale to that radius isn't
+/// atmosphere reach [`StellarModel::overhang`] times it, which a picture
+/// divides its room by). A model whose scale to that radius isn't
 /// finite (it reaches nowhere, or too little, or its reach is no number)
 /// draws nothing, so the caller draws its stand-in in its place.
 pub fn draw_stellar_model(
@@ -178,7 +182,7 @@ pub fn draw_stellar_model(
                 },
             );
         }
-        StellarModel::Planet { key } => {
+        StellarModel::Planet { key, .. } => {
             list.planet(
                 key,
                 PlanetPose {
@@ -404,7 +408,8 @@ mod tests {
             reach: 4.0,
         };
         assert!(draw_stellar_model(&mut list, station, centre, 10.0, 5.0));
-        let giant = StellarModel::Planet { key: PlanetKey(1) };
+        // Its rings reach beyond the globe, which takes the radius.
+        let giant = StellarModel::planet(PlanetKey(1), 2.3);
         assert!(draw_stellar_model(&mut list, giant, centre, 10.0, 5.0));
         assert_eq!(
             commands(&list),

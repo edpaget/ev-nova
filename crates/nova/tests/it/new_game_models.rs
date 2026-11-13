@@ -174,7 +174,7 @@ fn the_ships_the_station_and_the_planet_draw_as_their_models() {
             .all(|key| *key == hub || ship_keys.contains(key)),
         "each hull its class's: {drawn:?} of {ship_keys:?}"
     );
-    let Some(StellarModel::Planet { key: giant }) = assets.models.stellar(reach) else {
+    let Some(StellarModel::Planet { key: giant, .. }) = assets.models.stellar(reach) else {
         panic!("Kestrel Reach's planet");
     };
     assert!(
@@ -235,7 +235,7 @@ fn the_data_not_the_ruleset_picks_the_models() {
         panic!("the exchange's model");
     };
     assert!(drawn.contains(&hub), "the station hub: {drawn:?}");
-    let Some(StellarModel::Planet { key: giant }) = assets.models.stellar(reach) else {
+    let Some(StellarModel::Planet { key: giant, .. }) = assets.models.stellar(reach) else {
         panic!("Kestrel Reach's planet");
     };
     assert!(

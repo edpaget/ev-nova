@@ -187,7 +187,7 @@ fn the_system_viewer_draws_the_start_system_s_station_and_planet() {
     let Some(StellarModel::Model { key: hub, .. }) = assets.models.stellar(exchange) else {
         panic!("the exchange's model");
     };
-    let Some(StellarModel::Planet { key: giant }) = assets.models.stellar(reach) else {
+    let Some(StellarModel::Planet { key: giant, .. }) = assets.models.stellar(reach) else {
         panic!("Kestrel Reach's planet");
     };
     let crossing = nova_sim::SystemId(nova_id(&game.ids.systems, "luyten-crossing"));

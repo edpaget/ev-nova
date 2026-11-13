@@ -107,7 +107,7 @@ fn the_sample_s_ship_turret_and_planet_draw_from_the_keys_the_table_hands_out() 
     });
     assert_eq!(commands.len(), 2, "the hull and its turret: {commands:?}");
     let reach = StellarId(game.ids.stellars[&id("kestrel-reach")]);
-    let Some(StellarModel::Planet { key: planet }) = assets.models.stellar(reach) else {
+    let Some(StellarModel::Planet { key: planet, .. }) = assets.models.stellar(reach) else {
         panic!("Kestrel Reach's planet");
     };
     let turret = assets

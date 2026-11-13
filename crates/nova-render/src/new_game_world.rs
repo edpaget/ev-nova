@@ -27,7 +27,9 @@
 //!   its stand-in). One whose stand-in isn't its outline (the model
 //!   didn't read for the loader) has none.
 //! - **Planets and moons**: each [`GalaxyPlanets`] answers with a planet,
-//!   one key each.
+//!   one key each, with how far its rings and atmosphere reach in its
+//!   radii ([`planet::surface_reach`]), so a picture can fit the whole of
+//!   it.
 //! - **Skies**: each system's own sky look, from its `sky` block, keyed
 //!   by its sky's seed ([`sky_looks`]), for the app to hand the renderer
 //!   ([`Renderer::set_sky_looks`](crate::Renderer::set_sky_looks)).
@@ -65,6 +67,7 @@ use crate::livery::{Livery, painted};
 use crate::model::Mesh;
 use crate::model_source::{LoadedModel, ModelError, ModelRequest, ModelSource};
 use crate::new_game_sky::sky_looks;
+use crate::planet;
 use crate::planet_source::{LoadedPlanet, PlanetError, PlanetRequest, PlanetSource};
 use crate::sky::SkyLooks;
 
@@ -178,7 +181,10 @@ pub fn world_assets_from(
         match planets.planet(&PlanetRequest::new(id.as_str())) {
             Ok(planet) => {
                 let key = PlanetKey(next(planet_list.len()));
-                table.stellars.insert(stellar, StellarModel::Planet { key });
+                let reach = planet::surface_reach(&planet.surface);
+                table
+                    .stellars
+                    .insert(stellar, StellarModel::planet(key, reach));
                 planet_list.push((key, planet));
             }
             Err(error) if planet_news(&error) => {
@@ -555,10 +561,13 @@ mod tests {
             "---\nname: Pebble\nkind: moon\nsystem: luyten-crossing\nposition: [10, 10]\n---\n",
         );
         let (game, assets) = built(&source);
-        assert_eq!(
+        assert!(matches!(
             assets.models.stellar(stellar(&game, "kestrel-reach")),
-            Some(StellarModel::Planet { key: PlanetKey(1) })
-        );
+            Some(StellarModel::Planet {
+                key: PlanetKey(1),
+                ..
+            })
+        ));
         assert_eq!(assets.planets.len(), 1);
         assert_eq!(assets.planets[0].0, PlanetKey(1));
         assert_eq!(assets.models.stellar(stellar(&game, "pebble")), None);
@@ -572,6 +581,54 @@ mod tests {
         );
         assert!(flat.planets.is_empty());
         assert!(plain.ids.stellars.len() >= 2);
+    }
+
+    /// Kestrel Reach generated with `extra`, front-matter lines of its
+    /// `generated` block, each indented four spaces.
+    fn kestrel_reach_with(extra: &str) -> MemSource {
+        modelled_sample_3d().with(
+            "stellars/kestrel-reach.md",
+            &format!(
+                "---\nname: Kestrel Reach\nkind: planet\nsystem: luyten-crossing\n\
+                 position: [700, -500]\nvisual:\n  generated:\n    type: gas-giant\n\
+                 \x20   palette: [\"#c9a36b\"]\n{extra}    seed: 4417\n---\n"
+            ),
+        )
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn a_planet_reaches_as_far_as_its_rings_and_atmosphere() {
+        for (source, want) in [
+            // The sample's: rings to 2.3, an atmosphere 0.04 thick.
+            (modelled_sample_3d(), 2.3),
+            (
+                kestrel_reach_with("    atmosphere: {color: \"#f0e0c0\", thickness: 0.5}\n"),
+                1.5,
+            ),
+            (
+                kestrel_reach_with("    rings: {inner: 1.4, outer: 2.0, color: \"#d8c8a8\"}\n"),
+                2.0,
+            ),
+            (kestrel_reach_with(""), 1.0),
+        ] {
+            let (game, assets) = built(&source);
+            assert_eq!(assets.problems, Vec::<String>::new());
+            let [(key, planet)] = &assets.planets[..] else {
+                panic!("one planet: {:?}", assets.planets.len());
+            };
+            let surface = &planet.surface;
+            #[allow(clippy::cast_possible_truncation, reason = "as the renderer reads it")]
+            let reach = crate::planet::reach(
+                surface.atmosphere.as_ref().map(|a| a.thickness as f32),
+                surface.rings.as_ref().map(|r| r.outer as f32),
+            );
+            assert!((reach - want).abs() < 1e-6, "{reach} is not {want}");
+            assert_eq!(
+                assets.models.stellar(stellar(&game, "kestrel-reach")),
+                Some(StellarModel::planet(*key, reach))
+            );
+        }
     }
 
     #[test]
@@ -693,7 +750,8 @@ mod tests {
         let assets = world_assets_in(&game, &folder.0);
         assert_eq!(
             assets.models.stellar(stellar(&game, "kestrel-reach")),
-            Some(StellarModel::Planet { key: PlanetKey(1) })
+            Some(StellarModel::planet(PlanetKey(1), 1.0)),
+            "a bare globe"
         );
         assert_eq!(assets.planets.len(), 1);
     }

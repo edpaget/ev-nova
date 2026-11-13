@@ -417,13 +417,17 @@ impl PlanetCommDialog {
 /// ([`draw_stellar_model`]): round the item's centre, each half truncated
 /// as the sprite's is, reaching the flight's [`UNKNOWN_STELLAR_RADIUS`] or
 /// [`FIT`] of half the item's shorter side if that is less, a planet at
-/// time 0. It is fitted, not cut: a model is drawn uncut by a clip.
+/// time 0. A planet's globe takes the flight's radius only while its rings
+/// and atmosphere ([`StellarModel::overhang`]) fit that fit, and shrinks
+/// so their outer edge reaches it when they don't. It is fitted, not cut:
+/// a model or a planet is drawn uncut by a clip.
 fn draw_model(list: &mut DrawList, model: StellarModel, at: Bounds) {
     let centre = Point::new(
         f32::midpoint(at.min.x, at.max.x).trunc(),
         f32::midpoint(at.min.y, at.max.y).trunc(),
     );
-    let radius = UNKNOWN_STELLAR_RADIUS.min(FIT * at.width().min(at.height()) / 2.0);
+    let room = FIT * at.width().min(at.height()) / 2.0 / model.overhang();
+    let radius = UNKNOWN_STELLAR_RADIUS.min(room);
     draw_stellar_model(list, model, centre, radius, 0.0);
 }
 
@@ -1274,9 +1278,7 @@ mod tests {
 
     #[test]
     fn with_no_frame_a_stellar_s_model_draws_in_item_5_in_the_sprite_s_place() {
-        let giant = StellarModel::Planet {
-            key: crate::planet::PlanetKey(2),
-        };
+        let giant = StellarModel::planet(crate::planet::PlanetKey(2), 1.0);
         for model in [HUB, giant] {
             let dialog = unframed(Some(model));
             let want = model_in_item(&dialog, model);
@@ -1320,6 +1322,60 @@ mod tests {
         };
         assert_eq!(pose.scale, FIT * 40.0 / 2.0 / 4.0);
         assert!(drawn(&small).contains(&model_in_item(&small, HUB)[0]));
+    }
+
+    /// Earth with no frame on `template`, and `model` drawn for it.
+    fn unframed_on(template: &DialogTemplate, model: StellarModel) -> PlanetCommDialog {
+        PlanetCommDialog::new(
+            template,
+            &greeting(),
+            None,
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+        .expect("builds")
+        .with_stellar_model(Some(model))
+    }
+
+    /// The radius each planet the dialog draws is drawn at.
+    fn planet_radii(dialog: &PlanetCommDialog) -> Vec<f32> {
+        drawn(dialog)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Planet { pose, .. } => Some(pose.radius),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn a_planet_s_rings_and_atmosphere_stay_within_the_fit_of_item_5() {
+        let mut small = stock();
+        small.items[SPRITE_ITEM - 1].bounds = Bounds::at(Point::new(222.0, 5.0), 40.0, 50.0);
+        for template in [stock(), small] {
+            let at = template.items[SPRITE_ITEM - 1].bounds;
+            let room = FIT * at.width().min(at.height()) / 2.0;
+            for reach in [2.3, 2.0] {
+                let ringed = StellarModel::planet(crate::planet::PlanetKey(2), reach);
+                let radii = planet_radii(&unframed_on(&template, ringed));
+                assert_eq!(radii.len(), 1);
+                assert!(
+                    radii[0] * reach <= room + 1e-3,
+                    "{reach} in {at:?}: {} reaches past {room}",
+                    radii[0]
+                );
+                assert_eq!(radii[0], UNKNOWN_STELLAR_RADIUS.min(room / reach));
+            }
+            for reach in [1.0, 0.5, f32::NAN, f32::INFINITY] {
+                let globe = StellarModel::planet(crate::planet::PlanetKey(2), reach);
+                assert_eq!(
+                    planet_radii(&unframed_on(&template, globe)),
+                    [UNKNOWN_STELLAR_RADIUS.min(room)],
+                    "{reach} draws the globe as before"
+                );
+            }
+        }
     }
 
     #[test]

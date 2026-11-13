@@ -1006,7 +1006,9 @@ mod tests {
                         reach: 4.0,
                     },
                 ),
-                (StellarId(141), StellarModel::Planet { key: GIANT }),
+                // Ringed: the viewer draws the globe at its stand-in's
+                // radius whatever its rings reach.
+                (StellarId(141), StellarModel::planet(GIANT, 2.3)),
             ]
             .into(),
             ..WorldModels::default()

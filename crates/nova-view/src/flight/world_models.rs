@@ -69,7 +69,34 @@ pub enum StellarModel {
     Planet {
         /// The planet.
         key: PlanetKey,
+        /// How far its rings and atmosphere reach on screen, in its
+        /// globe's radii: 1 for a bare globe, more for a halo or rings
+        /// (`nova_render`'s `planet::reach`). Flight draws the globe at
+        /// its stand-in's radius whatever this is; a picture fits the
+        /// whole of it to its rectangle ([`StellarModel::overhang`]).
+        reach: f32,
     },
+}
+
+impl StellarModel {
+    /// Planet `key` reaching `reach` of its globe's radii.
+    #[must_use]
+    pub const fn planet(key: PlanetKey, reach: f32) -> Self {
+        Self::Planet { key, reach }
+    }
+
+    /// How far it draws beyond the radius it is drawn at, as a multiple
+    /// of it: a planet's reach, or 1 where that is below 1 or no finite
+    /// number, as a planet never draws inside its globe; and 1 for a
+    /// model, whose scale fits its reach to the radius. A picture divides
+    /// the room it has by this, so the whole of it fits.
+    #[must_use]
+    pub fn overhang(self) -> f32 {
+        match self {
+            Self::Planet { reach, .. } if reach.is_finite() => reach.max(1.0),
+            Self::Planet { .. } | Self::Model { .. } => 1.0,
+        }
+    }
 }
 
 /// The models the flight draws (see the module docs).
@@ -176,8 +203,39 @@ mod tests {
                         reach: 4.0,
                     },
                 ),
-                (StellarId(136), StellarModel::Planet { key: GIANT }),
+                (StellarId(136), StellarModel::planet(GIANT, 2.3)),
             ]),
+        }
+    }
+
+    #[test]
+    fn a_planet_is_built_from_its_key_and_its_reach() {
+        assert_eq!(
+            StellarModel::planet(GIANT, 2.3),
+            StellarModel::Planet {
+                key: GIANT,
+                reach: 2.3
+            }
+        );
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn a_planet_overhangs_its_globe_by_its_reach_and_a_station_by_nothing() {
+        assert_eq!(StellarModel::planet(GIANT, 2.3).overhang(), 2.3);
+        assert_eq!(StellarModel::planet(GIANT, 1.04).overhang(), 1.04);
+        assert_eq!(StellarModel::planet(GIANT, 1.0).overhang(), 1.0);
+        let station = StellarModel::Model {
+            key: HUB,
+            reach: 4.0,
+        };
+        assert_eq!(station.overhang(), 1.0, "its scale fits its reach");
+        for reach in [0.5, 0.0, -2.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(
+                StellarModel::planet(GIANT, reach).overhang(),
+                1.0,
+                "{reach} is taken as the globe's"
+            );
         }
     }
 
@@ -209,7 +267,7 @@ mod tests {
         );
         assert_eq!(
             table.stellar(StellarId(136)),
-            Some(StellarModel::Planet { key: GIANT })
+            Some(StellarModel::planet(GIANT, 2.3))
         );
         assert_eq!(table.stellar(StellarId(129)), None);
     }

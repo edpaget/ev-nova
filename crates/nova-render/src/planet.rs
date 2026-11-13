@@ -111,6 +111,17 @@ pub fn reach(thickness: Option<f32>, outer: Option<f32>) -> f32 {
     halo.max(outer.unwrap_or(1.0)).max(1.0)
 }
 
+/// How far a planet drawn with `surface` reaches, in its radii: the
+/// [`reach`] of its atmosphere's thickness and its rings' outer edge.
+#[must_use]
+pub fn surface_reach(surface: &Surface) -> f32 {
+    #[allow(clippy::cast_possible_truncation, reason = "a shader's sizes")]
+    reach(
+        surface.atmosphere.as_ref().map(|a| a.thickness as f32),
+        surface.rings.as_ref().map(|r| r.outer as f32),
+    )
+}
+
 /// The square a planet at `pose`, reaching `reach` of its radii, covers on
 /// screen, in logical units. `None` when it draws nothing: a radius or
 /// reach that is not a positive, finite number, or a centre or time that
@@ -299,8 +310,7 @@ pub fn textures(surface: &Surface) -> PlanetTextures {
 #[must_use]
 pub fn instance(planet: PlanetId, surface: &Surface, pose: &PlanetPose) -> Option<PlanetInstance> {
     let thickness = surface.atmosphere.as_ref().map(|a| a.thickness as f32);
-    let outer = surface.rings.as_ref().map(|r| r.outer as f32);
-    let reach = reach(thickness, outer);
+    let reach = surface_reach(surface);
     let square = quad(pose, reach)?;
     let color = |c: [u8; 3]| c.map(|c| f32::from(c) / 255.0);
     let ring_color = surface.rings.as_ref().map_or([0.0; 3], |r| color(r.color));
