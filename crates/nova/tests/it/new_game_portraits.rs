@@ -10,7 +10,10 @@
 //! navigator's system viewer, entered on the crossing from the main
 //! menu's galaxy map, draws the hub and Kestrel Reach's planet. The
 //! escort dialog's wiring is pinned in `combat.rs`, whose harness flies
-//! with an escort.
+//! with an escort. The main menu's pilot panel draws the pilot's class as
+//! its model (rdm:phase/rendering-3d/phase-16-pilot-panel-ship-model),
+//! for a pilot just created and for one saved and opened at launch, with
+//! the table given after the menu is built, as `main` gives it.
 //!
 //! The 3D sample's stations sell no ships, so no shipyard opens over it:
 //! the shipyard's and the hire screen's models are pinned on nova-view's
@@ -28,6 +31,7 @@ use std::path::Path;
 use nova::app::Showing;
 use nova::app::{Control, WindowEvent};
 use nova::chance::SplitMix;
+use nova::rulebook::ruleset_rulebook;
 use nova::ruleset::Ruleset;
 use nova_data::new_game::{self, NewGame};
 use nova_render::{WorldAssets, world_assets};
@@ -35,8 +39,10 @@ use nova_sim::TargetPick;
 use nova_sim::fixture::{MemoryPilots, place, put_player_at};
 use nova_sim::{ShipRef, StellarId, Vec2};
 use nova_view::flight::StellarModel;
+use nova_view::menu::{MenuChoice, PanelPilot};
 use nova_view::spaceport::layout::LANDSCAPE_ITEM;
 use nova_view::{DrawCommand, DrawLayer, DrawList, Key, ModelKey, Point, Screen};
+use winit::keyboard::KeyCode;
 
 use crate::common::draw;
 use crate::new_game_models::{flying_over, frame};
@@ -294,4 +300,67 @@ fn the_spaceport_s_landscape_draws_the_station_s_model() {
         })
         .collect();
     assert_eq!(centres, [area.center()], "the hub in the landscape");
+}
+
+/// The app on the main menu over the 3D sample, keeping pilots in
+/// `pilots`, wired as `main` wires it: the world models' table given
+/// after the menu is built, then the last pilot opened at launch; and the
+/// sample's world models.
+fn on_the_menu(pilots: &MemoryPilots) -> (Harness, WorldAssets) {
+    let (game, assets) = sample();
+    let rules = ruleset_rulebook(None, Ruleset::NewGame.profile().readings).0;
+    let table = std::rc::Rc::new(assets.models.clone());
+    let harness = Harness::built_wired(std::rc::Rc::new(game.data), pilots, |screen| {
+        screen.with_rulebook(&rules).with_world_models(table)
+    });
+    (harness, assets)
+}
+
+/// The hull key of the class the main menu's pilot panel shows, from
+/// `assets`, and the models the main menu draws.
+fn the_menu_s_class_and_models(
+    harness: &Harness,
+    assets: &WorldAssets,
+) -> (ModelKey, Vec<ModelKey>) {
+    let menu = harness.app.screen().main_menu().expect("the main menu");
+    let PanelPilot::Alive(panel) = menu.pilot_shown() else {
+        panic!("an alive pilot: {:?}", menu.pilot_shown());
+    };
+    let key = assets
+        .models
+        .ship(panel.ship)
+        .expect("the class's model")
+        .key;
+    (key, models_of(menu))
+}
+
+#[test]
+fn the_main_menu_s_pilot_panel_draws_a_new_pilot_s_class_as_its_model() {
+    let pilots = MemoryPilots::new();
+    let (mut harness, assets) = on_the_menu(&pilots);
+    draw(&mut harness);
+    // New Pilot, named and christened by the keyboard, saves the pilot
+    // and comes back to the menu holding it.
+    let new_pilot = harness.menu_button(MenuChoice::NewPilot);
+    harness.click(new_pilot);
+    draw(&mut harness);
+    harness.type_name("Ada");
+    harness.press(KeyCode::Enter);
+    harness.press(KeyCode::Enter);
+    assert_eq!(harness.showing(), Showing::MainMenu);
+    draw(&mut harness);
+    let (key, drawn) = the_menu_s_class_and_models(&harness, &assets);
+    assert!(drawn.contains(&key), "the pilot's class: {drawn:?}");
+}
+
+#[test]
+fn the_main_menu_draws_a_saved_pilot_opened_at_launch_as_its_model() {
+    let pilots = MemoryPilots::new();
+    let (mut first, _) = on_the_menu(&pilots);
+    draw(&mut first);
+    first.create_and_close("Ada");
+    let (mut harness, assets) = on_the_menu(&pilots);
+    draw(&mut harness);
+    let (key, drawn) = the_menu_s_class_and_models(&harness, &assets);
+    assert!(drawn.contains(&key), "the saved pilot's class: {drawn:?}");
 }
