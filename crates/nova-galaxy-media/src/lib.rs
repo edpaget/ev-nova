@@ -35,7 +35,9 @@
 //! For drawing planets (the renderer's planet adapter,
 //! `nova_render::GalaxyPlanets`), it reads a planet's or moon's texture
 //! asset ([`texture`]: its `.png` held to the default budget's `texture`
-//! limits from its header, then decoded to RGBA8), and bakes a generated
+//! limits from its header, then decoded to RGBA8; or checked from its
+//! header at load, [`check_texture`], and read by its file later,
+//! [`read_texture_file`]), and bakes a generated
 //! look into the same kind of surface, with its clouds, rings, spin and
 //! tilt ([`planet`]: deterministic from the seed, the same bytes on every
 //! platform).
@@ -81,4 +83,7 @@ pub use paint::{Slot, slot_of};
 pub use placement::Placement;
 pub use sampling::{Sampler, TextureRef};
 pub use scene::{AssetScenes, Scene, read_asset_scene, read_scene};
-pub use texture::{NoTexture, read_picture, read_texture};
+pub use texture::{
+    NoTexture, TextureHeader, check_texture, read_picture, read_texture, read_texture_file,
+    texture_file,
+};
