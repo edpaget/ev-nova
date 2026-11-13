@@ -41,17 +41,24 @@ pub trait Gpu {
     fn clear_pages(&mut self);
     /// Holds `data` as model texture `texture`, for the sections of the
     /// meshes that name it to sample ([`Gpu::upload_mesh`]): its mip
-    /// chain as given, sampled trilinear and repeating past its edges.
+    /// chain as given. It says nothing of how it is sampled: each
+    /// section that names it says so, and two may sample it two ways.
     /// The renderer uploads a texture once, before the first mesh that
-    /// names it, however many meshes hold it. Model textures are not
-    /// pages: [`Gpu::clear_pages`] keeps them.
+    /// names it, however many meshes hold it and however many samplers
+    /// read it. Model textures are not pages: [`Gpu::clear_pages`] keeps
+    /// them.
     fn upload_model_texture(&mut self, texture: ModelTextureId, data: &ModelTexture);
     /// Holds `data` as mesh `mesh`, replacing any mesh of that id, for
     /// [`Batch::Models`] to draw. `textures` are the numbers its textures
     /// ([`Mesh::textures`]) were uploaded under
     /// ([`Gpu::upload_model_texture`]), one for each in the mesh's order,
     /// so a [`Section`](crate::model::Section) that names texture `i`
-    /// draws with `textures[i]`; each was uploaded before this call. The
+    /// draws with `textures[i]`, sampled as the section's
+    /// [`sampler`](crate::model::Section::sampler) says
+    /// ([`crate::model_sampler::sample`]); each was uploaded before this
+    /// call. Everything a frame needs to sample a section arrives here,
+    /// so an adapter makes its samplers at this call and none while
+    /// drawing. The
     /// renderer uploads a mesh the first frame that draws it, and again
     /// after it is replaced ([`crate::Renderer::add_model`]); it never
     /// hands over one with no triangles. Meshes are not pages:

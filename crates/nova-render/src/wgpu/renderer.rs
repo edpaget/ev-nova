@@ -2980,6 +2980,118 @@ mod tests {
     }
 
     #[test]
+    fn two_sections_sample_one_texture_each_through_its_own_sampler() {
+        use crate::gpu::Gpu;
+        use crate::model_sampler::{Filter, ModelSampler, Wrap};
+        // The white cube straight on, so only +z shows. Its two triangles
+        // are two sections on the one texture, two texels wide, every
+        // vertex a quarter of the image past its right edge: repeating,
+        // that is the first texel's middle, and clamped, the last texel.
+        const TEXELS: [[u8; 4]; 2] = [[230, 40, 40, 255], [40, 60, 230, 255]];
+        const AGAIN: [[u8; 4]; 2] = [[40, 200, 60, 255], [200, 200, 40, 255]];
+        let clamped = ModelSampler {
+            wrap_s: Wrap::Clamp,
+            mag: Filter::Nearest,
+            ..ModelSampler::DEFAULT
+        };
+        let logical = LogicalSize { w: 32, h: 24 };
+        let pose = nova_view::ModelPose {
+            center: Point::new(16.0, 12.0),
+            orientation: nova_view::Orientation::IDENTITY,
+            scale: 12.0,
+        };
+        let instance = crate::camera::instance(logical, &pose, MeshId(3), 0.9).expect("drawable");
+        let frame = Frame {
+            viewport: PixelRect {
+                x: 0,
+                y: 8,
+                w: 64,
+                h: 48,
+            },
+            logical,
+            world: vec![0],
+            ..frame_of(vec![Batch::Models {
+                light: Light::STANDARD,
+                models: vec![instance],
+            }])
+        };
+        let texture =
+            |texels: [[u8; 4]; 2]| ModelTexture::new(2, 1, texels.concat()).expect("two texels");
+        let cube = Mesh::cube([Color::WHITE; 6]);
+        let vertices = cube
+            .vertices()
+            .iter()
+            .map(|v| crate::model::Vertex {
+                uv: [1.25, 0.5],
+                ..*v
+            })
+            .collect();
+        let section = crate::model::Section::new;
+        let skinned = Mesh::textured(
+            vertices,
+            cube.indices().to_vec(),
+            vec![std::sync::Arc::new(texture(TEXELS))],
+            vec![
+                section(0..24, None),
+                section(24..27, Some(0)),
+                section(27..30, Some(0)).sampled(clamped),
+                section(30..36, None),
+            ],
+        )
+        .expect("the cube in four sections");
+        let id = ModelTextureId(5);
+        // A pixel in each of +z's triangles, after `steps`.
+        let shown = |steps: &dyn Fn(&mut crate::wgpu::OffscreenGpu)| {
+            let mut gpu = crate::wgpu::OffscreenGpu::new(64, 64, &FontFaces::bundled()).ok()?;
+            steps(&mut gpu);
+            gpu.submit(&frame);
+            let pixels = gpu.read_pixels().expect("read back");
+            Some([pixel_at(&pixels, 39, 32), pixel_at(&pixels, 25, 32)])
+        };
+        let lit = |base: [u8; 4]| {
+            let base = base.map(f32::from);
+            crate::camera::shade([0.0, 0.0, 1.0], base, Light::STANDARD).map(|c| c.round() as u8)
+        };
+        let near = |got: [u8; 4], want: [u8; 4]| (0..3).all(|c| got[c].abs_diff(want[c]) <= 2);
+        let check = |what: &str, got: Option<[[u8; 4]; 2]>, texels: [[u8; 4]; 2]| {
+            let Some([repeated, held]) = got else {
+                return;
+            };
+            assert!(near(repeated, lit(texels[0])), "{what}: {repeated:?}");
+            assert!(near(held, lit(texels[1])), "{what}: {held:?}");
+        };
+        assert!(!near(lit(TEXELS[0]), lit(TEXELS[1])));
+        // The texture, then the mesh, as the renderer uploads them.
+        let in_order = shown(&|gpu| {
+            gpu.upload_model_texture(id, &texture(TEXELS));
+            gpu.upload_mesh(MeshId(3), &skinned, &[id]);
+        });
+        check("the texture then the mesh", in_order, TEXELS);
+        // The mesh first: the texture is bound through both samplers
+        // when it arrives.
+        let mesh_first = shown(&|gpu| {
+            gpu.upload_mesh(MeshId(3), &skinned, &[id]);
+            gpu.upload_model_texture(id, &texture(TEXELS));
+        });
+        check("the mesh then the texture", mesh_first, TEXELS);
+        // The texture uploaded again under its id: both sections draw
+        // the new one, each through its own sampler still.
+        let replaced = shown(&|gpu| {
+            gpu.upload_model_texture(id, &texture(TEXELS));
+            gpu.upload_mesh(MeshId(3), &skinned, &[id]);
+            gpu.upload_model_texture(id, &texture(AGAIN));
+        });
+        check("the texture replaced", replaced, AGAIN);
+        // Another texture's upload leaves these bound.
+        let beside = shown(&|gpu| {
+            gpu.upload_model_texture(id, &texture(TEXELS));
+            gpu.upload_mesh(MeshId(3), &skinned, &[id]);
+            gpu.upload_model_texture(ModelTextureId(6), &texture(AGAIN));
+        });
+        check("another texture uploaded", beside, TEXELS);
+    }
+
+    #[test]
     fn the_native_upscaler_enlarges_a_texture_world_with_sharp_bilinear() {
         use crate::gpu::Gpu;
         // A white-faced cube a little off centre, in a world texture half

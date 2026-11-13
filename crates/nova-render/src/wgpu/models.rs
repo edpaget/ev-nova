@@ -3,8 +3,8 @@
 //! ([`crate::Gpu::upload_model_texture`]), the depth textures, the model
 //! pipeline and its draws. It decides nothing: each instance's transforms
 //! and the light come from the core ([`crate::camera`]), and which
-//! triangles take which texture from the mesh's sections
-//! ([`crate::model::Section`]).
+//! triangles take which texture through which sampler from the mesh's
+//! sections ([`crate::model::Section`]).
 //!
 //! The pipelines draw into [`SCENE_FORMAT`] with a [`DEPTH_FORMAT`]
 //! attachment, cull nothing (the depth test hides a model's far faces)
@@ -24,13 +24,24 @@
 //! [`crate::camera::shade`]'s formula unless the vertex is unlit, its
 //! alpha times the instance's.
 //!
-//! Each texture is one bind group, a texture with its mip chain and the
-//! one sampler (repeating, trilinear), made when the texture is uploaded.
+//! A texture is uploaded once, with its mip chain, and bound once for
+//! each sampler a section samples it through: a bind group for each
+//! (texture, sampler) pair, and a wgpu sampler for each distinct
+//! [`ModelSampler`](crate::model_sampler::ModelSampler)
+//! (`super::model_samplers`, which mirrors
+//! [`crate::model_sampler::sample`]). The texture's upload makes its
+//! group through the default sampler, and a mesh's upload makes the
+//! groups and samplers its sections name that aren't made yet, so two
+//! sections may draw one texture two ways and a model that says nothing
+//! takes the repeating, trilinear sampler it always did. A texture
+//! uploaded again under its id is bound again through every sampler the
+//! held meshes name it by.
 //! A section with no texture binds a 1 by 1 opaque white texture made
 //! with the pipeline, so one pipeline and one shader path draw both, and
 //! the product with white is the vertex colour exactly. A mesh is one
 //! indexed draw per instance for each of its sections that has
-//! triangles. Nothing is made on a frame.
+//! triangles. Nothing is made on a frame: the draws only look up what
+//! the uploads made.
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -38,11 +49,13 @@ use std::ops::Range;
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
+use super::model_samplers::Samplers;
 use super::planets::texture;
 use super::renderer::{SCENE_FORMAT, pipeline_layout};
 use crate::camera::Light;
 use crate::gpu::{ModelInstance, ModelTextureId, PlanetImage};
 use crate::model::{Mesh, MeshId, Vertex};
+use crate::model_sampler::ModelSampler;
 use crate::model_texture::ModelTexture;
 use crate::models::ModelRun;
 
@@ -118,23 +131,32 @@ enum Drawing {
     Faded,
 }
 
-/// One draw of a mesh: a run of its indices, and the texture it samples,
-/// if any.
-type SectionDraw = (Range<u32>, Option<ModelTextureId>);
+/// A texture as a section samples it: which, and through which sampler.
+type Sampled = (ModelTextureId, ModelSampler);
+
+/// One draw of a mesh: a run of its indices, and the texture it samples
+/// with the sampler it samples it through, if any.
+type SectionDraw = (Range<u32>, Option<Sampled>);
 
 /// The draws mesh `data` takes, its textures uploaded as `textures` (one
 /// id for each of the mesh's, in its order): each of its sections that has
-/// triangles, with the id of the texture it names. A section naming a
-/// texture `textures` has no id for draws untextured.
+/// triangles, with the id of the texture it names and its sampler. A
+/// section naming a texture `textures` has no id for draws untextured.
 fn draws(data: &Mesh, textures: &[ModelTextureId]) -> Vec<SectionDraw> {
     data.sections()
         .iter()
         .filter(|section| !section.indices.is_empty())
         .map(|section| {
             let texture = section.texture.and_then(|at| textures.get(at).copied());
-            (section.indices.clone(), texture)
+            let sampled = texture.map(|id| (id, section.sampler));
+            (section.indices.clone(), sampled)
         })
         .collect()
+}
+
+/// What `draws` sample: the texture and sampler of each that has one.
+fn sampled(draws: &[SectionDraw]) -> impl Iterator<Item = Sampled> + '_ {
+    draws.iter().filter_map(|(_, sampled)| *sampled)
 }
 
 /// One mesh on the GPU.
@@ -152,10 +174,15 @@ pub(super) struct Models {
     /// A faded run's colour pass.
     faded: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
-    sampler: wgpu::Sampler,
+    /// A sampler for each distinct [`ModelSampler`] a section has named.
+    samplers: Samplers,
     /// What a section with no texture samples: one opaque white texel.
     white: wgpu::BindGroup,
-    textures: HashMap<ModelTextureId, wgpu::BindGroup>,
+    /// Each texture uploaded.
+    views: HashMap<ModelTextureId, wgpu::TextureView>,
+    /// A bind group for each texture through each sampler a held mesh's
+    /// section samples it by, and through the default.
+    groups: HashMap<Sampled, wgpu::BindGroup>,
     meshes: HashMap<MeshId, GpuMesh>,
 }
 
@@ -164,15 +191,7 @@ impl Models {
     /// sections sample, written on `queue`; no meshes and no textures.
     pub(super) fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
         let layout = texture_layout(device);
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("nova model texture"),
-            address_mode_u: wgpu::AddressMode::Repeat,
-            address_mode_v: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Linear,
-            ..Default::default()
-        });
+        let mut samplers = Samplers::default();
         let white = PlanetImage {
             width: 1,
             height: 1,
@@ -180,24 +199,26 @@ impl Models {
         };
         let white = group(
             device,
-            queue,
             &layout,
-            &sampler,
-            std::slice::from_ref(&white),
+            &view(device, queue, std::slice::from_ref(&white)),
+            samplers.get(device, ModelSampler::DEFAULT),
         );
         Self {
             pipeline: pipeline(device, &layout, Drawing::Whole),
             depth_only: pipeline(device, &layout, Drawing::DepthOnly),
             faded: pipeline(device, &layout, Drawing::Faded),
             layout,
-            sampler,
+            samplers,
             white,
-            textures: HashMap::new(),
+            views: HashMap::new(),
+            groups: HashMap::new(),
             meshes: HashMap::new(),
         }
     }
 
-    /// Holds `data` as model texture `texture`, replacing any of that id.
+    /// Holds `data` as model texture `texture`, replacing any of that id:
+    /// bound through the default sampler, and through each sampler a mesh
+    /// already held samples it by.
     pub(super) fn upload_texture(
         &mut self,
         device: &wgpu::Device,
@@ -205,13 +226,40 @@ impl Models {
         texture: ModelTextureId,
         data: &ModelTexture,
     ) {
-        let group = group(device, queue, &self.layout, &self.sampler, data.levels());
-        self.textures.insert(texture, group);
+        self.views
+            .insert(texture, view(device, queue, data.levels()));
+        self.groups.retain(|(held, _), _| *held != texture);
+        let named: Vec<ModelSampler> = self
+            .meshes
+            .values()
+            .flat_map(|mesh| sampled(&mesh.draws))
+            .filter(|(id, _)| *id == texture)
+            .map(|(_, sampler)| sampler)
+            .collect();
+        for sampler in named.into_iter().chain([ModelSampler::DEFAULT]) {
+            self.bind(device, (texture, sampler));
+        }
+    }
+
+    /// Makes the bind group a draw of `key` (a texture through a
+    /// sampler) binds, if its texture is held and the group isn't made
+    /// yet, and its sampler the first time that is named.
+    fn bind(&mut self, device: &wgpu::Device, key: Sampled) {
+        if self.groups.contains_key(&key) {
+            return;
+        }
+        let Some(view) = self.views.get(&key.0) else {
+            return;
+        };
+        let made = group(device, &self.layout, view, self.samplers.get(device, key.1));
+        self.groups.insert(key, made);
     }
 
     /// Holds `data` as mesh `mesh`, replacing any mesh of that id, its
-    /// textures those uploaded as `textures`. A mesh with no triangles
-    /// (which the core never hands over) is dropped.
+    /// textures those uploaded as `textures`, and makes the sampler and
+    /// the bind group each of its sections draws with, so a frame makes
+    /// none. A mesh with no triangles (which the core never hands over)
+    /// is dropped.
     pub(super) fn upload(
         &mut self,
         device: &wgpu::Device,
@@ -234,12 +282,16 @@ impl Models {
             contents: bytemuck::cast_slice(data.indices()),
             usage: wgpu::BufferUsages::INDEX,
         });
+        let draws = draws(data, textures);
+        for sampled in sampled(&draws) {
+            self.bind(device, sampled);
+        }
         self.meshes.insert(
             mesh,
             GpuMesh {
                 vertices,
                 indices,
-                draws: draws(data, textures),
+                draws,
             },
         );
     }
@@ -272,9 +324,11 @@ impl Models {
 
     /// Encodes the models of instances `start` on, mesh `meshes[i]` for
     /// the i-th, into `pass` through its pipeline: one indexed draw for
-    /// each of the mesh's sections, its texture bound, or the white one
-    /// for a section with none (or with one the GPU doesn't hold). A mesh
-    /// the GPU doesn't hold is skipped.
+    /// each of the mesh's sections, its texture bound through its
+    /// sampler, or the white one for a section with none (or with one the
+    /// GPU doesn't hold). A mesh the GPU doesn't hold is skipped. It only
+    /// looks up what the uploads made: it takes `&self`, and makes
+    /// nothing.
     fn encode_run(&self, pass: &mut wgpu::RenderPass<'_>, start: u32, meshes: &[MeshId]) {
         for (instance, mesh) in (start..).zip(meshes) {
             let Some(mesh) = self.meshes.get(mesh) else {
@@ -282,9 +336,9 @@ impl Models {
             };
             pass.set_vertex_buffer(0, mesh.vertices.slice(..));
             pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-            for (indices, texture) in &mesh.draws {
-                let group = texture
-                    .and_then(|id| self.textures.get(&id))
+            for (indices, sampled) in &mesh.draws {
+                let group = sampled
+                    .and_then(|sampled| self.groups.get(&sampled))
                     .unwrap_or(&self.white);
                 pass.set_bind_group(0, group, &[]);
                 pass.draw_indexed(indices.clone(), 0, instance..instance + 1);
@@ -318,24 +372,27 @@ fn texture_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     })
 }
 
-/// The bind group of a texture of `levels`, a mip chain, uploaded on
-/// `queue`, sampled through `sampler`.
+/// The view of a texture of `levels`, a mip chain, uploaded on `queue`.
+fn view(device: &wgpu::Device, queue: &wgpu::Queue, levels: &[PlanetImage]) -> wgpu::TextureView {
+    texture(device, queue, "nova model texture", levels)
+        .create_view(&wgpu::TextureViewDescriptor::default())
+}
+
+/// The bind group of the texture behind `view`, sampled through
+/// `sampler`.
 fn group(
     device: &wgpu::Device,
-    queue: &wgpu::Queue,
     layout: &wgpu::BindGroupLayout,
+    view: &wgpu::TextureView,
     sampler: &wgpu::Sampler,
-    levels: &[PlanetImage],
 ) -> wgpu::BindGroup {
-    let view = texture(device, queue, "nova model texture", levels)
-        .create_view(&wgpu::TextureViewDescriptor::default());
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("nova model texture"),
         layout,
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::TextureView(&view),
+                resource: wgpu::BindingResource::TextureView(view),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
@@ -447,6 +504,7 @@ mod tests {
 
     use super::*;
     use crate::model::Section;
+    use crate::model_sampler::{Filter, Wrap};
 
     #[test]
     fn a_vertex_becomes_its_position_normal_colour_coordinates_and_unlit_flag_in_order() {
@@ -488,24 +546,66 @@ mod tests {
         )
         .expect("the cube in sections");
         let ids = [ModelTextureId(7), ModelTextureId(4)];
+        let plain = |id| Some((ModelTextureId(id), ModelSampler::DEFAULT));
         assert_eq!(
             draws(&mesh, &ids),
-            [
-                (0..6, Some(ModelTextureId(4))),
-                (6..18, None),
-                (18..36, Some(ModelTextureId(7))),
-            ]
+            [(0..6, plain(4)), (6..18, None), (18..36, plain(7))]
         );
         // An id the mesh was not given draws untextured.
         assert_eq!(
             draws(&mesh, &ids[..1]),
-            [
-                (0..6, None),
-                (6..18, None),
-                (18..36, Some(ModelTextureId(7))),
-            ]
+            [(0..6, None), (6..18, None), (18..36, plain(7))]
         );
         assert_eq!(draws(&cube, &[]), [(0..36, None)]);
+    }
+
+    /// A sampler that clamps along u and reads the nearest texel.
+    const SHARP: ModelSampler = ModelSampler {
+        wrap_s: Wrap::Clamp,
+        mag: Filter::Nearest,
+        ..ModelSampler::DEFAULT
+    };
+
+    #[test]
+    fn a_draw_carries_its_section_s_sampler_with_its_texture_s_id() {
+        let cube = Mesh::cube([nova_view::Color::WHITE; 6]);
+        let texture = Arc::new(ModelTexture::new(1, 1, vec![9, 9, 9, 255]).expect("one texel"));
+        let mirrored = ModelSampler {
+            wrap_t: Wrap::Mirror,
+            ..ModelSampler::DEFAULT
+        };
+        // Two sections on the one texture through two samplers, an
+        // untextured one that names a sampler all the same, and the
+        // texture again the default way.
+        let mesh = Mesh::textured(
+            cube.vertices().to_vec(),
+            cube.indices().to_vec(),
+            vec![texture],
+            vec![
+                Section::new(0..6, Some(0)).sampled(SHARP),
+                Section::new(6..12, Some(0)).sampled(mirrored),
+                Section::new(12..18, None).sampled(SHARP),
+                Section::new(18..36, Some(0)),
+            ],
+        )
+        .expect("the cube in sections");
+        let id = ModelTextureId(3);
+        let made = draws(&mesh, &[id]);
+        assert_eq!(
+            made,
+            [
+                (0..6, Some((id, SHARP))),
+                (6..12, Some((id, mirrored))),
+                (12..18, None),
+                (18..36, Some((id, ModelSampler::DEFAULT))),
+            ]
+        );
+        // What the draws sample, each texture and sampler together.
+        assert_eq!(
+            sampled(&made).collect::<Vec<_>>(),
+            [(id, SHARP), (id, mirrored), (id, ModelSampler::DEFAULT)]
+        );
+        assert_eq!(sampled(&draws(&cube, &[])).count(), 0);
     }
 
     #[test]

@@ -40,8 +40,9 @@ pub struct Vertex {
     /// Its colour, straight RGBA from 0 to 1.
     pub color: [f32; 4],
     /// Where on its section's texture it is: u across from the left, v
-    /// down from the top, each 0 to 1 over the image and repeating past
-    /// it. Nothing reads it in a section with no texture.
+    /// down from the top, each 0 to 1 over the image, and past it as its
+    /// section's sampler wraps it. Nothing reads it in a section with no
+    /// texture.
     pub uv: [f32; 2],
     /// Whether it is drawn at its colour whatever the light
     /// ([`crate::camera::fragment`]).

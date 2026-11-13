@@ -114,6 +114,7 @@ mod layout;
 #[cfg(target_os = "macos")]
 mod metal_fx;
 mod metrics;
+mod model_samplers;
 mod models;
 mod offscreen;
 mod overlay;
