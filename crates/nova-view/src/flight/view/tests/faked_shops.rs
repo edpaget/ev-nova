@@ -344,6 +344,7 @@ pub(super) fn stale(view: &mut Faked) {
             name: "Stale".to_owned(),
             subtitle: String::new(),
             picture: None,
+            model: None,
             status: nova_sim::TargetStatus::Hidden,
             tag: None,
         }),
@@ -1548,6 +1549,7 @@ fn a_ship_bought_redraws_the_nav_area_and_the_target_panel() {
         name: "Stale".to_owned(),
         subtitle: String::new(),
         picture: None,
+        model: None,
         status: nova_sim::TargetStatus::Hidden,
         tag: None,
     };

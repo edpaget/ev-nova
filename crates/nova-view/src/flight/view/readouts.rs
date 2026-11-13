@@ -10,6 +10,7 @@ use crate::flight::cadence::{Drawn, retake_target};
 use crate::flight::hud::{NavDestination, NavDisplay};
 use crate::flight::radar::{self, RadarScene, RadarStellar};
 use crate::flight::target::{Tag, TargetPanel};
+use crate::model_picture::ShipPortrait;
 use crate::spaceport::PortDialog;
 use crate::time::ticks;
 
@@ -237,12 +238,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// What the target panel shows of the target in `frame` (see
     /// [`TargetPanel`], [`FrameTarget`](nova_sim::flight_frame::FrameTarget)):
     /// its name, its subtitle or its ship type's card's, the card's
-    /// picture, its status line, and its label, a government's code read
-    /// from the catalog; none without a target.
+    /// picture or, with none, its ship type's model's portrait from the
+    /// table ([`ShipPortrait::of`]), its status line, and its label, a
+    /// government's code read from the catalog; none without a target.
     pub(super) fn target_now(&self, frame: &FlightFrame) -> Option<TargetPanel> {
         let target = frame.target.as_ref()?;
         let class = frame.ship(ShipRef::Npc(target.npc))?.class;
         let card = self.cards.get(&class);
+        let picture = card.and_then(|card| card.picture);
         let tag = target.tag.and_then(|tag| match tag {
             TargetTag::Code(govt) => self.codes.get(&govt).cloned().flatten().map(Tag::Code),
             TargetTag::Escort => Some(Tag::Escort),
@@ -255,7 +258,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 .clone()
                 .or_else(|| card.map(|card| card.subtitle.clone()))
                 .unwrap_or_default(),
-            picture: card.and_then(|card| card.picture),
+            picture,
+            model: picture
+                .is_none()
+                .then(|| ShipPortrait::of(&self.world_models, class))
+                .flatten(),
             status: target.status,
             tag,
         })

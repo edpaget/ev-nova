@@ -147,6 +147,7 @@ mod stellar_looks;
 mod stellar_models;
 mod stellars;
 mod stepping;
+mod target_portrait;
 mod touch_flight;
 mod touch_hover;
 mod turret_swing;

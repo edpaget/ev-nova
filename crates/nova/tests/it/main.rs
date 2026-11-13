@@ -66,6 +66,7 @@ mod new_game_play;
 mod new_game_play_loop;
 mod new_game_port;
 mod new_game_port_loop;
+mod new_game_portraits;
 mod new_game_relations;
 mod new_game_routes;
 mod new_game_saved_ids;
