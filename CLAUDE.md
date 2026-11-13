@@ -358,7 +358,13 @@ the same commit. Don't leave the test failing for later.
 
 When wgpu tests (or any tests) run for seconds each or time out, read
 `.claude/rules/slow-tests.md` before blaming load or the code. The usual
-cause is a bloated `target/debug/deps`, and the fix is `cargo clean`.
+cause is a bloated `target/debug/deps`. `mise run sweep` (cargo-sweep)
+removes artifacts no build has used recently from every target dir under
+`target/`, keeping what is in use warm. hk's `post-merge` hook runs it after
+every merge, including landing's `merge --ff-only` in the main checkout. Run
+`hk install` once per clone to register it, as for the pre-commit hook.
+`cargo clean` remains the fallback when the deps folder is still bloated
+after a sweep.
 
 Give a `git bisect` (or any second checkout) its own `CARGO_TARGET_DIR`.
 Sharing the main worktree's target directory can leave stale build artifacts

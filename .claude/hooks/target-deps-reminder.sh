@@ -30,5 +30,5 @@ while IFS= read -r r; do
 done <<<"$roots"
 [ -n "$over" ] || exit 0
 
-msg="target/debug/deps is over $limit files in:$over. Run \`cargo clean\` in that checkout before this command (once nothing else is building there). A bloated deps folder slows every test process and has stalled WindowServer; see .claude/rules/slow-tests.md."
+msg="target/debug/deps is over $limit files in:$over. Run \`mise run sweep\` in that checkout (once nothing else is building there); if target/debug/deps is still over $limit files, \`cargo clean\` it. A bloated deps folder slows every test process and has stalled WindowServer; see .claude/rules/slow-tests.md."
 jq -n --arg m "$msg" '{hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $m}}'
