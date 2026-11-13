@@ -6,13 +6,15 @@
 //! Ported from game-bible's `galaxy` tool (`media.rs` `model`, and
 //! `check/art.rs` `model_of`). It walks the glTF file as
 //! [`read_scene`](crate::scene::read_scene) does, through the same code,
-//! and keeps only the triangles' corners and colours.
+//! and keeps only the triangles' corners and colours. So a scene already
+//! read gives the same model without reading the file again
+//! ([`Model::from_scene`]).
 
 use nova_galaxy_format::asset::{Asset, Front};
 use nova_galaxy_format::media::is_lfs_pointer;
 use nova_galaxy_format::source::Source;
 
-use crate::scene;
+use crate::scene::{self, Primitive, Scene};
 
 /// The box a model fills, in its own units, after its nodes' transforms.
 /// glTF axes: +Y is up, +Z is the front, +X is the model's left.
@@ -79,21 +81,10 @@ pub fn model(
     let primitives = scene::walk(&opened)?;
     let bounds = scene::bounds_of(&primitives).ok_or("the model draws no triangles")?;
     let materials: Vec<_> = opened.gltf.materials().collect();
-    let mut faces = Vec::new();
-    for p in &primitives {
-        // Without a material, glTF's default: white.
-        let color = p
-            .material
-            .and_then(|m| materials.get(m))
-            .map_or([1.0; 4], |m| m.pbr_metallic_roughness().base_color_factor());
-        for tri in p.indices.as_chunks::<3>().0 {
-            faces.push(Face {
-                points: [0, 1, 2].map(|k| p.positions[tri[k] as usize]),
-                color,
-                material: p.material,
-            });
-        }
-    }
+    let faces = faces(&primitives, |m| {
+        let material = materials.get(m)?;
+        Some(material.pbr_metallic_roughness().base_color_factor())
+    });
     Ok(Model {
         triangles: scene::triangles_of(&primitives),
         bounds,
@@ -104,6 +95,44 @@ pub fn model(
             .collect(),
         external: opened.external,
     })
+}
+
+impl Model {
+    /// The model of a scene already read
+    /// ([`read_scene`](crate::scene::read_scene)): what [`model`] reads
+    /// from the same file, so a caller that draws a model in 3D and needs
+    /// its triangles as data too reads the file once.
+    #[must_use]
+    pub fn from_scene(scene: &Scene) -> Model {
+        Model {
+            triangles: scene.triangles,
+            bounds: scene.bounds,
+            faces: faces(&scene.primitives, |m| {
+                scene.materials.get(m).map(|material| material.base_color)
+            }),
+            materials: scene.materials.iter().map(|m| m.name.clone()).collect(),
+            external: scene.external.clone(),
+        }
+    }
+}
+
+/// Every triangle of `primitives`, each in its material's base colour as
+/// `base_color` gives it by index: white, glTF's default, without a
+/// material or for one the file doesn't hold. [`model`] and
+/// [`Model::from_scene`] both build their faces here.
+fn faces(primitives: &[Primitive], base_color: impl Fn(usize) -> Option<[f32; 4]>) -> Vec<Face> {
+    let mut faces = Vec::new();
+    for p in primitives {
+        let color = p.material.and_then(&base_color).unwrap_or([1.0; 4]);
+        for tri in p.indices.as_chunks::<3>().0 {
+            faces.push(Face {
+                points: [0, 1, 2].map(|k| p.positions[tri[k] as usize]),
+                color,
+                material: p.material,
+            });
+        }
+    }
+    faces
 }
 
 /// Why an asset has no model to draw.
@@ -450,6 +479,65 @@ mod tests {
             let err = beside("media/p", uri).unwrap_err();
             assert!(err.contains(&format!("`{uri}`")), "{uri}: {err}");
         }
+    }
+
+    #[test]
+    fn a_scene_s_model_is_the_model_its_file_reads_as() {
+        use crate::fixture::{Builder, ImageAt, Mat, Node};
+        use crate::scene::read_scene;
+
+        let named = || {
+            Builder::new([2.0, 1.0, 4.0])
+                .material(Mat::new("hull", [1.0; 4]))
+                .material(Mat::new("glass", [0.2, 0.4, 0.8, 0.5]))
+        };
+        let tree = vec![
+            Node::group(&[1, 2]),
+            Node::at([0.0, 0.5, 0.0]),
+            Node {
+                rotation: [0.0, 0.707_106_77, 0.0, 0.707_106_77],
+                scale: [2.0, 1.0, 0.5],
+                ..Node::at([3.0, 0.0, -1.0])
+            },
+        ];
+        let mut shapes: Vec<(&str, Vec<u8>)> = vec![
+            ("plain", Builder::new([2.0, 1.0, 4.0]).glb()),
+            ("named materials", named().glb()),
+            (
+                "an unnamed material",
+                Builder::new([1.0; 3])
+                    .material(Mat::new("", [0.5; 4]))
+                    .glb(),
+            ),
+            ("a moved node", named().at([2.0, 0.0, 1.5]).glb()),
+            ("a tree of nodes", named().nodes(tree).glb()),
+            ("with normals", named().normals().glb()),
+            ("with texture coordinates", named().texcoords().glb()),
+            ("with lines", named().lines().glb()),
+            ("an embedded image", named().image(ImageAt::Embedded).glb()),
+        ];
+        let (json, bin) = named()
+            .image(ImageAt::Uri("skin.png".into()))
+            .gltf("hull.bin");
+        shapes.push(("a .gltf with its files", json.into_bytes()));
+        let read = |path: &str| match path {
+            "media/export/pack/hull.bin" => Some(bin.clone()),
+            "media/export/pack/skin.png" => Some(fixture::PNG.to_vec()),
+            _ => None,
+        };
+        for (shape, bytes) in &shapes {
+            let path = "media/export/pack/hull.gltf";
+            let scene = read_scene(path, bytes, read).unwrap_or_else(|e| panic!("{shape}: {e}"));
+            let model = model(path, bytes, read).unwrap_or_else(|e| panic!("{shape}: {e}"));
+            assert_eq!(Model::from_scene(&scene), model, "{shape}");
+            assert!(!model.faces.is_empty(), "{shape}");
+        }
+        // The last names both its files, buffer first.
+        let scene = read_scene("media/export/pack/hull.gltf", &shapes[9].1, read).unwrap();
+        assert_eq!(
+            Model::from_scene(&scene).external,
+            ["media/export/pack/hull.bin", "media/export/pack/skin.png"]
+        );
     }
 
     #[test]
