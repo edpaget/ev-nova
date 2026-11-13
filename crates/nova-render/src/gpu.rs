@@ -471,10 +471,24 @@ impl Frame {
     /// world's space, and in texels for [`WorldSpace::Texture`].
     #[must_use]
     pub fn world_scissor_in(&self, space: WorldSpace) -> PixelRect {
+        self.world_clip.map_or_else(
+            || self.space_pixels(space),
+            |clip| self.clip_scissor_in(space, clip),
+        )
+    }
+
+    /// The pixels of `space` a logical `clip` covers: projected onto the
+    /// viewport in target pixels for [`WorldSpace::Target`], and onto the
+    /// texture in texels for [`WorldSpace::Texture`], each edge rounded to
+    /// the nearest pixel as [`Frame::world_scissor`]'s are, so it ends on
+    /// the column a [`DrawCommand::Clipped`] crop ends on. Clamped to the
+    /// space's pixels; it may be empty (no width or no height) when `clip`
+    /// lies outside the logical space. The world's clip plays no part.
+    ///
+    /// [`DrawCommand::Clipped`]: nova_view::DrawCommand::Clipped
+    #[must_use]
+    pub fn clip_scissor_in(&self, space: WorldSpace, clip: Rect) -> PixelRect {
         let onto = self.space_pixels(space);
-        let Some(clip) = self.world_clip else {
-            return onto;
-        };
         let sx = onto.w as f32 / self.logical.w as f32;
         let sy = onto.h as f32 / self.logical.h as f32;
         let (x0, x1) = (onto.x as f32, (onto.x + onto.w) as f32);
@@ -941,6 +955,67 @@ mod tests {
         );
         assert_eq!(frame.world_scissor(), rect(2, 3, 10, 5));
         assert_eq!(textured().world_scissor_in(TARGET), rect(0, 8, 64, 48));
+    }
+
+    fn logical(x: f32, y: f32, w: f32, h: f32) -> Rect {
+        Rect { x, y, w, h }
+    }
+
+    #[test]
+    fn clip_scissor_in_the_target_projects_onto_the_viewport() {
+        // Scale 2, the viewport 8 below the target's top.
+        let frame = letterboxed();
+        let clip = logical(4.0, 3.0, 10.0, 5.0);
+        assert_eq!(frame.clip_scissor_in(TARGET, clip), rect(8, 14, 20, 10));
+        // The world's own clip plays no part.
+        let world_clipped = clipped(letterboxed(), 0.0, 0.0, 1.0, 1.0);
+        assert_eq!(
+            world_clipped.clip_scissor_in(TARGET, clip),
+            rect(8, 14, 20, 10)
+        );
+    }
+
+    #[test]
+    fn clip_scissor_in_a_texture_projects_onto_texels_at_its_render_scale() {
+        let frame = textured();
+        let clip = logical(4.0, 3.0, 10.0, 5.0);
+        assert_eq!(
+            frame.clip_scissor_in(frame.world_space, clip),
+            rect(4, 3, 10, 5)
+        );
+        // A texture at half the logical size: half a texel a unit.
+        let half = WorldSpace::Texture { size: (16, 12) };
+        assert_eq!(frame.clip_scissor_in(half, clip), rect(2, 2, 5, 2));
+    }
+
+    #[test]
+    fn clip_scissor_rounds_each_edge_to_the_nearest_pixel() {
+        // Scale 2: 4.3 and 14.2 across are 8.6 and 28.4, rounded to 9 and
+        // 28; 3.2 and 8.3 down are 6.4 and 16.6, so 8 + 6 and 8 + 17.
+        let frame = letterboxed();
+        let clip = logical(4.3, 3.2, 9.9, 5.1);
+        assert_eq!(frame.clip_scissor_in(TARGET, clip), rect(9, 14, 19, 11));
+        // A widened scale, 1.875 across and down in a 60x45 target.
+        let widened = Frame {
+            target: (60, 45),
+            viewport: rect(0, 0, 60, 45),
+            ..letterboxed()
+        };
+        let clip = logical(3.0, 2.0, 20.0, 11.0);
+        assert_eq!(widened.clip_scissor_in(TARGET, clip), rect(6, 4, 37, 20));
+    }
+
+    #[test]
+    fn clip_scissor_clamps_to_the_space_and_is_empty_outside_it() {
+        let frame = letterboxed();
+        let spilling = logical(-4.0, -2.0, 10.0, 6.0);
+        assert_eq!(frame.clip_scissor_in(TARGET, spilling), rect(0, 8, 12, 8));
+        let texture = WorldSpace::Texture { size: (32, 24) };
+        assert_eq!(frame.clip_scissor_in(texture, spilling), rect(0, 0, 6, 4));
+        let right = frame.clip_scissor_in(TARGET, logical(40.0, 0.0, 8.0, 8.0));
+        assert_eq!(right.w, 0, "{right:?}");
+        let below = frame.clip_scissor_in(texture, logical(0.0, 30.0, 8.0, 8.0));
+        assert_eq!(below.h, 0, "{below:?}");
     }
 
     #[test]
