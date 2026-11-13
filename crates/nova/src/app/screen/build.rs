@@ -1013,7 +1013,7 @@ impl AppScreen {
     }
 
     /// The flight screen to ask, shown or not, once flight has been
-    /// entered: for the integration tests' harnesses, as a screen's ask of
+    /// entered: for nova-it's integration tests' harnesses, as a screen's ask of
     /// the flight takes `&mut` ([`FlightView::hailing`]).
     #[cfg(any(test, feature = "fixture"))]
     #[must_use]
@@ -1022,7 +1022,7 @@ impl AppScreen {
     }
 
     /// Whether flight holds input its next frames will act on
-    /// ([`FlightView::input_queued`]): for the integration tests'
+    /// ([`FlightView::input_queued`]): for nova-it's integration tests'
     /// harnesses, to draw frames until the screen has taken its input
     /// rather than count them. Only while flight is what the router ticks,
     /// shown with nothing over it: a flight hidden, or paused under a

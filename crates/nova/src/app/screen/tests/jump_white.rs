@@ -5,7 +5,7 @@
 //! faded screen, so it fades in from black (`_FadeScreenIn` @0x5b038)
 //! and the white is gone; once it closes, the warp lights the white
 //! again on its next pass (@0x683f1-0x68404). The About text's path is
-//! pinned through the whole app in `tests/it/hyperspace.rs`.
+//! pinned through the whole app in `nova-it`'s `tests/it/hyperspace.rs`.
 
 use super::*;
 use nova_view::flight::JumpEffect;

@@ -2132,7 +2132,7 @@ fn put_i16s(bytes: &mut [u8], at: usize, values: &[i16]) {
 /// The fuel gauge's full colour in [`bar_interface`].
 const BAR_FUEL: u32 = 0x00FF_FF00;
 
-/// `ïntf` 128, as `tests/it/flight.rs` has it: the radar at (8, 8) to
+/// `ïntf` 128, as `nova-it`'s `tests/it/flight.rs` has it: the radar at (8, 8) to
 /// (184, 184), green and dim green, the shield, armour and fuel
 /// gauges 149 wide from x 35, over `PICT` 700.
 fn bar_interface() -> Vec<u8> {
