@@ -207,6 +207,7 @@ pub struct Builder {
     image: Option<ImageAt>,
     image_bytes: Vec<u8>,
     spare: Option<Vec<u8>>,
+    required: Vec<String>,
 }
 
 impl Builder {
@@ -223,6 +224,7 @@ impl Builder {
             image: None,
             image_bytes: PNG.to_vec(),
             spare: None,
+            required: Vec::new(),
         }
     }
 
@@ -292,6 +294,14 @@ impl Builder {
     #[must_use]
     pub fn spare_image(mut self, bytes: &[u8]) -> Self {
         self.spare = Some(bytes.to_vec());
+        self
+    }
+
+    /// Lists `extension` under `extensionsRequired` (and `extensionsUsed`):
+    /// a reader that doesn't know it must refuse the model.
+    #[must_use]
+    pub fn requires(mut self, extension: &str) -> Self {
+        self.required.push(extension.to_owned());
         self
     }
 
@@ -403,9 +413,7 @@ impl Builder {
         if !self.materials.is_empty() {
             json["materials"] = self.materials_json().into();
         }
-        if self.materials.iter().any(|m| m.unlit) {
-            json["extensionsUsed"] = json!(["KHR_materials_unlit"]);
-        }
+        self.write_extensions(&mut json);
         if !images.is_empty() {
             if self.image.is_some() {
                 json["textures"] = json!([{ "source": images.len() - 1 }]);
@@ -413,6 +421,27 @@ impl Builder {
             json["images"] = images.into();
         }
         (json.to_string(), bin)
+    }
+
+    /// Writes `extensionsUsed` (what the materials use, then what the
+    /// model requires, each once) and `extensionsRequired` into `json`,
+    /// each only when it lists something.
+    fn write_extensions(&self, json: &mut serde_json::Value) {
+        let mut used = Vec::new();
+        if self.materials.iter().any(|m| m.unlit) {
+            used.push("KHR_materials_unlit".to_owned());
+        }
+        for extension in &self.required {
+            if !used.contains(extension) {
+                used.push(extension.clone());
+            }
+        }
+        if !used.is_empty() {
+            json["extensionsUsed"] = used.into();
+        }
+        if !self.required.is_empty() {
+            json["extensionsRequired"] = self.required.clone().into();
+        }
     }
 
     /// The images' JSON: the spare one, if any, then the model's own, if

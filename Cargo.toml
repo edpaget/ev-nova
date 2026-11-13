@@ -73,7 +73,9 @@ serde-saphyr = { version = "2.0.0", default-features = false, features = ["deser
 # Reads the new game's glTF models (nova-galaxy-media), as game-bible's
 # `galaxy` tool pins it: only the data, no image decoding or URI fetching.
 # `KHR_materials_unlit` reads a material's unlit flag for the 3D models.
-gltf = { version = "1.4.1", default-features = false, features = ["utils", "names", "KHR_materials_unlit"] }
+# `KHR_texture_transform` reads a texture's offset, rotation and scale, and
+# lets a model that requires the extension load.
+gltf = { version = "1.4.1", default-features = false, features = ["utils", "names", "KHR_materials_unlit", "KHR_texture_transform"] }
 # Decodes a glTF model's JPEG images to RGBA (nova-galaxy-media only, as
 # `deny.toml` bans it elsewhere); its PNG ones go through `png`.
 zune-jpeg = "0.5.15"

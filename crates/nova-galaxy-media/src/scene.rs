@@ -692,6 +692,16 @@ mod tests {
     }
 
     #[test]
+    fn a_model_that_requires_the_texture_transform_extension_reads() {
+        let builder = Builder::new([1.0; 3]).requires("KHR_texture_transform");
+        assert!(read_scene("m.glb", &builder.glb(), no_files).is_ok());
+        // An extension the reader doesn't know is still refused.
+        let unknown = Builder::new([1.0; 3]).requires("KHR_draco_mesh_compression");
+        let err = read_scene("m.glb", &unknown.glb(), no_files).unwrap_err();
+        assert!(err.starts_with("not a readable glTF model"), "{err}");
+    }
+
+    #[test]
     fn non_triangle_primitives_are_skipped() {
         let scene = scene(&Builder::new([1.0; 3]).lines());
         assert_eq!(scene.primitives.len(), 1);
