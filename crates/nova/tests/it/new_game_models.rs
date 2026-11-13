@@ -51,7 +51,7 @@ use crate::common::{draw, fly_new_pilot_modelled};
 use crate::pilots::Harness;
 
 /// The 3D sample, loaded, and its world models.
-fn sample() -> (NewGame, WorldAssets) {
+pub(crate) fn sample() -> (NewGame, WorldAssets) {
     let source = new_game::fixture::modelled_sample_3d();
     let game = new_game::load(&source, Path::new("sample"));
     let assets = world_assets(&game, &source);
@@ -60,7 +60,10 @@ fn sample() -> (NewGame, WorldAssets) {
 }
 
 /// The Nova ID `table` gives the bible id `name`.
-fn nova_id<K: std::fmt::Display>(table: &std::collections::BTreeMap<K, i16>, name: &str) -> i16 {
+pub(crate) fn nova_id<K: std::fmt::Display>(
+    table: &std::collections::BTreeMap<K, i16>,
+    name: &str,
+) -> i16 {
     table
         .iter()
         .find(|(id, _)| id.to_string() == name)
