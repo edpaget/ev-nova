@@ -81,6 +81,7 @@ mod controls;
 mod dialog_map;
 mod display_gain;
 mod drawn_back_by_gain;
+mod edge_reads;
 mod effects_gain;
 mod escorts;
 mod faded_keys;
