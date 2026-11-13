@@ -21,6 +21,8 @@
 //! rush. Only the layered reading draws a sky, so the rush is the new
 //! game's alone; the original's starfield is left as ported.
 
+use std::time::Duration;
+
 use nova_sim::flight_frame::{FlightFrame, ShipPlace};
 use nova_sim::player_wrap::PlayerWrap;
 use nova_sim::{RuleSource, Vec2};
@@ -87,18 +89,21 @@ impl SkyShift {
 
 /// Draws `frame`'s system's sky, seen from over `camera`'s centre with
 /// the wraps taken back by `shift`, drawn at its anchor, rushing by
-/// [`rush`] from `previous`: none in a system of negative murk.
+/// [`rush`] from `previous`, `elapsed` into the flight
+/// ([`SkyPose::time`](crate::sky::SkyPose::time), the clock the planets
+/// turn by): none in a system of negative murk.
 pub(super) fn draw(
     list: &mut DrawList,
     frame: &FlightFrame,
     previous: ShipPlace,
     camera: &Camera,
     shift: SkyShift,
+    elapsed: Duration,
 ) {
     let eye = shift.eye(camera.center());
     let rush = rush(frame, previous);
     if let Some(sky) = sky_pose(frame.system, eye, camera.anchor(), rush, frame.system_murk) {
-        list.sky(sky);
+        list.sky(sky.with_time(elapsed.as_secs_f64()));
     }
 }
 

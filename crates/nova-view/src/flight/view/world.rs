@@ -265,12 +265,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// frame's message rect. Its text is drawn with the floaters
     /// ([`FlightView::draw_floaters`]).
     fn draw_stars_and_message(&self, list: &mut DrawList, camera: &Camera) {
-        match self.presentation.starfield.stars() {
-            Some(source) => {
-                let starfield = (&self.stars, &self.looks);
-                stars::draw(list, starfield, source, camera, self.alpha);
-            }
-            None => sky::draw(list, self.drawn(), self.previous, camera, self.sky_shift),
+        if let Some(source) = self.presentation.starfield.stars() {
+            let starfield = (&self.stars, &self.looks);
+            stars::draw(list, starfield, source, camera, self.alpha);
+        } else {
+            let (frame, shift) = (self.drawn(), self.sky_shift);
+            sky::draw(list, frame, self.previous, camera, shift, self.elapsed);
         }
         if self.message().is_some() {
             let background = message_background(self.drawn().system_background);

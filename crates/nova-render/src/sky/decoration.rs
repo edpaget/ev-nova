@@ -14,7 +14,11 @@
 //! parallax of the eye's move. The longer side of its image is drawn
 //! [`SkyDecoration::size`] logical units long, whatever its parallax,
 //! and the other side follows the image's shape. It is turned
-//! [`SkyDecoration::turn`] degrees clockwise about its centre.
+//! [`SkyDecoration::turn`] degrees clockwise about its centre, and from
+//! there turns [`SkyDecoration::spin`] degrees a second by the pose's
+//! clock ([`SkyPose::time`]), the slow motion a floating hulk wants. It
+//! doesn't drift over time: it already drifts against the stars as the
+//! eye moves, by its parallax.
 //!
 //! # What it adds
 //!
@@ -48,9 +52,9 @@
 //! # Its bounds
 //!
 //! Whatever it is handed, [`placed`] draws at most [`MOST_DECORATIONS`]
-//! of a list (its first), each at a size within [`DECORATION_SIZE`] and
-//! a parallax within [`DECORATION_PARALLAX`]; a value that is not finite
-//! takes its default. So a sky's decorations are at most 6 instances
+//! of a list (its first), each at a size within [`DECORATION_SIZE`], a
+//! parallax within [`DECORATION_PARALLAX`] and a spin within
+//! [`DECORATION_SPIN`]; a value that is not finite takes its default. So a sky's decorations are at most 6 instances
 //! whose quads shade at most 6 · 512² = 1,572,864 square units, 2.0
 //! areas of a 1024×768 view and 0.57 of a 2560×1080 one, and never more
 //! than 6 view areas ([`decoration_area_bound`]). A quad that doesn't
@@ -84,6 +88,9 @@ pub const DECORATION_SIZE: (f32, f32) = (8.0, 512.0);
 /// The size of a decoration that sets none, in logical units.
 pub const DEFAULT_SIZE: f32 = 128.0;
 
+/// The most a decoration spins, in degrees a second, either way.
+pub const DECORATION_SPIN: f32 = 20.0;
+
 /// How far across and down from its layer's centre a seeded place lies
 /// at most ([`seeded_place`]), in logical units: within a 1024×768 view
 /// from the system's centre.
@@ -116,6 +123,10 @@ pub struct SkyDecoration {
     pub size: f32,
     /// Its heading, in degrees clockwise as drawn.
     pub turn: f32,
+    /// How fast it turns about its centre, in degrees a second clockwise
+    /// as drawn, within [`DECORATION_SPIN`] either way: its heading at
+    /// the pose's time is its turn plus this times the seconds.
+    pub spin: f32,
     /// The colour its image is multiplied by, RGB 0 to 1, taken at full
     /// brightness; `None`, or black, for the image's own colours.
     pub tint: Option<[f32; 3]>,
@@ -127,7 +138,8 @@ pub struct SkyDecoration {
 
 impl SkyDecoration {
     /// `image` at `at` with every default: [`DEFAULT_PARALLAX`],
-    /// [`DEFAULT_SIZE`], no turn, no tint, full brightness, painted over.
+    /// [`DEFAULT_SIZE`], no turn, no spin, no tint, full brightness,
+    /// painted over.
     #[must_use]
     pub fn new(image: Arc<SkyImage>, at: Point) -> Self {
         Self {
@@ -136,6 +148,7 @@ impl SkyDecoration {
             parallax: DEFAULT_PARALLAX,
             size: DEFAULT_SIZE,
             turn: 0.0,
+            spin: 0.0,
             tint: None,
             brightness: 1.0,
             blend: SkyBlend::Over,
@@ -190,16 +203,29 @@ fn parallax_of(decoration: &SkyDecoration) -> f32 {
     held(decoration.parallax, DECORATION_PARALLAX, DEFAULT_PARALLAX)
 }
 
+/// `decoration`'s heading `time` seconds in, in degrees clockwise as
+/// drawn, 0 to 360: its turn plus its spin times the seconds, worked in
+/// `f64` and brought within a whole turn, so a flight of any length
+/// still turns it by the right angle. A turn or a time that is not
+/// finite is none, and a spin past [`DECORATION_SPIN`] is that.
+fn heading(decoration: &SkyDecoration, time: f64) -> f64 {
+    let finite = |value: f64| if value.is_finite() { value } else { 0.0 };
+    let spin = held(decoration.spin, (-DECORATION_SPIN, DECORATION_SPIN), 0.0);
+    let turned = f64::from(spin) * finite(time);
+    (finite(f64::from(decoration.turn)) + turned).rem_euclid(360.0)
+}
+
 /// Where `decoration`, the `index`th of sky `pose.seed`'s list, is drawn
 /// as `pose` sees it, into a canvas of `texels_per_unit` texels per
 /// logical unit, whether or not it reaches into a view. `None` at level
 /// 0, or with an eye or anchor that is not finite.
 ///
 /// A size or a parallax outside its range is taken to its nearer end,
-/// and a brightness into 0 to 1; a size, parallax, turn or brightness
-/// that is not finite takes its default, and a place that is not finite
-/// the seed's. A `texels_per_unit` that is not a positive, finite number
-/// samples the whole image (level 0).
+/// a spin to [`DECORATION_SPIN`] either way and a brightness into 0 to
+/// 1; a size, parallax, turn, spin or brightness that is not finite
+/// takes its default, and a place that is not finite the seed's. A
+/// `texels_per_unit` that is not a positive, finite number samples the
+/// whole image (level 0).
 #[must_use]
 pub fn placement(
     pose: &SkyPose,
@@ -234,12 +260,7 @@ pub fn placement(
     let longer = width.max(height);
     // Half its drawn width and height.
     let (across, down) = (size * width / longer / 2.0, size * height / longer / 2.0);
-    let turn = if decoration.turn.is_finite() {
-        f64::from(decoration.turn)
-    } else {
-        0.0
-    };
-    let (sin, cos) = turn.to_radians().sin_cos();
+    let (sin, cos) = heading(decoration, pose.time).to_radians().sin_cos();
     let (sin, cos) = (sin as f32, cos as f32);
     let brightness = held(decoration.brightness, (0.0, 1.0), 1.0);
     let level = f32::from(pose.level.min(32)) / 32.0;
@@ -406,10 +427,12 @@ mod tests {
         assert_eq!(decoration.parallax, 0.05);
         assert_eq!(decoration.size, 128.0);
         assert_eq!(decoration.turn, 0.0);
+        assert_eq!(decoration.spin, 0.0);
         assert_eq!(decoration.tint, None);
         assert_eq!(decoration.brightness, 1.0);
         assert_eq!(decoration.blend, SkyBlend::Over);
         assert_eq!(SkyBlend::default(), SkyBlend::Over);
+        assert_eq!(DECORATION_SPIN, 20.0);
         assert_eq!((DEFAULT_PARALLAX, DEFAULT_SIZE), (0.05, 128.0));
         assert_eq!(DECORATION_PARALLAX, (0.0125, 0.5));
         assert_eq!(DECORATION_SIZE, (8.0, 512.0));
@@ -659,6 +682,88 @@ mod tests {
         // A dropped decoration leaves the others their indexes.
         let list = [square(5000.0, 0.0, 0.0), square(500.0, 300.0, 0.0)];
         assert_eq!(order(&seen, &list, LOGICAL), [1]);
+    }
+
+    /// A 4 by 2 image 100 units long at the view's middle, turned `turn`
+    /// and spinning `spin` degrees a second, as seen `time` seconds in.
+    fn spun(turn: f32, spin: f32, time: f64) -> Placement {
+        let decoration = SkyDecoration {
+            size: 100.0,
+            turn,
+            spin,
+            ..SkyDecoration::new(image(4, 2), Point::new(0.0, 0.0))
+        };
+        one(&pose(1, (0.0, 0.0)).with_time(time), &decoration)
+    }
+
+    #[test]
+    fn a_spin_turns_it_by_its_degrees_a_second_over_the_poses_time() {
+        // At time zero it is at its turn.
+        assert_eq!(spun(0.0, 9.0, 0.0).right, Point::new(50.0, 0.0));
+        assert_eq!(spun(30.0, 9.0, 0.0), spun(30.0, 0.0, 0.0));
+        // Nine degrees a second is a quarter turn clockwise at ten
+        // seconds, and back the other way for a spin the other way.
+        let quarter = spun(0.0, 9.0, 10.0);
+        assert_near(quarter.right, (0.0, 50.0));
+        assert_near(quarter.down, (-25.0, 0.0));
+        assert_near(spun(0.0, -9.0, 10.0).right, (0.0, -50.0));
+        // It is added to its turn.
+        assert_near(spun(90.0, 9.0, 10.0).right, (-50.0, 0.0));
+        assert_near(spun(-90.0, 9.0, 10.0).right, (50.0, 0.0));
+        // Half way there it is an eighth round.
+        assert_near(spun(0.0, 9.0, 5.0).right, (35.355_34, 35.355_34));
+        // The rest of it is as it was: it turns about its centre.
+        let still = spun(0.0, 0.0, 0.0);
+        assert_eq!(
+            (quarter.centre, quarter.color, quarter.cover, quarter.lod),
+            (still.centre, still.color, still.cover, still.lod)
+        );
+    }
+
+    #[test]
+    fn a_spin_still_turns_by_the_right_angle_after_a_week() {
+        // A week and ten seconds at nine degrees a second is 15,120 whole
+        // turns and a quarter: the turns are taken off before the sine.
+        let week = 604_810.0;
+        let after = spun(0.0, 9.0, week);
+        assert_near(after.right, (0.0, 50.0));
+        assert_near(after.down, (-25.0, 0.0));
+        // A quarter of a degree a second, a second past the week.
+        let slow = spun(0.0, 0.25, 604_801.0);
+        let expected = spun(0.25, 0.0, 0.0);
+        assert_near(slow.right, (expected.right.x, expected.right.y));
+        assert!(slow.right.y > 0.2, "{slow:?}");
+    }
+
+    #[test]
+    fn no_spin_ignores_the_time_and_one_out_of_range_or_not_finite_is_held() {
+        let still = spun(30.0, 0.0, 0.0);
+        for time in [1.0, 37.5, 604_800.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(spun(30.0, 0.0, time), still, "{time}");
+        }
+        // A spin past 20 degrees a second is 20, either way.
+        assert_eq!(spun(0.0, 90.0, 1.0), spun(0.0, 20.0, 1.0));
+        assert_eq!(spun(0.0, -90.0, 1.0), spun(0.0, -20.0, 1.0));
+        assert_ne!(spun(0.0, 20.0, 1.0), spun(0.0, 19.0, 1.0));
+        // One that is not finite is none, and so is a time that is not.
+        for odd in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(spun(30.0, odd, 5.0), still, "{odd}");
+        }
+        for odd in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(spun(30.0, 9.0, odd), still, "{odd}");
+        }
+        // A spinning decoration is kept or dropped by where it is now.
+        let seen = pose(1, (0.0, 0.0));
+        let edge = SkyDecoration {
+            size: 100.0,
+            spin: 9.0,
+            ..at(1084.0 - 512.0, 300.0 - 384.0)
+        };
+        assert_eq!(order(&seen, std::slice::from_ref(&edge), LOGICAL).len(), 0);
+        assert_eq!(
+            order(&seen.with_time(5.0), std::slice::from_ref(&edge), LOGICAL).len(),
+            1
+        );
     }
 
     #[test]

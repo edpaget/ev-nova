@@ -532,7 +532,7 @@ pub const SKY_GALAXY_SIZE: (u32, u32) = (8, 8);
 /// its place comes from the system's seed.
 pub const DECORATED_SAMPLE_BLOCK: &str = "sky:\n  decorations:\n    - image: far-hulk\n      \
                                           at: [140, -90]\n      parallax: 0.2\n      size: 96\n      \
-                                          turn: 30\n      tint: \"#ffb070\"\n      \
+                                          turn: 30\n      spin: 4\n      tint: \"#ffb070\"\n      \
                                           brightness: 0.75\n      blend: over\n    \
                                           - image: far-galaxy\n      blend: glow\n";
 
@@ -680,7 +680,7 @@ mod tests {
         use nova_galaxy_format::asset::AssetKind;
         use nova_galaxy_format::id::{Color, Fraction, MediaPath};
         use nova_galaxy_format::sky::decoration::{
-            Blend, DecorationParallax, DecorationSize, DecorationTurn,
+            Blend, DecorationParallax, DecorationSize, DecorationSpin, DecorationTurn,
         };
         let game = super::super::load(&decorated_sample(), Path::new("sample"));
         assert_eq!(game.problems, Vec::new());
@@ -698,6 +698,7 @@ mod tests {
         assert_eq!(hulk.parallax.map(DecorationParallax::get), Some(0.2));
         assert_eq!(hulk.size.map(DecorationSize::get), Some(96.0));
         assert_eq!(hulk.turn.map(DecorationTurn::get), Some(30.0));
+        assert_eq!(hulk.spin.map(DecorationSpin::get), Some(4.0));
         assert_eq!(hulk.tint.as_ref().map(Color::rgb), Some([0xff, 0xb0, 0x70]));
         assert_eq!(hulk.brightness.map(Fraction::get), Some(0.75));
         assert_eq!(hulk.blend, Blend::Over);
@@ -706,6 +707,7 @@ mod tests {
         assert_eq!(galaxy.blend, Blend::Glow);
         assert!(galaxy.at.is_none() && galaxy.parallax.is_none() && galaxy.size.is_none());
         assert!(galaxy.turn.is_none() && galaxy.tint.is_none() && galaxy.brightness.is_none());
+        assert!(galaxy.spin.is_none());
         // The other two systems list none.
         assert!(sky("brightwater").is_none() && sky("marrow").is_none());
         // Each image is a texture asset naming its one file, a PNG of its

@@ -273,6 +273,7 @@ mod tests {
             "parallax",
             "size",
             "turn",
+            "spin",
             "tint",
             "brightness",
             "blend",
@@ -283,6 +284,7 @@ mod tests {
             ("parallax", 0.0125, 0.5),
             ("size", 8.0, 512.0),
             ("turn", -360.0, 360.0),
+            ("spin", -20.0, 20.0),
             ("brightness", 0.0, 1.0),
         ] {
             let number = definition(&decoration["properties"][field]);

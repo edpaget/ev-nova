@@ -178,6 +178,24 @@ fn a_murky_systems_sky_is_dimmed_and_a_negative_murks_is_not_drawn() {
     assert_eq!(skies(&view), []);
 }
 
+#[test]
+#[allow(clippy::float_cmp, reason = "the seconds are exact in binary")]
+fn the_skys_time_is_the_flights_elapsed_seconds() {
+    let draws = Rc::new(Cell::new(0));
+    let mut view = faked(&layered(), Vec2::ZERO, 0, &draws);
+    caught_up(&mut view);
+    view.elapsed = Duration::from_millis(2500);
+    let before = the_sky(&view);
+    assert_eq!(before.time, 2.5);
+    // A later frame's sky is as much later, and otherwise the same.
+    view.elapsed += Duration::from_millis(250);
+    let after = the_sky(&view);
+    assert_eq!(after.time - before.time, 0.25);
+    assert_eq!(after.with_time(before.time), before);
+    // It is the clock the planets turn by.
+    assert_eq!(after.time, view.elapsed.as_secs_f64());
+}
+
 /// Runs a step of `view` from the ship at `from` to `to`, `wrap` run at
 /// its head, and shows its end.
 fn flown(view: &mut Faked, from: Vec2, to: Vec2, wrap: Option<PlayerWrap>) {

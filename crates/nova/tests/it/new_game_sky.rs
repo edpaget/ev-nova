@@ -349,6 +349,37 @@ fn a_system_that_lists_decorations_draws_them_after_its_stars() {
         .map(|(index, _)| (*list[*index].image).clone())
         .collect();
     assert_eq!(sky_image_uploads(&game), images);
+    // The sky's clock is the flight's: once the flight's clock runs (it
+    // holds while the screen enters), the pose is later, and the frame
+    // draws what the core places then, the spinning hulk turned.
+    for _ in 0..2000 {
+        if skies(&game)[0].time > pose.time + 0.5 {
+            break;
+        }
+        draw(&mut game);
+    }
+    let frame = frame_drawn(&mut game);
+    let later = skies(&game)[0];
+    assert!(
+        later.time > pose.time + 0.5,
+        "{} then {}",
+        pose.time,
+        later.time
+    );
+    let turned = placed(&later, list, frame.logical, world_texels(&frame));
+    let [(_, images)] = &sky_image_batches(&frame)[..] else {
+        panic!("one sky-images batch");
+    };
+    let drawn: Vec<Placement> = images.iter().map(|image| image.placement).collect();
+    let placements: Vec<Placement> = turned.iter().map(|(_, placement)| *placement).collect();
+    assert_eq!(drawn, placements);
+    let then = placed(
+        &later.with_time(pose.time),
+        list,
+        frame.logical,
+        world_texels(&frame),
+    );
+    assert_ne!(turned, then, "the hulk turned with the clock");
 }
 
 #[test]

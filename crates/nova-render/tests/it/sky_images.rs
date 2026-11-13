@@ -277,6 +277,38 @@ fn a_turned_tinted_half_bright_image_shows_the_references_pixels() {
 }
 
 #[test]
+fn a_spinning_image_is_drawn_turned_by_the_poses_time() {
+    let image = picture(16, 255, true);
+    let spinning = [SkyDecoration {
+        size: 96.0,
+        spin: 6.0,
+        ..SkyDecoration::new(image, Point::new(10.0, -6.0))
+    }];
+    // Five seconds in it has turned 30 degrees: the reference's pixels
+    // then, which are those of the same image set at that turn.
+    let later = pose(32).with_time(5.0);
+    let Some(pixels) = drawn(later, dark(), &spinning, RenderScale::Auto) else {
+        return;
+    };
+    let touched = assert_as_predicted(&pixels, &later, &dark(), &spinning, "spun");
+    assert!(touched > 6000, "{touched}");
+    let turned = [SkyDecoration {
+        turn: 30.0,
+        spin: 0.0,
+        ..spinning[0].clone()
+    }];
+    let Some(set) = drawn(pose(32), dark(), &turned, RenderScale::Auto) else {
+        return;
+    };
+    assert_eq!(pixels, set);
+    // At time zero it has not turned.
+    let Some(start) = drawn(pose(32), dark(), &spinning, RenderScale::Auto) else {
+        return;
+    };
+    assert_ne!(pixels, start);
+}
+
+#[test]
 fn drawn_larger_it_blends_its_texels_and_smaller_it_reads_its_mips() {
     let image = picture(32, 255, false);
     for (size, what) in [

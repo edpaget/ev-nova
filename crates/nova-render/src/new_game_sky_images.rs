@@ -133,6 +133,7 @@ fn decorated(
         parallax: (decoration.parallax).map_or(plain.parallax, |p| p.get() as f32),
         size: decoration.size.map_or(plain.size, |s| s.get() as f32),
         turn: decoration.turn.map_or(plain.turn, |t| t.get() as f32),
+        spin: decoration.spin.map_or(plain.spin, |s| s.get() as f32),
         tint: (decoration.tint.as_ref()).map(|c| c.rgb().map(|c| f32::from(c) / 255.0)),
         brightness: (decoration.brightness).map_or(plain.brightness, |b| b.get() as f32),
         // Each of the format's blends is one of the renderer's, so this
@@ -260,6 +261,7 @@ mod tests {
         assert_eq!(hulk.parallax, 0.2);
         assert_eq!(hulk.size, 96.0);
         assert_eq!(hulk.turn, 30.0);
+        assert_eq!(hulk.spin, 4.0);
         assert_eq!(hulk.tint, Some([1.0, 176.0 / 255.0, 112.0 / 255.0]));
         assert_eq!(hulk.brightness, 0.75);
         assert_eq!(hulk.blend, SkyBlend::Over);

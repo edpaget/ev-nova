@@ -48,6 +48,10 @@ pub struct Decoration {
     /// Its heading, -360 to 360 degrees clockwise as drawn. Omit for 0.
     #[serde(default)]
     pub turn: Option<DecorationTurn>,
+    /// A slow turn about its centre, -20 to 20 degrees a second,
+    /// clockwise as drawn. Omit for 0: it holds its heading.
+    #[serde(default)]
+    pub spin: Option<DecorationSpin>,
     /// A colour the image is multiplied by, taken at full brightness, so
     /// it never dims; black is no tint. Omit for the image's own colours.
     #[serde(default)]
@@ -186,6 +190,15 @@ ranged!(
     "A decoration's heading in degrees clockwise, from -360 to 360"
 );
 
+ranged!(
+    /// A decoration's spin: degrees a second clockwise as drawn, from -20
+    /// to 20.
+    DecorationSpin,
+    -20.0,
+    20.0,
+    "A decoration's spin in degrees a second clockwise, from -20 to 20"
+);
+
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
@@ -216,8 +229,8 @@ mod tests {
     fn a_full_decoration_reads_each_field() {
         let sky = sky(
             "sky:\n  decorations:\n    - image: far-hulk\n      at: [120, -80]\n      \
-             parallax: 0.2\n      size: 96\n      turn: -45\n      tint: \"#ffd9b0\"\n      \
-             brightness: 0.75\n      blend: glow\n",
+             parallax: 0.2\n      size: 96\n      turn: -45\n      spin: 2.5\n      \
+             tint: \"#ffd9b0\"\n      brightness: 0.75\n      blend: glow\n",
         );
         let list = sky.decorations.expect("a list");
         let [decoration] = list.as_slice() else {
@@ -228,6 +241,7 @@ mod tests {
         assert_eq!(decoration.parallax.map(DecorationParallax::get), Some(0.2));
         assert_eq!(decoration.size.map(DecorationSize::get), Some(96.0));
         assert_eq!(decoration.turn.map(DecorationTurn::get), Some(-45.0));
+        assert_eq!(decoration.spin.map(DecorationSpin::get), Some(2.5));
         assert_eq!(
             decoration.tint.as_ref().map(Color::rgb),
             Some([0xff, 0xd9, 0xb0])
@@ -247,6 +261,7 @@ mod tests {
         assert!(decoration.at.is_none() && decoration.parallax.is_none());
         assert!(decoration.size.is_none() && decoration.turn.is_none());
         assert!(decoration.tint.is_none() && decoration.brightness.is_none());
+        assert!(decoration.spin.is_none());
         assert_eq!(decoration.blend, Blend::Over);
         let none = read("sky:\n  decorations:\n    - size: 64\n").unwrap_err();
         assert!(none.contains("image"), "{none}");
@@ -265,6 +280,7 @@ mod tests {
             ("parallax", "0.0125", "0.5"),
             ("size", "8", "512"),
             ("turn", "-360", "360"),
+            ("spin", "-20", "20"),
             ("brightness", "0", "1"),
         ] {
             for good in [low, high] {
@@ -281,6 +297,9 @@ mod tests {
             ("turn", "-360.5"),
             ("turn", "361"),
             ("turn", ".inf"),
+            ("spin", "-20.5"),
+            ("spin", "21"),
+            ("spin", ".nan"),
             ("brightness", "-0.1"),
             ("brightness", "1.1"),
             ("size", "big"),
@@ -294,6 +313,9 @@ mod tests {
         assert!(DecorationSize::try_from(512.0 + 1e-9).is_err());
         assert!(DecorationTurn::try_from(-360.0 - 1e-9).is_err());
         assert!(DecorationTurn::try_from(360.0 + 1e-9).is_err());
+        assert!(DecorationSpin::try_from(-20.0 - 1e-9).is_err());
+        assert!(DecorationSpin::try_from(20.0 + 1e-9).is_err());
+        assert_eq!((DecorationSpin::LEAST, DecorationSpin::MOST), (-20.0, 20.0));
         assert_eq!(
             DecorationParallax::try_from(0.0125).map(DecorationParallax::get),
             Ok(0.0125)
@@ -371,6 +393,12 @@ mod tests {
         assert_eq!(
             (turn["minimum"].as_f64(), turn["maximum"].as_f64()),
             (Some(-360.0), Some(360.0))
+        );
+        let spin = DecorationSpin::json_schema(&mut generator).to_value();
+        assert_eq!(DecorationSpin::schema_name(), "DecorationSpin");
+        assert_eq!(
+            (spin["minimum"].as_f64(), spin["maximum"].as_f64()),
+            (Some(-20.0), Some(20.0))
         );
     }
 

@@ -14,7 +14,9 @@
 //!
 //! Through a jump's warp the pose carries the rush the view gives it
 //! ([`SkyPose::rush`]), the eye's move over the step, so the renderer
-//! streaks the stars by depth; out of the warp it is zero.
+//! streaks the stars by depth; out of the warp it is zero. The view also
+//! sets the pose's clock ([`SkyPose::time`]) to the flight's elapsed
+//! time, the one its planets turn by.
 //!
 //! What the sky looks like (its layers, depths, density and tints) is the
 //! renderer's (`nova_render::sky`). A system's own look, set by its data
@@ -33,7 +35,8 @@ use crate::sky::SkyPose;
 /// The sky the flight shows in `system` of `Murk` `murk` as loaded, the
 /// eye over world point `eye`, drawn at `anchor`, rushing by `rush` (the
 /// eye's move over the last step through a jump's warp, zero otherwise);
-/// `None` in a system of negative murk.
+/// `None` in a system of negative murk. It is at time zero: the view
+/// that draws it sets its clock ([`SkyPose::with_time`]).
 #[must_use]
 pub fn sky_pose(
     system: SystemId,

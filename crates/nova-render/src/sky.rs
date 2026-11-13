@@ -113,6 +113,9 @@
 //! - **Blends.** [`SkyBlend::Over`] hides the sky behind it by its
 //!   image's alpha; [`SkyBlend::Glow`] adds its light ([`lit`],
 //!   [`over`]).
+//! - **Motion.** One moves with the eye by its parallax, and may spin
+//!   slowly about its centre by the pose's clock ([`SkyPose::time`]). It
+//!   doesn't drift over time.
 //! - **The warp and murk.** They don't streak, as the backdrop doesn't.
 //!   Murk dims their light with the stars' and leaves their cover.
 //! - **The bound.** At most [`MOST_DECORATIONS`] a sky, each at most 512
@@ -140,9 +143,9 @@ pub use backdrop::{
     backdrop_area_bound, backdrop_instance_bound, cloud, instances, resolved, seeded,
 };
 pub use decoration::{
-    DECORATION_PARALLAX, DECORATION_SIZE, DEFAULT_PARALLAX, DEFAULT_SIZE, MOST_DECORATIONS,
-    Placement, SEEDED_REACH, SkyBlend, SkyDecoration, decoration_area_bound, lit, over, placed,
-    placement, seeded_place,
+    DECORATION_PARALLAX, DECORATION_SIZE, DECORATION_SPIN, DEFAULT_PARALLAX, DEFAULT_SIZE,
+    MOST_DECORATIONS, Placement, SEEDED_REACH, SkyBlend, SkyDecoration, decoration_area_bound, lit,
+    over, placed, placement, seeded_place,
 };
 pub use image::{SKY_IMAGE_SIDE, SKY_SAMPLER, SkyImage, SkyImageId};
 pub use look::{BackdropLook, SkyLook, SkyLooks, TINT_SHARE, normalised};
