@@ -19,7 +19,7 @@ use nova_sim::{MissionTextKind, PlayerFate, SessionEvent, TextBar};
 const POD_BACKGROUND: u32 = 0x0000_0010;
 
 /// The `BkgndColor` of the system the rescue takes the pod to.
-const NEW_BACKGROUND: u32 = 0x0010_0000;
+pub(super) const NEW_BACKGROUND: u32 = 0x0010_0000;
 
 /// A view over Sol with the player in the escape pod, its looks read and
 /// its status bar chosen.
@@ -28,7 +28,7 @@ fn in_the_pod() -> Faked {
 }
 
 /// [`in_the_pod`] over `catalog`.
-fn pod_over(catalog: FakeCatalog) -> Faked {
+pub(super) fn pod_over(catalog: FakeCatalog) -> Faked {
     barred(
         catalog,
         FlightFrame {
@@ -41,7 +41,7 @@ fn pod_over(catalog: FakeCatalog) -> Faked {
 
 /// The frame the rescue leaves: the player flying again in system 131,
 /// by its stellar Proxima (140), none on the radar.
-fn rescued_frame() -> FlightFrame {
+pub(super) fn rescued_frame() -> FlightFrame {
     FlightFrame {
         system: SystemId(131),
         ships: vec![the_player_at(Vec2::new(50.0, 50.0), 90.0)],
@@ -53,7 +53,7 @@ fn rescued_frame() -> FlightFrame {
 }
 
 /// A mission text the rescue queued.
-fn briefed() -> MissionShown {
+pub(super) fn briefed() -> MissionShown {
     MissionShown::Text(nova_sim::MissionText {
         kind: MissionTextKind::Brief,
         mission: MissionId(131),
@@ -83,7 +83,7 @@ fn rescue_noting(
 
 /// [`rescue_noting`] the texts and marks of `noted`, the rescue leaving
 /// `frame`.
-fn rescue_into(
+pub(super) fn rescue_into(
     view: &mut Faked,
     (texts, marks): (Vec<(MissionShown, Option<TextBar>)>, Option<RescueTexts>),
     frame: FlightFrame,
@@ -163,7 +163,7 @@ fn bar_noted_over(frame: FlightFrame, like: &Faked) -> DrawList {
 }
 
 /// What `view` draws under its first text once it has faded in.
-fn under_the_first_text(view: &mut Faked) -> DrawList {
+pub(super) fn under_the_first_text(view: &mut Faked) -> DrawList {
     ticks(view, 2 * RESCUE_FADE_FOR);
     ticks(view, RESCUE_FADE_FOR);
     assert_eq!(view.take_mission_texts().len(), 1, "the texts are due");
@@ -197,9 +197,27 @@ fn at_the_desc(texts: Vec<MissionShown>) -> Faked {
 /// A view rescued with `texts`, its `dësc` shown and closed, ticked until
 /// the texts are due: the tick after the `dësc`'s, then the second fade.
 fn under_the_texts(texts: Vec<MissionShown>) -> Faked {
-    let mut view = at_the_desc(texts);
+    desc_closed_over(in_the_pod(), texts, rescued_frame())
+}
+
+/// `view`, in the pod, rescued into `frame` with `texts`, ticked until
+/// its `dësc` is due, the `dësc` shown and closed, then ticked through
+/// the second fade, until the texts are due.
+fn desc_closed_over(mut view: Faked, texts: Vec<MissionShown>, frame: FlightFrame) -> Faked {
+    let texts = texts.into_iter().map(|shown| (shown, None)).collect();
+    rescue_into(&mut view, (texts, None), frame);
+    ticks(&mut view, 2 * RESCUE_FADE_FOR);
     assert!(view.take_rescue_desc().is_some());
     ticks(&mut view, RESCUE_FADE_FOR);
+    view
+}
+
+/// `view`, in the pod, rescued into `frame` with no texts, at its
+/// closing: [`desc_closed_over`], then a tick, which begins the closing
+/// repaint.
+pub(super) fn closing_over(view: Faked, frame: FlightFrame) -> Faked {
+    let mut view = desc_closed_over(view, Vec::new(), frame);
+    view.tick(TICK);
     view
 }
 
@@ -213,7 +231,7 @@ fn black_over(list: &DrawList) -> Option<u8> {
 
 /// The space area painted `background`, as the rescue's repaints paint
 /// it.
-fn space_painted(view: &Faked, background: u32) -> DrawCommand {
+pub(super) fn space_painted(view: &Faked, background: u32) -> DrawCommand {
     crate::draw::fill_command(view.play_rect(), Color::from_rgb24_as_rgb555(background))
 }
 
@@ -507,7 +525,7 @@ fn a_first_text_the_days_queued_shows_over_the_new_system_and_its_bar() {
 
 /// The stellars `view`'s scene shows, as flight draws them, each clipped
 /// to the play area: what a repaint draws of them.
-fn stellars_drawn(view: &Faked) -> Vec<DrawCommand> {
+pub(super) fn stellars_drawn(view: &Faked) -> Vec<DrawCommand> {
     let scene = view.scene().expect("laid out");
     let mut stellars = DrawList::new();
     crate::system::scene::draw_stellars(

@@ -138,6 +138,7 @@ mod pict_pair_ships;
 mod port_screen_map;
 mod rebinding;
 mod rescue;
+mod rescue_models;
 mod ship_drawing;
 mod ship_looks;
 mod ship_models;

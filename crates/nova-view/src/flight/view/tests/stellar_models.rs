@@ -21,17 +21,22 @@ use crate::outline::{Outline, OutlineTriangle, StellarStandIn};
 use crate::planet::{PlanetKey, PlanetPose};
 use crate::system::catalog::StellarContents;
 
-const HUB: ModelKey = ModelKey(7);
-const GIANT: PlanetKey = PlanetKey(3);
+pub(super) const HUB: ModelKey = ModelKey(7);
+pub(super) const GIANT: PlanetKey = PlanetKey(3);
 /// The hub's footprint's reach, in its own units.
-const REACH: f32 = 4.0;
+pub(super) const REACH: f32 = 4.0;
 /// The station, the gas giant and a moon, none with a sheet.
 const STATION: i16 = 140;
 const PLANET: i16 = 141;
 const MOON: i16 = 142;
 
 /// `id`, at `at`, with no sheet, standing in as `stand_in`.
-fn sheetless(id: i16, name: &str, at: (i16, i16), stand_in: StellarStandIn) -> StellarContents {
+pub(super) fn sheetless(
+    id: i16,
+    name: &str,
+    at: (i16, i16),
+    stand_in: StellarStandIn,
+) -> StellarContents {
     StellarContents {
         sprite: Err(format!("no spïn for {id}")),
         stand_in: Some(stand_in),
@@ -39,7 +44,7 @@ fn sheetless(id: i16, name: &str, at: (i16, i16), stand_in: StellarStandIn) -> S
     }
 }
 
-fn hub_from_above() -> Outline {
+pub(super) fn hub_from_above() -> Outline {
     Outline {
         triangles: vec![OutlineTriangle {
             corners: [at(0.0, -4.0), at(3.0, 2.0), at(-3.0, 2.0)],
@@ -110,7 +115,7 @@ fn view_of(models: WorldModels) -> Faked {
 
 /// Where `view` centres stellar `id`'s stand-in: as a sprite as wide as
 /// the landing reach.
-fn stand_in_centre(view: &Faked, id: i16) -> Point {
+pub(super) fn stand_in_centre(view: &Faked, id: i16) -> Point {
     let stellar = view
         .scene()
         .expect("laid out")
@@ -124,7 +129,7 @@ fn stand_in_centre(view: &Faked, id: i16) -> Point {
 }
 
 /// `stand_in` drawn round `centre` as the scene draws it.
-fn stand_in_at(stand_in: &StellarStandIn, centre: Point) -> Vec<DrawCommand> {
+pub(super) fn stand_in_at(stand_in: &StellarStandIn, centre: Point) -> Vec<DrawCommand> {
     let mut list = DrawList::new();
     crate::outline::draw_stellar(&mut list, stand_in, centre, UNKNOWN_STELLAR_RADIUS);
     list.iter().cloned().collect()

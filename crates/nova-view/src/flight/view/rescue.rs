@@ -42,8 +42,9 @@
 //!   sprite hidden since the black (`_SWHideAllSprites` @0x68e04); the
 //!   closing draws the new system's stellars, which
 //!   `_HandleStellarSystemVisibility` set up and showed after the days
-//!   (@0x69135, @0x32e54-0x3306b). No ship's sprite is shown before the
-//!   next frame's `_HandleShipDisplay`.
+//!   (@0x69135, @0x32e54-0x3306b), a new-game stellar's model or planet
+//!   among them as flight draws it, cut to the play area. No ship's sprite
+//!   is shown before the next frame's `_HandleShipDisplay`.
 //! - **The floaters.** Each repaint draws the escort menu while it
 //!   shows, at the level it stood at, as `_FloaterDrawCallback` blits it
 //!   (@0x38c0f-0x38c5b): its fade counts flight steps, and none runs.
@@ -238,17 +239,26 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// The stellars of the scene laid out, as flight draws them, each
     /// clipped to the play area as the sprite world is, a sheet that draws
     /// past its box cut to the box at the play area's edge as the world's
-    /// draw proc cuts it ([`scene::draw_stellars_clipped_to`]): what the
-    /// closing's `_SWUpdateSpriteWorld` (@0x6c0d) draws of the sprites
-    /// `_HandleStellarSystemVisibility` showed (@0x32e54-0x3306b). Not
-    /// world, as the repaint's space area is overlay.
+    /// draw proc cuts it ([`scene::draw_stellars_clipped_instead`]): what
+    /// the closing's `_SWUpdateSpriteWorld` (@0x6c0d) draws of the sprites
+    /// `_HandleStellarSystemVisibility` showed (@0x32e54-0x3306b). A
+    /// stellar with a model or planet in the table draws it, as flight
+    /// does ([`FlightView::stellar_model_drawn`]), cut to the play area.
+    /// Not world, as the repaint's space area is overlay.
     fn repaint_stellars(&self) -> DrawList {
         let mut list = DrawList::new();
         let Some(scene) = &self.scene else {
             return list;
         };
         let (camera, murk) = (self.camera(), Some(self.seen_murk()));
-        scene::draw_stellars_clipped_to(&mut list, scene, &camera, murk, self.play_rect());
+        scene::draw_stellars_clipped_instead(
+            &mut list,
+            scene,
+            &camera,
+            murk,
+            self.play_rect(),
+            |list, stellar, centre| self.stellar_model_drawn(list, stellar, centre),
+        );
         list
     }
 

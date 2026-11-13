@@ -14,8 +14,11 @@
 //! - **A planet**: a [`DrawCommand::Planet`] at the stand-in's centre, its
 //!   globe the stand-in disc's radius, turned by the view's flight clock.
 //!
-//! Both are drawn by [`draw_stellar_model`], which the other screens that
-//! show a stellar share.
+//! Both are drawn by [`draw_stellar_model`] ([`FlightView::stellar_model_drawn`]),
+//! which the other screens that show a stellar share. The escape pod
+//! rescue's closing repaint draws them the same way, each cut to the play
+//! area ([`scene::draw_stellars_clipped_instead`]), so it too commands every
+//! stellar it shows (below).
 //!
 //! # Every shown stellar is commanded, on screen or off
 //!
@@ -55,11 +58,11 @@
 
 use nova_sim::landing::UNKNOWN_STELLAR_RADIUS;
 
-use crate::DrawList;
 use crate::flight::sim_port::FlightSim;
 use crate::model_picture::draw_stellar_model;
 use crate::system::camera::Camera;
-use crate::system::scene::{self, SystemScene};
+use crate::system::scene::{self, SceneStellar, SystemScene};
+use crate::{DrawList, Point};
 
 use super::FlightView;
 
@@ -74,17 +77,28 @@ impl<C, S: FlightSim> FlightView<C, S> {
         scene: &SystemScene,
         camera: &Camera,
     ) {
-        let time = self.elapsed.as_secs_f64();
         scene::draw_stellars_instead(
             list,
             scene,
             camera,
             Some(self.seen_murk()),
-            |list, stellar, centre| {
-                self.world_models.stellar(stellar.id).is_some_and(|model| {
-                    draw_stellar_model(list, model, centre, UNKNOWN_STELLAR_RADIUS, time)
-                })
-            },
+            |list, stellar, centre| self.stellar_model_drawn(list, stellar, centre),
         );
+    }
+
+    /// Draws `stellar`'s model or planet round `centre`, its stand-in's
+    /// centre, if the table has one it can draw: at
+    /// [`UNKNOWN_STELLAR_RADIUS`], a planet by the flight clock. Whether it
+    /// drew, so its stand-in is left out (see the module docs).
+    pub(super) fn stellar_model_drawn(
+        &self,
+        list: &mut DrawList,
+        stellar: &SceneStellar,
+        centre: Point,
+    ) -> bool {
+        let time = self.elapsed.as_secs_f64();
+        self.world_models.stellar(stellar.id).is_some_and(|model| {
+            draw_stellar_model(list, model, centre, UNKNOWN_STELLAR_RADIUS, time)
+        })
     }
 }

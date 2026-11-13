@@ -603,9 +603,26 @@ pub fn draw_stellars_clipped_to(
     seen: Option<SeenMurk>,
     clip: Bounds,
 ) {
+    draw_stellars_clipped_instead(list, scene, camera, seen, clip, |_, _, _| false);
+}
+
+/// Draws `scene`'s stellars as [`draw_stellars_clipped_to`] does, but as
+/// [`draw_stellars_instead`] does: `instead` is asked first of each
+/// stellar that would draw its stand-in, and what it draws in its place
+/// is cut to `clip` with the rest. The flight's rescue repaints its
+/// stellar models so (a model or a planet is cut by a clip as a sprite
+/// is, [`DrawCommand::Clipped`]).
+pub fn draw_stellars_clipped_instead(
+    list: &mut DrawList,
+    scene: &SystemScene,
+    camera: &Camera,
+    seen: Option<SeenMurk>,
+    clip: Bounds,
+    instead: impl FnMut(&mut DrawList, &SceneStellar, Point) -> bool,
+) {
     let mut stellars = DrawList::new();
     stellars.world_in(clip, |stellars| {
-        draw_stellars(stellars, scene, camera, seen);
+        draw_stellars_instead(stellars, scene, camera, seen, instead);
     });
     for command in &stellars {
         list.clipped(clip, command.clone());

@@ -22,7 +22,9 @@ use super::catalog::{
     StellarAnimation, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemContents,
     SystemId,
 };
-use super::scene::{SystemScene, draw_stellars, draw_stellars_clipped_to};
+use super::scene::{
+    SystemScene, draw_stellars, draw_stellars_clipped_instead, draw_stellars_clipped_to,
+};
 use crate::flight::murk::SeenMurk;
 use crate::geometry::Bounds;
 use crate::{Blend, Color, Colorize, DrawCommand, DrawList, ImageKey, Point, SheetImage};
@@ -267,6 +269,117 @@ fn the_rescue_repaint_draws_a_quirky_sheet_clipped_by_its_cut() {
             .any(|command| *command == cut_to(play, cut_to(frame_box, clipped.clone()))),
         "{:?}",
         list.iter().collect::<Vec<_>>()
+    );
+}
+
+/// Sol (131) holding stellar 140 at (0, 0) with a plain sheet, and 141 at
+/// (30, 10) with none, standing in as a disc.
+fn sheeted_and_sheetless() -> SystemScene {
+    let catalog = OneSystem(SystemContents {
+        id: SystemId(131),
+        name: "Sol".to_owned(),
+        stellars: vec![
+            StellarContents {
+                id: StellarId(140),
+                name: "Stellar 140".to_owned(),
+                x: 0,
+                y: 0,
+                sprite: Ok(sheet(false, BOXED)),
+                dead_sprite: None,
+                animation: StellarAnimation::default(),
+                stand_in: None,
+            },
+            StellarContents {
+                id: StellarId(141),
+                name: "Stellar 141".to_owned(),
+                x: 30,
+                y: 10,
+                sprite: Err("no spïn".to_owned()),
+                dead_sprite: None,
+                animation: StellarAnimation::default(),
+                stand_in: Some(crate::outline::StellarStandIn::Disc(Color::WHITE)),
+            },
+        ],
+        type_zero_sprite: Err("none".to_owned()),
+        problems: Vec::new(),
+    });
+    SystemScene::load(&catalog, SystemId(131))
+}
+
+/// A model of key 7 at `centre`, unturned.
+fn model_at(centre: Point) -> DrawCommand {
+    DrawCommand::model(
+        crate::model::ModelKey(7),
+        crate::model::ModelPose {
+            center: centre,
+            orientation: crate::model::Orientation::IDENTITY,
+            scale: 1.0,
+        },
+    )
+}
+
+#[test]
+fn draw_stellars_clipped_instead_clips_what_instead_draws() {
+    let scene = sheeted_and_sheetless();
+    let play = clip_to(Point::new(10_000.0, 10_000.0));
+    let mut asked = Vec::new();
+    let mut list = DrawList::new();
+    draw_stellars_clipped_instead(
+        &mut list,
+        &scene,
+        &camera(),
+        None,
+        play,
+        |list, stellar, centre| {
+            asked.push((stellar.id, centre));
+            list.push(model_at(centre));
+            true
+        },
+    );
+    let [(StellarId(141), centre)] = asked[..] else {
+        panic!("asked only of the sheetless stellar: {asked:?}")
+    };
+    let commands: Vec<DrawCommand> = list.iter().cloned().collect();
+    assert!(
+        commands.contains(&cut_to(play, model_at(centre))),
+        "{commands:?}"
+    );
+    assert!(
+        !commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Clipped { command, .. } if matches!(**command, DrawCommand::Triangle { .. })
+        )),
+        "no stand-in: {commands:?}"
+    );
+    // The sheeted stellar and the names, clipped as before.
+    let mut before = DrawList::new();
+    draw_stellars_clipped_to(&mut before, &scene, &camera(), None, play);
+    let triangle = |command: &DrawCommand| matches!(command, DrawCommand::Clipped { command, .. } if matches!(**command, DrawCommand::Triangle { .. }));
+    let kept: Vec<&DrawCommand> = before.iter().filter(|c| !triangle(c)).collect();
+    let others: Vec<&DrawCommand> = commands
+        .iter()
+        .filter(|c| **c != cut_to(play, model_at(centre)))
+        .collect();
+    assert_eq!(others, kept);
+    assert!(
+        kept.iter()
+            .any(|c| matches!(c, DrawCommand::Clipped { command, .. } if matches!(**command, DrawCommand::Text { .. }))),
+        "the names are clipped"
+    );
+}
+
+#[test]
+fn draw_stellars_clipped_to_is_clipped_instead_with_nothing_instead() {
+    let scene = sheeted_and_sheetless();
+    let play = clip_to(Point::new(10_000.0, 10_000.0));
+    let mut to = DrawList::new();
+    draw_stellars_clipped_to(&mut to, &scene, &camera(), None, play);
+    let mut instead = DrawList::new();
+    draw_stellars_clipped_instead(&mut instead, &scene, &camera(), None, play, |_, _, _| false);
+    assert_eq!(to, instead);
+    assert!(
+        to.iter().any(|c| matches!(c, DrawCommand::Clipped { command, .. } if matches!(**command, DrawCommand::Triangle { .. }))),
+        "the stand-in"
     );
 }
 
