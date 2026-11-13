@@ -260,6 +260,38 @@ mod tests {
         );
         assert_eq!(sky["additionalProperties"], false);
         assert_eq!(backdrop["additionalProperties"], false);
+        described(&sky, "decorations");
+        let decorations = definition(&sky["properties"]["decorations"]);
+        assert_eq!(decorations["type"], "array", "{decorations}");
+        assert_eq!(decorations["maxItems"].as_u64(), Some(6), "{decorations}");
+        let decoration = definition(&decorations["items"]);
+        assert_eq!(decoration["additionalProperties"], false);
+        assert_eq!(decoration["required"], serde_json::json!(["image"]));
+        for field in [
+            "image",
+            "at",
+            "parallax",
+            "size",
+            "turn",
+            "tint",
+            "brightness",
+            "blend",
+        ] {
+            described(&decoration, field);
+        }
+        for (field, least, most) in [
+            ("parallax", 0.0125, 0.5),
+            ("size", 8.0, 512.0),
+            ("turn", -360.0, 360.0),
+            ("brightness", 0.0, 1.0),
+        ] {
+            let number = definition(&decoration["properties"][field]);
+            assert_eq!(
+                (number["minimum"].as_f64(), number["maximum"].as_f64()),
+                (Some(least), Some(most)),
+                "{field}: {number}"
+            );
+        }
     }
 
     #[test]

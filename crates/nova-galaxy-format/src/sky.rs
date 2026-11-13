@@ -1,6 +1,6 @@
 //! How a system's sky looks behind the play: its star density, the
-//! colour its stars lean toward, and a distant nebula backdrop
-//! ([`Sky`], a system's optional `sky` block).
+//! colour its stars lean toward, a distant nebula backdrop, and the
+//! images that decorate it ([`Sky`], a system's optional `sky` block).
 //!
 //! Every field is optional, and the engine has a default for each, so a
 //! system with no `sky` block draws the engine's star field and a faint
@@ -8,6 +8,11 @@
 //! backdrop is scenery only: it is not the `nebula` hazard
 //! ([`crate::model::Hazard::Nebula`]), which is fog that cuts sensors,
 //! and neither sets nor implies the other.
+//!
+//! A system's decorations ([`decoration`]: distant hulks, far galaxies
+//! and the like, each an image asset with a place, a depth and a size)
+//! are scenery only too. A missing `decorations` key draws the engine's
+//! default for the system's seed, and an empty list draws none.
 
 use std::borrow::Cow;
 
@@ -16,8 +21,12 @@ use serde::Deserialize;
 
 use crate::id::{Color, Fraction};
 
-/// How a system's sky looks: its stars and its distant backdrop. Omit a
-/// field for the engine's default.
+pub mod decoration;
+
+use decoration::Decorations;
+
+/// How a system's sky looks: its stars, its distant backdrop and its
+/// decorations. Omit a field for the engine's default.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Sky {
@@ -36,6 +45,11 @@ pub struct Sky {
     /// amount come from the system's seed.
     #[serde(default)]
     pub backdrop: Option<Backdrop>,
+    /// Images drawn as far scenery, behind every planet and ship: distant
+    /// hulks, far galaxies and the like, at most 6. Omit for the engine's
+    /// default, picked by the system's seed; an empty list draws none.
+    #[serde(default)]
+    pub decorations: Option<Decorations>,
 }
 
 /// A system's distant nebula backdrop. Each field left out comes from the
