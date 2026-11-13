@@ -17,6 +17,7 @@ mod fsr1;
 mod fsr1_reference;
 mod generated_planets;
 mod layered_sky;
+mod lazy_planets;
 mod livery_paint;
 mod load_cost;
 mod message_line;
