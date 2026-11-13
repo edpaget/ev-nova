@@ -57,7 +57,9 @@ pub struct ShipModel {
 pub enum StellarModel {
     /// A model, a station's or an outpost's, in its own units.
     Model {
-        /// The model.
+        /// The model, in the livery of the stellar's owner as the edge
+        /// keys it (`nova_render::new_game_world`): one model in two
+        /// owners' liveries is two keys, so each stellar draws its own.
         key: ModelKey,
         /// How far its footprint reaches from its centre, in model units,
         /// measured as its stand-in outline's reach is

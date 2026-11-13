@@ -137,6 +137,27 @@ fn with_an_empty_table_the_landscape_draws_as_before() {
 }
 
 #[test]
+fn the_landscape_draws_its_own_stellar_s_key_when_another_holds_another() {
+    // Earth and another stellar on one model in two liveries: two keys.
+    const PAINTED_HUB: ModelKey = ModelKey(33);
+    let models = |earth: ModelKey, other: ModelKey| {
+        let model = |key| crate::flight::world_models::StellarModel::Model { key, reach: 4.0 };
+        Rc::new(WorldModels {
+            stellars: [
+                (StellarId(140), model(earth)),
+                (StellarId(141), model(other)),
+            ]
+            .into(),
+            ..WorldModels::default()
+        })
+    };
+    for (earth, other) in [(HUB, PAINTED_HUB), (PAINTED_HUB, HUB)] {
+        let view = modelled_earth(Some(models(earth, other)));
+        assert_eq!(model_keys(&drawn(&view)), [earth], "{earth:?}");
+    }
+}
+
+#[test]
 fn with_an_empty_table_the_shipyard_draws_as_before() {
     let mut before = shipbuying(Ok(shipyard_template()));
     let mut empty = shipbuying(Ok(shipyard_template())).with_world_models(Rc::default());

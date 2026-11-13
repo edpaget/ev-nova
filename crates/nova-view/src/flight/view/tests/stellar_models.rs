@@ -289,6 +289,52 @@ fn a_stellar_with_no_entry_draws_its_stand_in_and_names_and_order_are_unchanged(
 }
 
 #[test]
+fn two_stations_on_one_model_in_two_liveries_each_draw_their_own_key() {
+    // A second station on the hub, its table entry another key with the
+    // same reach, as one model painted in two owners' liveries is.
+    const YARD: i16 = 143;
+    const PAINTED_HUB: ModelKey = ModelKey(8);
+    let mut catalog = catalog_3d();
+    catalog.sol_more.push(sheetless(
+        YARD,
+        "Yard",
+        (-100, -200),
+        StellarStandIn::Outline(hub_from_above()),
+    ));
+    let mut frame = frame();
+    frame.stellars.push(record::stellar(StellarId(YARD)));
+    let mut models = table();
+    models.stellars.insert(
+        StellarId(YARD),
+        StellarModel::Model {
+            key: PAINTED_HUB,
+            reach: REACH,
+        },
+    );
+    let view = world(catalog, frame).with_world_models(Rc::new(models));
+    let list = commands(&world_list(&view));
+    for (id, key) in [(STATION, HUB), (YARD, PAINTED_HUB)] {
+        let model = DrawCommand::model(
+            key,
+            ModelPose {
+                center: stand_in_centre(&view, id),
+                orientation: Orientation::IDENTITY,
+                scale: UNKNOWN_STELLAR_RADIUS / REACH,
+            },
+        );
+        assert_eq!(
+            list.iter().filter(|c| **c == model).count(),
+            1,
+            "{id}: {list:?}"
+        );
+    }
+    assert_ne!(
+        stand_in_centre(&view, STATION),
+        stand_in_centre(&view, YARD)
+    );
+}
+
+#[test]
 fn the_3d_stellars_keep_the_stellars_id_order() {
     let list = commands(&world_list(&view_of(table())));
     let model = list
