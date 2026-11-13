@@ -163,6 +163,8 @@ pub struct Runner<S: ImageSource> {
     /// The new game's world models' meshes and planets and its systems'
     /// sky looks, until the app takes them.
     world: Option<WorldMeshes>,
+    /// What reads the world's planets' textures, until the app takes it.
+    planet_files: Option<Box<dyn nova_render::PlanetFiles>>,
 }
 
 /// The meshes and planets the new game's world models' keys name, and
@@ -194,6 +196,7 @@ impl<S: ImageSource> Runner<S> {
             report: None,
             gamepads: None,
             world: None,
+            planet_files: None,
         }
     }
 
@@ -284,6 +287,15 @@ impl<S: ImageSource> Runner<S> {
         skies: nova_render::sky::SkyLooks,
     ) -> Self {
         self.world = Some((meshes, planets, skies));
+        self
+    }
+
+    /// The runner with `files` for the app it opens to read the textures
+    /// of the world's planets through, at their first draw
+    /// ([`App::with_planet_files`]).
+    #[must_use]
+    pub fn with_planet_files(mut self, files: Box<dyn nova_render::PlanetFiles>) -> Self {
+        self.planet_files = Some(files);
         self
     }
 
@@ -422,6 +434,10 @@ impl<S: ImageSource + 'static> ApplicationHandler for Runner<S> {
                 };
                 let app = match self.world.take() {
                     Some((meshes, planets, skies)) => app.with_world_assets(meshes, planets, skies),
+                    None => app,
+                };
+                let app = match self.planet_files.take() {
+                    Some(files) => app.with_planet_files(files),
                     None => app,
                 };
                 let app = app.with_text_entry(Box::new(WinitTextEntry::new(window.0.clone())));

@@ -21,7 +21,10 @@
 //!   to load no key, so it keeps its stand-in. A key drawn with nothing
 //!   registered is so a wiring fault of the engine's, never a state of the
 //!   data: it draws nothing, as the renderer pins, and a stand-in drawn in
-//!   its place would hide the fault.
+//!   its place would hide the fault. A planet key that is registered can
+//!   still fail after it is handed out, when its texture is read at its
+//!   first draw and doesn't decode: that is a state of the data, drawn as
+//!   its disc and reported apart (the `planet_failures` module).
 
 use nova_view::{ModelKey, PlanetKey};
 

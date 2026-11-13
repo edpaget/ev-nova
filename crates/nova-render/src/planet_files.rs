@@ -31,7 +31,9 @@
 
 use std::rc::Rc;
 
-use nova_galaxy_media::budget::Limits;
+/// The budget limits a [`TextureFile`] is held to, so a caller that names
+/// no media crate can build one.
+pub use nova_galaxy_media::budget::Limits;
 
 use crate::planet_source::{PlanetError, Surface};
 

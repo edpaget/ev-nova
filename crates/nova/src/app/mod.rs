@@ -43,7 +43,8 @@
 //! warnings the screen reports ([`Screen::take_warnings`]), which the app
 //! takes after every input and frame, and a model or planet key a frame
 //! draws with nothing registered for it with the renderer, once a key (the
-//! `missing_keys` module).
+//! `missing_keys` module), and a planet whose texture didn't read in the
+//! frame that first drew it, once a planet (the `planet_failures` module).
 //!
 //! # Fullscreen
 //!
@@ -188,6 +189,7 @@ mod loop_event;
 mod menu;
 mod missing_keys;
 mod pads;
+mod planet_failures;
 mod px_rect;
 mod safe_area;
 mod scaling;
@@ -1198,6 +1200,9 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             &report.missing_models,
             &report.missing_planets,
         ));
+        // A planet whose texture didn't read in the frame that first drew
+        // it, which draws its disc from then on: one warning each.
+        (self.warnings).extend(planet_failures::warnings(&report.failed_planets));
         // What drawing it raised (an upscaler's fallback, say), to show.
         self.warnings.extend(gpu.take_warnings());
         self.show_pointer(window);
@@ -1747,6 +1752,7 @@ mod tests {
     mod gamepads;
     mod menu;
     mod missing_keys;
+    mod planet_failures;
     mod pointer_outside;
     mod pointer_release;
     mod safe_area;
