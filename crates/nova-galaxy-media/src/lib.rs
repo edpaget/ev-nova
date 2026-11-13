@@ -40,6 +40,10 @@
 //! tilt ([`planet`]: deterministic from the seed, the same bytes on every
 //! platform).
 //!
+//! For drawing a sky's decorations (the renderer's `new_game_sky_images`),
+//! it reads a texture asset of any shape ([`read_picture`]: the same
+//! budget and header checks, without a surface's 2:1).
+//!
 //! # What it holds, and why here
 //!
 //! The format crate keeps media decoding out, so the format's
@@ -77,4 +81,4 @@ pub use paint::{Slot, slot_of};
 pub use placement::Placement;
 pub use sampling::{Sampler, TextureRef};
 pub use scene::{AssetScenes, Scene, read_asset_scene, read_scene};
-pub use texture::{NoTexture, read_texture};
+pub use texture::{NoTexture, read_picture, read_texture};
