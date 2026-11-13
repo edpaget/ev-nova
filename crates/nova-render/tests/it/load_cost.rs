@@ -12,14 +12,21 @@
 //! cargo nextest run -p nova-render --test it --run-ignored only --no-capture load_cost::
 //! ```
 //!
-//! It times three data sets:
+//! It times four data sets:
 //!
 //! - the 3D sample (`nova_data::new_game::fixture::modelled_sample_3d`):
 //!   three systems, one generated planet;
 //! - the scaled galaxy ([`scaled`]): the 3D sample with [`ADDED_SYSTEMS`]
 //!   more systems of two generated planets each, the seven types by
 //!   turns, each with clouds, rings and an atmosphere;
+//! - the decorated galaxy ([`decorated`]): the scaled galaxy with
+//!   [`SKY_IMAGES`] distinct sky images listed across its systems, so the
+//!   world builder's time shows what reading sky decorations at load
+//!   costs (each distinct image decoded, premultiplied and mipped once);
 //! - the folder `GAME_DATA` names, the full sample, skipping without it.
+//!
+//! It ends with what one seeded galaxy's bake takes, which the first
+//! frame that draws its sky pays.
 //!
 //! The frames are drawn on the `recording` Gpu, so no GPU adapter is
 //! needed: a first frame's time is what the renderer does on the CPU
@@ -29,15 +36,19 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 
 use nova_data::new_game::fixture::modelled_sample_3d;
 use nova_data::new_game::{NewGame, load};
-use nova_data::wire::id::StellarId;
+use nova_data::wire::id::{StellarId, SystemId};
 use nova_galaxy_format::source::{DirSource, MemSource, Source};
+use nova_galaxy_media::fixture::png;
 use nova_render::recording::{NoImages, RecordingGpu};
+use nova_render::sky::galaxy;
 use nova_render::{LOGICAL, LoadedPlanet, Renderer, Viewport, WorldAssets, world_assets};
 use nova_view::flight::StellarModel;
+use nova_view::flight::sky::sky_seed;
 use nova_view::{DrawList, PlanetKey, PlanetPose, Point};
 
 use super::common::game_data;
@@ -100,6 +111,74 @@ fn scaled() -> MemSource {
     source
 }
 
+/// The distinct sky images [`decorated`] adds.
+const SKY_IMAGES: u32 = 12;
+
+/// The side of each of [`decorated`]'s sky images, in pixels.
+const SKY_IMAGE_SIDE: u32 = 512;
+
+/// [`scaled`] with [`SKY_IMAGES`] distinct sky images, each
+/// [`SKY_IMAGE_SIDE`] square with a clear border, built in code, and two
+/// decorations on each added system, the images by turns: so the cost of
+/// reading a galaxy's worth of sky images at load is on the readout.
+fn decorated() -> MemSource {
+    let mut source = scaled();
+    let side = SKY_IMAGE_SIDE;
+    for image in 0..SKY_IMAGES {
+        let mut rgba = Vec::with_capacity((side * side * 4) as usize);
+        for y in 0..side {
+            for x in 0..side {
+                let edge = x.min(y).min(side - 1 - x).min(side - 1 - y);
+                let shade = ((x * 7 + y * 3 + image * 40) % 200) as u8;
+                rgba.extend([
+                    shade,
+                    shade / 2,
+                    255 - shade,
+                    if edge < 32 { 0 } else { 255 },
+                ]);
+            }
+        }
+        let file = format!("media/export/sky/added-{image}.png");
+        source = source
+            .with(
+                &format!("assets/sky-{image}.md"),
+                &format!("---\nkind: texture\nplaceholder: false\nfiles: [{file}]\n---\n"),
+            )
+            .with_bytes(&file, &png(side, side, &rgba));
+    }
+    for system in 0..ADDED_SYSTEMS {
+        let (one, other) = (system % SKY_IMAGES, (system + 5) % SKY_IMAGES);
+        source = source.with(
+            &format!("systems/added-{system}.md"),
+            &format!(
+                "---\nname: Added {system}\nregion: commonwealth-rim\nmap: [{}, {}]\n\
+                 sky:\n  decorations:\n    - image: sky-{one}\n    \
+                 - {{image: sky-{other}, blend: glow, size: 256, parallax: 0.2}}\n---\n",
+                1000 + system * 20,
+                1000 + (system % 7) * 20
+            ),
+        );
+    }
+    source
+}
+
+/// The distinct sky images `assets` holds for `game`'s systems, and the
+/// megabytes they take with their mips.
+fn sky_images(game: &NewGame, assets: &WorldAssets) -> (usize, f64) {
+    let mut images = BTreeMap::new();
+    for &nova in game.ids.systems.values() {
+        let listed = assets.skies.decorations(sky_seed(SystemId(nova)));
+        for decoration in listed.unwrap_or_default() {
+            let texels: usize = (decoration.image.texture().levels().iter())
+                .map(|level| level.rgba.len())
+                .sum();
+            images.insert(Arc::as_ptr(&decoration.image) as usize, texels);
+        }
+    }
+    let bytes: usize = images.values().sum();
+    (images.len(), bytes as f64 / (1024.0 * 1024.0))
+}
+
 /// The milliseconds since `start`.
 fn ms(start: Instant) -> f64 {
     start.elapsed().as_secs_f64() * 1000.0
@@ -140,6 +219,8 @@ struct Run {
     /// The planets handed over holding their surface, and those unbaked.
     planets: (usize, usize),
     planet_mb: f64,
+    /// The distinct sky images read, and the megabytes they hold.
+    sky_images: (usize, f64),
     system: Option<(String, usize)>,
     first_frame_ms: f64,
     second_frame_ms: f64,
@@ -163,6 +244,7 @@ fn run(source: &impl Source, dir: &Path) -> Run {
         .count();
     let planets = (baked, assets.planets.len() - baked);
     let planet_mb = assets.planets.iter().map(|(_, p)| megabytes(p)).sum();
+    let sky_images = sky_images(&game, &assets);
     let problems = game.problems.len() + assets.problems.len();
     let system = busiest_system(&game, &assets);
     let mut list = DrawList::new();
@@ -196,6 +278,7 @@ fn run(source: &impl Source, dir: &Path) -> Run {
         world_ms,
         planets,
         planet_mb,
+        sky_images,
         system: system.map(|(id, keys)| (id, keys.len())),
         first_frame_ms,
         second_frame_ms,
@@ -224,6 +307,10 @@ fn report(name: &str, source: &impl Source, dir: &Path) {
     println!(
         "  planets         {} baked or read holding {:.1} MB, {} unbaked",
         shown.planets.0, shown.planet_mb, shown.planets.1
+    );
+    println!(
+        "  sky images      {} read holding {:.1} MB",
+        shown.sky_images.0, shown.sky_images.1
     );
     match &shown.system {
         Some((system, drawn)) => {
@@ -255,7 +342,30 @@ fn the_new_game_s_start_up_costs() {
         &scaled(),
         Path::new("scaled"),
     );
+    report(
+        &format!(
+            "decorated galaxy: the scaled galaxy with {SKY_IMAGES} sky images of \
+             {SKY_IMAGE_SIDE} square, two decorations on each of {ADDED_SYSTEMS} systems"
+        ),
+        &decorated(),
+        Path::new("decorated"),
+    );
     if let Some(dir) = game_data() {
         report("GAME_DATA folder", &DirSource::new(&dir), &dir);
     }
+    // A seeded galaxy is baked the first frame that draws its sky: what
+    // that frame pays, once for each system that has one.
+    let far = (0..10_000)
+        .find_map(galaxy::seeded)
+        .expect("a seed with a galaxy");
+    let least = (0..RUNS)
+        .map(|_| {
+            let start = Instant::now();
+            let image = galaxy::bake(&far);
+            let took = ms(start);
+            assert_eq!(image.width(), galaxy::GALAXY_SIDE);
+            took
+        })
+        .fold(f64::INFINITY, f64::min);
+    println!("a seeded galaxy's bake, at its sky's first frame: {least:.2} ms");
 }
