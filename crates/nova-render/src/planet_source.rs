@@ -377,8 +377,10 @@ mod fake {
             .unwrap_or_else(|e| panic!("`{stellar}` loads: {e}"));
         let surface = &planet.clone().into_surface();
         let reach = crate::planet::surface_reach(surface);
-        assert!(
-            (planet.reach() - reach).abs() < f32::EPSILON,
+        // The same sizes through the same arithmetic: the same bits.
+        assert_eq!(
+            planet.reach().to_bits(),
+            reach.to_bits(),
             "`{stellar}` reaches {} before it is baked and {reach} after",
             planet.reach()
         );
