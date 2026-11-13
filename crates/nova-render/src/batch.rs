@@ -925,7 +925,6 @@ impl Layers {
     }
 }
 
-/// Where `a` and `b` overlap, if they share any area.
 /// `bounds` as a frame carries a logical rect.
 fn rect_of(bounds: Bounds) -> Rect {
     Rect {
@@ -936,6 +935,7 @@ fn rect_of(bounds: Bounds) -> Rect {
     }
 }
 
+/// Where `a` and `b` overlap, if they share any area.
 fn meet(a: Bounds, b: Bounds) -> Option<Bounds> {
     let min = Point::new(a.min.x.max(b.min.x), a.min.y.max(b.min.y));
     let max = Point::new(a.max.x.min(b.max.x), a.max.y.min(b.max.y));
