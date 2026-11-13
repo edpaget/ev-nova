@@ -20,6 +20,7 @@ use super::layout::lay_out_text;
 use super::models::{ModelData, Models, depth_view};
 use super::planets::{PlanetData, Planets};
 use super::sky::{Sky, StarData};
+use super::sky_images::{SkyImageData, SkyImages};
 use super::upscale::{Upscale, abilities, upscale_for};
 use crate::fonts::FontFaces;
 use crate::gpu::{
@@ -28,6 +29,7 @@ use crate::gpu::{
 use crate::model::{Mesh, MeshId};
 use crate::model_texture::ModelTexture;
 use crate::models::{ModelRun, draw_runs};
+use crate::sky::{SkyImage, SkyImageId};
 use crate::upscale::{Abilities, Upscaler, WorldResolution, offered};
 use crate::viewport::PixelRect;
 
@@ -111,6 +113,12 @@ enum Draw {
     Sky {
         instances: Range<u32>,
     },
+    /// A sky's decorations: the instances, and the image of each, in
+    /// order.
+    SkyImages {
+        instances: Range<u32>,
+        images: Vec<SkyImageId>,
+    },
 }
 
 /// A render pass over a canvas (the scene, or the world's texture) and the
@@ -167,6 +175,9 @@ pub struct WgpuRenderer {
     planets: Planets,
     /// The sky pipeline ([`Batch::Sky`]).
     sky: Sky,
+    /// The sky-image pipeline and the images' textures
+    /// ([`Batch::SkyImages`]).
+    sky_images: SkyImages,
     page_layout: wgpu::BindGroupLayout,
     texture_layout: wgpu::BindGroupLayout,
     scene: Option<Scene>,
@@ -318,6 +329,7 @@ impl WgpuRenderer {
             models: Models::new(device, queue),
             planets: Planets::new(device, &globals_layout),
             sky: Sky::new(device, &globals_layout),
+            sky_images: SkyImages::new(device, &globals_layout),
             page_layout,
             texture_layout,
             scene: None,
@@ -448,6 +460,11 @@ impl WgpuRenderer {
         (self.planets).upload(&self.device, &self.queue, planet, textures);
     }
 
+    /// Holds `data` as sky image `image`, replacing any of that id.
+    pub fn upload_sky_image(&mut self, image: SkyImageId, data: &SkyImage) {
+        (self.sky_images).upload(&self.device, &self.queue, image, data);
+    }
+
     /// Copies `image` onto page `page` at `at`.
     pub fn upload(&mut self, page: PageId, at: PixelRect, image: &Image) {
         let Some(page) = self.pages.get(&page) else {
@@ -518,6 +535,7 @@ impl WgpuRenderer {
         let model_buffer = self.vertex_buffer("nova model instances", &layout.models);
         let planet_buffer = self.vertex_buffer("nova planet instances", &layout.planets);
         let star_buffer = self.vertex_buffer("nova star instances", &layout.stars);
+        let sky_image_buffer = self.vertex_buffer("nova sky image instances", &layout.sky_images);
 
         let scene = self.scene.as_ref().expect("ensured above");
         let buffers = Buffers {
@@ -526,6 +544,7 @@ impl WgpuRenderer {
             models: &model_buffer,
             planets: &planet_buffer,
             stars: &star_buffer,
+            sky_images: &sky_image_buffer,
         };
         let mut commands = WgpuCommands::new(DeviceEncoders(&self.device));
         let world = if layout.world.is_empty() {
@@ -637,6 +656,7 @@ impl WgpuRenderer {
             models: model_buffer,
             planets: planet_buffer,
             stars: star_buffer,
+            ..
         } = buffers;
         let content = target.content;
         let full = PixelRect {
@@ -715,6 +735,12 @@ impl WgpuRenderer {
                     set_viewport(pass, content);
                     let globals = &self.globals_group;
                     (self.sky).encode(pass, globals, star_buffer, instances.clone());
+                }
+                Draw::SkyImages { instances, images } => {
+                    set_viewport(pass, content);
+                    let globals = &self.globals_group;
+                    let buffer = buffers.sky_images;
+                    (self.sky_images).encode(pass, globals, buffer, instances.clone(), images);
                 }
             }
         }
@@ -1143,6 +1169,8 @@ struct Layout<'a> {
     planets: Vec<PlanetData>,
     /// Every sky batch's stars, in one buffer.
     stars: Vec<StarData>,
+    /// Every sky-images batch's instances, in one buffer.
+    sky_images: Vec<SkyImageData>,
     /// The text batches, one glyphon renderer each.
     text: Vec<&'a [TextRun]>,
     /// What to draw for each batch, in order.
@@ -1254,6 +1282,15 @@ impl<'a> Layout<'a> {
                     instances: first..self.stars.len() as u32,
                 }
             }
+            Batch::SkyImages(images) => {
+                let first = self.sky_images.len() as u32;
+                self.sky_images
+                    .extend(images.iter().map(SkyImageData::from));
+                Draw::SkyImages {
+                    instances: first..self.sky_images.len() as u32,
+                    images: images.iter().map(|one| one.image).collect(),
+                }
+            }
         };
         self.draws.push(draw);
         self.scissors.push(scissor);
@@ -1281,7 +1318,7 @@ impl<'a> Layout<'a> {
 }
 
 /// The buffers a frame's draws read: sprite and OR-fill instances, solid
-/// vertices, model instances, planet instances and stars.
+/// vertices, model instances, planet instances, stars and sky images.
 #[derive(Clone, Copy)]
 struct Buffers<'a> {
     instances: &'a wgpu::Buffer,
@@ -1289,6 +1326,7 @@ struct Buffers<'a> {
     models: &'a wgpu::Buffer,
     planets: &'a wgpu::Buffer,
     stars: &'a wgpu::Buffer,
+    sky_images: &'a wgpu::Buffer,
 }
 
 /// The scissors a frame's draws are encoded with, in their canvas's
@@ -2806,6 +2844,21 @@ mod tests {
             trail: Point::new(0.0, 0.0),
         }])]);
         assert_builds_no_pipeline(&mut gpu, made, &sky, "a frame of sky");
+        // A sky image uploaded, then drawn: neither builds one.
+        let image = SkyImage::new(2, 2, vec![128; 16]).expect("four texels");
+        gpu.upload_sky_image(SkyImageId(0), &image);
+        let decorated = frame_of(vec![Batch::SkyImages(vec![crate::gpu::SkyImageInstance {
+            image: SkyImageId(0),
+            placement: crate::sky::Placement {
+                centre: Point::new(16.0, 16.0),
+                right: Point::new(8.0, 0.0),
+                down: Point::new(0.0, 8.0),
+                color: [1.0; 3],
+                cover: 1.0,
+                lod: 0.0,
+            },
+        }])]);
+        assert_builds_no_pipeline(&mut gpu, made, &decorated, "a frame of sky images");
         // A native world drawn below 100% is a texture, enlarged with
         // sharp-bilinear: neither the first such frame nor a later one
         // builds it.

@@ -12,6 +12,7 @@ use crate::model_texture::ModelTexture;
 use crate::present::{
     AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action,
 };
+use crate::sky::{SkyImage, SkyImageId};
 use crate::upscale::{Upscaler, UpscalerProbe, WorldResolution};
 use crate::viewport::PixelRect;
 
@@ -96,6 +97,10 @@ impl Gpu for SurfaceGpu {
 
     fn upload_planet(&mut self, planet: PlanetId, textures: &PlanetTextures) {
         self.renderer.upload_planet(planet, textures);
+    }
+
+    fn upload_sky_image(&mut self, image: SkyImageId, data: &SkyImage) {
+        self.renderer.upload_sky_image(image, data);
     }
 
     fn submit(&mut self, frame: &Frame) {

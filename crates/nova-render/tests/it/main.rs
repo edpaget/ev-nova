@@ -28,6 +28,7 @@ mod sample_world;
 mod sampled_models;
 mod sharp_bilinear;
 mod sky_backdrop;
+mod sky_images;
 mod station_livery;
 mod stock_fonts;
 mod stock_interface_images;

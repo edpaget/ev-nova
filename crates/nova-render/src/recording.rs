@@ -14,6 +14,7 @@ use crate::gpu::{Frame, Gpu, PageId, PlanetId, PlanetTextures};
 use crate::images::{ImageError, ImageSource};
 use crate::model::{Mesh, MeshId};
 use crate::model_texture::{ModelTexture, ModelTextureId};
+use crate::sky::{SkyImage, SkyImageId};
 use crate::upscale::{Upscaler, UpscalerProbe, WorldResolution, resolution_of};
 use crate::viewport::PixelRect;
 
@@ -76,6 +77,13 @@ pub enum GpuCall {
         planet: PlanetId,
         /// Its textures.
         textures: PlanetTextures,
+    },
+    /// [`Gpu::upload_sky_image`].
+    UploadSkyImage {
+        /// The image's id.
+        image: SkyImageId,
+        /// The image.
+        data: SkyImage,
     },
     /// [`Gpu::submit`].
     Submit(Frame),
@@ -216,6 +224,13 @@ impl Gpu for RecordingGpu {
         });
     }
 
+    fn upload_sky_image(&mut self, image: SkyImageId, data: &SkyImage) {
+        self.calls.push(GpuCall::UploadSkyImage {
+            image,
+            data: data.clone(),
+        });
+    }
+
     fn submit(&mut self, frame: &Frame) {
         self.calls.push(GpuCall::Submit(frame.clone()));
     }
@@ -316,6 +331,20 @@ mod tests {
             [GpuCall::UploadModelTexture {
                 texture: ModelTextureId(6),
                 data: texture,
+            }]
+        );
+    }
+
+    #[test]
+    fn recording_gpu_records_a_sky_image_upload() {
+        let mut gpu = RecordingGpu::new();
+        let image = SkyImage::new(2, 1, vec![1, 2, 3, 255, 5, 6, 7, 255]).expect("two texels");
+        gpu.upload_sky_image(SkyImageId(4), &image);
+        assert_eq!(
+            gpu.calls,
+            [GpuCall::UploadSkyImage {
+                image: SkyImageId(4),
+                data: image,
             }]
         );
     }

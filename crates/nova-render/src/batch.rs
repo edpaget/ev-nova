@@ -24,6 +24,7 @@ use crate::planets::Planets;
 use crate::quickdraw_stretch;
 use crate::render_scale::RenderScale;
 use crate::sky::{self, SkyLooks};
+use crate::sky_images::SkyImages;
 use crate::streams::{Owner, Streams};
 use crate::upscale::world_space;
 use crate::viewport::{LogicalSize, PixelRect, Viewport};
@@ -93,6 +94,8 @@ pub struct Renderer<S> {
     /// Each system's own sky look, by its sky's seed
     /// ([`Renderer::set_sky_looks`]).
     skies: SkyLooks,
+    /// The sky images the GPU holds, for the skies' decorations.
+    sky_images: SkyImages,
     /// The size the world layer is drawn at
     /// ([`Renderer::set_render_scale`]).
     render_scale: RenderScale,
@@ -122,6 +125,7 @@ impl<S: ImageSource> Renderer<S> {
             models: Models::default(),
             planets: Planets::default(),
             skies: SkyLooks::new(),
+            sky_images: SkyImages::default(),
             render_scale: RenderScale::Auto,
         }
     }
@@ -153,8 +157,10 @@ impl<S: ImageSource> Renderer<S> {
     }
 
     /// Draws each sky ([`DrawCommand::Sky`]) in the look `looks` holds
-    /// for its seed from the next frame on, in place of any looks before;
-    /// a seed it holds none for draws the default look.
+    /// for its seed, with the decorations it lists for it, from the next
+    /// frame on, in place of any looks before; a seed it holds none for
+    /// draws the default look. An image the GPU already holds is not
+    /// uploaded again.
     pub fn set_sky_looks(&mut self, looks: SkyLooks) {
         self.skies = looks;
     }
@@ -249,7 +255,9 @@ impl<S: ImageSource> Renderer<S> {
     /// look set for its seed ([`Renderer::set_sky_looks`]), for the
     /// logical size and the texels a unit is in the canvas it draws into:
     /// the world texture's for a world sky drawn into one, the window's
-    /// otherwise. A sky that draws nothing is no batch.
+    /// otherwise. A sky that draws nothing is no batch. Its decorations
+    /// follow as a [`Batch::SkyImages`] of their own, each image uploaded
+    /// the first frame that draws it ([`crate::sky_images`]).
     ///
     /// A frame drawn after [`Renderer::set_enlarger`] first starts the
     /// atlas afresh, the stream pages with it; a zero-area viewport leaves
@@ -530,6 +538,7 @@ impl<S: ImageSource> Renderer<S> {
                 if !stars.is_empty() {
                     batches.push(Batch::Sky(stars));
                 }
+                (self.sky_images).draw(sky, &self.skies, logical, texels, batches, gpu);
             }
             DrawCommand::Mounted {
                 model,

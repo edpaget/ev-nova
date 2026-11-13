@@ -65,7 +65,13 @@
 //!   size a texel lets them be drawn at, and the falloff the sky shader
 //!   mirrors; a system's own look ([`sky::SkyLook`], `sky::look`), its
 //!   star density and tint, and the distant nebula backdrop drawn under
-//!   the stars (`sky::backdrop`).
+//!   the stars (`sky::backdrop`); and its decorations, images drawn as
+//!   far scenery over the stars ([`sky::SkyDecoration`], each a
+//!   premultiplied [`SkyImage`]), placed by the core and checked against
+//!   its reference ([`sky::lit`], [`sky::over`]).
+//! - `sky_images`: the [`Renderer`]'s sky images, each uploaded the first
+//!   frame that draws it ([`Gpu::upload_sky_image`]), once by its
+//!   pointer, and the [`Batch::SkyImages`] a sky's decorations become.
 //! - `models`: the [`Renderer`]'s meshes by [`nova_view::ModelKey`]
 //!   ([`Renderer::add_model`]), uploaded the first frame that draws them
 //!   ([`Gpu::upload_mesh`]) after their textures, each once
@@ -196,6 +202,7 @@ pub mod quickdraw_stretch;
 pub mod recording;
 pub mod render_scale;
 pub mod sky;
+mod sky_images;
 pub mod source;
 pub mod streams;
 pub mod super_xbr;
@@ -212,7 +219,8 @@ pub use galaxy_models::{GalaxyModels, ship_livery, ship_request, station_livery}
 pub use galaxy_planets::GalaxyPlanets;
 pub use gpu::{
     Batch, Frame, Gpu, MAX_TEXTURE_SIDE, ModelInstance, PlanetId, PlanetImage, PlanetInstance,
-    PlanetTextures, QuadInstance, Rect, SolidQuad, StarInstance, TextRun, WorldSpace,
+    PlanetTextures, QuadInstance, Rect, SkyImageId, SkyImageInstance, SolidQuad, StarInstance,
+    TextRun, WorldSpace,
 };
 pub use images::{ImageError, ImageSource};
 pub use livery::{Livery, PaintSlot, painted};
@@ -225,6 +233,7 @@ pub use new_game_world::{WorldAssets, world_assets, world_assets_from, world_ass
 pub use planet_source::{LoadedPlanet, PlanetError, PlanetRequest, PlanetSource};
 pub use present::{AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action};
 pub use render_scale::{RenderScale, scaled_size};
+pub use sky::SkyImage;
 pub use source::GameImages;
 pub use super_xbr::SuperXbr;
 pub use upscale::{

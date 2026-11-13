@@ -18,7 +18,9 @@ use crate::model::Mesh;
 pub use crate::model::MeshId;
 use crate::model_texture::ModelTexture;
 pub use crate::model_texture::ModelTextureId;
+pub use crate::sky::SkyImageId;
 pub use crate::sky::StarInstance;
+use crate::sky::{Placement, SkyImage};
 use crate::upscale::{Upscaler, WorldResolution};
 use crate::viewport::{LogicalSize, PixelRect};
 
@@ -70,6 +72,16 @@ pub trait Gpu {
     /// ([`crate::Renderer::add_planet`]). Planets are not pages:
     /// [`Gpu::clear_pages`] keeps them.
     fn upload_planet(&mut self, planet: PlanetId, textures: &PlanetTextures);
+    /// Holds `data` as sky image `image`, for [`Batch::SkyImages`] to
+    /// draw: its premultiplied texels and their mip chain as given, read
+    /// through the one sampler every sky image takes
+    /// ([`crate::sky::SKY_SAMPLER`]). Everything a frame needs to draw it
+    /// arrives here, so an adapter makes its texture, its sampler and its
+    /// bindings at this call and none while drawing. The renderer uploads
+    /// an image once, the first frame that draws it, before that frame is
+    /// submitted, however many skies and decorations show it. Sky images
+    /// are not pages: [`Gpu::clear_pages`] keeps them.
+    fn upload_sky_image(&mut self, image: SkyImageId, data: &SkyImage);
     /// Draws `frame` to the window or target.
     fn submit(&mut self, frame: &Frame);
     /// The resolution it draws the world layer at, which decides each
@@ -291,12 +303,33 @@ pub enum Batch {
     /// [`crate::sky`]). Each adds its colour, by the core's falloff, to
     /// what is beneath. They test no depth and write none.
     Sky(Vec<StarInstance>),
+    /// A sky's decorations ([`crate::sky::SkyDecoration`]), in draw
+    /// order, far to near: each a quad of its image
+    /// ([`Gpu::upload_sky_image`]), which leaves `beneath · (1 − cover) +
+    /// light` ([`crate::sky::lit`], [`crate::sky::over`]). It follows its
+    /// sky's [`Batch::Sky`], when that sky drew one. They test no depth
+    /// and write none.
+    SkyImages(Vec<SkyImageInstance>),
+}
+
+/// One sky decoration as the sky-image shader draws it: which image, and
+/// everything the core worked out for its quad
+/// ([`crate::sky::placed`]). The adapter only draws the quad and samples
+/// the image through the one sampler ([`crate::sky::SKY_SAMPLER`]) at
+/// the placement's level of detail.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SkyImageInstance {
+    /// Its image.
+    pub image: SkyImageId,
+    /// Where it is drawn and what it adds.
+    pub placement: Placement,
 }
 
 impl Batch {
     /// A short name for its kind: `"sprites"`, `"or-fill"`, `"solid"`,
-    /// `"text"`, `"models"`, `"planets"` or `"sky"`. Other crates' tests
-    /// describe a frame's shape by it without matching every kind.
+    /// `"text"`, `"models"`, `"planets"`, `"sky"` or `"sky-images"`. Other
+    /// crates' tests describe a frame's shape by it without matching
+    /// every kind.
     #[must_use]
     pub fn kind(&self) -> &'static str {
         match self {
@@ -307,10 +340,12 @@ impl Batch {
             Self::Models { .. } => "models",
             Self::Planets { .. } => "planets",
             Self::Sky(_) => "sky",
+            Self::SkyImages(_) => "sky-images",
         }
     }
 
-    /// How many draws it holds: quads, text runs, models, planets or stars.
+    /// How many draws it holds: quads, text runs, models, planets, stars
+    /// or sky images.
     #[must_use]
     pub fn draws(&self) -> usize {
         match self {
@@ -320,6 +355,7 @@ impl Batch {
             Self::Models { models, .. } => models.len(),
             Self::Planets { planets, .. } => planets.len(),
             Self::Sky(stars) => stars.len(),
+            Self::SkyImages(images) => images.len(),
         }
     }
 }
@@ -960,6 +996,20 @@ mod tests {
                 };
                 8
             ]),
+            Batch::SkyImages(vec![
+                SkyImageInstance {
+                    image: SkyImageId(0),
+                    placement: crate::sky::Placement {
+                        centre: Point::new(0.0, 0.0),
+                        right: Point::new(1.0, 0.0),
+                        down: Point::new(0.0, 1.0),
+                        color: [1.0; 3],
+                        cover: 1.0,
+                        lod: 0.0,
+                    },
+                };
+                9
+            ]),
         ];
         let shape: Vec<(&str, usize)> = batches
             .iter()
@@ -974,7 +1024,8 @@ mod tests {
                 ("text", 5),
                 ("models", 6),
                 ("planets", 7),
-                ("sky", 8)
+                ("sky", 8),
+                ("sky-images", 9)
             ]
         );
     }

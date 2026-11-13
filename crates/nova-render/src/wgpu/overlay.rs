@@ -8,6 +8,7 @@ use nova_data::graphics::Image;
 use crate::gpu::{Frame, Gpu, ModelTextureId, PageId, PlanetId, PlanetTextures};
 use crate::model::{Mesh, MeshId};
 use crate::model_texture::ModelTexture;
+use crate::sky::{SkyImage, SkyImageId};
 use crate::upscale::{Upscaler, WorldResolution};
 use crate::viewport::PixelRect;
 
@@ -75,6 +76,10 @@ impl<G: OverlayGpu + ?Sized> Gpu for WithOverlay<'_, G> {
         self.gpu.upload_planet(planet, textures);
     }
 
+    fn upload_sky_image(&mut self, image: SkyImageId, data: &SkyImage) {
+        self.gpu.upload_sky_image(image, data);
+    }
+
     fn submit(&mut self, frame: &Frame) {
         self.gpu.submit_with(frame, self.painter);
     }
@@ -110,6 +115,7 @@ mod tests {
         UploadModelTexture(ModelTextureId, ModelTexture),
         UploadMesh(MeshId, Mesh, Vec<ModelTextureId>),
         UploadPlanet(PlanetId, PlanetTextures),
+        UploadSkyImage(SkyImageId, SkyImage),
         Submit(Frame),
         SubmitWith(Frame, *const ()),
         SetUpscaler(Upscaler),
@@ -150,6 +156,10 @@ mod tests {
         fn upload_planet(&mut self, planet: PlanetId, textures: &PlanetTextures) {
             self.calls
                 .push(Call::UploadPlanet(planet, textures.clone()));
+        }
+
+        fn upload_sky_image(&mut self, image: SkyImageId, data: &SkyImage) {
+            self.calls.push(Call::UploadSkyImage(image, data.clone()));
         }
 
         fn submit(&mut self, frame: &Frame) {
@@ -323,6 +333,21 @@ mod tests {
             with.upload_planet(PlanetId(4), &textures);
         }
         assert_eq!(gpu.calls, [Call::UploadPlanet(PlanetId(4), textures)]);
+    }
+
+    #[test]
+    fn with_overlay_forwards_sky_image_uploads() {
+        let mut gpu = FakeGpu::default();
+        let mut painter = NoPainter;
+        let image = SkyImage::new(1, 1, vec![1, 2, 3, 255]).expect("one texel");
+        {
+            let mut with = WithOverlay {
+                gpu: &mut gpu,
+                painter: &mut painter,
+            };
+            with.upload_sky_image(SkyImageId(3), &image);
+        }
+        assert_eq!(gpu.calls, [Call::UploadSkyImage(SkyImageId(3), image)]);
     }
 
     #[test]

@@ -90,6 +90,15 @@
 //! pass, with no depth: one square per star, its fragments adding the
 //! star's colour by [`sky::coverage`](crate::sky::coverage) (`sky.wgsl`).
 //!
+//! A sky-images batch ([`Batch::SkyImages`](crate::Batch::SkyImages))
+//! draws in an ordinary pass, with no depth: one quad per decoration, as
+//! the core placed and turned it, its fragments sampling the image each
+//! uploads ([`Gpu::upload_sky_image`](crate::Gpu::upload_sky_image)) at
+//! the core's level of detail and leaving `beneath · (1 − cover) + light`
+//! ([`sky::over`](crate::sky::over), `sky_images.wgsl`). An image's
+//! texture and bind group are made at its upload, and the one sampler
+//! with the pipeline.
+//!
 //! Every render pipeline, glyphon's included, the model pipeline too, is built when the renderer
 //! is made or its upscaler is set, never on a frame: building one compiles
 //! its shader, which takes tens of milliseconds when macOS's Metal shader
@@ -122,6 +131,7 @@ mod planets;
 mod renderer;
 mod sharp_bilinear;
 mod sky;
+mod sky_images;
 mod surface;
 mod upscale;
 
