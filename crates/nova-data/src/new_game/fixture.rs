@@ -150,6 +150,13 @@
 //! generated planet in the start system, for the 3D flight screen:
 //! [`modelled_sample_3d`]'s docs say what each is.
 //!
+//! # `liveried_stations_3d()`
+//!
+//! [`modelled_sample_3d`] with the station hub painted and a livery for
+//! the commonwealth, so Luyten Exchange draws in its owner's livery and
+//! Marrow Yard, whose owner has none, in the kit's own colours:
+//! [`liveried_stations_3d`]'s docs say what each is.
+//!
 //! # `sky_sample()`
 //!
 //! [`modelled_sample`] with a `sky` block on the start system, Luyten
@@ -408,6 +415,58 @@ pub fn modelled_sample_3d() -> MemSource {
         .with("nova-ids.json", &pinned)
 }
 
+/// The id of the commonwealth's livery in [`liveried_stations_3d`].
+pub const COMMONWEALTH_LIVERY: &str = "commonwealth-colours";
+
+/// The commonwealth's livery's colours in [`liveried_stations_3d`], as
+/// sRGB bytes: primary, secondary and trim. Each channel of each is at
+/// least 18 from that channel of every [`KENNEY`] colour (as bytes) and
+/// every slot of the sample's `harrow-raider` livery, and the three are
+/// apart from each other.
+pub const COMMONWEALTH_COLOURS: [[u8; 3]; 3] =
+    [[0xff, 0x8c, 0x00], [0x71, 0x8c, 0xff], [0x00, 0xff, 0xff]];
+
+/// [`modelled_sample_3d`], with its stations' hub painted and the
+/// commonwealth given a livery, so a station draws in its owner's colours:
+///
+/// - the `station-hub` asset is painted as the sample's ships are
+///   (`primary: [metal]`, `secondary: [metalRed]`, `trim: [metalDark]`),
+///   its top in `metalDark`, as the freighter's is;
+/// - the livery [`COMMONWEALTH_LIVERY`] names the `commonwealth`, in
+///   [`COMMONWEALTH_COLOURS`]. No ship wears it.
+///
+/// So `luyten-exchange`, the commonwealth's, wears the commonwealth's
+/// livery, and `marrow-yard`, owned by `marrow-commons`, which no livery
+/// names, wears none and draws in the kit's own colours.
+///
+/// [`modelled_sample_3d`] stays as it is, so the tests over it keep their
+/// meaning.
+///
+/// # Panics
+///
+/// When the sample folder can't be read.
+#[must_use]
+pub fn liveried_stations_3d() -> MemSource {
+    let hex = |[r, g, b]: [u8; 3]| format!("\"#{r:02x}{g:02x}{b:02x}\"");
+    let [primary, secondary, trim] = COMMONWEALTH_COLOURS.map(hex);
+    modelled_sample_3d()
+        .with(
+            "assets/station-hub.md",
+            &format!(
+                "---\nkind: model\nplaceholder: false\nfront: \"-z\"\n\
+                 paint: {{primary: [metal], secondary: [metalRed], trim: [metalDark]}}\n\
+                 files: [{STATION_HUB_GLB}]\n{KENNEY_CC0}---\n"
+            ),
+        )
+        .with(
+            &format!("liveries/{COMMONWEALTH_LIVERY}.md"),
+            &format!(
+                "---\nname: Commonwealth colours\nfaction: commonwealth\n\
+                 palette: {{primary: {primary}, secondary: {secondary}, trim: {trim}}}\n---\n"
+            ),
+        )
+}
+
 /// The `sky` block [`sky_sample`] gives Luyten Crossing, a front-matter
 /// fragment: no stars, a warm tint, and red clouds in every backdrop
 /// cell, a look no seed gives, so a test can tell the data's look from
@@ -469,4 +528,20 @@ fn read_into_memory(dir: &Path) -> MemSource {
         into
     }
     walk(dir, "", MemSource::default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_liveried_stations_load_with_the_commonwealth_s_livery_and_no_problems() {
+        let game = super::super::load(&liveried_stations_3d(), Path::new("sample"));
+        assert_eq!(game.problems, Vec::new());
+        let id = |s: &str| nova_galaxy_format::id::Id::try_from(s.to_owned()).expect("an id");
+        let livery = &game.galaxy.liveries[&id(COMMONWEALTH_LIVERY)].data;
+        assert_eq!(livery.faction, Some(id("commonwealth")));
+        let hub = &game.galaxy.assets[&id("station-hub")].data;
+        assert!(hub.paint.is_some(), "the hub is painted");
+    }
 }
