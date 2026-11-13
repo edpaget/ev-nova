@@ -6,6 +6,7 @@
 
 mod common;
 
+mod colorized_models;
 mod enlarged_atlas;
 mod faded_models;
 mod flight_frame;

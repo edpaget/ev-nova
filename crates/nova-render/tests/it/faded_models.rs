@@ -23,9 +23,9 @@ use super::common::fill;
 use super::common::pixels::{LOGICAL, SIZE, assert_near, color_at};
 use super::wgpu_offscreen::{Images, gpu_with};
 
-const CUBE: ModelKey = ModelKey(1);
+pub(super) const CUBE: ModelKey = ModelKey(1);
 /// A cube half the size, white all over.
-const PART: ModelKey = ModelKey(2);
+pub(super) const PART: ModelKey = ModelKey(2);
 
 /// The cube's faces' colours, in `Mesh::cube`'s order: +x, −x, +y, −y,
 /// +z, −z.
@@ -38,7 +38,7 @@ const FACES: [[u8; 3]; 6] = [
     [40, 40, 255],
 ];
 /// Each face's outward normal, in the same order.
-const NORMALS: [[f32; 3]; 6] = [
+pub(super) const NORMALS: [[f32; 3]; 6] = [
     [1.0, 0.0, 0.0],
     [-1.0, 0.0, 0.0],
     [0.0, 1.0, 0.0],
@@ -46,17 +46,17 @@ const NORMALS: [[f32; 3]; 6] = [
     [0.0, 0.0, 1.0],
     [0.0, 0.0, -1.0],
 ];
-const PLUS_Y: usize = 2;
-const PLUS_Z: usize = 4;
+pub(super) const PLUS_Y: usize = 2;
+pub(super) const PLUS_Z: usize = 4;
 
 /// The backdrop every scene is drawn over.
-const BACKDROP: [u8; 3] = [40, 120, 60];
+pub(super) const BACKDROP: [u8; 3] = [40, 120, 60];
 
 /// A point on the +z face, where the −y face lies behind it: drawn
 /// before it, so a model that blended its back faces would show it.
-const ON_PLUS_Z: (f32, f32) = (12.0, 7.5);
+pub(super) const ON_PLUS_Z: (f32, f32) = (12.0, 7.5);
 /// A point on the +y face, where the −z face lies behind it.
-const ON_PLUS_Y: (f32, f32) = (12.0, 16.5);
+pub(super) const ON_PLUS_Y: (f32, f32) = (12.0, 16.5);
 
 fn at(x: f32, y: f32) -> Point {
     Point::new(x, y)
@@ -64,14 +64,14 @@ fn at(x: f32, y: f32) -> Point {
 
 /// The cube's turn: 30° about x, which tips +y toward the camera, so +z
 /// and +y face it and −z and −y face away.
-fn turn() -> Orientation {
+pub(super) fn turn() -> Orientation {
     Orientation::about([1.0, 0.0, 0.0], FRAC_PI_6)
 }
 
 /// The cube at (`x`, 12), 10 logical units a side. Turned, at x 12 its +z
 /// covers logical y 5.17 to 13.83 and its +y 13.83 to 18.83, and x 7 to
 /// 17.
-fn pose_at(x: f32) -> ModelPose {
+pub(super) fn pose_at(x: f32) -> ModelPose {
     ModelPose {
         center: at(x, 12.0),
         orientation: turn(),
@@ -112,7 +112,7 @@ fn backdrop(list: &mut DrawList) {
 }
 
 /// The backdrop, then whatever `draw` adds.
-fn scene(draw: impl FnOnce(&mut DrawList)) -> DrawList {
+pub(super) fn scene(draw: impl FnOnce(&mut DrawList)) -> DrawList {
     let mut list = DrawList::new();
     backdrop(&mut list);
     draw(&mut list);
@@ -122,10 +122,16 @@ fn scene(draw: impl FnOnce(&mut DrawList)) -> DrawList {
 /// `list` drawn with the cube and the part registered, read back; `None`
 /// with no adapter.
 fn drawn(list: &DrawList) -> Option<Vec<u8>> {
+    drawn_with(list, cube())
+}
+
+/// `list` drawn with `cube` registered as [`CUBE`] and the part as
+/// [`PART`], read back; `None` with no adapter.
+pub(super) fn drawn_with(list: &DrawList, cube: Mesh) -> Option<Vec<u8>> {
     let mut gpu = gpu_with(SIZE, SIZE, &FontFaces::bundled())?;
     gpu.set_upscaler(Upscaler::Native);
     let mut renderer = Renderer::new(Images);
-    renderer.add_model(CUBE, cube());
+    renderer.add_model(CUBE, cube);
     renderer.add_model(PART, part());
     let viewport = Viewport::new(LOGICAL, (SIZE, SIZE), 2.0);
     let report = renderer.render(list, &viewport, &mut gpu);
@@ -146,7 +152,7 @@ fn fragment_of(face: usize, alpha: f32) -> [f32; 4] {
 }
 
 /// `fragment` blended straight over `beneath`, rounded to 8 bits.
-fn over(beneath: [u8; 3], [r, g, b, a]: [f32; 4]) -> [u8; 3] {
+pub(super) fn over(beneath: [u8; 3], [r, g, b, a]: [f32; 4]) -> [u8; 3] {
     let [br, bg, bb] = beneath.map(|c| f32::from(c) / 255.0);
     [(r, br), (g, bg), (b, bb)].map(|(c, d)| ((c * a + d * (1.0 - a)) * 255.0).round() as u8)
 }
@@ -169,7 +175,7 @@ fn a_faded_cube_shows_each_face_faded_over_the_backdrop_alone() {
 }
 
 /// A part at the cube's centre, wholly inside it.
-fn inside() -> Mounting {
+pub(super) fn inside() -> Mounting {
     Mounting {
         at: [0.0; 3],
         turn: 0.0,
@@ -231,7 +237,7 @@ fn an_earlier_model_shows_through_a_faded_one_and_a_later_one_covers_it() {
 }
 
 /// A part standing out of the cube to its right: at logical x 24.
-fn beside() -> Mounting {
+pub(super) fn beside() -> Mounting {
     Mounting {
         at: [1.2, 0.0, 0.0],
         turn: 0.0,
