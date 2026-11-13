@@ -239,13 +239,19 @@ fn ship_radius<M: ModelSource>(
         .filter_map(|mount| {
             let shown = mount.shows.as_ref()?;
             let part = keys.radius(table.outfit(&shown.asset)?)?;
-            let [x, y, z] = mount.at;
-            let lifted = z + shown.lift;
-            #[allow(clippy::cast_possible_truncation, reason = "a mount's metres")]
-            let reach = (x * x + y * y + lifted * lifted).sqrt() as f32;
-            Some(reach + part)
+            Some(part_reach(mount.at, shown.lift, part))
         })
         .fold(hull_radius, f32::max)
+}
+
+/// How far a part of radius `part` reaches from its hull's origin, on a
+/// mount at `at` raised by `lift`: the lifted point's distance, plus the
+/// part's own radius.
+fn part_reach([x, y, z]: [f64; 3], lift: f64, part: f32) -> f32 {
+    let lifted = z + lift;
+    #[allow(clippy::cast_possible_truncation, reason = "a mount's metres")]
+    let reach = (x * x + y * y + lifted * lifted).sqrt() as f32;
+    reach + part
 }
 
 /// Every outfit model asset a mount in `table` shows.
@@ -839,6 +845,14 @@ mod tests {
         // Light freighter (shared with the plain one), the gunship's
         // paint, the turret and the hub.
         assert_eq!(keys.len(), 4);
+    }
+
+    #[test]
+    fn a_part_reaches_its_lifted_mount_s_distance_plus_its_own_radius() {
+        // (3, 4, 10 + 2) is 13 from the origin.
+        assert!((part_reach([3.0, 4.0, 10.0], 2.0, 0.5) - 13.5).abs() < 1e-6);
+        // (0, 0, 0 - 1) is 1 from it: a lift down reaches as far.
+        assert!((part_reach([0.0, 0.0, 0.0], -1.0, 0.25) - 1.25).abs() < 1e-6);
     }
 
     #[test]
