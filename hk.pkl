@@ -125,8 +125,27 @@ local changed = new Mapping<String, Step | Group> {
     }
 }
 
+// After a merge (landing's `merge --ff-only` in the main checkout, or a
+// `git merge main` into a branch), sweep that checkout's target dir of
+// artifacts no build has used in 7 days (`mise run sweep`), so
+// target/debug/deps stays at a few thousand files and the wgpu tests stay
+// fast (.claude/rules/slow-tests.md). It covers target/clippy and the other
+// target dirs under target/ too. The sweep only walks and unlinks files,
+// so it is not a heavy job: a build running in the same target dir uses only
+// units it has just read, which are fresh. It can't fail the merge, which
+// has already happened.
+local merged = new Mapping<String, Step> {
+    ["sweep"] {
+        check = "mise run sweep"
+    }
+}
+
 // Check-only: the hooks report problems but never rewrite staged files.
 hooks {
+    ["post-merge"] {
+        fix = false
+        steps = merged
+    }
     ["pre-commit"] {
         steps = changed
     }
