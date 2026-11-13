@@ -26,6 +26,10 @@
 //!   checked when they are made, and [`Mesh::cube`].
 //! - [`model_texture`]: a model's base-colour texture ([`ModelTexture`]),
 //!   decoded pixels with their mip chain built at load.
+//! - [`model_sampler`]: how a section samples its texture
+//!   ([`ModelSampler`]: wrap, filters and mip levels, as the model gives
+//!   them), and the texel that is ([`model_sampler::sample`]), which the
+//!   adapter's samplers mirror.
 //! - [`model_source`]: the [`ModelSource`] port, the new game's models by
 //!   asset id ([`ModelRequest`]) as [`LoadedModel`]s, placed and scaled
 //!   on the view's model axes, with their materials and their base-colour
@@ -177,6 +181,7 @@ pub mod gpu;
 pub mod images;
 pub mod livery;
 pub mod model;
+pub mod model_sampler;
 pub mod model_source;
 pub mod model_texture;
 mod models;
@@ -212,6 +217,7 @@ pub use gpu::{
 pub use images::{ImageError, ImageSource};
 pub use livery::{Livery, PaintSlot, painted};
 pub use model::{Mesh, MeshError, MeshId, Section, Vertex};
+pub use model_sampler::ModelSampler;
 pub use model_source::{LoadedModel, ModelError, ModelRequest, ModelSource};
 pub use model_texture::{ModelTexture, ModelTextureError, ModelTextureId};
 pub use new_game_sky::sky_looks;

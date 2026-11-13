@@ -2787,14 +2787,8 @@ mod tests {
         gpu.upload_model_texture(ModelTextureId(0), &texture);
         let cube = Mesh::cube([Color::WHITE; 6]);
         let sections = vec![
-            crate::model::Section {
-                indices: 0..18,
-                texture: Some(0),
-            },
-            crate::model::Section {
-                indices: 18..36,
-                texture: None,
-            },
+            crate::model::Section::new(0..18, Some(0)),
+            crate::model::Section::new(18..36, None),
         ];
         let skinned = Mesh::textured(
             cube.vertices().to_vec(),
@@ -2940,7 +2934,7 @@ mod tests {
         };
         let texture = ModelTexture::new(1, 1, GREEN.to_vec()).expect("one texel");
         let cube = Mesh::cube([Color::WHITE; 6]);
-        let section = |indices, texture| crate::model::Section { indices, texture };
+        let section = crate::model::Section::new;
         let skinned = Mesh::textured(
             cube.vertices().to_vec(),
             cube.indices().to_vec(),

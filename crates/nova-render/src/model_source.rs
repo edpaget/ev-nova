@@ -35,20 +35,31 @@
 //!   is white (a white factor under a texture, or no texture), and close
 //!   otherwise, as the sRGB curve is nearly a power law and a power law
 //!   is multiplicative. Decoding to linear in the shader would mean
-//!   rebaking every vertex colour for a difference in the curve's toe. A
-//!   texture is sampled trilinear and repeats past its edges (glTF's
-//!   defaults).
+//!   rebaking every vertex colour for a difference in the curve's toe.
+//! - **Its base colour's sampler.** A texture is sampled as the model
+//!   says ([`Material::base_color_sampler`], a [`ModelSampler`]): its
+//!   wrap along each axis, its filters and the mip levels it reads, as
+//!   [`crate::model_sampler::sample`] defines them. A model that says
+//!   nothing repeats past the texture's edges and is trilinear
+//!   ([`ModelSampler::DEFAULT`]). The sampler travels with each section
+//!   of the merged mesh, so two materials may draw one texture two ways
+//!   and still share its one upload.
+//! - **Its base colour's coordinates.** [`Part::uv`] is the coordinate
+//!   set the base colour names (`texCoord`), with its
+//!   `KHR_texture_transform` applied: the source resolves both when it
+//!   reads the model, so the coordinates here are final and nothing later
+//!   applies either. A part whose named set is missing has no
+//!   coordinates, and draws untextured.
 //! - **`unlit`.** An unlit material's parts draw at that product whatever
 //!   the light; every other part is lit by it ([`crate::camera::shade`]).
 //! - **Metallic and roughness are carried and unused.** The light is one
 //!   Lambert term and an ambient one, which neither factor enters. They
 //!   stay on [`Material`] for a lighting model that grows to use them.
 //!
-//! Not read from the model, and so not drawn: a sampler's wrap and filter
-//! modes, a base colour's `texCoord` set other than 0,
-//! `KHR_texture_transform`, and the metallic-roughness, normal, occlusion
-//! and emissive textures. What a fragment's alpha does once drawn (alpha
-//! mode, cutoff, blending order) is not this module's either.
+//! Not read from the model, and so not drawn: the metallic-roughness,
+//! normal, occlusion and emissive textures. What a fragment's alpha does
+//! once drawn (alpha mode, cutoff, blending order) is not this module's
+//! either.
 //!
 //! # Where an addition goes
 //!
@@ -68,6 +79,10 @@
 //!   mesh carries neither texture coordinates nor the unlit flag), its
 //!   effect on a fragment defined by [`crate::camera::fragment`] and
 //!   mirrored by the shader.
+//! - A new property of how a texture is sampled: a field of
+//!   [`ModelSampler`], defined by [`crate::model_sampler::sample`] and
+//!   mirrored by the wgpu adapter's `descriptor`, never a new argument
+//!   or method of the [`Gpu`](crate::Gpu) port.
 //! - A new livery slot: a [`PaintSlot`] variant and a field of
 //!   [`Livery`](crate::livery::Livery), and the adapter's reading of the
 //!   media crate's slot (see [`crate::livery`]).
@@ -92,6 +107,7 @@ pub use nova_view::view_axes;
 
 pub use crate::livery::PaintSlot;
 use crate::model::{Mesh, MeshError, Section, Vertex};
+use crate::model_sampler::ModelSampler;
 use crate::model_texture::ModelTexture;
 
 /// A model wanted: the asset (`assets/<id>.md`), and how long to make it.
@@ -125,7 +141,9 @@ pub struct Part {
     /// Its material, as an index into [`LoadedModel::materials`].
     pub material: Option<usize>,
     /// Each vertex's texture coordinates, if it has them: one per vertex
-    /// of [`mesh`](Self::mesh).
+    /// of [`mesh`](Self::mesh), as its material's base colour is sampled
+    /// by them (the set it names, transformed; see the
+    /// [module docs](self)).
     pub uv: Option<Vec<[f32; 2]>>,
 }
 
@@ -150,6 +168,31 @@ pub struct Material {
     /// The texture its base colour takes, as an index into
     /// [`LoadedModel::textures`].
     pub base_color_texture: Option<usize>,
+    /// How its base colour samples that texture, as the model gives it.
+    /// Two materials may name one texture through two samplers. A
+    /// material with no base-colour texture carries
+    /// [`ModelSampler::DEFAULT`].
+    pub base_color_sampler: ModelSampler,
+}
+
+impl Material {
+    /// A material of the linear `base_color` that says nothing else: no
+    /// name and no paint slot, glTF's metallic and roughness of 1, lit,
+    /// and no texture. A literal names the fields it means and takes the
+    /// rest from here, so a new field doesn't touch it.
+    #[must_use]
+    pub fn new(base_color: [f32; 4]) -> Self {
+        Material {
+            name: None,
+            paint: None,
+            base_color,
+            metallic: 1.0,
+            roughness: 1.0,
+            unlit: false,
+            base_color_texture: None,
+            base_color_sampler: ModelSampler::DEFAULT,
+        }
+    }
 }
 
 /// A model's base-colour texture: an image a material's base colour
@@ -184,11 +227,13 @@ impl LoadedModel {
     /// The merge writes what a part's own mesh doesn't carry: each
     /// vertex's texture coordinates (from [`Part::uv`]) and whether it is
     /// unlit (its part's material's). It makes one [`Section`] for each
-    /// run of consecutive parts that draw the same texture, so a model
-    /// with no texture is one section. A part draws its material's
-    /// texture only if it has texture coordinates to sample it by;
-    /// without them, or without a material, it draws untextured, in its
-    /// vertex colours alone.
+    /// run of consecutive parts that draw the same texture through the
+    /// same sampler, so a model with no texture is one section. A part
+    /// draws its material's texture, through its material's sampler,
+    /// only if it has texture coordinates to sample it by; without them,
+    /// or without a material, it draws untextured, in its vertex colours
+    /// alone, and its section carries the default sampler, so untextured
+    /// runs merge whatever their materials say.
     #[must_use]
     pub fn mesh(&self) -> Mesh {
         let mut vertices = Vec::new();
@@ -197,9 +242,13 @@ impl LoadedModel {
         for part in &self.parts {
             let material = part.material.and_then(|at| self.materials.get(at));
             let unlit = material.is_some_and(|m| m.unlit);
-            let texture = material
-                .and_then(|m| m.base_color_texture)
-                .filter(|&at| part.uv.is_some() && at < self.textures.len());
+            let drawn = material
+                .and_then(|m| Some((m.base_color_texture?, m.base_color_sampler)))
+                .filter(|&(at, _)| part.uv.is_some() && at < self.textures.len());
+            let (texture, sampler) = match drawn {
+                Some((at, sampler)) => (Some(at), sampler),
+                None => (None, ModelSampler::DEFAULT),
+            };
             let base = u32::try_from(vertices.len()).expect("a model's vertices fit in u32");
             let uvs = part.uv.as_deref().unwrap_or(&[]);
             vertices.extend(
@@ -217,11 +266,10 @@ impl LoadedModel {
             indices.extend(part.mesh.indices().iter().map(|i| base + i));
             let end = u32::try_from(indices.len()).expect("a model's indices fit in u32");
             match sections.last_mut() {
-                Some(last) if last.texture == texture => last.indices.end = end,
-                _ => sections.push(Section {
-                    indices: start..end,
-                    texture,
-                }),
+                Some(last) if last.texture == texture && last.sampler == sampler => {
+                    last.indices.end = end;
+                }
+                _ => sections.push(Section::new(start..end, texture).sampled(sampler)),
             }
         }
         let textures = self.textures.iter().map(|t| Arc::clone(&t.image)).collect();
@@ -494,6 +542,7 @@ mod fake {
 
     use super::{LoadedModel, ModelError, ModelRequest, ModelSource};
     use crate::model::{Mesh, Vertex};
+    use crate::model_sampler::ModelSampler;
 
     /// A hand-written [`ModelSource`]: the models it was given, by asset,
     /// each at a metre to a unit, scaled to a request's length. An asset it
@@ -577,6 +626,8 @@ mod fake {
     /// - each part's material, each material's texture, is in range, and
     ///   each part's texture coordinates, when it has them, are one per
     ///   vertex and finite;
+    /// - a material with no base-colour texture carries the default
+    ///   sampler, so two readings of one model compare equal;
     /// - a material with no name has no paint slot;
     /// - asking again gives an equal answer;
     /// - `absent` is [`ModelError::NoAsset`].
@@ -639,6 +690,12 @@ mod fake {
                 "`{asset}` material {at}'s texture is in range"
             );
             assert!(
+                material.base_color_texture.is_some()
+                    || material.base_color_sampler == ModelSampler::DEFAULT,
+                "`{asset}` material {at} has no texture, so the default sampler: {:?}",
+                material.base_color_sampler
+            );
+            assert!(
                 material.name.is_some() || material.paint.is_none(),
                 "`{asset}` material {at} has no name, so no paint slot: {:?}",
                 material.paint
@@ -663,6 +720,7 @@ mod fake {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::model_sampler::{Filter, Wrap};
 
     /// A unit cube's parts: its first two faces in material 0 and the
     /// rest in material 1, each part a mesh of its own.
@@ -690,13 +748,25 @@ mod tests {
     fn material(name: &str) -> Material {
         Material {
             name: Some(name.to_owned()),
-            paint: None,
-            base_color: [1.0; 4],
-            metallic: 1.0,
-            roughness: 1.0,
-            unlit: false,
-            base_color_texture: None,
+            ..Material::new([1.0; 4])
         }
+    }
+
+    #[test]
+    fn a_new_material_says_only_its_base_colour() {
+        assert_eq!(
+            Material::new([0.5, 0.25, 0.125, 1.0]),
+            Material {
+                name: None,
+                paint: None,
+                base_color: [0.5, 0.25, 0.125, 1.0],
+                metallic: 1.0,
+                roughness: 1.0,
+                unlit: false,
+                base_color_texture: None,
+                base_color_sampler: ModelSampler::DEFAULT,
+            }
+        );
     }
 
     #[test]
@@ -763,7 +833,83 @@ mod tests {
     }
 
     fn section(indices: std::ops::Range<u32>, texture: Option<usize>) -> Section {
-        Section { indices, texture }
+        Section::new(indices, texture)
+    }
+
+    /// A sampler that clamps along u and reads the nearest texel.
+    const SHARP: ModelSampler = ModelSampler {
+        wrap_s: Wrap::Clamp,
+        mag: Filter::Nearest,
+        ..ModelSampler::DEFAULT
+    };
+
+    /// A material drawing texture `texture` through `sampler`.
+    fn sampled(texture: usize, sampler: ModelSampler) -> Material {
+        Material {
+            base_color_sampler: sampler,
+            ..textured(texture)
+        }
+    }
+
+    #[test]
+    fn parts_on_one_texture_split_where_the_sampler_changes_and_only_there() {
+        let mirrored = ModelSampler {
+            wrap_t: Wrap::Mirror,
+            ..ModelSampler::DEFAULT
+        };
+        let model = faced(
+            vec![sampled(0, SHARP), sampled(0, mirrored), textured(0)],
+            vec![texture(9)],
+            [
+                (Some(0), true),
+                (Some(0), true),
+                (Some(1), true),
+                (Some(2), true),
+                (Some(2), true),
+                (Some(0), true),
+            ],
+        );
+        let mesh = model.mesh();
+        assert_eq!(
+            mesh.sections(),
+            [
+                section(0..12, Some(0)).sampled(SHARP),
+                section(12..18, Some(0)).sampled(mirrored),
+                section(18..30, Some(0)),
+                section(30..36, Some(0)).sampled(SHARP),
+            ]
+        );
+        // One texture, however many samplers read it.
+        assert_eq!(mesh.textures().len(), 1);
+        assert!(Arc::ptr_eq(&mesh.textures()[0], &model.textures[0].image));
+    }
+
+    #[test]
+    fn a_part_that_draws_no_texture_carries_the_default_sampler() {
+        // A sampled material's part with no coordinates, a part with no
+        // material and a material naming a texture the model lacks all
+        // draw untextured, and merge into one section whatever sampler
+        // their materials name.
+        let model = faced(
+            vec![sampled(0, SHARP), sampled(4, SHARP), material("plain")],
+            vec![texture(9)],
+            [
+                (Some(0), true),
+                (Some(0), false),
+                (None, true),
+                (Some(1), true),
+                (Some(2), true),
+                (Some(0), true),
+            ],
+        );
+        assert_eq!(
+            model.mesh().sections(),
+            [
+                section(0..6, Some(0)).sampled(SHARP),
+                section(6..30, None),
+                section(30..36, Some(0)).sampled(SHARP),
+            ]
+        );
     }
 
     #[test]
@@ -1058,6 +1204,21 @@ mod tests {
         assert_eq!(scaled.sections(), skinned.mesh().sections());
         assert!(scaled.vertices().iter().all(|v| v.unlit));
         assert_eq!(scaled.vertices()[5].uv, skinned.mesh().vertices()[5].uv);
+        // Sampled its own way, it still does, and scaling keeps the
+        // sampler.
+        let sharp = faced(
+            vec![sampled(0, SHARP)],
+            vec![texture(9)],
+            [(Some(0), true); 6],
+        );
+        let fake = FakeModels::default().with("sharp", sharp);
+        check_contract(&fake, &ModelRequest::new("sharp", None), "nothing");
+        check_contract(&fake, &ModelRequest::new("sharp", Some(40.0)), "nothing");
+        let scaled = fake.model(&ModelRequest::new("sharp", Some(40.0))).unwrap();
+        assert_eq!(
+            scaled.mesh().sections(),
+            [section(0..36, Some(0)).sampled(SHARP)]
+        );
     }
 
     /// A source whose cube has a texture coordinate that is not a number.
@@ -1081,6 +1242,29 @@ mod tests {
     #[should_panic(expected = "`cube` part 2's texture coordinates are finite")]
     fn the_contract_fails_a_source_with_a_texture_coordinate_that_is_not_finite() {
         check_contract(&BadCoordinates, &ModelRequest::new("cube", None), "nothing");
+    }
+
+    /// A source whose cube has an untextured material with a sampler of
+    /// its own.
+    struct SamplesNothing;
+
+    impl ModelSource for SamplesNothing {
+        fn model(&self, request: &ModelRequest) -> Result<LoadedModel, ModelError> {
+            match request.asset.as_str() {
+                "cube" => {
+                    let mut model = cube_model();
+                    model.materials[1].base_color_sampler = SHARP;
+                    Ok(model)
+                }
+                other => Err(ModelError::NoAsset(other.into())),
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "`cube` material 1 has no texture, so the default sampler")]
+    fn the_contract_fails_a_source_whose_untextured_material_carries_a_sampler() {
+        check_contract(&SamplesNothing, &ModelRequest::new("cube", None), "nothing");
     }
 
     /// A source that answers every request with the unit cube, whatever

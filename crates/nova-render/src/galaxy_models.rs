@@ -368,6 +368,7 @@ fn loaded(
                 base_color_texture: m
                     .base_color_texture
                     .and_then(|texture| places.get(texture.image).copied().flatten()),
+                base_color_sampler: crate::ModelSampler::DEFAULT,
             })
             .collect(),
         textures,
@@ -739,12 +740,11 @@ mod tests {
             model.materials,
             [Material {
                 name: Some("hull".into()),
-                paint: None,
-                base_color: [1.0; 4],
                 metallic: 0.25,
                 roughness: 0.5,
                 unlit: true,
                 base_color_texture: Some(0),
+                ..Material::new([1.0; 4])
             }]
         );
         let part = &model.parts[0];

@@ -185,11 +185,7 @@ mod tests {
         Material {
             name: Some(name.to_owned()),
             paint: slot,
-            base_color: [0.25, 0.5, 0.75, 1.0],
-            metallic: 1.0,
-            roughness: 1.0,
-            unlit: false,
-            base_color_texture: None,
+            ..Material::new([0.25, 0.5, 0.75, 1.0])
         }
     }
 

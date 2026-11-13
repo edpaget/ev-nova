@@ -4,7 +4,8 @@
 //! whether it is unlit.
 //!
 //! A mesh draws in [`Section`]s: runs of its triangles, each with one
-//! base-colour texture ([`ModelTexture`]) or none. A fragment's colour is
+//! base-colour texture ([`ModelTexture`]) or none, sampled as the section
+//! says ([`ModelSampler`]). A fragment's colour is
 //! its vertex colour times its section's texel, lit unless its vertex is
 //! unlit ([`crate::camera::fragment`]). A section with no texture draws
 //! as if its texel were white, so in its vertex colour alone.
@@ -20,6 +21,7 @@ use std::sync::Arc;
 
 use nova_view::Color;
 
+use crate::model_sampler::ModelSampler;
 use crate::model_texture::ModelTexture;
 
 /// Which mesh the GPU holds, as the renderer numbers them
@@ -46,7 +48,8 @@ pub struct Vertex {
     pub unlit: bool,
 }
 
-/// A run of a mesh's triangles drawn with one texture, or with none.
+/// A run of a mesh's triangles drawn with one texture through one
+/// sampler, or with none.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Section {
     /// Which of the mesh's indices it draws.
@@ -54,6 +57,29 @@ pub struct Section {
     /// Its base-colour texture, as an index into [`Mesh::textures`]; `None`
     /// draws its vertex colours alone.
     pub texture: Option<usize>,
+    /// How it samples its texture ([`crate::model_sampler::sample`]). Two
+    /// sections may name one texture through two samplers. Nothing reads
+    /// it in a section with no texture.
+    pub sampler: ModelSampler,
+}
+
+impl Section {
+    /// The section of `indices` on `texture`, sampled the default way
+    /// ([`ModelSampler::DEFAULT`]).
+    #[must_use]
+    pub fn new(indices: Range<u32>, texture: Option<usize>) -> Self {
+        Section {
+            indices,
+            texture,
+            sampler: ModelSampler::DEFAULT,
+        }
+    }
+
+    /// The same section, sampling its texture through `sampler`.
+    #[must_use]
+    pub fn sampled(self, sampler: ModelSampler) -> Self {
+        Section { sampler, ..self }
+    }
 }
 
 /// Why [`Mesh::new`] or [`Mesh::textured`] refused a mesh.
@@ -143,10 +169,7 @@ impl Mesh {
     /// whole triangles. A mesh with no triangles is a mesh, which draws
     /// nothing.
     pub fn new(vertices: Vec<Vertex>, indices: Vec<u32>) -> Result<Self, MeshError> {
-        let whole = Section {
-            indices: 0..indices.len() as u32,
-            texture: None,
-        };
+        let whole = Section::new(0..indices.len() as u32, None);
         Self::textured(vertices, indices, Vec::new(), vec![whole])
     }
 
@@ -176,7 +199,13 @@ impl Mesh {
             });
         }
         let mut covered = 0;
-        for (section, Section { indices, texture }) in sections.iter().enumerate() {
+        for (
+            section,
+            Section {
+                indices, texture, ..
+            },
+        ) in sections.iter().enumerate()
+        {
             if indices.start != covered {
                 return Err(MeshError::SectionOutOfOrder {
                     section,
@@ -378,7 +407,43 @@ mod tests {
     }
 
     fn section(indices: std::ops::Range<u32>, texture: Option<usize>) -> Section {
-        Section { indices, texture }
+        Section::new(indices, texture)
+    }
+
+    #[test]
+    fn a_section_takes_the_default_sampler_unless_it_is_given_one() {
+        use crate::model_sampler::{Filter, Wrap};
+        let plain = Section::new(3..9, Some(1));
+        assert_eq!(
+            plain,
+            Section {
+                indices: 3..9,
+                texture: Some(1),
+                sampler: ModelSampler::DEFAULT,
+            }
+        );
+        let sharp = ModelSampler {
+            wrap_s: Wrap::Clamp,
+            mag: Filter::Nearest,
+            ..ModelSampler::DEFAULT
+        };
+        assert_eq!(
+            plain.clone().sampled(sharp),
+            Section {
+                indices: 3..9,
+                texture: Some(1),
+                sampler: sharp,
+            }
+        );
+        assert_ne!(plain.clone().sampled(sharp), plain);
+        // A mesh keeps each section's sampler.
+        let (vertices, indices) = quad();
+        let sections = vec![
+            Section::new(0..3, Some(0)).sampled(sharp),
+            Section::new(3..6, Some(0)),
+        ];
+        let mesh = Mesh::textured(vertices, indices, vec![texture(1)], sections.clone());
+        assert_eq!(mesh.expect("two sections").sections(), sections);
     }
 
     #[test]

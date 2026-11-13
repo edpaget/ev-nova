@@ -474,7 +474,7 @@ mod tests {
     fn a_mesh_draws_each_section_that_has_triangles_with_its_texture_s_id() {
         let cube = Mesh::cube([nova_view::Color::WHITE; 6]);
         let texture = || Arc::new(ModelTexture::new(1, 1, vec![9, 9, 9, 255]).expect("one texel"));
-        let section = |indices, texture| Section { indices, texture };
+        let section = Section::new;
         let mesh = Mesh::textured(
             cube.vertices().to_vec(),
             cube.indices().to_vec(),

@@ -650,15 +650,9 @@ mod tests {
         let cube = cube();
         let faces = textures.len() as u32;
         let mut sections: Vec<Section> = (0..faces)
-            .map(|face| Section {
-                indices: face * 6..face * 6 + 6,
-                texture: Some(face as usize),
-            })
+            .map(|face| Section::new(face * 6..face * 6 + 6, Some(face as usize)))
             .collect();
-        sections.push(Section {
-            indices: faces * 6..36,
-            texture: None,
-        });
+        sections.push(Section::new(faces * 6..36, None));
         Mesh::textured(
             cube.vertices().to_vec(),
             cube.indices().to_vec(),

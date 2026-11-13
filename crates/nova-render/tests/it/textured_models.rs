@@ -58,12 +58,9 @@ fn skin() -> Texture {
 fn material(base: [f32; 4], unlit: bool, textured: bool) -> Material {
     Material {
         name: Some("skin".to_owned()),
-        paint: None,
-        base_color: base,
-        metallic: 1.0,
-        roughness: 1.0,
         unlit,
         base_color_texture: textured.then_some(0),
+        ..Material::new(base)
     }
 }
 
@@ -138,13 +135,7 @@ fn a_textured_unlit_model_from_data_uploads_its_texture_then_its_mesh_and_draws(
     // The mesh names it: one section, all twelve triangles.
     assert_eq!(*mesh, MeshId(0));
     assert_eq!(textures, &[ModelTextureId(0)]);
-    assert_eq!(
-        uploaded.sections(),
-        [Section {
-            indices: 0..36,
-            texture: Some(0),
-        }]
-    );
+    assert_eq!(uploaded.sections(), [Section::new(0..36, Some(0))]);
     // Each vertex is unlit and carries the fixture's coordinates.
     assert!(!uploaded.vertices().is_empty());
     let mut corners = Vec::new();
