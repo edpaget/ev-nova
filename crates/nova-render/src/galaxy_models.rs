@@ -2,6 +2,15 @@
 //! asset's `.glb` or `.gltf` (with the buffers and images a `.gltf`
 //! names) through the format's [`Source`] port, needing no GPU.
 //!
+//! A scene comes from one of two places. Given the scenes somebody read
+//! already ([`GalaxyModels::reading`]: the loader's, which reads every
+//! model a ship, a mount or a station shows for its 2D stand-in), an
+//! asset among them is taken as it was read there, a failure included,
+//! and the source isn't asked about it. Any other asset, and every asset
+//! with no scenes given, is read through the source
+//! (`nova_galaxy_media::read_asset_scene`). Either way what is made of the
+//! scene is the same.
+//!
 //! It only chains decisions made elsewhere: which file is the model and
 //! how it is read (`nova_galaxy_media::scene`), which budget covers it and
 //! what it breaks (`nova_galaxy_media::budget`), how each image a
@@ -41,7 +50,7 @@ use nova_galaxy_format::load::Galaxy;
 use nova_galaxy_format::source::Source;
 use nova_galaxy_media::budget::{self, Limits, limits, measure, over_budget, texture_limits};
 use nova_galaxy_media::scene::{Scene, read_asset_scene};
-use nova_galaxy_media::{NoImage, NoModel, Placement, Slot, read_image, slot_of};
+use nova_galaxy_media::{AssetScenes, NoImage, NoModel, Placement, Slot, read_image, slot_of};
 
 use crate::gpu::MAX_TEXTURE_SIDE;
 use crate::livery::Livery;
@@ -53,18 +62,39 @@ use crate::model_source::{
 use crate::model_texture::ModelTexture;
 
 /// The new game's models: the asset manifest and budgets of `galaxy`, the
-/// files read through `source`.
+/// files read through `source`, but for the scenes it was given already
+/// read ([`reading`](Self::reading)).
 #[derive(Clone, Copy, Debug)]
 pub struct GalaxyModels<'a, S: Source> {
     galaxy: &'a Galaxy,
     source: &'a S,
+    /// The scenes somebody read already, if any were given.
+    scenes: Option<&'a AssetScenes>,
 }
 
 impl<'a, S: Source> GalaxyModels<'a, S> {
     /// The models `galaxy` names, read through `source`.
     #[must_use]
     pub fn new(galaxy: &'a Galaxy, source: &'a S) -> Self {
-        GalaxyModels { galaxy, source }
+        GalaxyModels {
+            galaxy,
+            source,
+            scenes: None,
+        }
+    }
+
+    /// The same models, taking each asset in `scenes` as it was read
+    /// there (its scene, or why it has none) and asking the source for
+    /// nothing about it: the loader's
+    /// ([`NewGame::scenes`](nova_data::new_game::NewGame::scenes)), so
+    /// no model file is read twice. An asset with no entry is still read
+    /// through the source.
+    #[must_use]
+    pub fn reading(self, scenes: &'a AssetScenes) -> Self {
+        GalaxyModels {
+            scenes: Some(scenes),
+            ..self
+        }
     }
 }
 
@@ -81,9 +111,16 @@ impl<S: Source> ModelSource for GalaxyModels<'_, S> {
         if asset.kind != AssetKind::Model {
             return Err(ModelError::NotAModel(name.clone()));
         }
-        let (scene, front) =
-            read_asset_scene(self.source, asset).map_err(|why| no_model(name, why))?;
-        let over = over_budget(&limits(self.galaxy, &id), measure(&scene));
+        let read;
+        let (scene, front) = match self.scenes.and_then(|scenes| scenes.get(&id)) {
+            Some(Ok((scene, front))) => (scene, *front),
+            Some(Err(why)) => return Err(no_model(name, why.clone())),
+            None => {
+                read = read_asset_scene(self.source, asset).map_err(|why| no_model(name, why))?;
+                (&read.0, read.1)
+            }
+        };
+        let over = over_budget(&limits(self.galaxy, &id), measure(scene));
         if !over.is_empty() {
             return Err(ModelError::OverBudget {
                 asset: name.clone(),
@@ -95,8 +132,8 @@ impl<S: Source> ModelSource for GalaxyModels<'_, S> {
                 .ok_or_else(|| ModelError::NoDepth(name.clone()))?,
             None => Placement::unscaled_bounds(scene.bounds, front),
         };
-        let textures = textures(name, &scene, &texture_limits(self.galaxy))?;
-        loaded(&scene, &placement, asset.paint.as_ref(), textures).map_err(|error| {
+        let textures = textures(name, scene, &texture_limits(self.galaxy))?;
+        loaded(scene, &placement, asset.paint.as_ref(), textures).map_err(|error| {
             ModelError::Mesh {
                 asset: name.clone(),
                 error,
@@ -342,7 +379,7 @@ fn loaded(
 mod tests {
     use nova_galaxy_format::fixture::{CC0, galaxy};
     use nova_galaxy_format::load::load;
-    use nova_galaxy_format::source::MemSource;
+    use nova_galaxy_format::source::{CountingSource, MemSource};
     use nova_galaxy_media::fixture::{Builder, ImageAt, JPEG, JPEG_SIZE, Mat, PNG, glb, png};
 
     use super::*;
@@ -1072,6 +1109,100 @@ mod tests {
         ] {
             let (galaxy, _) = load(&source);
             let models = GalaxyModels::new(&galaxy, &source);
+            check_contract(&models, &ModelRequest::new("hull", Some(8.0)), "nothing");
+            check_contract(&models, &ModelRequest::new("hull", None), "nothing");
+        }
+    }
+
+    /// The scene of `asset` as a loader reading `source` would carry it.
+    fn carried(galaxy: &Galaxy, source: &impl Source, asset: &str) -> AssetScenes {
+        let read = read_asset_scene(source, &galaxy.assets[&id(asset)].data);
+        AssetScenes::from([(id(asset), read)])
+    }
+
+    #[test]
+    fn a_scene_already_read_answers_as_reading_does_and_asks_the_source_for_nothing() {
+        for source in [
+            faced_box(),
+            with_glb_hull(skinned(), &png(2, 2, &SKIN)),
+            with_gltf_hull(skinned(), &png(2, 2, &SKIN)),
+        ] {
+            let (galaxy, _) = load(&source);
+            let scenes = carried(&galaxy, &source, "hull");
+            let counting = CountingSource::new(&source);
+            let models = GalaxyModels::new(&galaxy, &counting).reading(&scenes);
+            for length in [Some(8.0), None] {
+                let request = ModelRequest::new("hull", length);
+                let read = GalaxyModels::new(&galaxy, &source).model(&request);
+                assert!(read.is_ok());
+                assert_eq!(models.model(&request), read);
+            }
+            assert_eq!(counting.all_bytes_asked(), [], "nothing read again");
+            assert_eq!(counting.heads_asked("media/export/pack/hull.glb"), 0);
+        }
+    }
+
+    #[test]
+    fn a_scene_carried_as_a_failure_is_the_error_reading_would_give() {
+        let pointer = b"version https://git-lfs.github.com/spec/v1\noid sha256:ab\nsize 12\n";
+        for (source, asset) in [
+            (with_hull(pointer), "hull"),
+            (galaxy(), "hull"),
+            (with_hull(b"glTF nonsense"), "hull"),
+            (with_hull(&glb([1.0; 3], [0.0; 3])), "spire"),
+        ] {
+            let (galaxy, _) = load(&source);
+            let scenes = carried(&galaxy, &source, asset);
+            let counting = CountingSource::new(&source);
+            let models = GalaxyModels::new(&galaxy, &counting).reading(&scenes);
+            let request = ModelRequest::new(asset, None);
+            let read = GalaxyModels::new(&galaxy, &source).model(&request);
+            assert!(read.is_err(), "{read:?}");
+            assert_eq!(models.model(&request), read);
+            assert_eq!(counting.all_bytes_asked(), [], "{asset}: not read again");
+        }
+    }
+
+    #[test]
+    fn an_asset_with_no_scene_carried_is_read_through_the_source() {
+        let source = faced_box();
+        let (galaxy, _) = load(&source);
+        // Scenes that hold another asset's, and none at all.
+        for scenes in [carried(&galaxy, &source, "spire"), AssetScenes::new()] {
+            let counting = CountingSource::new(&source);
+            let models = GalaxyModels::new(&galaxy, &counting).reading(&scenes);
+            let request = ModelRequest::new("hull", Some(8.0));
+            assert_eq!(
+                models.model(&request),
+                GalaxyModels::new(&galaxy, &source).model(&request)
+            );
+            assert_eq!(
+                counting.all_bytes_asked(),
+                [("media/export/pack/hull.glb".to_owned(), 1)]
+            );
+        }
+    }
+
+    #[test]
+    fn a_scene_of_an_asset_that_is_no_model_is_still_not_a_model() {
+        // The loader reads whatever a ship or a station names; the port
+        // still refuses one the manifest doesn't call a model.
+        let source = with_hull(&glb([1.0; 3], [0.0; 3]));
+        let (galaxy, _) = load(&source);
+        let scenes = carried(&galaxy, &source, "surface");
+        let models = GalaxyModels::new(&galaxy, &source).reading(&scenes);
+        assert_eq!(
+            models.model(&ModelRequest::new("surface", None)),
+            Err(ModelError::NotAModel("surface".into()))
+        );
+    }
+
+    #[test]
+    fn the_adapter_meets_the_contract_reading_scenes_it_was_given() {
+        for source in [faced_box(), with_gltf_hull(skinned(), &png(2, 2, &SKIN))] {
+            let (galaxy, _) = load(&source);
+            let scenes = carried(&galaxy, &source, "hull");
+            let models = GalaxyModels::new(&galaxy, &source).reading(&scenes);
             check_contract(&models, &ModelRequest::new("hull", Some(8.0)), "nothing");
             check_contract(&models, &ModelRequest::new("hull", None), "nothing");
         }

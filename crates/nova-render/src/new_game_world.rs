@@ -38,7 +38,13 @@
 //!   by its sky's seed ([`sky_looks`]), for the app to hand the renderer
 //!   ([`Renderer::set_sky_looks`](crate::Renderer::set_sky_looks)).
 //!
-//! Each (asset, length) is read once and painted once in each livery it
+//! Each model file is read once, by the loader: [`world_assets`] builds
+//! from the scenes it kept ([`NewGame::scenes`], through
+//! [`GalaxyModels::reading`]), and every model this builder asks for is
+//! one the loader read (a ship's by its mounts, whether or not it has a
+//! size; an outfit's a mount shows; a station's for its stand-in), so it
+//! reads no model file itself. Each (asset, length) is asked of the model
+//! source once and painted once in each livery it
 //! wears. A livery on a model with no part in a painted material paints
 //! nothing, so that model keeps its one unpainted key and mesh; keys
 //! count up from 1 in a stable order (bible id order: ships, then
@@ -93,12 +99,13 @@ pub struct WorldAssets {
     pub problems: Vec<String>,
 }
 
-/// The world models of `game`, its files read through `source` (see the
-/// module docs).
+/// The world models of `game` (see the module docs): its models from the
+/// scenes the loader read ([`NewGame::scenes`]), so no model file is read
+/// again, and its planets' textures read through `source`.
 pub fn world_assets(game: &NewGame, source: &impl Source) -> WorldAssets {
     world_assets_from(
         game,
-        &GalaxyModels::new(&game.galaxy, source),
+        &GalaxyModels::new(&game.galaxy, source).reading(&game.scenes),
         &GalaxyPlanets::new(&game.galaxy, source),
     )
 }
@@ -396,8 +403,6 @@ fn planet_news(error: &PlanetError) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::io;
     use std::path::Path;
 
     use nova_data::new_game::fixture::{
@@ -405,7 +410,7 @@ mod tests {
         modelled_sample, modelled_sample_3d,
     };
     use nova_data::new_game::load;
-    use nova_galaxy_format::source::{Listed, MemSource, SourceFile};
+    use nova_galaxy_format::source::{CountingSource, MemSource};
     use nova_galaxy_media::planet::Sizes;
 
     use super::*;
@@ -417,37 +422,17 @@ mod tests {
         ring: 16,
     };
 
-    /// `source` read as `bytes` counts each path it is asked for.
-    struct Counting<'a> {
-        source: &'a MemSource,
-        reads: RefCell<BTreeMap<String, u32>>,
-    }
-
-    impl Source for Counting<'_> {
-        fn files(&self, dir: &str, ext: &str) -> io::Result<Vec<SourceFile>> {
-            self.source.files(dir, ext)
-        }
-
-        fn listing(&self, dir: &str, ext: &str) -> io::Result<Vec<Listed>> {
-            self.source.listing(dir, ext)
-        }
-
-        fn bytes(&self, path: &str) -> io::Result<Option<Vec<u8>>> {
-            *self.reads.borrow_mut().entry(path.to_owned()).or_default() += 1;
-            self.source.bytes(path)
-        }
-    }
-
     fn id(text: &str) -> Id {
         Id::try_from(text.to_owned()).expect("an id")
     }
 
-    /// `source` loaded and built, its planets baked small.
+    /// `source` loaded and built as [`world_assets`] builds it, from the
+    /// loader's scenes, but with its planets baked small.
     fn built(source: &impl Source) -> (NewGame, WorldAssets) {
         let game = load(source, Path::new("sample"));
         let assets = world_assets_from(
             &game,
-            &GalaxyModels::new(&game.galaxy, source),
+            &GalaxyModels::new(&game.galaxy, source).reading(&game.scenes),
             &GalaxyPlanets::new(&game.galaxy, source).baked_at(SMALL),
         );
         (game, assets)
@@ -526,23 +511,68 @@ mod tests {
     }
 
     #[test]
-    fn each_model_file_is_read_once() {
-        let memory = with_a_plain_freighter();
-        let game = load(&memory, Path::new("sample"));
-        let counting = Counting {
-            source: &memory,
-            reads: RefCell::default(),
-        };
-        let assets = world_assets_from(
-            &game,
-            &GalaxyModels::new(&game.galaxy, &counting),
-            &GalaxyPlanets::new(&game.galaxy, &counting).baked_at(SMALL),
+    fn each_model_file_is_read_once_by_the_loader_and_the_world_builder_together() {
+        // A third class on the freighter's model, at another length: the
+        // builder makes its mesh twice from the one scene the loader read.
+        let memory = with_a_plain_freighter().with(
+            "ships/long-freighter.md",
+            "---\nname: Long freighter\nbase: light-freighter\n\
+             size: {length: 80, beam: 26, collision_radius: 20}\n---\n",
         );
-        assert!(!assets.meshes.is_empty());
-        let reads = counting.reads.borrow();
+        let counting = CountingSource::new(&memory);
+        let game = load(&counting, Path::new("sample"));
+        let assets = world_assets(&game, &counting);
+        assert_eq!(assets.problems, Vec::<String>::new());
+        let key = |name| assets.models.ship(ship(&game, name)).expect("a model").key;
+        assert_ne!(key("light-freighter"), key("long-freighter"));
+        assert!(assets.models.outfit("turret-mount").is_some());
+        assert!(matches!(
+            assets.models.stellar(stellar(&game, "luyten-exchange")),
+            Some(StellarModel::Model { .. })
+        ));
         for file in [LIGHT_FREIGHTER_GLB, TURRET_MOUNT_GLB, STATION_HUB_GLB] {
-            assert_eq!(reads.get(file), Some(&1), "{file}: {reads:?}");
+            assert_eq!(
+                counting.bytes_asked(file),
+                1,
+                "{file}: {:?}",
+                counting.all_bytes_asked()
+            );
         }
+    }
+
+    #[test]
+    fn a_ship_with_a_model_and_no_size_is_read_by_the_loader_and_the_builder_reads_nothing() {
+        // With no size it has no stand-in, but the loader's mounts read
+        // its model all the same, so the builder has its scene.
+        const SKIFF_GLB: &str = "media/export/pack/skiff.glb";
+        let memory = modelled_sample_3d()
+            .with(
+                "ships/skiff.md",
+                "---\nname: Skiff\nmodel: skiff-hull\n---\n",
+            )
+            .with(
+                "assets/skiff-hull.md",
+                &format!(
+                    "---\nkind: model\nplaceholder: false\nfront: \"-z\"\nfiles: [{SKIFF_GLB}]\n\
+                     licence: CC0-1.0\nauthor: test\n---\n"
+                ),
+            )
+            .with_bytes(
+                SKIFF_GLB,
+                &nova_galaxy_media::fixture::glb([1.0, 1.0, 2.0], [0.0; 3]),
+            );
+        let loading = CountingSource::new(&memory);
+        let game = load(&loading, Path::new("sample"));
+        assert_eq!(
+            game.data.stand_in(StandInOf::Ship(ship(&game, "skiff"))),
+            None
+        );
+        assert_eq!(loading.bytes_asked(SKIFF_GLB), 1, "by the loader's mounts");
+        let building = CountingSource::new(&memory);
+        let assets = world_assets(&game, &building);
+        assert!(assets.models.ship(ship(&game, "skiff")).is_some());
+        assert_eq!(assets.problems, Vec::<String>::new());
+        assert_eq!(building.all_bytes_asked(), [], "the builder reads nothing");
     }
 
     #[test]
@@ -679,11 +709,22 @@ mod tests {
     #[test]
     fn the_hub_is_read_once_for_both_its_liveries() {
         let memory = liveried_stations_3d();
+        let counting = CountingSource::new(&memory);
+        let (game, assets) = built(&counting);
+        assert_ne!(
+            station_key(&game, &assets, "luyten-exchange"),
+            station_key(&game, &assets, "marrow-yard")
+        );
+        assert_eq!(counting.bytes_asked(STATION_HUB_GLB), 1);
+    }
+
+    #[test]
+    fn a_builder_given_no_scenes_reads_each_model_once_for_all_its_lengths_and_liveries() {
+        // The phase-9 rule, for a model source that reads its files: one
+        // read per (asset, length), however many liveries it wears.
+        let memory = liveried_stations_3d();
         let game = load(&memory, Path::new("sample"));
-        let counting = Counting {
-            source: &memory,
-            reads: RefCell::default(),
-        };
+        let counting = CountingSource::new(&memory);
         let assets = world_assets_from(
             &game,
             &GalaxyModels::new(&game.galaxy, &counting),
@@ -693,7 +734,9 @@ mod tests {
             station_key(&game, &assets, "luyten-exchange"),
             station_key(&game, &assets, "marrow-yard")
         );
-        assert_eq!(counting.reads.borrow().get(STATION_HUB_GLB), Some(&1));
+        for file in [LIGHT_FREIGHTER_GLB, TURRET_MOUNT_GLB, STATION_HUB_GLB] {
+            assert_eq!(counting.bytes_asked(file), 1, "{file}");
+        }
     }
 
     #[test]
