@@ -159,6 +159,12 @@ use crate::flight::fake_catalog::look;
 use frames::*;
 use keys::*;
 
+/// The priority the tests' player fire is heard at. The view only hands
+/// a fired weapon's priority through to the sound it plays, so any value
+/// does; this is the one the player's fire has in nova-sim
+/// (`nova_sim::combat::PLAYER_FIRE_PRIORITY`), which its tests pin.
+const PLAYER_FIRE_PRIORITY: u8 = 5;
+
 /// Where flight draws the player's ship in Nova's own 1024 x 768 by the
 /// original's reading of [`RuleKey::FlightAnchor`]: the play area's
 /// centre, `_screenCenter`, (trunc((1024 − 194) / 2), 384).

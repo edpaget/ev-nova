@@ -2325,9 +2325,9 @@ mod tests {
     use super::*;
     use crate::draw::Blend;
     use crate::galaxy::catalog::{Galaxy, GovtId, StellarEntry, StellarId};
-    use crate::galaxy::model::{NEUTRAL, star_system};
+    use crate::galaxy::model::NEUTRAL;
     use crate::galaxy::nebulae::{choose, nebula_rect};
-    use crate::galaxy::testkit::{BLUE, FakeCatalog, galaxy, system};
+    use crate::galaxy::testkit::{BLUE, FakeCatalog, galaxy, shown, system};
     use crate::galaxy::view::{MAP_CENTER, SCALES};
     use crate::text::fixture::MonoMetrics;
     use crate::{DrawCommand, Font, ImageKey, Key, MouseButton};
@@ -2336,8 +2336,6 @@ mod tests {
     const HELP: &str = "Arrows or drag: pan   +/-: zoom   Click: select   Return: enter   S: find";
     /// The Enter button's label under the default keys.
     const ENTER_LABEL: &str = "Enter system (Return)";
-    use nova_sim::galaxy_map::GalaxyShownOf;
-    use nova_sim::story::{GalaxyOverlay, OverlaidGalaxy};
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
@@ -3639,9 +3637,7 @@ mod tests {
         // A course map shown a galaxy hiding Beta (129) gives no hit for
         // it; the viewer, unfiltered, selects it.
         let (mut course, beta) = on_beta();
-        course.show_galaxy(&session_galaxy(|overlay| {
-            overlay.set_visible(SystemId(129), Some(false));
-        }));
+        course.show_galaxy(&without_beta());
         course.input(&button(MouseButton::Left, true, beta));
         assert_eq!(course.take_press(), None, "no hit on the course map");
         let mut map = map();
@@ -3682,9 +3678,7 @@ mod tests {
     #[test]
     fn the_preselect_is_kept_only_while_the_session_shows_it() {
         let mut map = course_map();
-        map.show_galaxy(&session_galaxy(|overlay| {
-            overlay.set_visible(SystemId(129), Some(false));
-        }));
+        map.show_galaxy(&without_beta());
         map.preselect(Some(SystemId(129)));
         assert_eq!(map.selected(), None, "hidden");
     }
@@ -3898,28 +3892,46 @@ mod tests {
 
     // The session's galaxy.
 
-    /// What the session's galaxy over [`galaxy`]'s systems shows, with
-    /// `change` made.
-    fn session_galaxy(change: impl FnOnce(&mut GalaxyOverlay)) -> GalaxyShown {
-        let mut overlay = GalaxyOverlay::default();
-        change(&mut overlay);
-        let systems = galaxy().systems.iter().map(star_system).collect();
-        GalaxyShown::of(&OverlaidGalaxy::new(systems, overlay))
+    /// What a session shows of [`galaxy`]'s systems with nothing hidden:
+    /// every one, with its government, and the links Alpha's and Beta's
+    /// lists make.
+    fn session_galaxy() -> GalaxyShown {
+        shown(
+            &[(128, Some(128)), (129, None), (130, Some(128)), (131, None)],
+            &[(128, 129), (128, 130)],
+            &[],
+        )
+    }
+
+    /// What a session shows of [`galaxy`]'s systems with Beta (129)
+    /// hidden, and its link with it.
+    fn without_beta() -> GalaxyShown {
+        shown(
+            &[(128, Some(128)), (130, Some(128)), (131, None)],
+            &[(128, 130)],
+            &[],
+        )
+    }
+
+    /// What a session shows of [`galaxy`]'s systems with Gamma (130)
+    /// hidden, and its link with it.
+    fn without_gamma() -> GalaxyShown {
+        shown(
+            &[(128, Some(128)), (129, None), (131, None)],
+            &[(128, 129)],
+            &[],
+        )
     }
 
     #[test]
     fn showing_the_sessions_galaxy_lets_go_of_a_selection_it_hides() {
         let mut map = map();
         click_on(&mut map, 129);
-        map.show_galaxy(&session_galaxy(|_| {}));
+        map.show_galaxy(&session_galaxy());
         assert_eq!(map.selected(), Some(SystemId(129)), "still drawn");
-        map.show_galaxy(&session_galaxy(|overlay| {
-            overlay.set_visible(SystemId(130), Some(false));
-        }));
+        map.show_galaxy(&without_gamma());
         assert_eq!(map.selected(), Some(SystemId(129)), "another hidden");
-        map.show_galaxy(&session_galaxy(|overlay| {
-            overlay.set_visible(SystemId(129), Some(false));
-        }));
+        map.show_galaxy(&without_beta());
         assert_eq!(map.selected(), None);
     }
 
@@ -4683,9 +4695,7 @@ mod tests {
     fn the_viewer_draws_every_system_link_and_name_in_the_data() {
         let mut map = map();
         // Nothing the viewer is told filters what it draws.
-        map.show_galaxy(&session_galaxy(|overlay| {
-            overlay.set_visible(SystemId(130), Some(false));
-        }));
+        map.show_galaxy(&without_gamma());
         let picture = map.picture().expect("the viewer's");
         let ids: Vec<i16> = picture.systems.iter().map(|system| system.id.0).collect();
         assert_eq!(ids, [128, 129, 130, 131]);

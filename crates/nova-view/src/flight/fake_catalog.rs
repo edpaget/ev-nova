@@ -1690,7 +1690,8 @@ pub(in crate::flight) fn holding(id: i16, weapon: WeaponId) -> OutfitRecord {
         flags: 0,
         cost: 1000,
         mods: [
-            (nova_sim::combat::armament::MOD_WEAPON, weapon.0),
+            // The weapon mod, `nova_sim::combat::armament::MOD_WEAPON`.
+            (1, weapon.0),
             (0, 0),
             (0, 0),
             (0, 0),

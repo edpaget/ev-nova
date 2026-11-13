@@ -783,9 +783,7 @@ fn the_fight_before_the_arrival_is_heard_and_not_drawn() {
             ship: ShipRef::Player,
             weapon: BLASTER,
             at: Vec2::ZERO,
-            sound: Some(nova_sim::FireSound::at(
-                nova_sim::combat::PLAYER_FIRE_PRIORITY,
-            )),
+            sound: Some(nova_sim::FireSound::at(PLAYER_FIRE_PRIORITY)),
         },
         CombatEvent::Exploded {
             at: Vec2::ZERO,
@@ -1310,9 +1308,7 @@ fn a_fights_sound_on_an_arrivals_tick_is_still_taken_after_its_layout() {
         ship: ShipRef::Player,
         weapon: BLASTER,
         at: Vec2::ZERO,
-        sound: Some(nova_sim::FireSound::at(
-            nova_sim::combat::PLAYER_FIRE_PRIORITY,
-        )),
+        sound: Some(nova_sim::FireSound::at(PLAYER_FIRE_PRIORITY)),
     };
     // Fired in the rest of the arrival's pass, among the new system.
     let mut report = arrival_report(0, ShipPlace::default());

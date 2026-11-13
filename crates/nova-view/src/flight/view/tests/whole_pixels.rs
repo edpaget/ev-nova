@@ -15,7 +15,6 @@ use super::ship_drawing::{NPC_0, display, flying_with, npc_sheet, redrawn, shown
 use super::*;
 use crate::flight::catalog::EffectSheet;
 use nova_sim::DrawnShips;
-use nova_sim::hover::in_box;
 use nova_sim::navigation::SpriteRect;
 
 /// Where the player is: off a whole pixel on both axes.
@@ -220,8 +219,8 @@ fn a_pointer_just_inside_the_drawn_right_edge_is_over_the_ship_and_one_on_it_is_
         let p = camera.screen_to_world(at(x, middle));
         Vec2::new(p.x, p.y)
     };
-    assert!(in_box(world(right - 1.0), boxed), "a pixel inside");
-    assert!(!in_box(world(right), boxed), "on the edge");
+    assert!(boxed.rect.holds(world(right - 1.0)), "a pixel inside");
+    assert!(!boxed.rect.holds(world(right)), "on the edge");
 }
 
 #[test]

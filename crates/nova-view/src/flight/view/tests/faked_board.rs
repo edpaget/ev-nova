@@ -435,7 +435,8 @@ fn b_on_a_pickup_ship_without_room_says_cant_board_and_its_dialog_is_taken_at_on
     let no_room = nova_sim::MissionText {
         kind: MissionTextKind::NoRoom,
         mission: MissionId(140),
-        text: nova_sim::mission::cargo::NO_SPACE_TO_LOAD.to_owned(),
+        // The fake hands through whatever text it is given.
+        text: "Not enough free cargo space.".to_owned(),
         graphic: None,
         movie: None,
         map: None,

@@ -8,8 +8,8 @@ use super::faked_screen::{in_flight, sent_count, sent_since};
 use super::faked_world::raise;
 use super::*;
 use nova_sim::FireSound;
+use nova_sim::TargetPick;
 use nova_sim::flight_frame::FlightEvent;
-use nova_sim::{TargetPick, combat::PLAYER_FIRE_PRIORITY};
 
 /// The player's blaster fired at the centre, heard at the player's
 /// priority.

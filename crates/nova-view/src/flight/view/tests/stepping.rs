@@ -343,7 +343,7 @@ fn each_pass_of_each_step_reaches_the_effects() {
         ship: ShipRef::Player,
         weapon: BLASTER,
         at: Vec2::ZERO,
-        sound: Some(FireSound::at(nova_sim::combat::PLAYER_FIRE_PRIORITY)),
+        sound: Some(FireSound::at(PLAYER_FIRE_PRIORITY)),
     };
     let report = StepReport {
         steps: vec![
@@ -356,7 +356,7 @@ fn each_pass_of_each_step_reaches_the_effects() {
     let heard = CombatSound {
         sound: nova_sim::SoundId(208),
         offset: (0, 0),
-        priority: u16::from(nova_sim::combat::PLAYER_FIRE_PRIORITY),
+        priority: u16::from(PLAYER_FIRE_PRIORITY),
         until_stopped: false,
     };
     assert_eq!(combat_heard(&mut view), [heard; 3]);
@@ -637,7 +637,7 @@ fn looped_beam(rules: &Rulebook) -> (Faked, CombatEvent) {
         ship: ShipRef::Player,
         weapon: UNDER,
         at: Vec2::ZERO,
-        sound: Some(FireSound::at(nova_sim::combat::PLAYER_FIRE_PRIORITY)),
+        sound: Some(FireSound::at(PLAYER_FIRE_PRIORITY)),
     };
     (stepping_by(catalog, rules), fired)
 }
