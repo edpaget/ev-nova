@@ -99,6 +99,10 @@ impl Gpu for SurfaceGpu {
         self.renderer.upload_planet(planet, textures);
     }
 
+    fn release_planet(&mut self, planet: PlanetId) {
+        self.renderer.release_planet(planet);
+    }
+
     fn upload_sky_image(&mut self, image: SkyImageId, data: &SkyImage) {
         self.renderer.upload_sky_image(image, data);
     }

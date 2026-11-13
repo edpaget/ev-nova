@@ -196,6 +196,10 @@ impl<G: Gpu> Gpu for TimedGpu<G> {
         self.inner.upload_planet(planet, textures);
     }
 
+    fn release_planet(&mut self, planet: PlanetId) {
+        self.inner.release_planet(planet);
+    }
+
     fn upload_sky_image(&mut self, image: SkyImageId, data: &SkyImage) {
         self.inner.upload_sky_image(image, data);
     }

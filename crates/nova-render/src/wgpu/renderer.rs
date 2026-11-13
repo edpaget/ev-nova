@@ -460,6 +460,12 @@ impl WgpuRenderer {
         (self.planets).upload(&self.device, &self.queue, planet, textures);
     }
 
+    /// Drops planet `planet`'s textures; it draws nothing until uploaded
+    /// again.
+    pub fn release_planet(&mut self, planet: PlanetId) {
+        self.planets.release(planet);
+    }
+
     /// Holds `data` as sky image `image`, replacing any of that id.
     pub fn upload_sky_image(&mut self, image: SkyImageId, data: &SkyImage) {
         (self.sky_images).upload(&self.device, &self.queue, image, data);

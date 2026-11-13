@@ -76,6 +76,10 @@ impl<G: OverlayGpu + ?Sized> Gpu for WithOverlay<'_, G> {
         self.gpu.upload_planet(planet, textures);
     }
 
+    fn release_planet(&mut self, planet: PlanetId) {
+        self.gpu.release_planet(planet);
+    }
+
     fn upload_sky_image(&mut self, image: SkyImageId, data: &SkyImage) {
         self.gpu.upload_sky_image(image, data);
     }
@@ -115,6 +119,7 @@ mod tests {
         UploadModelTexture(ModelTextureId, ModelTexture),
         UploadMesh(MeshId, Mesh, Vec<ModelTextureId>),
         UploadPlanet(PlanetId, PlanetTextures),
+        ReleasePlanet(PlanetId),
         UploadSkyImage(SkyImageId, SkyImage),
         Submit(Frame),
         SubmitWith(Frame, *const ()),
@@ -156,6 +161,10 @@ mod tests {
         fn upload_planet(&mut self, planet: PlanetId, textures: &PlanetTextures) {
             self.calls
                 .push(Call::UploadPlanet(planet, textures.clone()));
+        }
+
+        fn release_planet(&mut self, planet: PlanetId) {
+            self.calls.push(Call::ReleasePlanet(planet));
         }
 
         fn upload_sky_image(&mut self, image: SkyImageId, data: &SkyImage) {
@@ -333,6 +342,27 @@ mod tests {
             with.upload_planet(PlanetId(4), &textures);
         }
         assert_eq!(gpu.calls, [Call::UploadPlanet(PlanetId(4), textures)]);
+    }
+
+    #[test]
+    fn with_overlay_forwards_planet_releases() {
+        let mut gpu = FakeGpu::default();
+        let mut painter = NoPainter;
+        {
+            let mut with = WithOverlay {
+                gpu: &mut gpu,
+                painter: &mut painter,
+            };
+            with.release_planet(PlanetId(4));
+            with.release_planet(PlanetId(1));
+        }
+        assert_eq!(
+            gpu.calls,
+            [
+                Call::ReleasePlanet(PlanetId(4)),
+                Call::ReleasePlanet(PlanetId(1))
+            ]
+        );
     }
 
     #[test]

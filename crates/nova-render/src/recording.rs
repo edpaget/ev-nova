@@ -78,6 +78,11 @@ pub enum GpuCall {
         /// Its textures.
         textures: PlanetTextures,
     },
+    /// [`Gpu::release_planet`].
+    ReleasePlanet {
+        /// The planet's id.
+        planet: PlanetId,
+    },
     /// [`Gpu::upload_sky_image`].
     UploadSkyImage {
         /// The image's id.
@@ -188,17 +193,38 @@ impl RecordingGpu {
         std::mem::take(&mut self.calls)
     }
 
-    /// The bytes of planet textures it holds: every level of the latest
-    /// textures uploaded under each planet id, surface, clouds and rings.
-    #[must_use]
-    pub fn planet_bytes_held(&self) -> usize {
+    /// The latest textures uploaded under each planet id, of the planets
+    /// not released since.
+    fn planets(&self) -> std::collections::BTreeMap<PlanetId, &PlanetTextures> {
         let mut held = std::collections::BTreeMap::new();
         for call in &self.calls {
-            if let GpuCall::UploadPlanet { planet, textures } = call {
-                held.insert(*planet, textures);
+            match call {
+                GpuCall::UploadPlanet { planet, textures } => {
+                    held.insert(*planet, textures);
+                }
+                GpuCall::ReleasePlanet { planet } => {
+                    held.remove(planet);
+                }
+                _ => {}
             }
         }
-        held.values()
+        held
+    }
+
+    /// The planets it holds textures for: uploaded, and not released
+    /// since.
+    #[must_use]
+    pub fn planets_held(&self) -> std::collections::BTreeSet<PlanetId> {
+        self.planets().into_keys().collect()
+    }
+
+    /// The bytes of planet textures it holds: every level of the latest
+    /// textures uploaded under each planet id not released since, surface,
+    /// clouds and rings.
+    #[must_use]
+    pub fn planet_bytes_held(&self) -> usize {
+        self.planets()
+            .values()
             .map(|textures| {
                 let levels =
                     |chain: &[PlanetImage]| chain.iter().map(|i| i.rgba.len()).sum::<usize>();
@@ -241,6 +267,10 @@ impl Gpu for RecordingGpu {
             planet,
             textures: textures.clone(),
         });
+    }
+
+    fn release_planet(&mut self, planet: PlanetId) {
+        self.calls.push(GpuCall::ReleasePlanet { planet });
     }
 
     fn upload_sky_image(&mut self, image: SkyImageId, data: &SkyImage) {
@@ -402,6 +432,37 @@ mod tests {
         // A second upload under one id replaces the first.
         gpu.upload_planet(PlanetId(0), &planet_textures(16, 2));
         assert_eq!(gpu.planet_bytes_held(), 2 * second);
+    }
+
+    #[test]
+    fn recording_gpu_records_a_planet_release_and_holds_it_no_longer() {
+        let mut gpu = RecordingGpu::new();
+        gpu.upload_planet(PlanetId(0), &planet_textures(8, 3));
+        gpu.upload_planet(PlanetId(1), &planet_textures(16, 2));
+        assert_eq!(
+            gpu.planets_held(),
+            [PlanetId(0), PlanetId(1)].into_iter().collect()
+        );
+        gpu.release_planet(PlanetId(0));
+        assert_eq!(
+            gpu.calls[2],
+            GpuCall::ReleasePlanet {
+                planet: PlanetId(0)
+            }
+        );
+        assert_eq!(gpu.planets_held(), [PlanetId(1)].into_iter().collect());
+        assert_eq!(gpu.planet_bytes_held(), (128 + 32 + 2 + 1 + 2) * 4);
+        // Uploaded again, it is held again: the latest upload counts.
+        gpu.upload_planet(PlanetId(0), &planet_textures(8, 3));
+        assert_eq!(gpu.planets_held().len(), 2);
+        assert_eq!(
+            gpu.planet_bytes_held(),
+            (128 + 32 + 2 + 1 + 2) * 4 + (32 + 8 + 2 + 1 + 3) * 4
+        );
+        gpu.release_planet(PlanetId(1));
+        gpu.release_planet(PlanetId(0));
+        assert!(gpu.planets_held().is_empty());
+        assert_eq!(gpu.planet_bytes_held(), 0);
     }
 
     #[test]

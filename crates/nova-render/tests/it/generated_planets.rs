@@ -25,8 +25,9 @@ use nova_render::planet::{
     ring_shadow, surface_uv, turns,
 };
 use nova_render::planet_files::FakePlanetFiles;
+use nova_render::recording::{GpuCall, RecordingGpu};
 use nova_render::{
-    GalaxyPlanetFiles, GalaxyPlanets, Light, LoadedPlanet, LogicalSize, Mesh, PlanetError,
+    GalaxyPlanetFiles, GalaxyPlanets, Gpu, Light, LoadedPlanet, LogicalSize, Mesh, PlanetError,
     PlanetRequest, PlanetSource, RenderReport, Renderer, Viewport,
 };
 use nova_view::{
@@ -753,6 +754,47 @@ const CUBE_FACES: [[u8; 3]; 6] = [
     [230, 40, 40],
     [40, 40, 255],
 ];
+
+#[test]
+fn a_released_planet_draws_nothing_until_uploaded_again() {
+    let Some(mut gpu) = gpu_with(SIDE, SIDE, &FontFaces::bundled()) else {
+        return;
+    };
+    // The frame and the upload the core makes for the planet, replayed on
+    // the adapter by hand.
+    let mut renderer = Renderer::new(Images);
+    renderer.add_planet(PLANET, loaded(&sample(4417), "marrow-fields"));
+    let mut list = DrawList::new();
+    list.planet(PLANET, pose(CENTRE.0, CENTRE.1));
+    let mut recording = RecordingGpu::new();
+    renderer.render(
+        &list,
+        &Viewport::new(LOGICAL, (SIDE, SIDE), 1.0),
+        &mut recording,
+    );
+    let [
+        GpuCall::UploadPlanet { planet, textures },
+        GpuCall::Submit(frame),
+    ] = &recording.calls[..]
+    else {
+        panic!("an upload, then a frame: {:?}", recording.calls.len());
+    };
+    let centre = (CENTRE.0 as u32, CENTRE.1 as u32);
+    gpu.upload_planet(*planet, textures);
+    gpu.submit(frame);
+    let drawn = gpu.read_pixels().expect("read back");
+    assert_ne!(rgb(&drawn, centre), [0, 0, 0], "drawn");
+    gpu.release_planet(*planet);
+    gpu.submit(frame);
+    let released = gpu.read_pixels().expect("read back");
+    assert!(
+        released.chunks(4).all(|p| p[..3] == [0, 0, 0]),
+        "black where it was"
+    );
+    gpu.upload_planet(*planet, textures);
+    gpu.submit(frame);
+    assert_eq!(gpu.read_pixels().expect("read back"), drawn, "back");
+}
 
 #[test]
 fn a_model_drawn_after_a_planet_covers_it() {

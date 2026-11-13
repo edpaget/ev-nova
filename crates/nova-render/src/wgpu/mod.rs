@@ -89,7 +89,10 @@
 //! textures each planet uploads ([`Gpu::upload_planet`](crate::Gpu::upload_planet))
 //! with explicit gradients so no mip seam shows where the surface wraps.
 //! A clipped planets batch is scissored to its batch's clip, met with
-//! the world's, as a models batch is.
+//! the world's, as a models batch is. A planet released
+//! ([`Gpu::release_planet`](crate::Gpu::release_planet)) drops its bind
+//! group, the only owner of its textures, so wgpu frees them once the
+//! work already submitted is done; it draws nothing until uploaded again.
 //!
 //! A sky batch ([`Batch::Sky`](crate::Batch::Sky)) draws in an ordinary
 //! pass, with no depth: one square per star, its fragments adding the

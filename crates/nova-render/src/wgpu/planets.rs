@@ -147,6 +147,14 @@ impl Planets {
         self.groups.insert(planet, group);
     }
 
+    /// Drops planet `planet`'s textures: they are owned only through its
+    /// bind group, and wgpu keeps them alive until the GPU has finished
+    /// any work already submitted with them. It draws nothing until it is
+    /// uploaded again.
+    pub(super) fn release(&mut self, planet: PlanetId) {
+        self.groups.remove(&planet);
+    }
+
     /// Encodes the planets `instances` of `buffer`, planet `planets[i]`
     /// for the i-th, into `pass`, the projection's `globals` bound, one
     /// square each. A planet the GPU doesn't hold is skipped.

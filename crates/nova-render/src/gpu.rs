@@ -68,10 +68,18 @@ pub trait Gpu {
     fn upload_mesh(&mut self, mesh: MeshId, data: &Mesh, textures: &[ModelTextureId]);
     /// Holds `textures` as planet `planet`'s, replacing any it had, for
     /// [`Batch::Planets`] to draw. The renderer uploads a planet's textures
-    /// the first frame that draws it, and again after it is replaced
-    /// ([`crate::Renderer::add_planet`]). Planets are not pages:
+    /// the first frame that draws it, again after it is replaced
+    /// ([`crate::Renderer::add_planet`]), or after it released them
+    /// ([`Gpu::release_planet`]). Planets are not pages:
     /// [`Gpu::clear_pages`] keeps them.
     fn upload_planet(&mut self, planet: PlanetId, textures: &PlanetTextures);
+    /// Drops planet `planet`'s textures. The renderer uploads it again
+    /// ([`Gpu::upload_planet`]) before any frame draws it again; it
+    /// releases a planet only after the frame it last drew it in was
+    /// submitted. Planets are not pages. Every adapter forwards or does
+    /// this, so it has no default: one that forgot would hold them for
+    /// the session in silence.
+    fn release_planet(&mut self, planet: PlanetId);
     /// Holds `data` as sky image `image`, for [`Batch::SkyImages`] to
     /// draw: its premultiplied texels and their mip chain as given, read
     /// through the one sampler every sky image takes
