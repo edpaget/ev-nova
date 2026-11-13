@@ -673,6 +673,10 @@ mod fake {
     /// - a material with no base-colour texture carries the default
     ///   sampler, so two readings of one model compare equal;
     /// - a material with no name has no paint slot;
+    /// - every texture it holds is sampled by some part: the base colour
+    ///   of a material some part's
+    ///   [`sampling_material`](super::Part::sampling_material) names.
+    ///   Only the source can save the decode of one that isn't;
     /// - asking again gives an equal answer;
     /// - `absent` is [`ModelError::NoAsset`].
     pub fn check_contract(source: &impl ModelSource, request: &ModelRequest, absent: &str) {
@@ -744,6 +748,14 @@ mod fake {
                 "`{asset}` material {at} has no name, so no paint slot: {:?}",
                 material.paint
             );
+        }
+        for at in 0..model.textures.len() {
+            let sampled = model
+                .parts
+                .iter()
+                .filter_map(|part| model.materials.get(part.sampling_material()?))
+                .any(|material| material.base_color_texture == Some(at));
+            assert!(sampled, "`{asset}` texture {at} is sampled by some part");
         }
         assert_eq!(
             source.model(request).as_ref(),
@@ -1504,6 +1516,42 @@ mod tests {
     #[should_panic(expected = "`cube` material 1 has no texture, so the default sampler")]
     fn the_contract_fails_a_source_whose_untextured_material_carries_a_sampler() {
         check_contract(&SamplesNothing, &ModelRequest::new("cube", None), "nothing");
+    }
+
+    /// A source whose cube holds textures no part samples: face 0 samples
+    /// texture `sampled`, and the others' textured material has no
+    /// coordinates to sample texture `1 - sampled` by.
+    struct HoldsTheUnsampled {
+        sampled: usize,
+    }
+
+    impl ModelSource for HoldsTheUnsampled {
+        fn model(&self, request: &ModelRequest) -> Result<LoadedModel, ModelError> {
+            let mut faces = [(Some(1), false); 6];
+            faces[0] = (Some(0), true);
+            match request.asset.as_str() {
+                "cube" => Ok(faced(
+                    vec![textured(self.sampled), textured(1 - self.sampled)],
+                    vec![texture(1), texture(2)],
+                    faces,
+                )),
+                other => Err(ModelError::NoAsset(other.into())),
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "`cube` texture 1 is sampled by some part")]
+    fn the_contract_fails_a_source_that_holds_a_texture_no_part_samples() {
+        let source = HoldsTheUnsampled { sampled: 0 };
+        check_contract(&source, &ModelRequest::new("cube", None), "nothing");
+    }
+
+    #[test]
+    #[should_panic(expected = "`cube` texture 0 is sampled by some part")]
+    fn the_contract_fails_a_source_whose_first_texture_no_part_samples() {
+        let source = HoldsTheUnsampled { sampled: 1 };
+        check_contract(&source, &ModelRequest::new("cube", None), "nothing");
     }
 
     /// A source that answers every request with the unit cube, whatever
