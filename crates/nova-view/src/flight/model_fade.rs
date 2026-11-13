@@ -22,9 +22,9 @@
 //! classes have models, so it needs no rulebook key: stock ships draw
 //! their sprites. An alpha that comes out 0 draws nothing, as `None` does.
 
-use nova_sim::Rgb15;
-use nova_sim::cloak::{CloakShown, FADE_FULL};
-use nova_sim::flight_frame::GateFade;
+use nova_sim_frame::Rgb15;
+use nova_sim_frame::cloak::{CloakShown, FADE_FULL};
+use nova_sim_frame::flight_frame::GateFade;
 
 use super::cloak_fade::{hull_factor, translucent_factors};
 use super::paint::paint_channels;

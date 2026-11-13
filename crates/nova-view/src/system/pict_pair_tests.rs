@@ -15,7 +15,7 @@ use nova_data::store::fixture::one_file;
 use nova_data::{GameData, Record};
 use nova_rsrc::ResType;
 use nova_rsrc::fixture::ForkBuilder;
-use nova_sim::DrawnSheet;
+use nova_sim_frame::DrawnSheet;
 
 use super::camera::Camera;
 use super::catalog::{StellarSheet, SystemCatalog, SystemId};

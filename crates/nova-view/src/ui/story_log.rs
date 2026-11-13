@@ -66,9 +66,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_data::MissionStoryline;
-use nova_sim::flight_frame::{Names, StoryObjective, StoryRow};
-use nova_sim::storylines::news::HeardNews;
-use nova_sim::{StellarId, SystemId};
+use nova_sim_frame::flight_frame::{Names, StoryObjective, StoryRow};
+use nova_sim_frame::storylines::news::HeardNews;
+use nova_sim_frame::{StellarId, SystemId};
 
 use crate::color::Color;
 use crate::draw::DrawList;

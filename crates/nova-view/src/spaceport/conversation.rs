@@ -2,7 +2,7 @@
 //! the spaceport a page at a time.
 //!
 //! [`ConversationScreen`] takes a page as plain data
-//! ([`ConversationPage`](nova_sim::ConversationPage): the lines, the
+//! ([`ConversationPage`](nova_sim_frame::ConversationPage): the lines, the
 //! choices, whether the story has ended, and its problem if it failed) and
 //! reports what the player did with it ([`ConversationChoice`]). It talks
 //! to no flight: the router sends the choice
@@ -41,8 +41,8 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::ConversationPage;
-use nova_sim::flight_frame::RoomRefusal;
+use nova_sim_frame::ConversationPage;
+use nova_sim_frame::flight_frame::RoomRefusal;
 
 use crate::color::Color;
 use crate::draw::DrawList;

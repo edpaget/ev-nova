@@ -127,9 +127,10 @@ use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::landing::{TypeWidth, stellar_width};
 use crate::traffic::approach_flight;
-use crate::traffic::emerge::FULL_LEVEL;
 use crate::traffic::held_burst::Flight;
 use crate::traffic::npc::AiType;
+
+pub use nova_sim_base::shown::traffic::gate_entry::enter_level;
 
 /// The wait a ship entering a gate starts at, as it reaches the box: 16.0
 /// (0xdd048).
@@ -174,27 +175,6 @@ pub fn inside(gate: Vec2, ship: Vec2, reach: i32) -> bool {
     within(gate.x - ship.x) && within(gate.y - ship.y)
 }
 
-/// How opaque a ship entering a gate with `ticks_left` of its wait is
-/// drawn, in 32nds ([`FULL_LEVEL`]): full less the fade
-/// `_HandleShipDisplay` writes, clamp(trunc(-2.0 × +0x4c + 32.0), 0, 32)
-/// in floats (`mulss` 0xdd650, `addss` 0xdd654, `cvttss2si`,
-/// @0x2bfb2-0x2c00e). At a whole wait it is 2 × `ticks_left`, at most
-/// full; a fractional one truncates the fade (7.3 and 7.5 both fade 17,
-/// so draw at 15).
-#[must_use]
-pub fn enter_level(ticks_left: f32) -> u8 {
-    #[allow(clippy::cast_possible_truncation)]
-    let fade = (FADE_SLOPE * ticks_left + FADE_TOP) as i32;
-    let fade = fade.clamp(0, i32::from(FULL_LEVEL));
-    FULL_LEVEL - u8::try_from(fade).unwrap_or(FULL_LEVEL)
-}
-
-/// The fade's slope, the float -2.0 at 0xdd650.
-const FADE_SLOPE: f32 = -2.0;
-
-/// The fade's top, the float 32.0 at 0xdd654.
-const FADE_TOP: f32 = 32.0;
-
 /// The provocation a ship takes as its lead enters a gate and releases
 /// it: +0x96 = -1 (@0x8dd14), so the first point of damage that hits it
 /// leaves it unprovoked (the readers' `cmpw $0` and `jle`).
@@ -215,6 +195,7 @@ pub fn released_ai_type(lead: AiType) -> AiType {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::traffic::emerge::FULL_LEVEL;
 
     #[test]
     fn the_reach_is_a_quarter_of_the_width_rounded_down() {
@@ -238,26 +219,12 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_entering_fades_out_by_two_32nds_a_tick() {
-        assert_eq!(enter_level(16.0), 32);
-        assert_eq!(enter_level(17.0), 32);
-        assert_eq!(enter_level(15.0), 30);
-        assert_eq!(enter_level(1.0), 2);
-        assert_eq!(enter_level(0.0), 0);
+    fn the_longest_wait_enters_unfaded_and_an_entry_takes_16_ticks() {
         assert_eq!(
             enter_level(crate::traffic::ai_wait::ticks(u32::MAX)),
             FULL_LEVEL
         );
         assert_eq!(ENTRY_TICKS, 16.0);
-    }
-
-    #[test]
-    fn a_fractional_wait_entering_truncates_its_fade() {
-        // -2 × 7.3 + 32 = 17.4 and -2 × 7.5 + 32 = 17.0: both fade 17.
-        assert_eq!(enter_level(7.3), 15);
-        assert_eq!(enter_level(7.5), 15);
-        assert_eq!(enter_level(0.75), 2, "30.5 faded 30");
-        assert_eq!(enter_level(-0.25), 0, "faded all the way");
     }
 
     #[test]

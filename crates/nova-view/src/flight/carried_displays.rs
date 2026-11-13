@@ -12,7 +12,7 @@
 //! the player lands, holding them here instead ([`HeldDisplays::hold`]).
 //! Once the session places the fleet it says which new NPC each kept
 //! escort is and the gain of each prepare that displayed it
-//! ([`FlightEvent::DisplaysCarried`](nova_sim::flight_frame::FlightEvent::DisplaysCarried)):
+//! ([`FlightEvent::DisplaysCarried`](nova_sim_frame::flight_frame::FlightEvent::DisplaysCarried)):
 //! [`HeldDisplays::carry`] moves each one's flash and glow onto its new
 //! NPC, steps them once for each gain, as a pass's display does
 //! ([`ShieldFlash::step`], [`WeaponGlow::step`]), and lets go of the rest.
@@ -20,8 +20,8 @@
 
 use std::collections::BTreeMap;
 
-use nova_sim::flight_frame::CarriedDisplay;
-use nova_sim::{ShipRef, SpeedMult};
+use nova_sim_frame::flight_frame::CarriedDisplay;
+use nova_sim_frame::{ShipRef, SpeedMult};
 
 use super::flash::{FlashLook, ShieldFlash};
 use super::weapon_glow::{WeaponGlow, WeaponGlows};
@@ -97,7 +97,7 @@ fn step_flash(flash: &mut ShieldFlash, look: FlashLook, gains: &[SpeedMult]) {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use nova_sim::NpcId;
+    use nova_sim_frame::NpcId;
 
     use super::*;
 

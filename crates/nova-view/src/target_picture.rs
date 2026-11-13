@@ -16,7 +16,7 @@
 use nova_data::GameData;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
-use nova_sim::catalog::ShipId;
+use nova_sim_frame::catalog::ShipId;
 
 /// The first target picture, `PICT` 3000 for `shïp` 128
 /// (`_LoadSprites`).

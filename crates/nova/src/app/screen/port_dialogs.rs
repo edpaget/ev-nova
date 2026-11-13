@@ -3,8 +3,10 @@
 use std::rc::Rc;
 
 use nova_data::GameData;
+use nova_flight::SessionView;
 use nova_sim::{MissionInfo, text_tags};
 use nova_view::Screen;
+#[cfg(doc)]
 use nova_view::flight::FlightView;
 use nova_view::spaceport::{PortMap, SpaceportView};
 use nova_view::ui::mission_dialogs::MissionDialogs;
@@ -18,10 +20,13 @@ use super::ENTERED;
 /// `_DrawStatus` after it still draws a marked nav
 /// ([`FlightView::empty_outfitter_returned`]), before any port dialog's
 /// opening is told. Its text plays the last `dësc` loaded's after-movie
-/// ([`SessionFlight::loaded_after_movie`](nova_view::flight::SessionFlight::loaded_after_movie)),
+/// ([`SessionFlight::loaded_after_movie`](nova_flight::SessionFlight::loaded_after_movie)),
 /// read before the opening loads anything, as the original shows #206
 /// before any load (@0x5bba0-0x5bbf2).
-pub(super) fn open_outfitter(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
+pub(super) fn open_outfitter(
+    spaceport: &mut SpaceportView,
+    flight: &mut SessionView<Rc<GameData>>,
+) {
     if !spaceport.take_outfitter_opened() {
         return;
     }
@@ -42,7 +47,7 @@ pub(super) fn open_outfitter(spaceport: &mut SpaceportView, flight: &mut FlightV
 /// ([`SpaceportView::set_opened_shipyard`]), before any port dialog's
 /// opening is told, playing the last `dësc` loaded's after-movie as the
 /// outfitter's text does ([`open_outfitter`]; #223 @0x5e8da).
-pub(super) fn open_shipyard(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
+pub(super) fn open_shipyard(spaceport: &mut SpaceportView, flight: &mut SessionView<Rc<GameData>>) {
     if !spaceport.take_shipyard_opened() {
         return;
     }
@@ -62,7 +67,7 @@ pub(super) fn open_shipyard(spaceport: &mut SpaceportView, flight: &mut FlightVi
 /// ([`FlightView::open_dialog_map`]), the spaceport letting go of its
 /// gesture and keys as it is covered. The screen that asked stays open
 /// under the map and has the input again once it closes.
-pub(super) fn open_port_map(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
+pub(super) fn open_port_map(spaceport: &mut SpaceportView, flight: &mut SessionView<Rc<GameData>>) {
     let Some(map) = spaceport.take_map_request() else {
         return;
     };
@@ -86,7 +91,7 @@ pub(super) fn open_port_map(spaceport: &mut SpaceportView, flight: &mut FlightVi
 /// input that opened it.
 pub(super) fn open_port_dialogs(
     spaceport: &mut SpaceportView,
-    flight: &mut FlightView<Rc<GameData>>,
+    flight: &mut SessionView<Rc<GameData>>,
 ) {
     if spaceport.take_mission_computer_request() {
         let computer = flight.open_mission_computer();
@@ -111,7 +116,7 @@ pub(super) fn open_port_dialogs(
 /// credits the winnings once the result text has closed
 /// ([`collect_race_winnings`]). A race that ran took the bet from the
 /// cash, so the shops are handed back ([`refresh_spaceport`]).
-pub(super) fn run_gamble(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
+pub(super) fn run_gamble(spaceport: &mut SpaceportView, flight: &mut SessionView<Rc<GameData>>) {
     if spaceport.take_gamble_request()
         && let Some(opening) = flight.gamble_opening()
     {
@@ -142,7 +147,7 @@ pub(super) fn run_gamble(spaceport: &mut SpaceportView, flight: &mut FlightView<
 /// ([`refresh_spaceport`]).
 pub(super) fn collect_race_winnings(
     spaceport: &mut SpaceportView,
-    flight: &mut FlightView<Rc<GameData>>,
+    flight: &mut SessionView<Rc<GameData>>,
 ) {
     if spaceport.take_winnings_due()
         && let Some(asked_max) = flight.collect_winnings()
@@ -161,7 +166,7 @@ pub(super) fn collect_race_winnings(
 /// have closed.
 pub(super) fn close_port_dialogs(
     spaceport: &mut SpaceportView,
-    flight: &mut FlightView<Rc<GameData>>,
+    flight: &mut SessionView<Rc<GameData>>,
 ) {
     if let Some(dialog) = spaceport.take_port_dialog_closed() {
         flight.close_port_dialog(dialog);
@@ -178,7 +183,7 @@ pub(super) fn close_port_dialogs(
 /// closed on a movie's tick, or dropped, redraws before the next frame.
 pub(super) fn close_mission_texts(
     spaceport: &mut SpaceportView,
-    flight: &mut FlightView<Rc<GameData>>,
+    flight: &mut SessionView<Rc<GameData>>,
 ) {
     for _ in 0..spaceport.take_texts_closed() {
         flight.close_mission_text();
@@ -193,7 +198,7 @@ pub(super) fn close_mission_texts(
 /// mission info, a jettison), and before any frame is drawn.
 pub(super) fn refresh_status_bar(
     spaceport: &mut SpaceportView,
-    flight: &mut FlightView<Rc<GameData>>,
+    flight: &mut SessionView<Rc<GameData>>,
 ) {
     if spaceport.take_status_refresh() {
         flight.refresh_status();
@@ -207,7 +212,7 @@ pub(super) fn refresh_status_bar(
 /// the bar was told as it opened stays as it is.
 pub(super) fn refresh_spaceport(
     spaceport: &mut SpaceportView,
-    flight: &mut FlightView<Rc<GameData>>,
+    flight: &mut SessionView<Rc<GameData>>,
 ) {
     let shops = flight.shops();
     spaceport.set_empty_services(shops.empty);
@@ -229,7 +234,7 @@ pub(super) fn refresh_spaceport(
 /// settle, which rolls the visit's mission offers, and before any frame.
 pub(super) fn serve_empty_services(
     spaceport: &mut SpaceportView,
-    flight: &mut FlightView<Rc<GameData>>,
+    flight: &mut SessionView<Rc<GameData>>,
 ) {
     if spaceport.take_empty_services_request() {
         spaceport.set_empty_services(flight.shops().empty);
@@ -301,7 +306,7 @@ impl MissionInfoHolder for MissionDialogs {
 /// screen; `None` when nothing changed.
 pub(super) fn abort_and_refresh(
     holder: &mut impl MissionInfoHolder,
-    flight: Option<&mut FlightView<Rc<GameData>>>,
+    flight: Option<&mut SessionView<Rc<GameData>>>,
 ) -> Option<bool> {
     let slot = holder.take_abort()?;
     let flight = flight.expect(ENTERED);
@@ -317,7 +322,7 @@ pub(super) fn abort_and_refresh(
 /// (`_MissionInfoFilter` @0x9d89f) and shown while still selected.
 pub(super) fn load_info_text(
     holder: &mut impl MissionInfoHolder,
-    flight: &mut FlightView<Rc<GameData>>,
+    flight: &mut SessionView<Rc<GameData>>,
 ) {
     if let Some(slot) = holder.take_info_text_request()
         && let Some(text) = flight.show_info_row(slot)
@@ -352,7 +357,7 @@ pub(super) fn start_up_words(
 /// `story_log` module).
 pub(super) fn open_port_mission_info(
     spaceport: &mut SpaceportView,
-    flight: &mut FlightView<Rc<GameData>>,
+    flight: &mut SessionView<Rc<GameData>>,
 ) -> Option<nova_sim::MissionInfo> {
     if !spaceport.take_mission_info_request() {
         return None;

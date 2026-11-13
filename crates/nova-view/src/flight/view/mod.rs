@@ -3,43 +3,43 @@
 //! camera following the ship, and jumping through hyperspace along the
 //! course plotted on the galaxy map.
 //!
-//! The screen shows a flight it is handed built (by default a
-//! [`SessionFlight`] over a [`nova_sim::Session`], which the edge builds,
-//! [`open_flight`](crate::flight::open_flight)), flying a new pilot
-//! ([`FlightStart::New`](crate::flight::FlightStart::New)) or a given one
-//! ([`FlightStart::Pilot`](crate::flight::FlightStart::Pilot)), and holds
+//! The screen shows a flight it is handed built (in the game a
+//! `nova_flight::SessionFlight` over a `nova_sim::Session`, which the
+//! edge builds, `nova_flight::open_flight`), flying a new pilot
+//! (`nova_flight::FlightStart::New`) or a given one
+//! (`nova_flight::FlightStart::Pilot`), and holds
 //! its catalog ([`FlightView::over`]). It reads, once when it is built: the session's system, through the [`SystemCatalog`]
 //! port, the ship's sprite sheet, through the [`ShipSprites`](super::catalog::ShipSprites) port, the
 //! HUD's status bar for the player's government, through the
 //! [`StatusBars`](super::catalog::StatusBars) port, the galaxy for its course map, through the
 //! [`GalaxyCatalog`](crate::galaxy::GalaxyCatalog) port, and the look of every weapon the flight lists
-//! ([`FlightOpening::weapons`](nova_sim::flight_frame::FlightOpening::weapons))
+//! ([`FlightOpening::weapons`](nova_sim_frame::flight_frame::FlightOpening::weapons))
 //! and of every explosion type, through the
 //! [`CombatLooks`](super::catalog::CombatLooks) port. After that it reads only when the
 //! session tells it entered a system afresh: that system, and when the
 //! player's ship changes class: its sprite sheet, and when the system's NPC
-//! traffic is populated: its traffic, through the [`TrafficCatalog`](nova_sim::TrafficCatalog)
+//! traffic is populated: its traffic, through the [`TrafficCatalog`](nova_sim_frame::catalog::TrafficCatalog)
 //! port, and the target cards and codes of the ship types and governments
 //! it brings. Drawing and input never read anything.
 //!
 //! The session populates the system's NPC traffic when it says to (see
-//! [`Session::game_work`]), and as the ship takes off
-//! ([`Session::take_off`]), rolled on the screen's [`SharedChance`].
+//! `nova_sim::Session::game_work`), and as the ship takes off
+//! (`nova_sim::Session::take_off`), rolled on the screen's [`SharedChance`].
 //! Each time, the sprite sheet of each ship type the traffic can spawn is
 //! read, once per type for the life of the screen. Each step runs an
-//! advance pass in the original's order ([`Session::game_work`]): the
+//! advance pass in the original's order (`nova_sim::Session::game_work`): the
 //! player's fire and move, the fight's collision passes, the traffic's AI,
-//! its NPCs deciding as the screen's [`Behaviour`](nova_sim::Behaviour) says
-//! ([`Collaborators::behaviour`](crate::flight::Collaborators::behaviour); [`NovaAi`](nova_sim::NovaAi) by default), the shots,
+//! its NPCs deciding as the screen's `nova_sim::Behaviour` says
+//! (`nova_flight::Collaborators::behaviour`; `nova_sim::NovaAi` by default), the shots,
 //! the traffic's motion, the NPCs' fire and the beams, the fight's ships
 //! disabled as the screen's
-//! [`DisableRule`](nova_sim::DisableRule) says ([`SessionSetup::disable_rule`](nova_sim::SessionSetup::disable_rule);
-//! [`NovaDisable`](nova_sim::NovaDisable) by default), their point defence engaging every
+//! `nova_sim::DisableRule` says (`nova_sim::SessionSetup::disable_rule`;
+//! `nova_sim::NovaDisable` by default), their point defence engaging every
 //! missile fired at them, or by the other reading of the `pd_hostility`
-//! rule those its [`PointDefenceRule`](nova_sim::PointDefenceRule) calls hostile
-//! ([`Collaborators::defence_rule`](crate::flight::Collaborators::defence_rule); [`Allegiance`](nova_sim::Allegiance) by default),
-//! and the player's crimes judged by its [`LegalCode`](nova_sim::LegalCode)
-//! ([`Collaborators::law`](crate::flight::Collaborators::law); [`NovaLaw`](nova_sim::NovaLaw) by default). What could not be read of the looks
+//! rule those its `nova_sim::PointDefenceRule` calls hostile
+//! (`nova_flight::Collaborators::defence_rule`; `nova_sim::Allegiance` by default),
+//! and the player's crimes judged by its `nova_sim::LegalCode`
+//! (`nova_flight::Collaborators::law`; `nova_sim::NovaLaw` by default). What could not be read of the looks
 //! (each once, when the screen is built), then the session's diagnostics
 //! about game data it does not handle yet, pass through
 //! [`Screen::take_diagnostics`](crate::Screen::take_diagnostics) for the app to write out. Each NPC is
@@ -51,7 +51,7 @@
 //! the radar all along, as the original's radar does not ask.
 //!
 //! In double time ([`FlightView::set_double_time`]), each step runs the
-//! session's second pass ([`Session::tick_again`]) after the advance
+//! session's second pass (`nova_sim::Session::tick_again`) after the advance
 //! pass, the frame drawn between them, as `_PlayGame` draws it, and
 //! steps the effects and takes the fight's events after it as after the
 //! advance pass, held for the next frame (see the `between_passes` module)
@@ -77,7 +77,7 @@
 //!
 //! - the camera keeps the ship at the play area's centre, the original's
 //!   `_screenCenter`, (415, 384) at 1024 x 768, or by
-//!   [`RuleKey::FlightAnchor`](nova_sim::RuleKey::FlightAnchor)'s other
+//!   [`RuleKey::FlightAnchor`](nova_sim_frame::RuleKey::FlightAnchor)'s other
 //!   reading at the view's centre ([`FlightView::camera`],
 //!   [`Anchor`](crate::system::camera::Anchor)); the play area, the
 //!   brackets, clicks in space and the starfield (see the `stars` module)
@@ -94,7 +94,7 @@
 //!   goals, brackets and the asteroid field; a click in space, which the
 //!   bar's [`STATUS_BAR_WIDTH`] at the right edge doesn't take; the
 //!   original's stars, scattered and wrapped over the play area, or by
-//!   [`RuleKey::FlightStarfield`](nova_sim::RuleKey::FlightStarfield)'s
+//!   [`RuleKey::FlightStarfield`](nova_sim_frame::RuleKey::FlightStarfield)'s
 //!   other reading the stand-in's dots, which cover the whole view; and
 //!   the fades, which cover it.
 //!
@@ -110,7 +110,7 @@
 //! beams live before the fight's step are passed along, so a looped
 //! weapon is heard once a beam. The fight is drawn in the sprite world's
 //! layers, as `_SetupSpriteWorld` orders them
-//! ([`nova_sim::sprite_layer::WORLD_PASSES`], `world.rs`): over the
+//! ([`nova_sim_frame::sprite_layer::WORLD_PASSES`], `world.rs`): over the
 //! stellars, the beams that go under the ships, the asteroid field
 //! ([`asteroids`](super::asteroids), smoothed as the cargo boxes are), the
 //! disabled ships, the cargo boxes a jettison left ([`boxes`](super::boxes),
@@ -126,7 +126,7 @@
 //! Landing and arriving clear the effects.
 //!
 //! Each day a jump takes rolls the planetary events on the screen's
-//! [`SharedChance`] ([`Collaborators::chance`](crate::flight::Collaborators::chance)); without one, nothing
+//! [`SharedChance`] (`nova_flight::Collaborators::chance`); without one, nothing
 //! random happens. Landed at a trade center, the session's exchange can be
 //! read ([`FlightView::shops`]) and traded on ([`FlightView::trade`]);
 //! landed at an outfitter, so can its outfitter ([`FlightView::shops`],
@@ -136,7 +136,7 @@
 //! sprite sheet is read then.
 //!
 //! The screen redraws from what the session tells it
-//! ([`SessionEvent`](nova_sim::SessionEvent)), never from which of the session's methods ran or
+//! ([`SessionEvent`](nova_sim_frame::SessionEvent)), never from which of the session's methods ran or
 //! what it gave. Each frame first takes the session's events, so a change
 //! made outside the screen's own methods (an edit through the pilot desk,
 //! a set expression run by a control bit) is drawn by the next frame; each
@@ -149,7 +149,7 @@
 //! shown draws the ship there.
 //!
 //! Once the player's ship has exploded, the scene runs on without it
-//! through the session's hold ([`nova_sim::HOLD_TICKS`]). On the step the
+//! through the session's hold (`nova_sim::HOLD_TICKS`). On the step the
 //! hold expires flight stops stepping, whatever the frame's length, and
 //! the expiry is held for the router ([`FlightView::take_hold_expired`]),
 //! which begins the fade when it is ready ([`FlightView::begin_fade`]):
@@ -162,7 +162,7 @@
 //! as drawn, its bars the session's shield, armour and fuel, and its nav
 //! area the session's nav mode and selection. Without a status bar it
 //! says why, and flight goes on. By
-//! [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s engine
+//! [`RuleKey::HudCadence`](nova_sim_frame::RuleKey::HudCadence)'s engine
 //! reading the radar shows what it held at its last refresh, every 8
 //! ticks ([`HudCadence`]) or when the original's `_RedrawStatus` would
 //! redraw it (a new system, landing, take-off, or closing the map, the
@@ -176,9 +176,9 @@
 //! at once ([`retake_target`](super::cadence::retake_target)). Its target blinks bright on the
 //! same 8 ticks either way, and it shows no stellars or ships while the
 //! ship is landed. The player's outfits give it IFF colours and a density
-//! scanner ([`FrameHud::radar_gear`](nova_sim::flight_frame::FrameHud::radar_gear)); far from the system's centre an
+//! scanner ([`FrameHud::radar_gear`](nova_sim_frame::flight_frame::FrameHud::radar_gear)); far from the system's centre an
 //! arrow points back to it; and each tick the interference in the system
-//! ([`FrameHud::interference`](nova_sim::flight_frame::FrameHud::interference)) may fill it with static, rolled on the
+//! ([`FrameHud::interference`](nova_sim_frame::flight_frame::FrameHud::interference)) may fill it with static, rolled on the
 //! effects' chance.
 //!
 //! In port the app draws the status bar alone under the spaceport
@@ -219,7 +219,7 @@
 //! The ship is drawn as its sheet's rotation frame for the heading shown,
 //! then, at the same centre and on the same frame (modulo the layer's
 //! frame count), its engine glow and its running lights. The glow is
-//! drawn at the level [`nova_sim::glow_level`] gives for the session's
+//! drawn at the level [`nova_sim_frame::glow_level`] gives for the session's
 //! glow base (`nova_sim::Session::engine_glow`) at the flight's time in ticks: it
 //! fades in over 24 ticks of thrust, flickers, and fades out over 24
 //! ticks after Up is released, and landing and beginning a jump put it
@@ -247,9 +247,9 @@
 //!   ship target, or the navigation stellar with no target or with Alt
 //!   (Option) held. While Down or A aims the ship, Left and Right do
 //!   nothing, as the original's turn block holds them off (see
-//!   [`player_turn`](nova_sim::player_turn)).
+//!   `nova_sim::player_turn`).
 //! - L, once a press (its repeats do nothing), requests clearance, then
-//!   lands, as [`landing`](nova_sim::landing) says, in two presses: with
+//!   lands, as [`landing`](nova_sim_frame::landing) says, in two presses: with
 //!   no navigation target it selects the nearest stellar, and
 //!   the press requests the stellar selected. Away from it traffic
 //!   control answers with the request's line ([`request_line`]); within
@@ -270,7 +270,7 @@
 //!   [`landing_refusal_ticks`], in the original's words (`STR#` 2002).
 //!   The words' picks roll on the flight's chance.
 //!   Over a hypergate or wormhole, the second L enters it instead
-//!   ([`nova_sim::gate`]): a hypergate opens the course map as the
+//!   ([`nova_sim_frame::gate`]): a hypergate opens the course map as the
 //!   hypergate map ([`MapMode::Hypergate`](crate::galaxy::MapMode::Hypergate)), offering its linked
 //!   systems, and closing the map (M, or the router's Escape) enters it
 //!   for the one picked, or cancels; a wormhole passes the ship through at
@@ -304,7 +304,7 @@
 //!   bar, a port screen and a mission dialog open on M open with it
 //!   held. Tab or `\` on it (repeats too) cycles the
 //!   hyperspace selection through the current system's links
-//!   ([`Session::cycle_map_selection`]): the map draws the new selected
+//!   (`nova_sim::Session::cycle_map_selection`): the map draws the new selected
 //!   link and selects its system, and the nav area is redrawn at once; on
 //!   the hypergate map it steps the pick through the gate's destinations,
 //!   Shift stepping back (`nova_sim::Session::hypergate_cycle`); docked, it does
@@ -318,7 +318,7 @@
 //!   `_DoSystemMap` does (`Session::map_preselection`): the one
 //!   selected in nav mode 3, or the current system in any other mode,
 //!   and its panel shows that system. It draws the session's drawing
-//!   ([`Session::map_drawing`], [`GalaxyMap::show_drawing`]): what
+//!   (`nova_sim::Session::map_drawing`, [`GalaxyMap::show_drawing`]): what
 //!   `_DrawMap` draws of the known and explored systems, coloured by
 //!   `_ColorCodeSystem`, with the mission systems taken as it opens
 //!   (`Session::map_mission_systems`), taken again on the frame after
@@ -327,18 +327,18 @@
 //!   system clicked on the map becomes the destination: the session plots
 //!   the course there and the map shows it, and the hop it cues as the
 //!   selected link. Its info panels are the session's for the system it
-//!   selects ([`Session::map_panel`], [`GalaxyMap::show_panel`]), taken
+//!   selects (`nova_sim::Session::map_panel`, [`GalaxyMap::show_panel`]), taken
 //!   with each drawing and whenever a click, a Tab or a gate pick changes
 //!   the selection, measured by the flight's text metrics. The
-//!   map's nebulae are the session's galaxy's ([`Session::galaxy`]),
+//!   map's nebulae are the session's galaxy's (`nova_sim::Session::galaxy`),
 //!   active and explored, rebuilt on the frame after each change to it;
 //!   its panel's course line is the course as it is flown
-//!   ([`Session::course_shown`]), each hop the visible system standing
+//!   (`nova_sim::Session::course_shown`), each hop the visible system standing
 //!   for it. Space centres it on the current system and selects it
 //!   ([`UiSound::MapCentred`]), and Done closes it as Return does. F, S
 //!   or its Find button open Find, which takes every input while it is
 //!   open, M and Escape included; the session searches what the
-//!   original's `_DoSystemSearch` does ([`Session::find_map_system`]),
+//!   original's `_DoSystemSearch` does (`nova_sim::Session::find_map_system`),
 //!   and the map selects and centres on a system found
 //!   ([`UiSound::MapSystemFound`], or [`UiSound::MapSystemNotFound`]).
 //!   Closing the map drops an open Find. A mission dialog opens the same
@@ -351,9 +351,9 @@
 //!   ([`FlightView::open_port_screen_map`]), silently and unmarked (see
 //!   [`PortScreen`]'s module).
 //! - The HUD's nav area shows the session's nav mode and its selection
-//!   ([`Session::nav_mode`]): the nav system off, a stellar, or a system
+//!   (`nova_sim::Session::nav_mode`): the nav system off, a stellar, or a system
 //!   (see [`hud`](super::hud)). As in the original
-//!   (`_HandlePlayer` @0x68390; see [`navigation`](nova_sim::navigation)),
+//!   (`_HandlePlayer` @0x68390; see [`navigation`](nova_sim_frame::navigation)),
 //!   1-4 and F1-F4 ([`FlightCommand::StellarSlot1`](crate::keymap::FlightCommand::StellarSlot1) and on, F1-F4 their twins) select the stellar in
 //!   that slot of the system's nav defaults, 1-4 only while the escort
 //!   menu is shut; F5 and, with the menu shut,
@@ -379,7 +379,7 @@
 //!   click's ship walk reads no jump state (@0x6a353-0x6a5e4).
 //! - `\` (a press, not its repeats), the original's Hyper Select, selects
 //!   the next system linked with this one, as
-//!   [`Session::select_next_system`] says, so the nav area shows that
+//!   `nova_sim::Session::select_next_system` says, so the nav area shows that
 //!   system and J jumps there. By the engine's reading the course is
 //!   kept, and the course map draws the selection as its own link.
 //! - The floating map ([`floating`](super::floating)) is shown on every
@@ -393,7 +393,7 @@
 //!   menu. While it is up, faded out or not, a left click in its frame is
 //!   its own: on the current system's centre it selects mode 3 with
 //!   nothing, on a link's box mode 3 with that link, each with `snd ` 152
-//!   ([`Session::select_on_floating_map`]), except during a jump, and
+//!   (`nova_sim::Session::select_on_floating_map`), except during a jump, and
 //!   anything else picks nothing. `-` zooms it out a step and `=` or the keypad's
 //!   `+` in ([`FlightCommand::ZoomOut`](crate::keymap::FlightCommand::ZoomOut), [`FlightCommand::ZoomIn`](crate::keymap::FlightCommand::ZoomIn)),
 //!   with `snd ` 150, during a jump too, but only while no key the flight
@@ -402,7 +402,7 @@
 //!   system selected when the session allows a jump, and otherwise
 //!   says why in the original's words (`STR#` 2002), as a refused landing
 //!   does. Once J is accepted the session flies the ship round to the
-//!   jump's bearing ([`Session::preparing_jump`]) without the steering
+//!   jump's bearing (`nova_sim::Session::preparing_jump`) without the steering
 //!   and thrust keys, and its fire keys fire nothing until arrival. While
 //!   a jump is under way, the stage braking for it included, only the keys
 //!   the original's `_HandlePlayer` does not gate on its jump state are
@@ -421,7 +421,7 @@
 //!   and J held through it, do nothing after it. J held into a disable, or
 //!   first pressed while disabled, acts on the first tick the ship is
 //!   intact again. The jump plays its [`JumpEffect`] from when the session
-//!   says the jump has begun ([`Session::jumping`]), at once for a ship
+//!   says the jump has begun (`nova_sim::Session::jumping`), at once for a ship
 //!   already facing that way and slow enough: the session flies the warp,
 //!   the ship rushing off along its bearing, and the screen, HUD included,
 //!   fades to white once the session lights it, as the original's
@@ -441,10 +441,10 @@
 //!   while held. W (a press) selects the next secondary weapon, and with
 //!   Alt (Option) the one before. Tab (a press) targets the next ship in
 //!   turn, R the nearest threat, and Alt-R (Option-R) the nearest ship
-//!   ([`TargetPick`](nova_sim::TargetPick)). Shift-Tab targets back through the ships, and
+//!   ([`TargetPick`](nova_sim_frame::TargetPick)). Shift-Tab targets back through the ships, and
 //!   Shift-Alt-Tab (Shift-Option-Tab) back through the escorts, as the
 //!   original's `_FindPrevShipInSystem` does. Every Tab press beeps
-//!   ([`SimSound::TargetSelected`](nova_sim::SimSound::TargetSelected)),
+//!   ([`SimSound::TargetSelected`](nova_sim_frame::SimSound::TargetSelected)),
 //!   as does R picking a ship other than the target; R finding none
 //!   beeps the refusal. A held key's repeat does nothing, as the
 //!   original's per-press latches. Tab, R and W work during a
@@ -452,8 +452,8 @@
 //!   of the target; Space and Control fire nothing then (@0x6aaf0,
 //!   @0x6ab75).
 //! - B (a press) boards the target when the session allows it
-//!   ([`Session::board`]), by the screen's [`BoardingRule`](nova_sim::BoardingRule)
-//!   ([`Collaborators::boarding_rule`](crate::flight::Collaborators::boarding_rule); [`NovaBoarding`](nova_sim::NovaBoarding) by default),
+//!   (`nova_sim::Session::board`), by the screen's `nova_sim::BoardingRule`
+//!   (`nova_flight::Collaborators::boarding_rule`; `nova_sim::NovaBoarding` by default),
 //!   and otherwise says why in the original's words (`STR#` 2002
 //!   #130-132), or nothing when there is no target or the player does not
 //!   face it. A boarding lets go of the flight keys and is held for the
@@ -467,11 +467,11 @@
 //!   person that grants outfits says what it retrieved
 //!   ([`grant_message`]) for [`GRANT_TICKS`]. A person of `Flags`
 //!   0x0200 whose mission is available offers it in place of the plunder
-//!   ([`Boarding::Offered`](nova_sim::Boarding::Offered)), held for the router as a hail's offer is.
+//!   ([`Boarding::Offered`](nova_sim_frame::Boarding::Offered)), held for the router as a hail's offer is.
 //!   B works during a jump too, as `_HandlePlayerBoardAttempt` reads no
 //!   jump state (0x65000-0x66064): its checks run on the ship as it brakes,
 //!   or as it warps.
-//! - Y (a press) hails the target ([`Session::hail_key`]), and with no
+//! - Y (a press) hails the target (`nova_sim::Session::hail_key`), and with no
 //!   ship target, or Alt (Option) held, the navigation stellar: one that
 //!   answers opens the planet comm dialog (`_DoPlanetCommDialog`), held
 //!   for the router ([`FlightView::take_planet_comm`]), whose presses and
@@ -483,9 +483,9 @@
 //!   [`FlightView::accept_mission`] or [`FlightView::refuse_mission`]; a
 //!   mission that cannot be refused, with no offer text, is accepted at
 //!   once and shows nothing. Any other hail opens the comm dialog,
-//!   listing the screen's [`HailOptions`](nova_sim::HailOptions)
-//!   ([`Collaborators::hail_options`](crate::flight::Collaborators::hail_options); Nova's by default), its replies
-//!   read through the [`CommCatalog`](nova_sim::CommCatalog) port, and otherwise says why in the
+//!   listing the screen's `nova_sim::HailOptions`
+//!   (`nova_flight::Collaborators::hail_options`; Nova's by default), its replies
+//!   read through the [`CommCatalog`](nova_sim_frame::catalog::CommCatalog) port, and otherwise says why in the
 //!   original's words (`STR#` 2002 #53-54), or nothing with no target. A
 //!   hail answered lets go of the flight keys and is held for the router
 //!   ([`FlightView::take_hail`]), which opens the comm dialog over the
@@ -493,10 +493,10 @@
 //!   each haggle through [`FlightView::haggle`], and closing the channel
 //!   through [`FlightView::hang_up`]. Each step, the NPCs refuelling the
 //!   player give their help in the traffic's tick (a repair is the
-//!   traffic's, by the screen's [`DisableRule`](nova_sim::DisableRule)), and each that is done
+//!   traffic's, by the screen's `nova_sim::DisableRule`), and each that is done
 //!   says so, as a message ([`comm_message`]), taken after the step's
 //!   advance pass, which settles the notes in slot order with the frame's
-//!   other lines ([`FlightEvent::Comm`](nova_sim::flight_frame::FlightEvent::Comm)). During a jump, its pre-jump stage included, Y is
+//!   other lines ([`FlightEvent::Comm`](nova_sim_frame::flight_frame::FlightEvent::Comm)). During a jump, its pre-jump stage included, Y is
 //!   taken and the session refuses the hail, silently, as
 //!   `_HandlePlayerCommunication` refuses while the jump state is set
 //!   (@0x61f87; its beep is player-death phase 16's).
@@ -506,11 +506,11 @@
 //!   [`FlightView::open_player_info`]), letting go of the flight keys, as
 //!   `_HandlePlayer` does (@0x702bf-0x703c9). During a jump, its pre-jump
 //!   stage included, while the ship breaks up, and for
-//!   [`TAKEOFF_GRACE_TICKS`](nova_sim::TAKEOFF_GRACE_TICKS) after a
+//!   `nova_sim::TAKEOFF_GRACE_TICKS` after a
 //!   take-off or a gate's exit, the session refuses it with the shared
 //!   refusal beep (`Session::press_player_info`, sent as
-//!   [`FlightCommand::PressPlayerInfo`](nova_sim::flight_frame::FlightCommand::PressPlayerInfo),
-//!   [`SimSound::Refused`](nova_sim::SimSound::Refused), @0x7039a-0x703bd);
+//!   [`FlightCommand::PressPlayerInfo`](nova_sim_frame::flight_frame::FlightCommand::PressPlayerInfo),
+//!   [`SimSound::Refused`](nova_sim_frame::SimSound::Refused), @0x7039a-0x703bd);
 //!   once the ship has exploded, and in the escape pod, it does nothing
 //!   and says nothing, as no key handler runs there. Its Jettison
 //!   jettisons everything ([`FlightView::jettison_all`]).
@@ -524,14 +524,14 @@
 //!   flight keys, when the session shows an active mission there; with
 //!   none it says "You have no active missions." (`STR#` 2002 #354) after
 //!   the shared refusal beep
-//!   ([`SimSound::Refused`](nova_sim::SimSound::Refused), @0x70557). The
+//!   ([`SimSound::Refused`](nova_sim_frame::SimSound::Refused), @0x70557). The
 //!   session decides (`nova_sim::Session::press_mission_info`, through
-//!   [`FlightCommand::PressMissionInfo`](nova_sim::flight_frame::FlightCommand::PressMissionInfo)), and refuses it in
+//!   [`FlightCommand::PressMissionInfo`](nova_sim_frame::flight_frame::FlightCommand::PressMissionInfo)), and refuses it in
 //!   silence during a jump, its pre-jump stage included (+0x50,
 //!   @0x70424), in the escape pod (+0xc908, @0x7042e), while the ship
 //!   breaks up (`_IsDying` @0x70439, +0x3c @0x7044b), once it has
 //!   exploded, and for
-//!   [`TAKEOFF_GRACE_TICKS`](nova_sim::TAKEOFF_GRACE_TICKS) after a
+//!   `nova_sim::TAKEOFF_GRACE_TICKS` after a
 //!   take-off or a gate's exit (`_frameCounter`, @0x7045e). A disabled
 //!   ship takes it.
 //! - F12 ([`FlightCommand::ShowFramerate`](crate::keymap::FlightCommand::ShowFramerate), a press, not its repeats) toggles the
@@ -546,9 +546,9 @@
 //!   frames a second every 2 s, as `_PlayGame` says them
 //!   (@0x45bcd-0x45d57). The app coming back to the front says
 //!   "Calculating FPS..." again ([`Screen::focus_gained`](crate::Screen::focus_gained)).
-//! - The player's escorts fly beside it (see [`Session`]), their ship
+//! - The player's escorts fly beside it (see `nova_sim::Session`), their ship
 //!   types' sprite sheets read with the traffic's. F, D, V and C (presses)
-//!   command them ([`Session::command_escorts`]): attack the player's
+//!   command them (`nova_sim::Session::command_escorts`): attack the player's
 //!   target, defend the player, hold position, and recall them to
 //!   formation; Option-C is Return to Hangar, sending the fighters out of
 //!   the player's bays home to dock and the others back to formation.
@@ -560,10 +560,10 @@
 //!   its group (rather than a stellar) and Return closes it. The menu is drawn over the flight,
 //!   under the HUD, in the colours the [`EscortMenuLooks`](super::escorts::EscortMenuLooks) port gives,
 //!   read when the screen is built. Option-Tab targets the next escort
-//!   ([`TargetPick::NextEscort`](nova_sim::TargetPick::NextEscort)), and Shift-Option-Tab the one before
-//!   ([`TargetPick::PreviousEscort`](nova_sim::TargetPick::PreviousEscort)), as for a hail. The escorts' standing
+//!   ([`TargetPick::NextEscort`](nova_sim_frame::TargetPick::NextEscort)), and Shift-Option-Tab the one before
+//!   ([`TargetPick::PreviousEscort`](nova_sim_frame::TargetPick::PreviousEscort)), as for a hail. The escorts' standing
 //!   orders reset, or not, on entering a system as the session's rule
-//!   set says ([`SessionSetup::rules`](nova_sim::SessionSetup::rules)). While a jump is under way,
+//!   set says (`nova_sim::SessionSetup::rules`). While a jump is under way,
 //!   the ship braking and turning for it or warping, the
 //!   escort menu's keys are taken, among the few that are (see J above),
 //!   as the original runs its escort block on every frame of a jump but
@@ -575,7 +575,7 @@
 //!   the system launches have their sheets read with the traffic's. What
 //!   a fighter launched does first, and what becomes of the fighters out
 //!   as the player leaves a system, follow the session's rule set
-//!   ([`SessionSetup::rules`](nova_sim::SessionSetup::rules)); fighters abandoned in a jump
+//!   (`nova_sim::SessionSetup::rules`); fighters abandoned in a jump
 //!   are told on arrival ([`fighters_abandoned_message`](super::escorts::fighters_abandoned_message)).
 //! - Landed at an outfitter or a shipyard, the router asks the flight
 //!   for its list ([`FlightView::shops`], [`FlightView::outfitter`])
@@ -585,31 +585,31 @@
 //!   outfitter opens ([`FlightView::open_outfitter`]). Where the shops,
 //!   the exchange and the tribbles and perishables in flight follow a
 //!   disputed rule, they read it from the session's rule set
-//!   ([`SessionSetup::rules`](nova_sim::SessionSetup::rules)).
+//!   (`nova_sim::SessionSetup::rules`).
 //! - Landed at a bar, the router asks the flight for the ships for hire
 //!   and hires them ([`FlightView::escorts_for_hire`],
 //!   [`FlightView::hire`]), the day's rolls drawn on the flight's chance,
 //!   and has it draw the visit's news as the bar opens
 //!   ([`FlightView::open_bar`], [`FlightView::news`]);
 //!   the session's hire terms and control bits are set on the screen
-//!   ([`SessionSetup::hire_terms`](nova_sim::SessionSetup::hire_terms), [`SessionSetup::control_bits`](nova_sim::SessionSetup::control_bits)),
+//!   (`nova_sim::SessionSetup::hire_terms`, `nova_sim::SessionSetup::control_bits`),
 //!   and its disputed hiring rules come from its rule set
-//!   ([`SessionSetup::rules`](nova_sim::SessionSetup::rules)). Hired escorts who defect unpaid
+//!   (`nova_sim::SessionSetup::rules`). Hired escorts who defect unpaid
 //!   on arrival or at take-off are kept, worded by [`defection_message`],
 //!   for whoever shows texts to show each in a text dialog
 //!   ([`FlightView::take_defections`]), not said on the message line.
 //! - Persons appear as the session's rules say
-//!   ([`SessionSetup::person_rules`](nova_sim::SessionSetup::person_rules)); the target panel shows a
+//!   (`nova_sim::SessionSetup::person_rules`); the target panel shows a
 //!   person's own name and subtitle, a person hailed says its comm quote
-//!   as the session's rule set says ([`SessionSetup::rules`](nova_sim::SessionSetup::rules)), and
+//!   as the session's rule set says (`nova_sim::SessionSetup::rules`), and
 //!   each step a person may
 //!   say its hail quote (`nova_sim::Session::tick_quotes`, right after the
 //!   fight and the answer to its hits, `nova_sim::Session::answer_strikes`),
 //!   shown in the message line for
-//!   the session's count ([`PersonQuote::ticks`](nova_sim::PersonQuote::ticks)),
+//!   the session's count ([`PersonQuote::ticks`](nova_sim_frame::PersonQuote::ticks)),
 //!   the last one said winning.
 //! - Each step ends with the asteroid field's work
-//!   (`nova_sim::Session::tick_asteroids`, which [`Session::game_work`] runs
+//!   (`nova_sim::Session::tick_asteroids`, which `nova_sim::Session::game_work` runs
 //!   after the fight): a spawn at the field's edge and the field stepped,
 //!   on the flight's chance, so the next step's shots meet the asteroids
 //!   where they are drawn. Before any step, and so
@@ -625,7 +625,7 @@
 //!   do for a disabled ship. Once it has exploded no key is taken, as the
 //!   original's dead branch (0x6870d-0x6888c) skips every handler. The
 //!   screen asks the session which commands it takes
-//!   ([`Session::takes`]).
+//!   (`nova_sim::Session::takes`).
 //! - Escape belongs to the app's router, which closes the map or leaves
 //!   flight. The screen never quits.
 //!
@@ -640,8 +640,8 @@
 //! background frame's `_commRect` over the work frame each frame
 //! (@0x38b52-0x38b90). Each message stays for as many ticks of
 //! flight as its original caller asks ([`MESSAGE_TICKS`] and the
-//! constants after it, [`SimMessage::ticks`], [`CommNote::ticks`](nova_sim::CommNote::ticks),
-//! [`PersonQuote::ticks`](nova_sim::PersonQuote::ticks)). The dialogs drawn over
+//! constants after it, [`SimMessage::ticks`], [`CommNote::ticks`](nova_sim_frame::CommNote::ticks),
+//! [`PersonQuote::ticks`](nova_sim_frame::PersonQuote::ticks)). The dialogs drawn over
 //! flight (the comm, offer and plunder dialogs, the map) leave it as it
 //! is, and it shows again afterwards for the ticks it had left, as
 //! `_RedrawComm` (@0x903a0) redraws it; the plunder dialog counts it down
@@ -696,18 +696,18 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::rc::Rc;
 use std::time::Duration;
 
-#[cfg(doc)]
-use nova_sim::Session;
-use nova_sim::flight_frame::{FlightFrame, FrameShip, GateFade, Names, ShipPlace, StepReport};
-use nova_sim::order_loop::{OrderRun, Stopped};
-use nova_sim::traffic::emerge::{FULL_LEVEL, emerge_level};
-use nova_sim::traffic::gate_entry::enter_level;
-use nova_sim::{
+use nova_sim_frame::flight_frame::{
+    FlightFrame, FrameShip, GateFade, Names, ShipPlace, StepReport,
+};
+use nova_sim_frame::order_loop::{OrderRun, Stopped};
+use nova_sim_frame::traffic::emerge::{FULL_LEVEL, emerge_level};
+use nova_sim_frame::traffic::gate_entry::enter_level;
+use nova_sim_frame::{
     Chance, CombatEvent, Condition, FixedStep, GovtId, HailView, HashedRolls, NavMode, NeverFires,
     NpcId, OutfitRefusal, OutfitRun, Reselection, Reserves, ShipId, ShipRef, SimMessage, StellarId,
     SystemId, Vec2, flight::normalized, flight::shortest_turn,
 };
-use nova_sim::{InterfaceLoad, MissionInfo, OfferPrompt, SpeedMult, TextBar};
+use nova_sim_frame::{InterfaceLoad, MissionInfo, OfferPrompt, SpeedMult, TextBar};
 
 use super::cadence::{Drawn, HudCadence};
 use super::catalog::{Looks, ShipSheet, ShipSprites, TargetCard};
@@ -719,7 +719,6 @@ use super::floating::FloatingMap;
 use super::hud::{NavDisplay, STATUS_BAR_WIDTH, StatusBar};
 use super::jump::JumpEffect;
 use super::radar::{RadarScene, RadarShip};
-use super::sim_adapter::SessionFlight;
 use super::sim_port::FlightSim;
 use super::stars::Starfield;
 use super::target::TargetPanel;
@@ -748,6 +747,8 @@ mod dialog_latch;
 mod dialog_map;
 mod docked;
 mod drawing;
+#[cfg(any(test, feature = "fixture"))]
+mod edge_reads;
 mod faded_keys;
 mod frame_rate;
 mod gamble;
@@ -811,9 +812,9 @@ pub struct FlightOverlays {
     pub help: bool,
     /// The original's cheat mode (`_cheatsActive`, which nothing in 1.1
     /// turns on): the player info shows its IDs
-    /// ([`PlayerInfo::cheats`](nova_sim::player_info::PlayerInfo::cheats)),
+    /// (`nova_sim::player_info::PlayerInfo::cheats`),
     /// and the course map's panels their raw numbers and the zoom readout
-    /// ([`MapPanel::with_cheats`](nova_sim::map_panel::MapPanel::with_cheats)).
+    /// ([`MapPanel::with_cheats`](nova_sim_frame::map_panel::MapPanel::with_cheats)).
     pub cheats: bool,
 }
 
@@ -834,7 +835,7 @@ fn shown_heading(from: ShipPlace, to: ShipPlace, alpha: f32) -> f32 {
 
 /// How an NPC at `gate` is tinted: `None` while it waits hidden at the gate
 /// it comes out of; white with the alpha of its [`emerge_level`] over
-/// its last [`FADE_TICKS`](nova_sim::traffic::emerge::FADE_TICKS) there;
+/// its last `nova_sim::traffic::emerge::FADE_TICKS` there;
 /// white with the alpha of its [`enter_level`] while it enters a gate to
 /// leave, fading out; plain white otherwise, held at its gate by the
 /// player's hit too (its goal 4 is not the fade's goal 0x15).
@@ -871,6 +872,15 @@ impl SharedChance {
     pub fn new(chance: Rc<RefCell<dyn Chance>>) -> Self {
         Self(chance)
     }
+
+    /// Whether `other` is a copy of this one: one source, shared. The
+    /// edge's checks' read (nova-flight's `edge::edge_checks`): view code
+    /// never calls it.
+    #[cfg(any(test, feature = "fixture"))]
+    #[must_use]
+    pub fn shares(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 impl Default for SharedChance {
@@ -901,13 +911,20 @@ impl Chance for SharedChance {
 
 #[cfg(test)]
 mod shared_chance_tests {
-    use nova_sim::fixture::chance::check_contract;
+    use nova_sim_base::fixture::chance::check_contract;
 
     use super::*;
 
     #[test]
     fn a_default_shared_chance_meets_the_chance_contract() {
         assert_eq!(check_contract(&mut SharedChance::default()), Ok(()));
+    }
+
+    #[test]
+    fn a_shared_chance_shares_only_with_its_copies() {
+        let chance = SharedChance::default();
+        assert!(chance.shares(&chance.clone()), "a copy");
+        assert!(!chance.shares(&SharedChance::default()), "another source");
     }
 
     /// Fires every time, draws 0 and records each `n`, and rolls the last
@@ -1043,7 +1060,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// whether a jump is under way. The view reads no fresh fill; this
     /// refill, the step's, the catch-up's and [`FlightView::change_sim`]'s
     /// are what keep the frame the flight's. An ask
-    /// ([`FlightCommand::is_ask`](nova_sim::flight_frame::FlightCommand::is_ask):
+    /// ([`FlightCommand::is_ask`](nova_sim_frame::flight_frame::FlightCommand::is_ask):
     /// the hover, the coming traffic, a description's load) changes
     /// nothing the frame shows, so none is filled after it, and a shown
     /// cursor's hover each step adds no fill to the tick.
@@ -1059,8 +1076,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// the next pass.
     pub(super) fn send(
         &mut self,
-        command: nova_sim::flight_frame::FlightCommand,
-    ) -> nova_sim::flight_frame::Answer {
+        command: nova_sim_frame::flight_frame::FlightCommand,
+    ) -> nova_sim_frame::flight_frame::Answer {
         let ask = command.is_ask();
         let answer = self.sim.apply(command);
         if !ask {
@@ -1082,20 +1099,23 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// (`FlightView::nav_held_frame`) and the step's holds
     /// (`FlightView::step_input`).
     ///
-    /// [`FlightCommand::gate`]: nova_sim::flight_frame::FlightCommand::gate
-    pub(super) fn takes_command(&self, command: &nova_sim::flight_frame::FlightCommand) -> bool {
+    /// [`FlightCommand::gate`]: nova_sim_frame::flight_frame::FlightCommand::gate
+    pub(super) fn takes_command(
+        &self,
+        command: &nova_sim_frame::flight_frame::FlightCommand,
+    ) -> bool {
         command.gate().is_none_or(|gate| self.takes(gate))
     }
 
     /// Sends `command` as [`FlightView::send`] does once the flight takes
     /// it ([`FlightView::takes_command`]); refused, sends nothing and
-    /// answers [`Answer::Refused`](nova_sim::flight_frame::Answer::Refused).
+    /// answers [`Answer::Refused`](nova_sim_frame::flight_frame::Answer::Refused).
     pub(super) fn send_gated(
         &mut self,
-        command: nova_sim::flight_frame::FlightCommand,
-    ) -> nova_sim::flight_frame::Answer {
+        command: nova_sim_frame::flight_frame::FlightCommand,
+    ) -> nova_sim_frame::flight_frame::Answer {
         if !self.takes_command(&command) {
-            return nova_sim::flight_frame::Answer::Refused;
+            return nova_sim_frame::flight_frame::Answer::Refused;
         }
         self.send(command)
     }
@@ -1110,14 +1130,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
 }
 
 /// The player's ship in flight, reading the game data from `C`, the
-/// flight itself through the [`FlightSim`] port `S`: by default the
-/// [`SessionFlight`] adapter over a real session.
+/// flight itself through the [`FlightSim`] port `S`: in the game the
+/// adapter over a real session, `nova_flight::SessionFlight`, the view
+/// of which is `nova_flight::SessionView`.
 #[derive(Clone, Debug)]
 #[allow(clippy::struct_excessive_bools)] // each is one fact the screen keeps
-pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
+pub struct FlightView<C, S: FlightSim> {
     /// What the screen reads: when it is built, and on each arrival. The
     /// flight holds the same handle for its answers that read the catalog
-    /// ([`SessionFlight`]'s, shared as the view is read).
+    /// (`nova_flight::SessionFlight`'s, shared as the view is read).
     catalog: Rc<C>,
     /// The flight, with the collaborators its calls are handed.
     sim: S,
@@ -1139,18 +1160,18 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// frame's steps, each catch-up, and each change behind the port
     /// ([`FlightView::change_sim`], [`FlightView::begin`],
     /// [`FlightView::enter_game`]), so it is never stale at a read; an ask
-    /// ([`FlightCommand::is_ask`](nova_sim::flight_frame::FlightCommand::is_ask))
+    /// ([`FlightCommand::is_ask`](nova_sim_frame::flight_frame::FlightCommand::is_ask))
     /// changes nothing it shows. A double-time frame is drawn from the
     /// frame between its passes instead ([`FlightView::drawn`]), so this
     /// stays the flight as it stands for every read.
     frame: FlightFrame,
     /// Why the flight could not start, if it could not, as it opened
-    /// ([`FlightOpening::failure`](nova_sim::flight_frame::FlightOpening::failure)):
+    /// ([`FlightOpening::failure`](nova_sim_frame::flight_frame::FlightOpening::failure)):
     /// fixed for the flight's life, so no frame field. Such a flight
     /// shows only the reason.
     failure: Option<String>,
     /// The names fixed for the flight's life, as it opened
-    /// ([`FlightOpening::names`](nova_sim::flight_frame::FlightOpening::names)):
+    /// ([`FlightOpening::names`](nova_sim_frame::flight_frame::FlightOpening::names)):
     /// the ships', outfits', goods', `jünk`s' and stellars' names the
     /// messages are worded with. Behind an `Rc`, as a clone of the view
     /// shares the one table.
@@ -1194,7 +1215,7 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// `nova_sim::speed_mult`).
     since_step: Duration,
     /// The gain the last pass ran at
-    /// ([`nova_sim::flight_frame::PassReport::speed_mult`]): the share of its
+    /// ([`nova_sim_frame::flight_frame::PassReport::speed_mult`]): the share of its
     /// velocity each shot, box and asteroid last moved by
     /// (`flight::moved`), which the draws between passes back them off
     /// by. The engine's own interpolation, with no counterpart in the
@@ -1338,9 +1359,9 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     pending_hail: Option<HailView>,
     /// The escort dialog a fleet escort hailed just opened, for the
     /// router.
-    pending_escort_dialog: Option<nova_sim::escort_dialog::EscortDialogView>,
+    pending_escort_dialog: Option<nova_sim_frame::escort_dialog::EscortDialogView>,
     /// The planet comm dialog a stellar hailed just opened, for the router.
-    pending_planet_comm: Option<nova_sim::planet_comm::PlanetCommView>,
+    pending_planet_comm: Option<nova_sim_frame::planet_comm::PlanetCommView>,
     /// The mission info [`PlayCommand::MissionInfo`](crate::keymap::PlayCommand::MissionInfo) asked the screen be opened
     /// on, for the router.
     pending_mission_info: Option<MissionInfo>,
@@ -1405,7 +1426,7 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// What the course map's drawing was last taken from
     /// ([`FlightView::redraw_map`]): while the map is open, a change to
     /// any of it takes the drawing again (see `FlightView::catch_up`).
-    map_seen: Option<nova_sim::flight_frame::MapKey>,
+    map_seen: Option<nova_sim_frame::flight_frame::MapKey>,
     /// What the floating map draws, taken at its last show
     /// ([`FlightView::show_floating_map`]).
     floating_picture: Option<MapPicture>,
@@ -1446,7 +1467,7 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// What of each ship's sprites the session loads, as the Ship
     /// Animations and Running Lights preferences say: the last load sent
     /// it (`nova_sim::flight_frame::FlightCommand::SetSpriteLoad`).
-    sprite_load: nova_sim::combat::SpriteLoad,
+    sprite_load: nova_sim_frame::combat::SpriteLoad,
     /// The player's sound preferences, which say whether the Red Alert
     /// blinks its icon ([`SoundPrefs::alert_quiet`]), as the session is
     /// told.
@@ -1480,7 +1501,7 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// them, and an empty table draws as none.
     world_models: Rc<crate::flight::world_models::WorldModels>,
     /// Each NPC's place a step before the frame's, in the system's order
-    /// as the step reported them ([`StepRun::before`](nova_sim::flight_frame::StepRun::before)).
+    /// as the step reported them ([`StepRun::before`](nova_sim_frame::flight_frame::StepRun::before)).
     npc_previous: Vec<(NpcId, ShipPlace)>,
     /// The weapons' and explosions' looks, read once.
     looks: Looks,
@@ -1497,7 +1518,7 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// What the wording's picks are rolled on (the dock request's line
     /// and the approach greeting, [`FlightView::text_of`]): the flight's
     /// own chance, the same handle, shared as the view is built
-    /// ([`Collaborators::chance`](crate::flight::Collaborators::chance) gives both), as the catalog is. It is a
+    /// (`nova_flight::Collaborators::chance` gives both), as the catalog is. It is a
     /// collaborator handed in at construction, like the catalog, so the
     /// picks draw on the flight's chance in the order they always have,
     /// with no pick type of the view's on the port. The view's own
@@ -1548,12 +1569,12 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     hud_cadence: HudCadence,
     /// What the radar showed at its last refresh, which it shows until the
     /// next under
-    /// [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s
+    /// [`RuleKey::HudCadence`](nova_sim_frame::RuleKey::HudCadence)'s
     /// engine reading; `None` before the first.
     radar_scene: Option<RadarScene>,
     /// What the nav area showed at its last refresh, and the nav mode it
     /// showed it for, which it shows until the next under
-    /// [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s
+    /// [`RuleKey::HudCadence`](nova_sim_frame::RuleKey::HudCadence)'s
     /// engine reading; `None` before the first.
     nav_scene: Option<(NavMode, NavDisplay)>,
     /// How long the nav area shows the take-off's snapshot from before its
@@ -1569,18 +1590,18 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     nav_texts: u64,
     /// What the target panel showed at its last redraw, and what it drew
     /// it for, which it shows until the next under
-    /// [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s
+    /// [`RuleKey::HudCadence`](nova_sim_frame::RuleKey::HudCadence)'s
     /// engine reading; `None` before the first.
     target_scene: Option<(Option<Drawn>, Option<TargetPanel>)>,
     /// The shield, armour and fuel gauges at their last redraw, which
     /// they show while docked until the next under
-    /// [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s
+    /// [`RuleKey::HudCadence`](nova_sim_frame::RuleKey::HudCadence)'s
     /// engine reading; `None` before the first.
     reserves_scene: Option<Reserves>,
     /// The bar's redraws held for the docked mission texts shown, one for
     /// each, made as each closes ([`FlightView::close_mission_text`]).
     bar_steps: VecDeque<BarStep>,
-    /// The last of the texts' bars ([`FlightEvent::MissionShown`](nova_sim::flight_frame::FlightEvent::MissionShown)) staged into
+    /// The last of the texts' bars ([`FlightEvent::MissionShown`](nova_sim_frame::flight_frame::FlightEvent::MissionShown)) staged into
     /// [`FlightView::bar_steps`], by its [`TextBar::texts`].
     bars_staged: u64,
     /// The radar's static this tick, a `ppat` ID, rolled on the effects'
@@ -1682,7 +1703,7 @@ struct Redrawn {
 }
 
 /// How the flight holds stellar `id` as `frame` records it
-/// ([`FrameStellar`](nova_sim::flight_frame::FrameStellar)): destroyed as
+/// ([`FrameStellar`](nova_sim_frame::flight_frame::FrameStellar)): destroyed as
 /// its galaxy holds it, with the sheet the session says it draws
 /// (`nova_sim::Session::drawn_sheet`: its `DeadType` sheet, graphic type
 /// 0's or its `Type` sheet, story-runtime phases 7 and 9, stellar-fidelity
@@ -1697,7 +1718,7 @@ fn look(frame: &FlightFrame, id: StellarId) -> StellarLook {
     frame.stellar(id).map_or(
         StellarLook {
             destroyed: false,
-            drawn: nova_sim::DrawnSheet::Type,
+            drawn: nova_sim_frame::DrawnSheet::Type,
             frozen: false,
             frame: Some(0),
         },
@@ -1721,7 +1742,7 @@ fn show_stellars(scene: &mut SystemScene, frame: &FlightFrame) {
 
 /// The system `frame`'s player is in, read from `catalog`, with only the
 /// stellars the frame shows
-/// ([`FlightFrame::stellars_shown`](nova_sim::flight_frame::FlightFrame::stellars_shown)),
+/// ([`FlightFrame::stellars_shown`](nova_sim_frame::flight_frame::FlightFrame::stellars_shown)),
 /// in navigation order.
 fn shown_scene(catalog: &impl SystemCatalog, frame: &FlightFrame) -> SystemScene {
     let shown: BTreeSet<StellarId> = frame.stellars_shown().collect();
@@ -2038,11 +2059,11 @@ const HEAVY_MASS: f32 = 99.0;
 /// drawn at `anchor`, as the flight's camera draws it. The session reads it
 /// to tell whether a ship is on screen, for cloaks, scanners and observed
 /// goals, the brackets and the asteroid field.
-fn play_area(view: (f32, f32), anchor: Anchor) -> nova_sim::cloak::Area {
+fn play_area(view: (f32, f32), anchor: Anchor) -> nova_sim_frame::cloak::Area {
     let camera = Camera::centred_on_in(Point::default(), view).with_anchor(anchor);
     let top_left = camera.screen_to_world(Point::default());
     let bottom_right = camera.screen_to_world(Point::new(view.0 - STATUS_BAR_WIDTH, view.1));
-    nova_sim::cloak::Area {
+    nova_sim_frame::cloak::Area {
         left: top_left.x,
         top: top_left.y,
         right: bottom_right.x,

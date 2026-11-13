@@ -4,33 +4,33 @@
 //!
 //! Available to this crate's tests and, through the `fixture` feature, to
 //! other crates' tests. A component test of the view runs on a
-//! [`FakeFlight`]; `tests/it/flight_seam.rs` runs [`check_contract`] on a
-//! real [`SessionFlight`](crate::flight::SessionFlight).
+//! [`FakeFlight`]; nova-flight's `tests/it/flight_seam.rs` runs
+//! [`check_contract`] on a real `nova_flight::SessionFlight`.
 
 use std::cell::Cell;
 use std::collections::VecDeque;
 
-use nova_sim::brackets::{NavBrackets, TargetBrackets};
-use nova_sim::catalog::SystemId;
-use nova_sim::combat::hull_turn::HullTurn;
-use nova_sim::flight_frame::{
+use nova_sim_frame::brackets::{NavBrackets, TargetBrackets};
+use nova_sim_frame::catalog::SystemId;
+use nova_sim_frame::combat::hull_turn::HullTurn;
+use nova_sim_frame::flight_frame::{
     Answer, DrawnBoxes, FlightCommand, FlightEvent, FlightFrame, FlightOpening, FloatingLinks,
     FrameAsteroid, FrameBeam, FrameBox, FrameHud, FrameShip, GateEntry, GatePilotShown, Gates,
     KeyFades, MapKey, MarksFrom, Names, PortShops, ScreenAnswer, ScreenAsk, StepInput, StepReport,
     StepRun,
 };
-use nova_sim::navigation::NavMode;
-use nova_sim::status_cargo::StatusCargo;
-use nova_sim::{ClassRow, Gauge, RadarGear, Reserves, Take};
-use nova_sim::{
+use nova_sim_frame::navigation::NavMode;
+use nova_sim_frame::status_cargo::StatusCargo;
+use nova_sim_frame::{ClassRow, Gauge, RadarGear, Reserves, Take};
+use nova_sim_frame::{
     EscortClass, Hover, MapMarks, MissionId, PlayerCommand, ShipId, ShipRef, StellarId,
     StellarPick, Vec2, WeaponId,
 };
-use nova_sim::{JumpReadiness, PlayerFate};
+use nova_sim_frame::{JumpReadiness, PlayerFate};
 
-use nova_sim::{Direction, Good, Lot, Order};
+use nova_sim_frame::{Direction, Good, Lot, Order};
 
-use nova_sim::DeskReading;
+use nova_sim_frame::DeskReading;
 
 use super::FlightSim;
 use crate::devtools::{DevDesk, EditRefusal, PilotEdit};
@@ -534,9 +534,12 @@ pub fn refused_command() -> FlightCommand {
 /// A frame unlike `frame` in every field, to fill over: a fill that
 /// leaves a field unwritten then shows in the comparison. The
 /// destructuring names every field, so a field added to [`FlightFrame`]
-/// doesn't compile until it is changed here.
+/// doesn't compile until it is changed here. Public for the adapter's
+/// checks above nova-view (nova-flight's `sim_adapter` tests), which fill
+/// a real session's frame over it.
 #[allow(clippy::too_many_lines)] // a few lines for each of the frame's fields
-pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
+#[must_use]
+pub fn unlike(frame: &FlightFrame) -> FlightFrame {
     let FlightFrame {
         nav_mode,
         system,
@@ -643,13 +646,15 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
             ..map_key.clone()
         },
         ships: one_or_none(ships, FrameShip::default),
-        drawn: one_or_none(drawn, || (ShipRef::Player, nova_sim::ShipLayer::Ships)),
+        drawn: one_or_none(drawn, || {
+            (ShipRef::Player, nova_sim_frame::ShipLayer::Ships)
+        }),
         shots: one_or_none(shots, record::shot),
         beams: one_or_none(beams, || FrameBeam {
             firer: ShipRef::Player,
             start: Vec2::ZERO,
             end: Vec2::ZERO,
-            weapon: nova_sim::WeaponId(128),
+            weapon: nova_sim_frame::WeaponId(128),
             fade: 0,
         }),
         cargo_boxes: one_or_none(cargo_boxes, || FrameBox {
@@ -659,7 +664,7 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
             fade: 0,
             graphic: 0,
         }),
-        pods: one_or_none(pods, || nova_sim::escape_pod::Pod {
+        pods: one_or_none(pods, || nova_sim_frame::escape_pod::Pod {
             position: Vec2::ZERO,
             velocity: Vec2::ZERO,
             life: 0.0,
@@ -685,10 +690,10 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         },
         murk_colour: murk_colour.wrapping_add(1),
         double_time: !double_time,
-        speed_mult: if *speed_mult == nova_sim::SpeedMult::FULL {
-            nova_sim::SpeedMult::ZERO
+        speed_mult: if *speed_mult == nova_sim_frame::SpeedMult::FULL {
+            nova_sim_frame::SpeedMult::ZERO
         } else {
-            nova_sim::SpeedMult::FULL
+            nova_sim_frame::SpeedMult::FULL
         },
         hyper_gamma: hyper_gamma + 1.0,
         traffic_ships: one_or_none(traffic_ships, || ShipId(128)),
@@ -715,7 +720,7 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         } else {
             HullTurn::ByFrame
         },
-        player_kits: one_or_none(player_kits, || nova_sim::OutfitId(128)),
+        player_kits: one_or_none(player_kits, || nova_sim_frame::OutfitId(128)),
     }
 }
 
@@ -748,14 +753,14 @@ fn unlike_hud(hud: &FrameHud) -> FrameHud {
             cash: cargo.cash.wrapping_add(1),
             ..cargo.clone()
         },
-        secondary: toggle(secondary.as_ref(), nova_sim::WeaponId(128)),
+        secondary: toggle(secondary.as_ref(), nova_sim_frame::WeaponId(128)),
         secondary_line_count: toggle(secondary_line_count.as_ref(), 1),
         radar_gear: RadarGear {
             iff: !radar_gear.iff,
             ..*radar_gear
         },
         interference: u8::from(*interference == 0),
-        interface_government: toggle(interface_government.as_ref(), nova_sim::GovtId(128)),
+        interface_government: toggle(interface_government.as_ref(), nova_sim_frame::GovtId(128)),
         nav_brackets: toggle(
             nav_brackets.as_ref(),
             NavBrackets {
@@ -768,12 +773,12 @@ fn unlike_hud(hud: &FrameHud) -> FrameHud {
         target_brackets: toggle(
             target_brackets.as_ref(),
             TargetBrackets {
-                npc: nova_sim::NpcId(0),
+                npc: nova_sim_frame::NpcId(0),
                 expand: 0.0,
-                standing: nova_sim::brackets::Standing::Neutral,
+                standing: nova_sim_frame::brackets::Standing::Neutral,
             },
         ),
-        red_alert: toggle(red_alert.as_ref(), nova_sim::AlertIcon::Red),
+        red_alert: toggle(red_alert.as_ref(), nova_sim_frame::AlertIcon::Red),
         escort_rows: escort_rows.map(|row| ClassRow {
             present: !row.present,
             ..row
@@ -799,11 +804,11 @@ fn one_or_none<T>(records: &[T], record: impl FnOnce() -> T) -> Vec<T> {
 /// Small record builders for frames a test scripts: a ship, a shot, a
 /// stellar.
 pub mod record {
-    use nova_sim::combat::projectile::ShotId;
-    use nova_sim::flight_frame::{
+    use nova_sim_frame::combat::projectile::ShotId;
+    use nova_sim_frame::flight_frame::{
         FrameRadarStellar, FrameShip, FrameShot, FrameStellar, FrameTarget,
     };
-    use nova_sim::{
+    use nova_sim_frame::{
         DrawnSheet, NpcId, ShipId, ShipRef, StellarId, StellarIff, TargetStatus, Vec2, WeaponId,
     };
 
@@ -846,10 +851,10 @@ pub mod record {
             heading: 0.0,
             // Not yet visited, of the fake looks' `Count` and `Falloff`,
             // none.
-            life: nova_sim::combat::shot_fade::at_full_gain(0, 0, 0).0,
-            fade: nova_sim::combat::shot_fade::at_full_gain(0, 0, 0).1,
+            life: nova_sim_frame::combat::shot_fade::at_full_gain(0, 0, 0).0,
+            fade: nova_sim_frame::combat::shot_fade::at_full_gain(0, 0, 0).1,
             frame: Some(0),
-            layer: nova_sim::combat::shot_layer::ShotLayer::Shots,
+            layer: nova_sim_frame::combat::shot_layer::ShotLayer::Shots,
         }
     }
 
@@ -1484,7 +1489,7 @@ fn check_world(sim: &mut impl FlightSim, once: &FlightFrame) -> Result<(), Strin
 
 #[cfg(test)]
 mod tests {
-    use nova_sim::{DescMovie, Market, ShipRefusal, SimSound};
+    use nova_sim_frame::{DescMovie, Market, ShipRefusal, SimSound};
 
     use super::*;
 
@@ -1957,7 +1962,7 @@ mod tests {
             name: "Ada".to_owned(),
             credits: 1000,
             reserves: Reserves::default(),
-            date: nova_sim::GameDate::new(1177, 6, 23).expect("a date"),
+            date: nova_sim_frame::GameDate::new(1177, 6, 23).expect("a date"),
             date_text: "June 23, 1177".to_owned(),
             system: SystemId(130),
             landed: None,
@@ -2261,15 +2266,15 @@ mod tests {
                 Fault::SkipsTheDeathDescs => into.death_descs = descs,
                 _ => {}
             }
-            let npc = ShipRef::Npc(nova_sim::NpcId(7));
-            let brackets = |id| nova_sim::brackets::TargetBrackets {
-                npc: nova_sim::NpcId(id),
+            let npc = ShipRef::Npc(nova_sim_frame::NpcId(7));
+            let brackets = |id| nova_sim_frame::brackets::TargetBrackets {
+                npc: nova_sim_frame::NpcId(id),
                 expand: 0.0,
-                standing: nova_sim::brackets::Standing::Neutral,
+                standing: nova_sim_frame::brackets::Standing::Neutral,
             };
             match self.fault {
                 Fault::NpcFirst => into.ships.insert(0, record::npc(7, 129, Vec2::ZERO, 0.0)),
-                Fault::DrawsAStray => into.drawn.push((npc, nova_sim::ShipLayer::Ships)),
+                Fault::DrawsAStray => into.drawn.push((npc, nova_sim_frame::ShipLayer::Ships)),
                 Fault::TargetsAStray => into.target = Some(record::target(7)),
                 Fault::BracketsWithoutATarget => into.hud.target_brackets = Some(brackets(7)),
                 Fault::BracketsAnother => {
@@ -2315,10 +2320,10 @@ mod tests {
                 Fault::TradesWithoutAMarket if trade => Answer::Traded(Ok(1)),
                 Fault::TradeChangesTheFrame if trade => {
                     self.fake.set_frame(stellar(129));
-                    Answer::Traded(Err(nova_sim::TradeRefusal::NoMarket))
+                    Answer::Traded(Err(nova_sim_frame::TradeRefusal::NoMarket))
                 }
                 Fault::PlundersNothing if plunder => Answer::Plundered {
-                    taken: nova_sim::Taken::Nothing,
+                    taken: nova_sim_frame::Taken::Nothing,
                     open: false,
                 },
                 Fault::PlunderChangesTheFrame if plunder => {
@@ -2331,7 +2336,7 @@ mod tests {
                 Fault::RefusalJumps if jump => {
                     self.fake.frame_mut().jump_under_way = true;
                     Answer::JumpRefused {
-                        refusal: nova_sim::JumpRefusal::NoDestination,
+                        refusal: nova_sim_frame::JumpRefusal::NoDestination,
                         told: false,
                     }
                 }
@@ -2389,7 +2394,7 @@ mod tests {
                     ..PortShops::default()
                 }),
                 (Fault::OutfitterInFlight, ScreenAsk::Shops) => shops(PortShops {
-                    outfitter: Some(nova_sim::Outfitter::default()),
+                    outfitter: Some(nova_sim_frame::Outfitter::default()),
                     ..PortShops::default()
                 }),
                 (Fault::ShipyardInFlight, ScreenAsk::Shops) => shops(PortShops {
@@ -2397,7 +2402,7 @@ mod tests {
                     ..PortShops::default()
                 }),
                 (Fault::NewsInFlight, ScreenAsk::News) => {
-                    ScreenAnswer::News(nova_sim::flight_frame::BarNews::default())
+                    ScreenAnswer::News(nova_sim_frame::flight_frame::BarNews::default())
                 }
                 (Fault::NamingCountsAsks, ScreenAsk::ShipNaming(_)) => {
                     self.shops_asked += 1;
@@ -2420,13 +2425,13 @@ mod tests {
     }
 
     /// A shipyard listing nothing, of the player flying ship 128.
-    fn shipyard() -> nova_sim::Shipyard {
-        nova_sim::Shipyard {
+    fn shipyard() -> nova_sim_frame::Shipyard {
+        nova_sim_frame::Shipyard {
             rows: Vec::new(),
             trade_in: 0,
             cash: 0,
             current: ShipId(128),
-            rules: nova_sim::Rulebook::default(),
+            rules: nova_sim_frame::Rulebook::default(),
         }
     }
 
@@ -2692,7 +2697,7 @@ mod tests {
                 market: Some(Market::default()),
                 ..PortShops::default()
             })),
-            ScreenAsk::News => ScreenAnswer::News(nova_sim::flight_frame::BarNews::default()),
+            ScreenAsk::News => ScreenAnswer::News(nova_sim_frame::flight_frame::BarNews::default()),
             _ => ScreenAnswer::Nothing,
         });
         assert_eq!(
@@ -2724,9 +2729,9 @@ mod tests {
     }
 
     /// What is on board NPC 0, a ship 129.
-    fn boarded() -> nova_sim::PlunderView {
-        nova_sim::PlunderView {
-            npc: nova_sim::NpcId(0),
+    fn boarded() -> nova_sim_frame::PlunderView {
+        nova_sim_frame::PlunderView {
+            npc: nova_sim_frame::NpcId(0),
             ship: ShipId(129),
             credits: 100,
             cargo: None,
@@ -2915,10 +2920,10 @@ mod tests {
         let mut frame = stellar(128);
         frame.ships.push(record::npc(7, 129, Vec2::ZERO, 0.0));
         frame.target = Some(record::target(7));
-        frame.hud.target_brackets = Some(nova_sim::brackets::TargetBrackets {
-            npc: nova_sim::NpcId(7),
+        frame.hud.target_brackets = Some(nova_sim_frame::brackets::TargetBrackets {
+            npc: nova_sim_frame::NpcId(7),
             expand: 0.0,
-            standing: nova_sim::brackets::Standing::Neutral,
+            standing: nova_sim_frame::brackets::Standing::Neutral,
         });
         frame.hud.interference = 100;
         frame.stellars = vec![record::stellar(StellarId(128))];
@@ -2978,8 +2983,8 @@ mod tests {
     fn the_fake_answers_the_hover_as_told_and_records_each_ask() {
         let mut fake = FakeFlight::new();
         let boxes = DrawnBoxes {
-            player: Some(nova_sim::DrawnBox::at(
-                nova_sim::navigation::SpriteRect::centred(Vec2::ZERO, (10, 10)),
+            player: Some(nova_sim_frame::DrawnBox::at(
+                nova_sim_frame::navigation::SpriteRect::centred(Vec2::ZERO, (10, 10)),
             )),
             npcs: Vec::new(),
         };

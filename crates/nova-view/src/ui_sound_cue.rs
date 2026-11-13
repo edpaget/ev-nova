@@ -2,7 +2,7 @@
 //! the original's `PlaySound` call, decided where the call is ported
 //! ([`UiSound::cue`]). Re-exported from [`sound`](crate::sound).
 
-use nova_sim::sound::BEEP;
+use nova_sim_frame::sound::BEEP;
 
 use crate::sound::{SoundCue, SoundId, UiSound};
 
@@ -117,7 +117,7 @@ impl UiSound {
 
 #[cfg(test)]
 mod tests {
-    use nova_sim::sound::WEAPON_SOUNDS;
+    use nova_sim_frame::sound::WEAPON_SOUNDS;
 
     use super::*;
     use crate::menu::intro::INTRO_SOUND;

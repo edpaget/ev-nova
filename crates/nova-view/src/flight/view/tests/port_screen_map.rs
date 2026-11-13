@@ -1,6 +1,6 @@
 use super::*;
 use crate::flight::PortScreen;
-use nova_sim::SavedNav;
+use nova_sim_frame::SavedNav;
 
 // The map opened from the spaceport, a shop, the shipyard or the hire
 // screen, or the ship description (`_DoPortDialog`, `_DoTradeDialog`,
@@ -67,12 +67,12 @@ fn each_port_screens_map_opens_as_the_course_map_with_no_marks() {
             view.sim.screens_asked()[..2],
             [
                 ScreenAsk::MapOpening {
-                    marks: MarksFrom::Given(nova_sim::MapMarks::NONE),
+                    marks: MarksFrom::Given(nova_sim_frame::MapMarks::NONE),
                 },
                 ScreenAsk::Map {
                     hypergate: None,
                     missions: Vec::new(),
-                    marks: nova_sim::MapMarks::NONE,
+                    marks: nova_sim_frame::MapMarks::NONE,
                     selected: Some(SystemId(130)),
                 },
             ],

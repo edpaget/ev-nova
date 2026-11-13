@@ -1,6 +1,5 @@
 extern crate bindgen;
 extern crate cc;
-extern crate num_cpus;
 
 use std::env;
 use std::fmt::Write as FmtWrite;
@@ -530,10 +529,22 @@ fn build(record: &SourceRecord) -> io::Result<()> {
         )));
     }
 
-    // run make
-    if !build_command("make", false)?
-        .arg("-j")
-        .arg(num_cpus::get().to_string())
+    // run make, within cargo's job budget: join cargo's jobserver through
+    // CARGO_MAKEFLAGS, else take NUM_JOBS (cargo's `-j`) as make's own cap.
+    // On Windows cargo's jobserver is a named Win32 semaphore, which MSYS2's
+    // Cygwin-runtime make rejects ("invalid --jobserver-auth string"), so
+    // make always takes the NUM_JOBS cap there. The build script runs on the
+    // host, and only native builds are supported, so `cfg!` names make's host.
+    let mut make = build_command("make", false)?;
+    match env::var("CARGO_MAKEFLAGS").ok().filter(|_| !cfg!(windows)) {
+        Some(flags) => {
+            make.env("MAKEFLAGS", flags);
+        }
+        None => {
+            make.arg("-j").arg(env::var("NUM_JOBS").unwrap_or_else(|_| "1".into()));
+        }
+    }
+    if !make
         .status()?
         .success()
     {

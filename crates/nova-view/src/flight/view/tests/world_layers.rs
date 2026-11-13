@@ -1,13 +1,13 @@
 //! The flight world drawn in `_SetupSpriteWorld`'s order
-//! ([`nova_sim::sprite_layer::WORLD_PASSES`]): each beam, effect, smoke
+//! ([`nova_sim_frame::sprite_layer::WORLD_PASSES`]): each beam, effect, smoke
 //! puff, escape pod and cargo box in its layer among the ships and the
 //! shots (rdm play-feel phase 4). On [`FakeFlight`]: each frame scripted,
 //! each effect raised on the view's own effects and each pod put in the
 //! frame.
 
-use nova_sim::catalog::Explosion;
-use nova_sim::combat::ParticleBurst;
-use nova_sim::flight_frame::{FrameBox, FrameShip, PassReport, StepReport, StepRun};
+use nova_sim_frame::catalog::Explosion;
+use nova_sim_frame::combat::ParticleBurst;
+use nova_sim_frame::flight_frame::{FrameBox, FrameShip, PassReport, StepReport, StepRun};
 
 use super::combat::{line_in, podding};
 use super::faked_hud::barred;
@@ -67,7 +67,7 @@ fn firing_with_sprays() -> Faked {
     };
     let mut view = world(rocky(armed(1, &[BLASTER, UNDER, OVER])), frame);
     let explosion = Explosion {
-        boom: nova_sim::BoomId(128),
+        boom: nova_sim_frame::BoomId(128),
         extra: false,
     };
     raise(
@@ -143,8 +143,8 @@ fn an_escape_pod_is_drawn_above_a_disabled_ship_and_below_a_flying_one() {
         npc_129(1, Vec2::new(-50.0, 0.0), 0.0),
     ]);
     frame.drawn = vec![
-        (ShipRef::Npc(NpcId(1)), nova_sim::ShipLayer::Disabled),
-        (ShipRef::Player, nova_sim::ShipLayer::Ships),
+        (ShipRef::Npc(NpcId(1)), nova_sim_frame::ShipLayer::Disabled),
+        (ShipRef::Player, nova_sim_frame::ShipLayer::Ships),
     ];
     let mut view = world(podding(), frame);
     pod_adrift(&mut view, Vec2::new(0.0, -100.0));
@@ -414,7 +414,7 @@ fn the_escort_menu_is_drawn_over_the_floating_map_and_under_the_particles() {
     // The menu's rows are the frame's (`FrameHud::escort_rows`), shown
     // here as a step would leave them.
     let mut view = firing_with_sprays();
-    let mut hud = nova_sim::flight_frame::FrameHud::default();
+    let mut hud = nova_sim_frame::flight_frame::FrameHud::default();
     hud.escort_rows[0].present = true;
     view.escort_menu.toggle(view.elapsed, &hud.escort_rows);
     assert!(view.escort_menu.is_open());
@@ -455,11 +455,11 @@ fn the_ships_are_drawn_in_the_frames_draw_order_whatever_their_records_order() {
         npc_129(4, at(4), 0.0),
     ]);
     frame.drawn = vec![
-        (ShipRef::Npc(NpcId(3)), nova_sim::ShipLayer::Disabled),
-        (ShipRef::Npc(NpcId(2)), nova_sim::ShipLayer::Led),
-        (ShipRef::Npc(NpcId(1)), nova_sim::ShipLayer::Led),
-        (ShipRef::Npc(NpcId(4)), nova_sim::ShipLayer::Ships),
-        (ShipRef::Player, nova_sim::ShipLayer::Ships),
+        (ShipRef::Npc(NpcId(3)), nova_sim_frame::ShipLayer::Disabled),
+        (ShipRef::Npc(NpcId(2)), nova_sim_frame::ShipLayer::Led),
+        (ShipRef::Npc(NpcId(1)), nova_sim_frame::ShipLayer::Led),
+        (ShipRef::Npc(NpcId(4)), nova_sim_frame::ShipLayer::Ships),
+        (ShipRef::Player, nova_sim_frame::ShipLayer::Ships),
     ];
     let view = world(catalog(), frame);
     let list = world_list(&view);
@@ -489,7 +489,7 @@ fn at_point(world: Vec2) -> Point {
 #[test]
 fn an_asteroid_is_drawn_back_along_its_velocity_between_steps() {
     let frame = FlightFrame {
-        asteroids: vec![nova_sim::flight_frame::FrameAsteroid {
+        asteroids: vec![nova_sim_frame::flight_frame::FrameAsteroid {
             velocity: Vec2::new(8.0, -4.0),
             ..asteroid_at(Vec2::new(100.0, 50.0))
         }],
@@ -522,7 +522,7 @@ fn a_beam_is_drawn_moved_with_its_firer_between_steps() {
         },
     );
     // The player is drawn half way from a step ago, (-10, 6).
-    view.previous = nova_sim::flight_frame::ShipPlace {
+    view.previous = nova_sim_frame::flight_frame::ShipPlace {
         position: Vec2::new(-10.0, 6.0),
         heading: 0.0,
     };
@@ -563,14 +563,14 @@ fn a_shield_flash_shows_from_the_frame_after_its_hit_until_it_runs_out() {
     flash.hit(false);
     assert_eq!(view.shield_flash(ShipRef::Player), None, "not stepped yet");
     let flash = view.flashes.get_mut(&ShipRef::Player).expect("hit");
-    flash.step(100.0, 100.0, true, nova_sim::SpeedMult::FULL);
+    flash.step(100.0, 100.0, true, nova_sim_frame::SpeedMult::FULL);
     let shown = view.shield_flash(ShipRef::Player).expect("shown");
     assert!(shown > 0.0, "{shown}");
     let flash = view.flashes.get_mut(&ShipRef::Player).expect("hit");
     while !flash.spent() {
-        flash.step(100.0, 100.0, true, nova_sim::SpeedMult::FULL);
+        flash.step(100.0, 100.0, true, nova_sim_frame::SpeedMult::FULL);
     }
-    flash.step(100.0, 100.0, true, nova_sim::SpeedMult::FULL);
+    flash.step(100.0, 100.0, true, nova_sim_frame::SpeedMult::FULL);
     assert_eq!(view.shield_flash(ShipRef::Player), None, "run out");
 }
 

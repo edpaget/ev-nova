@@ -9,7 +9,7 @@ use nova_data::records::nebula::Nebula;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 use nova_data::{GameData, Record, StoreEntry};
-use nova_sim::Governments;
+use nova_sim_frame::Governments;
 
 use super::catalog::{
     Galaxy, GalaxyCatalog, GovtId, NebulaEntry, NebulaId, NebulaPicture, StellarEntry, SystemEntry,
@@ -57,7 +57,6 @@ impl GalaxyCatalog for GameData {
             govts: Governments::read(self),
             nebulae,
             problems,
-            gate_links: nova_sim::viewer_lanes::gate_links(self),
         }
     }
 }
@@ -178,7 +177,7 @@ mod tests {
     use nova_rsrc::ResType;
     use nova_rsrc::fixture::ForkBuilder;
 
-    use nova_sim::govt::{NO_INFLUENCE, SMALL_INFLUENCE};
+    use nova_sim_state::govt::{NO_INFLUENCE, SMALL_INFLUENCE};
 
     use super::*;
     use crate::galaxy::catalog::{

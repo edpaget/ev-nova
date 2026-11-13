@@ -5,7 +5,7 @@
 //! flight's input, Escape among it; a key pressed under it reaches the
 //! spaceport once it runs out; and a cinematic one hides the pointer once
 //! its fade-out is over. The gate's counterpart, a flight key
-//! reaching flight after a hypergate's come-out, is in the `nova` crate's
+//! reaching flight after a hypergate's come-out, is in `nova-it`'s
 //! `tests/it/hyperspace.rs`, beside the hypergate fixture.
 
 use super::*;

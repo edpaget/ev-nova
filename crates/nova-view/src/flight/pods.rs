@@ -2,9 +2,9 @@
 //! (@0x39e48-0x3a063) shows them in the `EV Nova` executable. The
 //! simulation keeps them (`nova_sim::escape_pod`: their spawn, drift,
 //! life, slots and whether each is shown) and hands them over in slot
-//! order ([`FlightFrame::pods`](nova_sim::flight_frame::FlightFrame::pods));
+//! order ([`FlightFrame::pods`](nova_sim_frame::flight_frame::FlightFrame::pods));
 //! the view draws each shown one ([`draw_pods`]), and plays `snd ` 372 for
-//! each [`CombatEvent::PodEjected`](nova_sim::CombatEvent::PodEjected)
+//! each [`CombatEvent::PodEjected`](nova_sim_frame::CombatEvent::PodEjected)
 //! ([`Effects`](super::effects::Effects)).
 //!
 //! - **The place**: at whole pixels from the player, by its sheet's own
@@ -29,7 +29,7 @@
 //! the cargo boxes (`_InitSprites` @0x1fc71-0x1fd57, added @0x1fcfb), in
 //! slot order: above the disabled ships and below the smoke, the shots and
 //! the flying ships
-//! ([`SpriteLayer::Boxes`](nova_sim::sprite_layer::SpriteLayer::Boxes)).
+//! ([`SpriteLayer::Boxes`](nova_sim_frame::sprite_layer::SpriteLayer::Boxes)).
 //!
 //! A pod is murked at its position, seen from the player's ship
 //! ([`murk`](super::murk); `_HandleSpriteMurkiness` @0x39f90-0x39fbc,
@@ -37,7 +37,7 @@
 //! the murk writes the sprite's +0xb0/+0xb4 and the fade +0xa8, so the
 //! two compose.
 
-use nova_sim::escape_pod::Pod;
+use nova_sim_frame::escape_pod::Pod;
 
 use super::catalog::Looks;
 use super::murk::SeenMurk;
@@ -113,10 +113,10 @@ pub fn draw_pods(
 
 /// A pod of `life` at `at`, for the drawing tests.
 #[cfg(test)]
-pub(crate) fn pod_at(at: nova_sim::Vec2, life: f32) -> Pod {
+pub(crate) fn pod_at(at: nova_sim_frame::Vec2, life: f32) -> Pod {
     Pod {
         position: at,
-        velocity: nova_sim::Vec2::ZERO,
+        velocity: nova_sim_frame::Vec2::ZERO,
         life,
         frame: 9,
         shown: true,
@@ -128,7 +128,7 @@ pub(crate) fn pod_at(at: nova_sim::Vec2, life: f32) -> Pod {
 mod tests {
     use std::num::NonZeroU16;
 
-    use nova_sim::Vec2;
+    use nova_sim_frame::Vec2;
 
     use super::*;
     use crate::DrawCommand;

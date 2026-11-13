@@ -10,7 +10,7 @@
 //! (@0x5b40b-0x5b44f) runs whatever the third argument says, so each plays
 //! the after-movie (`Flags` 0x0001) of the last `dësc` loaded, which
 //! whoever flies the ship reads as it answers
-//! ([`SessionFlight::loaded_after_movie`](crate::flight::SessionFlight::loaded_after_movie),
+//! (`nova_flight::SessionFlight::loaded_after_movie`,
 //! under the `desc_movie_globals` rule) and hands in as data: `after` on
 //! [`SpaceportView::show_text`], [`SpaceportView::set_opened_outfitter`],
 //! [`SpaceportView::set_opened_shipyard`], [`SpaceportView::open_hire`]
@@ -27,7 +27,7 @@
 //! closes once the movie has ended, as the original leaves its loop
 //! (@0x5da33) only after `_ShowTextDialog` returns.
 
-use nova_sim::MissionShown;
+use nova_sim_frame::MissionShown;
 
 use super::{Open, SpaceportView};
 #[cfg(doc)]
@@ -68,7 +68,7 @@ impl SpaceportView {
 mod tests {
     use std::rc::Rc;
 
-    use nova_sim::{DescMovie, Reselection};
+    use nova_sim_frame::{DescMovie, Reselection};
 
     use super::super::tests::{
         alert, click_item, done, drinking_with_info, hirelings, key, movies_of, ms, serve_openings,
@@ -81,8 +81,8 @@ mod tests {
     use crate::screen::Screen;
     use crate::spaceport::outfitter::NO_ITEMS;
     use crate::spaceport::shipyard::NO_SHIPS;
-    use nova_sim::hire::NONE_FOR_HIRE;
-    use nova_sim::{Outfitter, Shipyard};
+    use nova_sim_frame::hire::NONE_FOR_HIRE;
+    use nova_sim_frame::{Outfitter, Shipyard};
 
     fn after(file: &str) -> Option<DescMovie> {
         DescMovie::from_desc(file, 0x0001)

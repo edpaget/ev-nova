@@ -9,11 +9,11 @@
 
 use std::rc::Rc;
 
-use nova_sim::cloak::CloakShown;
-use nova_sim::combat::hull_turn::HullTurn;
-use nova_sim::combat::ion_tint::IonTint;
-use nova_sim::flight_frame::GateFade;
-use nova_sim::{RuleKey, RuleSource};
+use nova_sim_frame::cloak::CloakShown;
+use nova_sim_frame::combat::hull_turn::HullTurn;
+use nova_sim_frame::combat::ion_tint::IonTint;
+use nova_sim_frame::flight_frame::GateFade;
+use nova_sim_frame::{RuleKey, RuleSource};
 
 use super::faked_world::{world, world_by, world_list};
 use super::ship_models::{

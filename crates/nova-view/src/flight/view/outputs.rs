@@ -3,7 +3,7 @@
 //! the router asks after, each drained from the flight into the inbox
 //! (see the `inbox` module) and taken from it.
 
-use nova_sim::{
+use nova_sim_frame::{
     CommNote, FighterNote, Granted, MissionBoardLine, MissionShown, NavMode, PersonQuote,
     SimMessage, TextBar,
 };
@@ -16,7 +16,7 @@ use super::{
     FlightView, MESSAGE_TICKS, Message, SCRIPT_MESSAGE_TICKS, Said, Wording, comm_message,
     message_text, pay_notes_message,
 };
-use nova_sim::flight_frame::{FlightCommand, RaisedLine};
+use nova_sim_frame::flight_frame::{FlightCommand, RaisedLine};
 
 /// The mission texts taken over flight ([`FlightView::flight_texts`]),
 /// with what their redraw needs.
@@ -41,8 +41,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`FlightFrame::texts_queued`]): what
     /// [`FlightView::take_mission_texts`] redraws in flight from.
     ///
-    /// [`FlightEvent::MissionShown`]: nova_sim::flight_frame::FlightEvent::MissionShown
-    /// [`FlightFrame::texts_queued`]: nova_sim::flight_frame::FlightFrame::texts_queued
+    /// [`FlightEvent::MissionShown`]: nova_sim_frame::flight_frame::FlightEvent::MissionShown
+    /// [`FlightFrame::texts_queued`]: nova_sim_frame::flight_frame::FlightFrame::texts_queued
     pub(super) fn flight_texts(&mut self) -> FlightTexts {
         let queued = self.frame.texts_queued;
         let (nav_texts, bars_staged) = (self.nav_texts, self.bars_staged);
@@ -72,7 +72,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// The mission texts and offer movies not yet taken, in order
     /// ([`FlightEvent::MissionShown`]); taking them lets go of their bars.
     ///
-    /// [`FlightEvent::MissionShown`]: nova_sim::flight_frame::FlightEvent::MissionShown
+    /// [`FlightEvent::MissionShown`]: nova_sim_frame::flight_frame::FlightEvent::MissionShown
     pub(super) fn docked_texts(&mut self) -> Vec<MissionShown> {
         self.drain().take_mission_texts()
     }
@@ -82,7 +82,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// router may show its dialogs over the stopped flight before it
     /// begins the fade. True once.
     ///
-    /// [`FlightEvent::HoldExpired`]: nova_sim::flight_frame::FlightEvent::HoldExpired
+    /// [`FlightEvent::HoldExpired`]: nova_sim_frame::flight_frame::FlightEvent::HoldExpired
     pub fn take_hold_expired(&mut self) -> bool {
         self.drain().take_hold_expired()
     }
@@ -94,8 +94,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// rescue's screen fades out and shows black, none: it is due once
     /// the black is over (the `rescue` module).
     ///
-    /// [`FlightEvent::RescueDesc`]: nova_sim::flight_frame::FlightEvent::RescueDesc
-    pub fn take_rescue_desc(&mut self) -> Option<nova_sim::flight_frame::LoadedDesc> {
+    /// [`FlightEvent::RescueDesc`]: nova_sim_frame::flight_frame::FlightEvent::RescueDesc
+    pub fn take_rescue_desc(&mut self) -> Option<nova_sim_frame::flight_frame::LoadedDesc> {
         if self.rescue_holds_desc() {
             return None;
         }
@@ -105,7 +105,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Whether the pilot should be saved ([`FlightEvent::SaveDue`]);
     /// taking it clears it.
     ///
-    /// [`FlightEvent::SaveDue`]: nova_sim::flight_frame::FlightEvent::SaveDue
+    /// [`FlightEvent::SaveDue`]: nova_sim_frame::flight_frame::FlightEvent::SaveDue
     pub fn take_save_due(&mut self) -> bool {
         self.drain().take_save_due()
     }
@@ -216,7 +216,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// The flight's messages since they were last taken
     /// ([`FlightEvent::Message`]), worded.
     ///
-    /// [`FlightEvent::Message`]: nova_sim::flight_frame::FlightEvent::Message
+    /// [`FlightEvent::Message`]: nova_sim_frame::flight_frame::FlightEvent::Message
     fn worded_messages(&mut self) -> Said {
         let messages = self.drain().take_messages();
         self.word(messages)
@@ -245,7 +245,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// approach greeting's picks rolled on the flight's chance
     /// ([`FlightView::words_chance`](FlightView#structfield.words_chance)),
     /// and the numbers' millions by the view's held reading
-    /// ([`RuleKey::PayMillions`](nova_sim::RuleKey::PayMillions)). None
+    /// ([`RuleKey::PayMillions`](nova_sim_frame::RuleKey::PayMillions)). None
     /// only for an arrival's lead.
     pub(super) fn text_of(&mut self, message: &SimMessage) -> Option<String> {
         message_text(
@@ -340,7 +340,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// picks a second time. Every other kind is worded by
     /// [`FlightView::said_of`].
     ///
-    /// [`StepRun::last_line`]: nova_sim::flight_frame::StepRun::last_line
+    /// [`StepRun::last_line`]: nova_sim_frame::flight_frame::StepRun::last_line
     pub(super) fn relay_last_line(&mut self) {
         let last = self
             .step_report
@@ -358,7 +358,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// plundered it ([`FlightEvent::BoardLine`]), once: what
     /// [`FlightView::board`] says first, worded with the session's names.
     ///
-    /// [`FlightEvent::BoardLine`]: nova_sim::flight_frame::FlightEvent::BoardLine
+    /// [`FlightEvent::BoardLine`]: nova_sim_frame::flight_frame::FlightEvent::BoardLine
     pub(super) fn board_line_drained(&mut self) -> Option<MissionBoardLine> {
         self.drain().take_board_line()
     }
@@ -367,7 +367,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// what [`FlightView::board`] says as the plunder opens, worded with
     /// the outfit's names.
     ///
-    /// [`FlightEvent::Grant`]: nova_sim::flight_frame::FlightEvent::Grant
+    /// [`FlightEvent::Grant`]: nova_sim_frame::flight_frame::FlightEvent::Grant
     pub(super) fn grant_drained(&mut self) -> Option<Granted> {
         self.drain().take_grant()
     }
@@ -375,7 +375,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// How many fighters the player abandoned leaving systems, said for
     /// [`MESSAGE_TICKS`] each ([`FlightEvent::FighterNote`]).
     ///
-    /// [`FlightEvent::FighterNote`]: nova_sim::flight_frame::FlightEvent::FighterNote
+    /// [`FlightEvent::FighterNote`]: nova_sim_frame::flight_frame::FlightEvent::FighterNote
     pub(super) fn fighters_said(&mut self) -> Said {
         self.drain()
             .take_fighter_notes()
@@ -389,7 +389,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// the arrival words ([`FlightEvent::Message`]). The escorts that
     /// defected unpaid stay for [`FlightView::take_defections`].
     ///
-    /// [`FlightEvent::Message`]: nova_sim::flight_frame::FlightEvent::Message
+    /// [`FlightEvent::Message`]: nova_sim_frame::flight_frame::FlightEvent::Message
     pub(super) fn arrival_outputs(&mut self) -> (Said, Vec<SimMessage>) {
         let fighters = self.fighters_said();
         (fighters, self.drain().take_messages())
@@ -405,7 +405,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// `_DoEscortPayment` shows it with `_ShowTextDialog(0, 0, 0)`
     /// (@0x40301).
     ///
-    /// [`FlightEvent::PayNote`]: nova_sim::flight_frame::FlightEvent::PayNote
+    /// [`FlightEvent::PayNote`]: nova_sim_frame::flight_frame::FlightEvent::PayNote
     pub fn take_defections(&mut self) -> Vec<String> {
         pay_notes_message(&self.drain().take_pay_notes())
     }
@@ -414,7 +414,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// [`SCRIPT_MESSAGE_TICKS`] ([`FlightEvent::LeaveMessage`]); none when
     /// it left on none.
     ///
-    /// [`FlightEvent::LeaveMessage`]: nova_sim::flight_frame::FlightEvent::LeaveMessage
+    /// [`FlightEvent::LeaveMessage`]: nova_sim_frame::flight_frame::FlightEvent::LeaveMessage
     pub(super) fn leave_said(&mut self) -> Said {
         self.drain()
             .take_leave_message()
@@ -428,7 +428,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`FlightEvent::TakeoffNav`]). The escorts that defected for want
     /// of its pay stay for [`FlightView::take_defections`].
     ///
-    /// [`FlightEvent::TakeoffNav`]: nova_sim::flight_frame::FlightEvent::TakeoffNav
+    /// [`FlightEvent::TakeoffNav`]: nova_sim_frame::flight_frame::FlightEvent::TakeoffNav
     pub(super) fn takeoff_outputs(&mut self) -> (Vec<SimMessage>, Option<NavMode>) {
         let inbox = self.drain();
         (inbox.take_messages(), inbox.take_takeoff_nav())

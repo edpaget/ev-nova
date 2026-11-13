@@ -13,7 +13,7 @@ use nova_data::records::desc::Desc;
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::{DialogItem, ItemKind};
 use nova_data::{GameData, InterfaceData};
-use nova_sim::DescMovie;
+use nova_sim_frame::DescMovie;
 
 use super::button::ButtonStyle;
 use super::catalog::{DescriptionGraphics, DescriptionSource, DialogResources, PictureSizes};

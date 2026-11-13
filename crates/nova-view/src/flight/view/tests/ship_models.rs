@@ -15,10 +15,10 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use nova_data::store::{Footing, Mount, Mounts, Shown};
-use nova_sim::cloak::CloakShown;
-use nova_sim::combat::hull_turn::HullTurn;
-use nova_sim::flight_frame::GateFade;
-use nova_sim::{NpcId, OutfitId};
+use nova_sim_frame::cloak::CloakShown;
+use nova_sim_frame::combat::hull_turn::HullTurn;
+use nova_sim_frame::flight_frame::GateFade;
+use nova_sim_frame::{NpcId, OutfitId};
 
 use super::faked_world::{world, world_list};
 use super::*;
@@ -448,7 +448,7 @@ fn a_seen_full_fade_npc_and_a_cloaked_player_draw_their_models_at_their_alphas()
 }
 
 /// A paint whose channels fade apart, so its share is not the unpainted one.
-const PAINT: nova_sim::Rgb15 = nova_sim::Rgb15 { r: 31, g: 16, b: 4 };
+const PAINT: nova_sim_frame::Rgb15 = nova_sim_frame::Rgb15 { r: 31, g: 16, b: 4 };
 
 /// The alpha a model of `BaseTransp` 0 painted [`PAINT`] draws at under
 /// `cloak`, and that it is not the unpainted alpha.
@@ -606,7 +606,10 @@ fn an_opaque_ship_draws_its_model_whole() {
 
 #[test]
 fn a_player_not_drawn_in_full_draws_no_model() {
-    for shown in [nova_sim::Drawn::Hidden, nova_sim::Drawn::SpriteHidden] {
+    for shown in [
+        nova_sim_frame::Drawn::Hidden,
+        nova_sim_frame::Drawn::SpriteHidden,
+    ] {
         let view = view_of(
             frame(0.0, HullTurn::Continuous, |ships| ships[0].shown = shown),
             table(),

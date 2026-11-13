@@ -7,11 +7,9 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::rc::Rc;
 use std::time::Duration;
 
-#[cfg(any(test, feature = "fixture"))]
-use nova_sim::SimCatalog;
-use nova_sim::combat::SpriteLoad;
-use nova_sim::flight_frame::{FlightCommand, FlightOpening, ScreenAnswer, ScreenAsk};
-use nova_sim::{ALERT_CICN, FixedStep, HashedRolls, Rulebook, SpeedMult};
+use nova_sim_frame::combat::SpriteLoad;
+use nova_sim_frame::flight_frame::{FlightCommand, FlightOpening, ScreenAnswer, ScreenAsk};
+use nova_sim_frame::{ALERT_CICN, FixedStep, HashedRolls, Rulebook, SpeedMult};
 
 use crate::flight::cadence::HudCadence;
 use crate::flight::catalog::{CombatLooks, Looks, ShipSprites, StatusBars};
@@ -20,8 +18,6 @@ use crate::flight::effects::Effects;
 use crate::flight::escorts::{EscortMenu, EscortMenuLooks};
 use crate::flight::floating::FloatingMap;
 use crate::flight::hud::{self};
-#[cfg(any(test, feature = "fixture"))]
-use crate::flight::sim_adapter::SessionFlight;
 use crate::flight::sim_port::FlightSim;
 use crate::galaxy::{GalaxyCatalog, GalaxyMap};
 use crate::keymap::{CommandReader, SharedBindings, contexts};
@@ -78,7 +74,7 @@ impl<
     ) -> Self {
         // Sized as the view starts, before anything reads its field.
         sim.apply(FlightCommand::SetWindowWidth(window_width(VIEW_SIZE)));
-        let mut frame = nova_sim::flight_frame::FlightFrame::default();
+        let mut frame = nova_sim_frame::flight_frame::FlightFrame::default();
         sim.frame(&mut frame);
         let FlightOpening {
             weapons,
@@ -99,10 +95,10 @@ impl<
             .is_none()
             .then_some(BarFor(frame.hud.interface_government));
         let mut map = GalaxyMap::course(&*catalog);
-        map.set_nebula_pick(rules.source_for(nova_sim::RuleKey::NebulaPicture));
+        map.set_nebula_pick(rules.source_for(nova_sim_frame::RuleKey::NebulaPicture));
         map.set_border_rules(
-            rules.source_for(nova_sim::RuleKey::MapBorderPace),
-            rules.source_for(nova_sim::RuleKey::MapFindBorders),
+            rules.source_for(nova_sim_frame::RuleKey::MapBorderPace),
+            rules.source_for(nova_sim_frame::RuleKey::MapFindBorders),
         );
         // A flight that failed to start shows no galaxy: it answers
         // nothing.
@@ -476,42 +472,6 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 }
 
-/// The view of a [`SessionFlight`] that a test built itself, for the
-/// tests whose session a builder put into the state they need.
-#[cfg(any(test, feature = "fixture"))]
-impl<
-    C: SimCatalog
-        + CombatLooks
-        + SystemCatalog
-        + ShipSprites
-        + StatusBars
-        + GalaxyCatalog
-        + EscortMenuLooks
-        + 'static,
-> FlightView<C, SessionFlight<C>>
-{
-    /// The view of `sim` over `catalog`, read as the edge reads a flight
-    /// ([`FlightView::over`]) and shown by `rules`, the rulebook its
-    /// session was built with (`nova_sim::fixture::SessionBuilder`), so
-    /// the view and the session read one: for a test whose session a
-    /// builder put into the state it needs, passed as
-    /// `builder.build().into()` for Nova's collaborators
-    /// ([`SessionFlight::new`]). The catalog is shared with the flight
-    /// first, and the wording picks on the flight's chance.
-    ///
-    /// Wiring-only: for the integration tests that wire a real session
-    /// behind the port (`flight_seam`, the stock tests, the edge's
-    /// checks). View code and component tests never call it; they open
-    /// the view over `FakeFlight`.
-    pub fn from_session(catalog: C, mut sim: SessionFlight<C>, rules: &Rulebook) -> Self {
-        let catalog = Rc::new(catalog);
-        sim.share_catalog(Rc::clone(&catalog) as Rc<dyn SimCatalog>);
-        let chance = sim.chance.clone();
-        let opening = sim.opening();
-        Self::over(catalog, sim, opening, rules, chance)
-    }
-}
-
 /// What reading a flight gives the view as it opens, besides the catalog
 /// and the flight: the course map, the scene, the player's sheet and bar,
 /// the flight's first frame, the looks and what of them could not be read,
@@ -523,10 +483,10 @@ struct Opening {
     scene: Option<crate::system::SystemScene>,
     sheet: Result<crate::flight::ShipSheet, String>,
     outline: Option<crate::outline::Outline>,
-    sheet_ship: Option<nova_sim::ShipId>,
+    sheet_ship: Option<nova_sim_frame::ShipId>,
     status_bar: Result<hud::StatusBar, String>,
     bar_government: Option<BarFor>,
-    frame: nova_sim::flight_frame::FlightFrame,
+    frame: nova_sim_frame::flight_frame::FlightFrame,
     looks: Looks,
     unread_looks: Vec<Diagnostic>,
     escort_colors: crate::flight::escorts::EscortMenuColors,
@@ -534,7 +494,7 @@ struct Opening {
     presentation: super::stepping::Presentation,
     words_chance: SharedChance,
     failure: Option<String>,
-    names: nova_sim::flight_frame::Names,
+    names: nova_sim_frame::flight_frame::Names,
 }
 
 impl<C, S: FlightSim> FlightView<C, S> {
@@ -741,7 +701,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             bar_steps: VecDeque::new(),
             bars_staged: 0,
             inbox: super::inbox::Inbox::default(),
-            step_report: nova_sim::flight_frame::StepReport::default(),
+            step_report: nova_sim_frame::flight_frame::StepReport::default(),
             presentation: opening.presentation,
             frame: opening.frame,
             failure: opening.failure,
@@ -764,7 +724,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     pub fn scripted(
         catalog: C,
         sim: S,
-        names: nova_sim::flight_frame::Names,
+        names: nova_sim_frame::flight_frame::Names,
         rules: &Rulebook,
     ) -> Self
     where
@@ -772,12 +732,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
     {
         const NO_FLIGHT: &str = "a scripted flight has none";
         let mut map = GalaxyMap::course(&catalog);
-        map.set_nebula_pick(rules.source_for(nova_sim::RuleKey::NebulaPicture));
+        map.set_nebula_pick(rules.source_for(nova_sim_frame::RuleKey::NebulaPicture));
         map.set_border_rules(
-            rules.source_for(nova_sim::RuleKey::MapBorderPace),
-            rules.source_for(nova_sim::RuleKey::MapFindBorders),
+            rules.source_for(nova_sim_frame::RuleKey::MapBorderPace),
+            rules.source_for(nova_sim_frame::RuleKey::MapFindBorders),
         );
-        let mut frame = nova_sim::flight_frame::FlightFrame::default();
+        let mut frame = nova_sim_frame::flight_frame::FlightFrame::default();
         sim.frame(&mut frame);
         map.show_course(frame.system, &frame.course_shown);
         map.recentre();
@@ -813,9 +773,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
 /// a scripted one in the component tests.
 impl<C: ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S> {
     /// Reads the sheet of each ship type the traffic can spawn
-    /// ([`FlightFrame::traffic_ships`](nova_sim::flight_frame::FlightFrame::traffic_ships))
+    /// ([`FlightFrame::traffic_ships`](nova_sim_frame::flight_frame::FlightFrame::traffic_ships))
     /// that has not been read yet, of each type a ship here is boxed by
-    /// ([`FlightFrame::framed_types`](nova_sim::flight_frame::FlightFrame::framed_types)),
+    /// ([`FlightFrame::framed_types`](nova_sim_frame::flight_frame::FlightFrame::framed_types)),
     /// such as the stale frames of a hidden ship's slot, and each NPC's
     /// government's target code, from the kept frame. The
     /// player's own type is read with its ship, so it is left out while
@@ -858,14 +818,14 @@ impl<C: ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S> {
     /// Whether the sheet and the target card of ship type `ship` are read
     /// already, so a step that brings one reads neither.
     #[must_use]
-    pub fn has_read_traffic(&self, ship: nova_sim::ShipId) -> bool {
+    pub fn has_read_traffic(&self, ship: nova_sim_frame::ShipId) -> bool {
         self.npc_sheets.contains_key(&ship) && self.cards.contains_key(&ship)
     }
 
     /// Reads ship type `ship`'s sheet unless it is read already, and with
     /// it, when the sheet cannot be shown, its outline
     /// ([`outline_for`](super::outline_for)).
-    fn read_npc_sheet(&mut self, ship: nova_sim::ShipId) {
+    fn read_npc_sheet(&mut self, ship: nova_sim_frame::ShipId) {
         if self.npc_sheets.contains_key(&ship) {
             return;
         }
@@ -879,7 +839,7 @@ impl<C: ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S> {
     /// Reads the sheet of each of `traffic` not read yet, and their target
     /// cards not read yet in one batch ([`CombatLooks::target_cards`]),
     /// none when all are read.
-    fn read_traffic_sheets(&mut self, traffic: Vec<nova_sim::ShipId>) {
+    fn read_traffic_sheets(&mut self, traffic: Vec<nova_sim_frame::ShipId>) {
         for &ship in &traffic {
             self.read_npc_sheet(ship);
         }
@@ -893,6 +853,3 @@ impl<C: ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S> {
         }
     }
 }
-
-#[cfg(test)]
-mod edge_checks;

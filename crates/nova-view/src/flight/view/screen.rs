@@ -2,8 +2,8 @@
 
 use std::time::Duration;
 
-use nova_sim::PlayerCommand;
-use nova_sim::Steps;
+use nova_sim_frame::PlayerCommand;
+use nova_sim_frame::Steps;
 
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::escorts::EscortMenuLooks;
@@ -33,15 +33,15 @@ impl<
     /// the pre-jump stage included, M, L, P, Y and I are kept for the pass
     /// that reads them (the `faded_keys` module), and any other press
     /// goes on only when [`FlightView::taken_in_jump`] takes it; a
-    /// click in space selects nothing then, as [`Session::select_stellar`](nova_sim::Session::select_stellar)
+    /// click in space selects nothing then, as `nova_sim::Session::select_stellar`
     /// refuses during a jump (@0x6a145, @0x6a5ef). Otherwise, and of the
     /// keys taken during a jump, each key's [`PlayerCommand`] is asked of
-    /// the session ([`Session::takes`](nova_sim::Session::takes)) and a refused one does nothing,
+    /// the session (`nova_sim::Session::takes`) and a refused one does nothing,
     /// saying nothing: while the player's ship breaks up the map, landing
     /// and mission info (`_HandlePlayer`'s breakup-timer gates at 0x6a7b3,
     /// 0x6a8cb and 0x7044b), and once it has exploded every command (the
     /// dead branch, 0x6870d-0x6888c); and for
-    /// [`TAKEOFF_GRACE_TICKS`](nova_sim::TAKEOFF_GRACE_TICKS) after a
+    /// `nova_sim::TAKEOFF_GRACE_TICKS` after a
     /// take-off the map and mission info (`_frameCounter` below 0,
     /// @0x6a7de, @0x7045e). The session refuses some taken commands
     /// itself, P with its beep among them. The flight keys are still
@@ -70,9 +70,9 @@ impl<
     /// open nothing moves. The session flies on through the whole jump, its
     /// warp included: the jump's effect starts once the jump has begun,
     /// fades to white from the first step the session's `_hyperGamma` is
-    /// above 0 ([`FlightFrame::hyper_gamma`](nova_sim::flight_frame::FlightFrame::hyper_gamma)), and the ship arrives in the pass
+    /// above 0 ([`FlightFrame::hyper_gamma`](nova_sim_frame::flight_frame::FlightFrame::hyper_gamma)), and the ship arrives in the pass
     /// the step reports its arrival in
-    /// ([`StepRun::arrival`](nova_sim::flight_frame::StepRun::arrival)),
+    /// ([`StepRun::arrival`](nova_sim_frame::flight_frame::StepRun::arrival)),
     /// whose steps stop after it, laid out where the replay reaches that
     /// pass ([`FlightView::arrive_in_step`]), or, on double time's held
     /// second pass, at the next catch-up after the frame between its
@@ -178,14 +178,14 @@ impl<
     /// failed to start refuses it, as any command.
     fn focus_gained(&mut self) {
         self.switched_in();
-        self.send(nova_sim::flight_frame::FlightCommand::SwitchedIn);
+        self.send(nova_sim_frame::flight_frame::FlightCommand::SwitchedIn);
     }
 
     /// The flight halts both warp-ups, as `_SwitchedOut` does
     /// (@0x4f3a3-0x4f3e0; `FlightCommand::SwitchedOut`). A flight that
     /// failed to start refuses it, as any command.
     fn focus_lost(&mut self) {
-        self.send(nova_sim::flight_frame::FlightCommand::SwitchedOut);
+        self.send(nova_sim_frame::flight_frame::FlightCommand::SwitchedOut);
     }
 
     /// The session's sounds (thrust, landing, taking off and jumping),

@@ -79,7 +79,7 @@
 //! screen open for their timers. While a mission text, the mission info
 //! screen or the player info screen covers it, only the venue's offer
 //! timer ticks, as covered, which runs on or waits as
-//! [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock) reads it
+//! [`RuleKey::OfferClock`](nova_sim_frame::RuleKey::OfferClock) reads it
 //! ([`SpaceportView::with_offer_clock`]); the bar's hire screen restarts
 //! the bar's by the engine, which asks for a new gap
 //! ([`SpaceportView::take_offer_restart`]).
@@ -178,10 +178,10 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::flight_frame::EmptyServices;
-use nova_sim::hire::NONE_FOR_HIRE;
-use nova_sim::mission::screens::{BAR, OUTFITTER, SHIPYARD, SPACEPORT, TRADE_CENTER};
-use nova_sim::{
+use nova_sim_frame::flight_frame::EmptyServices;
+use nova_sim_frame::hire::NONE_FOR_HIRE;
+use nova_sim_frame::mission::screens::{BAR, OUTFITTER, SHIPYARD, SPACEPORT, TRADE_CENTER};
+use nova_sim_frame::{
     ComputerRefusal, ComputerRow, DescMovie, HireList, Market, MissionComputer, MissionId,
     MissionInfo, MissionShown, News, OfferPrompt, Order, OutfitOrder, Outfitter, PlayerInfo,
     Reselection, RuleSource, SaleAlert, Service, ShipId, ShipNaming, Shipyard, sells_fuel,
@@ -516,7 +516,7 @@ pub struct SpaceportView {
     /// ([`SpaceportView::take_offer_reload`]).
     offer_reload: Option<MissionId>,
     /// How the venues' offer timers run
-    /// ([`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock)).
+    /// ([`RuleKey::OfferClock`](nova_sim_frame::RuleKey::OfferClock)).
     offer_clock: RuleSource,
     /// The movies the mission texts and offers play, and whether they play.
     movies: Movies,
@@ -1540,7 +1540,7 @@ impl SpaceportView {
 
     /// The spaceport with each venue's offer timer, the bar's, the trade
     /// center's, the outfitter's and the shipyard's, running as `clock`
-    /// reads [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock): for
+    /// reads [`RuleKey::OfferClock`](nova_sim_frame::RuleKey::OfferClock): for
     /// each venue opened after it.
     #[must_use]
     pub fn with_offer_clock(self, clock: RuleSource) -> Self {
@@ -1697,7 +1697,7 @@ impl SpaceportView {
     /// `after`, the movie a `STR#` text plays once it closes: the last
     /// `dësc` loaded's after-movie, as `_ShowTextDialog`'s after-check
     /// reads it (@0xa3956, then @0x5b40b-0x5b44f; see
-    /// [`SessionFlight::loaded_after_movie`](crate::flight::SessionFlight::loaded_after_movie)).
+    /// `nova_flight::SessionFlight::loaded_after_movie`).
     pub fn open_mission_computer_after(
         &mut self,
         computer: Result<MissionComputer, ComputerRefusal>,
@@ -2780,7 +2780,7 @@ pub(in crate::spaceport) mod tests {
     use crate::keymap::test_keys::MISSION_INFO_KEY;
     use std::cell::RefCell;
 
-    use nova_sim::landing::StellarFlags;
+    use nova_sim_frame::landing::StellarFlags;
 
     use super::*;
     use crate::draw::{DrawCommand, fill_command};
@@ -3733,7 +3733,7 @@ pub(in crate::spaceport) mod tests {
 
     use crate::spaceport::trade::{BUY_ITEM, TradeScreen};
     use crate::ui::dialog::DialogTemplate as Template;
-    use nova_sim::{Direction, Good, Lot, Market, MarketRow, Order};
+    use nova_sim_frame::{Direction, Good, Lot, Market, MarketRow, Order};
 
     /// "Trade": 426 x 252, centred, with Done (1), eight rows (4-11), Buy
     /// (13) and Sell (14).
@@ -3993,9 +3993,8 @@ pub(in crate::spaceport) mod tests {
 
     use crate::spaceport::outfitter::{NEGATIVE_FREE_MASS, OutfitterCatalog, OutfitterScreen};
     use crate::ui::desc::DescDialog;
-    use nova_sim::{
-        OutfitFacts, OutfitId, OutfitOrder, OutfitRefusal, OutfitRow, Outfitter, SaleAlert,
-    };
+    use nova_sim_frame::{OutfitId, OutfitOrder, OutfitRefusal, OutfitRow, Outfitter, SaleAlert};
+    use nova_sim_state::shown::outfitter::OutfitFacts;
 
     /// "Outfit": 765 x 321, centred, with Done (1), Sell (4), the grid
     /// (5), the description (6), Buy (7), the picture (8) and the info box
@@ -4482,7 +4481,8 @@ pub(in crate::spaceport) mod tests {
     use crate::spaceport::shipyard::{
         ShipLook, ShipLooks, ShipyardCatalog, ShipyardScreen, fake_looks,
     };
-    use nova_sim::{Rulebook, ShipFacts, ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard};
+    use nova_sim_frame::{Rulebook, ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard};
+    use nova_sim_state::shown::shipyard::ShipFacts;
 
     use crate::spaceport::shipyard::ShipOrder;
 
@@ -4506,7 +4506,7 @@ pub(in crate::spaceport) mod tests {
         }
 
         /// Names no movie: these screens never play one.
-        fn description_movie(&self, _id: i16) -> Option<nova_sim::DescMovie> {
+        fn description_movie(&self, _id: i16) -> Option<nova_sim_frame::DescMovie> {
             None
         }
     }
@@ -4573,13 +4573,13 @@ pub(in crate::spaceport) mod tests {
                 short_name: "Heavy Shuttle".to_owned(),
                 price,
                 specs: ShipSpecs {
-                    fields: nova_sim::ShipFields::default(),
+                    fields: nova_sim_base::ShipFields::default(),
                     max_gun: 0,
                     max_tur: 0,
                     length: 0,
                     crew: 0,
                     space: 0,
-                    rounding: nova_sim::RuleSource::Engine,
+                    rounding: nova_sim_frame::RuleSource::Engine,
                     weapons: Vec::new(),
                     long_name: String::new(),
                 },
@@ -4790,8 +4790,8 @@ pub(in crate::spaceport) mod tests {
     // The Bar.
 
     use crate::spaceport::bar::BarScreen;
-    use nova_sim::hire::NONE_FOR_HIRE;
-    use nova_sim::{HireList, HireRow};
+    use nova_sim_frame::hire::NONE_FOR_HIRE;
+    use nova_sim_frame::{HireList, HireRow};
 
     /// "Bar": 263 x 185, centred, with Leave (1), Gamble (2), Holovid (3),
     /// Hire Escort (5) and the text (7), all disabled as stock has them.
@@ -4829,8 +4829,8 @@ pub(in crate::spaceport) mod tests {
         }
     }
 
-    fn the_news() -> nova_sim::News {
-        nova_sim::News {
+    fn the_news() -> nova_sim_frame::News {
+        nova_sim_frame::News {
             commercial: "Buy Bibble".to_owned(),
             story: "<PN> wins".to_owned(),
         }
@@ -4887,7 +4887,7 @@ pub(in crate::spaceport) mod tests {
     /// `rows` ships for hire, the fleet with `room` or not.
     pub(in crate::spaceport) fn hirelings(rows: usize, room: bool) -> HireList {
         HireList {
-            rules: nova_sim::Rulebook::default(),
+            rules: nova_sim_frame::Rulebook::default(),
             rows: (0..rows)
                 .map(|n| HireRow {
                     id: ShipId(128 + n as i16),
@@ -4896,13 +4896,13 @@ pub(in crate::spaceport) mod tests {
                     fee: 970,
                     wage: 100,
                     specs: ShipSpecs {
-                        fields: nova_sim::ShipFields::default(),
+                        fields: nova_sim_base::ShipFields::default(),
                         max_gun: 0,
                         max_tur: 0,
                         length: 0,
                         crew: 0,
                         space: 0,
-                        rounding: nova_sim::RuleSource::Engine,
+                        rounding: nova_sim_frame::RuleSource::Engine,
                         weapons: Vec::new(),
                         long_name: String::new(),
                     },
@@ -5140,8 +5140,8 @@ pub(in crate::spaceport) mod tests {
     #[test]
     fn the_briefing_asks_for_its_map_and_another_text_for_none() {
         const MAP_KEY: crate::Key = crate::Key::KeyM;
-        let marks = nova_sim::MapMarks {
-            green: Some(nova_sim::SystemId(131)),
+        let marks = nova_sim_frame::MapMarks {
+            green: Some(nova_sim_frame::SystemId(131)),
             multi_arrows: true,
         };
         let text = |map| MissionText {
@@ -5179,7 +5179,9 @@ pub(in crate::spaceport) mod tests {
     // The mission computer and the mission texts.
 
     use crate::spaceport::missions::{ACCEPT_ITEM as COMPUTER_ACCEPT, MissionComputerScreen};
-    use nova_sim::{ComputerRow, MissionText, MissionTextKind};
+    use nova_sim_frame::ComputerRow;
+    use nova_sim_frame::mission_screens::MissionText;
+    use nova_sim_frame::mission_screens::MissionTextKind;
 
     /// The mission computer's shape, smaller: 300 x 200, fixed at (0, 0),
     /// with Accept (1), the list (2), the text (4), the name (5), Leave
@@ -5673,8 +5675,8 @@ pub(in crate::spaceport) mod tests {
 
     use crate::spaceport::bar::FIRST_OFFER_DELAY;
     use crate::spaceport::offer::{OfferChoice, OfferDialog};
-    use nova_sim::OfferPrompt;
-    use nova_sim::mission::OfferLabels;
+    use nova_sim_frame::OfferPrompt;
+    use nova_sim_frame::mission::OfferLabels;
 
     /// Earth with its bar and its mission screens given.
     fn drinking_with_offers() -> SpaceportView {
@@ -5704,7 +5706,7 @@ pub(in crate::spaceport) mod tests {
 
     // The offers at each venue.
 
-    use nova_sim::mission::screens::{BAR, OUTFITTER, SHIPYARD, SPACEPORT, TRADE_CENTER};
+    use nova_sim_frame::mission::screens::{BAR, OUTFITTER, SHIPYARD, SPACEPORT, TRADE_CENTER};
 
     /// Earth with every venue: a trade center, an outfitter, a shipyard
     /// and a bar, and its mission screens.
@@ -6287,7 +6289,7 @@ pub(in crate::spaceport) mod tests {
     // Mission info.
 
     use crate::spaceport::missions::ABORT_ITEM;
-    use nova_sim::InfoRow;
+    use nova_sim_frame::InfoRow;
 
     /// The mission info screen's shape, smaller: 300 x 150, fixed at
     /// (0, 0), with Done (1), the list (2), the heading (3), the text (4),
@@ -6537,7 +6539,7 @@ pub(in crate::spaceport) mod tests {
         BACKGROUND, BackgroundSizes, PictureSize, PlayerInfoButton, PlayerInfoScreen as InfoScreen,
         Tab,
     };
-    use nova_sim::PlayerInfo;
+    use nova_sim_frame::PlayerInfo;
 
     /// The player info screen's shape: stock `DLOG` 1017's items, fixed
     /// at (0, 0).
@@ -6585,8 +6587,8 @@ pub(in crate::spaceport) mod tests {
             extras: None,
             honors: None,
             jettisonable: true,
-            words: nova_sim::player_info::Words::STOCK,
-            cheat_ids: nova_sim::player_info::CheatIds::default(),
+            words: nova_sim_frame::player_info::Words::STOCK,
+            cheat_ids: nova_sim_state::shown::player_info::CheatIds::default(),
             cheats: false,
         }
     }
@@ -6685,7 +6687,7 @@ pub(in crate::spaceport) mod tests {
 
     use crate::movie::fixture::{Call, MockMoviePlayer};
     use crate::movie::{MOVIE_FADE_FOR, MoviePlayer};
-    use nova_sim::{DescMovie, MissionShown};
+    use nova_sim_frame::{DescMovie, MissionShown};
 
     pub(in crate::spaceport) fn movies_of(player: &Rc<MockMoviePlayer>) -> Movies {
         Movies::new(Rc::clone(player) as Rc<dyn MoviePlayer>, true)
@@ -7279,7 +7281,7 @@ pub(in crate::spaceport) mod tests {
 
     // The offer timer under what opens over a venue (`RuleKey::OfferClock`).
 
-    use nova_sim::RuleSource;
+    use nova_sim_frame::RuleSource;
 
     const OFFER_VENUES: [i16; 4] = [BAR, TRADE_CENTER, OUTFITTER, SHIPYARD];
 
@@ -7669,7 +7671,7 @@ pub(in crate::spaceport) mod tests {
     use crate::flight::view::SharedChance;
     use crate::sound::SoundId;
     use crate::spaceport::ambient::LOOPS;
-    use nova_sim::mission::screens::mac_ticks;
+    use nova_sim_frame::mission::screens::mac_ticks;
 
     /// Port Kane's ambient sound.
     const KANE: i16 = 10_032;
@@ -7726,7 +7728,7 @@ pub(in crate::spaceport) mod tests {
 
     #[test]
     fn its_wait_is_drawn_on_the_chance_given() {
-        let chance: Rc<RefCell<dyn nova_sim::Chance>> = Rc::new(RefCell::new(First));
+        let chance: Rc<RefCell<dyn nova_sim_frame::Chance>> = Rc::new(RefCell::new(First));
         let mut view = kane().with_chance(SharedChance::new(chance));
         assert_eq!(frame(&mut view), ambient(false));
         view.tick(mac_ticks(479));
@@ -7738,7 +7740,7 @@ pub(in crate::spaceport) mod tests {
     /// A source whose every draw is the first outcome.
     struct First;
 
-    impl nova_sim::Chance for First {
+    impl nova_sim_frame::Chance for First {
         fn fires(&mut self, _percent: u8) -> bool {
             true
         }

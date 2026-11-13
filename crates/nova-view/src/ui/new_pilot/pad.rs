@@ -35,7 +35,7 @@ pub(super) fn include(dialog: &mut Dialog) {
 pub(crate) mod tests {
     use std::rc::Rc;
 
-    use nova_sim::{Gender, RuleKey, RuleSource, Rulebook};
+    use nova_sim_frame::{Gender, RuleKey, RuleSource, Rulebook};
 
     use super::super::tests::stock;
     use super::super::{CANCEL_ITEM, Focus, NewPilotDialog, NewPilotOutcome, OK_ITEM};

@@ -52,42 +52,7 @@
 use super::armament::Fold;
 use super::ship_frames::{FrameSpec, ShipFrames};
 
-/// What of each ship's sprites loads (see the module docs). The default
-/// loads everything, as the original's preferences are registered.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SpriteLoad {
-    /// The `ShipAnimations` preference: a class's sets all load.
-    pub ship_animations: bool,
-    /// The `RunningLights` preference: a class's lights sprite loads.
-    pub running_lights: bool,
-}
-
-impl Default for SpriteLoad {
-    fn default() -> Self {
-        Self {
-            ship_animations: true,
-            running_lights: true,
-        }
-    }
-}
-
-impl FrameSpec {
-    /// This class's display as `load` loads its sprites (see the module
-    /// docs): one base set and at most one alt set without the
-    /// animations, and no lights sprite without the lights.
-    #[must_use]
-    pub fn loaded(self, load: SpriteLoad) -> FrameSpec {
-        let mut spec = self;
-        if !load.ship_animations {
-            spec.base_sets = 1;
-            spec.alt_sets = spec.alt_sets.min(1);
-        }
-        if !load.running_lights {
-            spec.lights = false;
-        }
-        spec
-    }
-}
+pub use nova_sim_state::shown::combat::sprite_load::SpriteLoad;
 
 impl ShipFrames {
     /// Brings a ship's display state, its fold `fold`, inside the sets
@@ -154,55 +119,6 @@ mod tests {
             alt_sets,
             ..FrameSpec::NONE
         }
-    }
-
-    #[test]
-    fn everything_loads_by_default() {
-        assert_eq!(
-            SpriteLoad::default(),
-            SpriteLoad {
-                ship_animations: true,
-                running_lights: true,
-            }
-        );
-        let spec = FrameSpec {
-            lights: true,
-            ..class(ANIMATED, 4, 3)
-        };
-        assert_eq!(spec.loaded(SpriteLoad::default()), spec);
-    }
-
-    #[test]
-    fn without_the_animations_a_class_has_one_base_set_and_at_most_one_alt_set() {
-        let alt = class(ANIMATED, 3, 3).loaded(STILL);
-        assert_eq!((alt.base_sets, alt.alt_sets), (1, 1));
-        assert_eq!(alt.last_set(), 0);
-        assert!(!alt.multi_set());
-        let no_alt = class(FOLDS, 6, 0).loaded(STILL);
-        assert_eq!((no_alt.base_sets, no_alt.alt_sets), (1, 0), "no alt sprite");
-        let lit = FrameSpec {
-            lights: true,
-            ..class(BANKS, 3, 2)
-        };
-        assert!(lit.loaded(STILL).lights, "the lights still load");
-        assert_eq!(lit.loaded(STILL).flags, BANKS, "its flags kept");
-    }
-
-    #[test]
-    fn without_the_lights_a_class_has_no_lights_sprite_and_keeps_its_sets() {
-        let spec = FrameSpec {
-            lights: true,
-            ..class(ANIMATED, 4, 3)
-        };
-        let dark = spec.loaded(DARK);
-        assert!(!dark.lights);
-        assert_eq!(
-            dark,
-            FrameSpec {
-                lights: false,
-                ..spec
-            }
-        );
     }
 
     /// The sets a ship of `spec` draws over `n` frames in `moment`, its

@@ -8,8 +8,8 @@ use super::faked_world::{world, world_by};
 use super::*;
 use crate::flight::radar::RadarShip;
 use crate::flight::radar::{IRect, RadarColor, RadarMark};
-use nova_sim::flight_frame::{FrameRadarStellar, FrameShip, FrameTarget};
-use nova_sim::{AlertIcon, ShipIff, StellarIff, TargetStatus, TargetTag};
+use nova_sim_frame::flight_frame::{FrameRadarStellar, FrameShip, FrameTarget};
+use nova_sim_frame::{AlertIcon, ShipIff, StellarIff, TargetStatus, TargetTag};
 
 /// A view over a flight scripted to show `frame`, read from `catalog` by
 /// `rules` ([`world_by`]), with the status bar the catalog gives a ship of
@@ -58,7 +58,7 @@ pub(super) fn npc_of_140(id: u32) -> FrameShip {
 
 #[test]
 fn a_description_is_read_from_the_catalog_and_loaded_through_the_flight() {
-    let movie = nova_sim::DescMovie::from_desc("Port.mov", 0x0001).expect("named");
+    let movie = nova_sim_frame::DescMovie::from_desc("Port.mov", 0x0001).expect("named");
     let catalog = FakeCatalog {
         descriptions: vec![(3000, "raw".to_owned())],
         desc_movies: vec![(3000, movie.clone())],
@@ -320,7 +320,7 @@ fn the_radar_draws_the_stellars_in_the_listings_order() {
 fn the_radar_is_blank_docked_and_shows_the_frames_gear_and_static() {
     let mut frame = in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]);
     frame.landed = Some(StellarId(128));
-    frame.hud.radar_gear = nova_sim::RadarGear {
+    frame.hud.radar_gear = nova_sim_frame::RadarGear {
         iff: true,
         density_scanner: true,
         anti_interference: 0,
@@ -413,10 +413,10 @@ fn a_double_time_frame_draws_the_first_passs_hud_and_takes_the_radar_from_it() {
     let mut now = view.frame.clone();
     now.hud.cargo.cash = 222;
     view.sim.set_frame(now);
-    let pass = nova_sim::flight_frame::PassReport {
+    let pass = nova_sim_frame::flight_frame::PassReport {
         ships: first.ships.clone(),
         double_time: true,
-        ..nova_sim::flight_frame::PassReport::default()
+        ..nova_sim_frame::flight_frame::PassReport::default()
     };
     view.sim
         .queue_report(super::stepping::doubled(pass.clone(), pass, first));

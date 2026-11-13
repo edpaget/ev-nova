@@ -18,8 +18,11 @@ use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
 use nova_data::store::fixture::one_file;
 use nova_data::{GameData, Record, SystemId};
+use nova_flight::SessionView;
+use nova_flight::SessionViewExt as _;
 use nova_rsrc::fixture::ForkBuilder;
 use nova_sim::{RuleKey, RuleSource};
+use nova_view::flight::FlightView;
 use nova_view::galaxy::GalaxyMap;
 use nova_view::galaxy::map::ENTER_BUTTON;
 use nova_view::geometry::Bounds;
@@ -244,7 +247,7 @@ fn hiding_beta_data() -> Rc<GameData> {
 }
 
 /// Whether the pilot of `flight` has explored Beta (129).
-fn explored_beta(flight: &FlightView<Rc<GameData>>) -> bool {
+fn explored_beta(flight: &SessionView<Rc<GameData>>) -> bool {
     flight
         .sim()
         .pilot()
@@ -1042,12 +1045,12 @@ fn fly(screen: &mut AppScreen) {
     assert_eq!(screen.showing(), Showing::Flight);
 }
 
-fn flight(screen: &AppScreen) -> &FlightView<Rc<GameData>> {
+fn flight(screen: &AppScreen) -> &SessionView<Rc<GameData>> {
     screen.flight_view().expect("flight entered")
 }
 
 /// The flight entered, to ask its screens, which take `&mut`.
-fn flight_mut(screen: &mut AppScreen) -> &mut FlightView<Rc<GameData>> {
+fn flight_mut(screen: &mut AppScreen) -> &mut SessionView<Rc<GameData>> {
     screen.flight.as_mut().expect("flight entered")
 }
 
@@ -2153,7 +2156,7 @@ fn put_i16s(bytes: &mut [u8], at: usize, values: &[i16]) {
 /// The fuel gauge's full colour in [`bar_interface`].
 const BAR_FUEL: u32 = 0x00FF_FF00;
 
-/// `ïntf` 128, as `tests/it/flight.rs` has it: the radar at (8, 8) to
+/// `ïntf` 128, as `nova-it`'s `tests/it/flight.rs` has it: the radar at (8, 8) to
 /// (184, 184), green and dim green, the shield, armour and fuel
 /// gauges 149 wide from x 35, over `PICT` 700.
 fn bar_interface() -> Vec<u8> {

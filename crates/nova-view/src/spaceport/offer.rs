@@ -51,7 +51,7 @@
 //! @0xa2e06 and the refuse text @0xa2f04): the dialog plays none of it and
 //! takes the choice at once, and the session queues that movie behind the
 //! texts the answer shows
-//! ([`MissionShown::Movie`](nova_sim::MissionShown::Movie)).
+//! ([`MissionShown::Movie`](nova_sim_frame::MissionShown::Movie)).
 //!
 //! Keys pressed while a press is held on an arrow, or a click tracked on a
 //! button or an arrow, wait for the release (`_SingleMissionFilter`'s held
@@ -124,7 +124,7 @@
 //! `VenueOffers`: when it next asks for an offer, the offer dialog open
 //! over it, and the choice made, until it is taken.
 //!
-//! The venue's offer timer runs as [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock)
+//! The venue's offer timer runs as [`RuleKey::OfferClock`](nova_sim_frame::RuleKey::OfferClock)
 //! reads it. By the engine, as the original's one deadline
 //! (`_missionOfferTime`) does: the next offer is due its gap after the
 //! last ask (`_BarFilter` @0x47be0-0x47c11, `_TradeFilter`
@@ -142,7 +142,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::{MissionId, OfferPrompt, RuleSource};
+use nova_sim_frame::{MissionId, OfferPrompt, RuleSource};
 
 mod close;
 #[cfg(test)]
@@ -859,7 +859,7 @@ pub(crate) struct VenueOffers {
     movies: Movies,
     /// The offer dialog's sounds not yet handed on.
     sounds: Vec<Sound>,
-    /// How the timer runs ([`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock)).
+    /// How the timer runs ([`RuleKey::OfferClock`](nova_sim_frame::RuleKey::OfferClock)).
     clock: RuleSource,
     /// Whether the offer dialog's buttons take the keyboard focus.
     focus_ring: FocusRing,
@@ -920,7 +920,7 @@ impl VenueOffers {
     }
 
     /// These offers with their timer running as `clock` reads
-    /// [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock).
+    /// [`RuleKey::OfferClock`](nova_sim_frame::RuleKey::OfferClock).
     #[must_use]
     pub(crate) fn with_clock(self, clock: RuleSource) -> Self {
         Self { clock, ..self }
@@ -1220,8 +1220,8 @@ fn queues_an_event(input: &Input) -> bool {
 /// An offer dialog's template and prompt, for the venues' tests.
 #[cfg(test)]
 pub(crate) mod fixture {
-    use nova_sim::mission::OfferLabels;
-    use nova_sim::{MissionId, OfferPrompt};
+    use nova_sim_frame::mission::OfferLabels;
+    use nova_sim_frame::{MissionId, OfferPrompt};
 
     use crate::geometry::{Bounds, Point};
     use crate::ui::dialog::{DialogTemplate, ItemSpec, ItemTemplate, Placement};
@@ -1354,8 +1354,8 @@ pub(crate) mod fixture {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use nova_sim::mission::OfferLabels;
-    use nova_sim::{DescMovie, RuleSource};
+    use nova_sim_frame::mission::OfferLabels;
+    use nova_sim_frame::{DescMovie, RuleSource};
 
     use super::*;
     use crate::draw::DrawCommand;

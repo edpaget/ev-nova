@@ -76,7 +76,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::DescMovie;
+use nova_sim_frame::DescMovie;
 
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};

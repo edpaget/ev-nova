@@ -1,0 +1,61 @@
+[package]
+name = "nova-it"
+description = "nova's integration tests, in a crate of their own so nova's unit-test build doesn't wait on its own library"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# The developer tools' paint test (`dev_tools_paint`), which
+# `test-dev-tools` runs. Cargo can't forward a feature to a
+# dev-dependency, hence the optional `[dependencies]` below.
+dev-tools = ["nova/dev-tools", "dep:egui"]
+
+# Both only for `dev-tools`: no code links them, and with the feature off
+# nothing is built. Optional, so `lint-lib`'s workspace build doesn't
+# unify nova into it.
+[dependencies]
+nova = { workspace = true, optional = true }
+egui = { workspace = true, optional = true }
+
+[dev-dependencies]
+# The crate under test, with its `fixture` support: the screen to change
+# (`App::screen_mut`), the flight screen to ask
+# (`AppScreen::flight_view_mut`) and its queued input
+# (`AppScreen::input_queued`).
+nova = { workspace = true, features = ["fixture"] }
+# The tests record Audio commands with the `recording` mock.
+nova-audio = { workspace = true, features = ["recording"] }
+# The game data loader and its fixtures (stores, records, graphics, the
+# new game's data, sounds and the stock look).
+nova-data = { workspace = true, features = ["fixture"] }
+# `SessionViewExt`, which reads the app's flight.
+nova-flight.workspace = true
+# The checked-in movie the movie wiring tests play.
+nova-movie = { workspace = true, features = ["fixture"] }
+# The `recording` Gpu mock, and the GPU through `nova_render::wgpu`.
+nova-render = { workspace = true, features = ["recording"] }
+# Synthetic resource forks for in-memory stores.
+nova-rsrc = { workspace = true, features = ["fixture"] }
+# The in-memory pilot store and the simulation's fixtures.
+nova-sim = { workspace = true, features = ["fixture"] }
+# The text-metrics mock and the menu, movie and catalog fixtures.
+nova-view = { workspace = true, features = ["fixture"] }
+# The resource browser's JSON, and `windows_exe`'s reading of cargo's
+# build messages.
+serde_json.workspace = true
+# Pilot files and settings in a temporary directory.
+tempfile.workspace = true
+# The window events the harnesses feed the app.
+winit.workspace = true
+
+# `windows_exe`'s reading of the built nova.exe: its PE structures
+# (`object`) and the resource ids it holds (`nova-winres`).
+[target.'cfg(windows)'.dev-dependencies]
+object.workspace = true
+nova-winres.workspace = true
+
+[lints]
+workspace = true

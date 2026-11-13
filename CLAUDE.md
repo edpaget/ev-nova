@@ -189,7 +189,9 @@ that depend on it.
 
 The pre-commit hook tests only the crates with staged changes (see
 "Verification runs through cargo"), and it stays that way: don't widen it to
-dependents. Instead, keep crates loose enough that a change to one breaks no
+dependents. The one exception is an `<x>-it` crate, which holds `<x>`'s own
+integration tests and runs in `<x>`'s hook; other dependents still don't.
+Instead, keep crates loose enough that a change to one breaks no
 other crate's tests.
 
 - A test asserts only its own crate's rules. Don't pin a rule, constant,
@@ -203,7 +205,8 @@ other crate's tests.
 - A test that runs a real upstream crate covers wiring only. It lives in the
   crate that wires the program together, or where a port's module docs place
   it (see "Architecture: ports and adapters"). The full gate runs it, not the
-  hook of the crates it reaches.
+  hook of the crates it reaches. An `<x>-it` crate's tests aren't such tests:
+  they are `<x>`'s own, moved out of `<x>`, so `<x>`'s hook runs them.
 - Each edge between workspace crates is a `bans` rule in `deny.toml` (see
   "Test behaviour, never text"). A new edge adds its rule.
 
@@ -305,10 +308,11 @@ under `tests/`, or doctests) so `cargo` runs them.
   needs-review; `rdm:land` runs it again before landing. `hk check` runs it
   too.
 - The pre-commit hook is lighter: `cargo fmt --check`, then clippy and nextest
-  with `-p <crate>` for each crate with staged changes (and the workspace lint
+  side by side (clippy in `target/clippy`) with `-p <crate>` for each crate with staged changes (and the workspace lint
   and tests when `Cargo.toml`, `Cargo.lock`, `mise.toml`, `clippy.toml`,
-  `.config/nextest.toml` or `.cargo/` change). It skips dependent crates,
-  doctests and the dev-tools legs, which the full gate covers.
+  `.config/nextest.toml` or `.cargo/` change). It skips dependent crates
+  (except a crate's `<x>-it` sibling), doctests and the dev-tools legs, which
+  the full gate covers.
 - Don't run `mise run ci` just before a commit: the hook checks the commit
   anyway, so the gate would run twice.
 - Keep `mise` tasks as one-line `cargo` invocations. When a check needs logic,
@@ -317,18 +321,34 @@ under `tests/`, or doctests) so `cargo` runs them.
   crate. Add a new `tests/it/<name>.rs` and a `mod <name>;` line in
   `tests/it/main.rs`, never a new `tests/*.rs` file: each of those is another
   binary to link on every build.
+- A crate whose integration tests would slow its own hook build (they need a
+  dev-dependency on the crate itself, with a test feature on) keeps them in a
+  sibling `<crate>-it` crate, whose `tests/it` they move to. `hk.pkl` maps the
+  crate's paths to it too.
 
 ### Stock-data tests
 
-Tests over the original game's data (the `stock_*` modules under each crate's
-`tests/it/`, in `tests/it/stock_*.rs`) skip, passing, unless `NOVA_DATA`
+Tests over the original game's data (the `stock` and `stock_*` modules under
+each crate's `tests/it/`) skip, passing, unless `NOVA_DATA`
 points at a `Nova Files` folder. CI and `mise run ci` don't set it, so these
-tests can break without anyone noticing. When a change touches anything those
-tests cover, run them with the data before review, for each crate the change
-touches, one crate at a time:
+tests can break without anyone noticing. The stock leg, `mise run stock`,
+runs every crate's stock tests on purpose; it refuses to run without
+`NOVA_DATA`. When a change touches anything those tests cover, run them with
+the data before review, one crate at a time, for each crate the change
+touches and each crate its integration tests moved to: its `<crate>-it`
+sibling, and any crate whose `tests/it/main.rs` says its stock modules came
+from it (nova-view's moved to nova-flight). A crate with no stock tests of
+its own selects nothing, and `--no-tests=warn` lets it pass with a warning
+instead of failing:
 
 ```sh
-NOVA_DATA="/Users/edward/Projects/ev-nova/EV Nova.app/Contents/Resources/Nova Files" cargo nextest run -p <crate> -E 'test(/^stock_/)'
+NOVA_DATA="/Users/edward/Projects/ev-nova/EV Nova.app/Contents/Resources/Nova Files" cargo nextest run -p <crate> --no-tests=warn -E 'test(/^stock(_|::)/)'
+```
+
+Or run them all at once, as one heavy job:
+
+```sh
+NOVA_DATA="/Users/edward/Projects/ev-nova/EV Nova.app/Contents/Resources/Nova Files" mise run stock
 ```
 
 That folder (inside the gitignored app bundle in the primary checkout) holds
@@ -342,7 +362,13 @@ the same commit. Don't leave the test failing for later.
 
 When wgpu tests (or any tests) run for seconds each or time out, read
 `.claude/rules/slow-tests.md` before blaming load or the code. The usual
-cause is a bloated `target/debug/deps`, and the fix is `cargo clean`.
+cause is a bloated `target/debug/deps`. `mise run sweep` (cargo-sweep)
+removes artifacts no build has used recently from every target dir under
+`target/`, keeping what is in use warm. hk's `post-merge` hook runs it after
+every merge, including landing's `merge --ff-only` in the main checkout. Run
+`hk install` once per clone to register it, as for the pre-commit hook.
+`cargo clean` remains the fallback when the deps folder is still bloated
+after a sweep.
 
 Give a `git bisect` (or any second checkout) its own `CARGO_TARGET_DIR`.
 Sharing the main worktree's target directory can leave stale build artifacts

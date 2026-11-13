@@ -6,7 +6,7 @@
 //! The flight decides each [`PilotEdit`] and its refusal; the desk only
 //! names what the flight reads.
 
-use nova_sim::catalog::{StellarId, SystemId};
+use nova_sim_frame::catalog::{StellarId, SystemId};
 
 use super::pilot::{DevDesk, EditRefusal, PilotDesk, PilotEdit, PilotSheet, Place};
 use crate::galaxy::GalaxyModel;
@@ -115,7 +115,7 @@ impl<D: DevDesk + ?Sized> PilotDesk for FlightDesk<'_, D> {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use nova_sim::{Bit, DeskReading, GameDate, Gauge, Reserve, Reserves};
+    use nova_sim_frame::{Bit, DeskReading, GameDate, Gauge, Reserve, Reserves};
 
     use super::*;
     use crate::flight::sim_port::fixture::FakeFlight;

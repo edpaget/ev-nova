@@ -2,7 +2,7 @@
 //! (`flight/view/key_fade.rs`) and when the view reads the gates. The gates
 //! themselves are nova-sim's (`nova_sim::key_fade`).
 
-use nova_sim::flight_frame::{FadeKey, KeyFades, StepReport};
+use nova_sim_frame::flight_frame::{FadeKey, KeyFades, StepReport};
 
 use super::controls::{NOWHERE, faked_cursor_alpha};
 use super::faked_flight::{at_rest, hold, ticked};
@@ -441,9 +441,9 @@ fn a_jump_key_held_across_an_offers_close_fades_the_cursor_without_jumping_until
     // the offer's `_SetAllKeyCmdFlags` (@0x622ac) set.
     let mut view = showing(KeyFades::EVERY);
     view.sim
-        .queue_answer(Answer::Hailed(nova_sim::Hailed::Offer(VenueOffer::Prompt(
-            super::faked_hail::prompt("Help?"),
-        ))));
+        .queue_answer(Answer::Hailed(nova_sim_frame::Hailed::Offer(
+            VenueOffer::Prompt(super::faked_hail::prompt("Help?")),
+        )));
     view.hail();
     assert!(view.take_offer().is_some(), "the offer");
     let _ = super::live_keys::back(&mut view, [JUMP_KEY], [], false);

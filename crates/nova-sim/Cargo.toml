@@ -8,9 +8,6 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-# The save schema: JSON, through private records.
-serde.workspace = true
-serde_json.workspace = true
 thiserror.workspace = true
 # The foundation of the layered nova-sim crates, re-exported at its old
 # paths (`nova_sim::rulebook`, `nova_sim::Vec2`, ...).
@@ -23,6 +20,11 @@ nova-sim-catalog.workspace = true
 # market, crons, landing and clearance, outfit effects and ship stats,
 # re-exported at their old paths (`nova_sim::market`, ...).
 nova-sim-state.workspace = true
+# The view vocabulary, on the state: the view models the session fills
+# (the map's panels, borders and Find, the status bar's cargo and target
+# panels, the pilot panel, the engine glow, the cursor's key fades and the
+# Red Alert), re-exported at their old paths (`nova_sim::map_panel`, ...).
+nova-sim-frame.workspace = true
 # The combat layer, on the state: combat, the asteroid field, fighter bays,
 # cloaking, the fleet, messages, the player's fate, sabotage, self-repair,
 # ship layers and the tutorial, re-exported at their old paths
@@ -42,49 +44,60 @@ nova-sim-story.workspace = true
 # gate sprite, the order loop and the player info screen, re-exported at
 # their old paths (`nova_sim::shipyard`, ...).
 nova-sim-port.workspace = true
+# The save layer, on the story: the save schema and its upgrades, and the
+# pilot store port with the rules for keeping pilots, re-exported at their
+# old paths (`nova_sim::save`, `nova_sim::saves`).
+nova-sim-save.workspace = true
 
 [dev-dependencies]
-# Synthetic resource forks for the GameData adapter tests under `tests/`.
-nova-data = { workspace = true, features = ["fixture"] }
-nova-rsrc = { workspace = true, features = ["fixture"] }
+# The unit tests that read a save's JSON text.
+serde_json.workspace = true
 # The `Chance` mocks (`Scripted`, `Draws`, `Ranged`) the unit tests draw on.
 nova-sim-base = { workspace = true, features = ["fixture"] }
 # The catalog's record builders and control-bit mocks, which `testkit`
 # re-exports.
 nova-sim-catalog = { workspace = true, features = ["fixture"] }
-# The combat layer's test support the session and stock tests call: the
-# plain answered strike (`combat::fixture::strike`), and the setters
+# The combat layer's test support the unit tests call: the plain answered
+# strike (`combat::fixture::strike`), and the setters
 # `SabotageClock::set_counter` and `Combat::shots_mut`.
 nova-sim-combat = { workspace = true, features = ["fixture"] }
 # The ai and traffic layer's test support: `traffic::fixture::npc`, which
-# `testkit` re-exports, and the `Traffic` setters and accessors the session
-# and stock tests call: `strength_armed`, `berths_taken`,
-# `queue_pirate_event`, `set_berth_person`, `write_berth_search`,
-# `cache_odds` and `take_pirate_events`.
+# `testkit` re-exports, and the `Traffic` setters and accessors the unit
+# tests call: `strength_armed`, `berths_taken`, `queue_pirate_event`,
+# `set_berth_person`, `write_berth_search` and `cache_odds`.
 nova-sim-ai = { workspace = true, features = ["fixture"] }
 # The story layer's test support: `mission::fixture::carrying`, which
 # `testkit` re-exports, and the dialog port's fake the conversation tests
 # open.
 nova-sim-story = { workspace = true, features = ["fixture"] }
-# This crate's own `fixture` module, for its integration tests under
-# `tests/`, which build the library without `cfg(test)`: the storyline
-# walker the stock tests drive.
-nova-sim = { workspace = true, features = ["fixture"] }
+# The view vocabulary's test support: `SavedNav::of`, which the frame
+# and screen tests build a saved nav with.
+nova-sim-frame = { workspace = true, features = ["fixture"] }
+# The save layer's test support: the pilot store's fake, `MemoryPilots`,
+# which `fixture` re-exports and the unit tests save through.
+nova-sim-save = { workspace = true, features = ["fixture"] }
 
 [features]
 # Exposes the test support in `fixture` (the in-memory pilot store, the
 # pilot store's `check_contract` and the storyline walker) to other crates'
-# tests and this crate's `tests/`. It re-exports the catalog's
+# tests, nova-sim-it's among them; this crate's own unit tests reach it
+# through `cfg(test)`. It re-exports the catalog's
 # `listed_stellars`, `list_also` and `bits_allowing`, so it turns on the
 # catalog's `fixture` too; the AI's, whose `Traffic` setters build the
-# berths a traffic hands on; nova-sim-base's, whose `Chance` contract
+# berths a traffic hands on (and whose `take_pirate_events` nova-sim-it's
+# stock tests call); nova-sim-base's, whose `Chance` contract
 # it re-exports as `fixture::chance`; and the story layer's, whose dialog
-# fake (`dialog::fake`) the game's router tests hand a session.
+# fake (`dialog::fake`) the game's router tests hand a session; and the
+# save layer's, whose `MemoryPilots` and `pilot_store` contract it
+# re-exports; and the view vocabulary's, whose `SavedNav::of` the view's
+# tests build a saved nav with.
 fixture = [
     "nova-sim-base/fixture",
     "nova-sim-catalog/fixture",
+    "nova-sim-frame/fixture",
     "nova-sim-ai/fixture",
     "nova-sim-story/fixture",
+    "nova-sim-save/fixture",
 ]
 
 [lints]

@@ -9,7 +9,7 @@ use super::faked_screen::sent_count;
 use super::faked_travel::shown_to_flight;
 use super::*;
 use crate::flight::frame_rate::CALCULATING_FPS;
-use nova_sim::flight_frame::FlightEvent;
+use nova_sim_frame::flight_frame::FlightEvent;
 
 /// One Mac tick, 1/60 s.
 fn sixtieth() -> Duration {

@@ -133,8 +133,5 @@ default-features = false
 [build-dependencies.cc]
 version = "1.6"
 
-[build-dependencies.num_cpus]
-version = "1.17"
-
 [build-dependencies.sha2]
 version = "0.10.9"

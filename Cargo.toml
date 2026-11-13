@@ -14,9 +14,11 @@ license = "GPL-3.0-or-later"
 publish = false
 
 [workspace.dependencies]
-nova-rsrc = { path = "crates/nova-rsrc" }
+nova = { path = "crates/nova" }
+nova-rsrc ={ path = "crates/nova-rsrc" }
 nova-data = { path = "crates/nova-data" }
 nova-view = { path = "crates/nova-view" }
+nova-flight = { path = "crates/nova-flight" }
 nova-render = { path = "crates/nova-render" }
 nova-metalfx = { path = "crates/nova-metalfx" }
 nova-appkit = { path = "crates/nova-appkit" }
@@ -26,9 +28,11 @@ nova-sim = { path = "crates/nova-sim" }
 nova-sim-base = { path = "crates/nova-sim-base" }
 nova-sim-catalog = { path = "crates/nova-sim-catalog" }
 nova-sim-state = { path = "crates/nova-sim-state" }
+nova-sim-frame = { path = "crates/nova-sim-frame" }
 nova-sim-combat = { path = "crates/nova-sim-combat" }
 nova-sim-ai = { path = "crates/nova-sim-ai" }
 nova-sim-story = { path = "crates/nova-sim-story" }
+nova-sim-save = { path = "crates/nova-sim-save" }
 nova-sim-port = { path = "crates/nova-sim-port" }
 nova-ink = { path = "crates/nova-ink" }
 nova-audio = { path = "crates/nova-audio" }

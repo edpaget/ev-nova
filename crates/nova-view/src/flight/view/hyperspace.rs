@@ -2,16 +2,16 @@
 //! frame and the jump it sends ([`FlightCommand::Jump`]), the jump's
 //! effect read from the frame (the jump under way, the warp and the
 //! `_hyperGamma`), and the arrival a step reports in its pass
-//! ([`StepRun::arrival`](nova_sim::flight_frame::StepRun::arrival),
+//! ([`StepRun::arrival`](nova_sim_frame::flight_frame::StepRun::arrival),
 //! [`FlightView::arrive_in_step`]), caught up with where that pass is
 //! replayed, or, on double time's held second pass, at the frame after
 //! (see the `between_passes` module). A gate's arrival answers with its
 //! pending explosions ([`Answer::Arrived`]). The arrival's words name
 //! what the flight names ([`FlightView::word`], the date
-//! [`FlightFrame::long_date`](nova_sim::flight_frame::FlightFrame::long_date)).
+//! [`FlightFrame::long_date`](nova_sim_frame::flight_frame::FlightFrame::long_date)).
 
-use nova_sim::flight_frame::{Answer, FlightCommand, PassExit};
-use nova_sim::{CombatEvent, Condition, SimMessage};
+use nova_sim_frame::flight_frame::{Answer, FlightCommand, PassExit};
+use nova_sim_frame::{CombatEvent, Condition, SimMessage};
 
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::jump::JumpEffect;
@@ -30,7 +30,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// flight's, drained with its sounds. A refusal the player is not told
     /// shows at once any line the flight raised with it
     /// ([`FlightView::say_messages`]), as the new game's
-    /// [`SimMessage::NoGateLeadsThere`](nova_sim::SimMessage::NoGateLeadsThere).
+    /// [`SimMessage::NoGateLeadsThere`](nova_sim_frame::SimMessage::NoGateLeadsThere).
     /// Starting it clears the message
     /// line only when it says [`TOO_CLOSE`], [`TRACTORED`], [`FAR_ENOUGH`]
     /// or [`NOTHING_OUT_HERE`] (`_HandlePlayer` @0x6b231-0x6b3d9, #36 at
@@ -104,8 +104,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// pass (`_HandlePlayer` @0x68404), like a sound, not drawn with the
     /// frame.
     ///
-    /// [`FlightFrame::warping`]: nova_sim::flight_frame::FlightFrame::warping
-    /// [`FlightFrame::hyper_gamma`]: nova_sim::flight_frame::FlightFrame::hyper_gamma
+    /// [`FlightFrame::warping`]: nova_sim_frame::flight_frame::FlightFrame::warping
+    /// [`FlightFrame::hyper_gamma`]: nova_sim_frame::flight_frame::FlightFrame::hyper_gamma
     pub(super) fn start_jump_effect(&mut self) {
         // `_hyperGamma` goes back to -1 on the first pass after the
         // arrival, so it lights only a jump still under way.
@@ -243,7 +243,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// the one step here stands for its pass's `_HandleExplods`
     /// (@0x444e1), at that pass's gain: the frame the catch-up refilled
     /// holds it
-    /// ([`FlightFrame::speed_mult`](nova_sim::flight_frame::FlightFrame::speed_mult)),
+    /// ([`FlightFrame::speed_mult`](nova_sim_frame::flight_frame::FlightFrame::speed_mult)),
     /// as an arrival writes no gain. The arrival's `_PrepareAllSprites`
     /// (@0x6c59c, `_HandleExplods` @0x3a7ce) advances nothing, as it runs
     /// under the frozen flag `*0x3b523c` (set @0x3a765-0x3a773), which
@@ -272,8 +272,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// where a pass's replay sets its explosions off after its step. The
     /// layout cleared every other, so only that pass's are stepped, at
     /// its gain
-    /// ([`PassReport::speed_mult`](nova_sim::flight_frame::PassReport::speed_mult)).
-    pub(super) fn step_arrival_explosions(&mut self, pass: &nova_sim::flight_frame::PassReport) {
+    /// ([`PassReport::speed_mult`](nova_sim_frame::flight_frame::PassReport::speed_mult)).
+    pub(super) fn step_arrival_explosions(
+        &mut self,
+        pass: &nova_sim_frame::flight_frame::PassReport,
+    ) {
         let scene = self.presentation.scene(pass.player_position);
         self.effects.show_step(
             &crate::flight::effects::Breakups::default(),
@@ -287,7 +290,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
 /// The arrival, which lays the new system out ([`FlightView::catch_up`]).
 impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> FlightView<C, S> {
     /// The jump's arrival a step reported in its pass, `exit`
-    /// ([`StepRun::arrival`](nova_sim::flight_frame::StepRun::arrival)), as
+    /// ([`StepRun::arrival`](nova_sim_frame::flight_frame::StepRun::arrival)), as
     /// [`FlightView::step_frame`] reaches that pass: the new system laid
     /// out and its arrival line said ([`FlightView::arrived`]), the ship
     /// drawn from where the arrival put it, and the rest of the jump's
@@ -337,7 +340,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// arrival message, led as the original leads it, naming the scene
     /// laid out and the flight's date as the frame the catch-up refilled
     /// holds it
-    /// ([`FlightFrame::long_date`](nova_sim::flight_frame::FlightFrame::long_date)),
+    /// ([`FlightFrame::long_date`](nova_sim_frame::flight_frame::FlightFrame::long_date)),
     /// or the system's message buoy in its place ([`SimMessage::Buoy`],
     /// its text as the flight gives it), followed by how many fighters
     /// were abandoned, the line's own tail (`_HandlePlayer`

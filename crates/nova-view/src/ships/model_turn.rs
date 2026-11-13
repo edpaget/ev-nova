@@ -19,8 +19,8 @@
 
 use std::time::Duration;
 
-use nova_sim::combat::hull_turn::HullTurn;
-use nova_sim::combat::ship_frames::FrameSpec;
+use nova_sim_frame::combat::hull_turn::HullTurn;
+use nova_sim_frame::combat::ship_frames::FrameSpec;
 
 use super::browser::{
     MESSAGE_SIZE, PLACEHOLDER_SIZE, SHIP_CENTER, SPRITE_ERROR_WRAP, message_origin,
@@ -91,9 +91,9 @@ mod tests {
     use std::time::Duration;
 
     use nova_data::store::{Footing, Mount, Mounts, Shown};
-    use nova_sim::ShipId;
-    use nova_sim::combat::hull_turn::HullTurn;
-    use nova_sim::combat::ship_frames::FrameSpec;
+    use nova_sim_frame::ShipId;
+    use nova_sim_frame::combat::hull_turn::HullTurn;
+    use nova_sim_frame::combat::ship_frames::FrameSpec;
 
     use super::*;
     use crate::flight::ship_orientation;

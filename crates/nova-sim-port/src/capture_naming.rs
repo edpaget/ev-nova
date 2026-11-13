@@ -51,6 +51,8 @@ use crate::chance::Chance;
 use crate::shipyard::numbered_name;
 use crate::string_entry::entry;
 
+pub use nova_sim_state::shown::capture_naming::CaptureNaming;
+
 /// The `STR#` the prompt comes from.
 pub const PROMPT_LIST: i16 = 2002;
 
@@ -59,16 +61,6 @@ pub const PROMPT_INDEX: usize = 119;
 
 /// How many digits the default's number has.
 pub const DEFAULT_DIGITS: usize = 3;
-
-/// The prompt for renaming a captured ship the player takes over.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CaptureNaming {
-    /// The prompt's text: `STR#` 2002 #119 alone (empty when missing).
-    pub prompt: String,
-    /// The name the prompt opens with: the captured class's `Name`, a
-    /// space and three digits from 1 to 9.
-    pub default: String,
-}
 
 /// The rename prompt for a captured ship of class `record`, its text read
 /// from `strings` and its default's digits drawn on `chance`, as the module

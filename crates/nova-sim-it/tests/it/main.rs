@@ -1,0 +1,87 @@
+//! nova-sim's integration tests, built as one test binary in nova-sim-it.
+//!
+//! Each file under `tests/it/` is a module of this binary. Add new
+//! integration tests as a module here, not as a new `tests/*.rs` file:
+//! every `tests/*.rs` file is a separate binary to link.
+
+mod common;
+mod passes;
+
+mod asteroids;
+mod board_reach_frame;
+mod frame_rate;
+mod landing;
+mod missions;
+mod plugin_strings;
+mod stellar_hazards;
+mod stock;
+mod stock_afterburner;
+mod stock_answer_flag;
+mod stock_asteroids;
+mod stock_auto_refuel;
+mod stock_board_reach;
+mod stock_christening;
+mod stock_cloak_conditions;
+mod stock_cloak_when_hit_burst;
+mod stock_combat_rating;
+mod stock_comm_calls;
+mod stock_conditional_text;
+mod stock_contact_masks;
+mod stock_crons;
+mod stock_domination;
+mod stock_escape_pod;
+mod stock_escort_dialog;
+mod stock_fighter_variants;
+mod stock_galaxy_map;
+mod stock_galaxy_visibility;
+mod stock_gamble;
+mod stock_gate_pick;
+mod stock_hail_advice;
+mod stock_held_stock;
+mod stock_hyper_select;
+mod stock_inertialess;
+mod stock_ionization;
+mod stock_jump_arrival;
+mod stock_leave;
+mod stock_map_panel;
+mod stock_map_search;
+mod stock_miners;
+mod stock_mission_info;
+mod stock_mission_ships;
+mod stock_missions;
+mod stock_murk;
+mod stock_news;
+mod stock_npc_escape;
+mod stock_npc_skill;
+mod stock_pirates;
+mod stock_planet_comm;
+mod stock_player_cloak;
+mod stock_plunder;
+mod stock_pursuit;
+mod stock_ranks;
+mod stock_refuel_dock;
+mod stock_reinforcements;
+mod stock_repair_dock;
+mod stock_scan;
+mod stock_secondary_select;
+mod stock_ship_display;
+mod stock_ship_goal_walk;
+mod stock_ship_lights;
+mod stock_ship_paint;
+mod stock_slot_loop_cost;
+mod stock_spawn_availability;
+mod stock_stand_off;
+mod stock_star_map;
+mod stock_stellar_defence;
+mod stock_stellar_frames;
+mod stock_stellar_guns;
+mod stock_stellar_hazards;
+mod stock_storyline;
+mod stock_swarm;
+mod stock_target_selection;
+mod stock_tractor_hold;
+mod stock_trade;
+mod stock_turning;
+mod stock_voices;
+mod stock_warp_end;
+mod story;

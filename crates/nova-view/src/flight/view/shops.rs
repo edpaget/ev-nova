@@ -12,9 +12,11 @@
 //! router's facts, Recharge and the intro seen, are the kept frame's.
 //! The bar's redraws around each command stay the view's.
 
-use nova_sim::capture_naming::CaptureNaming;
-use nova_sim::flight_frame::{Answer, BarNews, FlightCommand, PortShops, ScreenAnswer, ScreenAsk};
-use nova_sim::{
+use nova_sim_frame::capture_naming::CaptureNaming;
+use nova_sim_frame::flight_frame::{
+    Answer, BarNews, FlightCommand, PortShops, ScreenAnswer, ScreenAsk,
+};
+use nova_sim_frame::{
     Assigned, Assignment, HireList, HireRefusal, Hired, Order, OutfitOrder, OutfitRefusal,
     OutfitRun, Outfitter, RechargeRefusal, ShipId, ShipNaming, ShipPurchase, ShipRefusal,
     TradeRefusal,
@@ -45,7 +47,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// (@0x5e33a, @0x5e59e), which draws the nav when the shipyard's
     /// restore marked it ([`FlightView::close_port_dialog`]); the cargo
     /// area shows the hold traded from the frame the command leaves
-    /// ([`FrameHud::cargo`](nova_sim::flight_frame::FrameHud::cargo)).
+    /// ([`FrameHud::cargo`](nova_sim_frame::flight_frame::FrameHud::cargo)).
     ///
     /// # Errors
     ///
@@ -88,7 +90,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// Whether the spaceport's Recharge button is enabled, as the kept
     /// frame says
-    /// ([`FlightFrame::recharge_enabled`](nova_sim::flight_frame::FlightFrame::recharge_enabled)):
+    /// ([`FlightFrame::recharge_enabled`](nova_sim_frame::flight_frame::FlightFrame::recharge_enabled)):
     /// false for a flight that never started.
     #[must_use]
     pub fn recharge_enabled(&self) -> bool {
@@ -201,7 +203,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Option too, [`JettisonNonMission`](crate::keymap::FlightCommand::JettisonNonMission)):
     /// notes the tap, all unless with Option. The chord jettisons on every pass
     /// it is held, with no latch (`_HandlePlayer` @0x6fd54-0x6fda1), so
-    /// the step does it ([`StepInput::jettison`](nova_sim::flight_frame::StepInput::jettison),
+    /// the step does it ([`StepInput::jettison`](nova_sim_frame::flight_frame::StepInput::jettison),
     /// `nova_sim::Session::hold_jettison`), and its messages and sound
     /// come through the step's relay. The tap makes a Command-K let go
     /// before the next step still jettison once on it, as a pass would
@@ -215,7 +217,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// Whether the pilot flying has seen the intro screen, as the kept
     /// frame says
-    /// ([`FlightFrame::seen_intro`](nova_sim::flight_frame::FlightFrame::seen_intro));
+    /// ([`FlightFrame::seen_intro`](nova_sim_frame::flight_frame::FlightFrame::seen_intro));
     /// false for a flight that never started.
     #[must_use]
     pub fn seen_intro(&self) -> bool {
@@ -237,7 +239,7 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
     /// Buys a ship named `name` ([`FlightCommand::BuyShip`],
     /// `nova_sim::Session::buy_ship`), it and its hooks drawing on the
     /// flight's chance, and catches up with the change of ship it tells
-    /// ([`SessionEvent::ShipChanged`](nova_sim::SessionEvent::ShipChanged)): the sprite
+    /// ([`SessionEvent::ShipChanged`](nova_sim_frame::SessionEvent::ShipChanged)): the sprite
     /// sheet of the class the session then flies (the one bought, or the
     /// one its hooks changed it to) is read, once, so the new hull is
     /// drawn once it takes off; a refused purchase tells nothing and
@@ -461,7 +463,7 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
     /// Says what an assignment or a rename did: after a takeover the new
     /// ship is drawn where it is, not on its way from the old ship, and
     /// the change of ship the flight tells is caught up with
-    /// ([`SessionEvent::ShipChanged`](nova_sim::SessionEvent::ShipChanged)),
+    /// ([`SessionEvent::ShipChanged`](nova_sim_frame::SessionEvent::ShipChanged)),
     /// reading the new ship's sprite sheet, once.
     fn assigned(&mut self, assigned: Assigned)
     where

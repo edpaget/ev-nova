@@ -434,6 +434,12 @@
 //!   which the view asks, keeps the pod from docking or jumping.
 //! - The stragglers `red_alert`, `tutorial` and `load_repaired`, which
 //!   stay on `Session`.
+//!
+//! The plain values the session's modules hand the view (the saved nav
+//! `SavedNav`, `SessionEvent`, the mission screens' rows, `StellarPick`
+//! and `LandPress`, …) are defined in `nova_sim_frame`, each in the module
+//! named for the `session/` module that builds it, and re-exported by that
+//! module; the code that builds them stays here.
 
 mod afterburner;
 mod afterburner_roll;
@@ -763,6 +769,7 @@ pub use mission_screens::{
 #[cfg(any(test, feature = "fixture"))]
 pub(crate) use missions::StopRefusal;
 pub use missions::{AbortError, NotOffered, RefuseShown};
+pub use nova_sim_frame::stellar_pick::{LandPress, StellarPick};
 pub use person_offers::Hailed;
 pub use persons::PersonQuote;
 pub use saved_opening::SavedOpening;
@@ -1028,46 +1035,6 @@ enum Jump {
     },
     /// The jump to the system has begun, `warp` ticks into the warp stage.
     Hyperspace { to: SystemId, warp: u32 },
-}
-
-/// Which stellar [`Session::select_stellar`] makes the navigation
-/// target, by the original's keys (`_HandlePlayer` @0x68390); a click in
-/// space is [`Session::click_in_space`].
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum StellarPick {
-    /// The stellar in this slot of the system's navigation defaults
-    /// (`NavDefs`), from 0, gaps kept: the original's keys 1-4 and F1-F4
-    /// (@0x69cf6-0x69f17). An empty slot, or one naming a stellar another
-    /// system owns, selects nothing.
-    Slot(usize),
-    /// The nearest stellar with the can-land flag, destroyed or not, the one the land key selects with no
-    /// target ([`nearest_stellar`](crate::landing::nearest_stellar)): the original's F5, which picks
-    /// through the same `_FindNearestStellar` (@0x276c) its land key does.
-    Nearest,
-}
-
-/// What [`Session::land`] did, when it was not refused.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LandPress {
-    /// What the [`landing`](crate::landing) rules gave: a stellar
-    /// requested, or one landed on and docked at.
-    Outcome(LandOutcome),
-    /// The ship is cleared and over a hypergate or wormhole, and the
-    /// entry awaits [`Session::enter_hypergate`] or
-    /// [`Session::enter_wormhole`]: what the landing rules would let it
-    /// land on, it enters instead (see [`gate`]).
-    AtGate {
-        /// The stellar.
-        stellar: StellarId,
-        /// What it is.
-        kind: GateKind,
-    },
-}
-
-impl From<LandOutcome> for LandPress {
-    fn from(outcome: LandOutcome) -> Self {
-        Self::Outcome(outcome)
-    }
 }
 
 /// The player's ship, flying in one system.

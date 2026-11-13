@@ -8,8 +8,8 @@
 //! seen; a system's stellars when it is selected. The editor holds every
 //! string the panel shows.
 
-use nova_sim::catalog::{StellarId, SystemId};
-use nova_sim::{Bit, GameDate, Reserve};
+use nova_sim_frame::catalog::{StellarId, SystemId};
+use nova_sim_frame::{Bit, GameDate, Reserve};
 
 use super::pilot::{PilotDesk, PilotEdit, PilotSheet, Place};
 use super::search::fold;
@@ -356,7 +356,7 @@ impl PilotEditor {
 mod tests {
     use std::cell::Cell;
 
-    use nova_sim::Gauge;
+    use nova_sim_frame::Gauge;
 
     use super::*;
     use crate::devtools::pilot::EditRefusal;

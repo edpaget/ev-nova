@@ -24,9 +24,9 @@
 //! it looks the look up by the pose's seed, which [`sky_seed`] gives, so
 //! the pose carries no look.
 //!
-//! [`RuleKey::LayeredStarfield`]: nova_sim::RuleKey::LayeredStarfield
+//! [`RuleKey::LayeredStarfield`]: nova_sim_frame::RuleKey::LayeredStarfield
 
-use nova_sim::SystemId;
+use nova_sim_frame::SystemId;
 
 use crate::flight::stars::murk_level;
 use crate::geometry::Point;

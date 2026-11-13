@@ -24,8 +24,8 @@
 //! [`Dialog`]: crate::ui::dialog::Dialog
 //! [`BarScreen::set_nothing_for_hire`]: crate::spaceport::bar::BarScreen::set_nothing_for_hire
 
-use nova_sim::Service;
-use nova_sim::flight_frame::EmptyServices;
+use nova_sim_frame::Service;
+use nova_sim_frame::flight_frame::EmptyServices;
 
 use super::{Open, Port, SpaceportView};
 use crate::spaceport::layout::service_item;
@@ -73,7 +73,7 @@ impl Port {
 
 #[cfg(test)]
 mod tests {
-    use nova_sim::landing::StellarFlags;
+    use nova_sim_frame::landing::StellarFlags;
 
     use super::super::tests::{click_item, drawn, drinking, flagged, key, missioned, view_of};
     use super::*;

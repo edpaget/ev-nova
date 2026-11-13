@@ -18,7 +18,7 @@
 
 use std::rc::Rc;
 
-use nova_sim::{Direction, gamble};
+use nova_sim_frame::{Direction, gamble};
 
 use super::modal::ModalHost;
 use super::trade::{BUY_LABEL, SELL_LABEL};

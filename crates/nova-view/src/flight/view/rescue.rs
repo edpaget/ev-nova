@@ -3,7 +3,7 @@
 //! original's ranges) run in place of flight's steps.
 //!
 //! - **Start.** The frame's steps that end in the rescue
-//!   ([`StepRun::rescued`](nova_sim::flight_frame::StepRun::rescued)) are
+//!   ([`StepRun::rescued`](nova_sim_frame::flight_frame::StepRun::rescued)) are
 //!   run as any others up to the rescue's pass, their lines said, the
 //!   fight's events that pass raised before it heard as the original's
 //!   `PlaySound` comes before the fade, and the screen begins over the
@@ -27,7 +27,7 @@
 //!   shows it. Nothing in the rescue after the reset says a line.
 //! - **The repaint under the first text** reads the state where the
 //!   rescue was as that text was queued
-//!   ([`StepRun::rescue_texts`](nova_sim::flight_frame::StepRun::rescue_texts),
+//!   ([`StepRun::rescue_texts`](nova_sim_frame::flight_frame::StepRun::rescue_texts),
 //!   [`FirstText`]): before `_ResetPlayer`, the pod's system, bar and
 //!   message line as the pod last drew them; after it, by the
 //!   `OnPurchase`, the pod's system and radar (its ships not yet
@@ -64,7 +64,7 @@
 //!   pass, ran among the new system after `_FadeScreenIn` ([`RescueRest`]).
 //!   They wait with the screen: once it is over, the passes' effects
 //!   replay in the new scene laid out at the black, the lines raised after
-//!   the rescue ([`StepRun::rescue_lines`](nova_sim::flight_frame::StepRun::rescue_lines))
+//!   the rescue ([`StepRun::rescue_lines`](nova_sim_frame::flight_frame::StepRun::rescue_lines))
 //!   show on the slot the rescue emptied, and an advance-pass rescue's
 //!   frame between is held with its second pass, so flight's first frame
 //!   is it. Only a second-pass rescue fades over its frame between.
@@ -94,9 +94,9 @@
 
 use std::time::Duration;
 
-use nova_sim::PlayerFate;
+use nova_sim_frame::PlayerFate;
 
-use nova_sim::{ClassRow, NavMode, TextBar};
+use nova_sim_frame::{ClassRow, NavMode, TextBar};
 
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::hud;
@@ -139,14 +139,14 @@ pub(super) struct PodFrame {
 pub(super) struct RescueRest {
     /// The passes from the rescue's on, the rest of its pass among them,
     /// replayed after the screen.
-    pub(super) passes: Vec<nova_sim::flight_frame::PassReport>,
+    pub(super) passes: Vec<nova_sim_frame::flight_frame::PassReport>,
     /// An advance-pass rescue's frame between double time's passes, in
     /// the new system, with its second pass: flight's first frame after
     /// the screen.
     pub(super) between: Option<super::between_passes::BetweenPasses>,
     /// The lines raised after the rescue
-    /// ([`StepRun::rescue_lines`](nova_sim::flight_frame::StepRun::rescue_lines)).
-    pub(super) lines: Vec<nova_sim::flight_frame::RaisedLine>,
+    /// ([`StepRun::rescue_lines`](nova_sim_frame::flight_frame::StepRun::rescue_lines)).
+    pub(super) lines: Vec<nova_sim_frame::flight_frame::RaisedLine>,
 }
 
 /// The repaint under a first text queued after `_ResetPlayer`, taken once
@@ -268,7 +268,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// in `background` (see the module docs): the message while one
     /// shows, its box erased in `background` and its background OR-ed in
     /// as flight draws them ([`FlightView::draw_floaters`]), then the
-    /// escort menu: by [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s
+    /// escort menu: by [`RuleKey::HudCadence`](nova_sim_frame::RuleKey::HudCadence)'s
     /// engine reading the image it last drew, as the rescue path
     /// (`_HandlePlayer` @0x68e04-0x692ce) redraws it nowhere; by the
     /// other, `rows` ([`FlightView::menu_rows`]). Not world: the repaint's

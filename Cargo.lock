@@ -978,7 +978,6 @@ dependencies = [
  "bindgen",
  "cc",
  "libc",
- "num_cpus",
  "sha2",
 ]
 
@@ -1835,10 +1834,10 @@ dependencies = [
  "egui-wgpu",
  "embed-resource",
  "gilrs",
- "nova",
  "nova-appkit",
  "nova-audio",
  "nova-data",
+ "nova-flight",
  "nova-ink",
  "nova-movie",
  "nova-render",
@@ -1847,7 +1846,6 @@ dependencies = [
  "nova-view",
  "nova-win32",
  "nova-winres",
- "object",
  "pollster 1.0.1",
  "rfd",
  "serde",
@@ -1937,6 +1935,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nova-flight"
+version = "0.1.0"
+dependencies = [
+ "nova-data",
+ "nova-rsrc",
+ "nova-sim",
+ "nova-view",
+]
+
+[[package]]
 name = "nova-galaxy-format"
 version = "0.1.0"
 dependencies = [
@@ -1964,6 +1972,27 @@ version = "0.1.0"
 dependencies = [
  "bladeink",
  "nova-sim-story",
+]
+
+[[package]]
+name = "nova-it"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "nova",
+ "nova-audio",
+ "nova-data",
+ "nova-flight",
+ "nova-movie",
+ "nova-render",
+ "nova-rsrc",
+ "nova-sim",
+ "nova-view",
+ "nova-winres",
+ "object",
+ "serde_json",
+ "tempfile",
+ "winit",
 ]
 
 [[package]]
@@ -2021,17 +2050,15 @@ dependencies = [
 name = "nova-sim"
 version = "0.1.0"
 dependencies = [
- "nova-data",
- "nova-rsrc",
- "nova-sim",
  "nova-sim-ai",
  "nova-sim-base",
  "nova-sim-catalog",
  "nova-sim-combat",
+ "nova-sim-frame",
  "nova-sim-port",
+ "nova-sim-save",
  "nova-sim-state",
  "nova-sim-story",
- "serde",
  "serde_json",
  "thiserror 2.0.21",
 ]
@@ -2070,6 +2097,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "nova-sim-frame"
+version = "0.1.0"
+dependencies = [
+ "nova-data",
+ "nova-sim-base",
+ "nova-sim-catalog",
+ "nova-sim-state",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "nova-sim-it"
+version = "0.1.0"
+dependencies = [
+ "nova-data",
+ "nova-rsrc",
+ "nova-sim",
+ "nova-sim-base",
+ "nova-sim-combat",
+ "serde_json",
+]
+
+[[package]]
 name = "nova-sim-port"
 version = "0.1.0"
 dependencies = [
@@ -2082,12 +2132,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "nova-sim-save"
+version = "0.1.0"
+dependencies = [
+ "nova-sim-ai",
+ "nova-sim-base",
+ "nova-sim-catalog",
+ "nova-sim-combat",
+ "nova-sim-state",
+ "nova-sim-story",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "nova-sim-state"
 version = "0.1.0"
 dependencies = [
  "nova-data",
  "nova-sim-base",
  "nova-sim-catalog",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2109,7 +2175,21 @@ dependencies = [
  "keyboard-types",
  "nova-data",
  "nova-rsrc",
- "nova-sim",
+ "nova-sim-base",
+ "nova-sim-catalog",
+ "nova-sim-frame",
+ "nova-sim-state",
+ "serde_json",
+]
+
+[[package]]
+name = "nova-view-it"
+version = "0.1.0"
+dependencies = [
+ "nova-data",
+ "nova-rsrc",
+ "nova-sim-frame",
+ "nova-sim-state",
  "nova-view",
  "serde_json",
 ]
@@ -2166,16 +2246,6 @@ checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
  "libm",
-]
-
-[[package]]
-name = "num_cpus"
-version = "1.17.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91df4bbde75afed763b708b7eee1e8e7651e02d97f6d5dd763e89367e957b23b"
-dependencies = [
- "hermit-abi",
- "libc",
 ]
 
 [[package]]

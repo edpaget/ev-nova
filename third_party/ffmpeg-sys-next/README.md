@@ -41,11 +41,16 @@ Everything else is upstream's, byte for byte.
     linked, and so are its `-framework` entries; the fixed list of Apple
     frameworks is gone (it linked QTKit, OpenCL and others nothing here
     uses, and the linker warned that QTKit has no arm64 slice).
+  - **Job budget.** `make` joins cargo's jobserver (`CARGO_MAKEFLAGS`
+    passed as `MAKEFLAGS`), or runs `-j $NUM_JOBS` without one, instead
+    of `-j` the number of CPUs, so it stays within cargo's `-j`. On
+    Windows it always runs `-j $NUM_JOBS`: cargo's jobserver there is a
+    Win32 semaphore, which MSYS2's make can't join.
   - **Native builds only**: a build whose target isn't the host fails, so
     the cross-compiling and sysroot code is gone.
   - **No installed FFmpeg**: the `FFMPEG_DIR`, vcpkg and pkg-config
     branches are gone, and building without the `build` feature fails.
-- `Cargo.toml`: the `pkg-config` and `vcpkg` build-dependencies are gone,
+- `Cargo.toml`: the `pkg-config`, `vcpkg` and `num_cpus` build-dependencies are gone,
   and `sha2` is added.
 - The crate's `.github/` workflows and the registry's `.cargo-ok` marker
   are left out, and this section is added.

@@ -5,13 +5,13 @@
 //! reported; what the session does to a shot (its age, its spin
 //! timer, its life) is nova-sim's, named where a test leans on it.
 
-use nova_sim::flight_frame::{FrameShip, FrameShot, PassReport, StepReport, StepRun};
+use nova_sim_frame::flight_frame::{FrameShip, FrameShot, PassReport, StepReport, StepRun};
 
 use super::faked_world::{beam, shot_of, world, world_by};
 use super::*;
 use crate::Colorize;
 use crate::system::camera::Anchor;
-use nova_sim::combat::shot_fade::at_full_gain;
+use nova_sim_frame::combat::shot_fade::at_full_gain;
 
 /// The blaster's look set by `edit`, in [`armed`]'s catalog.
 fn with_blaster(edit: impl FnOnce(&mut WeaponLook)) -> FakeCatalog {
@@ -483,7 +483,9 @@ fn lit(ship: ShipRef) -> Vec<CombatEvent> {
 /// [`armed`] with the player's sheet glowing on layer 2300, decaying by 6.
 fn glowing() -> FakeCatalog {
     let mut catalog = armed(0, &[BLASTER]);
-    catalog.weapons[0].flags2 = nova_sim::combat::weapon::GLOWS;
+    // `Flags2` 0x0200, the glowing weapon's bit
+    // (`nova_sim::combat::weapon::GLOWS`).
+    catalog.weapons[0].flags2 = 0x0200;
     catalog.sheet = Ok(ShipSheet {
         weapon: Some(layer(2300, 36)),
         weap_decay: 6,
@@ -545,8 +547,11 @@ fn with_weapon_effects_off_no_ship_draws_its_weapon_glow() {
     let mut view = beside_an_npc(0);
     view.weapon_effects = false;
     let npc = ShipRef::Npc(NpcId(0));
-    view.glows
-        .step(&[(npc, false)], |_| Some(1.0), nova_sim::SpeedMult::FULL);
+    view.glows.step(
+        &[(npc, false)],
+        |_| Some(1.0),
+        nova_sim_frame::SpeedMult::FULL,
+    );
     assert_eq!(glow_layers(&view, 2301), [], "an NPC's neither");
     view.weapon_effects = true;
     assert_eq!(glow_layers(&view, 2301).len(), 1);
@@ -562,7 +567,7 @@ fn an_npcs_weapon_glow_is_held_below_its_murk_and_murked() {
         view.glows.step(
             &[(npc.ship, false)],
             |_| Some(1.0),
-            nova_sim::SpeedMult::FULL,
+            nova_sim_frame::SpeedMult::FULL,
         );
         let capped = crate::flight::weapon_glow::npc_glow_level(32, level);
         let tint = crate::draw::lights_tint(capped);
@@ -589,7 +594,7 @@ fn an_npcs_weapon_glow_is_held_below_its_murk_and_murked() {
 
 /// Runs a frame of `view` whose one pass fires `beams`, of their weapons,
 /// and leaves its frame showing them.
-fn beaming(view: &mut Faked, beams: &[nova_sim::flight_frame::FrameBeam]) {
+fn beaming(view: &mut Faked, beams: &[nova_sim_frame::flight_frame::FrameBeam]) {
     let frame = FlightFrame {
         beams: beams.to_vec(),
         ..view.frame.clone()
@@ -611,7 +616,7 @@ fn beaming(view: &mut Faked, beams: &[nova_sim::flight_frame::FrameBeam]) {
 }
 
 /// The player's beam of [`UNDER`], `length` straight up.
-fn under_beam(length: f32) -> nova_sim::flight_frame::FrameBeam {
+fn under_beam(length: f32) -> nova_sim_frame::flight_frame::FrameBeam {
     beam(ShipRef::Player, UNDER, Vec2::ZERO, Vec2::new(0.0, -length))
 }
 
@@ -687,7 +692,7 @@ fn by_the_engine_a_short_lightning_beam_draws_nothing_and_mended_one_line() {
 
 #[test]
 fn landing_and_arriving_free_the_smoke() {
-    use nova_sim::landing::LandOutcome;
+    use nova_sim_frame::landing::LandOutcome;
     let smoked = || {
         let mut view = shooting(smoking_trailing_blaster());
         for tick in 0..3 {
@@ -703,7 +708,7 @@ fn landing_and_arriving_free_the_smoke() {
     };
     let mut view = smoked();
     view.sim
-        .queue_answer(Answer::LandPress(nova_sim::LandPress::Outcome(
+        .queue_answer(Answer::LandPress(nova_sim_frame::LandPress::Outcome(
             LandOutcome::Landed(StellarId(128)),
         )));
     view.land();
@@ -712,12 +717,12 @@ fn landing_and_arriving_free_the_smoke() {
     let mut view = smoked();
     view.sim.queue_report(super::faked_travel::arrival_report(
         0,
-        nova_sim::flight_frame::ShipPlace::default(),
+        nova_sim_frame::flight_frame::ShipPlace::default(),
     ));
     view.sim.frame_mut().system = SystemId(131);
     view.sim
-        .queue_event(nova_sim::flight_frame::FlightEvent::Session(
-            nova_sim::SessionEvent::SystemChanged,
+        .queue_event(nova_sim_frame::flight_frame::FlightEvent::Session(
+            nova_sim_frame::SessionEvent::SystemChanged,
         ));
     view.run_steps(1, None);
     assert_eq!(view.shot_looks.smoke().puffs(), [], "arrived");

@@ -12,7 +12,7 @@
 //! [`UiCommand`]s, read through the key map: Left, Right, Up and Down,
 //! and Page Up and Page Down answering Up and Down.
 
-use nova_sim::{RuleKey, RuleSource, Rulebook};
+use nova_sim_frame::{RuleKey, RuleSource, Rulebook};
 
 use super::grid::{COLUMNS, CellGrid, GRID_ROWS};
 use crate::keymap::{Command, UiCommand};
@@ -142,7 +142,7 @@ pub fn arrow_move(
 /// The original's cell is always on screen. The port's highlighted cell
 /// can sit off it (the outfitter after a scroll arrow, and the shipyard
 /// and hire screens under
-/// [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection)'s other
+/// [`RuleKey::GridSelection`](nova_sim_frame::RuleKey::GridSelection)'s other
 /// reading), so the grid is first scrolled the least that shows it, as
 /// [`CellGrid::select`] does; the original cannot reach that state.
 fn filter(arrow: Arrow, selected: usize, top_row: usize, count: usize) -> Placed {

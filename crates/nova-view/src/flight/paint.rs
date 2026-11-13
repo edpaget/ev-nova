@@ -40,7 +40,7 @@
 //! opaque and unbiased, so its paint is dropped there
 //! ([`eight_bit_blit`](crate::eight_bit_blit)).
 
-use nova_sim::Rgb15;
+use nova_sim_frame::Rgb15;
 
 use crate::Color;
 use crate::draw::translucent_tint_by_channel;

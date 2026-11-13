@@ -3,8 +3,10 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use nova_sim::Governments;
-pub use nova_sim::viewer_lanes::GateLinks;
+use nova_sim_frame::Governments;
+/// A fresh pilot's gate lanes, which the catalog doesn't hand over: the
+/// viewer is handed them ([`GalaxyMap::with_gate_links`](super::GalaxyMap::with_gate_links)).
+pub use nova_sim_frame::viewer_lanes::GateLinks;
 
 pub use nova_data::{GovtId, NebulaId, StellarId, SystemId};
 
@@ -30,7 +32,8 @@ pub struct SystemEntry {
     pub y: i16,
     /// Its hyperlinks, raw and in record order: they may repeat, point at
     /// itself or at a system that does not exist. The simulation's
-    /// `StarMap` normalises them, and the map draws its links.
+    /// `system_links` normalises them, as its `StarMap` does, and the map
+    /// draws those links.
     pub links: Vec<SystemId>,
     /// The government that owns it, or `None` for an independent system.
     pub govt: Option<GovtId>,
@@ -94,10 +97,6 @@ pub struct Galaxy {
     pub nebulae: Vec<NebulaEntry>,
     /// What could not be read, each a message ready to display.
     pub problems: Vec<String>,
-    /// A fresh pilot's gate lanes, which the viewer draws in place of the
-    /// Con links by the rules (`nova_sim::viewer_lanes`): none, by
-    /// default.
-    pub gate_links: GateLinks,
 }
 
 /// The galaxy the map shows.

@@ -15,10 +15,9 @@ use super::faked_travel::{faked_lasts, sent_but_lines};
 use super::live_keys::latches_its_close;
 use super::*;
 use crate::flight::radar::RadarScene;
-use nova_sim::flight_frame::FlightEvent;
-use nova_sim::mission::screens::offer_labels;
-use nova_sim::navigation::NavMode;
-use nova_sim::{
+use nova_sim_frame::flight_frame::FlightEvent;
+use nova_sim_frame::navigation::NavMode;
+use nova_sim_frame::{
     ComputerRow, Gauge, InfoRow, MissionComputer, MissionInfo, MissionInfoPress, OfferPrompt,
     RefuseShown, SimMessage,
 };
@@ -98,7 +97,7 @@ fn entering_a_venue_and_its_next_offer_go_through_the_flight() {
     let refused = VenueOffer::Accepted {
         mission: MissionId(150),
         accepted: Err(AcceptError::Refused(
-            nova_sim::mission::AcceptRefusal::SlotsFull,
+            nova_sim_state::shown::mission::active::AcceptRefusal::SlotsFull,
         )),
     };
     view.enter_offer_venue(1);
@@ -510,7 +509,7 @@ fn the_mission_info_its_rows_and_an_abort_go_through_the_flight() {
 fn i_with_no_mission_says_what_the_flight_said_after_its_beep() {
     let mut view = faked(in_sol());
     view.sim
-        .queue_event(FlightEvent::Sound(nova_sim::SimSound::Refused));
+        .queue_event(FlightEvent::Sound(nova_sim_frame::SimSound::Refused));
     view.sim
         .queue_event(FlightEvent::Message(SimMessage::NoActiveMissions));
     view.sim
@@ -520,7 +519,7 @@ fn i_with_no_mission_says_what_the_flight_said_after_its_beep() {
     assert_eq!(view.take_mission_info_request(), None);
     assert_eq!(
         view.drained_sounds(),
-        [Sound::Sim(nova_sim::SimSound::Refused)],
+        [Sound::Sim(nova_sim_frame::SimSound::Refused)],
         "_beepSnd[3], snd 153"
     );
     faked_lasts(
@@ -615,7 +614,7 @@ fn offer() -> OfferPrompt {
     OfferPrompt {
         mission: MissionId(130),
         text: "Help?".to_owned(),
-        labels: offer_labels("", "", true),
+        labels: yes_no(),
         graphic: None,
         movie: None,
     }

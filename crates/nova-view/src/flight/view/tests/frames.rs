@@ -6,8 +6,8 @@
 //! from the catalog with no session ([`shown_of`]).
 
 use super::*;
-use nova_sim::flight_frame::{FrameShip, FrameTarget};
-use nova_sim::galaxy_map::GalaxyShown;
+use nova_sim_frame::flight_frame::{FrameShip, FrameTarget};
+use nova_sim_frame::galaxy_map::GalaxyShown;
 
 /// The frame of a flight in Sol (130), nav off, nothing plotted, on
 /// [`DATE`].
@@ -33,9 +33,9 @@ pub(super) fn in_sol_with(ships: Vec<FrameShip>) -> FlightFrame {
     let mut drawn: Vec<_> = ships
         .iter()
         .filter(|ship| ship.ship != ShipRef::Player)
-        .map(|ship| (ship.ship, nova_sim::ShipLayer::Ships))
+        .map(|ship| (ship.ship, nova_sim_frame::ShipLayer::Ships))
         .collect();
-    drawn.push((ShipRef::Player, nova_sim::ShipLayer::Ships));
+    drawn.push((ShipRef::Player, nova_sim_frame::ShipLayer::Ships));
     FlightFrame {
         ships,
         drawn,

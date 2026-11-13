@@ -2,7 +2,7 @@ use super::*;
 use crate::input::Device;
 use crate::key_names::fixture::FakeKeyNames;
 use crate::keymap::{Bindings, FlightCommand as Fc, KeyCombo, PlayCommand, SharedBindings};
-use nova_sim::flight_frame::FlightEvent;
+use nova_sim_frame::flight_frame::FlightEvent;
 
 // Hyperspace.
 
@@ -42,11 +42,11 @@ fn hints_on(bindings: SharedBindings, rules: &Rulebook, device: Device) -> (Stri
         view.relay_messages();
         view.message().unwrap_or_default().to_owned()
     };
-    let land = said(nova_sim::TutorialHint::Land {
+    let land = said(nova_sim_frame::TutorialHint::Land {
         stellar: StellarId(129),
         station: false,
     });
-    (land, said(nova_sim::TutorialHint::Hyperspace))
+    (land, said(nova_sim_frame::TutorialHint::Hyperspace))
 }
 
 /// [`hints`] over `bindings`, naming keys through `names`, by the

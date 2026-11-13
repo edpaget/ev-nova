@@ -1,6 +1,6 @@
 use super::*;
-use nova_sim::DrawnShips as _;
-use nova_sim::flight_frame::FadeKey;
+use nova_sim_frame::flight_frame::FadeKey;
+use nova_sim_state::shown::hover::DrawnShips as _;
 
 // Double time.
 
@@ -11,7 +11,7 @@ fn double_time_shows_its_icon_at_the_top_left_over_the_red_alert() {
     // `a_fill_writes_the_red_alert_icon_shown`).
     let mut frame = among(Vec::new());
     frame.double_time = true;
-    frame.hud.red_alert = Some(nova_sim::AlertIcon::Red);
+    frame.hud.red_alert = Some(nova_sim_frame::AlertIcon::Red);
     let mut view = super::faked_world::world(catalog(), frame);
     view.alert_width = Some(24);
     let list = super::faked_world::world_list(&view);
@@ -128,7 +128,7 @@ fn a_click_on_the_players_own_ship_with_no_target_is_silent() {
 
 /// The last hover `view` asked of its flight
 /// ([`FlightCommand::Hover`]): its point and boxes.
-fn last_hover(view: &Faked) -> (Vec2, nova_sim::flight_frame::DrawnBoxes) {
+fn last_hover(view: &Faked) -> (Vec2, nova_sim_frame::flight_frame::DrawnBoxes) {
     view.sim
         .asks()
         .iter()
@@ -147,7 +147,7 @@ fn an_ask_doesnt_refill_the_kept_frame() {
     // changes nothing the frame shows, so a tick with it fills no more
     // than a quiet tick: the catch-up and the steps.
     let (mut view, id) = faked_with_npc();
-    view.sim.set_hover(Some(nova_sim::Hover::Ship(id)));
+    view.sim.set_hover(Some(nova_sim_frame::Hover::Ship(id)));
     view.cursor_input(&Input::PointerMoved(npc_on_screen(&view, id)));
     view.tick(TICK);
     let (asked, fills) = (view.sim.asks().len(), view.sim.fills());
@@ -161,7 +161,7 @@ fn the_cursor_animates_over_an_npc_and_rests_off_it() {
     // What the pointer is over is the flight's answer (`FlightSim::hover`).
     let (mut view, id) = faked_with_npc();
     let over = npc_on_screen(&view, id);
-    view.sim.set_hover(Some(nova_sim::Hover::Ship(id)));
+    view.sim.set_hover(Some(nova_sim_frame::Hover::Ship(id)));
     view.cursor_input(&Input::PointerMoved(over));
     assert_eq!(
         cursor_sprites(&super::faked_world::world_list(&view)),
@@ -297,7 +297,7 @@ fn a_cloaked_npc_is_hovered_only_with_a_scanner_that_targets_cloaked_ships() {
         let (mut view, id) = faked_with_npc();
         let over = npc_on_screen(&view, id);
         view.sim
-            .set_hover(hovered.then_some(nova_sim::Hover::Ship(id)));
+            .set_hover(hovered.then_some(nova_sim_frame::Hover::Ship(id)));
         view.cursor_input(&Input::PointerMoved(over));
         super::faked_flight::ticked(&mut view, 2);
         let frames: Vec<u16> = cursor_sprites(&super::faked_world::world_list(&view))
@@ -323,7 +323,7 @@ fn the_players_own_ship_is_hovered_only_while_it_holds_a_target() {
         [(0, PLAYER_AT)],
         "no target"
     );
-    view.sim.set_hover(Some(nova_sim::Hover::Player));
+    view.sim.set_hover(Some(nova_sim_frame::Hover::Player));
     super::faked_flight::ticked(&mut view, 2);
     assert_eq!(
         cursor_sprites(&super::faked_world::world_list(&view)),
@@ -360,7 +360,7 @@ fn an_npc_of_a_cost_minus_one_type_is_not_drawn_but_is_still_hovered() {
         !near(&super::faked_world::world_list(&view)),
         "not drawn hidden"
     );
-    view.sim.set_hover(Some(nova_sim::Hover::Ship(id)));
+    view.sim.set_hover(Some(nova_sim_frame::Hover::Ship(id)));
     view.cursor_input(&Input::PointerMoved(over));
     super::faked_flight::ticked(&mut view, 2);
     assert_eq!(
@@ -401,7 +401,7 @@ fn a_hidden_player_is_hovered_by_the_box_its_slot_last_drew() {
     for (framed, width) in [(131, 100), (128, 40)] {
         let (mut view, _) = faked_with_npc();
         let mut frame = view.frame.clone();
-        frame.ships[0].shown = nova_sim::player_fate::Drawn::Hidden;
+        frame.ships[0].shown = nova_sim_state::shown::player_fate::Drawn::Hidden;
         frame.ships[0].framed = Some(ShipId(framed));
         super::faked_hud::shows(&mut view, frame);
         let boxed = view.drawn_boxes().player.expect("boxed");
@@ -425,7 +425,7 @@ fn an_undisplayed_ship_is_hovered_and_clicked_at_its_slots_last_place_not_its_ow
     let place = view.frame.ships[1].position;
     super::faked_hud::changes(&mut view, |frame| {
         frame.ships[1].position = place + Vec2::new(200.0, 0.0);
-        frame.ships[1].hover = nova_sim::HoverPlace::Stale(place);
+        frame.ships[1].hover = nova_sim_frame::HoverPlace::Stale(place);
     });
     let boxed = view.drawn_boxes().npc(id).expect("boxed");
     let boxed = view.camera().world_to_screen(super::box_centre(boxed));
@@ -445,7 +445,7 @@ fn an_undisplayed_ship_is_hovered_and_clicked_at_its_slots_last_place_not_its_ow
 fn faked_with_cloned_npc(framed: i16) -> (Faked, NpcId) {
     let (mut view, id) = faked_with_npc();
     super::faked_hud::changes(&mut view, |frame| {
-        frame.ships[1].hover = nova_sim::HoverPlace::Cloned;
+        frame.ships[1].hover = nova_sim_frame::HoverPlace::Cloned;
         frame.ships[1].framed = Some(ShipId(framed));
     });
     (view, id)
@@ -495,7 +495,7 @@ fn a_small_cloned_box_takes_the_pointer_within_its_inset_and_not_past_it() {
     // `PtInRect` keeps the right and bottom edges out.
     let (mut view, id) = faked_with_cloned_npc(129);
     let boxed = view.drawn_boxes().npc(id).expect("boxed");
-    assert!(boxed.rect.width <= nova_sim::navigation::SMALL_SPRITE_WIDTH);
+    assert!(boxed.rect.width <= nova_sim_state::shown::navigation::SMALL_SPRITE_WIDTH);
     let world = |view: &Faked, x: f32, y: f32| {
         let p = view.camera().screen_to_world(Point::new(x, y));
         Vec2::new(p.x, p.y)
@@ -529,7 +529,7 @@ fn by_the_other_reading_an_undisplayed_ship_is_hovered_and_clicked_where_it_is()
     let place = view.frame.ships[1].position;
     super::faked_hud::changes(&mut view, |frame| {
         frame.ships[1].position = place + Vec2::new(200.0, 0.0);
-        frame.ships[1].hover = nova_sim::HoverPlace::Own;
+        frame.ships[1].hover = nova_sim_frame::HoverPlace::Own;
     });
     let now = npc_on_screen(&view, id);
     let boxed = view.drawn_boxes().npc(id).expect("boxed");
@@ -736,7 +736,9 @@ fn option_backquote_held_lets_go_of_a_target_picked_the_next_tick() {
     faked_release(&mut view, NEAREST_KEY);
     assert_eq!(
         sent(&view).last(),
-        Some(&FlightCommand::SelectTarget(nova_sim::TargetPick::Nearest)),
+        Some(&FlightCommand::SelectTarget(
+            nova_sim_frame::TargetPick::Nearest
+        )),
         "Option-R picks"
     );
     view.nav_held_frame();

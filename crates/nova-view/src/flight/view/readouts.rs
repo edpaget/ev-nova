@@ -3,8 +3,8 @@
 
 use std::borrow::Cow;
 
-use nova_sim::flight_frame::{FlightCommand, FlightFrame};
-use nova_sim::{NavMode, RuleSource, ShipRef, StellarIff, TargetTag};
+use nova_sim_frame::flight_frame::{FlightCommand, FlightFrame};
+use nova_sim_frame::{NavMode, RuleSource, ShipRef, StellarIff, TargetTag};
 
 use crate::flight::cadence::{Drawn, retake_target};
 use crate::flight::hud::{NavDestination, NavDisplay};
@@ -30,7 +30,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// master's width the session gives it, whatever sheet the scene
     /// draws, and blank while the ship is landed (`_playerIsLanded`,
     /// [`FlightFrame::docked`]); each with its IFF code (a stellar's
-    /// [`FrameRadarStellar::iff`](nova_sim::flight_frame::FrameRadarStellar::iff),
+    /// [`FrameRadarStellar::iff`](nova_sim_frame::flight_frame::FrameRadarStellar::iff),
     /// unlandable for one the frame has none for), the player's IFF and
     /// density scanner, this tick's static ([`FlightView::advance_hud`]),
     /// and whether the nav mode is hyperspace
@@ -96,7 +96,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// `dialog` closes, as `_DoPortDialog` closes each: its close
     /// redraws the whole bar first ([`FlightView::refresh_status`],
     /// `_RefreshSAT`), then the nav saved as it opened is restored
-    /// ([`Session::restore_port_nav`](nova_sim::Session::restore_port_nav); the outfitter @0x5dbb8-0x5dbc5,
+    /// (`nova_sim::Session::restore_port_nav`; the outfitter @0x5dbb8-0x5dbc5,
     /// the exchange @0x5e64d-0x5e65d, the shipyard @0x5f8e8-0x5f8f5, the
     /// computer @0x60084-0x60096), undoing a landed `M` or `N` run inside
     /// it. When the restored nav shows:
@@ -236,7 +236,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// What the target panel shows of the target in `frame` (see
-    /// [`TargetPanel`], [`FrameTarget`](nova_sim::flight_frame::FrameTarget)):
+    /// [`TargetPanel`], [`FrameTarget`](nova_sim_frame::flight_frame::FrameTarget)):
     /// its name, its subtitle or its ship type's card's, the card's
     /// picture or, with none, its ship type's model's portrait from the
     /// table ([`ShipPortrait::of`]), its status line, and its label, a
@@ -275,7 +275,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// What the target panel shows this frame, of `frame`'s target: by
-    /// [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s engine
+    /// [`RuleKey::HudCadence`](nova_sim_frame::RuleKey::HudCadence)'s engine
     /// reading, the snapshot taken at its last redraw while it is of the
     /// target the player has now; by the other, before the first redraw,
     /// or once the target has changed, the panel as it is now
@@ -339,7 +339,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
-    /// What the nav area shows this frame: by [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s
+    /// What the nav area shows this frame: by [`RuleKey::HudCadence`](nova_sim_frame::RuleKey::HudCadence)'s
     /// engine reading, the snapshot taken at its last refresh, text and
     /// colours both, in flight while the nav mode is the one it was taken
     /// for and while docked whatever it is; by the other, before the first
@@ -387,14 +387,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Whether the HUD's content waits for its refreshes: the engine's
-    /// reading of [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence),
+    /// reading of [`RuleKey::HudCadence`](nova_sim_frame::RuleKey::HudCadence),
     /// as the view's presentation holds it
     /// ([`Presentation`](super::stepping::Presentation)).
     pub(super) fn hud_waits(&self) -> bool {
         self.presentation.hud_cadence == RuleSource::Engine
     }
 
-    /// What the radar shows this frame: by [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s
+    /// What the radar shows this frame: by [`RuleKey::HudCadence`](nova_sim_frame::RuleKey::HudCadence)'s
     /// engine reading, the snapshot taken at its last refresh; by the
     /// other, or before the first refresh, the radar as it is now
     /// ([`FlightView::radar_now`]).
@@ -422,7 +422,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// A port dialog (the outfitter, exchange, shipyard, the bar's hire
     /// screen or the mission computer) opens: the nav is saved
-    /// ([`FlightCommand::SavePortNav`], [`Session::save_port_nav`](nova_sim::Session::save_port_nav)), as
+    /// ([`FlightCommand::SavePortNav`], `nova_sim::Session::save_port_nav`), as
     /// each of the original's saves +0x6a
     /// and +0x6c as it opens (the outfitter @0x5bafc-0x5bb12, the exchange
     /// @0x5dbed-0x5dc08, the shipyard and the hire screen
@@ -440,7 +440,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.nav_texts = self.frame.texts_queued;
     }
 
-    /// The player's nav mode ([`FlightFrame::nav_mode`](nova_sim::flight_frame::FlightFrame::nav_mode));
+    /// The player's nav mode ([`FlightFrame::nav_mode`](nova_sim_frame::flight_frame::FlightFrame::nav_mode));
     /// off without a session.
     pub(super) fn nav_mode(&self) -> NavMode {
         self.frame.nav_mode
@@ -477,10 +477,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// its name on the map if the pilot has explored it ("No Destination"
     /// for none), with whether the ship can jump there now; with the nav
     /// system off, "Nav System Off". Each read from what the flight gave:
-    /// the opening's names ([`Names::stellar`](nova_sim::flight_frame::Names::stellar))
+    /// the opening's names ([`Names::stellar`](nova_sim_frame::flight_frame::Names::stellar))
     /// and the frame it reads (`FlightView::nav_frame`)
-    /// ([`FlightFrame::has_explored`](nova_sim::flight_frame::FlightFrame::has_explored),
-    /// [`FlightFrame::jump_readiness`](nova_sim::flight_frame::FlightFrame::jump_readiness)).
+    /// ([`FlightFrame::has_explored`](nova_sim_frame::flight_frame::FlightFrame::has_explored),
+    /// [`FlightFrame::jump_readiness`](nova_sim_frame::flight_frame::FlightFrame::jump_readiness)).
     /// `mode` may be held or noted from before (a take-off's, a text's, an
     /// interface load's): its system reads as explored or not as the
     /// frame's set stands now, as `_DrawStatusNav` reads the flag as it
@@ -513,7 +513,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// The name the nav area gives the stellar `target` selected in nav
     /// mode 2 ([`FlightView::nav_display`]).
-    fn nav_stellar(&self, target: Option<nova_sim::StellarId>) -> Option<String> {
+    fn nav_stellar(&self, target: Option<nova_sim_frame::StellarId>) -> Option<String> {
         target.and_then(|target| {
             stellar_name(
                 self.scene.as_ref(),
@@ -525,7 +525,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// How the nav area names the system `next` selected in nav mode 3
     /// ([`FlightView::nav_display`]).
-    fn nav_destination(&self, next: Option<nova_sim::SystemId>) -> NavDestination {
+    fn nav_destination(&self, next: Option<nova_sim_frame::SystemId>) -> NavDestination {
         next.map_or(NavDestination::None, |next| {
             self.nav_frame()
                 .has_explored(next)

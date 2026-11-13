@@ -41,11 +41,11 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::planet_comm::{
+use nova_sim_frame::planet_comm::{
     PlanetCommButton, PlanetCommItem, PlanetCommView, PlanetStatus, STATUS_LABEL,
 };
 
-use nova_sim::landing::UNKNOWN_STELLAR_RADIUS;
+use nova_sim_frame::landing::UNKNOWN_STELLAR_RADIUS;
 
 use crate::color::Color;
 use crate::draw::{Blend, DrawCommand, DrawList};
@@ -541,7 +541,7 @@ pub(crate) use tests::pad_probe;
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use nova_sim::StellarId;
+    use nova_sim_frame::StellarId;
 
     use super::*;
     use crate::input::Key;

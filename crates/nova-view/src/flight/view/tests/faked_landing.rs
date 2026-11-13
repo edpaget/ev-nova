@@ -11,9 +11,9 @@ use super::live_keys::latches_its_close;
 use super::*;
 use crate::flight::flash::ShieldFlash;
 use crate::flight::jump::{FADE_IN_FOR, JumpPhase};
-use nova_sim::flight_frame::FlightEvent;
-use nova_sim::landing::LandOutcome;
-use nova_sim::{GateKind, GateRefusal, LandPress, LandingRefusal, SessionEvent, SimSound};
+use nova_sim_frame::flight_frame::FlightEvent;
+use nova_sim_frame::landing::LandOutcome;
+use nova_sim_frame::{GateKind, GateRefusal, LandPress, LandingRefusal, SessionEvent, SimSound};
 
 /// The answer to a press that requested clearance at `stellar`.
 fn requested(stellar: i16) -> Answer {
@@ -290,7 +290,7 @@ fn landing_lets_go_of_the_line_the_effects_the_flashes_and_the_glows() {
         &mut view,
         &[CombatEvent::Exploded {
             at: Vec2::ZERO,
-            explosion: nova_sim::catalog::Explosion::decode(0).expect("type 0"),
+            explosion: nova_sim_frame::catalog::Explosion::decode(0).expect("type 0"),
             size: 0.0,
         }],
     );
@@ -300,7 +300,7 @@ fn landing_lets_go_of_the_line_the_effects_the_flashes_and_the_glows() {
     view.glows.step(
         &[(ShipRef::Player, false)],
         |_| Some(1.0),
-        nova_sim::SpeedMult::FULL,
+        nova_sim_frame::SpeedMult::FULL,
     );
     assert!(view.glows.drawn(ShipRef::Player).is_some(), "a glow lit");
     let alt = crate::flight::held_alt::AltLayer {
@@ -313,7 +313,7 @@ fn landing_lets_go_of_the_line_the_effects_the_flashes_and_the_glows() {
     };
     let held = view.held_alts.get_mut().shown(
         ShipRef::Player,
-        nova_sim::combat::ship_frames::Alt::Drawn(0),
+        nova_sim_frame::combat::ship_frames::Alt::Drawn(0),
         Some(alt),
         true,
     );
@@ -625,7 +625,7 @@ fn a_wormhole_with_no_exit_lays_the_scene_out_afresh_once_from_the_flights_event
         &mut view,
         &[CombatEvent::Exploded {
             at: Vec2::ZERO,
-            explosion: nova_sim::catalog::Explosion::decode(0).expect("type 0"),
+            explosion: nova_sim_frame::catalog::Explosion::decode(0).expect("type 0"),
             size: 0.0,
         }],
     );
@@ -638,7 +638,7 @@ fn a_wormhole_with_no_exit_lays_the_scene_out_afresh_once_from_the_flights_event
     flash.hit(false);
     view.flashes.insert(ShipRef::Player, flash);
     view.npc_previous = vec![(
-        nova_sim::NpcId(0),
+        nova_sim_frame::NpcId(0),
         ShipPlace {
             position: Vec2::ZERO,
             heading: 0.0,
@@ -818,9 +818,9 @@ fn a_borders_change_on_the_hypergate_map_saves_but_one_docked_is_kept_unsaved() 
 
 /// The answer to a take-off from `stellar`, nothing settled.
 pub(super) fn departed(stellar: i16) -> Answer {
-    Answer::Departed(nova_sim::Departure {
+    Answer::Departed(nova_sim_frame::Departure {
         stellar: StellarId(stellar),
-        settled: nova_sim::Settled::default(),
+        settled: nova_sim_frame::Settled::default(),
     })
 }
 
@@ -968,10 +968,11 @@ fn landing_and_taking_off_keep_the_stars() {
 #[test]
 fn the_settling_sends_its_command_and_says_what_it_settled() {
     let mut view = faked(sol());
-    view.sim.queue_answer(Answer::Settled(nova_sim::Settled {
-        message: Some("Hello.".to_owned()),
-        ..nova_sim::Settled::default()
-    }));
+    view.sim
+        .queue_answer(Answer::Settled(nova_sim_frame::Settled {
+            message: Some("Hello.".to_owned()),
+            ..nova_sim_frame::Settled::default()
+        }));
     view.settle_script();
     assert_eq!(sent_but_lines(&view), [FlightCommand::SettleScript]);
     faked_lasts(&mut view, "Hello.", SCRIPT_MESSAGE_TICKS);
@@ -980,17 +981,16 @@ fn the_settling_sends_its_command_and_says_what_it_settled() {
 #[test]
 fn fighters_abandoned_are_told_only_with_the_layout_of_the_move_settled() {
     let mut view = faked(sol());
+    view.sim.queue_event(FlightEvent::FighterNote(
+        nova_sim_frame::FighterNote::Abandoned(2),
+    ));
     view.sim
-        .queue_event(FlightEvent::FighterNote(nova_sim::FighterNote::Abandoned(
-            2,
-        )));
-    view.sim
-        .queue_answer(Answer::Settled(nova_sim::Settled::default()));
+        .queue_answer(Answer::Settled(nova_sim_frame::Settled::default()));
     view.settle_script();
     assert_eq!(view.message(), None, "no layout from this settling");
     assert_eq!(
         view.drain().take_fighter_notes(),
-        [nova_sim::FighterNote::Abandoned(2)],
+        [nova_sim_frame::FighterNote::Abandoned(2)],
         "left for the next arrival"
     );
 }
@@ -1001,14 +1001,15 @@ fn fighters_abandoned_by_a_settled_move_are_told_in_flight_and_not_docked() {
     // (rdm:phase/view-sim-seam/phase-20-view-frame-fills-per-tick).
     for (frame, told) in [(sol(), true), (docked_at(128, Vec2::ZERO), false)] {
         let mut view = faked(frame.clone());
-        view.sim
-            .queue_event(FlightEvent::FighterNote(nova_sim::FighterNote::Abandoned(
-                2,
-            )));
+        view.sim.queue_event(FlightEvent::FighterNote(
+            nova_sim_frame::FighterNote::Abandoned(2),
+        ));
         view.sim.queue_answer_telling(
-            Answer::Settled(nova_sim::Settled::default()),
+            Answer::Settled(nova_sim_frame::Settled::default()),
             frame,
-            vec![FlightEvent::Session(nova_sim::SessionEvent::SystemChanged)],
+            vec![FlightEvent::Session(
+                nova_sim_frame::SessionEvent::SystemChanged,
+            )],
         );
         view.settle_script();
         let said = view.message().map(str::to_owned);
@@ -1029,7 +1030,7 @@ fn docked_the_settling_stages_the_bar_as_its_scripts_ran() {
     let mut view = faked(docked_at(128, Vec2::ZERO));
     assert!(view.docked());
     view.sim
-        .queue_answer(Answer::Settled(nova_sim::Settled::default()));
+        .queue_answer(Answer::Settled(nova_sim_frame::Settled::default()));
     view.settle_script();
     assert!(view.bar_steps.is_empty(), "no text, nothing staged");
     assert_eq!(sent_but_lines(&view), [FlightCommand::SettleScript]);
@@ -1040,15 +1041,15 @@ fn docked_the_settling_stages_the_bar_as_its_scripts_ran() {
 #[test]
 fn a_refused_gate_sends_no_travel_command() {
     let mut view = faked(sol());
-    view.change_sim(|sim| sim.refuse(nova_sim::PlayerCommand::Land));
+    view.change_sim(|sim| sim.refuse(nova_sim_frame::PlayerCommand::Land));
     view.land();
     assert_eq!(sent(&view), [], "L under a refused Land gate");
-    view.change_sim(|sim| sim.refuse(nova_sim::PlayerCommand::Jump));
+    view.change_sim(|sim| sim.refuse(nova_sim_frame::PlayerCommand::Jump));
     view.jump_latch = false;
     view.jump_frame(true);
     assert_eq!(sent(&view), [], "J under a refused Jump gate");
     assert!(!view.jump_latch, "its latch left as it was");
-    view.change_sim(|sim| sim.take(nova_sim::PlayerCommand::Jump));
+    view.change_sim(|sim| sim.take(nova_sim_frame::PlayerCommand::Jump));
     view.jump_frame(true);
     assert_eq!(sent(&view), [FlightCommand::Jump], "taken again");
 }
@@ -1056,7 +1057,7 @@ fn a_refused_gate_sends_no_travel_command() {
 #[test]
 fn a_command_sent_under_a_refused_gate_is_refused_unsent() {
     let mut view = faked(sol());
-    view.change_sim(|sim| sim.refuse(nova_sim::PlayerCommand::Jump));
+    view.change_sim(|sim| sim.refuse(nova_sim_frame::PlayerCommand::Jump));
     view.sim.queue_answer(Answer::Jumped(SystemId(131)));
     assert_eq!(view.send_gated(FlightCommand::Jump), Answer::Refused);
     assert_eq!(sent(&view), [], "nothing sent");
@@ -1144,7 +1145,7 @@ fn a_take_offs_defection_is_kept_for_a_dialog_not_said_after_the_greeting() {
             lead: 4,
         }));
     view.sim
-        .queue_event(FlightEvent::PayNote(nova_sim::PayNote::Defected(1)));
+        .queue_event(FlightEvent::PayNote(nova_sim_frame::PayNote::Defected(1)));
     view.sim.queue_answer_showing(departed(128), sol());
     view.take_off().expect("takes off");
     faked_lasts(&mut view, &take_off_greeting(4, "Earth", DATE), 240);
@@ -1157,7 +1158,7 @@ fn a_landed_qs_message_is_said_alone_and_its_defection_kept() {
     view.sim
         .queue_event(FlightEvent::LeaveMessage("Off you go.".to_owned()));
     view.sim
-        .queue_event(FlightEvent::PayNote(nova_sim::PayNote::Defected(3)));
+        .queue_event(FlightEvent::PayNote(nova_sim_frame::PayNote::Defected(3)));
     view.sim.queue_answer_showing(departed(128), sol());
     view.take_off().expect("takes off");
     faked_lasts(&mut view, "Off you go.", SCRIPT_MESSAGE_TICKS);

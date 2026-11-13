@@ -5,9 +5,9 @@ use super::faked_world::world;
 use super::*;
 use crate::flight::brackets::NO_SPRITE_HALF;
 use crate::outline::{Outline, OutlineTriangle, StellarStandIn};
-use nova_sim::flight_frame::FrameShip;
-use nova_sim::status_cargo::StatusCargo;
-use nova_sim::{AlertIcon, JumpReadiness};
+use nova_sim_frame::flight_frame::FrameShip;
+use nova_sim_frame::status_cargo::StatusCargo;
+use nova_sim_frame::{AlertIcon, JumpReadiness};
 
 // The navigation target.
 
@@ -121,7 +121,9 @@ fn selecting_a_stellar_draws_cicn_10000_to_10003_flying_in_then_settled() {
     faked_tap_slot(&mut view, STELLAR_SLOT_KEYS[0][0]);
     assert_eq!(
         sent(&view),
-        [FlightCommand::SelectStellar(nova_sim::StellarPick::Slot(0))]
+        [FlightCommand::SelectStellar(
+            nova_sim_frame::StellarPick::Slot(0)
+        )]
     );
     // Earth (128), 20 x 20: half 10.
     let earth = faked_on_screen(&view, (0.0, -600.0));
@@ -138,11 +140,11 @@ fn selecting_a_stellar_draws_cicn_10000_to_10003_flying_in_then_settled() {
 /// where.
 pub(super) fn faked_nav_icons(
     view: &mut Faked,
-    nav: Option<nova_sim::brackets::NavBrackets>,
+    nav: Option<nova_sim_frame::brackets::NavBrackets>,
 ) -> Vec<(i16, Point)> {
-    let hud = nova_sim::flight_frame::FrameHud {
+    let hud = nova_sim_frame::flight_frame::FrameHud {
         nav_brackets: nav,
-        ..nova_sim::flight_frame::FrameHud::default()
+        ..nova_sim_frame::flight_frame::FrameHud::default()
     };
     super::faked_world::world_list_with(view, &hud)
         .iter()
@@ -156,8 +158,12 @@ pub(super) fn faked_nav_icons(
 }
 
 /// The brackets round stellar `id` at `at`, settled or `expand` out.
-pub(super) fn nav_at(id: i16, (x, y): (f32, f32), expand: f32) -> nova_sim::brackets::NavBrackets {
-    nova_sim::brackets::NavBrackets {
+pub(super) fn nav_at(
+    id: i16,
+    (x, y): (f32, f32),
+    expand: f32,
+) -> nova_sim_frame::brackets::NavBrackets {
+    nova_sim_frame::brackets::NavBrackets {
         stellar: StellarId(id),
         position: Vec2::new(x, y),
         expand,
@@ -336,7 +342,7 @@ fn a_dominated_stellar_is_bracketed_green() {
     // Whether it is: the session's (its `Flags2` DOMINATED).
     let mut view = faked_sol_scene();
     let earth = faked_on_screen(&view, (0.0, -600.0));
-    let dominated = Some(nova_sim::brackets::NavBrackets {
+    let dominated = Some(nova_sim_frame::brackets::NavBrackets {
         dominated: true,
         ..nav_at(128, (0.0, -600.0), 0.0)
     });
@@ -375,7 +381,7 @@ fn the_hud_lists_the_goods_bought_the_free_space_and_the_cash() {
         "an empty 10-ton hold"
     );
     changes(&mut view, |frame| {
-        frame.hud.cargo.rows[0] = Some(nova_sim::status_cargo::CommodityRow {
+        frame.hud.cargo.rows[0] = Some(nova_sim_frame::status_cargo::CommodityRow {
             label: "Food:".to_owned(),
             tons: 10,
         });
@@ -886,7 +892,7 @@ fn the_red_alert_sounds_once_through_the_view() {
     // That a threat sounds it once is nova-sim's (`staying_threatened_sounds_once`).
     let mut view = faked(in_sol());
     view.sim
-        .queue_event(nova_sim::flight_frame::FlightEvent::Sound(
+        .queue_event(nova_sim_frame::flight_frame::FlightEvent::Sound(
             SimSound::RedAlert,
         ));
     assert_eq!(view.drained_sounds(), [Sound::Sim(SimSound::RedAlert)]);
@@ -1208,19 +1214,19 @@ fn the_nav_area_names_a_stellar_by_its_name_in_the_scene() {
 #[test]
 fn a_hyperspace_selection_is_named_once_explored_with_the_frames_readiness() {
     let mut view = faked(FlightFrame {
-        jump_readiness: nova_sim::JumpReadiness::Blocked,
+        jump_readiness: nova_sim_frame::JumpReadiness::Blocked,
         ..sol_in(NavMode::Hyperspace(Some(SystemId(131))))
     });
     assert_eq!(
         view.nav_now(),
         NavDisplay::Hyperspace {
             destination: hud::NavDestination::Unexplored,
-            readiness: nova_sim::JumpReadiness::Blocked,
+            readiness: nova_sim_frame::JumpReadiness::Blocked,
         }
     );
     view.change_sim(|sim| {
         sim.set_frame(FlightFrame {
-            jump_readiness: nova_sim::JumpReadiness::Underway,
+            jump_readiness: nova_sim_frame::JumpReadiness::Underway,
             explored: vec![SystemId(131)],
             ..sol_in(NavMode::Hyperspace(Some(SystemId(131))))
         });
@@ -1229,7 +1235,7 @@ fn a_hyperspace_selection_is_named_once_explored_with_the_frames_readiness() {
         view.nav_now(),
         NavDisplay::Hyperspace {
             destination: hud::NavDestination::Named("Alpha Centauri".to_owned()),
-            readiness: nova_sim::JumpReadiness::Underway,
+            readiness: nova_sim_frame::JumpReadiness::Underway,
         }
     );
 }
@@ -1237,14 +1243,14 @@ fn a_hyperspace_selection_is_named_once_explored_with_the_frames_readiness() {
 #[test]
 fn hyperspace_with_nothing_selected_is_no_destination() {
     let view = faked(FlightFrame {
-        jump_readiness: nova_sim::JumpReadiness::Blocked,
+        jump_readiness: nova_sim_frame::JumpReadiness::Blocked,
         ..sol_in(NavMode::Hyperspace(None))
     });
     assert_eq!(
         view.nav_now(),
         NavDisplay::Hyperspace {
             destination: hud::NavDestination::None,
-            readiness: nova_sim::JumpReadiness::Blocked,
+            readiness: nova_sim_frame::JumpReadiness::Blocked,
         }
     );
 }

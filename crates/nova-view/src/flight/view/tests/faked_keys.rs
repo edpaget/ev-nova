@@ -12,9 +12,9 @@ use super::faked_world::world;
 use super::*;
 use crate::galaxy::place::{INITIAL_ZOOM, ZOOM_OUT_STEP};
 use crate::time::sixtieths;
-use nova_sim::flight_frame::FlightEvent;
-use nova_sim::navigation::NavMode;
-use nova_sim::{EscortCommand, EscortGroup, StellarPick, TargetPick};
+use nova_sim_frame::flight_frame::FlightEvent;
+use nova_sim_frame::navigation::NavMode;
+use nova_sim_frame::{EscortCommand, EscortGroup, StellarPick, TargetPick};
 
 /// A view of a flight whose fleet holds escorts of `present`'s classes,
 /// the course map's opening answered and its first redraw drawing Sol
@@ -540,17 +540,17 @@ fn the_escort_menu_times_out_during_the_streak() {
     assert!(view.escort_menu().is_open(), "open as the streak begins");
     // Each tick's step: one pass through `_HandlePlayer`'s fade, the
     // escort flying.
-    let step = nova_sim::flight_frame::StepReport {
-        steps: vec![nova_sim::flight_frame::StepRun {
-            passes: vec![nova_sim::flight_frame::PassReport {
-                escort_menu: Some(nova_sim::flight_frame::EscortMenuPass {
+    let step = nova_sim_frame::flight_frame::StepReport {
+        steps: vec![nova_sim_frame::flight_frame::StepRun {
+            passes: vec![nova_sim_frame::flight_frame::PassReport {
+                escort_menu: Some(nova_sim_frame::flight_frame::EscortMenuPass {
                     escorts_flying: 1,
                     rows: view.frame.hud.escort_rows,
                     class_orders_cleared: false,
                 }),
-                ..nova_sim::flight_frame::PassReport::default()
+                ..nova_sim_frame::flight_frame::PassReport::default()
             }],
-            ..nova_sim::flight_frame::StepRun::default()
+            ..nova_sim_frame::flight_frame::StepRun::default()
         }],
         stopped: false,
     };
@@ -608,7 +608,7 @@ fn p_during_a_jump_beeps_and_asks_nothing() {
         tap(&mut view, PLAYER_INFO_KEY);
         assert_eq!(sent_since(&view, from), [], "{stage}: kept for its pass");
         view.sim.queue_report(StepReport {
-            steps: vec![nova_sim::flight_frame::StepRun::default()],
+            steps: vec![nova_sim_frame::flight_frame::StepRun::default()],
             stopped: false,
         });
         view.tick(ms(17));
@@ -689,7 +689,7 @@ fn a_scan_in_the_warps_lead_in_is_said_under_the_streak() {
     renamed(&mut view, |names| {
         names.ships.insert(
             ShipId(129),
-            nova_sim::flight_frame::ShipNames {
+            nova_sim_frame::flight_frame::ShipNames {
                 name: "Ship 129".to_owned(),
                 long_name: String::new(),
             },
@@ -863,15 +863,15 @@ fn a_zoom_given_to_the_flight_is_the_maps() {
 
 #[test]
 fn the_flights_metrics_measure_the_course_maps_panel() {
-    use nova_sim::map_panel::Strip;
+    use nova_sim_frame::map_panel::Strip;
     // The date set against the strip's right edge: 1016 − width − 5.
     let mut view = faked(in_sol()).with_metrics(Rc::new(crate::text::fixture::MonoMetrics));
     let date = "6/23/1177".to_owned();
     let mut panel = super::map_find::panel_titled("Sol");
     panel.strip = Strip::Info {
-        ports: nova_sim::map_panel::Ports::Unknown,
+        ports: nova_sim_frame::map_panel::Ports::Unknown,
         hazards: String::new(),
-        date: nova_sim::map_panel::PanelDate::Text(date.clone()),
+        date: nova_sim_frame::map_panel::PanelDate::Text(date.clone()),
     };
     let opening = map_opening(&view.frame, Some(130));
     view.sim.queue_screen(opening);
@@ -899,7 +899,7 @@ fn the_course_map_runs_its_pass_on_flights_ticks() {
     assert!(view.map_open());
     assert_eq!(
         view.course_map().border_passes().next(),
-        nova_sim::map_borders::Next::Idle,
+        nova_sim_frame::map_borders::Next::Idle,
         "the map ticked"
     );
     assert_eq!(view.course_map().border_passes().step(), 1);
@@ -991,7 +991,7 @@ fn find_is_laid_out_from_the_template_and_style_the_flight_gives() {
 #[test]
 fn a_key_the_frames_gates_refuse_sends_nothing() {
     let refusing = FlightFrame {
-        gates: nova_sim::flight_frame::Gates::EVERY.refusing(PlayerCommand::Land),
+        gates: nova_sim_frame::flight_frame::Gates::EVERY.refusing(PlayerCommand::Land),
         ..in_sol()
     };
     let mut view = faked(refusing);

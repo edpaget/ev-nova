@@ -123,9 +123,9 @@ fn a_scroll_moves_the_dots_by_their_factor() {
     let ship = Vec2::new(50.0, 50.0);
     let (mut field, mut chance) = scattered(ship, &looks);
     let before = field.stars();
-    let pass = nova_sim::flight_frame::PassReport {
+    let pass = nova_sim_frame::flight_frame::PassReport {
         player_position: ship,
-        ..nova_sim::flight_frame::PassReport::default()
+        ..nova_sim_frame::flight_frame::PassReport::default()
     };
     let from = Vec2::new(ship.x + 8.0, ship.y - 4.0);
     super::super::stars::step(
@@ -217,8 +217,8 @@ fn a_starfield_reset_scatters_the_stars_afresh_about_the_frames_ship() {
     frame.ships[0].position = ship;
     view.sim.set_frame(frame);
     view.sim
-        .queue_event(nova_sim::flight_frame::FlightEvent::Session(
-            nova_sim::SessionEvent::StarfieldReset,
+        .queue_event(nova_sim_frame::flight_frame::FlightEvent::Session(
+            nova_sim_frame::SessionEvent::StarfieldReset,
         ));
     caught_up(&mut view);
     let after: Vec<u16> = faked_stars(&view).iter().map(|star| star.frame).collect();
@@ -242,8 +242,8 @@ fn a_system_entered_with_no_starfield_reset_keeps_the_stars() {
         ..in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)])
     });
     view.sim
-        .queue_event(nova_sim::flight_frame::FlightEvent::Session(
-            nova_sim::SessionEvent::SystemChanged,
+        .queue_event(nova_sim_frame::flight_frame::FlightEvent::Session(
+            nova_sim_frame::SessionEvent::SystemChanged,
         ));
     caught_up(&mut view);
     assert_eq!(view.frame.system, SystemId(131));
@@ -295,10 +295,10 @@ fn a_step_scrolls_the_stars_by_the_ships_move_twice_over_in_double_time() {
         let from = Vec2::new(ship.x + 8.0, ship.y - 4.0);
         let place = (VIEW_SIZE, Anchor::PlayAreaCentre);
         let starfield = (RuleSource::Engine, &looks);
-        let pass = nova_sim::flight_frame::PassReport {
+        let pass = nova_sim_frame::flight_frame::PassReport {
             player_position: ship,
             double_time: double,
-            ..nova_sim::flight_frame::PassReport::default()
+            ..nova_sim_frame::flight_frame::PassReport::default()
         };
         super::super::stars::step(&mut field, &pass, starfield, place, Some(from), &mut chance);
         let times = if double { 2.0 } else { 1.0 };
@@ -322,23 +322,24 @@ fn the_frame_draws_the_first_passs_placement_in_double_time() {
         // Twenty steps of the ship thrusting up, a pass each or two.
         for step in 0..20_u16 {
             let y = -f32::from(step);
-            let pass = |at: f32| nova_sim::flight_frame::PassReport {
+            let pass = |at: f32| nova_sim_frame::flight_frame::PassReport {
                 player_position: Vec2::new(0.0, at),
                 double_time: double,
-                ..nova_sim::flight_frame::PassReport::default()
+                ..nova_sim_frame::flight_frame::PassReport::default()
             };
             let passes = if double {
                 vec![pass(y), pass(y - 0.5)]
             } else {
                 vec![pass(y)]
             };
-            view.sim.queue_report(nova_sim::flight_frame::StepReport {
-                steps: vec![nova_sim::flight_frame::StepRun {
-                    passes,
-                    ..nova_sim::flight_frame::StepRun::default()
-                }],
-                stopped: false,
-            });
+            view.sim
+                .queue_report(nova_sim_frame::flight_frame::StepReport {
+                    steps: vec![nova_sim_frame::flight_frame::StepRun {
+                        passes,
+                        ..nova_sim_frame::flight_frame::StepRun::default()
+                    }],
+                    stopped: false,
+                });
             view.step_frame(1, view.anchor());
         }
         view.alpha = 1.0;

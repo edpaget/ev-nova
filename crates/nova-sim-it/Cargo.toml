@@ -1,0 +1,31 @@
+[package]
+name = "nova-sim-it"
+description = "nova-sim's integration tests, in a crate of their own so nova-sim's unit-test build doesn't wait on its own library"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# No dependencies: the crate has no code of its own, only `tests/it`.
+
+[dev-dependencies]
+# The pilot-save JSON the tests write, read back and edit (`json!`, `Value`,
+# `from_str`).
+serde_json.workspace = true
+# The crate under test, with its `fixture` module: the in-memory pilot store,
+# the storyline walker the stock tests drive, and `traffic::fixture::npc`.
+nova-sim = { workspace = true, features = ["fixture"] }
+# The game data loader and its fixtures (`store::fixture`, `records::fixture`,
+# `graphics::fixture`), for the GameData adapter and stock tests.
+nova-data = { workspace = true, features = ["fixture"] }
+# Synthetic resource forks (`fixture::ForkBuilder`) and `ResType`.
+nova-rsrc = { workspace = true, features = ["fixture"] }
+# The `Chance` mocks (`Draws`, `Ranged`) the tests draw on.
+nova-sim-base = { workspace = true, features = ["fixture"] }
+# `Combat::shots_mut`, which a stock test calls; nova-sim's `fixture`
+# doesn't turn combat's on.
+nova-sim-combat = { workspace = true, features = ["fixture"] }
+
+[lints]
+workspace = true

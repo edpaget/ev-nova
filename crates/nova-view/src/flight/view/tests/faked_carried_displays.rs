@@ -5,9 +5,9 @@
 //! gain. Which prepares and gains are the session's rules, pinned by its
 //! own tests (`nova_sim`'s `display_carry` module).
 
-use nova_sim::flight_frame::{CarriedDisplay, FlightEvent};
-use nova_sim::landing::LandOutcome;
-use nova_sim::{GateKind, Gauge, LandPress, NpcId, SessionEvent, SpeedMult};
+use nova_sim_frame::flight_frame::{CarriedDisplay, FlightEvent};
+use nova_sim_frame::landing::LandOutcome;
+use nova_sim_frame::{GateKind, Gauge, LandPress, NpcId, SessionEvent, SpeedMult};
 
 use super::faked_landing::at_gate;
 use super::*;
@@ -136,9 +136,9 @@ fn a_take_off_shows_them_as_the_landing_left_them() {
     assert!(view.flashes.is_empty(), "let go as the player lands");
     let gains = [SpeedMult::ZERO; 2];
     view.sim.queue_answer_telling(
-        Answer::Departed(nova_sim::Departure {
+        Answer::Departed(nova_sim_frame::Departure {
             stellar: StellarId(128),
-            settled: nova_sim::Settled::default(),
+            settled: nova_sim_frame::Settled::default(),
         }),
         with_escort(9),
         vec![carried(gains.to_vec())],

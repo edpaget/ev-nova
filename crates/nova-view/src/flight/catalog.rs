@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU16;
 use std::rc::Rc;
 
-use nova_sim::asteroid::KINDS;
-pub use nova_sim::{Blink, BoomId, GovtId, ShipId, SoundId, WeaponId};
+use nova_sim_frame::asteroid::KINDS;
+pub use nova_sim_frame::{Blink, BoomId, GovtId, ShipId, SoundId, WeaponId};
 
 use crate::box_cut::SheetEdge;
 use crate::color::Color;
@@ -100,7 +100,7 @@ pub struct ShipSheet {
     /// ([`ImageKind::RledClipped`](crate::ImageKind::RledClipped)) there. Never
     /// for any stock sheet.
     pub clip_quirks: bool,
-    /// The engine glow, drawn at the level [`nova_sim::glow_level`] gives
+    /// The engine glow, drawn at the level [`nova_sim_frame::glow_level`] gives
     /// for the ship's glow base, which thrust ramps up.
     pub glow: Option<LayerSheet>,
     /// The running lights, drawn at the level the session's display drew
@@ -477,7 +477,7 @@ pub struct WeaponLook {
     /// `BeamWidth`: a beam's width.
     pub beam_width: i16,
     /// `Falloff` as the original loads it
-    /// ([`loaded_falloff`](nova_sim::combat::weapon::loaded_falloff)): how
+    /// ([`loaded_falloff`](nova_sim_frame::combat::weapon::loaded_falloff)): how
     /// fast a beam's corona fades, 16 for a beam that says none, and none
     /// for a lightning weapon.
     pub falloff: i16,

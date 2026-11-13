@@ -61,6 +61,8 @@ use crate::catalog::{OutfitId, PersonRecord};
 use crate::chance::Chance;
 use crate::rulebook::RuleSource;
 
+pub use nova_sim_state::shown::grant::Granted;
+
 /// The odds' draw: a grant when `Rand(100) + 1` is at most `GrantProb`
 /// (@0x930b4-0x930d4).
 pub const GRANT_ROLL: u32 = 100;
@@ -130,18 +132,6 @@ pub struct GrantStock {
     /// ammunition cap or its raised `Max`, or a gun or turret past the
     /// ship's limit ([`has_max_of_item`](crate::has_max::has_max_of_item)).
     pub at_max: bool,
-}
-
-/// What a grant gave: `count` of `outfit`, the outfit picked; a count of
-/// none when none of it fits (step 6 of the module docs), which grants
-/// nothing and says nothing, but still resets the session as the pick
-/// does (`_DoPlunderDialog` @0x931d9).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Granted {
-    /// The outfit granted.
-    pub outfit: OutfitId,
-    /// How many: none when none of it fits.
-    pub count: u16,
 }
 
 /// The outfits of `stock` a grant of `class` may pick: those of its

@@ -4,7 +4,8 @@
 use std::cell::Cell;
 use std::collections::BTreeMap;
 
-use nova_sim::Governments;
+use nova_sim_frame::Governments;
+use nova_sim_frame::galaxy_map::GalaxyShown;
 
 use super::catalog::{
     Galaxy, GalaxyCatalog, GovtId, NebulaEntry, NebulaId, NebulaPicture, StellarEntry, StellarId,
@@ -30,6 +31,28 @@ impl GalaxyCatalog for FakeCatalog {
     fn galaxy(&self) -> Galaxy {
         self.reads.set(self.reads.get() + 1);
         self.galaxy.clone()
+    }
+}
+
+/// What the map shows, as the frame's plain data: `systems` by
+/// ascending ID, each with its government's ID, `links` and `nebulae`.
+/// The view's tests give it the values a session would, so they drive no
+/// story overlay: its rules are nova-sim's to pin.
+pub(crate) fn shown(
+    systems: &[(i16, Option<i16>)],
+    links: &[(i16, i16)],
+    nebulae: &[i16],
+) -> GalaxyShown {
+    GalaxyShown {
+        systems: systems
+            .iter()
+            .map(|&(id, govt)| (SystemId(id), govt.map(GovtId)))
+            .collect(),
+        links: links
+            .iter()
+            .map(|&(from, to)| (SystemId(from), SystemId(to)))
+            .collect(),
+        nebulae: nebulae.iter().copied().map(NebulaId).collect(),
     }
 }
 
@@ -90,7 +113,6 @@ pub(crate) fn galaxy() -> Galaxy {
         systems: vec![alpha, beta, gamma, alternate],
         govt_colors: BTreeMap::from([(GovtId(128), BLUE)]),
         govts: Governments::default(),
-        gate_links: super::catalog::GateLinks::default(),
         nebulae: vec![NebulaEntry {
             id: NebulaId(128),
             name: "Holpa Nebula".to_owned(),

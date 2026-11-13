@@ -7,6 +7,7 @@ rust = { version = "1.98.1", components = "rustfmt,clippy" }
 # of GitHub releases can time out and fall back to building from source.
 "aqua:nextest-rs/nextest/cargo-nextest" = "0.9.146"
 "cargo:cargo-mutants" = "27.1.0"
+"cargo:cargo-sweep" = "0.8.0"
 "aqua:EmbarkStudios/cargo-deny" = "0.19.9"
 hk = "2.4.0"
 pkl = "0.32.1"
@@ -41,12 +42,12 @@ run = "cargo doc --workspace --no-deps --document-private-items --locked"
 
 # Not in `ci`: CI's own Windows leg lints natively. Needs
 # `rustup target add x86_64-pc-windows-msvc`; its own target directory keeps
-# the host build warm. nova-movie and nova, which links it, are left out:
-# FFmpeg is built natively only (third_party/ffmpeg-sys-next), and CI's
-# windows-2025 leg lints both.
+# the host build warm. nova-movie, and nova and nova-it, which link it, are
+# left out: FFmpeg is built natively only (third_party/ffmpeg-sys-next), and
+# CI's windows-2025 leg lints all three.
 [tasks.lint-windows]
-description = "Clippy over every crate and target but nova and nova-movie for Windows (x86_64-pc-windows-msvc), from any host, warnings are errors; CI's windows-2025 leg lints those two natively"
-run = "cargo clippy --workspace --exclude nova --exclude nova-movie --all-targets --target x86_64-pc-windows-msvc --target-dir target/windows --locked -- -D warnings"
+description = "Clippy over every crate and target but nova, nova-it and nova-movie for Windows (x86_64-pc-windows-msvc), from any host, warnings are errors; CI's windows-2025 leg lints those three natively"
+run = "cargo clippy --workspace --exclude nova --exclude nova-it --exclude nova-movie --all-targets --target x86_64-pc-windows-msvc --target-dir target/windows --locked -- -D warnings"
 
 [tasks.lint-lib]
 description = "Clippy over every crate's libs and bins without dev-dependency features (so no `fixture`), warnings are errors"
@@ -59,17 +60,27 @@ run = [
   "cargo test --doc --workspace --locked",
 ]
 
+# The stock-data tests skip, passing, without NOVA_DATA, so neither the hook
+# nor `ci` (which has no data) runs them. This leg runs them on purpose. The
+# `get_env` without a default makes mise refuse the task when NOVA_DATA is
+# unset, and nextest's default `--no-tests=fail` fails a filter that selects
+# nothing, so the leg can't pass by running nothing.
+[tasks.stock]
+description = "The stock-data tests (every crate's stock and stock_* modules) over the Nova Files folder NOVA_DATA names; fails when NOVA_DATA is unset"
+env = { NOVA_DATA = "{{ get_env(name='NOVA_DATA') }}" }
+run = "cargo nextest run --workspace --locked -E 'test(/^stock(_|::)/)'"
+
 # The dev-tools tasks build nova with the `dev-tools` feature (egui) into
 # their own target directories, so the default build in `target/debug` is
 # never rebuilt with egui, and its cache never thrashed, by a parallel task
 # or a running viewer.
 [tasks.lint-dev-tools]
-description = "Clippy over nova with the dev-tools feature, warnings are errors"
-run = "cargo clippy -p nova --all-targets --features dev-tools --target-dir target/dev-tools --locked -- -D warnings"
+description = "Clippy over nova and nova-it with the dev-tools feature, warnings are errors"
+run = "cargo clippy -p nova -p nova-it --all-targets --features nova/dev-tools,nova-it/dev-tools --target-dir target/dev-tools --locked -- -D warnings"
 
 [tasks.test-dev-tools]
-description = "nova's tests with the dev-tools feature (nextest)"
-run = "cargo nextest run -p nova --features dev-tools --target-dir target/dev-tools --locked --no-tests=pass"
+description = "nova and nova-it's tests with the dev-tools feature (nextest)"
+run = "cargo nextest run -p nova -p nova-it --features nova/dev-tools,nova-it/dev-tools --target-dir target/dev-tools --locked --no-tests=pass"
 
 [tasks.disasm]
 description = "Query EV Nova's disassembly (cached under target/): fn|callers|callees|find, e.g. -- fn _HandlePlayer"
@@ -131,6 +142,10 @@ description = "Mutation testing (cargo-mutants); pass extra flags after --, e.g.
 # and test processes across both mutant jobs at 8 (default: one per core).
 env = { NEXTEST_PROFILE = "mutants" }
 run = "cargo mutants --workspace --jobserver-tasks 8"
+
+[tasks.sweep]
+description = "Remove build artifacts no build has used in 7 days, from every target dir under target/ (debug, clippy, dev-tools, windows); a used crate's artifacts stay warm"
+run = "cargo sweep --time 7"
 
 [tasks.ci]
 description = "Everything CI would run; `hk check` runs this, and it gates review and landing"

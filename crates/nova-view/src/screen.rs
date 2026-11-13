@@ -23,7 +23,7 @@
 use std::fmt;
 use std::time::Duration;
 
-use nova_sim::SimDiagnostic;
+use nova_sim_frame::SimDiagnostic;
 
 use crate::draw::DrawList;
 use crate::geometry::Point;
@@ -470,7 +470,7 @@ mod tests {
     #[test]
     fn a_diagnostic_reads_as_a_line() {
         let sim = SimDiagnostic::UnimplementedGuidance {
-            weapon: nova_sim::WeaponId(131),
+            weapon: nova_sim_frame::WeaponId(131),
             guidance: 1,
         };
         assert_eq!(Diagnostic::from(sim), Diagnostic::Sim(sim));

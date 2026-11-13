@@ -17,9 +17,10 @@ A healthy count is a few thousand, and then the 23 offscreen tests take about
 a second in parallel. Repeated `cargo-mutants` and stock runs can grow it to
 hundreds of thousands. wgpu's Metal adapter setup reads the test binary's
 directory, and nextest starts a new process for each test, so every test pays
-that cost again. Run `cargo clean` in that worktree to fix it. Don't run the
-tests serially or raise the timeouts to work around it. Long autopilot or
-mutants sessions should clean the target directory now and then.
+that cost again. Run `mise run sweep` in that worktree to fix it, and
+`cargo clean` only if the deps folder is still bloated after the sweep. Don't
+run the tests serially or raise the timeouts to work around it. Long autopilot
+or mutants sessions should run `mise run sweep` now and then.
 
 ## Bound mutants and stock runs over GPU crates
 
@@ -32,8 +33,11 @@ ran without trouble.
 
 - Run a GPU crate's mutants (`nova-render`, `nova`) with `-j 1` or `-j 2`,
   keeping its integration tests out, since they drive wgpu:
-  `-- -E 'not binary_id(<crate>::it)' --test-threads 4`. Its unit tests carry
-  the logic. The gate still runs the integration tests once.
+  `-- -E 'not binary_id(<it>::it)' --test-threads 4`, where `<it>` is the
+  binary that holds them: the crate's own (`nova-render::it`), or its
+  `<crate>-it` sibling's (`nova-it::it`), which the run reaches through
+  `--test-package` (`mutants.md`). Its unit tests carry the logic. The gate
+  still runs the integration tests once.
 - Run stock tests one crate at a time (`-p <crate> --test-threads 4`), not
   `--workspace`.
 - Cap `CARGO_BUILD_JOBS` (6–8) for these runs, and run `mise run ci` once,

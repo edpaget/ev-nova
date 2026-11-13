@@ -110,7 +110,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::Rulebook;
+use nova_sim_frame::Rulebook;
 
 use crate::color::Color;
 use crate::draw::DrawList;
@@ -2191,8 +2191,8 @@ mod tests {
     #[test]
     fn the_keys_screen_lets_go_of_its_keys_with_the_dialog() {
         let bible = Rulebook::default().with_override(
-            nova_sim::RuleKey::RecordedModifiers,
-            nova_sim::RuleSource::Bible,
+            nova_sim_frame::RuleKey::RecordedModifiers,
+            nova_sim_frame::RuleSource::Bible,
         );
         let mut dialog = prefs().with_rules(&bible);
         let at = key_settings(&dialog);

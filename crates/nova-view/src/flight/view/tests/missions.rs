@@ -6,15 +6,15 @@ use super::*;
 /// holding 3 of it.
 pub(super) fn rocky(base: FakeCatalog) -> FakeCatalog {
     FakeCatalog {
-        asteroid_types: vec![nova_sim::AsteroidTypeRecord {
+        asteroid_types: vec![nova_sim_frame::catalog::AsteroidTypeRecord {
             kind: 0,
             strength: 50,
             spin_rate: 100,
             frames: 36,
             frame_size: Some((40, 40)),
-            ..nova_sim::AsteroidTypeRecord::default()
+            ..nova_sim_frame::catalog::AsteroidTypeRecord::default()
         }],
-        asteroid_fields: vec![nova_sim::AsteroidFieldRecord {
+        asteroid_fields: vec![nova_sim_frame::catalog::AsteroidFieldRecord {
             system: SystemId(130),
             count: 3,
             types: 0x0001,

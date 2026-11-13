@@ -32,7 +32,7 @@ fn anchor_for(source: RuleSource, view: (f32, f32)) -> Point {
 /// by `rules`.
 fn sized_in(
     catalog: FakeCatalog,
-    ships: Vec<nova_sim::flight_frame::FrameShip>,
+    ships: Vec<nova_sim_frame::flight_frame::FrameShip>,
     rules: &Rulebook,
     view: (f32, f32),
 ) -> Faked {
@@ -163,13 +163,13 @@ fn a_click_where_a_ship_is_drawn_sends_its_box_there_and_its_brackets_frame_it()
                 at(-300.0, 0.0),
                 "where it is drawn"
             );
-            let hud = nova_sim::flight_frame::FrameHud {
-                target_brackets: Some(nova_sim::brackets::TargetBrackets {
+            let hud = nova_sim_frame::flight_frame::FrameHud {
+                target_brackets: Some(nova_sim_frame::brackets::TargetBrackets {
                     npc: NpcId(0),
                     expand: 0.0,
                     standing: brackets::Standing::Neutral,
                 }),
-                ..nova_sim::flight_frame::FrameHud::default()
+                ..nova_sim_frame::flight_frame::FrameHud::default()
             };
             let corners: Vec<Point> = world_list_with(&mut view, &hud)
                 .iter()

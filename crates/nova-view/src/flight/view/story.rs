@@ -9,12 +9,12 @@
 //! `session/bar_story.rs`, `session/storylines.rs`); the router words and
 //! shows them.
 //!
-//! [`FlightEvent::RoomRefused`]: nova_sim::flight_frame::FlightEvent::RoomRefused
+//! [`FlightEvent::RoomRefused`]: nova_sim_frame::flight_frame::FlightEvent::RoomRefused
 
-use nova_sim::flight_frame::{
+use nova_sim_frame::flight_frame::{
     BarStory, FlightCommand, Names, RoomRefusal, ScreenAnswer, ScreenAsk,
 };
-use nova_sim::storylines::news::HeardNews;
+use nova_sim_frame::storylines::news::HeardNews;
 
 use crate::flight::sim_port::FlightSim;
 

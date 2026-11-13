@@ -41,7 +41,7 @@ pub(super) fn shows(view: &mut Faked, frame: FlightFrame) {
 }
 
 /// The world `view` draws, its brackets, Red Alert and escorts its
-/// frame's ([`FlightFrame::hud`](nova_sim::flight_frame::FlightFrame::hud)).
+/// frame's ([`FlightFrame::hud`](nova_sim_frame::flight_frame::FlightFrame::hud)).
 pub(super) fn world_list(view: &Faked) -> DrawList {
     let mut list = DrawList::new();
     assert!(view.draw_world_scene(&mut list), "a scene to draw");
@@ -52,7 +52,7 @@ pub(super) fn world_list(view: &Faked) -> DrawList {
 /// brackets, icon and escort rows from now on.
 pub(super) fn world_list_with(
     view: &mut Faked,
-    hud: &nova_sim::flight_frame::FrameHud,
+    hud: &nova_sim_frame::flight_frame::FrameHud,
 ) -> DrawList {
     view.sim.frame_mut().hud = hud.clone();
     view.refresh_frame();
@@ -84,8 +84,8 @@ pub(super) fn beam(
     weapon: WeaponId,
     start: Vec2,
     end: Vec2,
-) -> nova_sim::flight_frame::FrameBeam {
-    nova_sim::flight_frame::FrameBeam {
+) -> nova_sim_frame::flight_frame::FrameBeam {
+    nova_sim_frame::flight_frame::FrameBeam {
         firer,
         start,
         end,
@@ -101,9 +101,9 @@ pub(super) fn shot_of(
     weapon: WeaponId,
     at: Vec2,
     heading: f32,
-) -> nova_sim::flight_frame::FrameShot {
-    nova_sim::flight_frame::FrameShot {
-        id: nova_sim::combat::projectile::ShotId(id),
+) -> nova_sim_frame::flight_frame::FrameShot {
+    nova_sim_frame::flight_frame::FrameShot {
+        id: nova_sim_frame::combat::projectile::ShotId(id),
         weapon,
         position: at,
         heading,
@@ -112,8 +112,8 @@ pub(super) fn shot_of(
 }
 
 /// An asteroid of kind 0 at `at`, at rest, on its first frame.
-pub(super) fn asteroid_at(at: Vec2) -> nova_sim::flight_frame::FrameAsteroid {
-    nova_sim::flight_frame::FrameAsteroid {
+pub(super) fn asteroid_at(at: Vec2) -> nova_sim_frame::flight_frame::FrameAsteroid {
+    nova_sim_frame::flight_frame::FrameAsteroid {
         position: at,
         velocity: Vec2::ZERO,
         frame: 0,
@@ -123,8 +123,8 @@ pub(super) fn asteroid_at(at: Vec2) -> nova_sim::flight_frame::FrameAsteroid {
 
 /// A cargo box of graphic 0 at `at`, at rest, unfaded, on its first
 /// frame.
-pub(super) fn box_at(at: Vec2) -> nova_sim::flight_frame::FrameBox {
-    nova_sim::flight_frame::FrameBox {
+pub(super) fn box_at(at: Vec2) -> nova_sim_frame::flight_frame::FrameBox {
+    nova_sim_frame::flight_frame::FrameBox {
         position: at,
         velocity: Vec2::ZERO,
         frame: 0,
@@ -135,14 +135,14 @@ pub(super) fn box_at(at: Vec2) -> nova_sim::flight_frame::FrameBox {
 
 /// A HUD with NPC `id` targeted, its brackets settled round it as a
 /// neutral's.
-pub(super) fn targeting(id: u32) -> nova_sim::flight_frame::FrameHud {
-    nova_sim::flight_frame::FrameHud {
-        target_brackets: Some(nova_sim::brackets::TargetBrackets {
+pub(super) fn targeting(id: u32) -> nova_sim_frame::flight_frame::FrameHud {
+    nova_sim_frame::flight_frame::FrameHud {
+        target_brackets: Some(nova_sim_frame::brackets::TargetBrackets {
             npc: NpcId(id),
             expand: 0.0,
             standing: crate::flight::brackets::Standing::Neutral,
         }),
-        ..nova_sim::flight_frame::FrameHud::default()
+        ..nova_sim_frame::flight_frame::FrameHud::default()
     }
 }
 

@@ -87,9 +87,9 @@
 //! after itself ([`solid_runs`](super::solid_runs)), as the original's
 //! blits fill a run over every blend and colorize.
 
-use nova_sim::combat::ship_frames::{Alt, Drawn, FrameSpec};
-use nova_sim::traffic::npc::NpcId;
-use nova_sim::{HashedRolls, Rgb15};
+use nova_sim_frame::combat::ship_frames::{Alt, Drawn, FrameSpec};
+use nova_sim_frame::traffic::npc::NpcId;
+use nova_sim_frame::{HashedRolls, Rgb15};
 
 use super::catalog::{LayerSheet, ShipSheet};
 use super::cloak_fade::CloakDraw;
@@ -439,7 +439,7 @@ mod tests {
 
     #[test]
     fn each_npcs_glow_rolls_on_its_own_seed() {
-        use nova_sim::BlinkChance;
+        use nova_sim_base::BlinkChance;
         let of = |rolls: &HashedRolls| (0..8).map(|c| rolls.roll(c, 100)).collect::<Vec<_>>();
         assert_ne!(of(&npc_glow_rolls(NpcId(0))), of(&npc_glow_rolls(NpcId(1))));
         assert_eq!(
@@ -453,7 +453,7 @@ mod tests {
     mod placement {
         use std::num::NonZeroU16;
 
-        use nova_sim::combat::ship_frames::{Alt, Drawn, FrameSpec};
+        use nova_sim_frame::combat::ship_frames::{Alt, Drawn, FrameSpec};
 
         use super::super::*;
         use crate::DrawCommand;
@@ -584,9 +584,9 @@ mod tests {
     mod eight_bit {
         use std::num::NonZeroU16;
 
-        use nova_sim::ShipRef;
-        use nova_sim::cloak::CloakShown;
-        use nova_sim::combat::ship_frames::{Alt, Drawn, FrameSpec};
+        use nova_sim_frame::ShipRef;
+        use nova_sim_frame::cloak::CloakShown;
+        use nova_sim_frame::combat::ship_frames::{Alt, Drawn, FrameSpec};
 
         use super::super::*;
         use crate::flight::cloak_fade::CloakDraw;
@@ -917,7 +917,7 @@ mod tests {
     mod at_the_worlds_edge {
         use std::num::NonZeroU16;
 
-        use nova_sim::combat::ship_frames::{Alt, Drawn, FrameSpec};
+        use nova_sim_frame::combat::ship_frames::{Alt, Drawn, FrameSpec};
 
         use super::super::*;
         use crate::ImageKey;

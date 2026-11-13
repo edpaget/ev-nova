@@ -4,6 +4,8 @@
 use std::rc::Rc;
 
 use nova_data::GameData;
+use nova_flight::SessionView;
+use nova_flight::{Collaborators, FlightStart, SessionFlight, open_flight};
 use nova_sim::KeptBerths;
 use nova_sim::ship_layer::SlotSprites;
 use nova_sim::story::sprite_pool::StellarSpritePool;
@@ -14,10 +16,7 @@ use nova_sim::{
     RuleKey, RuleSource, Rulebook, SessionSetup,
 };
 use nova_view::devtools::FlightDesk;
-use nova_view::flight::{
-    Collaborators, FlightOverlays, FlightStart, FlightView, SessionFlight, SharedChance,
-    ShipSprites, open_flight,
-};
+use nova_view::flight::{FlightOverlays, FlightView, SharedChance, ShipSprites};
 use nova_view::galaxy::GalaxyMap;
 use nova_view::galaxy::find::FIND_DIALOG;
 use nova_view::keymap::{Command, UiCommand, contexts};
@@ -50,14 +49,19 @@ use super::{ABOUT_TEXT, AppScreen, CLASSIC_VIEW, Dialogs, ENTERED, LANDED, MENU,
 impl AppScreen {
     /// Every screen over `data`, showing the ship browser, reading the
     /// keys through one handle on the original's default bindings
-    /// ([`AppScreen::with_bindings`] gives it another).
+    /// ([`AppScreen::with_bindings`] gives it another). The galaxy viewer
+    /// is handed a fresh pilot's gate lanes over `data`
+    /// (`nova_sim::viewer_lanes::gate_links`), which it draws by the rules
+    /// ([`Navigator::with_gate_links`]).
     #[must_use]
     pub fn new(data: Rc<GameData>) -> Self {
         let bindings = SharedBindings::default();
         Self {
             side: Side::Ships,
             return_to: Side::Ships,
-            galaxy: Navigator::new(Rc::clone(&data)).with_bindings(bindings.clone()),
+            galaxy: Navigator::new(Rc::clone(&data))
+                .with_gate_links(nova_sim::viewer_lanes::gate_links(&*data))
+                .with_bindings(bindings.clone()),
             ships: ShipBrowser::new(Rc::clone(&data)).with_bindings(bindings.clone()),
             data,
             flight: None,
@@ -477,7 +481,7 @@ impl AppScreen {
         &self,
         start: FlightStart,
         last_refresh: Option<LastRefresh>,
-    ) -> FlightView<Rc<GameData>> {
+    ) -> SessionView<Rc<GameData>> {
         let mut flight = self.configured_flight(start, last_refresh);
         flight.set_view_size(self.widened);
         nova_view::Screen::input(&mut flight, &Input::Surroundings(self.surroundings));
@@ -528,7 +532,7 @@ impl AppScreen {
         &self,
         start: FlightStart,
         last_refresh: Option<LastRefresh>,
-    ) -> FlightView<Rc<GameData>> {
+    ) -> SessionView<Rc<GameData>> {
         let launch = self.flight_launch_prefs();
         let flight = open_flight(
             Rc::clone(&self.data),
@@ -1019,21 +1023,21 @@ impl AppScreen {
 
     /// The flight screen, shown or not, once flight has been entered.
     #[must_use]
-    pub fn flight_view(&self) -> Option<&FlightView<Rc<GameData>>> {
+    pub fn flight_view(&self) -> Option<&SessionView<Rc<GameData>>> {
         self.flight.as_ref()
     }
 
     /// The flight screen to ask, shown or not, once flight has been
-    /// entered: for the integration tests' harnesses, as a screen's ask of
+    /// entered: for nova-it's integration tests' harnesses, as a screen's ask of
     /// the flight takes `&mut` ([`FlightView::hailing`]).
     #[cfg(any(test, feature = "fixture"))]
     #[must_use]
-    pub fn flight_view_mut(&mut self) -> Option<&mut FlightView<Rc<GameData>>> {
+    pub fn flight_view_mut(&mut self) -> Option<&mut SessionView<Rc<GameData>>> {
         self.flight.as_mut()
     }
 
     /// Whether flight holds input its next frames will act on
-    /// ([`FlightView::input_queued`]): for the integration tests'
+    /// ([`FlightView::input_queued`]): for nova-it's integration tests'
     /// harnesses, to draw frames until the screen has taken its input
     /// rather than count them. Only while flight is what the router ticks,
     /// shown with nothing over it: a flight hidden, or paused under a
@@ -1049,7 +1053,7 @@ impl AppScreen {
     /// The game in progress the main menu holds, not flying, if any: a
     /// pilot created or opened there, or back from play.
     #[must_use]
-    pub fn game_in_progress(&self) -> Option<&FlightView<Rc<GameData>>> {
+    pub fn game_in_progress(&self) -> Option<&SessionView<Rc<GameData>>> {
         self.game.as_ref()
     }
 
@@ -1101,6 +1105,6 @@ impl AppScreen {
 /// `flight`'s course map, as the map reads it
 /// ([`GalaxyMap::means`](nova_view::galaxy::GalaxyMap::means)): the map
 /// holds the shared UI context, whose Back closes it.
-pub(super) fn map_back(flight: &FlightView<Rc<GameData>>, input: &Input) -> bool {
+pub(super) fn map_back(flight: &SessionView<Rc<GameData>>, input: &Input) -> bool {
     flight.course_map().means(input) == Some(Command::Ui(UiCommand::Back))
 }

@@ -1,7 +1,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::{RuleKey, RuleSource, Rulebook};
+use nova_sim_frame::{RuleKey, RuleSource, Rulebook};
 
 use super::*;
 use crate::draw::DrawCommand;

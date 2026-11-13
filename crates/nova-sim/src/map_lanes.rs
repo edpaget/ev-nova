@@ -39,32 +39,10 @@
 //! [`MapDrawing::lanes`]: crate::galaxy_map::MapDrawing::lanes
 //! [`MapDrawing::closed_lanes`]: crate::galaxy_map::MapDrawing::closed_lanes
 
-use crate::catalog::{GateStability, SystemId};
+pub use nova_sim_frame::map_lanes::*;
+
+use crate::catalog::SystemId;
 use crate::story::OverlaidGalaxy;
-
-/// The way back along a drawn link, `to` → `from`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Back {
-    /// The far system doesn't list the link back: one-way, arrowed.
-    OneWay,
-    /// It does: the way back's stability, or `None` where no gate serves
-    /// it, drawn grey.
-    Way(Option<GateStability>),
-}
-
-/// How one drawn link looks (see the module docs).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LaneLook {
-    /// The system the link is drawn from.
-    pub from: SystemId,
-    /// The system it is drawn to.
-    pub to: SystemId,
-    /// The way out, `from` → `to`: its lane's stability, or `None` where
-    /// no gate serves it, drawn grey.
-    pub out: Option<GateStability>,
-    /// The way back.
-    pub back: Back,
-}
 
 /// The look of the link `galaxy`'s map draws from `from` to `to` (see the
 /// module docs).
@@ -88,7 +66,7 @@ pub fn lane_look(galaxy: &OverlaidGalaxy, from: SystemId, to: SystemId) -> LaneL
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::{GateSite, ListedStellar, StellarId};
+    use crate::catalog::{GateSite, GateStability, ListedStellar, StellarId};
     use crate::gate::HYPERGATE;
     use crate::geometry::Vec2;
     use crate::story::{GalaxyOverlay, LinkSource};

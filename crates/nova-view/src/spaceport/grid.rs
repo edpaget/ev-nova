@@ -17,7 +17,7 @@
 //! the selected cell when the selection moves. The
 //! arrow keys move the selection as
 //! [`grid_arrows`](super::grid_arrows) decides, by
-//! [`RuleKey::GridArrows`](nova_sim::RuleKey::GridArrows).
+//! [`RuleKey::GridArrows`](nova_sim_frame::RuleKey::GridArrows).
 //!
 //! A cell shows its item's picture, stretched to [`ICON_SIZE`] square,
 //! centred across the cell near its top; its `ShortName` centred across
@@ -354,7 +354,7 @@ pub enum Scrolled {
 /// By default cell 0 is selected; [`CellGrid::clear`] leaves no cell
 /// highlighted, as `_ShipyardFilter` sets its cell to -1 (the shipyard and
 /// the hire screen under
-/// [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection)'s engine
+/// [`RuleKey::GridSelection`](nova_sim_frame::RuleKey::GridSelection)'s engine
 /// reading), until a cell is selected or an arrow picks one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CellGrid {
@@ -451,7 +451,7 @@ impl CellGrid {
 
     /// Moves the selection for an arrow `command` pressed, among `count`
     /// cells, by `moves`, the reading of
-    /// [`RuleKey::GridArrows`](nova_sim::RuleKey::GridArrows), and says
+    /// [`RuleKey::GridArrows`](nova_sim_frame::RuleKey::GridArrows), and says
     /// whether it was an arrow. Page Up and Page Down move as Up and Down.
     /// With no cell highlighted ([`CellGrid::clear`]), an arrow highlights
     /// one without scrolling: Right and Down the first cell shown, and Left

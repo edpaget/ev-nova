@@ -110,7 +110,7 @@
 
 use std::time::Duration;
 
-use nova_sim::flight_frame::{FlightFrame, PassExit, PassReport, RaisedLine, StepRun};
+use nova_sim_frame::flight_frame::{FlightFrame, PassExit, PassReport, RaisedLine, StepRun};
 
 use crate::flight::effects::Breakups;
 use crate::flight::sim_port::FlightSim;
@@ -308,7 +308,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     pub(super) fn run_held_escort_menu(
         &mut self,
         at: Duration,
-        menu: Option<nova_sim::flight_frame::EscortMenuPass>,
+        menu: Option<nova_sim_frame::flight_frame::EscortMenuPass>,
     ) {
         if self.escort_menu.run_held_pass(at, menu) {
             self.shut_escort_menu_by_key();

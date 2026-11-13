@@ -4,7 +4,7 @@
 //!
 //! - A shot is a frame of its weapon's sheet, `spïn` 3000 + `Graphic`: the
 //!   one the simulation gives
-//!   ([`FrameShot::frame`](nova_sim::flight_frame::FrameShot::frame)),
+//!   ([`FrameShot::frame`](nova_sim_frame::flight_frame::FrameShot::frame)),
 //!   which the contact passes touch by. The simulation reads the same
 //!   `spïn`, so it gives none only where the view has no sheet either; a
 //!   sheet the view read anyway shows its first frame.
@@ -40,9 +40,9 @@ use crate::box_cut::BoxCut;
 use crate::draw::{crossed_box, lights_tint};
 use crate::system::scene::PLACEHOLDER;
 use crate::{Blend, Color, Colorize, DrawList, Point};
-use nova_sim::combat::projectile::ShotId;
-use nova_sim::sprite_layer::SpriteLayer;
-use nova_sim::{Chance, RuleSource};
+use nova_sim_frame::combat::projectile::ShotId;
+use nova_sim_frame::sprite_layer::SpriteLayer;
+use nova_sim_frame::{Chance, RuleSource};
 
 /// `Flags`: the firing sound loops while the beam lasts.
 pub const LOOPED_SOUND: u16 = 0x0010;
@@ -67,13 +67,13 @@ const CORONA_END: i32 = 2;
 
 /// The lines that draw a beam from `start` to `end` of a weapon that
 /// looks as `look` says, `fade` ticks into its fade
-/// ([`Beam::fade`](nova_sim::combat::beam::Beam::fade)), each with its
+/// (`nova_sim::combat::beam::Beam::fade`), each with its
 /// colour, in drawing order: the corona, then the core out to in. The
 /// corona falls off by `Falloff` + `fade` and is drawn when that is above
 /// none (`_DrawBeam` @0xc3e00), so a fading beam grows one. A lightning
 /// beam (`LiDensity` above none) is its zig-zag instead
 /// ([`lightning::zig_zag`]), drawn on the `zig_zag` rolls by its rule's
-/// reading of [`RuleKey::LightningZigZag`](nova_sim::RuleKey::LightningZigZag),
+/// reading of [`RuleKey::LightningZigZag`](nova_sim_frame::RuleKey::LightningZigZag),
 /// at (32 − `fade`)/32 (`_BeamDrawCallback` @0x37c75-0x37d62).
 #[must_use]
 pub fn beam_strokes(
@@ -139,19 +139,19 @@ pub struct ShotShown {
     /// Where its centre is drawn, on screen.
     pub at: Point,
     /// Its life after its last visit
-    /// ([`FrameShot::life`](nova_sim::flight_frame::FrameShot::life)),
+    /// ([`FrameShot::life`](nova_sim_frame::flight_frame::FrameShot::life)),
     /// which its fade-out window reads.
     pub life: f32,
     /// The fade its last visit read
-    /// ([`FrameShot::fade`](nova_sim::flight_frame::FrameShot::fade)).
+    /// ([`FrameShot::fade`](nova_sim_frame::flight_frame::FrameShot::fade)).
     pub fade: f32,
     /// Its weapon.
     pub weapon: WeaponId,
     /// The layer it is drawn in among the ships
-    /// ([`nova_sim::sprite_layer`]).
+    /// ([`nova_sim_frame::sprite_layer`]).
     pub layer: SpriteLayer,
     /// The frame of its sheet it shows, as the simulation gives it
-    /// ([`FrameShot::frame`](nova_sim::flight_frame::FrameShot::frame));
+    /// ([`FrameShot::frame`](nova_sim_frame::flight_frame::FrameShot::frame));
     /// none where the simulation read no sheet for it.
     pub frame: Option<u16>,
     /// Its murk's colorize ([`SeenMurk::at`](super::murk::SeenMurk::at)).
@@ -159,7 +159,7 @@ pub struct ShotShown {
 }
 
 /// Draws each of `shots` in turn ([`draw_shot`]), by `fade`'s reading
-/// of [`RuleKey::TranslucentShotFade`](nova_sim::RuleKey::TranslucentShotFade).
+/// of [`RuleKey::TranslucentShotFade`](nova_sim_frame::RuleKey::TranslucentShotFade).
 pub fn draw_shots(list: &mut DrawList, shots: &[ShotShown], looks: &Looks, fade: RuleSource) {
     for shot in shots {
         draw_shot(list, shot, looks, fade);
@@ -170,7 +170,7 @@ pub fn draw_shots(list: &mut DrawList, shots: &[ShotShown], looks: &Looks, fade:
 /// the first where it gives none, shaded as it
 /// fades by the fade and life the frame carries ([`shot_shade`], by
 /// `fade`'s reading of
-/// [`RuleKey::TranslucentShotFade`](nova_sim::RuleKey::TranslucentShotFade)):
+/// [`RuleKey::TranslucentShotFade`](nova_sim_frame::RuleKey::TranslucentShotFade)):
 /// opaque; translucent by t, crossfaded by OR,
 /// [`Blend::OrCrossfade`](crate::draw::Blend::OrCrossfade) at alpha
 /// (32 − t)/32 ([`see_through`]); or additive,
@@ -228,7 +228,7 @@ pub struct BeamShown {
     /// Its weapon.
     pub weapon: WeaponId,
     /// The ticks it has faded at the end of its life, as the session
-    /// counts them ([`Beam::fade`](nova_sim::combat::beam::Beam::fade)).
+    /// counts them (`nova_sim::combat::beam::Beam::fade`).
     pub fade: u32,
 }
 
@@ -236,13 +236,13 @@ pub struct BeamShown {
 /// the others, as [`beam_strokes`], the `n`-th's zig-zag, if it is
 /// lightning, on the step's rolls for its `n`-th beam
 /// ([`StepRolls::for_beam`]) by `rule`'s reading of
-/// [`RuleKey::LightningZigZag`](nova_sim::RuleKey::LightningZigZag); a
+/// [`RuleKey::LightningZigZag`](nova_sim_frame::RuleKey::LightningZigZag); a
 /// beam whose look was not read is a plain line in [`Color::ERROR`], over
 /// the ships. The world draws the beams under the ships just over the
 /// stellars, as the stellar layer's `_BeamDrawOffscreenCallback` does,
 /// and the others over every layer, the explosions included, as the
 /// target layer's `_BeamDrawCallback` does
-/// ([`WorldPass`](nova_sim::sprite_layer::WorldPass)).
+/// ([`WorldPass`](nova_sim_frame::sprite_layer::WorldPass)).
 pub fn draw_beams(
     list: &mut DrawList,
     beams: &[BeamShown],
@@ -279,7 +279,7 @@ mod tests {
     use crate::ImageKey;
     use crate::box_cut::{box_of, drawn_cuts};
     use crate::flight::catalog::EffectSheet;
-    use nova_sim::combat::shot_fade::at_full_gain;
+    use nova_sim_frame::combat::shot_fade::at_full_gain;
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)

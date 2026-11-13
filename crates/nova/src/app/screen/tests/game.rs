@@ -5,6 +5,7 @@
 use super::menu::rewrite_save;
 use super::*;
 use nova_data::records::nebula::Nebula;
+use nova_flight::SessionView;
 use nova_sim::mission::aux_ships::AuxShips;
 use nova_view::menu::PanelPilot;
 use nova_view::ui::note::VERSION_NOTE;
@@ -18,7 +19,7 @@ fn holding_menu(store: &MemoryPilots) -> AppScreen {
 }
 
 /// The game held, which must be there.
-pub(super) fn game(screen: &AppScreen) -> &FlightView<Rc<GameData>> {
+pub(super) fn game(screen: &AppScreen) -> &SessionView<Rc<GameData>> {
     screen.game_in_progress().expect("a game held")
 }
 
@@ -305,7 +306,7 @@ pub(super) fn held_aux(screen: &AppScreen) -> AuxShips {
         .aux
 }
 
-pub(super) fn nebula_explored(flight: &FlightView<Rc<GameData>>) -> bool {
+pub(super) fn nebula_explored(flight: &SessionView<Rc<GameData>>) -> bool {
     flight
         .session()
         .expect("a session")

@@ -4,8 +4,8 @@
 
 use super::faked_shops::docked;
 use super::*;
-use nova_sim::ConversationPage;
-use nova_sim::flight_frame::Converse;
+use nova_sim_frame::ConversationPage;
+use nova_sim_frame::flight_frame::Converse;
 
 fn page(lines: &[&str], choices: &[&str]) -> ConversationPage {
     ConversationPage {

@@ -7,10 +7,10 @@
 //! `nova_sim::Session::haggle`, `nova_sim::Session::press_planet_comm`,
 //! `nova_sim::Session::haggle_bribe`).
 
-use nova_sim::escort_dialog::{EscortButton, EscortDialogView};
-use nova_sim::flight_frame::{Answer, FadedPress, FlightCommand, ScreenAnswer, ScreenAsk};
-use nova_sim::planet_comm::{PlanetCommItem, PlanetCommView};
-use nova_sim::{Haggle, HailView, Hailed, VenueOffer};
+use nova_sim_frame::escort_dialog::{EscortButton, EscortDialogView};
+use nova_sim_frame::flight_frame::{Answer, FadedPress, FlightCommand, ScreenAnswer, ScreenAsk};
+use nova_sim_frame::planet_comm::{PlanetCommItem, PlanetCommView};
+use nova_sim_frame::{Haggle, HailView, Hailed, VenueOffer};
 
 use crate::flight::sim_port::FlightSim;
 

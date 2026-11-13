@@ -36,7 +36,7 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::{DescMovie, MapMarks, MissionInfo, MissionShown};
+use nova_sim_frame::{DescMovie, MapMarks, MissionInfo, MissionShown};
 
 use crate::draw::DrawList;
 #[cfg(doc)]
@@ -814,7 +814,9 @@ pub(crate) use tests::pad_probe;
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use nova_sim::{InfoRow, MapMarks, MissionId, MissionText, MissionTextKind};
+    use nova_sim_frame::mission_screens::MissionText;
+    use nova_sim_frame::mission_screens::MissionTextKind;
+    use nova_sim_frame::{InfoRow, MapMarks, MissionId};
 
     use super::*;
     use crate::color::Color;
@@ -831,7 +833,7 @@ mod tests {
     use crate::ui::desc::{DONE_ITEM, SCROLL_DOWN_ITEM};
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
     use crate::ui::row_list::RowList;
-    use nova_sim::DescMovie;
+    use nova_sim_frame::DescMovie;
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds {
         Bounds::at(Point::new(x, y), w, h)
@@ -1092,7 +1094,7 @@ mod tests {
     fn the_briefings_map_key_asks_for_its_marked_map_and_another_texts_none() {
         let m = crate::Key::KeyM;
         let marks = MapMarks {
-            green: Some(nova_sim::SystemId(131)),
+            green: Some(nova_sim_frame::SystemId(131)),
             multi_arrows: true,
         };
         let mut dialogs = dialogs();

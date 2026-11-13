@@ -51,7 +51,6 @@ mod tests {
     #[test]
     fn a_hull_with_no_amount_costs_one_jumps_worth() {
         assert_eq!(fare(&hull(None)), JUMP_FUEL);
-        assert_eq!(JUMP_FUEL, 100.0);
     }
 
     #[test]

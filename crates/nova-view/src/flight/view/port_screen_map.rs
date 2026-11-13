@@ -17,7 +17,7 @@
 //!
 //! It is flight's course map over the spaceport, in
 //! [`MapMode::Course`](crate::galaxy::MapMode::Course), unmarked
-//! ([`MapMarks::NONE`](nova_sim::MapMarks::NONE)), and its close is the
+//! ([`MapMarks::NONE`](nova_sim_frame::MapMarks::NONE)), and its close is the
 //! docked [`FlightView::close_map`]: the whole bar redrawn, no cue, and
 //! the selection the map opened with put back. Neither the opening nor
 //! the close beeps: no caller's map branch plays a sound
@@ -34,7 +34,7 @@
 //! `_mapDialog` guards (@0x4f17a, @0x58103, @0x608fd, @0x51118), which
 //! nothing can trip while the map's own filter runs.
 
-use nova_sim::flight_frame::FlightCommand;
+use nova_sim_frame::flight_frame::FlightCommand;
 
 use super::FlightView;
 use super::dialog_map::{MapOpened, MapOpening};
@@ -70,10 +70,10 @@ pub enum PortScreen {
 /// The command that restores a port screen's map after its close, for the
 /// view to send: the exchange's and the outfitter's put back their
 /// open-time save ([`FlightCommand::PutBackPortNav`],
-/// [`Session::put_back_port_nav`](nova_sim::Session::put_back_port_nav)),
+/// `nova_sim::Session::put_back_port_nav`),
 /// and the others the nav as the map `opened` with
 /// ([`FlightCommand::RestoreMapNav`],
-/// [`Session::restore_map_nav`](nova_sim::Session::restore_map_nav)), none
+/// `nova_sim::Session::restore_map_nav`), none
 /// when it saved none.
 pub(super) fn restore_command(screen: PortScreen, opened: &MapOpened) -> Option<FlightCommand> {
     match screen {

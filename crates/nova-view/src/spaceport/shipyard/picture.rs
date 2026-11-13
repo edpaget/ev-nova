@@ -39,7 +39,7 @@ use crate::outline::{self, Outline};
 use crate::spaceport::grid::{self, CellGrid, GridColors};
 use crate::spaceport::ship_movie::ShipMovie;
 use crate::text::TextMetrics;
-use nova_sim::ShipId;
+use nova_sim_frame::ShipId;
 
 /// What a ship class shows, its movie aside.
 #[derive(Clone, Debug, PartialEq)]

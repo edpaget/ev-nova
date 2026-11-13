@@ -12,7 +12,7 @@ pub(in crate::session) mod port;
 use super::Session;
 use super::apply::ApplyCollaborators;
 use crate::flight_frame::{FloatingMap, MapOpen, MapScreen, MarksFrom, ScreenAnswer, ScreenAsk};
-use crate::galaxy_map::{GalaxyShown, MapMarks};
+use crate::galaxy_map::{GalaxyShown, GalaxyShownOf, MapMarks};
 
 impl Session {
     /// Answers the screen's `ask`, handed `collab`, changing nothing a

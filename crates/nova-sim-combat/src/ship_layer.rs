@@ -106,31 +106,7 @@ use crate::combat::hull::Condition;
 use crate::combat::shot_slots::ShotSlots;
 use crate::geometry::Vec2;
 
-/// The layer a ship is drawn in, bottom to top (see the module docs).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ShipLayer {
-    /// A disabled or breaking-up ship: `0x3b53a0`, the bottom ship layer.
-    Disabled,
-    /// A ship the player leads: `0x3b52a8`, the escorts' layer.
-    Led,
-    /// Every other ship, and the player: `0x3b541c`, the top ship layer.
-    Ships,
-}
-
-impl ShipLayer {
-    /// The layer of a ship `disabled` or not, `led` by the player or not:
-    /// being disabled wins, as @0x2bd24 asks it first.
-    #[must_use]
-    pub fn of(disabled: bool, led: bool) -> Self {
-        if disabled {
-            Self::Disabled
-        } else if led {
-            Self::Led
-        } else {
-            Self::Ships
-        }
-    }
-}
+pub use nova_sim_state::shown::ship_layer::ShipLayer;
 
 /// `ships` in the order they are drawn, bottom first: by layer, each
 /// layer keeping the order it is given in.
@@ -323,16 +299,6 @@ pub fn disabled(condition: Condition, defends: bool) -> bool {
 mod tests {
     use super::*;
     use crate::combat::NpcId;
-
-    #[test]
-    fn a_disabled_ship_is_in_the_bottom_layer_even_when_led() {
-        assert_eq!(ShipLayer::of(true, true), ShipLayer::Disabled);
-        assert_eq!(ShipLayer::of(true, false), ShipLayer::Disabled);
-        assert_eq!(ShipLayer::of(false, true), ShipLayer::Led);
-        assert_eq!(ShipLayer::of(false, false), ShipLayer::Ships);
-        assert!(ShipLayer::Disabled < ShipLayer::Led);
-        assert!(ShipLayer::Led < ShipLayer::Ships);
-    }
 
     #[test]
     fn the_draw_order_keeps_each_layers_own_order() {

@@ -9,9 +9,9 @@
 //! ([`ScreenAsk::PilotPanel`]), kept until the flight next changes
 //! ([`KeptPanel`]).
 
-use nova_sim::PlayerCommand;
-use nova_sim::flight_frame::{Answer, FadedPress, FlightCommand, ScreenAnswer, ScreenAsk};
-use nova_sim::{PlayerInfo, pilot_panel::PilotPanel};
+use nova_sim_frame::PlayerCommand;
+use nova_sim_frame::flight_frame::{Answer, FadedPress, FlightCommand, ScreenAnswer, ScreenAsk};
+use nova_sim_frame::{PlayerInfo, pilot_panel::PilotPanel};
 
 use crate::ScreenAction;
 use crate::flight::sim_port::FlightSim;

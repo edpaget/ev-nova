@@ -160,6 +160,8 @@
 //! counter garbles a name past 255 characters, reachable only by a `*`
 //! in a long name; it is not reproduced, and the name has no limit.
 
+pub use nova_sim_frame::ship_change::InterfaceLoad;
+
 use crate::pilot::Pilot;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -167,16 +169,14 @@ use std::rc::Rc;
 
 use super::hire::Shared;
 use super::{Outbox, PlayerShip, ReservePolicy, Session, SessionEvent, Setup};
-use crate::catalog::{CommCatalog, GovtId, OutfitId, ShipId, ShipRecord};
+use crate::catalog::{CommCatalog, OutfitId, ShipId, ShipRecord};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::armament;
 use crate::combat::exits::ExitCursors;
 use crate::combat::hull::{DisableRule, NovaDisable};
-use crate::navigation::NavMode;
 use crate::outfitter::{Hardpoints, OutfitFlags};
 use crate::pilot;
-use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::ship_change::{Fold, Limits, OutfitCarry, SET_OP_PERSISTENT, carried_outfits};
 use crate::strings::PatchedStrings;
@@ -184,33 +184,6 @@ use crate::strings::PatchedStrings;
 /// What the armour gains a step while the ship is disabled after a
 /// change (the constant @0xdd068).
 const ARMOR_BUMP: f32 = 1.0;
-
-/// A `C`, `E` or `H` run while docked, as the status bar sees it: the
-/// original's `_LoadIntfResource` call at the operator (@0x156c7, after
-/// the armour bump @0x15677-0x156c5). It asks for the `ïntf` of
-/// `government` (as [`Session::interface_government`] reads it), and
-/// when that is not the one loaded (`_currentIntf`, @0x73663-0x73672) it
-/// loads it and redraws the whole bar (`_RedrawStatus(1)`
-/// @0x739b6-0x739bd), drawing `nav` and `reserves` as they stood at the
-/// operator. Noted by `Session::change_ship`, taken by
-/// [`Session::take_interface_loads`], with how many mission texts had been
-/// queued by then, so that a view can order the redraws against the texts
-/// a script queues around them ([`TextBar`](super::TextBar)).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct InterfaceLoad {
-    /// The government whose `Interface` the operator's load asks for.
-    pub government: Option<GovtId>,
-    /// The nav mode and selection at the operator.
-    pub nav: NavMode,
-    /// The shield, armour and fuel at the operator, after its armour
-    /// bump.
-    pub reserves: Reserves,
-    /// How many mission texts had been queued at the operator
-    /// ([`Session::texts_queued`]): it ran after each text whose
-    /// [`TextBar::texts`](super::TextBar::texts) is at most this, and
-    /// before the others.
-    pub texts: u64,
-}
 
 /// The disputed rules of the ship-change set operators that the session
 /// follows, projected from its rule set (see [`Session::with_rules`]):

@@ -52,7 +52,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::gamble::{Bet, RACERS};
+use nova_sim_frame::gamble::{Bet, RACERS};
 
 use super::layout::DONE_LABEL;
 use super::quantity_ask::{Purpose, QuantityAsk};

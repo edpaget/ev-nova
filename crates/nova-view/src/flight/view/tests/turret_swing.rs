@@ -10,11 +10,11 @@
 //! pass reported holds the very ships the frame shown holds, NPC 0 of
 //! ship 130 at 90°, which the table gives a turret.
 
-use nova_sim::cloak::CloakShown;
-use nova_sim::combat::hull_turn::HullTurn;
-use nova_sim::flight_frame::{FlightEvent, GateFade, PassReport, StepReport, StepRun};
-use nova_sim::landing::LandOutcome;
-use nova_sim::{LandPress, SessionEvent};
+use nova_sim_frame::cloak::CloakShown;
+use nova_sim_frame::combat::hull_turn::HullTurn;
+use nova_sim_frame::flight_frame::{FlightEvent, GateFade, PassReport, StepReport, StepRun};
+use nova_sim_frame::landing::LandOutcome;
+use nova_sim_frame::{LandPress, SessionEvent};
 
 use super::faked_world::world_list;
 use super::ship_models::{

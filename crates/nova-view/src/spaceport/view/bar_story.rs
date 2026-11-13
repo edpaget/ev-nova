@@ -1,5 +1,5 @@
 //! The spaceport's side of the story the bar hosts under
-//! [`RuleKey::BarStory`](nova_sim::RuleKey::BarStory)'s other reading:
+//! [`RuleKey::BarStory`](nova_sim_frame::RuleKey::BarStory)'s other reading:
 //! the story given to the bar open ([`SpaceportView::set_bar_story`]), and
 //! the bar's asks taken through the spaceport, a slot's scene
 //! ([`SpaceportView::take_bar_scene_request`]) and Holovid's story news
@@ -8,7 +8,7 @@
 //! whoever holds the session opens the scene or the news over the
 //! spaceport.
 
-use nova_sim::flight_frame::BarStory;
+use nova_sim_frame::flight_frame::BarStory;
 
 use super::{Open, SpaceportView};
 

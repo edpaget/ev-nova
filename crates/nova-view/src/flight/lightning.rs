@@ -24,7 +24,7 @@
 //!   division whole, in `BeamColor` (`_DrawTranslucentLine`
 //!   @0xc4350-0xc44f5).
 //!
-//! The rulebook's [`RuleKey::LightningZigZag`](nova_sim::RuleKey::LightningZigZag)
+//! The rulebook's [`RuleKey::LightningZigZag`](nova_sim_frame::RuleKey::LightningZigZag)
 //! chooses between the engine's reading, above, and the mended one: the
 //! jitter −a to a, and a beam of one step or none drawn as one straight
 //! segment. The Child's graviton beam (168, `LiDensity` 2 as loaded) draws
@@ -39,7 +39,7 @@
 //! segment's flag to `_DrawTranslucentLine` (@0xc438e-0xc43a3): neither
 //! changes what is seen.
 
-use nova_sim::{Chance, RuleSource};
+use nova_sim_frame::{Chance, RuleSource};
 
 use super::catalog::WeaponLook;
 use crate::{Color, Point};
@@ -227,7 +227,7 @@ impl Chance for StepRolls {
 mod tests {
     use std::collections::VecDeque;
 
-    use nova_sim::fixture::chance::check_contract;
+    use nova_sim_base::fixture::chance::check_contract;
 
     use super::*;
 

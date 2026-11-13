@@ -13,7 +13,7 @@ use super::*;
 use crate::flight::floating;
 use crate::flight::{alert, brackets};
 use crate::view_shape::ViewShape;
-use nova_sim::flight_frame::FrameHud;
+use nova_sim_frame::flight_frame::FrameHud;
 
 /// A 16:9 window's widened view.
 const WIDE: (f32, f32) = (1365.0, 768.0);
@@ -86,7 +86,7 @@ fn the_ship_is_drawn_at_the_widened_play_areas_centre() {
 
 /// A widened flight of `ships` in Sol, with stellar 150 at (−500, 0)
 /// shown too.
-fn widened_world(ships: Vec<nova_sim::flight_frame::FrameShip>) -> Faked {
+fn widened_world(ships: Vec<nova_sim_frame::flight_frame::FrameShip>) -> Faked {
     let catalog = FakeCatalog {
         sol_more: vec![stellar(150, "West", (-500, 0), 1)],
         ..trafficked(&[130], 1, 129, 3)

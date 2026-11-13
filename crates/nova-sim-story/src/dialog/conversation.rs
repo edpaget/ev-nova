@@ -44,6 +44,7 @@
 use super::states::DialogStates;
 use super::{Dialog, DialogError, DialogLoader, Line, SavedDialog, Value};
 use crate::flags::WorldFlags;
+pub use nova_sim_state::shown::dialog::conversation::ConversationPage;
 
 /// The story a conversation plays: the Ink file, as a ref names it
 /// (`dialog/dock-job.ink`), which keys its kept state, and the story
@@ -54,21 +55,6 @@ pub struct DialogFile<'a> {
     pub file: &'a str,
     /// The story, compiled by `inklecate`.
     pub compiled: &'a str,
-}
-
-/// What a conversation screen shows: the page's lines, then its choices.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ConversationPage {
-    /// The lines stepped since the last choice, text only.
-    pub lines: Vec<String>,
-    /// The choices the story waits on, text only, in order. Empty once it
-    /// has ended.
-    pub choices: Vec<String>,
-    /// Whether the story has ended (no choices remain), so the page only
-    /// closes.
-    pub ended: bool,
-    /// The story's error, when it failed: the page is then ended.
-    pub problem: Option<String>,
 }
 
 /// A choice the conversation can't take: the page is ended, or `index` is

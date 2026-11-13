@@ -19,7 +19,7 @@
 //!   one, from `cicn` 1000 + 8 × set (`_LoadSprites` @0x21855-0x21907,
 //!   [`SmokeSheet`]), and none without its `cicn`s, so a puff of any other
 //!   set is dropped. Under the original's caps
-//!   ([`RuleKey::CombatCaps`](nova_sim::RuleKey::CombatCaps)'s engine
+//!   ([`RuleKey::CombatCaps`](nova_sim_frame::RuleKey::CombatCaps)'s engine
 //!   reading) it takes the first of [`MAX_PUFFS`] slots free, and a full
 //!   pool drops it; without them any number is kept, each still taking
 //!   the first free slot. `_smokeLayer` draws the puffs in slot order
@@ -31,7 +31,7 @@
 //!   at [`lights_tint`]`(32)` (+0xa8 and its channels 0x20,
 //!   @0x2e377-0x2e3b3), murked by where it is ([`SeenMurk::at`],
 //!   @0x2e367), and then ages by [`PUFF_AGE_STEP`] × the frame's gain
-//!   ([`PassReport::speed_mult`](nova_sim::flight_frame::PassReport::speed_mult),
+//!   ([`PassReport::speed_mult`](nova_sim_frame::flight_frame::PassReport::speed_mult),
 //!   `_gSpeedMult` @0x2e3d6), in doubles; its frame is then set
 //!   from its age ([`smoke_frame`], @0x2e3f9-0x2e499), and a puff past its
 //!   last frame is freed. It never moves.
@@ -47,15 +47,15 @@
 //! The puffs are drawn in their sprite layer, `_smokeLayer` 0x3b52d0
 //! (`_SpawnSmoke` @0x3f957-0x3f9d4 takes a `_smokeData` slot): over the
 //! cargo boxes and the escape pods, under every shot and flying ship
-//! ([`SpriteLayer::Smoke`](nova_sim::sprite_layer::SpriteLayer::Smoke)).
+//! ([`SpriteLayer::Smoke`](nova_sim_frame::sprite_layer::SpriteLayer::Smoke)).
 //!
 //! Left out: the translucency `_HandleSmoke` works out and overwrites at
 //! once (@0x2e308-0x2e33f), which is never seen; and the frozen frame
 //! (@0x35ccf, @0x2e3bc), which the engine never has.
 
-use nova_sim::player_wrap::PlayerWrap;
-use nova_sim::slot_pool::SlotPool;
-use nova_sim::{SpeedMult, Vec2};
+use nova_sim_frame::player_wrap::PlayerWrap;
+use nova_sim_frame::slot_pool::SlotPool;
+use nova_sim_frame::{SpeedMult, Vec2};
 
 use super::catalog::SmokeSheet;
 use super::murk::SeenMurk;
@@ -232,7 +232,7 @@ mod tests {
 
     #[test]
     fn a_wrap_carries_the_puffs_within_its_reach() {
-        use nova_sim::player_wrap::{WRAP_EDGE, WRAP_SHIFT};
+        use nova_sim_frame::player_wrap::{WRAP_EDGE, WRAP_SHIFT};
         let player = Vec2::new(WRAP_EDGE + 10.0, 0.0);
         let wrap = PlayerWrap::of(player).expect("past the edge");
         let mut puffs = SmokePuffs::default();

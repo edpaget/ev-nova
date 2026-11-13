@@ -14,7 +14,8 @@
 //! - Each system's colour comes from its own government's map colour;
 //!   independent systems, and systems whose government is missing, are
 //!   [`NEUTRAL`].
-//! - The hyperlinks are the [`StarMap`]'s [`StarMap::links`]: every pair
+//! - The hyperlinks are the catalog's [`system_links`], the star map's
+//!   links (`nova_sim::StarMap::links`) without building one: every pair
 //!   either system lists, drawn once and undirected, as the original's
 //!   `_DrawMap` (@0xe7a8) draws them, while the session's jumps follow its
 //!   `HyperlinkRule` (by the engine's, one way along each system's own
@@ -31,10 +32,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use nova_sim::Rulebook;
-use nova_sim::galaxy_map::GalaxyShown;
-use nova_sim::viewer_lanes::{ViewerLinks, viewer_links};
-use nova_sim::{Governments, StarMap, StarSystem, Vec2};
+use nova_sim_frame::Rulebook;
+use nova_sim_frame::galaxy_map::GalaxyShown;
+use nova_sim_frame::hyperspace::system_links;
+use nova_sim_frame::viewer_lanes::{ViewerLinks, viewer_links};
+use nova_sim_frame::{Governments, StarSystem, Vec2};
 
 use super::catalog::{Galaxy, GateLinks, GovtId, NebulaEntry, SystemEntry, SystemId};
 use super::view::{Bounds, Transform};
@@ -101,7 +103,7 @@ pub struct GalaxyModel {
     /// by the gate lanes' engine reading.
     con_links: Vec<(SystemId, SystemId)>,
     /// A fresh pilot's gate lanes, what the viewer draws by their other
-    /// reading.
+    /// reading: none until handed in ([`GalaxyModel::set_gate_links`]).
     gate_links: GateLinks,
     /// Every government's map colour.
     govt_colors: BTreeMap<GovtId, u32>,
@@ -126,7 +128,6 @@ impl GalaxyModel {
             govts,
             nebulae,
             mut problems,
-            gate_links,
         } = galaxy;
         systems.sort_by_key(|system| system.id);
         let known: BTreeSet<SystemId> = systems.iter().map(|system| system.id).collect();
@@ -140,7 +141,7 @@ impl GalaxyModel {
                 }
             }
         }
-        let links = StarMap::new(systems.iter().map(star_system).collect()).links();
+        let links = system_links(&systems.iter().map(star_system).collect::<Vec<_>>());
         let systems: Vec<MapSystem> = systems
             .into_iter()
             .map(|entry| {
@@ -175,7 +176,7 @@ impl GalaxyModel {
             systems,
             con_links: links.clone(),
             links,
-            gate_links,
+            gate_links: GateLinks::default(),
             govt_colors,
             govts,
             catalog_nebulae: nebulae.clone(),
@@ -256,9 +257,16 @@ impl GalaxyModel {
         &self.links
     }
 
+    /// The model with `gates` as a fresh pilot's gate lanes, which
+    /// [`apply_viewer_rules`](Self::apply_viewer_rules) picks from.
+    pub(super) fn set_gate_links(&mut self, gates: GateLinks) {
+        self.gate_links = gates;
+    }
+
     /// The links the viewer draws by `rules`, from the catalog's Con
-    /// links and gate lanes (`nova_sim::viewer_lanes::viewer_links`),
-    /// which become its [`links`](Self::links).
+    /// links and the gate lanes handed in
+    /// (`nova_sim::viewer_lanes::viewer_links`), which become its
+    /// [`links`](Self::links).
     pub fn apply_viewer_rules(&mut self, rules: &Rulebook) -> ViewerLinks {
         let drawn = viewer_links(&self.con_links, &self.gate_links, rules);
         self.links.clone_from(&drawn.links);
@@ -367,8 +375,8 @@ impl GalaxyModel {
 mod tests {
     use super::*;
     use crate::galaxy::catalog::{NebulaId, NebulaPicture};
+    use crate::galaxy::testkit::shown;
     use crate::galaxy::view::{MAP_CENTER, MapView, SCALES};
-    use nova_sim::story::{GalaxyOverlay, OverlaidGalaxy};
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
@@ -838,16 +846,13 @@ mod tests {
         }
     }
 
-    /// What the session's galaxy over `galaxy`'s systems shows, with
-    /// `change` made.
-    fn overlaid(galaxy: &Galaxy, change: impl FnOnce(&mut GalaxyOverlay)) -> GalaxyShown {
-        let mut overlay = GalaxyOverlay::default();
-        change(&mut overlay);
-        GalaxyShown::of(&OverlaidGalaxy::new(
-            galaxy.systems.iter().map(star_system).collect(),
-            overlay,
-        ))
-    }
+    /// What a session shows of [`session_galaxy`]'s systems with nothing
+    /// changed: every one, 129 of government 128, and the links 128 and
+    /// 131 list.
+    const SESSION_SYSTEMS: &[(i16, Option<i16>)] =
+        &[(128, None), (129, Some(128)), (130, None), (131, None)];
+    /// [`SESSION_SYSTEMS`]' links: each pair once, lower ID first.
+    const SESSION_LINKS: &[(i16, i16)] = &[(128, 129), (129, 131)];
 
     fn system_ids(model: &GalaxyModel) -> Vec<SystemId> {
         model
@@ -867,7 +872,7 @@ mod tests {
         let mut model = GalaxyModel::new(galaxy.clone());
         let fresh = model.clone();
         assert_eq!(nebula_ids(&fresh), [NebulaId(140), NebulaId(141)]);
-        model.apply(&overlaid(&galaxy, |_| {}));
+        model.apply(&shown(SESSION_SYSTEMS, SESSION_LINKS, &[]));
         assert_eq!(model.systems(), fresh.systems());
         assert_eq!(model.links(), fresh.links());
         assert_eq!(model.problems(), fresh.problems());
@@ -883,15 +888,11 @@ mod tests {
     fn a_nebula_is_drawn_only_while_active_and_explored() {
         let galaxy = session_galaxy();
         let mut model = GalaxyModel::new(galaxy.clone());
-        model.apply(&overlaid(&galaxy, |overlay| {
-            overlay.set_nebula_explored(NebulaId(140), true);
-        }));
+        // 140 explored.
+        model.apply(&shown(SESSION_SYSTEMS, SESSION_LINKS, &[140]));
         assert_eq!(nebula_ids(&model), [NebulaId(140)], "141 unexplored");
-        model.apply(&overlaid(&galaxy, |overlay| {
-            overlay.set_nebula_explored(NebulaId(140), true);
-            overlay.set_nebula_active(NebulaId(140), Some(false));
-            overlay.set_nebula_explored(NebulaId(141), true);
-        }));
+        // Both explored, 140 inactive.
+        model.apply(&shown(SESSION_SYSTEMS, SESSION_LINKS, &[141]));
         assert_eq!(nebula_ids(&model), [NebulaId(141)], "140 inactive");
     }
 
@@ -900,9 +901,12 @@ mod tests {
         let galaxy = session_galaxy();
         let mut model = GalaxyModel::new(galaxy.clone());
         let bounds = model.bounds();
-        model.apply(&overlaid(&galaxy, |overlay| {
-            overlay.set_visible(SystemId(129), Some(false));
-        }));
+        // 129 hidden: its links go to its place, 130's.
+        model.apply(&shown(
+            &[(128, None), (130, None), (131, None)],
+            &[(128, 130), (130, 131)],
+            &[],
+        ));
         assert_eq!(system_ids(&model), ids(&[128, 130, 131]));
         assert_eq!(model.system(SystemId(129)), None);
         assert_eq!(model.stack(SystemId(130)), ids(&[130]), "alone there now");
@@ -924,10 +928,12 @@ mod tests {
     fn an_overridden_government_recolours_its_system() {
         let galaxy = session_galaxy();
         let mut model = GalaxyModel::new(galaxy.clone());
-        model.apply(&overlaid(&galaxy, |overlay| {
-            overlay.set_govt(SystemId(128), Some(Some(GovtId(129))));
-            overlay.set_govt(SystemId(129), Some(None));
-        }));
+        // 128 given government 129, 129 made independent.
+        model.apply(&shown(
+            &[(128, Some(129)), (129, None), (130, None), (131, None)],
+            SESSION_LINKS,
+            &[],
+        ));
         let colors: Vec<Color> = model.systems().iter().map(|s| s.color).collect();
         assert_eq!(
             colors,
@@ -939,16 +945,11 @@ mod tests {
     fn an_inactive_nebula_is_not_drawn_and_shows_again_once_active() {
         let galaxy = session_galaxy();
         let mut model = GalaxyModel::new(galaxy.clone());
-        let explored = |overlay: &mut GalaxyOverlay| {
-            overlay.set_nebula_explored(NebulaId(140), true);
-            overlay.set_nebula_explored(NebulaId(141), true);
-        };
-        model.apply(&overlaid(&galaxy, |overlay| {
-            explored(overlay);
-            overlay.set_nebula_active(NebulaId(140), Some(false));
-        }));
+        // Both explored, 140 inactive.
+        model.apply(&shown(SESSION_SYSTEMS, SESSION_LINKS, &[141]));
         assert_eq!(nebula_ids(&model), [NebulaId(141)]);
-        model.apply(&overlaid(&galaxy, explored));
+        // Both explored and active.
+        model.apply(&shown(SESSION_SYSTEMS, SESSION_LINKS, &[140, 141]));
         assert_eq!(
             nebula_ids(&model),
             [NebulaId(140), NebulaId(141)],

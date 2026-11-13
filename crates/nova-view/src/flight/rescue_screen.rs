@@ -95,7 +95,7 @@ use crate::fade::{DEATH_FADE_FOR, ScreenFade, whole_view};
 use crate::geometry::Bounds;
 use crate::input::Input;
 use crate::{Color, DrawList, Point};
-use nova_sim::flight_frame::RescueTexts;
+use nova_sim_frame::flight_frame::RescueTexts;
 
 /// How long each of the rescue's fades, and the black between the first
 /// two, lasts: the 1.0 s of `_FadeScreenOut` (@0x5399) and
@@ -177,7 +177,7 @@ pub enum FirstText {
 
 impl FirstText {
     /// Where a first text whose place among the texts is `texts`
-    /// ([`TextBar::texts`](nova_sim::TextBar::texts)) was queued, by the
+    /// ([`TextBar::texts`](nova_sim_frame::TextBar::texts)) was queued, by the
     /// counts `at` the rescue noted; none at all reads as before the
     /// reset, as nothing is shown over the repaint then.
     #[must_use]

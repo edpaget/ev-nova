@@ -10,7 +10,7 @@ use super::faked_movies::{
     ENTER_ALPHA, at_the_filmed_hypergate, filmed, filming, land_on_mars, run_out,
 };
 use super::*;
-use nova_sim::{GateKind, GateRefusal};
+use nova_sim_frame::{GateKind, GateRefusal};
 
 /// Where the pointer rests before the landing or entry.
 const AT: Point = Point::new(40.0, 400.0);

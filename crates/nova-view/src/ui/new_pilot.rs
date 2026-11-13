@@ -58,7 +58,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::{Gender, RuleKey, RuleSource, Rulebook};
+use nova_sim_frame::{Gender, RuleKey, RuleSource, Rulebook};
 
 use crate::color::Color;
 use crate::draw::DrawList;

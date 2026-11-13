@@ -5,17 +5,14 @@
 
 use std::time::Duration;
 
-use nova_sim::story::{GalaxyOverlay, OverlaidGalaxy};
-
 use super::*;
 use crate::draw::{DrawCommand, DrawList};
 use crate::galaxy::catalog::Galaxy;
 use crate::galaxy::click::PressAnswer;
 use crate::galaxy::dialog::in_map_item;
 use crate::galaxy::map::MapMode;
-use crate::galaxy::model::star_system;
 use crate::galaxy::place::MapPlace;
-use crate::galaxy::testkit::{FakeCatalog, galaxy, system};
+use crate::galaxy::testkit::{FakeCatalog, galaxy, shown, system};
 use crate::input::{Input, Key, MouseButton, PadAxis, PadButton};
 use crate::screen::Screen;
 use crate::sound::UiSound;
@@ -150,13 +147,8 @@ fn a_hidden_system_is_never_a_target() {
         ids(MapCursor::default().target(&model, &transform)),
         Some(128)
     );
-    let mut overlay = GalaxyOverlay::default();
-    overlay.set_visible(SystemId(128), Some(false));
-    overlay.set_visible(SystemId(131), Some(false));
-    let systems = galaxy().systems.iter().map(star_system).collect();
-    model.apply(&nova_sim::galaxy_map::GalaxyShown::of(
-        &OverlaidGalaxy::new(systems, overlay),
-    ));
+    // 128 and 131 hidden.
+    model.apply(&shown(&[(129, None), (130, Some(128))], &[], &[]));
     assert_eq!(MapCursor::default().target(&model, &transform), None);
 }
 

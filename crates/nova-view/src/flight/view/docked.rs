@@ -2,11 +2,9 @@
 //! and plunder, trade, the outfitter, bar, hiring, news, the mission
 //! computer and offers, and the shipyard.
 
-#[cfg(any(doc, test, feature = "fixture"))]
-use nova_sim::Session;
-use nova_sim::StellarId;
-use nova_sim::flight_frame::{ScreenAnswer, ScreenAsk};
-use nova_sim::{InterfaceLoad, MissionId, MissionShown};
+use nova_sim_frame::StellarId;
+use nova_sim_frame::flight_frame::{ScreenAnswer, ScreenAsk};
+use nova_sim_frame::{InterfaceLoad, MissionId, MissionShown};
 
 use crate::Point;
 use crate::flight::catalog::StatusBars;
@@ -92,7 +90,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Why the flight could not start, if it could not, as it opened
-    /// ([`FlightOpening::failure`](nova_sim::flight_frame::FlightOpening::failure)):
+    /// ([`FlightOpening::failure`](nova_sim_frame::flight_frame::FlightOpening::failure)):
     /// the router opens no game on such a flight and builds no bar for it.
     #[must_use]
     pub fn failure(&self) -> Option<&str> {
@@ -100,7 +98,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// The stellar the ship is landed on now, read from a fresh frame
-    /// ([`FlightFrame::landed`](nova_sim::flight_frame::FlightFrame::landed)):
+    /// ([`FlightFrame::landed`](nova_sim_frame::flight_frame::FlightFrame::landed)):
     /// for the router after a developer tools' edit, which may have moved
     /// it. None in flight.
     #[must_use]
@@ -126,7 +124,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
 /// frame and the drained bars.
 impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
     /// The mission texts and offer movies to show since they were last
-    /// taken ([`FlightEvent::MissionShown`](nova_sim::flight_frame::FlightEvent::MissionShown)); none for a
+    /// taken ([`FlightEvent::MissionShown`](nova_sim_frame::flight_frame::FlightEvent::MissionShown)); none for a
     /// session that failed.
     ///
     /// Docked, nothing is redrawn as they are taken: each text shows over
@@ -212,7 +210,7 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
 
     /// Whether the ship is docked: the bar is the port's, held between
     /// its redraws. Read from the frame filled afresh
-    /// ([`FlightFrame::landed`](nova_sim::flight_frame::FlightFrame::landed)).
+    /// ([`FlightFrame::landed`](nova_sim_frame::flight_frame::FlightFrame::landed)).
     pub(super) fn docked(&self) -> bool {
         self.frame.docked()
     }
@@ -220,7 +218,7 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
     /// Stages the bar's redraws for a run of docked scripts, given the
     /// `ïntf` changes it made (`changes`, [`FlightView::interface_changes`])
     /// and the mission texts it queued that are not yet staged
-    /// ([`FlightEvent::MissionShown`](nova_sim::flight_frame::FlightEvent::MissionShown)'s bars). Each text the original shows docked is
+    /// ([`FlightEvent::MissionShown`](nova_sim_frame::flight_frame::FlightEvent::MissionShown)'s bars). Each text the original shows docked is
     /// modal and followed by its caller's `_RefreshSAT` (`_DoMissionAccept`
     /// @0xa1f13, @0xa1fba, @0xa1bb7; `_OfferOneMission` @0xa2f09;
     /// `_DoMissionSuccess` @0xa0491; `_DoMissionFailure` @0xa03d2;
@@ -247,7 +245,7 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
     /// back redraw though the `ïntf` after the script is the one before
     /// it. Each redraw draws the nav and the gauges as they stood at its
     /// operator: `M` and `N` mark nothing (@0x15705, @0x157e3, @0x158fd).
-    /// Under [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s engine reading, the graphic waits
+    /// Under [`RuleKey::HudCadence`](nova_sim_frame::RuleKey::HudCadence)'s engine reading, the graphic waits
     /// with the scenes ([`FlightView::follow_bar`]).
     ///
     /// The offer dialog's after-movie plays over the last text's redraw,
@@ -290,7 +288,7 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
 
     /// A mission text has closed, the first of those shown that had not:
     /// the whole bar is redrawn as the text noted it as it was queued
-    /// ([`FlightEvent::MissionShown`](nova_sim::flight_frame::FlightEvent::MissionShown)'s bar), as the original's caller of
+    /// ([`FlightEvent::MissionShown`](nova_sim_frame::flight_frame::FlightEvent::MissionShown)'s bar), as the original's caller of
     /// `_ShowTextDialog` runs `_RefreshSAT` once it returns; then at each
     /// `C`, `E` or `H` run after it, before the next text, that changed
     /// the `ïntf`, as at its operator, the bar's graphic with it
@@ -349,20 +347,8 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
     }
 }
 
-impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
-    /// The flight's session, or why it could not start. Wiring-only: for
-    /// the integration tests that read a real session behind the port
-    /// (`crates/nova/tests/it`, `flight_seam`, the edge's checks) until
-    /// rdm:phase/crate-decoupling/phase-10-app-tests-wiring-only retires
-    /// the app tests' reads. View code and component tests never call it.
-    #[cfg(any(test, feature = "fixture"))]
-    pub fn session(&self) -> Result<&Session, &str> {
-        self.sim.session.as_ref().map_err(String::as_str)
-    }
-}
-
 /// The mission computer's cut offer names are filled by the flight
-/// ([`ScreenAsk::OfferText`], [`Session::offer_text`]), asked as a row is
+/// ([`ScreenAsk::OfferText`], `nova_sim::Session::offer_text`), asked as a row is
 /// shown; none for a mission no longer offered, or a flight with nothing
 /// to answer.
 impl<C, S: FlightSim> crate::spaceport::OfferNames for FlightView<C, S> {

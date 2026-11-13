@@ -12,7 +12,7 @@
 //! (`_PostDrawCallback`'s `_FloaterDrawCallback`: the message line's text,
 //! the floating map and the escort menu), and last the particles
 //! (`_PostDrawCallback`'s `_DrawParticlesOffscreen`). See
-//! [`nova_sim::sprite_layer`] for the addresses.
+//! [`nova_sim_frame::sprite_layer`] for the addresses.
 //!
 //! Left out:
 //!
@@ -31,7 +31,7 @@
 //!   the menu's frame before redrawing it (@0x38c60-0x38c77)
 //!   (rdm:phase/rendering/phase-9-escort-menu-redraw-a-frame-late).
 
-use nova_sim::sprite_layer::{SpriteLayer, WORLD_PASSES, WorldPass};
+use nova_sim_frame::sprite_layer::{SpriteLayer, WORLD_PASSES, WorldPass};
 
 use crate::flight::alert;
 use crate::flight::asteroids;
@@ -126,7 +126,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Draws the sprite world, pass by pass in [`WORLD_PASSES`]' order
     /// (see the module docs), from the frame drawn, its brackets, icon and
     /// escort rows from the frame's HUD
-    /// ([`FlightFrame::hud`](nova_sim::flight_frame::FlightFrame::hud)).
+    /// ([`FlightFrame::hud`](nova_sim_frame::flight_frame::FlightFrame::hud)).
     /// The message line's box is drawn over the stars and its text with
     /// the floaters; the text, the floating map's and the escort menu's
     /// included, is overlay among the world ([`DrawList::world`]). The
@@ -256,9 +256,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Draws the stars, by the flight's reading of
-    /// [`RuleKey::FlightStarfield`](nova_sim::RuleKey::FlightStarfield),
+    /// [`RuleKey::FlightStarfield`](nova_sim_frame::RuleKey::FlightStarfield),
     /// or the layered sky in their place by
-    /// [`RuleKey::LayeredStarfield`](nova_sim::RuleKey::LayeredStarfield)'s
+    /// [`RuleKey::LayeredStarfield`](nova_sim_frame::RuleKey::LayeredStarfield)'s
     /// other reading (see the `sky` module), then the message line's box
     /// over them, erased in the system's background
     /// ([`message_background`]), as `_DisplayComm` erases the background

@@ -16,8 +16,8 @@ use nova_data::records::colors::Colors;
 use nova_data::records::ship::Ship;
 use nova_data::records::spin::Spin;
 use nova_data::store::SpinSheet;
-use nova_sim::catalog::{CommCatalog, ShipId};
-use nova_sim::news::MISC_STRINGS;
+use nova_sim_frame::catalog::{CommCatalog, ShipId};
+use nova_sim_frame::news::MISC_STRINGS;
 
 use super::art::{
     BACKGROUND_PICT, BUTTON_SPINS, ButtonArt, COLORS_ID, LOGO_SPIN, MainScreenArt,

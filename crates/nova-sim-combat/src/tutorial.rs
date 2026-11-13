@@ -46,6 +46,8 @@
 
 use crate::catalog::StellarId;
 
+pub use nova_sim_state::shown::tutorial::TutorialHint;
+
 /// How many frames apart the hint checks fall (@0x7094d-0x70981).
 pub const HINT_FRAMES: i16 = 60;
 
@@ -56,27 +58,6 @@ pub const FAR_ENOUGH_SQUARED: f32 = 2_000_000.0;
 /// The squared distance from the centre past which the ship is told there
 /// is nothing out here: 10,000,000 (`0xdd978`, about 3,162 px).
 pub const NOTHING_OUT_HERE_SQUARED: f32 = 10_000_000.0;
-
-/// A tutorial hint, in the order of the hint block's steps.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TutorialHint {
-    /// Land on the nearest stellar (with the can-land flag): `STR#` 2002 #22 for a station
-    /// (`spöb` `Flags` 0x10, @0x70a31) or #23, then #24 and #25 around the
-    /// land key's name.
-    Land {
-        /// The stellar to land on.
-        stellar: StellarId,
-        /// Whether it is a station, docked at rather than landed on.
-        station: bool,
-    },
-    /// Hyperspace to another system: `STR#` 2002 #26-#28 around the map
-    /// and jump keys' names.
-    Hyperspace,
-    /// The ship is far enough out to jump: `STR#` 2002 #30.
-    FarEnough,
-    /// There is nothing to find this far out: `STR#` 2002 #31.
-    NothingOutHere,
-}
 
 /// The original's `_newbieFlag`: how far through the first-flight tutorial
 /// the pilot is (see the module docs).

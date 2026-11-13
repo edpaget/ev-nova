@@ -58,12 +58,13 @@
 use std::num::NonZeroU16;
 
 use crate::chance::Chance;
-use crate::flight::moved;
 use crate::geometry::Vec2;
 use crate::player_wrap::PlayerWrap;
 use crate::slot_pool::SlotPool;
 use crate::speed_mult::SpeedMult;
 use crate::trig::intercept_angle;
+
+pub use nova_sim_state::shown::escape_pod::Pod;
 
 /// The most pods kept at once under the caps: `_podData`'s 32 entries
 /// (`cmpl $0x20` @0x456bc).
@@ -72,40 +73,6 @@ pub const MAX_PODS: usize = 32;
 pub const POD_LIFE_MIN: u32 = 150;
 /// How many lives a pod can roll above [`POD_LIFE_MIN`].
 pub const POD_LIFE_ROLL: u32 = 100;
-
-/// An escape pod adrift.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Pod {
-    /// Where it is, in pixels from the system's centre.
-    pub position: Vec2,
-    /// How far it moves a pass at full gain: the move is this × the
-    /// frame's gain.
-    pub velocity: Vec2,
-    /// The ticks it has left, a float as the original keeps it (+0x14):
-    /// each pass takes the frame's gain off it.
-    pub life: f32,
-    /// The frame of shän 895's sheet it shows.
-    pub frame: u16,
-    /// Whether its sprite is shown: from its spawn until a step leaves
-    /// its life at 0 or less, or a scoop hides it, and never again.
-    pub shown: bool,
-}
-
-impl Pod {
-    /// One step at the frame's `gain`: it drifts by its velocity × the
-    /// gain, and the gain comes off its life, each added in doubles
-    /// (`_HandleEscapePods` @0x39e8d-0x39ee0, @0x39fcc-0x39fe5); then a
-    /// life of 0 or less hides it (@0x3a02d-0x3a046).
-    fn step(&mut self, gain: SpeedMult) {
-        self.position = moved(self.position, self.velocity, gain);
-        self.life = gain.add_times(self.life, -1.0);
-        // `jbe`: a NaN life hides it too.
-        #[allow(clippy::neg_cmp_op_on_partial_ord)]
-        if !(self.life > 0.0) {
-            self.shown = false;
-        }
-    }
-}
 
 /// The frame of a sheet of `frames` rotations a pod moving at `velocity`
 /// faces: the original's whole-degree heading of its velocity, times the

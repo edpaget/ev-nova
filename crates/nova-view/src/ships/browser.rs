@@ -3,7 +3,7 @@
 //! glow and lights layers on top, and its name (in Charcoal), stats and
 //! description in a column beside it. The lights blink by the ship's
 //! [`Blink`](super::catalog::Blink) from the selection on, as
-//! [`nova_sim::lights_level`] says, rolling on [`HashedRolls`] from seed 0
+//! [`nova_sim_frame::lights_level`] says, rolling on [`HashedRolls`] from seed 0
 //! for random blinking. The glow (at full level) and the lights (at
 //! [`lights_tint`] of their level) are combined by OR with what is beneath
 //! ([`Blend::Or`](crate::Blend::Or)), scaled by level/32, like the
@@ -27,7 +27,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::{HashedRolls, lights_level};
+use nova_sim_frame::{HashedRolls, lights_level};
 
 use super::catalog::{SheetInfo, ShipCatalog, ShipEntry, ShipId};
 use super::model_turn::{draw_model, model_step};
@@ -1274,7 +1274,7 @@ mod tests {
                 .iter()
                 .map(|&(id, key)| {
                     (
-                        nova_sim::ShipId(id),
+                        nova_sim_frame::ShipId(id),
                         ShipModel {
                             key: ModelKey(key),
                             scale: 1.0,
@@ -1293,7 +1293,7 @@ mod tests {
         let mut models = Rc::unwrap_or_clone(table(&[(128, 7)]));
         models.mounts = Mounts {
             hulls: BTreeMap::from([(
-                nova_sim::ShipId(128),
+                nova_sim_frame::ShipId(128),
                 vec![Mount {
                     hardpoint: "nose".to_owned(),
                     at: [0.0, 2.0, 0.5],
@@ -1337,7 +1337,7 @@ mod tests {
         assert_eq!(*model, ModelKey(7));
         assert_eq!(pose.center, SHIP_CENTER);
         let mut want = DrawList::new();
-        let portrait = ShipPortrait::of(&models, nova_sim::ShipId(128)).expect("a portrait");
+        let portrait = ShipPortrait::of(&models, nova_sim_frame::ShipId(128)).expect("a portrait");
         assert!(portrait.draw_posed_in(&mut want, model_area(), model_orientation(0)));
         assert_eq!(got[..want.len()], commands(&want)[..]);
         assert_eq!(lines(&list), 0, "no crossed box");

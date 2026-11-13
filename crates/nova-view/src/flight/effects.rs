@@ -7,7 +7,7 @@
 //! - An explosion is a frame of its `bööm`'s sheet, drawn centred where it
 //!   went off: it never moves. Each step its frame advances by the
 //!   `bööm`'s `FrameAdvance` / 100 × the frame's gain
-//!   ([`PassReport::speed_mult`](nova_sim::flight_frame::PassReport::speed_mult),
+//!   ([`PassReport::speed_mult`](nova_sim_frame::flight_frame::PassReport::speed_mult),
 //!   `_gSpeedMult` @0x2f811), and it ends once its truncated frame is past
 //!   the last. A delayed one is hidden while its delay counts down by the
 //!   same advance × the gain a step (@0x2f655). One whose sheet cannot be
@@ -56,7 +56,7 @@
 //!     the frozen one (`FlightView::step_arrival_explosions` for a jump's,
 //!     `FlightView::show_arrival_explosions` for a gate's).
 //! - Under the original's caps
-//!   ([`RuleKey::CombatCaps`](nova_sim::RuleKey::CombatCaps)'s engine
+//!   ([`RuleKey::CombatCaps`](nova_sim_frame::RuleKey::CombatCaps)'s engine
 //!   reading, [`Scene::caps`]; by default nothing is capped) at most
 //!   [`MAX_EXPLOSIONS`] explosions are kept: one more is dropped, though
 //!   still heard, as `_CreateExplosion` plays its sound whether
@@ -81,7 +81,7 @@
 //!   `Explode1` about it at random, more often as its end nears, a quarter
 //!   of them heard ([`Effects::step`]).
 //! - A destroyed ship goes off in its `Explode2`, with its size, and,
-//!   under [`RuleKey::ShipDebris`](nova_sim::RuleKey::ShipDebris)'s other
+//!   under [`RuleKey::ShipDebris`](nova_sim_frame::RuleKey::ShipDebris)'s other
 //!   reading, the default, though the original scatters none
 //!   ([`Scene::debris`]), [`DEBRIS_COUNT`] particles of debris, by the
 //!   original's particle model: each in a
@@ -91,14 +91,14 @@
 //!   or the shot releasing sub-munitions), and an explosion its own, each
 //!   heard from the player ([`CombatSound`]), unless the fight raised it
 //!   with no sound: an NPC's pick sounds once a call, on its first copy
-//!   ([`FireSound`](nova_sim::FireSound)). Each carries the original's
+//!   (`nova_sim::FireSound`). Each carries the original's
 //!   priority, which the audio side's voice list plays by: the
-//!   [`FireSound`](nova_sim::FireSound)'s for a weapon,
+//!   `nova_sim::FireSound`'s for a weapon,
 //!   [`EXPLOSION_PRIORITY`] for an explosion.
 //! - A weapon whose sound loops (`Flags` 0x0010), fired by a function that
-//!   tests it ([`FireSound::unless_playing`](nova_sim::FireSound)), waits
+//!   tests it (`nova_sim::FireSound`), waits
 //!   while its sound plays, as
-//!   [`RuleKey::LoopedSoundWait`](nova_sim::RuleKey::LoopedSoundWait)
+//!   [`RuleKey::LoopedSoundWait`](nova_sim_frame::RuleKey::LoopedSoundWait)
 //!   says ([`Scene::looped`]). By the engine's reading, the default
 //!   ([`LoopedSounds::Anywhere`]), its sound goes out marked
 //!   [`CombatSound::until_stopped`], and the audio side skips it while
@@ -150,15 +150,15 @@
 //!   say how it reads between steps.
 //!
 //! - A stellar's gun ([`CombatEvent::StellarFired`]) sounds its weapon's
-//!   `snd ` from the stellar at its [`FireSound`](nova_sim::FireSound)'s
+//!   `snd ` from the stellar at its `nova_sim::FireSound`'s
 //!   priority, 5, every shot: `_HandleStellarWeapons` tests no looped
 //!   sound (@0x2f553-0x2f59a), so neither reading of
-//!   [`RuleKey::LoopedSoundWait`](nova_sim::RuleKey::LoopedSoundWait)
+//!   [`RuleKey::LoopedSoundWait`](nova_sim_frame::RuleKey::LoopedSoundWait)
 //!   holds it.
 //!
 //! - A dying NPC's escape pod ([`CombatEvent::PodEjected`]) is heard as
 //!   `snd ` 372 from where its ship is
-//!   ([`ESCAPE_POD_SOUND`](nova_sim::sound::ESCAPE_POD_SOUND)), whether
+//!   ([`ESCAPE_POD_SOUND`](nova_sim_frame::sound::ESCAPE_POD_SOUND)), whether
 //!   or not the simulation's pool keeps it. The simulation sets it adrift
 //!   (`nova_sim::escape_pod`), and the view draws it from the frame
 //!   ([`pods`](super::pods)).
@@ -166,7 +166,7 @@
 //! [`WeaponLook::sound_ticks`]: super::catalog::WeaponLook::sound_ticks
 //!
 //! The explosions and the particles draw in different places among the
-//! world's sprites ([`nova_sim::sprite_layer`]): the explosions in
+//! world's sprites ([`nova_sim_frame::sprite_layer`]): the explosions in
 //! `_explodLayer` (0x3b52b8; `_SpawnExplod` @0x3f5ef takes an
 //! `_explodData` slot), over the ships and their turret shots and under
 //! the beams over the ships ([`Effects::draw_explosions`]); the particles
@@ -201,11 +201,11 @@
 
 use std::collections::BTreeMap;
 
-use nova_sim::combat::ParticleBurst;
-use nova_sim::combat::weapon::Explosion as Blast;
-use nova_sim::player_wrap::PlayerWrap;
-use nova_sim::slot_pool::SlotPool;
-use nova_sim::{Chance, CombatEvent, ShipRef, SpeedMult, Vec2};
+use nova_sim_frame::combat::ParticleBurst;
+use nova_sim_frame::combat::weapon::Explosion as Blast;
+use nova_sim_frame::player_wrap::PlayerWrap;
+use nova_sim_frame::slot_pool::SlotPool;
+use nova_sim_frame::{Chance, CombatEvent, ShipRef, SpeedMult, Vec2};
 
 use super::catalog::{BoomId, Looks, WeaponId};
 use super::murk::SeenMurk;
@@ -315,7 +315,7 @@ pub const POD_PRIORITY: u16 = 5;
 /// `sound`, heard by a player at `player` from `at`, at `priority`, and
 /// skipped while it plays `until_stopped`.
 fn heard(
-    sound: nova_sim::SoundId,
+    sound: nova_sim_frame::SoundId,
     at: Point,
     player: Point,
     priority: u16,
@@ -333,12 +333,12 @@ fn heard(
 }
 
 /// `sound`, an explosion's, heard by a player at `player` from `at`.
-fn explosion_heard(sound: nova_sim::SoundId, at: Point, player: Point) -> CombatSound {
+fn explosion_heard(sound: nova_sim_frame::SoundId, at: Point, player: Point) -> CombatSound {
     heard(sound, at, player, EXPLOSION_PRIORITY, false)
 }
 
 /// Where a looped weapon's sound waits, as
-/// [`RuleKey::LoopedSoundWait`](nova_sim::RuleKey::LoopedSoundWait) says
+/// [`RuleKey::LoopedSoundWait`](nova_sim_frame::RuleKey::LoopedSoundWait) says
 /// (see the module docs).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LoopedSounds {
@@ -384,11 +384,11 @@ pub struct Scene {
     /// Where the player is: sounds are heard from here.
     pub player: Point,
     /// Whether a destroyed ship scatters debris, as
-    /// [`RuleKey::ShipDebris`](nova_sim::RuleKey::ShipDebris)'s other
+    /// [`RuleKey::ShipDebris`](nova_sim_frame::RuleKey::ShipDebris)'s other
     /// reading, the default, has it; the original scatters none.
     pub debris: bool,
     /// Whether the original's explosion and particle pools cap them, as
-    /// [`RuleKey::CombatCaps`](nova_sim::RuleKey::CombatCaps)'s engine
+    /// [`RuleKey::CombatCaps`](nova_sim_frame::RuleKey::CombatCaps)'s engine
     /// reading has it; by default, not.
     pub caps: bool,
     /// Where a looped weapon's sound waits.
@@ -510,7 +510,7 @@ impl Effects {
             // `_SpawnEscapePod` found it a slot (@0x351fa, @0x35300).
             CombatEvent::PodEjected { at, .. } => {
                 self.sounds.push(heard(
-                    nova_sim::sound::ESCAPE_POD_SOUND,
+                    nova_sim_frame::sound::ESCAPE_POD_SOUND,
                     point(at),
                     scene.player,
                     POD_PRIORITY,
@@ -866,7 +866,7 @@ impl Effects {
 
     /// Draws the explosions shown, as `looks` says, where `camera` shows
     /// them: the sprites of `_explodLayer`
-    /// ([`SpriteLayer::Explosions`](nova_sim::sprite_layer::SpriteLayer::Explosions)),
+    /// ([`SpriteLayer::Explosions`](nova_sim_frame::sprite_layer::SpriteLayer::Explosions)),
     /// over the ships and their turret shots and under the beams over the
     /// ships. Each is added at full ([`EXPLOSION_LEVEL`], `Blend::Or`) and
     /// murked as the player sees them, `seen` (see the module docs;
@@ -901,7 +901,7 @@ impl Effects {
     /// Draws the particles, the bursts' and the debris, by the scroll
     /// offset taken from the player at `scrolled_from`, on `camera`'s
     /// anchor: last of the world, after the beams over the ships
-    /// ([`WorldPass::Particles`](nova_sim::sprite_layer::WorldPass::Particles)).
+    /// ([`WorldPass::Particles`](nova_sim_frame::sprite_layer::WorldPass::Particles)).
     /// As `_DrawParticlesOffscreen` draws them at 16 bits, each is a pixel
     /// at its whole pixel less the offset ([`Camera::particle_pixel`],
     /// @0xc5a29-0xc5a3b), but none with a tick or less left
@@ -981,7 +981,8 @@ mod tests {
     use std::collections::{BTreeMap, VecDeque};
     use std::num::NonZeroU16;
 
-    use nova_sim::{FireSound, NpcId, SoundId};
+    use nova_sim_frame::{NpcId, SoundId};
+    use nova_sim_state::shown::combat::FireSound;
 
     use super::*;
     use crate::DrawCommand;
@@ -1371,7 +1372,7 @@ mod tests {
         assert_eq!(capped_fill.particles().len(), MAX_PARTICLES);
         let destroyed = CombatEvent::Destroyed {
             ship: NPC,
-            ship_type: nova_sim::ShipId(128),
+            ship_type: nova_sim_frame::ShipId(128),
             at: Vec2::ZERO,
             velocity: Vec2::ZERO,
             explosion: None,
@@ -2069,7 +2070,7 @@ mod tests {
     /// priority, with no looped test.
     fn stellar_fired(weapon: i16, x: f32, y: f32) -> CombatEvent {
         CombatEvent::StellarFired {
-            stellar: nova_sim::StellarId(128),
+            stellar: nova_sim_frame::StellarId(128),
             weapon: WeaponId(weapon),
             at: Vec2::new(x, y),
             sound: FireSound {
@@ -2360,7 +2361,7 @@ mod tests {
     fn destroyed(explosion: Option<Blast>, size: f32) -> CombatEvent {
         CombatEvent::Destroyed {
             ship: NPC,
-            ship_type: nova_sim::ShipId(129),
+            ship_type: nova_sim_frame::ShipId(129),
             at: Vec2::new(200.0, 100.0),
             velocity: Vec2::new(3.0, -1.0),
             explosion,
@@ -2805,7 +2806,7 @@ mod tests {
         let mut effects = Effects::default();
         let event = CombatEvent::Destroyed {
             ship: NPC,
-            ship_type: nova_sim::ShipId(129),
+            ship_type: nova_sim_frame::ShipId(129),
             at: Vec2::new(200.6, -100.4),
             velocity: Vec2::new(3.0, -1.0),
             explosion: None,

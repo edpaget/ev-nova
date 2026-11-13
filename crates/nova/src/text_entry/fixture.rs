@@ -1,5 +1,5 @@
 //! The [`TextEntry`] port's fake and its contract, for this crate's tests
-//! and its integration tests (the `fixture` feature).
+//! and nova-it's integration tests (the `fixture` feature).
 
 use std::cell::RefCell;
 use std::rc::Rc;

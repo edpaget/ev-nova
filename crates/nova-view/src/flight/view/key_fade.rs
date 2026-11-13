@@ -1,12 +1,12 @@
 //! Which held command fades the cursor, against what the kept frame says
-//! fades it ([`FlightFrame::key_fades`](nova_sim::flight_frame::FlightFrame::key_fades)).
+//! fades it ([`FlightFrame::key_fades`](nova_sim_frame::flight_frame::FlightFrame::key_fades)).
 //! The gates are the session's (`nova_sim::key_fade`, which records where
 //! each of `_HandlePlayer`'s writes of the byte sits); the keys are the
 //! view's, in [`fade_key`]. Every latched block writes the byte before
 //! its latch test, so a latched key held past a close fades the cursor as
 //! a held one does ([`FlightView::commands_down`]).
 
-use nova_sim::flight_frame::FadeKey;
+use nova_sim_frame::flight_frame::FadeKey;
 
 use crate::Input;
 use crate::flight::sim_port::FlightSim;

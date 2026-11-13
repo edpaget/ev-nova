@@ -1,5 +1,6 @@
 use super::*;
 use crate::app::KeyboardAccess;
+use nova_flight::SessionView;
 use nova_view::ui::FocusRing;
 
 // The About dialog.
@@ -697,7 +698,7 @@ fn a_change_in_the_dialog_reaches_flight_already_built() {
     assert!(flight_effects(&screen));
 }
 
-fn flight_view(screen: &AppScreen) -> &FlightView<Rc<GameData>> {
+fn flight_view(screen: &AppScreen) -> &SessionView<Rc<GameData>> {
     screen.flight_view().expect("flying")
 }
 
@@ -773,7 +774,7 @@ fn a_parallax_starfield_change_in_the_dialog_reaches_flight_already_built() {
 struct LaunchBox {
     name: &'static str,
     toggle: fn(&PrefsDialog) -> &nova_view::ui::toggle::Toggle,
-    flight: fn(&FlightView<Rc<GameData>>) -> bool,
+    flight: fn(&SessionView<Rc<GameData>>) -> bool,
     off: fn(Prefs) -> Prefs,
 }
 

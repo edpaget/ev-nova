@@ -196,7 +196,7 @@ mod tests {
     #[test]
     fn the_toggle_hides_while_the_alert_is_open() {
         use super::super::tests::rack_alert;
-        use nova_sim::OutfitRefusal;
+        use nova_sim_frame::OutfitRefusal;
         let mut screen = touched(screen);
         screen.alert(&rack_alert(OutfitRefusal::NegativeFreeMass, false));
         assert!(screen.alert_dialog().is_some(), "alerting");

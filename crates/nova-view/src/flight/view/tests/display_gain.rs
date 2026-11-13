@@ -4,8 +4,8 @@
 //! `show_combat`, `step_flashes` and [`WeaponGlows::step`]. Each expected
 //! value is the flash's or glow's own step at the same gain.
 
-use nova_sim::SpeedMult;
-use nova_sim::flight_frame::PassReport;
+use nova_sim_frame::SpeedMult;
+use nova_sim_frame::flight_frame::PassReport;
 
 use super::stepping::{NPC, fight, frame, hit, one_step, stepping};
 use super::*;

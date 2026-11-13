@@ -382,13 +382,13 @@ impl AppScreen {
     /// swept as its session is built ([`nova_sim::Session::load`]), then its
     /// ship faces a drawn heading and its active missions' auxiliary ships
     /// restart (@0x1a918-0x1a982), in one call
-    /// ([`SessionFlight::open_saved`](nova_view::flight::SessionFlight::open_saved)
+    /// ([`SessionFlight::open_saved`](nova_flight::SessionFlight::open_saved)
     /// with [`SavedOpening::OpenPilot`]). The engine
     /// sweeps as it builds the session, before the note below, where the
     /// original sweeps after it (@0x1a8d4, after @0x1a85b); nothing the
     /// sweep changes shows on the main screen.
     ///
-    /// One whose load fell back ([`SessionFlight::load_repaired`](nova_view::flight::SessionFlight::load_repaired)) shows the
+    /// One whose load fell back ([`SessionFlight::load_repaired`](nova_flight::SessionFlight::load_repaired)) shows the
     /// note `STR#` 140 #52 over the main menu, as `_MainScreenChoice`
     /// shows it through `_EVNoteAlert` (@0x1a817-0x1a85b); without
     /// dialogs, or with no note to build, the note is a warning. Under

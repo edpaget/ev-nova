@@ -31,7 +31,7 @@
 //! (see [`crate::flight::sky`]).
 //!
 //! [`DrawCommand::Sky`]: crate::DrawCommand::Sky
-//! [`RuleKey::LayeredStarfield`]: nova_sim::RuleKey::LayeredStarfield
+//! [`RuleKey::LayeredStarfield`]: nova_sim_frame::RuleKey::LayeredStarfield
 
 use crate::geometry::Point;
 

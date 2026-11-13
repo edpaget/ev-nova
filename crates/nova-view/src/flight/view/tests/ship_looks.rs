@@ -190,7 +190,7 @@ fn looks_given_after_the_opening_read_the_player_s_and_the_read_traffic_s_sheets
 /// catches up.
 fn becomes(view: &mut Faked, class: i16) {
     use super::stellar_looks::{caught_up, changed, raising};
-    use nova_sim::SessionEvent;
+    use nova_sim_frame::SessionEvent;
     changed(view, |frame| frame.ships[0].class = ShipId(class));
     raising(view, &[SessionEvent::ShipChanged]);
     caught_up(view);

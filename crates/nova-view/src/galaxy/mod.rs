@@ -65,8 +65,8 @@ pub mod viewer_rules;
 mod testkit;
 
 pub use catalog::{
-    Galaxy, GalaxyCatalog, GovtId, NebulaEntry, NebulaId, NebulaPicture, StellarEntry, StellarId,
-    SystemEntry, SystemId,
+    Galaxy, GalaxyCatalog, GateLinks, GovtId, NebulaEntry, NebulaId, NebulaPicture, StellarEntry,
+    StellarId, SystemEntry, SystemId,
 };
 pub use click::{PendingPress, PressAnswer};
 pub use find::{FindDialog, FindOutcome};

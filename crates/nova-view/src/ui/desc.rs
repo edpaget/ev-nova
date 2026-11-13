@@ -50,7 +50,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::MapMarks;
+use nova_sim_frame::MapMarks;
 
 use crate::color::Color;
 use crate::draw::DrawList;
@@ -651,7 +651,7 @@ mod tests {
     fn with_marks_the_map_key_asks_for_the_map_and_without_none() {
         let m = crate::Key::KeyM;
         let marks = MapMarks {
-            green: Some(nova_sim::SystemId(131)),
+            green: Some(nova_sim_frame::SystemId(131)),
             multi_arrows: true,
         };
         let mut briefing = desc().with_map(Some(marks));
@@ -1179,7 +1179,7 @@ mod tests {
                 .rebound(PlayCommand::GalaxyMap, KeyCombo::key(Key::KeyQ)),
         );
         let marks = MapMarks {
-            green: Some(nova_sim::SystemId(131)),
+            green: Some(nova_sim_frame::SystemId(131)),
             multi_arrows: true,
         };
         let mut desc = long_desc().with_bindings(bindings).with_map(Some(marks));
@@ -1350,7 +1350,7 @@ mod tests {
     #[test]
     fn scroll_keys_never_close_it_or_ask_for_the_map() {
         let marks = MapMarks {
-            green: Some(nova_sim::SystemId(131)),
+            green: Some(nova_sim_frame::SystemId(131)),
             multi_arrows: false,
         };
         let mut desc = long_desc().with_map(Some(marks));

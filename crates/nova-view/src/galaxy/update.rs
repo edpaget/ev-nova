@@ -59,8 +59,6 @@ pub enum MapUpdate {
 mod tests {
     use std::rc::Rc;
 
-    use nova_sim::story::{GalaxyOverlay, OverlaidGalaxy};
-
     use super::*;
     use crate::draw::Blend;
     use crate::galaxy::buttons::{MapButton, MapButtons};
@@ -68,8 +66,7 @@ mod tests {
     use crate::galaxy::click::PressAnswer;
     use crate::galaxy::dialog::{DIALOG_ORIGIN, draw_frame};
     use crate::galaxy::map::GalaxyMap;
-    use crate::galaxy::model::star_system;
-    use crate::galaxy::testkit::{FakeCatalog, galaxy};
+    use crate::galaxy::testkit::{FakeCatalog, galaxy, shown};
     use crate::text::fixture::MonoMetrics;
     use crate::ui::button::ButtonStyle;
     use crate::{DrawCommand, DrawList, Input, Key, MouseButton, Point, Screen};
@@ -368,17 +365,15 @@ mod tests {
         }
     }
 
-    /// The session's galaxy over `galaxy`'s systems: 128 inactive and
-    /// explored, 129 active and unexplored, 130 active and explored.
-    fn session(galaxy: &Galaxy) -> nova_sim::galaxy_map::GalaxyShown {
-        let mut overlay = GalaxyOverlay::default();
-        overlay.set_nebula_active(NebulaId(128), Some(false));
-        overlay.set_nebula_explored(NebulaId(128), true);
-        overlay.set_nebula_explored(NebulaId(130), true);
-        nova_sim::galaxy_map::GalaxyShown::of(&OverlaidGalaxy::new(
-            galaxy.systems.iter().map(star_system).collect(),
-            overlay,
-        ))
+    /// What a session shows of [`three_nebulae`]: every system, and of
+    /// its nebulae (128 inactive and explored, 129 active and unexplored,
+    /// 130 active and explored) only 130.
+    fn session() -> nova_sim_frame::galaxy_map::GalaxyShown {
+        shown(
+            &[(128, Some(128)), (129, None), (130, Some(128)), (131, None)],
+            &[(128, 129), (128, 130)],
+            &[130],
+        )
     }
 
     fn pictures(list: &[DrawCommand]) -> Vec<i16> {
@@ -396,12 +391,12 @@ mod tests {
     fn the_viewer_draws_an_inactive_and_an_unexplored_nebula() {
         let galaxy = three_nebulae();
         let mut viewer = GalaxyMap::new(&FakeCatalog::new(galaxy.clone()));
-        viewer.show_galaxy(&session(&galaxy));
+        viewer.show_galaxy(&session());
         assert_eq!(pictures(&drawn(&viewer)), [9500, 9507, 9514]);
         let mut course = GalaxyMap::course(&FakeCatalog::new(galaxy.clone()));
         course.show_course(SystemId(128), &[]);
         course.recentre();
-        course.show_galaxy(&session(&galaxy));
+        course.show_galaxy(&session());
         assert_eq!(
             pictures(&drawn(&course)),
             [9514],

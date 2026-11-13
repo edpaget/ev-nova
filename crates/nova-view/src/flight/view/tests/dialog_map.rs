@@ -1,6 +1,6 @@
 use super::faked_screen::fading_in;
 use super::*;
-use nova_sim::{MapMarks, SavedNav};
+use nova_sim_frame::{MapMarks, SavedNav};
 
 // A mission dialog's map (`_OfferOneMission`, `_DoMissionDialog`,
 // `_DoMissionInfoDialog`, `_ShowTextDialog` for the accept's briefing).
@@ -20,7 +20,7 @@ fn queue_opening(view: &mut Faked, marks: MapMarks, nav: NavMode, missions: &[i1
     view.sim.queue_screen(ScreenAnswer::MapOpening(MapOpen {
         nav: SavedNav::of(nav),
         marks,
-        borders: nova_sim::map_borders::BorderSources::default(),
+        borders: nova_sim_frame::map_borders::BorderSources::default(),
         preselection: Some(SystemId(130)),
         missions: missions.iter().copied().map(SystemId).collect(),
     }));
@@ -593,7 +593,7 @@ fn a_dialogs_map_gives_the_keys_of_its_wait_at_the_close() {
 
 #[test]
 fn a_dialogs_map_over_flight_ticks_through_its_own_frame_alone() {
-    use nova_sim::map_borders::Next;
+    use nova_sim_frame::map_borders::Next;
     let mut view = faked_dialogs(in_sol(), MapMarks::NONE, MOON);
     view.open_dialog_map(MapOpener::Offer(MissionId(130)));
     let passes = |view: &Faked| view.course_map().border_passes().next();

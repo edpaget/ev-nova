@@ -21,11 +21,11 @@
 //! - **Where**: centred where its outline would be centred (the crossed
 //!   box's place with none), turned by [`ship_orientation`] at the
 //!   heading it is shown at and the frame's
-//!   [`hull_turn`](nova_sim::flight_frame::FlightFrame::hull_turn), at the
+//!   [`hull_turn`](nova_sim_frame::flight_frame::FlightFrame::hull_turn), at the
 //!   table's scale.
 //! - **Outfits**: the mounts of its class and kits
 //!   ([`WorldModels::mounts`]): the player's the kits the frame says it
-//!   carries ([`FlightFrame::player_kits`](nova_sim::flight_frame::FlightFrame::player_kits)),
+//!   carries ([`FlightFrame::player_kits`](nova_sim_frame::flight_frame::FlightFrame::player_kits)),
 //!   an NPC's its class's as built ([`WorldModels::built_kits`]).
 //! - **Turrets**: every turning mount faces the ship's
 //!   [`FrameShip::turret_facing`], or the nose with none, swung toward it
@@ -64,8 +64,8 @@
 
 use std::rc::Rc;
 
-use nova_sim::OutfitId;
-use nova_sim::flight_frame::{FrameShip, GateFade};
+use nova_sim_frame::OutfitId;
+use nova_sim_frame::flight_frame::{FrameShip, GateFade};
 
 use crate::flight::catalog::ShipSprites;
 use crate::flight::cloak_fade::CloakDraw;

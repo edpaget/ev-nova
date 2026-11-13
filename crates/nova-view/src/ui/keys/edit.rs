@@ -5,7 +5,7 @@
 
 use std::collections::BTreeSet;
 
-use nova_sim::{RuleKey, RuleSource, Rulebook};
+use nova_sim_frame::{RuleKey, RuleSource, Rulebook};
 
 use crate::input::Key;
 use crate::keymap::{

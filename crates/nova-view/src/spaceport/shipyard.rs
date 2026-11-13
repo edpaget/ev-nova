@@ -23,7 +23,7 @@
 //! #223).
 //!
 //! The selection follows
-//! [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection). By the
+//! [`RuleKey::GridSelection`](nova_sim_frame::RuleKey::GridSelection). By the
 //! engine, as `_DoShipyardDialog` and `_ShipyardFilter` keep it, the
 //! shipyard opens with nothing selected (@0x5e6d8-0x5e705); a press on an
 //! empty cell selects nothing (@0x60a5d-0x60a73) and reaches no button;
@@ -33,7 +33,7 @@
 //! highlights the first cell shown (Right, Down) or the last (Left, Up),
 //! as `_ShipyardFilter` does from no cell (@0x60734-0x607b7). With a cell
 //! highlighted, an arrow key moves it by
-//! [`RuleKey::GridArrows`](nova_sim::RuleKey::GridArrows): by the engine,
+//! [`RuleKey::GridArrows`](nova_sim_frame::RuleKey::GridArrows): by the engine,
 //! Up on the first row and Down onto an empty cell stay
 //! (@0x6057a-0x6072f). Page Up and Page Down move as Up and Down. By the
 //! other reading of the selection, the first cell is
@@ -162,7 +162,7 @@
 //! ([`ShipyardScreen::take_offer_choice`]). The info panel and the name
 //! prompt cover the shipyard, as the offer does: nothing is asked while
 //! any is open, and the wait runs on or stops as
-//! [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock) reads it
+//! [`RuleKey::OfferClock`](nova_sim_frame::RuleKey::OfferClock) reads it
 //! ([`ShipyardScreen::with_offer_clock`]).
 //!
 //! Done, Return and Escape close the shipyard. Without its dialog, the
@@ -176,8 +176,8 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::shipyard::SHIP_NAME_CHARS;
-use nova_sim::{
+use nova_sim_frame::shipyard::SHIP_NAME_CHARS;
+use nova_sim_frame::{
     MissionId, OfferPrompt, Rating, RuleSource, ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard,
     StockLine,
 };
@@ -1090,7 +1090,7 @@ impl ShipyardScreen {
     /// ship's picture and description read from `catalog`, which gives
     /// the ships' base images once, now. By the engine nothing is
     /// selected (`_DoShipyardDialog` @0x5e6d8-0x5e705); by the other
-    /// reading of [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection),
+    /// reading of [`RuleKey::GridSelection`](nova_sim_frame::RuleKey::GridSelection),
     /// the first cell is.
     #[must_use]
     pub fn new(
@@ -1209,7 +1209,7 @@ impl ShipyardScreen {
     /// The shipyard with mission offers, each shown in the offer dialog of
     /// its variant laid out by `templates` (or saying why there is none): it asks for the
     /// first as it opens, and again once rearmed ([`ShipyardScreen::rearm`]), as
-    /// the original's does ([`SHIPYARD`](nova_sim::mission::screens::SHIPYARD)).
+    /// the original's does ([`SHIPYARD`](nova_sim_frame::mission::screens::SHIPYARD)).
     #[must_use]
     pub fn with_offers(self, templates: OfferTemplates) -> Self {
         Self {
@@ -1223,7 +1223,7 @@ impl ShipyardScreen {
     }
 
     /// Its offers' timer running as `clock` reads
-    /// [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock), for offers
+    /// [`RuleKey::OfferClock`](nova_sim_frame::RuleKey::OfferClock), for offers
     /// given ([`ShipyardScreen::with_offers`]) before it.
     #[must_use]
     pub fn with_offer_clock(self, clock: RuleSource) -> Self {
@@ -1372,7 +1372,7 @@ impl ShipyardScreen {
     }
 
     /// The selected cell's index: none when nothing is listed, or, by
-    /// [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection)'s
+    /// [`RuleKey::GridSelection`](nova_sim_frame::RuleKey::GridSelection)'s
     /// engine reading, when nothing is selected (on opening, after a press
     /// on an empty cell or a scroll that moved).
     #[must_use]
@@ -1998,7 +1998,9 @@ use picture::ShipPicture;
 mod tests {
     use std::cell::RefCell;
 
-    use nova_sim::{RuleSource, Rulebook, ShipFacts, ShipFields, ShipSpecs, StockLine};
+    use nova_sim_base::ShipFields;
+    use nova_sim_frame::{RuleSource, Rulebook, ShipSpecs, StockLine};
+    use nova_sim_state::shown::shipyard::ShipFacts;
 
     use super::*;
     use crate::draw::{DrawCommand, frame_rect};
@@ -2168,7 +2170,7 @@ mod tests {
         }
 
         /// Names no movie: these screens never play one.
-        fn description_movie(&self, _id: i16) -> Option<nova_sim::DescMovie> {
+        fn description_movie(&self, _id: i16) -> Option<nova_sim_frame::DescMovie> {
             None
         }
     }
@@ -2222,7 +2224,7 @@ mod tests {
         length: 26,
         crew: 4,
         space: 12,
-        rounding: nova_sim::RuleSource::Engine,
+        rounding: nova_sim_frame::RuleSource::Engine,
         weapons: Vec::new(),
         long_name: String::new(),
     };
@@ -3232,8 +3234,10 @@ mod tests {
         assert_eq!(arrowed(engine(), 2, Key::ArrowUp), (Some(2), false));
         assert_eq!(arrowed(engine(), 2, Key::PageUp), (Some(2), false));
         assert_eq!(arrowed(engine(), 0, Key::PageDown), (Some(0), false));
-        let clamped =
-            || Rulebook::default().with_override(nova_sim::RuleKey::GridArrows, RuleSource::Bible);
+        let clamped = || {
+            Rulebook::default()
+                .with_override(nova_sim_frame::RuleKey::GridArrows, RuleSource::Bible)
+        };
         assert_eq!(
             arrowed(clamped(), 1, Key::ArrowDown),
             (Some(3), false),
@@ -3251,7 +3255,7 @@ mod tests {
     /// The Bible's reading of the grid's selection: the port's, where the
     /// selection is the highlighted cell.
     fn bible() -> Rulebook {
-        Rulebook::default().with_override(nova_sim::RuleKey::GridSelection, RuleSource::Bible)
+        Rulebook::default().with_override(nova_sim_frame::RuleKey::GridSelection, RuleSource::Bible)
     }
 
     /// Whether the screen shows no ship: Buy Ship and Info greyed, and no
@@ -3374,7 +3378,7 @@ mod tests {
 
     #[test]
     fn a_second_press_on_a_cell_within_15_mac_ticks_opens_info_by_either_reading() {
-        use nova_sim::mission::screens::mac_ticks;
+        use nova_sim_frame::mission::screens::mac_ticks;
         for rules in [Rulebook::default(), bible()] {
             let opened = || {
                 opened_with(

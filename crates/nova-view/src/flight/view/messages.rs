@@ -2,23 +2,23 @@
 //! something the flight read read it from a [`Wording`]: a ship, an
 //! outfit, a good, a `jünk` or a stellar from the names fixed for the
 //! flight's life, which its opening handed the view
-//! ([`FlightOpening::names`](nova_sim::flight_frame::FlightOpening::names)),
+//! ([`FlightOpening::names`](nova_sim_frame::flight_frame::FlightOpening::names)),
 //! and the player's ship and the date from the kept frame
 //! ([`FlightFrame::player_ship_name`], [`FlightFrame::long_date`]), so any
 //! flight, a scripted one in the component tests, words them. A mission
 //! cargo's name rides its board line
-//! ([`MissionBoardLine::Retrieved`](nova_sim::MissionBoardLine::Retrieved)).
+//! ([`MissionBoardLine::Retrieved`](nova_sim_frame::MissionBoardLine::Retrieved)).
 
-use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
-use nova_sim::mission::screens::NO_ACTIVE_MISSIONS;
-use nova_sim::text_tags::comma_number;
-use nova_sim::{
+use nova_sim_frame::hire::{DEFECTED_ONE, DEFECTED_SOME};
+use nova_sim_frame::mission::screens::NO_ACTIVE_MISSIONS;
+use nova_sim_frame::text_tags::comma_number;
+use nova_sim_frame::{
     Assigned, BoardRefusal, Chance, CommNote, DockFind, DockKind, GateKind, HailRefusal, Help,
     JumpRefusal, LandingRefusal, SelfDestructLine, ShipId, SimMessage, StellarId, Taken,
 };
-use nova_sim::{MissionBoardLine, PayNote, RuleSource, TutorialHint};
+use nova_sim_frame::{MissionBoardLine, PayNote, RuleSource, TutorialHint};
 
-use nova_sim::flight_frame::{FlightFrame, Names};
+use nova_sim_frame::flight_frame::{FlightFrame, Names};
 
 use crate::bound_names::{Spelling, name_command, name_read};
 use crate::flight::escorts::NUMBER_WORDS;
@@ -37,8 +37,8 @@ use crate::ui::comm::grouped;
 /// hud-fidelity/phase-12-flight-messages-the-original-raises's. The
 /// session's own messages carry their time ([`SimMessage::ticks`]), as
 /// do the ships' comm notes and the hail quotes it raises
-/// ([`CommNote::ticks`](nova_sim::CommNote::ticks),
-/// [`PersonQuote::ticks`](nova_sim::PersonQuote::ticks)).
+/// ([`CommNote::ticks`](nova_sim_frame::CommNote::ticks),
+/// [`PersonQuote::ticks`](nova_sim_frame::PersonQuote::ticks)).
 ///
 /// [`MESSAGE_TICKS`], 240, is the original's common time: "No
 /// response." (`_HandlePlayerCommunication` @0x626c8), "You have no
@@ -178,7 +178,7 @@ pub const AND: &str = "and";
 /// with credits too "and", the credits, "credit" at 1 and "credits"
 /// otherwise, then "stolen!"; each number as `_StrcatCommaNumber` writes
 /// it, from a million as `millions` reads
-/// ([`RuleKey::PayMillions`](nova_sim::RuleKey::PayMillions)).
+/// ([`RuleKey::PayMillions`](nova_sim_frame::RuleKey::PayMillions)).
 #[must_use]
 pub fn cargo_stolen_message(tons: u32, credits: i64, millions: RuleSource) -> String {
     let mut words = Vec::new();
@@ -200,7 +200,7 @@ pub fn cargo_stolen_message(tons: u32, credits: i64, millions: RuleSource) -> St
 
 /// What the message line says of a plunder's `message`, the numbers'
 /// millions as `millions` reads
-/// ([`RuleKey::PayMillions`](nova_sim::RuleKey::PayMillions)); none for
+/// ([`RuleKey::PayMillions`](nova_sim_frame::RuleKey::PayMillions)); none for
 /// any other message.
 fn stolen_text(message: &SimMessage, millions: RuleSource) -> Option<String> {
     match message {
@@ -234,12 +234,12 @@ pub const BOMB_SET_UP: &str = "Someone set up us the bomb!";
 pub const JUMP_COLLAPSED: &str = "Ship disabled - hyperspace field collapsed.";
 /// J refused because no gate the player's system shows serves the system
 /// selected in nav mode 3, by the other reading of
-/// [`RuleKey::NoGateRefusal`](nova_sim::RuleKey::NoGateRefusal): the
+/// [`RuleKey::NoGateRefusal`](nova_sim_frame::RuleKey::NoGateRefusal): the
 /// original's J says nothing there, so it has no `STR#` for it.
 pub const NO_GATE_LEADS_THERE: &str = "No jump point leads there.";
 /// The press that would enter a hypergate refused because the ship holds
 /// less fuel than the passage costs, by the other reading of
-/// [`RuleKey::GateFuel`](nova_sim::RuleKey::GateFuel): the original's
+/// [`RuleKey::GateFuel`](nova_sim_frame::RuleKey::GateFuel): the original's
 /// hypergates read no fuel, so it has no `STR#` for it. Worded after J's
 /// #10, [`NO_FUEL`].
 pub const GATE_FUEL_SHORT: &str = "Insufficient energy to pass through this jump point.";
@@ -415,7 +415,7 @@ pub(super) struct Wording<'a> {
     /// The keys the tutorial's hints name, for the device they read, or
     /// the default bindings on the keyboard for none.
     pub(super) keys: Option<&'a CommandReader>,
-    /// [`RuleKey::HintKeyNames`](nova_sim::RuleKey::HintKeyNames)'s
+    /// [`RuleKey::HintKeyNames`](nova_sim_frame::RuleKey::HintKeyNames)'s
     /// reading: whether the hints name a key from `STR#` 129 or through
     /// the layout.
     pub(super) hint_names: RuleSource,
@@ -434,7 +434,7 @@ impl<'a> Wording<'a> {
     }
 
     /// This wording, naming the keys `keys` reads, as `hint_names`
-    /// reads [`RuleKey::HintKeyNames`](nova_sim::RuleKey::HintKeyNames).
+    /// reads [`RuleKey::HintKeyNames`](nova_sim_frame::RuleKey::HintKeyNames).
     pub(super) const fn keyed(self, keys: &'a CommandReader, hint_names: RuleSource) -> Self {
         Self {
             keys: Some(keys),
@@ -493,7 +493,7 @@ fn self_destruct_text(line: SelfDestructLine) -> String {
 /// What the message line says of `message`, a session's message other
 /// than an arrival's, the names read from `words` and the numbers'
 /// millions as `millions` reads
-/// ([`RuleKey::PayMillions`](nova_sim::RuleKey::PayMillions)): none for an
+/// ([`RuleKey::PayMillions`](nova_sim_frame::RuleKey::PayMillions)): none for an
 /// arrival's, which [`arrival_lead`] leads the arrival message with, and
 /// for the take-off greeting, the land hint, the dock request's line,
 /// the dock approach's greeting and a bribe's clearance, which
@@ -1173,7 +1173,7 @@ pub fn bribe_cleared(station: bool, ship: &str) -> String {
 /// [`FEE_IS_DOCKING`] at a station or [`FEE_IS_LANDING`] elsewhere, " ",
 /// the fee with its commas (`_StrcatCommaNumber` @0x64e21, its millions
 /// by `millions`,
-/// [`RuleKey::PayMillions`](nova_sim::RuleKey::PayMillions)), " ",
+/// [`RuleKey::PayMillions`](nova_sim_frame::RuleKey::PayMillions)), " ",
 /// [`CREDITS`] and [`FEE_END`]: "… Welcome to Earth.   [Landing fee is
 /// 1,000 credits.]". A hypergate's greeting has none: it ends before the
 /// fee block (@0x64a59 → 0x64e5d), so `STR#` 2002 #102 "[Hypergate fee
@@ -1528,7 +1528,7 @@ pub fn jump_refusal_message(refusal: &JumpRefusal) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use nova_sim::NpcId;
+    use nova_sim_frame::NpcId;
 
     use super::*;
 
@@ -2246,7 +2246,7 @@ mod tests {
 
     #[test]
     fn a_helpers_note_names_it_in_the_originals_words() {
-        let note = |done| nova_sim::CommNote {
+        let note = |done| nova_sim_frame::CommNote {
             from: NpcId(2),
             comm_name: "Cruiser".to_owned(),
             ship_name: "Kestrel".to_owned(),

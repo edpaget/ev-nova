@@ -29,12 +29,12 @@
 //! which the port's comm dialog stands in for.
 //!
 //! Its grid's selection follows
-//! [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection) as the shipyard's does (see
+//! [`RuleKey::GridSelection`](nova_sim_frame::RuleKey::GridSelection) as the shipyard's does (see
 //! [`shipyard`](super::shipyard)): by the engine it opens with nothing
 //! selected, and an empty cell pressed or a scroll that moves selects
 //! nothing; by the other reading it opens on the first cell and keeps
 //! it. Its arrow keys move the selection by
-//! [`RuleKey::GridArrows`](nova_sim::RuleKey::GridArrows) as the
+//! [`RuleKey::GridArrows`](nova_sim_frame::RuleKey::GridArrows) as the
 //! shipyard's do: by the engine, Up on the first row and Down onto an
 //! empty cell stay, and Page Up and Page Down move as Up and Down. By both, a second press on a cell within 15 Mac ticks opens Info,
 //! as `_ShipyardFilter` does in hire mode too (@0x60cd7-0x60d12).
@@ -62,8 +62,8 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::hire::{HIRE_ESCORT, HIRING_PRICE};
-use nova_sim::{HireList, HireRow, ShipId};
+use nova_sim_frame::hire::{HIRE_ESCORT, HIRING_PRICE};
+use nova_sim_frame::{HireList, HireRow, ShipId};
 
 use super::credits::{self, credits_text, draw_amount_rows};
 use super::grid::{self, GridColors, Shown};
@@ -197,7 +197,7 @@ impl HireScreen {
     /// ship's picture and description read from `catalog`, each listed
     /// ship's cell picture once, now. By the engine nothing is
     /// selected (`_DoShipyardDialog` @0x5e6d8-0x5e705); by the other
-    /// reading of [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection), read from `list`'s rules,
+    /// reading of [`RuleKey::GridSelection`](nova_sim_frame::RuleKey::GridSelection), read from `list`'s rules,
     /// the first cell is.
     #[must_use]
     pub fn new(
@@ -346,7 +346,7 @@ impl HireScreen {
     }
 
     /// The selected cell's index: none when nothing is listed, or, by
-    /// [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection)'s
+    /// [`RuleKey::GridSelection`](nova_sim_frame::RuleKey::GridSelection)'s
     /// engine reading, when nothing is selected (on opening, after a press
     /// on an empty cell or a scroll that moved).
     #[must_use]
@@ -745,7 +745,8 @@ mod tests {
 
     mod movie;
 
-    use nova_sim::{HireRefusal, ShipFields, ShipSpecs, StockLine};
+    use nova_sim_base::ShipFields;
+    use nova_sim_frame::{HireRefusal, ShipSpecs, StockLine};
 
     use super::*;
     use crate::draw::{DrawCommand, frame_rect};
@@ -878,7 +879,7 @@ mod tests {
         }
 
         /// Names no movie: these screens never play one.
-        fn description_movie(&self, _id: i16) -> Option<nova_sim::DescMovie> {
+        fn description_movie(&self, _id: i16) -> Option<nova_sim_frame::DescMovie> {
             None
         }
     }
@@ -945,7 +946,7 @@ mod tests {
                 length: 20,
                 crew: 3,
                 space: 0,
-                rounding: nova_sim::RuleSource::Engine,
+                rounding: nova_sim_frame::RuleSource::Engine,
                 weapons: Vec::new(),
                 long_name: String::new(),
             },
@@ -957,7 +958,7 @@ mod tests {
     /// the cash does not cover; 25,000 credits in hand.
     fn list() -> HireList {
         HireList {
-            rules: nova_sim::Rulebook::default(),
+            rules: nova_sim_frame::Rulebook::default(),
             rows: vec![
                 row(128, 970, 100, Ok(())),
                 row(140, 50_000, 1, Err(HireRefusal::CannotAfford)),
@@ -1183,7 +1184,7 @@ mod tests {
         let screen = screen_of(
             &art(),
             HireList {
-                rules: nova_sim::Rulebook::default(),
+                rules: nova_sim_frame::Rulebook::default(),
                 rows: vec![row(128, 2_500_000, 100, Ok(()))],
                 cash: -1_500,
                 room: true,
@@ -1407,7 +1408,7 @@ mod tests {
             let mut screen = screen_of(
                 &art(),
                 HireList {
-                    rules: nova_sim::Rulebook::default(),
+                    rules: nova_sim_frame::Rulebook::default(),
                     rows: vec![row],
                     ..list()
                 },
@@ -1541,7 +1542,7 @@ mod tests {
         let empty = screen_of(
             &art(),
             HireList {
-                rules: nova_sim::Rulebook::default(),
+                rules: nova_sim_frame::Rulebook::default(),
                 rows: Vec::new(),
                 cash: 0,
                 room: true,
@@ -1555,7 +1556,7 @@ mod tests {
     /// `count` ships, numbered from 200, two lines each.
     fn long(count: usize) -> HireList {
         HireList {
-            rules: nova_sim::Rulebook::default(),
+            rules: nova_sim_frame::Rulebook::default(),
             rows: (0..count)
                 .map(|n| row(200 + i16::try_from(n).expect("few"), 10, 1, Ok(())))
                 .collect(),
@@ -1824,7 +1825,7 @@ mod tests {
         let mut row = row(128, 970, 100, Ok(()));
         row.specs.long_name = "The Long 128".to_owned();
         HireList {
-            rules: nova_sim::Rulebook::default(),
+            rules: nova_sim_frame::Rulebook::default(),
             rows: vec![row],
             ..list()
         }
@@ -2008,10 +2009,10 @@ mod tests {
 
     /// The Bible's reading of the grid's selection: the port's, where the
     /// selection is the highlighted cell.
-    fn bible() -> nova_sim::Rulebook {
-        nova_sim::Rulebook::default().with_override(
-            nova_sim::RuleKey::GridSelection,
-            nova_sim::RuleSource::Bible,
+    fn bible() -> nova_sim_frame::Rulebook {
+        nova_sim_frame::Rulebook::default().with_override(
+            nova_sim_frame::RuleKey::GridSelection,
+            nova_sim_frame::RuleSource::Bible,
         )
     }
 
@@ -2113,8 +2114,8 @@ mod tests {
 
     #[test]
     fn a_second_press_on_a_cell_within_15_mac_ticks_opens_info_by_either_reading() {
-        use nova_sim::mission::screens::mac_ticks;
-        for rules in [nova_sim::Rulebook::default(), bible()] {
+        use nova_sim_frame::mission::screens::mac_ticks;
+        for rules in [nova_sim_frame::Rulebook::default(), bible()] {
             let opened = || opened_of(&art(), HireList { rules, ..list() });
             let mut screen = opened();
             click_cell(&mut screen, 1);
@@ -2159,7 +2160,7 @@ mod tests {
         press_key(&mut screen, Key::Space);
         assert!(screen.info_panel().is_none());
         assert_eq!(screen.take_sounds(), [], "Info with no ship is silent");
-        for rules in [nova_sim::Rulebook::default(), bible()] {
+        for rules in [nova_sim_frame::Rulebook::default(), bible()] {
             let mut screen = opened_of(&art(), HireList { rules, ..list() });
             click_cell(&mut screen, 1);
             press_key(&mut screen, Key::KeyH);
@@ -2192,12 +2193,12 @@ mod tests {
     fn by_the_engine_down_onto_an_empty_cell_and_up_on_the_first_row_stay() {
         // Six escorts, the second too dear: Down from 3 finds index 7
         // empty, and Up from 5 reaches 1, on the first row.
-        let six = |rules: nova_sim::Rulebook| {
+        let six = |rules: nova_sim_frame::Rulebook| {
             let mut list = long(6);
             list.rows[1].hire = Err(HireRefusal::CannotAfford);
             HireList { rules, ..list }
         };
-        let arrowed = |rules: nova_sim::Rulebook, from: usize, keys: &[Key]| {
+        let arrowed = |rules: nova_sim_frame::Rulebook, from: usize, keys: &[Key]| {
             let mut screen = opened_of(&art(), six(rules));
             click_cell(&mut screen, from);
             for &k in keys {
@@ -2205,7 +2206,7 @@ mod tests {
             }
             (screen.selected(), enabled(&screen, HIRE_ESCORT))
         };
-        let engine = nova_sim::Rulebook::default;
+        let engine = nova_sim_frame::Rulebook::default;
         assert_eq!(arrowed(engine(), 3, &[Key::ArrowDown]), (Some(3), true));
         assert_eq!(arrowed(engine(), 3, &[Key::PageDown]), (Some(3), true));
         assert_eq!(arrowed(engine(), 5, &[Key::ArrowUp]), (Some(1), false));
@@ -2219,8 +2220,10 @@ mod tests {
         );
         assert_eq!(arrowed(engine(), 1, &[Key::PageDown]), (Some(5), true));
         let clamped = || {
-            nova_sim::Rulebook::default()
-                .with_override(nova_sim::RuleKey::GridArrows, nova_sim::RuleSource::Bible)
+            nova_sim_frame::Rulebook::default().with_override(
+                nova_sim_frame::RuleKey::GridArrows,
+                nova_sim_frame::RuleSource::Bible,
+            )
         };
         assert_eq!(arrowed(clamped(), 3, &[Key::ArrowDown]), (Some(5), true));
         assert_eq!(

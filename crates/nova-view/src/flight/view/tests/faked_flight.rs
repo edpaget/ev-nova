@@ -6,7 +6,7 @@
 
 use super::faked_world::world;
 use super::*;
-use nova_sim::flight_frame::{FrameShip, StepReport, StepRun};
+use nova_sim_frame::flight_frame::{FrameShip, StepReport, StepRun};
 
 /// A view over a flight scripted to show the player's ship 128 at rest
 /// at Sol's centre, facing up, read from `catalog`.
@@ -60,7 +60,7 @@ pub(super) fn last_controls(view: &Faked) -> Controls {
 }
 
 /// Everything the last step was given.
-pub(super) fn last_step_input(view: &Faked) -> nova_sim::flight_frame::StepInput {
+pub(super) fn last_step_input(view: &Faked) -> nova_sim_frame::flight_frame::StepInput {
     *view.sim.inputs().last().expect("a step")
 }
 

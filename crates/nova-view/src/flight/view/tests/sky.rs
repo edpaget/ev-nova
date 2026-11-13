@@ -7,8 +7,8 @@
 
 use std::cell::Cell;
 
-use nova_sim::flight_frame::StepRun;
-use nova_sim::player_wrap::PlayerWrap;
+use nova_sim_frame::flight_frame::StepRun;
+use nova_sim_frame::player_wrap::PlayerWrap;
 
 use crate::flight::catalog::{StarDot, StarDots};
 use crate::flight::stars::murk_level;
@@ -348,7 +348,7 @@ fn once_arrived_the_sky_no_longer_rushes() {
     flown_showing(&mut view, warp, start, next, None);
     assert_ne!(rush(&view), STILL);
     let arrived = FlightFrame {
-        system: nova_sim::SystemId(131),
+        system: nova_sim_frame::SystemId(131),
         jump_under_way: false,
         warping: false,
         ..view.frame.clone()

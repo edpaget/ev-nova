@@ -3,7 +3,7 @@
 //! (`spaceport/bar/story.rs`).
 
 use super::*;
-use nova_sim::flight_frame::{BarScene, BarStory};
+use nova_sim_frame::flight_frame::{BarScene, BarStory};
 
 /// Earth's bar laid out with its four story slots, under the text.
 fn storied() -> SpaceportView {

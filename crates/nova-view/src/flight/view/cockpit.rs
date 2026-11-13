@@ -3,11 +3,9 @@
 //! (its HUD and target parts). The world itself is drawn from the kept
 //! frame (the `drawing` and `world` modules).
 
-use nova_sim::PlayerCommand;
-#[cfg(doc)]
-use nova_sim::Session;
-use nova_sim::flight_frame::{Answer, FlightFrame, ScreenAnswer, ScreenAsk};
-use nova_sim::{
+use nova_sim_frame::PlayerCommand;
+use nova_sim_frame::flight_frame::{Answer, FlightFrame, ScreenAnswer, ScreenAsk};
+use nova_sim_frame::{
     ClassRow, Condition, EscortCommand, NavMode, Reserves, StellarPick, SystemId, TargetPick,
 };
 
@@ -25,7 +23,7 @@ use crate::keymap::{Command, EscortMenuCommand, FlightCommand as F, PlayCommand}
 use crate::system::camera::VIEW_SIZE;
 use crate::time::sixtieths;
 use crate::{DrawList, Input, Point, UiSound};
-use nova_sim::flight_frame::FlightCommand;
+use nova_sim_frame::flight_frame::FlightCommand;
 
 use super::slot_block::{self, Column};
 use super::{ESCORT_TICKS, FlightView, window_width};
@@ -197,7 +195,7 @@ pub(super) const fn escort_command_index(command: Command) -> Option<usize> {
 
 /// The escort menu, over the [`FlightSim`] port: its keys read the fleet
 /// from the kept frame
-/// ([`FrameHud::escort_rows`](nova_sim::flight_frame::FrameHud::escort_rows)) and
+/// ([`FrameHud::escort_rows`](nova_sim_frame::flight_frame::FrameHud::escort_rows)) and
 /// send their commands through it.
 impl<C, S: FlightSim> FlightView<C, S> {
     /// Selects the escort menu's group `n` (keys 1-5), if the player has
@@ -392,7 +390,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// The rows the escort menu draws: by
-    /// [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s engine
+    /// [`RuleKey::HudCadence`](nova_sim_frame::RuleKey::HudCadence)'s engine
     /// reading the image its last redraw drew ([`MenuRows::Held`]), held
     /// between `_DrawEscortMenuInFrame`'s redraws; by the other, `live`,
     /// filled afresh every frame.
@@ -428,7 +426,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
 impl<C, S: FlightSim> FlightView<C, S> {
     /// What the shield, armour and fuel gauges show this frame, of
     /// `frame`'s: while docked, by
-    /// [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s engine
+    /// [`RuleKey::HudCadence`](nova_sim_frame::RuleKey::HudCadence)'s engine
     /// reading, the snapshot taken at their last redraw, as the original's
     /// port draws them only at its redraws (`_statusRedraw[1]` and `[4]`):
     /// an outfitter order or a ship purchase under the same `ïntf` leaves
@@ -437,7 +435,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`FlightView::answer_in_flight`]), as the text dialog's modal loop
     /// draws no bar. Otherwise in flight, by the other reading, or before
     /// the first redraw, the gauges as they are now
-    /// ([`FrameHud::reserves`](nova_sim::flight_frame::FrameHud::reserves)): flight's every frame marks them as they
+    /// ([`FrameHud::reserves`](nova_sim_frame::flight_frame::FrameHud::reserves)): flight's every frame marks them as they
     /// change.
     pub(super) fn reserves_shown(&self, frame: &FlightFrame) -> Reserves {
         match self.reserves_scene {
@@ -450,7 +448,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// The ship's shield, armour and fuel now, as the flight's frame,
     /// filled afresh, holds them
-    /// ([`FrameHud::reserves`](nova_sim::flight_frame::FrameHud::reserves));
+    /// ([`FrameHud::reserves`](nova_sim_frame::flight_frame::FrameHud::reserves));
     /// none for a session that never started. Read afresh, as the docked
     /// calls that change them (a recharge, an outfitter order, a
     /// mission's script) read them right after.
@@ -459,7 +457,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// The escort menu's class rows, as the kept frame holds them
-    /// ([`FrameHud::escort_rows`](nova_sim::flight_frame::FrameHud::escort_rows)); none present for a session that
+    /// ([`FrameHud::escort_rows`](nova_sim_frame::flight_frame::FrameHud::escort_rows)); none present for a session that
     /// failed.
     pub(super) fn escort_rows(&self) -> [ClassRow; 4] {
         self.frame.hud.escort_rows
@@ -467,7 +465,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// Draws the status bar's target panel, showing `shown`, and the
     /// secondary weapon line, of `frame`'s secondary
-    /// ([`FrameHud::secondary`](nova_sim::flight_frame::FrameHud::secondary), [`FrameHud::secondary_line_count`](nova_sim::flight_frame::FrameHud::secondary_line_count)). The
+    /// ([`FrameHud::secondary`](nova_sim_frame::flight_frame::FrameHud::secondary), [`FrameHud::secondary_line_count`](nova_sim_frame::flight_frame::FrameHud::secondary_line_count)). The
     /// weapon line follows every frame: the original redraws it
     /// (`_statusRedraw[3]`) on every event that changes it, so drawing it
     /// each frame shows the same.
@@ -512,7 +510,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// `view_width` wide: the radar, gauges and nav area as shown
     /// ([`FlightView::radar_shown`], [`FlightView::reserves_shown`],
     /// [`FlightView::nav_shown`]), the cargo area
-    /// ([`FrameHud::cargo`](nova_sim::flight_frame::FrameHud::cargo)), the fuel gauge left out while the player is
+    /// ([`FrameHud::cargo`](nova_sim_frame::flight_frame::FrameHud::cargo)), the fuel gauge left out while the player is
     /// disabled, then the target panel as shown
     /// ([`FlightView::target_shown`]) and the secondary weapon's line.
     pub(super) fn draw_bar(
@@ -713,8 +711,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Whether the flight takes `command` now, as the kept frame's gates
-    /// say ([`FlightFrame::gates`](nova_sim::flight_frame::FlightFrame::gates),
-    /// [`Session::takes`]): the frame the last command, step or change
+    /// say ([`FlightFrame::gates`](nova_sim_frame::flight_frame::FlightFrame::gates),
+    /// `nova_sim::Session::takes`): the frame the last command, step or change
     /// left, which each of them refills, so a key read mid-input sees the
     /// commands sent before it. A flight that failed to start takes every
     /// one, as its default frame does.
@@ -879,11 +877,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
     ///
     /// - With \` and Option down and the latch clear, the latch set and
     ///   the ship target let go ([`FlightCommand::ClearTarget`],
-    ///   [`Session::clear_target`], @0x69a17-0x69a90), during a jump too.
+    ///   `nova_sim::Session::clear_target`, @0x69a17-0x69a90), during a jump too.
     /// - Then, with \` without Option or H down outside a jump
     ///   (@0x69aa1-0x69ad4), and the latch clear, the latch set and the
     ///   block run ([`FlightCommand::NavModeKeys`],
-    ///   [`Session::nav_mode_keys`]); otherwise, the latch cleared
+    ///   `nova_sim::Session::nav_mode_keys`); otherwise, the latch cleared
     ///   (@0x69baa).
     ///
     /// So Option-\` held lets go of a target picked meanwhile on the next
@@ -910,7 +908,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// runs it (@0x69bb2-0x69cee) on [`FlightView::select_latch`]: up, the
     /// latch cleared (@0x69cee); down with the latch clear outside a jump,
     /// the latch set (@0x69bf1) and the next linked system selected
-    /// ([`Session::select_next_system`]). During a jump the latch is left
+    /// (`nova_sim::Session::select_next_system`). During a jump the latch is left
     /// as it is (@0x69be7): a `\` held from before stays latched, and one
     /// first pressed during the jump acts after it.
     pub(super) fn select_frame(&mut self, down: bool) {
@@ -948,7 +946,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// selected now (`Session::floating_preselection`,
     /// @0x1147b-0x114c8), whose name alone is drawn above a zoom of 1.1.
     /// It marks no green system, with multiple arrows allowed
-    /// ([`MapMarks::NONE`](nova_sim::MapMarks::NONE)): it shows only from
+    /// ([`MapMarks::NONE`](nova_sim_frame::MapMarks::NONE)): it shows only from
     /// `_HandlePlayer`, never under a mission dialog's map.
     /// The frame shows that drawing until the next show: its course and
     /// mode-3 link are those of the last show, not live, as the
@@ -983,7 +981,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// mission's systems changed since the last show while the map is up
     /// with H and `\` let go, and the drawing is one snapshot of the
     /// flight with no stale mission systems to keep.
-    fn redraw_floating_map(&mut self) -> Option<Box<nova_sim::flight_frame::FloatingMap>> {
+    fn redraw_floating_map(&mut self) -> Option<Box<nova_sim_frame::flight_frame::FloatingMap>> {
         self.floating.show(self.mac_now());
         // `_DrawMapInFloatingFrame` sets `_mapScroll` to the current
         // system as it draws (@0x11338-0x1136d), so the course map opens
@@ -1023,9 +1021,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// `_HandlePlayer` does (@0x6a130-0x6a762): while the map is up, faded
     /// out or not, inside its frame. A hit on the current system's centre
     /// or a link's box, each at its place on the map (the kept frame's,
-    /// [`FlightFrame::floating`](nova_sim::flight_frame::FlightFrame::floating)), selects through the flight
+    /// [`FlightFrame::floating`](nova_sim_frame::flight_frame::FlightFrame::floating)), selects through the flight
     /// ([`FlightCommand::SelectOnFloatingMap`],
-    /// [`Session::select_on_floating_map`]) and shows the map again
+    /// `nova_sim::Session::select_on_floating_map`) and shows the map again
     /// (@0x6a735); a miss is swallowed (@0x6a342). Whether it took it.
     /// During a jump the original passes the click on (@0x6a145), where a
     /// click in space selects nothing either; here the session refuses the
@@ -1113,7 +1111,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// Draws the floating map while it is up: centred on the current
     /// system at its zoom (the kept frame's place for it,
-    /// [`FlightFrame::floating`](nova_sim::flight_frame::FlightFrame::floating),
+    /// [`FlightFrame::floating`](nova_sim_frame::flight_frame::FlightFrame::floating),
     /// read at every draw, never asked), the drawing its last show took
     /// ([`FlightView::show_floating_map`]) through the course map's
     /// [`GalaxyMap::draw_marks`](crate::galaxy::GalaxyMap::draw_marks), with no brackets or second names, as

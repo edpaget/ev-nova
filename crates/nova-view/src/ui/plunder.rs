@@ -41,7 +41,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::{Assignment, PlunderView, Take};
+use nova_sim_frame::{Assignment, PlunderView, Take};
 
 use crate::color::Color;
 use crate::draw::DrawList;
@@ -631,7 +631,7 @@ pub(crate) use tests::{assignment_pad_probe, plunder_pad_probe};
 
 #[cfg(test)]
 mod tests {
-    use nova_sim::{Good, NpcId, OutfitId, ShipId};
+    use nova_sim_frame::{Good, NpcId, OutfitId, ShipId};
 
     use super::*;
     use crate::draw::{DrawCommand, fill_command};
@@ -651,8 +651,8 @@ mod tests {
             ship: ShipId(129),
             credits: 5750,
             cargo: Some((Good::Commodity(0), 13)),
-            ammo: Some(nova_sim::AmmoOffer {
-                slot: nova_sim::WeaponId(140),
+            ammo: Some(nova_sim_state::shown::board::AmmoOffer {
+                slot: nova_sim_frame::WeaponId(140),
                 rounds: 2,
                 named: Some(OutfitId(310)),
             }),
@@ -792,9 +792,9 @@ mod tests {
     }
 
     /// A trader's offer of `rounds` rounds, named or not.
-    fn ammo(rounds: u32, named: bool) -> nova_sim::AmmoOffer {
-        nova_sim::AmmoOffer {
-            slot: nova_sim::WeaponId(140),
+    fn ammo(rounds: u32, named: bool) -> nova_sim_state::shown::board::AmmoOffer {
+        nova_sim_state::shown::board::AmmoOffer {
+            slot: nova_sim_frame::WeaponId(140),
             rounds,
             named: named.then_some(OutfitId(310)),
         }

@@ -43,54 +43,13 @@
 //! (`nova_sim::Session::hover`). The test makes no sound and
 //! targets nothing.
 
-use crate::catalog::StellarId;
 use crate::cloak::Scanner;
 use crate::combat::hull::Condition;
 use crate::geometry::Vec2;
-use crate::navigation::SpriteRect;
 use crate::targeting::type_targetable;
-use crate::traffic::npc::{Npc, NpcId};
+use crate::traffic::npc::Npc;
 
-/// A ship's sprite as it is drawn: the rect the view draws its hull in, in
-/// system coordinates, placed at whole pixels from the player as the
-/// original places the slot (`_HandleShipDisplay` @0x2cd17-0x2cd9d).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct DrawnBox {
-    /// The rect the hull is drawn in.
-    pub rect: SpriteRect,
-}
-
-impl DrawnBox {
-    /// The box of a sprite drawn in `rect`.
-    #[must_use]
-    pub fn at(rect: SpriteRect) -> Self {
-        Self { rect }
-    }
-}
-
-/// Where the view draws the ships: the port the hover test reads.
-pub trait DrawnShips {
-    /// The box NPC `id` is drawn in, or would be when it is hidden, or is
-    /// boxed in where its slot has not displayed it yet (where its slot
-    /// was last laid out, or at the window's top-left in a slot never laid
-    /// out this run: `nova_sim::Session::hover_place`), or `None` when it
-    /// has no box: no sprite slot (the original's null sprite, @0x38171),
-    /// which the engine never has.
-    fn npc(&self, id: NpcId) -> Option<DrawnBox>;
-    /// The box the player's ship is drawn in, or `None` when it has none.
-    fn player(&self) -> Option<DrawnBox>;
-}
-
-/// What the pointer is over.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Hover {
-    /// The player's own ship, which counts only while it has a target.
-    Player,
-    /// An NPC.
-    Ship(NpcId),
-    /// A stellar.
-    Stellar(StellarId),
-}
+pub use nova_sim_state::shown::hover::{DrawnBox, DrawnShips, Hover};
 
 /// Whether `npc` can be hovered by a player of `scanner` (see the module
 /// docs): intact or disabled, not cloaked unless `scanner` targets cloaked
@@ -103,8 +62,8 @@ pub fn hover_gate(npc: &Npc, scanner: Scanner) -> bool {
 }
 
 /// Whether `at` is in `drawn`'s hit box: the stellars' rule
-/// ([`SpriteRect::holds`]) over the rect the sprite is drawn in, see the
-/// module docs.
+/// ([`SpriteRect::holds`](crate::navigation::SpriteRect::holds)) over
+/// the rect the sprite is drawn in, see the module docs.
 #[must_use]
 pub fn in_box(at: Vec2, drawn: DrawnBox) -> bool {
     drawn.rect.holds(at)
@@ -135,9 +94,10 @@ pub fn ship_under(
 mod tests {
     use super::*;
     use crate::cloak::{Cloak, CloakGear, FADE_FULL, UNTARGETABLE};
+    use crate::navigation::SpriteRect;
     use crate::stats::ShipStats;
     use crate::traffic::fixture::npc;
-    use crate::traffic::npc::Mode;
+    use crate::traffic::npc::{Mode, NpcId};
     use std::collections::BTreeMap;
 
     /// The view's boxes, canned.

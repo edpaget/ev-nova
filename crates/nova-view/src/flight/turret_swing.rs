@@ -40,9 +40,9 @@
 
 use std::collections::BTreeMap;
 
-use nova_sim::combat::hull_turn::HullTurn;
-use nova_sim::flight_frame::FrameShip;
-use nova_sim::{ShipId, ShipRef, SpeedMult};
+use nova_sim_frame::combat::hull_turn::HullTurn;
+use nova_sim_frame::flight_frame::FrameShip;
+use nova_sim_frame::{ShipId, ShipRef, SpeedMult};
 
 /// How far a turret swings on its hull a pass at full gain, in degrees:
 /// 360 a second at 30 passes, a half turn in 15 passes. It out-turns every
@@ -150,8 +150,8 @@ impl TurretSwings {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use nova_sim::NpcId;
-    use nova_sim::combat::ship_frames::FrameSpec;
+    use nova_sim_frame::NpcId;
+    use nova_sim_frame::combat::ship_frames::FrameSpec;
 
     use super::*;
 

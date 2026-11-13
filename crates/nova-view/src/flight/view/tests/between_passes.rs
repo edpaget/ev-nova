@@ -7,9 +7,11 @@ use super::faked_hud::{barred, flown, npc_of_140};
 use super::*;
 use crate::flight::hud::NavDisplay;
 use crate::system::camera::Anchor;
-use nova_sim::CommNote;
-use nova_sim::flight_frame::{FrameShip, FrameTarget, PassReport, RaisedLine, StepReport, StepRun};
-use nova_sim::{AlertIcon, JumpReadiness, TargetStatus};
+use nova_sim_frame::CommNote;
+use nova_sim_frame::flight_frame::{
+    FrameShip, FrameTarget, PassReport, RaisedLine, StepReport, StepRun,
+};
+use nova_sim_frame::{AlertIcon, JumpReadiness, TargetStatus};
 
 /// The ship a frame draws the player's as.
 fn anchor() -> Anchor {
@@ -24,7 +26,7 @@ const SELECTED: SystemId = SystemId(131);
 fn second_pass() -> FlightFrame {
     let mut frame = among(Vec::new());
     frame.ships[0].position = Vec2::new(20.0, 0.0);
-    frame.ships[0].shown = nova_sim::Drawn::Hidden;
+    frame.ships[0].shown = nova_sim_frame::Drawn::Hidden;
     frame.ships[0].framed = None;
     frame.jump_readiness = JumpReadiness::Blocked;
     frame
@@ -180,7 +182,7 @@ fn repaired(ship: &str) -> CommNote {
         from: NpcId(0),
         comm_name: "Ally".to_owned(),
         ship_name: ship.to_owned(),
-        done: nova_sim::Help::Repair,
+        done: nova_sim_frame::Help::Repair,
     }
 }
 
@@ -301,7 +303,7 @@ fn a_held_message_is_worded_once() {
     view.words_chance = chance;
     let request = SimMessage::DockRequested {
         stellar: StellarId(128),
-        kind: nova_sim::DockKind::Planet,
+        kind: nova_sim_frame::DockKind::Planet,
     };
     super::stepping::frame(&mut view, holding(None, vec![RaisedLine::Message(request)]));
     let worded = view.message().map(str::to_owned);

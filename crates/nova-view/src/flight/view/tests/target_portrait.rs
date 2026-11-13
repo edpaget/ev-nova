@@ -9,8 +9,8 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use nova_sim::flight_frame::FrameTarget;
-use nova_sim::{TargetStatus, TargetTag};
+use nova_sim_frame::flight_frame::FrameTarget;
+use nova_sim_frame::{TargetStatus, TargetTag};
 
 use super::faked_hud::{barred, flown, npc_of_140};
 use super::*;

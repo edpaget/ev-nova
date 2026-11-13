@@ -11,8 +11,8 @@ use super::faked_landing::departed;
 use super::faked_travel::{jump_now, lit};
 use super::faked_world::world;
 use super::*;
-use nova_sim::SessionEvent;
-use nova_sim::flight_frame::{FlightEvent, FrameShip, FrameStellar, ShipPlace};
+use nova_sim_frame::SessionEvent;
+use nova_sim_frame::flight_frame::{FlightEvent, FrameShip, FrameStellar, ShipPlace};
 
 /// The fake's frame with the player's ship at `x`.
 fn player_at(x: f32) -> FlightFrame {
@@ -53,8 +53,8 @@ fn a_catch_up_redraws_from_the_frame_as_the_events_left_it_and_keeps_it_after() 
     let mut view = faked(player_at(5.0));
     view.sim.set_frame(player_at(9.0));
     view.sim
-        .queue_event(nova_sim::flight_frame::FlightEvent::Session(
-            nova_sim::SessionEvent::StellarChanged,
+        .queue_event(nova_sim_frame::flight_frame::FlightEvent::Session(
+            nova_sim_frame::SessionEvent::StellarChanged,
         ));
     view.sim.queue_answer_showing(Answer::Done, player_at(12.0));
     let seen = std::cell::Cell::new(0.0);
@@ -122,7 +122,7 @@ fn an_arrival_draws_the_ship_where_it_arrives_and_the_new_systems_stellars_as_it
         }],
         ..sol()
     };
-    let place = nova_sim::flight_frame::ShipPlace {
+    let place = nova_sim_frame::flight_frame::ShipPlace {
         position: arrived,
         heading: 45.0,
     };
@@ -168,7 +168,7 @@ fn a_status_redraw_snapshots_a_change_made_through_change_sim() {
     view.redraw_status();
     let before = view.reserves_scene.expect("taken");
     let mut changed = view.frame.clone();
-    changed.hud.reserves.fuel = nova_sim::Gauge::full(100.0);
+    changed.hud.reserves.fuel = nova_sim_frame::Gauge::full(100.0);
     view.change_sim(|sim| sim.set_frame(changed));
     assert_eq!(
         view.reserves_scene,
@@ -269,7 +269,7 @@ fn a_change_of_sound_preferences_is_sent_and_fills_the_kept_frame() {
 
 #[test]
 fn a_change_of_sprite_load_is_sent_and_fills_the_kept_frame() {
-    let still = nova_sim::combat::SpriteLoad {
+    let still = nova_sim_frame::combat::SpriteLoad {
         ship_animations: false,
         running_lights: true,
     };

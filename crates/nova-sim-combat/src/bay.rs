@@ -86,6 +86,8 @@ use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
 use crate::speed_cap::adjusted_accel;
 
+pub use nova_sim_state::shown::bay::{ABANDONED_MANY, ABANDONED_ONE, FighterNote};
+
 /// The `wëap` `Guidance` of a fighter bay.
 pub const FIGHTER_BAY: i16 = 99;
 /// The first `shïp` ID: a bay's `AmmoType` at or above it is the ship it
@@ -103,10 +105,6 @@ pub const DOCK_WINDOW_SCALE: f64 = 50.0;
 /// How far beyond its turn rate, in degrees, a docking fighter still
 /// thrusts at its carrier (1.0 @0xdd068).
 pub const DOCK_TURN_SLACK: f32 = 1.0;
-/// `STR#` 2002 #164: one fighter abandoned.
-pub const ABANDONED_ONE: &str = "fighter abandoned";
-/// `STR#` 2002 #165: several fighters abandoned.
-pub const ABANDONED_MANY: &str = "fighters abandoned";
 
 /// What a fighter's shield and armour capacities and its shield recharge
 /// rate are scaled by (1.333, a double @0xdd0a0): `_ShipShieldCapacity`,
@@ -139,13 +137,6 @@ pub struct Carrier {
     /// How near the carrier, in pixels on each axis, the fighter docks:
     /// the carrier's sprite width.
     pub reach: f32,
-}
-
-/// What became of the player's fighters, for the flight to tell.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FighterNote {
-    /// This many fighters were abandoned as the player left the system.
-    Abandoned(u32),
 }
 
 /// The dock window of a fighter of `Maneuver` `maneuver`.
@@ -237,9 +228,7 @@ mod tests {
     }
 
     #[test]
-    fn the_strings_are_str_2002s() {
-        assert_eq!(ABANDONED_ONE, "fighter abandoned");
-        assert_eq!(ABANDONED_MANY, "fighters abandoned");
+    fn a_bay_is_guidance_99_and_its_fighters_are_ships_from_128() {
         assert_eq!((FIGHTER_BAY, FIRST_SHIP), (99, 128));
     }
 }

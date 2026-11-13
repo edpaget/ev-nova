@@ -925,15 +925,16 @@ pub(super) mod tests {
     }
 
     /// Fills the system up to `MAX_SHIPS_IN_SYSTEM` with the player,
-    /// each new NPC far out of the fight, giving the last added.
-    fn fill(session: &mut Session) -> NpcId {
-        let mut last = None;
+    /// each new NPC far out of the fight, giving every one added.
+    fn fill(session: &mut Session) -> Vec<NpcId> {
+        let mut added = Vec::new();
         while session.npcs().len() + 1 < MAX_SHIPS_IN_SYSTEM {
             let mut far = npc(0, ShipStats::default());
             far.state.position = Vec2::new(5000.0, 5000.0);
-            last = Some(session.space.traffic.add_npc(far));
+            added.push(session.space.traffic.add_npc(far));
         }
-        last.expect("room to fill")
+        assert!(!added.is_empty(), "room to fill");
+        added
     }
 
     #[test]
@@ -1272,11 +1273,26 @@ pub(super) mod tests {
 
     /// With both outfits and no free slot on the first dying tick, the
     /// countdown of `death_delay` runs to `threshold` before the eject.
+    ///
+    /// The table is full only for the first check: the breakup tick runs
+    /// no eject check (see [`to_the_first_check`]), so filling after it
+    /// keeps "no slot on the first dying tick" exact, and the countdown
+    /// runs with room, so room is never what makes it wait. A full table
+    /// ticked through the breakup and the countdown took seconds.
     fn waits_for_the_threshold(death_delay: i16, threshold: u32) {
         let catalog = ejecting(death_delay);
         let mut session = flying(&catalog, &[POD, AUTO]);
-        let extra = fill(&mut session);
-        let (_, sounds) = to_the_first_check(&mut session, &catalog, false);
+        to_the_breakup(&mut session, &catalog, false);
+        assert_eq!(
+            session.ship.condition,
+            Condition::Dying {
+                ticks_left: 0,
+                starting: true
+            },
+            "unset"
+        );
+        let fillers = fill(&mut session);
+        let sounds = tick(&mut session, &catalog, false);
         assert!(!sounds.contains(&SimSound::Ejected), "no slot");
         let three = u32::try_from(death_delay).expect("positive")
             * crate::combat::hull::PLAYER_BREAKUP_FACTOR;
@@ -1288,7 +1304,9 @@ pub(super) mod tests {
             },
             "the breakup runs"
         );
-        session.space.traffic.remove(extra);
+        for filler in fillers {
+            session.space.traffic.remove(filler);
+        }
         let mut last = three;
         loop {
             let (sounds, _) = fight(&mut session, &catalog, false);

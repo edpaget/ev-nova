@@ -23,6 +23,8 @@ use super::ion::Ion;
 use crate::chance::Chance;
 use crate::ionization::factor;
 
+pub use nova_sim_state::shown::combat::ion_tint::IonTint;
+
 /// The factor below which an ionized ship shows no tint (the double 0.33
 /// @0xdd568).
 pub const TINT_FROM: f64 = 0.33;
@@ -34,16 +36,6 @@ pub const TINT_MOST: i64 = 24;
 pub const TINT_SCALE: f32 = 24.0;
 /// The flicker's spread, `Rand(5)` (@0x2bf24).
 pub const FLICKER: u32 = 5;
-
-/// The colorize an ionized ship's hull takes this frame: its level, out
-/// of 32, and its ion colour, `00RRGGBB`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct IonTint {
-    /// The level, 14 to 26 (the original's +0xb0).
-    pub level: u8,
-    /// The ship's ion colour (its +0xb0, the sprite's +0xb4).
-    pub colour: u32,
-}
 
 /// The tint's base level at ionization factor `factor`, none below
 /// [`TINT_FROM`]: trunc(factor × 24.0 as a float, × 0.01 as a double),

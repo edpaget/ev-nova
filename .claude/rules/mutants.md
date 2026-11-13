@@ -15,6 +15,12 @@ Let the tool generate and run the mutants rather than editing source by hand.
   every earlier phase's changes too. Use three dots:
   `git diff main` also holds `main`'s newer changes in reverse once `main`
   moves on, and mutates lines the branch never touched.
+- cargo-mutants tests each mutant with its own package's tests only. A crate
+  with an `<x>-it` sibling keeps its integration tests there, so a run that
+  mutates such a crate passes `--test-package` for every mutated package plus
+  the sibling:
+  `mise run mutants -- --test-package nova-sim --test-package nova-sim-it --in-diff …`.
+  Without it, the integration tests never see the crate's mutants.
 - To confirm the fixes for missed mutants, rerun the same command with
   `--iterate`. It skips every mutant already caught in `mutants.out/` and
   tests only the missed ones and any new code. Prefer this to `--file`

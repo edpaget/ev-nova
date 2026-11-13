@@ -8,8 +8,8 @@
 
 use std::time::Duration;
 
-use nova_sim::flight_frame::{Answer, FlightCommand, ScreenAnswer, ScreenAsk};
-use nova_sim::{Boarding, MissionBoardLine, PlunderView, Take, Taken};
+use nova_sim_frame::flight_frame::{Answer, FlightCommand, ScreenAnswer, ScreenAsk};
+use nova_sim_frame::{Boarding, MissionBoardLine, PlunderView, Take, Taken};
 
 use crate::flight::sim_port::FlightSim;
 use crate::time::sixtieths;
@@ -27,12 +27,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// too ([`FlightView::take_offer`](FlightView#method.take_offer)), each
     /// letting go of the flight keys. A failed mission's ship boarded for
     /// plunder says its pickup or assist line first
-    /// ([`FlightEvent::BoardLine`](nova_sim::flight_frame::FlightEvent::BoardLine)),
+    /// ([`FlightEvent::BoardLine`](nova_sim_frame::flight_frame::FlightEvent::BoardLine)),
     /// and a grant its retrieval
-    /// ([`FlightEvent::Grant`](nova_sim::flight_frame::FlightEvent::Grant)),
+    /// ([`FlightEvent::Grant`](nova_sim_frame::flight_frame::FlightEvent::Grant)),
     /// each named by the flight ([`Wording`]). Whether the attempt sets
     /// the board latch
-    /// ([`BoardRefusal::latches`](nova_sim::board::BoardRefusal::latches);
+    /// (`nova_sim::board::BoardRefusal::latches`;
     /// every board that passes does, and one the flight refused does not).
     ///
     /// `_HandlePlayerBoardAttempt`'s sites mark the close
@@ -43,7 +43,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// too ([`FlightView::latch_at_site`]): a pickup that fits, whose line
     /// names the cargo and which opens nothing, and one refused for room,
     /// whose text the flight queues
-    /// ([`BoardRefusal::sets_every_latch`](nova_sim::board::BoardRefusal::sets_every_latch)).
+    /// (`nova_sim::board::BoardRefusal::sets_every_latch`).
     pub(super) fn board(&mut self) -> bool {
         let answer = self.send(FlightCommand::Board);
         if let Some(line) = self.board_line_drained() {
@@ -119,7 +119,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// was, B down or up, and [`FlightView::board`] then sends with no
     /// gate of its own.
     ///
-    /// [`FlightCommand::gate`]: nova_sim::flight_frame::FlightCommand::gate
+    /// [`FlightCommand::gate`]: nova_sim_frame::flight_frame::FlightCommand::gate
     pub(super) fn board_frame(&mut self, down: bool) {
         if !self.takes_command(&FlightCommand::Board) {
             return;

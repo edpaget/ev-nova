@@ -365,7 +365,6 @@ mod tests {
     #[test]
     fn set_op_persistence_is_either_flag() {
         assert_eq!(SET_OP_PERSISTENT, 0x0024);
-        assert_eq!(OutfitFlags::MISSION_PERSISTENT, 0x0020);
     }
 
     #[test]

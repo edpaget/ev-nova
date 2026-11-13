@@ -32,7 +32,7 @@ mod tests {
 
     #[test]
     fn sixtieths_count_whole_mac_ticks_rounding_down() {
-        use nova_sim::mission::screens::mac_ticks;
+        use nova_sim_frame::mission::screens::mac_ticks;
         assert_eq!(MAC_TICK_NANOS, 16_666_666);
         for n in [0, 1, 2, 118, 119, 150, 500, 501, 100_000] {
             assert_eq!(sixtieths(mac_ticks(n)), u128::from(n), "{n}");

@@ -19,9 +19,7 @@ use super::cargo::Room;
 use super::offer::{Offer, Stop, after};
 use super::ships::SpecialShips;
 
-/// How many missions can be active at once: the original's slots
-/// (`_currentMissions`, 0x184688).
-pub const SLOTS: usize = 16;
+pub use nova_sim_state::shown::mission::active::{AbortRefusal, AcceptError, AcceptRefusal, SLOTS};
 
 /// `Flags`: ends at once, aborted, when nothing is left to do
 /// (`_DoMissionAccept` @0xa215a, `_MissionObjectivesCheck` @0x9ed7a).
@@ -256,31 +254,6 @@ impl Context for AcceptFacts<'_> {
     }
 }
 
-/// Why a mission is not accepted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum AcceptRefusal {
-    /// All 16 slots are taken.
-    #[error("every mission slot is taken")]
-    SlotsFull,
-    /// The ship's holds are fewer than the cargo's tons.
-    #[error("the ship's cargo holds are too few for the mission's cargo")]
-    NoHolds,
-    /// The ship's free cargo space is less than the cargo's tons.
-    #[error("the ship's free cargo space is too little for the mission's cargo")]
-    NoSpace,
-}
-
-/// Why `nova_sim::Session::accept_mission` accepted nothing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum AcceptError {
-    /// It is not offered here.
-    #[error("the mission is not offered here")]
-    NotOffered,
-    /// An accept check refused it.
-    #[error("the mission cannot be accepted: {0}")]
-    Refused(AcceptRefusal),
-}
-
 /// The checks an accept makes, in order (`_DoMissionAccept` @0xa1b11): a
 /// free slot; then, for an offer of tons above none, whatever its
 /// `PickupMode`, the ship's holds and then the free space for them
@@ -340,13 +313,6 @@ impl Context for AbortFacts<'_> {
     fn rulebook(&self) -> &Rulebook {
         self.rules
     }
-}
-
-/// Why the player cannot abort a mission.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AbortRefusal {
-    /// Its `CanAbort` is 0.
-    CannotAbort,
 }
 
 /// The checks the player's abort makes, in order

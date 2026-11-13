@@ -27,7 +27,7 @@ use super::{AppScreen, ENTERED, LANDED, MenuAction, Side, chord_command};
 /// go.
 fn serve_bar(
     spaceport: &mut nova_view::spaceport::SpaceportView,
-    flight: &mut FlightView<std::rc::Rc<nova_data::GameData>>,
+    flight: &mut nova_flight::SessionView<std::rc::Rc<nova_data::GameData>>,
 ) -> (Option<usize>, bool) {
     if spaceport.take_bar_opened() {
         flight.open_bar();

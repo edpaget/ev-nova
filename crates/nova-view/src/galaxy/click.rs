@@ -85,10 +85,8 @@ pub struct PressAnswer {
 mod tests {
     use super::*;
     use crate::galaxy::catalog::Galaxy;
-    use crate::galaxy::model::star_system;
     use crate::galaxy::place::MapPlace;
-    use crate::galaxy::testkit::{galaxy, system};
-    use nova_sim::story::{GalaxyOverlay, OverlaidGalaxy};
+    use crate::galaxy::testkit::{galaxy, shown, system};
 
     fn ids(list: &[i16]) -> Vec<SystemId> {
         list.iter().copied().map(SystemId).collect()
@@ -176,11 +174,11 @@ mod tests {
         let mut model = GalaxyModel::new(galaxy());
         let at = transform.world_to_screen(Point::new(3.0, -2.0));
         assert_eq!(hits(&model, at, &transform), ids(&[128, 131]));
-        let mut overlay = GalaxyOverlay::default();
-        overlay.set_visible(SystemId(128), Some(false));
-        let systems = galaxy().systems.iter().map(star_system).collect();
-        model.apply(&nova_sim::galaxy_map::GalaxyShown::of(
-            &OverlaidGalaxy::new(systems, overlay),
+        // 128 hidden: its links go to its place, Alpha Reborn's.
+        model.apply(&shown(
+            &[(129, None), (130, Some(128)), (131, None)],
+            &[(129, 131), (130, 131)],
+            &[],
         ));
         assert_eq!(hits(&model, at, &transform), ids(&[131]), "128 hidden");
     }

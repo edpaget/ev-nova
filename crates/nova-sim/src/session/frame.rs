@@ -180,7 +180,8 @@ pub(super) mod tests {
     use crate::combat::ship_frames::FrameSpec;
     use crate::combat::shot_layer::ShotLayer;
     use crate::flight_frame::{
-        FrameAsteroid, FrameBeam, FrameBox, FrameShip, FrameShot, FrameStellar, GateFade,
+        FrameAsteroid, FrameBeam, FrameBox, FrameShip, FrameShot, FrameShotOf, FrameStellar,
+        GateFade, GateFadeOf,
     };
     use crate::geometry::Vec2;
     use crate::glow::drawn_base;

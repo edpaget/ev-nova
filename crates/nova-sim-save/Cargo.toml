@@ -1,0 +1,48 @@
+[package]
+name = "nova-sim-save"
+description = "The save layer of nova-sim's layered crates, on the story layer: the save schema and its upgrades, and the pilot store port"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The foundation below it: the reserves a save keeps.
+nova-sim-base.workspace = true
+# The catalog below it: the typed ids a save names, the control bits and
+# the voice variants.
+nova-sim-catalog.workspace = true
+# The state below it: crons, the date, the market and outfit effects.
+nova-sim-state.workspace = true
+# Combat below it: the fleet's escort marks and orders.
+nova-sim-combat.workspace = true
+# The ai and traffic layer below it: escort orders and a stellar's
+# defence ships.
+nova-sim-ai.workspace = true
+# The story layer below it: missions and their aux ships, the pilot, the
+# story runtime, the world flags, the dialog states, the storylines' state
+# and nebulae. Nothing else of the nova-sim stack: `deny.toml` bans the
+# way back up.
+nova-sim-story.workspace = true
+# The save schema: JSON, through private records.
+serde.workspace = true
+serde_json.workspace = true
+# The `Error` derive on `SaveError`.
+thiserror.workspace = true
+
+[dev-dependencies]
+# The canned pilot catalog (`fixture::catalog`) and the record builders
+# the moved tests start pilots on.
+nova-sim-catalog = { workspace = true, features = ["fixture"] }
+
+[features]
+# Test support for other crates' tests: the pilot store port's fake,
+# `fixture::MemoryPilots`, and its contract, `fixture::pilot_store`, which
+# nova-sim's `fixture` re-exports at their old paths (nova's `FilePilots`
+# adapter runs the contract). This crate's own unit tests reach it through
+# `cfg(test)`.
+fixture = []
+
+[lints]
+workspace = true

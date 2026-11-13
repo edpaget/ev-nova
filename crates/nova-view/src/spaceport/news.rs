@@ -38,8 +38,8 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::News;
-use nova_sim::news::DEFAULT_NEWS_PICTURE;
+use nova_sim_frame::News;
+use nova_sim_frame::news::DEFAULT_NEWS_PICTURE;
 
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::bound_names::{CONFIRM_OR_BACK, press_clause};

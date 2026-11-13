@@ -49,18 +49,18 @@
 //! navigation stellar instead ([`Hailed::Stellar`]), and no person is
 //! asked.
 
+pub use nova_sim_frame::person_offers::Hailed;
+
 use std::collections::BTreeMap;
 
 use super::hail::{HailTarget, make_leave};
 use super::{Chart, MissionRun, Session, Setup, Space};
 use crate::catalog::{CommCatalog, MissionId, PersonId, StellarId};
 use crate::chance::{Chance, NeverFires};
-use crate::escort_dialog::EscortDialogView;
-use crate::hail::{Conversation, HailOptions, HailRefusal, HailView};
+use crate::hail::{Conversation, HailOptions, HailRefusal};
 use crate::mission::VenueOffer;
 use crate::mission::{self, Offer, Venue};
 use crate::person::{GONE_ON_ACCEPT, LEAVES_ON_ACCEPT, MISSION_ON_BOARD, swaps_for_mission_ship};
-use crate::planet_comm::PlanetCommView;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::sound::SimSound;
 use crate::traffic::npc::{Npc, NpcId};
@@ -99,27 +99,6 @@ pub(super) struct Offering {
 pub(super) struct OfferingShip {
     /// Its ship-table slot ([`Npc::berth`]).
     pub(super) berth: u32,
-}
-
-/// What hailing the player's target opened ([`Session::open_hail`]).
-#[derive(Clone, Debug, PartialEq)]
-pub enum Hailed {
-    /// The comm dialog, as [`Session::hail`] opens it.
-    Comm(HailView),
-    /// The escort dialog, opened in place of the comm dialog for one of
-    /// the fleet's escorts (see the `escort_dialog` module).
-    Escort(EscortDialogView),
-    /// The person's mission, offered in place of the comm dialog
-    /// (`_OfferOneMission` @0x62293): the offer dialog, or the mission
-    /// accepted at once.
-    Offer(VenueOffer),
-    /// The navigation stellar, which answers: the planet comm dialog
-    /// (`_DoPlanetCommDialog` @0x6204b; see the `planet_comm` module).
-    Stellar(PlanetCommView),
-    /// The comm dialog, the escort dialog or the planet comm dialog would
-    /// have opened, and its `_screenFaded` guard refused it in silence
-    /// ([`Session::hail_key_faded`]).
-    Faded,
 }
 
 impl Session {

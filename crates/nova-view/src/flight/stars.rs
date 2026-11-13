@@ -62,8 +62,8 @@
 //! - **The 16-bit positions and `Rand` range**: the engine uses wide
 //!   numbers.
 
-use nova_sim::Vec2;
-use nova_sim::chance::Chance;
+use nova_sim_frame::Vec2;
+use nova_sim_frame::chance::Chance;
 
 use crate::draw::lights_tint;
 use crate::flight::catalog::{StarDots, StarSheet};
@@ -521,7 +521,7 @@ mod tests {
     use std::collections::VecDeque;
     use std::num::NonZeroU16;
 
-    use nova_sim::player_wrap::WRAP_SHIFT;
+    use nova_sim_frame::player_wrap::WRAP_SHIFT;
 
     use super::*;
     use crate::flight::catalog::StarDot;

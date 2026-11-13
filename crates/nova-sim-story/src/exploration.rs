@@ -95,13 +95,11 @@ use crate::landing::StellarFlags;
 use crate::outfit_effects::MapReach;
 use crate::rulebook::RuleSource;
 use crate::story::OverlaidGalaxy;
+pub use nova_sim_state::shown::exploration::GATES;
 
 /// How many of a system's first `NavDefs` slots the engine reads for
 /// whether it is inhabited (@0x4c4f).
 pub const ENGINE_SLOTS: usize = 4;
-/// The `spöb` `Flags2` bits of a hypergate (0x1000) and a wormhole
-/// (0x2000).
-pub const GATES: u16 = 0x3000;
 
 /// Whether a system whose `NavDefs` slots hold stellars of these `Flags`
 /// and `Flags2` (`None` for an empty slot) is inhabited, as `source` says

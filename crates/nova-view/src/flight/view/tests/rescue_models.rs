@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use nova_sim::landing::UNKNOWN_STELLAR_RADIUS;
+use nova_sim_frame::landing::UNKNOWN_STELLAR_RADIUS;
 
 use super::rescue::{
     NEW_BACKGROUND, briefed, closing_over, pod_over, rescue_into, rescued_frame, space_painted,

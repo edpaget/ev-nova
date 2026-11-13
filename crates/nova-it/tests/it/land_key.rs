@@ -1,0 +1,309 @@
+//! The land key and a stellar slot key through the whole app: synthetic
+//! game data, wired to the renderer and the recording Gpu and driven only
+//! by window events, with every key made by the platform's own
+//! translation of a physical key.
+//!
+//! Alpha holds two planets the ship starts over, Alpha Prime (128) and
+//! Alpha Minor (131), its navigation defaults Alpha Minor then Alpha
+//! Prime.
+//!
+//! - L reaches flight, and a second L once the dock approach has cleared
+//!   the request opens the spaceport of the stellar the session landed on.
+//! - The slot key 1 reaches the session, and L lands where it chose.
+//!
+//! What L selects, the approach, the refusals and their words are
+//! nova-sim's and nova-view's, pinned there.
+
+use crate::bracket_art;
+use crate::common::Frames;
+
+use std::rc::Rc;
+use std::time::Duration;
+
+use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
+use nova::platform;
+use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
+use nova_data::graphics::{PICT, RLED};
+use nova_data::records::character::Character;
+use nova_data::records::fixture::{
+    CharacterBuilder, InterfaceBuilder, ShipAnimBuilder, ShipBuilder, SpinBuilder,
+};
+use nova_data::records::interface::Interface;
+use nova_data::records::ship::Ship;
+use nova_data::records::ship_anim::ShipAnim;
+use nova_data::records::spin::Spin;
+use nova_data::records::stellar::Stellar;
+use nova_data::records::system::System;
+use nova_data::store::fixture::one_file;
+use nova_data::{GameData, Record};
+use nova_flight::SessionView;
+use nova_flight::SessionViewExt as _;
+use nova_render::Frame;
+use nova_render::recording::RecordingGpu;
+use nova_rsrc::fixture::ForkBuilder;
+use nova_sim::{Session, StellarId};
+use nova_view::spaceport::SpaceportView;
+use winit::event::ElementState;
+use winit::keyboard::{KeyCode, PhysicalKey};
+
+/// A 1024 x 768 window at scale 1: window pixels are logical units.
+struct FakeWindow;
+
+impl WindowPort for FakeWindow {
+    fn size_px(&self) -> (u32, u32) {
+        (1024, 768)
+    }
+
+    fn scale_factor(&self) -> f64 {
+        1.0
+    }
+
+    fn request_redraw(&mut self) {}
+}
+
+fn put_i16s(bytes: &mut [u8], at: usize, values: &[i16]) {
+    for (i, value) in values.iter().enumerate() {
+        bytes[at + 2 * i..at + 2 * i + 2].copy_from_slice(&value.to_be_bytes());
+    }
+}
+
+/// A `chär` starting in ship 128 in system 128.
+fn character() -> Vec<u8> {
+    CharacterBuilder::new()
+        .ship_type(128)
+        .system(&[128, -1, -1, -1])
+        .unknown_0x134(23)
+        .unknown_0x136(6)
+        .start_year(1177)
+        .build()
+}
+
+/// An average `shïp`: 3 pixels a tick at most, 0.1 more a tick, 3° a tick.
+fn ship() -> Vec<u8> {
+    ShipBuilder::new()
+        .shield(30)
+        .accel(300)
+        .speed(300)
+        .maneuver(30)
+        .fuel(300)
+        .build()
+}
+
+/// Stock `ïntf` 128's areas and font, over background `PICT` 700: its
+/// `NavArea` is (8, 254)-(184, 286).
+fn interface() -> Vec<u8> {
+    InterfaceBuilder::new()
+        .bright_text(0x00FF_FFFF)
+        .dim_text(0x0080_8080)
+        .radar_area([8, 8, 184, 184])
+        .bright_radar(0x0000_FF00)
+        .dim_radar(0x0000_8000)
+        .shield_area([199, 35, 206, 184])
+        .shield_color(0x0000_00FF)
+        .armor_area([216, 35, 223, 184])
+        .armor_color(0x00FF_0000)
+        .fuel_area([234, 35, 241, 184])
+        .fuel_full(0x00FF_FF00)
+        .fuel_partial(0x0080_8000)
+        .nav_area([254, 8, 286, 184])
+        .status_font("Geneva")
+        .stat_font_size(12)
+        .status_bkgnd(700)
+        .build()
+}
+
+/// A grey 194 x 16 `PICT`: the status bar's background, cut short.
+fn status_picture() -> Vec<u8> {
+    let bounds = [0, 0, 16, 194];
+    PictBuilder::new(bounds)
+        .direct_bits(&DirectBits::rgb555(bounds, &[0x4210; 194 * 16]))
+        .end()
+        .build()
+}
+
+/// A `shän` whose base image is `rlëD` 2000, one set of 36 rotations.
+fn ship_anim() -> Vec<u8> {
+    ShipAnimBuilder::new()
+        .base_image_id(2000)
+        .base_set_count(1)
+        .frames_per(36)
+        .build()
+}
+
+/// An independent `sÿst` with these navigation defaults, in order.
+fn system(nav_defs: &[i16]) -> Vec<u8> {
+    let mut bytes = vec![0; System::SIZE.expect("fixed")];
+    put_i16s(&mut bytes, 0x04, &[-1; 32]);
+    put_i16s(&mut bytes, 0x24, nav_defs);
+    put_i16s(&mut bytes, 0x66, &[-1]);
+    bytes
+}
+
+/// A still planet anyone may land on at (0, `y`), of graphic type 0:
+/// `spïn` 1000, 64 x 64 (a landing radius of 32).
+fn planet(y: i16) -> Vec<u8> {
+    let mut bytes = vec![0; Stellar::SIZE.expect("fixed")];
+    put_i16s(&mut bytes, 0x00, &[0, y, 0]);
+    bytes[0x06..0x0A].copy_from_slice(&1_u32.to_be_bytes());
+    put_i16s(&mut bytes, 0x14, &[-1, 0, -1, -1]);
+    bytes
+}
+
+/// A `spïn` naming `rlëD` 1000, one frame across.
+fn spin() -> Vec<u8> {
+    SpinBuilder::new()
+        .sprites_id(1000)
+        .masks_id(-1)
+        .x_tiles(1)
+        .y_tiles(1)
+        .build()
+}
+
+/// An `rlëD` of `frames` frames of `size` x `size`.
+fn sheet(frames: u16, size: u16) -> Vec<u8> {
+    (0..frames)
+        .fold(RledBuilder::new(size, size), |sheet, _| {
+            sheet.frame(|f| (0..size).fold(f, |f, _| f.line().pixels(&vec![0x0400; size.into()])))
+        })
+        .build()
+}
+
+/// Alpha (128), whose navigation defaults are Alpha Minor (131), at
+/// (0, 24), then Alpha Prime (128), at the centre. The first `chär` flies
+/// ship 128 from Alpha. The status bar is `ïntf` 128, over a 194 x 16
+/// `PICT` 700.
+fn data() -> Rc<GameData> {
+    let fork = ForkBuilder::new()
+        .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
+        .resource(Ship::TYPE, 128, Some(b"Courier"), &ship())
+        .resource(ShipAnim::TYPE, 128, None, &ship_anim())
+        .resource(RLED, 2000, None, &sheet(36, 1))
+        .resource(System::TYPE, 128, Some(b"Alpha"), &system(&[131, 128]))
+        .resource(Stellar::TYPE, 128, Some(b"Alpha Prime"), &planet(0))
+        .resource(Stellar::TYPE, 131, Some(b"Alpha Minor"), &planet(24))
+        .resource(Spin::TYPE, 1000, None, &spin())
+        .resource(RLED, 1000, None, &sheet(1, 64))
+        .resource(
+            Interface::TYPE,
+            128,
+            Some(b"Default status bar"),
+            &interface(),
+        )
+        .resource(PICT, 700, Some(b"Status Bar"), &status_picture());
+    Rc::new(one_file(bracket_art::with_bracket_art(fork).build().bytes).load())
+}
+
+struct Harness {
+    app: App<Rc<GameData>>,
+    gpu: RecordingGpu,
+    /// Frames sent, at 60 a second.
+    frames: u64,
+}
+
+impl Harness {
+    /// The app in flight, entered from the ship browser with F.
+    fn flying() -> Self {
+        let data = data();
+        let screen = start_screen(Rc::clone(&data));
+        let mut harness = Self {
+            app: App::new(&FakeWindow, data, screen),
+            gpu: RecordingGpu::new(),
+            frames: 0,
+        };
+        harness.press(KeyCode::KeyF);
+        assert_eq!(harness.showing(), Showing::Flight);
+        harness.frame();
+        harness
+    }
+
+    fn send(&mut self, event: WindowEvent) {
+        assert_eq!(
+            self.app.handle(event, &mut FakeWindow, &mut self.gpu),
+            Control::Continue,
+            "{event:?}"
+        );
+    }
+
+    /// The physical key `code` going down or up, through the platform's
+    /// translation.
+    fn key(&mut self, code: KeyCode, pressed: bool) {
+        let state = if pressed {
+            ElementState::Pressed
+        } else {
+            ElementState::Released
+        };
+        self.send(platform::key_event(PhysicalKey::Code(code), state, false));
+    }
+
+    fn press(&mut self, code: KeyCode) {
+        self.key(code, true);
+        self.key(code, false);
+    }
+
+    fn showing(&self) -> Showing {
+        self.app.screen().showing()
+    }
+
+    fn flight(&self) -> &SessionView<Rc<GameData>> {
+        self.app.screen().flight_view().expect("flight entered")
+    }
+
+    fn session(&self) -> &Session {
+        self.flight().session().expect("flying")
+    }
+
+    /// The stellar whose spaceport is showing, if any.
+    fn spaceport(&self) -> Option<StellarId> {
+        self.app
+            .screen()
+            .spaceport_view()
+            .map(SpaceportView::stellar)
+    }
+
+    /// Sends the next redraw, 1/60 s after the last, and returns its frame.
+    fn frame(&mut self) -> Frame {
+        self.frames += 1;
+        let elapsed = Duration::from_nanos(self.frames * 1_000_000_000 / 60);
+        self.send(WindowEvent::Redraw { elapsed });
+        let frame = (*self.gpu.submits().last().expect("a frame")).clone();
+        assert_eq!(self.app.take_failures(), []);
+        frame
+    }
+
+    /// Draws frames until the dock approach has cleared the request.
+    fn approach(&mut self) {
+        self.settle_until("the dock approach's clearance", |game| {
+            game.session().dock_cleared()
+        });
+    }
+}
+
+#[test]
+fn l_reaches_flight_and_a_second_l_after_the_approach_opens_the_spaceport_landed_at() {
+    let mut game = Harness::flying();
+    game.press(KeyCode::KeyL);
+    game.settle();
+    assert_eq!(game.showing(), Showing::Flight, "requested, not landed");
+    game.approach();
+    game.press(KeyCode::KeyL);
+    assert_eq!(game.showing(), Showing::Spaceport);
+    let landed = game.session().landed();
+    assert!(landed.is_some());
+    assert_eq!(game.spaceport(), landed);
+}
+
+#[test]
+fn a_slot_key_reaches_the_session_and_l_lands_where_it_chose() {
+    let mut game = Harness::flying();
+    game.press(KeyCode::Digit1);
+    game.settle();
+    let chosen = game.session().nav_target();
+    assert!(chosen.is_some(), "the slot key chose a stellar");
+    game.press(KeyCode::KeyL);
+    game.approach();
+    game.press(KeyCode::KeyL);
+    assert_eq!(game.showing(), Showing::Spaceport);
+    assert_eq!(game.spaceport(), chosen);
+}
+
+crate::common::frames!(Harness, frame);

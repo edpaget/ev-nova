@@ -19,7 +19,7 @@
 //! next input, as those a tick's replay raises are
 //! (rdm:phase/flight-controls-2/phase-5-what-flight-controls-phase-15-left-out).
 
-use nova_sim::{ComputerRefusal, MissionComputer};
+use nova_sim_frame::{ComputerRefusal, MissionComputer};
 
 use super::{Open, SpaceportView};
 use crate::input::Input;

@@ -164,8 +164,13 @@ use crate::combat::armament::Arsenal;
 use crate::control::{ControlBits, Gate, PilotFacts, Test};
 use crate::hail::{CreditUnit, ShownWage};
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
-use crate::shipyard::{HIDE_BITS, ShipFlags3, ShipSpecs};
+use crate::shipyard::{HIDE_BITS, ShipFlags3, ship_specs};
 use crate::wares::{self, HideHigher, Roll};
+
+pub use nova_sim_state::shown::hire::{
+    DEFECTED_ONE, DEFECTED_SOME, ESCORT, HIRE_ESCORT, HIRED_ESCORT, HIRING_PRICE, HireList,
+    HireRefusal, HireRow, Hired, NONE_FOR_HIRE, PAY_LABEL, PER_DAY, PayNote,
+};
 
 /// The share of the hire price the fee is (@0xdd110).
 pub const HIRE_FEE_SHARE: f64 = 0.1;
@@ -199,26 +204,8 @@ pub const LOW_TECH: i16 = 5;
 /// The low-tech discount, in percent a tech level of difference.
 pub const TECH_DISCOUNT: i16 = 3;
 
-/// `STR#` 150 #13: the bar's button, and the hire dialog's.
-pub const HIRE_ESCORT: &str = "Hire Escort";
-/// `STR#` 2002 #224: what the bar says with nothing for hire.
-pub const NONE_FOR_HIRE: &str = "There are no ships available for hire.";
-/// `STR#` 2002 #228.
-pub const HIRING_PRICE: &str = "Hiring Price:";
 /// `STR#` 2002 #217.
 pub const YOU_HAVE: &str = "You Have:";
-/// `STR#` 2002 #166: a hired escort's status in the comm dialog.
-pub const HIRED_ESCORT: &str = "Hired Escort";
-/// `STR#` 2002 #168: any other escort's status in the comm dialog.
-pub const ESCORT: &str = "Escort";
-/// `STR#` 2002 #297.
-pub const PAY_LABEL: &str = "Pay:";
-/// `STR#` 2002 #267.
-pub const PER_DAY: &str = "per day";
-/// `STR#` 2002 #302: one escort defected.
-pub const DEFECTED_ONE: &str = "Due to lack of pay, one of your escorts has defected.";
-/// `STR#` 2002 #303: more than one defected.
-pub const DEFECTED_SOME: &str = "Due to lack of pay, some of your escorts have defected.";
 
 /// What hiring a ship class costs: the fee shown and checked, what a hire
 /// takes from the cash, and the daily wage. Nova's is [`NovaHire`].
@@ -319,95 +306,6 @@ pub fn price_flux(price: i32, mult: f32, ship_tech: i16, stellar_tech: i16) -> i
         1
     };
     (price / step * step).max(1)
-}
-
-/// Why a ship cannot be hired.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HireRefusal {
-    /// There is no bar: the ship is not landed, or the stellar has none.
-    NoBar,
-    /// The bar does not list the ship today.
-    NotListed,
-    /// It is listed but not for hire: its `Availability` does not hold,
-    /// or, by the other reading of
-    /// [`RuleKey::HireRequire`], its `Require` is not met.
-    NotForHire,
-    /// The cash does not cover its fee.
-    CannotAfford,
-    /// The fleet holds as many escorts as it can.
-    FleetFull,
-    /// By the other reading of [`RuleKey::HireNoSlot`], the system has
-    /// no ship-table slot for it below the spawn reserve.
-    NoSlot,
-}
-
-/// One ship class for hire in the bar.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HireRow {
-    /// The ship class.
-    pub id: ShipId,
-    /// Its name.
-    pub name: String,
-    /// Its `ShortName`, raw.
-    pub short_name: String,
-    /// The fee for hiring it, shown and checked.
-    pub fee: i64,
-    /// Its daily wage once hired.
-    pub wage: i64,
-    /// What the Info panel shows of it.
-    pub specs: ShipSpecs,
-    /// Whether it can be hired now, or why not.
-    pub hire: Result<(), HireRefusal>,
-}
-
-/// The ships for hire in the bar, as the player sees them.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HireList {
-    /// The ships listed, in `DispWeight` order.
-    pub rows: Vec<HireRow>,
-    /// The player's credits.
-    pub cash: i64,
-    /// Whether the fleet has room for another escort.
-    pub room: bool,
-    /// How each disputed rule reads, the bar's ([`Bar::rules`]): the
-    /// hire screen reads its grid's
-    /// ([`RuleKey::GridSelection`]) from it.
-    pub rules: Rulebook,
-}
-
-impl HireList {
-    /// `ship`'s row, if it is listed.
-    #[must_use]
-    pub fn row(&self, ship: ShipId) -> Option<&HireRow> {
-        self.rows.iter().find(|row| row.id == ship)
-    }
-
-    /// Whether `ship` can be hired now, or why not.
-    pub fn check(&self, ship: ShipId) -> Result<(), HireRefusal> {
-        self.row(ship).ok_or(HireRefusal::NotListed)?.hire
-    }
-}
-
-/// What hiring a ship did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Hired {
-    /// The ship class hired.
-    pub ship: ShipId,
-    /// What the hire took from the cash.
-    pub fee: i64,
-    /// The daily wage it was hired at.
-    pub wage: i64,
-    /// Whether an escort joined the fleet: not when, by the engine reading
-    /// of [`RuleKey::HireNoSlot`], it found no ship-table slot, the fee
-    /// taken all the same.
-    pub joined: bool,
-}
-
-/// What paying the escorts did, for the flight's message line.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PayNote {
-    /// So many hired escorts defected for want of pay.
-    Defected(u32),
 }
 
 /// Everything the hire list reads about the bar and the player.
@@ -514,7 +412,7 @@ impl Bar<'_> {
                     short_name: ship.short_name.clone(),
                     fee,
                     wage: self.terms.wage(ship),
-                    specs: ShipSpecs::of(ship, self.arsenal, self.outfits, &self.rules),
+                    specs: ship_specs(ship, self.arsenal, self.outfits, &self.rules),
                     hire,
                 },
             ));
@@ -736,44 +634,6 @@ mod tests {
             NovaHire::from_rulebook(&others).hire_fee,
             RuleSource::Engine
         );
-    }
-
-    #[test]
-    fn a_list_reads_its_rows_by_ship() {
-        let row = |id| HireRow {
-            id: ShipId(id),
-            name: String::new(),
-            short_name: String::new(),
-            fee: 0,
-            wage: 0,
-            specs: ShipSpecs {
-                fields: FAST,
-                max_gun: 0,
-                max_tur: 0,
-                length: 0,
-                crew: 0,
-                space: 0,
-                rounding: RuleSource::Engine,
-                weapons: Vec::new(),
-                long_name: String::new(),
-            },
-            hire: if id == 129 {
-                Err(HireRefusal::CannotAfford)
-            } else {
-                Ok(())
-            },
-        };
-        let list = HireList {
-            rows: vec![row(128), row(129)],
-            cash: 0,
-            room: true,
-            rules: Rulebook::default(),
-        };
-        assert_eq!(list.row(ShipId(129)).map(|row| row.id), Some(ShipId(129)));
-        assert_eq!(list.row(ShipId(130)), None);
-        assert_eq!(list.check(ShipId(128)), Ok(()));
-        assert_eq!(list.check(ShipId(129)), Err(HireRefusal::CannotAfford));
-        assert_eq!(list.check(ShipId(130)), Err(HireRefusal::NotListed));
     }
 
     #[test]

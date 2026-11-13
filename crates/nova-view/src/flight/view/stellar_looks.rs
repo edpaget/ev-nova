@@ -1,11 +1,11 @@
 //! [`FlightView`]'s scene as the kept frame holds its stellars, over the
 //! [`FlightSim`] port: which are shown, how each looks and the frame its
 //! session reports it shows
-//! ([`FrameStellar`](nova_sim::flight_frame::FrameStellar)), and the
+//! ([`FrameStellar`](nova_sim_frame::flight_frame::FrameStellar)), and the
 //! starfield scattered about the frame's ship.
 //! Any flight drives them, a scripted one in the component tests.
 
-use nova_sim::SystemId;
+use nova_sim_frame::SystemId;
 
 use crate::flight::catalog::{CombatLooks, ShipSprites};
 use crate::flight::sim_port::FlightSim;

@@ -28,7 +28,7 @@
 //! ([`WorldModels`](super::world_models::WorldModels)) and, for every
 //! turning mount, the ship's turret facing as the frame the sim port
 //! fills carries it
-//! ([`FrameShip::turret_facing`](nova_sim::flight_frame::FrameShip::turret_facing)),
+//! ([`FrameShip::turret_facing`](nova_sim_frame::flight_frame::FrameShip::turret_facing)),
 //! swung toward at a rate: the view's eased facing
 //! ([`TurretSwings::facing`](super::turret_swing::TurretSwings::facing)),
 //! the readout itself once a swing has settled.
@@ -88,8 +88,8 @@ pub fn mounted_outfits(
 #[allow(clippy::float_cmp)]
 mod tests {
     use nova_data::store::{Footing, Shown};
-    use nova_sim::combat::hull_turn::HullTurn;
-    use nova_sim::combat::ship_frames::FrameSpec;
+    use nova_sim_frame::combat::hull_turn::HullTurn;
+    use nova_sim_frame::combat::ship_frames::FrameSpec;
 
     use super::*;
     use crate::flight::ship_model::ship_orientation;

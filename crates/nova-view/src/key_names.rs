@@ -330,7 +330,7 @@ pub fn combo_name(names: &dyn KeyNames, combo: KeyCombo) -> String {
 }
 
 /// The port's fake and the contract every adapter meets, for this crate's
-/// tests and other crates' (`nova`'s adapters run [`check_contract`]).
+/// tests and other crates' (`nova`'s adapters run `check_contract`).
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture {
     use std::cell::RefCell;

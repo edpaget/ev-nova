@@ -67,7 +67,7 @@
 //! [`DrawCommand::Planet`]: crate::DrawCommand::Planet
 //! [`StellarModel`]: crate::flight::world_models::StellarModel
 
-use nova_sim::landing::UNKNOWN_STELLAR_RADIUS;
+use nova_sim_frame::landing::UNKNOWN_STELLAR_RADIUS;
 
 use crate::flight::sim_port::FlightSim;
 use crate::model_picture::draw_stellar_model;

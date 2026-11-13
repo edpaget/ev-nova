@@ -1,9 +1,9 @@
 use super::faked_flight::{at_rest, hold, last_controls, ship_at, tick_to, ticked};
 use super::faked_hud::{barred, barred_by, flown};
 use super::*;
-use nova_sim::Face;
-use nova_sim::flight_frame::FrameRadarStellar;
-use nova_sim::status_cargo::StatusCargo;
+use nova_sim_frame::Face;
+use nova_sim_frame::flight_frame::FrameRadarStellar;
+use nova_sim_frame::status_cargo::StatusCargo;
 
 // Building.
 

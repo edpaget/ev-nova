@@ -7,8 +7,9 @@ use std::rc::Rc;
 
 use super::routing::Overlay;
 
+use nova_flight::FlightStart;
 use nova_sim::{HailView, OfferPrompt, RuleKey, RuleSource, Taken};
-use nova_view::flight::{FlightStart, FlightView, MapOpener};
+use nova_view::flight::{FlightView, MapOpener};
 use nova_view::keymap::{AppCommand, Command, PauseCommand, PlayCommand};
 use nova_view::spaceport::missions::INFO_DIALOG;
 use nova_view::spaceport::offer::{

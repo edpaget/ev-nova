@@ -6,7 +6,7 @@
 //! (nova-data's `new_game::looks`); how an outline turns is the outline
 //! module's.
 
-use nova_sim::DrawnShips as _;
+use nova_sim_state::shown::hover::DrawnShips as _;
 
 use super::faked_world::{world, world_list, world_list_with};
 use super::*;
@@ -124,7 +124,7 @@ fn a_hidden_player_with_no_sheet_draws_no_outline() {
         ..darts(catalog())
     };
     let mut player = the_player_at(Vec2::ZERO, 45.0);
-    player.shown = nova_sim::player_fate::Drawn::Hidden;
+    player.shown = nova_sim_state::shown::player_fate::Drawn::Hidden;
     let view = world(sheetless, in_sol_with(vec![player]));
     assert_eq!(triangles(&world_list(&view)), []);
 }
@@ -152,13 +152,13 @@ fn a_ship_drawn_from_its_outline_is_hovered_by_its_extent() {
 #[test]
 fn a_ship_drawn_from_its_outline_is_bracketed_by_its_extent() {
     let mut view = npc_drawn_as_a_dart();
-    let hud = nova_sim::flight_frame::FrameHud {
-        target_brackets: Some(nova_sim::brackets::TargetBrackets {
+    let hud = nova_sim_frame::flight_frame::FrameHud {
+        target_brackets: Some(nova_sim_frame::brackets::TargetBrackets {
             npc: NpcId(0),
             expand: 0.0,
             standing: brackets::Standing::Neutral,
         }),
-        ..nova_sim::flight_frame::FrameHud::default()
+        ..nova_sim_frame::flight_frame::FrameHud::default()
     };
     let list = world_list_with(&mut view, &hud);
     let npc = *view.drawn().npcs().next().expect("the npc");

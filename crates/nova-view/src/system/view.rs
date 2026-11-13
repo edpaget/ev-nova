@@ -30,7 +30,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::landing::UNKNOWN_STELLAR_RADIUS;
+use nova_sim_frame::landing::UNKNOWN_STELLAR_RADIUS;
 
 use super::camera::{CAMERA_SPEED, Camera};
 use super::catalog::{SystemCatalog, SystemId};
@@ -932,14 +932,14 @@ mod tests {
         let catalog = catalog();
         let wormhole = &catalog.0[0].stellars[2];
         let count = NonZeroU16::new(4).expect("non-zero");
-        let mut frames = nova_sim::stellar_frames::StellarFrames::new();
+        let mut frames = nova_sim_frame::stellar_frames::StellarFrames::new();
         for _ in 0..ticks {
             frames.step(
                 wormhole.animation,
                 false,
                 count,
                 count,
-                &mut nova_sim::NeverFires,
+                &mut nova_sim_frame::NeverFires,
             );
         }
         frames.shown()

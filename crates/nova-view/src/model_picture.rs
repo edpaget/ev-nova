@@ -37,7 +37,7 @@
 //!
 //! [`ShipModel::radius`]: crate::flight::world_models::ShipModel::radius
 
-use nova_sim::ShipId;
+use nova_sim_frame::ShipId;
 
 use crate::draw::{DrawCommand, DrawList};
 use crate::flight::mounted_outfits;
@@ -221,7 +221,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use nova_data::store::{Footing, Mount, Mounts, Shown};
-    use nova_sim::OutfitId;
+    use nova_sim_frame::OutfitId;
 
     use super::*;
     use crate::flight::world_models::ShipModel;

@@ -784,7 +784,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         &self.screen
     }
 
-    /// The current screen, to change: for this crate's integration tests,
+    /// The current screen, to change: for nova-it's integration tests,
     /// whose harnesses ask the flight's screens through the view, as a
     /// screen's ask takes `&mut` (`FlightView::hailing`).
     #[cfg(any(test, feature = "fixture"))]

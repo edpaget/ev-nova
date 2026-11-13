@@ -20,9 +20,9 @@ use nova_data::{
     ShipSpriteInfo, SpriteError, StandInOf, shot_spin_id,
 };
 use nova_rsrc::ResType;
-use nova_sim::TICKS_PER_SECOND;
-use nova_sim::combat::weapon::loaded_falloff;
-use nova_sim::data::FIRST_ASTEROID_SPIN;
+use nova_sim_frame::TICKS_PER_SECOND;
+use nova_sim_frame::combat::weapon::loaded_falloff;
+use nova_sim_frame::data::FIRST_ASTEROID_SPIN;
 
 use super::catalog::{
     BoomId, BoomLook, CombatLooks, EffectSheet, FIRST_SMOKE_ICON, GovtId, LayerSheet, SMOKE_FRAMES,
@@ -258,7 +258,7 @@ impl CombatLooks for GameData {
         Some(Ok(BoomLook {
             sheet: effect_sheet(self, FIRST_BOOM_SPIN.saturating_add(boom.graphic_index)),
             advance: f32::from(boom.frame_advance) * FRAME_ADVANCE_UNIT,
-            sound: nova_sim::catalog::explosion_sound(boom.sound_index),
+            sound: nova_sim_frame::catalog::explosion_sound(boom.sound_index),
         }))
     }
 
@@ -311,7 +311,7 @@ impl CombatLooks for GameData {
     }
 
     fn pod_sheet(&self) -> Result<EffectSheet, String> {
-        let sheet = self.ship_sheet(nova_sim::ESCAPE_POD_SHIP)?;
+        let sheet = self.ship_sheet(nova_sim_frame::ESCAPE_POD_SHIP)?;
         Ok(EffectSheet {
             image: sheet.image,
             frames: sheet.rotations,
@@ -1506,10 +1506,10 @@ mod tests {
     #[test]
     fn the_escape_pods_sheet_is_its_ships_with_its_frame_width_and_height() {
         let data = store(&[
-            (Ship::TYPE, nova_sim::ESCAPE_POD_SHIP.0, ship()),
+            (Ship::TYPE, nova_sim_frame::ESCAPE_POD_SHIP.0, ship()),
             (
                 ShipAnim::TYPE,
-                nova_sim::ESCAPE_POD_SHIP.0,
+                nova_sim_frame::ESCAPE_POD_SHIP.0,
                 anim(1000, 1, 8),
             ),
             (RLED, 1000, sheet(8)),
@@ -1532,10 +1532,10 @@ mod tests {
         for bytes in [wide_sheet(8), quirky_sheet(8)] {
             let edge = decoded_edge(&bytes);
             let data = store(&[
-                (Ship::TYPE, nova_sim::ESCAPE_POD_SHIP.0, ship()),
+                (Ship::TYPE, nova_sim_frame::ESCAPE_POD_SHIP.0, ship()),
                 (
                     ShipAnim::TYPE,
-                    nova_sim::ESCAPE_POD_SHIP.0,
+                    nova_sim_frame::ESCAPE_POD_SHIP.0,
                     anim(1000, 1, 8),
                 ),
                 (RLED, 1000, bytes),

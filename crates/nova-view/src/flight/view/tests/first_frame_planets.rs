@@ -18,8 +18,8 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use nova_sim::flight_frame::{FlightEvent, ShipPlace};
-use nova_sim::{SessionEvent, SimMessage};
+use nova_sim_frame::flight_frame::{FlightEvent, ShipPlace};
+use nova_sim_frame::{SessionEvent, SimMessage};
 
 use super::faked_landing::{arrived, at_the_hypergate_in, close_on};
 use super::faked_travel::{arrival_report, jump_now, now_shows, step_the_arrival};

@@ -1,12 +1,13 @@
 //! The developer tools' desk and the view's catch-up after an edit, on
 //! `FakeFlight`, converted from pilot.rs (rdm:phase/view-sim-seam/phase-13-lifecycle-at-the-edge).
 //! The edits themselves are the session's (`nova_sim::session::edit`'s
-//! tests) and the adapter's forwards `sim_adapter`'s; a desk edit on a
-//! real flight, then a resync, is `tests/it/flight_seam.rs`'s.
+//! tests) and the adapter's forwards nova-flight's `sim_adapter`'s; a desk edit on a
+//! real flight, then a resync, is nova-flight's
+//! `tests/it/flight_seam.rs`'s.
 
 use super::*;
-use nova_sim::flight_frame::FlightEvent;
-use nova_sim::{DeskReading, GameDate, Reserves, SessionEvent};
+use nova_sim_frame::flight_frame::FlightEvent;
+use nova_sim_frame::{DeskReading, GameDate, Reserves, SessionEvent};
 
 /// Ada, docked on Earth in Sol.
 fn ada() -> DeskReading {

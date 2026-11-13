@@ -5,23 +5,33 @@
 //! ([`FlightSim::apply`]), what the flight raised for the view to act on
 //! once ([`FlightSim::drain`]), and what a screen draws from, asked as it
 //! opens or as its input changes ([`FlightSim::screen`]). The values it
-//! carries are `nova_sim`'s ([`flight_frame`](nova_sim::flight_frame)), so
-//! the session can build them.
+//! carries are `nova_sim`'s ([`flight_frame`](nova_sim_frame::flight_frame)), so
+//! the session can build them. They are defined in `nova_sim_frame`, the
+//! view vocabulary below the layer crates (`nova_sim_frame::flight_frame`
+//! and its siblings), and `nova_sim` re-exports each at the path named
+//! here, while the session code that fills and answers them stays in
+//! `nova_sim`. nova-view depends on `nova_sim_frame`, never on
+//! `nova_sim`: every other name of `nova_sim` the view reaches is
+//! re-exported by `nova_sim_frame` at the same path, and the adapter's
+//! four (`nova_sim::Session`, `nova_sim::SessionSetup`,
+//! `nova_sim::SimCatalog` and `nova_sim::Pilot`) are nova-flight's to
+//! name. `nova_sim_frame`'s crate docs keep the list.
 //!
-//! [`SessionFlight`](super::sim_adapter::SessionFlight) is the adapter
-//! over a real `nova_sim::Session`, and the edge builds it
-//! (`crate::flight::open_flight`).
+//! `nova_flight::SessionFlight` is the adapter over a real
+//! `nova_sim::Session`, and the edge builds it (`nova_flight::open_flight`),
+//! both in nova-flight, the crate above nova-view and nova-sim
+//! (rdm:phase/faster-builds/phase-6-nova-view-off-nova-sim).
 //!
 //! # How the view reads the flight
 //!
 //! - **The kept frame.** The view keeps one frame
 //!   (`FlightView::frame`) and reads every fact of the flight from it,
 //!   mid-input and mid-tick too: the gates a key is taken under
-//!   ([`FlightFrame::gates`](nova_sim::flight_frame::FlightFrame::gates)),
+//!   ([`FlightFrame::gates`](nova_sim_frame::flight_frame::FlightFrame::gates)),
 //!   the nav mode, docked, the jump, the death `dësc`s. It never fills a
 //!   fresh frame to read one fact. Drawing reads `FlightView::drawn`: the
 //!   kept frame, or a double-time step's frame between its passes
-//!   ([`StepRun::between_passes`](nova_sim::flight_frame::StepRun::between_passes)),
+//!   ([`StepRun::between_passes`](nova_sim_frame::flight_frame::StepRun::between_passes)),
 //!   which the view holds until the next step and no draw fills.
 //! - **Every change fills it afresh where it is made**: after each
 //!   command (`FlightView::send`), each frame's steps, a catch-up's
@@ -32,9 +42,9 @@
 //!   for each command it sends, and a draw not at all.
 //! - **A read made at every draw or every frame is a frame field**: the
 //!   floating map's places, which its draw centres on
-//!   ([`FlightFrame::floating`](nova_sim::flight_frame::FlightFrame::floating)),
+//!   ([`FlightFrame::floating`](nova_sim_frame::flight_frame::FlightFrame::floating)),
 //!   the readouts, the HUD, and what fades the cursor
-//!   ([`FlightFrame::key_fades`](nova_sim::flight_frame::FlightFrame::key_fades)).
+//!   ([`FlightFrame::key_fades`](nova_sim_frame::flight_frame::FlightFrame::key_fades)).
 //! - **A question a screen asks as it opens or as its input changes is a
 //!   screen's ask** ([`ScreenAsk`], answered by the [`ScreenAnswer`] of its
 //!   kind through [`FlightSim::screen`]): the course map's galaxy, its
@@ -45,11 +55,11 @@
 //!   prompt, the bar's news, what the bar's Gamble opens, the mission info, an offer's refuse button
 //!   and its filled text, the hail, the boarding and the pilot panel. The
 //!   asks one screen always makes together are one answer (the course
-//!   map's opening, [`MapOpen`](nova_sim::flight_frame::MapOpen); its
-//!   redraw, [`MapScreen`](nova_sim::flight_frame::MapScreen); the
-//!   spaceport's shops, [`PortShops`](nova_sim::flight_frame::PortShops);
+//!   map's opening, [`MapOpen`](nova_sim_frame::flight_frame::MapOpen); its
+//!   redraw, [`MapScreen`](nova_sim_frame::flight_frame::MapScreen); the
+//!   spaceport's shops, [`PortShops`](nova_sim_frame::flight_frame::PortShops);
 //!   the bar's news and its picture,
-//!   [`BarNews`](nova_sim::flight_frame::BarNews)). None changes a frame,
+//!   [`BarNews`](nova_sim_frame::flight_frame::BarNews)). None changes a frame,
 //!   which nova-sim pins (`session/screen.rs`) and
 //!   `fixture::check_contract` checks, so no fill follows one; and none
 //!   is asked per frame, save the floating map's show, which comes on
@@ -68,23 +78,23 @@
 //!   nothing ([`ScreenAsk::draws_afresh`]).
 //! - **A press the flight asks the view to make is a frame field**: the
 //!   gate autopilot's L
-//!   ([`FlightFrame::gate_pilot`](nova_sim::flight_frame::FlightFrame::gate_pilot)),
+//!   ([`FlightFrame::gate_pilot`](nova_sim_frame::flight_frame::FlightFrame::gate_pilot)),
 //!   read after each frame's steps, which the view sends as the land
 //!   key's own `FlightCommand::Land`, unlabelled: the flight counts it as
 //!   the autopilot's while its ask stands (`FlightView::gate_pilot_frame`).
-//!   J's [`Answer::GatePilot`](nova_sim::flight_frame::Answer::GatePilot)
+//!   J's [`Answer::GatePilot`](nova_sim_frame::flight_frame::Answer::GatePilot)
 //!   says the autopilot engaged, and `fixture::check_contract` checks the
 //!   frame after it shows the autopilot. The nav area reads the same
 //!   field to show the autopilot and the system it flies toward
 //!   ([`NavDisplay::GatePilot`](crate::flight::hud::NavDisplay::GatePilot)),
 //!   and J's line when no gate serves the selection is a message
-//!   ([`SimMessage::NoGateLeadsThere`](nova_sim::SimMessage::NoGateLeadsThere)),
+//!   ([`SimMessage::NoGateLeadsThere`](nova_sim_frame::SimMessage::NoGateLeadsThere)),
 //!   drained as any other.
 //! - **A fact the router reads between commands is a frame field**:
 //!   whether Recharge is enabled
-//!   ([`FlightFrame::recharge_enabled`](nova_sim::flight_frame::FlightFrame::recharge_enabled))
+//!   ([`FlightFrame::recharge_enabled`](nova_sim_frame::flight_frame::FlightFrame::recharge_enabled))
 //!   and whether the pilot has seen the intro
-//!   ([`FlightFrame::seen_intro`](nova_sim::flight_frame::FlightFrame::seen_intro)),
+//!   ([`FlightFrame::seen_intro`](nova_sim_frame::flight_frame::FlightFrame::seen_intro)),
 //!   which any command may change, and the refill after it keeps current.
 //! - **A draw that reads no flight state is the router's**: the wait
 //!   before a venue's next offer (`nova_sim::mission::offer_gap`) is drawn
@@ -101,22 +111,22 @@
 //! - **What is fixed for the flight's life comes as it opens**: the
 //!   weapons whose looks the view reads, the names it words the flight's
 //!   messages with and why the flight could not start
-//!   ([`FlightOpening`](nova_sim::flight_frame::FlightOpening)), handed to
+//!   ([`FlightOpening`](nova_sim_frame::flight_frame::FlightOpening)), handed to
 //!   `FlightView::over` by the edge, which reads it off the adapter
 //!   (`SessionFlight::opening`), not asked through the port.
 //! - **A name fixed for the flight's life comes in the opening's
-//!   [`Names`](nova_sim::flight_frame::Names)** (a ship's, an outfit's, a
+//!   [`Names`](nova_sim_frame::flight_frame::Names)** (a ship's, an outfit's, a
 //!   good's, a `jünk`'s, a stellar's, a system's: the new game's news
 //!   names its source by it); **a name the flight decides is a
 //!   frame field** (the player's ship's,
-//!   [`FlightFrame::player_ship_name`](nova_sim::flight_frame::FlightFrame::player_ship_name);
-//!   the date, [`FlightFrame::long_date`](nova_sim::flight_frame::FlightFrame::long_date);
+//!   [`FlightFrame::player_ship_name`](nova_sim_frame::flight_frame::FlightFrame::player_ship_name);
+//!   the date, [`FlightFrame::long_date`](nova_sim_frame::flight_frame::FlightFrame::long_date);
 //!   whether a system is explored,
-//!   [`FlightFrame::explored`](nova_sim::flight_frame::FlightFrame::explored)),
+//!   [`FlightFrame::explored`](nova_sim_frame::flight_frame::FlightFrame::explored)),
 //!   **or rides the value that carries it** (a mission cargo's, on
-//!   [`MissionBoardLine::Retrieved`](nova_sim::MissionBoardLine::Retrieved);
+//!   [`MissionBoardLine::Retrieved`](nova_sim_frame::MissionBoardLine::Retrieved);
 //!   a storyline point's holder, on
-//!   [`StoryObjective::TakePoint`](nova_sim::flight_frame::StoryObjective::TakePoint)).
+//!   [`StoryObjective::TakePoint`](nova_sim_frame::flight_frame::StoryObjective::TakePoint)).
 //!   A text filled for the pilot is a screen's ask
 //!   ([`ScreenAsk::PlainText`]).
 //! - **A readout is a frame field, an action a command, a one-shot output
@@ -134,6 +144,24 @@
 //! variant of nova-sim's, answered and pinned on nova-sim's side, and
 //! each adapter forward stays one `Session` call. nova-sim's `session`
 //! module is private, so its paths here are inline code.
+//!
+//! Where each half goes:
+//!
+//! - The type itself (a new frame field, command variant, event variant
+//!   or screen ask and its answer) is defined in nova-sim-frame, in
+//!   `nova-sim-frame/src/flight_frame.rs` or a module under
+//!   `nova-sim-frame/src/flight_frame/`, beside the types it carries;
+//!   `nova_sim::flight_frame` re-exports it.
+//! - The `Session` code that fills or answers it goes in nova-sim, in the
+//!   `session/` modules below.
+//! - A value type a screen carries goes in nova-sim-frame too, in the
+//!   module named for the `session/` module that builds it, or, when a
+//!   layer crate (combat, the ai, the story or the port) builds it, in
+//!   `nova_sim_state::shown` (or `nova_sim_base::shown`), re-exported by
+//!   that crate at its own path. A type there never names a crate above
+//!   it, so a constructor that reads a layer's state is an extension
+//!   trait in the module that builds it (`nova_sim::galaxy_map::GalaxyShownOf`,
+//!   `nova_sim::flight_frame::GateFadeOf`).
 //!
 //! - **A readout** is a [`FlightFrame`] field, filled in nova-sim's
 //!   `session/frame.rs` (or a module under `session/frame/`) and pinned by
@@ -160,12 +188,12 @@
 //!   another, opened from with [`FlightCommand::Converse`]'s
 //!   `OpenListed`. **A screen's new readout of an answer it already has is a
 //!   field of that answer**: the new game's storyline missions ride the
-//!   mission info ([`MissionInfo::story`](nova_sim::MissionInfo::story)),
+//!   mission info ([`MissionInfo::story`](nova_sim_frame::MissionInfo::story)),
 //!   so the mission info key stays one ask and one press answer.
 //! - **The step's order** lives in `session/step.rs`, and what a step
 //!   reports for the view to draw from is a
-//!   [`StepRun`](nova_sim::flight_frame::StepRun) or
-//!   [`PassReport`](nova_sim::flight_frame::PassReport) field, such as the
+//!   [`StepRun`](nova_sim_frame::flight_frame::StepRun) or
+//!   [`PassReport`](nova_sim_frame::flight_frame::PassReport) field, such as the
 //!   frame between double time's passes.
 //!
 //! New sim-side code for the port goes in those modules, not in
@@ -174,12 +202,11 @@
 //!
 //! # Testing the view
 //!
-//! View code goes in `impl<C, S: FlightSim> FlightView<C, S>` blocks,
-//! names no `Session` and adds no block over `SessionFlight<C>`. The
-//! only concrete members are two fixture-only ones
-//! (`cfg(any(test, feature = "fixture"))`): `FlightView::session`, which
-//! reads a real session behind the port, and `FlightView::from_session`,
-//! which wires a view over a session a test built.
+//! View code goes in `impl<C, S: FlightSim> FlightView<C, S>` blocks and
+//! names no `Session`: nova-view can't, as it doesn't depend on nova-sim.
+//! The two reads of a real session the wiring tests make,
+//! `view.session()` and `FlightView::from_session`, are
+//! `nova_flight::SessionViewExt`'s, over `nova_flight::SessionView`.
 //!
 //! The `fixture` feature (and this crate's tests) exposes `fixture`:
 //! `FakeFlight`, a scripted sim for the view's component tests, and
@@ -193,20 +220,22 @@
 //!
 //! The view's component tests run on `FakeFlight`: they set a frame (the
 //! builders in `flight/view/tests/frames.rs`), script its answers and
-//! events, and assert what the view draws, plays and sends. A real
-//! `Session` starts in nova-view only in:
+//! events, and assert what the view draws, plays and sends. nova-view's
+//! tests, and nova-view-it's, never start a real `Session`. Those tests
+//! are nova-flight's:
 //!
-//! - `tests/it/flight_seam.rs`, one test per port surface or router
+//! - its `tests/it/flight_seam.rs`, one test per port surface or router
 //!   handoff, as its module doc says;
 //! - the adapter's checks, `sim_adapter`'s tests and
 //!   `sim_adapter/fake_catalog_checks.rs`;
-//! - the edge's checks, `flight/view/build/edge_checks.rs`;
-//! - the `stock_*` tests.
+//! - the edge's checks, `edge::edge_checks`, which read the view through
+//!   its fixture-only reads (`flight::view`'s `edge_reads`);
+//! - its `tests/it` `stock_*` tests.
 //!
 //! The developer tools reach the flight through
 //! [`DevDesk`](crate::devtools::DevDesk), not this port.
 
-use nova_sim::flight_frame::{
+use nova_sim_frame::flight_frame::{
     Answer, FlightCommand, FlightEvent, FlightFrame, ScreenAnswer, ScreenAsk, StepInput, StepReport,
 };
 

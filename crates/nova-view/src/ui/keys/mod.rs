@@ -95,7 +95,7 @@ mod pad_record;
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::Rulebook;
+use nova_sim_frame::Rulebook;
 
 pub use edit::{Column, KeyEdit, PadRecorded, Recorded, Recording, left_key};
 

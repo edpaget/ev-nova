@@ -8,11 +8,11 @@
 //! player's ship's name and the date its frame holds. That the session
 //! names each as its records do is nova-sim's (`session/frame/names.rs`,
 //! `session/frame.rs`); that the adapter hands the session's on is
-//! `sim_adapter/fake_catalog_checks.rs`'.
+//! nova-flight's `sim_adapter/fake_catalog_checks.rs`'.
 
 use super::*;
-use nova_sim::flight_frame::{FlightEvent, OutfitNames, ShipNames};
-use nova_sim::{DockFind, SelfDestructLine};
+use nova_sim_frame::flight_frame::{FlightEvent, OutfitNames, ShipNames};
+use nova_sim_frame::{DockFind, SelfDestructLine};
 
 /// What `fake` words its messages with: its opening's names, and its
 /// frame's player's ship's name and date.
@@ -44,7 +44,7 @@ fn board_text(line: MissionBoardLine, fake: &FakeFlight) -> String {
 fn stellar_text(
     message: &SimMessage,
     fake: &FakeFlight,
-    chance: &mut dyn nova_sim::Chance,
+    chance: &mut dyn nova_sim_frame::Chance,
 ) -> Option<String> {
     let (names, frame) = wording_of(fake);
     message_text(
@@ -85,9 +85,10 @@ fn naming() -> FakeFlight {
     names
         .outfits
         .insert(OutfitId(275), outfit_lc("bomb", "bombs"));
-    names
-        .junk
-        .insert(nova_sim::JunkId(150), "bio-weapons".to_owned());
+    names.junk.insert(
+        nova_sim_frame::catalog::JunkId(150),
+        "bio-weapons".to_owned(),
+    );
     let mut fake = FakeFlight::new();
     fake.set_names(names);
     fake.frame_mut().player_ship_name = Some("Kestrel".to_owned());
@@ -105,7 +106,7 @@ fn naming_with(change: impl FnOnce(&mut Names)) -> FakeFlight {
 
 /// [`arrival_lead`] of `message`, no jump's roll wanted.
 fn lead_of(message: &SimMessage) -> Option<&'static str> {
-    arrival_lead(message, &mut nova_sim::NeverFires)
+    arrival_lead(message, &mut nova_sim_frame::NeverFires)
 }
 
 #[test]
@@ -430,7 +431,7 @@ fn a_contraband_notice_reads_its_names_from_the_flight() {
     let junk = |id: i16| SimMessage::IllegalJunk {
         scanner: ShipId(128),
         person: Some("Ace".to_owned()),
-        junk: nova_sim::JunkId(id),
+        junk: nova_sim_frame::catalog::JunkId(id),
         fine: 0,
     };
     assert_eq!(
@@ -500,7 +501,7 @@ fn a_dock_scan_says_what_traffic_control_found_and_the_fine() {
         text(&scanned(blaster, 0), &names),
         Some(dock_scanned_message("blaster", 0))
     );
-    let junk = DockFind::Junk(nova_sim::JunkId(150));
+    let junk = DockFind::Junk(nova_sim_frame::catalog::JunkId(150));
     assert_eq!(
         text(&scanned(junk, 0), &names),
         Some(dock_scanned_message("bio-weapons", 0))
@@ -638,7 +639,7 @@ fn a_dock_request_and_a_land_hint_name_an_unseen_stellar_by_its_spob_name() {
             }
         )
     );
-    let hint = SimMessage::Tutorial(nova_sim::TutorialHint::Land {
+    let hint = SimMessage::Tutorial(nova_sim_frame::TutorialHint::Land {
         stellar: StellarId(150),
         station: false,
     });
@@ -766,7 +767,7 @@ fn a_dominated_stellars_or_a_hypergates_greeting_states_no_fee() {
 
 /// A hypergate's greeting is one of its own, picked on the view's
 /// wording's chance, which the edge makes the flight's
-/// (`build::edge_checks::the_edge_hands_the_flight_and_the_wording_one_chance`); when
+/// (nova-flight's `edge::edge_checks::the_edge_hands_the_flight_and_the_wording_one_chance`); when
 /// the flight greets is its own.
 #[test]
 fn a_hypergates_greeting_is_one_of_its_own_by_a_roll() {
@@ -888,7 +889,7 @@ fn a_dock_scan_s_find_is_read_when_traffic_control_then_denies() {
     scanned_then(
         &mut view,
         Answer::LandRefused {
-            refusal: nova_sim::LandingRefusal::Denied {
+            refusal: nova_sim_frame::LandingRefusal::Denied {
                 stellar: StellarId(128),
                 station: false,
                 min_status: 1,
@@ -911,8 +912,8 @@ fn a_landing_blanks_the_line_whatever_the_press_said() {
     let mut view = scanning();
     scanned_then(
         &mut view,
-        Answer::LandPress(nova_sim::LandPress::Outcome(
-            nova_sim::landing::LandOutcome::Landed(StellarId(128)),
+        Answer::LandPress(nova_sim_frame::LandPress::Outcome(
+            nova_sim_frame::landing::LandOutcome::Landed(StellarId(128)),
         )),
     );
     assert_eq!(view.message(), None);
@@ -926,8 +927,8 @@ fn a_dock_scan_s_find_in_a_requested_press_is_said_in_its_order() {
     let mut view = scanning();
     scanned_then(
         &mut view,
-        Answer::LandPress(nova_sim::LandPress::Outcome(
-            nova_sim::landing::LandOutcome::Requested {
+        Answer::LandPress(nova_sim_frame::LandPress::Outcome(
+            nova_sim_frame::landing::LandOutcome::Requested {
                 stellar: StellarId(128),
                 station: false,
             },

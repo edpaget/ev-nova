@@ -56,7 +56,7 @@
 use super::Session;
 use crate::SimSound;
 use crate::control::Gate;
-use crate::escort_dialog::{self, EscortButton, EscortDialogView};
+use crate::escort_dialog::{self, EscortButton, EscortDialogView, EscortDialogViewOf};
 use crate::fleet::EscortMark;
 use crate::rulebook::RuleKey;
 use crate::traffic::npc::{AiType, Npc, NpcId};

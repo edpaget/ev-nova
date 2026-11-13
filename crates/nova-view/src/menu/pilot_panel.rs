@@ -54,8 +54,8 @@
 
 use std::rc::Rc;
 
-use nova_sim::catalog::ShipId;
-use nova_sim::pilot_panel::PilotPanel;
+use nova_sim_frame::catalog::ShipId;
+use nova_sim_frame::pilot_panel::PilotPanel;
 
 use crate::color::Color;
 use crate::draw::{Blend, DrawList};

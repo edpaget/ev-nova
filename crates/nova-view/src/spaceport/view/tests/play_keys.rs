@@ -114,9 +114,9 @@ fn player_info() -> SpaceportView {
 }
 
 /// The marks of [`briefing`]'s map.
-fn marks() -> nova_sim::MapMarks {
-    nova_sim::MapMarks {
-        green: Some(nova_sim::SystemId(131)),
+fn marks() -> nova_sim_frame::MapMarks {
+    nova_sim_frame::MapMarks {
+        green: Some(nova_sim_frame::SystemId(131)),
         multi_arrows: true,
     }
 }
@@ -127,7 +127,7 @@ fn briefing() -> SpaceportView {
     let mut view = computer();
     view.show_mission_texts(vec![MissionText {
         kind: MissionTextKind::Brief,
-        mission: nova_sim::MissionId(130),
+        mission: nova_sim_frame::MissionId(130),
         text: "Go.".to_owned(),
         graphic: None,
         movie: None,
@@ -215,7 +215,7 @@ const fn map_of(map: PortMap) -> Asked {
 
 /// The map [`offered`]'s offer opens, over whatever it is open over.
 const fn offer() -> PortMap {
-    PortMap::Dialog(MapOpener::Offer(nova_sim::MissionId(141)))
+    PortMap::Dialog(MapOpener::Offer(nova_sim_frame::MissionId(141)))
 }
 
 const PLAYER_INFO: Asked = (None, true, false);
@@ -230,7 +230,7 @@ type Opening = (&'static str, fn() -> SpaceportView, Command, Asked);
 fn openings() -> Vec<Opening> {
     use crate::flight::PortScreen as S;
     use crate::spaceport::port_map::PortMap::{Bar, Dialog, Screen};
-    use nova_sim::MissionId;
+    use nova_sim_frame::MissionId;
     vec![
         ("spaceport", port, MAP, map_of(Screen(S::Spaceport))),
         ("spaceport", port, PILOT, PLAYER_INFO),
@@ -348,7 +348,7 @@ fn the_play_keys_hide_while_a_mission_text_is_in_front() {
     assert!(!strip.is_empty(), "shown");
     view.show_mission_texts(vec![MissionText {
         kind: MissionTextKind::Brief,
-        mission: nova_sim::MissionId(130),
+        mission: nova_sim_frame::MissionId(130),
         text: "Hello.".to_owned(),
         graphic: None,
         movie: None,
@@ -382,7 +382,7 @@ fn over_a_briefing_with_a_map_only_the_map_control_shows_at_once() {
     assert_eq!(strip_labels(&view), ["Map", "Pilot", "Missions"]);
     view.show_mission_texts(vec![MissionText {
         kind: MissionTextKind::Brief,
-        mission: nova_sim::MissionId(130),
+        mission: nova_sim_frame::MissionId(130),
         text: "Go.".to_owned(),
         graphic: None,
         movie: None,
@@ -418,7 +418,7 @@ fn over_a_briefing_a_tap_where_pilot_or_missions_would_be_reaches_the_text() {
 #[test]
 fn the_play_keys_hide_while_a_mission_movie_plays() {
     use crate::movie::fixture::MockMoviePlayer;
-    use nova_sim::{DescMovie, MissionShown};
+    use nova_sim_frame::{DescMovie, MissionShown};
     let player = MockMoviePlayer::playing((160, 120), 1);
     let mut view = port().with_movies(movies_of(&player));
     view.input(&Input::Surroundings(Surroundings::of(Device::Touch)));

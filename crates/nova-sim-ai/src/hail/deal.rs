@@ -49,6 +49,8 @@
 
 use crate::chance::Chance;
 
+pub use nova_sim_state::shown::hail::deal::Haggle;
+
 /// How many variants a conversation draws from.
 pub const VARIANTS: u32 = 5;
 /// The mood's spread, drawn.
@@ -124,15 +126,6 @@ impl Mood {
             Self::Neutral
         }
     }
-}
-
-/// A choice in the haggle dialog.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Haggle {
-    /// "Accept Price".
-    Accept,
-    /// "Lower Price".
-    LowerPrice,
 }
 
 /// What a choice in the haggle dialog came to.

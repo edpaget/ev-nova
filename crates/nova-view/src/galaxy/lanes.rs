@@ -1,6 +1,6 @@
 //! How the in-flight maps draw a link in its gate lane's look, by
 //! `RuleKey::MapLaneStyle`'s other reading (`nova_sim`'s
-//! [`map_lanes`](nova_sim::map_lanes) works the looks out): each way in
+//! [`map_lanes`](nova_sim_frame::map_lanes) works the looks out): each way in
 //! its stability's colour and dash, in two halves where the ways differ,
 //! and an arrowhead on a one-way link ([`strokes`]).
 //!
@@ -18,10 +18,10 @@
 //! ([`arrow_head`]), two strokes back from the far end, in the way out's
 //! colour.
 
-use nova_sim::Vec2;
-use nova_sim::catalog::GateStability;
-use nova_sim::galaxy_map::arrow_head;
-use nova_sim::map_lanes::{Back, LaneLook};
+use nova_sim_frame::Vec2;
+use nova_sim_frame::catalog::GateStability;
+use nova_sim_frame::galaxy_map::arrow_head;
+use nova_sim_frame::map_lanes::{Back, LaneLook};
 
 use crate::Color;
 
@@ -143,7 +143,7 @@ fn truncated(at: Vec2) -> (i32, i32) {
 mod tests {
     use super::*;
     use GateStability::{Dead, Stable, Unstable};
-    use nova_sim::SystemId;
+    use nova_sim_frame::SystemId;
 
     const GREY: Color = Color::rgba(1, 2, 3, 255);
 

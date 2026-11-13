@@ -33,7 +33,7 @@
 //! ([`FlightView::held_keys_frame`](super::FlightView)), before any frame
 //! is drawn, so all the presses of one frame make one pick.
 
-use nova_sim::StellarPick;
+use nova_sim_frame::StellarPick;
 
 use crate::keymap::{Command, FlightCommand};
 

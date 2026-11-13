@@ -21,7 +21,7 @@
 //! [`OfferLabels`] holds none for an offer that can't be refused, so the
 //! accept label alone sets `w` here. No stock mission shows the difference.
 
-use nova_sim::mission::OfferLabels;
+use nova_sim_frame::mission::OfferLabels;
 
 use super::offer::{ACCEPT_ITEM, REFUSE_ITEM, SINGLE_ITEM};
 use crate::font::Font;

@@ -40,29 +40,16 @@
 //! @0x5fdc5) are not replicated. Ammunition and fighters are not
 //! recharged here.
 
-use crate::landing::StellarFlags;
 use crate::pilot::Pilot;
 use crate::reserves::Gauge;
 use crate::rulebook::RuleSource;
+
+pub use nova_sim_state::shown::recharge::{RechargeRefusal, sells_fuel};
 
 /// What a unit of fuel costs, in credits: 100 credits a jump. The fill
 /// takes one credit from the cash for each unit (`_DoPortDialog`
 /// @0x5fdcd).
 pub const FUEL_PRICE_PER_UNIT: i64 = 1;
-
-/// Why the spaceport won't recharge the ship.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RechargeRefusal {
-    /// No fuel is sold: the ship is not landed, or the stellar sells none.
-    NoFuel,
-}
-
-/// Whether a stellar with these `spöb` flags sells fuel: any but an
-/// uninhabited one.
-#[must_use]
-pub fn sells_fuel(flags: u32) -> bool {
-    flags & StellarFlags::UNINHABITED == 0
-}
 
 /// Whether the Recharge button is enabled at a stellar with `flags`, with
 /// the tank at `fuel` and `cash`: fuel is sold, the cash is above 0 and
@@ -123,21 +110,12 @@ pub fn settle(pilot: &mut Pilot, fill: Fill) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::landing::StellarFlags;
     use crate::rulebook::RuleSource;
     use nova_sim_catalog::fixture::catalog;
 
     fn tank(now: f32, max: f32) -> Gauge {
         Gauge { now, max }
-    }
-
-    #[test]
-    fn every_stellar_but_an_uninhabited_one_sells_fuel() {
-        for flags in [0x01, 0x57, 0x4242_2157] {
-            assert!(sells_fuel(flags), "{flags:#x}");
-        }
-        for flags in [0x20, 0x21, 0x4242_2177, u32::MAX] {
-            assert!(!sells_fuel(flags), "{flags:#x}");
-        }
     }
 
     #[test]

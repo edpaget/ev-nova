@@ -70,7 +70,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::ShipId;
+use nova_sim_frame::ShipId;
 
 use crate::draw::DrawList;
 use crate::geometry::Bounds;

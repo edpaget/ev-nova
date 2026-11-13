@@ -74,9 +74,9 @@
 //! double-time frame is drawn from the frame its last step reported
 //! between its passes ([`StepRun::between_passes`]) instead.
 
-use nova_sim::flight_frame::{PassReport, StepInput, StepRun};
-use nova_sim::player_wrap::PlayerWrap;
-use nova_sim::{
+use nova_sim_frame::flight_frame::{PassReport, StepInput, StepRun};
+use nova_sim_frame::player_wrap::PlayerWrap;
+use nova_sim_frame::{
     Amounts, Controls, Face, PlayerCommand, RuleKey, RuleSource, Rulebook, ShipRef, Turn, Vec2,
 };
 
@@ -288,7 +288,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             land_key: self.held(F::LandDock),
             dock_try: self.faded_keys.land_latched(),
             jettison,
-            held: nova_sim::speed_mult::holds_after(self.since_step),
+            held: nova_sim_frame::speed_mult::holds_after(self.since_step),
         }
     }
 
@@ -509,7 +509,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// Hears the fight's events a pass raised before its exit, `before`,
     /// in the scene the steps had reached, and draws none of them: the
     /// system they belong to is left (`PlaySound` starts at once).
-    fn hear_left_behind(&mut self, before: &[nova_sim::CombatEvent]) {
+    fn hear_left_behind(&mut self, before: &[nova_sim_frame::CombatEvent]) {
         let scene = self.presentation.scene(self.previous.position);
         for event in before {
             self.effects.hear_event(event, &scene, &self.looks);

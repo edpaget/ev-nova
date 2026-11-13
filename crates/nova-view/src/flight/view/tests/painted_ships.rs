@@ -15,11 +15,11 @@ use crate::flight::cloak_fade::{full_fade_factor, hull_factor};
 use crate::flight::murk::sprite_murk;
 use crate::flight::paint::{painted_hull, translucency};
 use crate::flight::ship_layers::base_alpha;
-use nova_sim::Rgb15;
-use nova_sim::catalog::ShipDisplay;
-use nova_sim::cloak::CloakShown;
-use nova_sim::combat::ship_frames::Alt;
-use nova_sim::flight_frame::FrameShip;
+use nova_sim_frame::Rgb15;
+use nova_sim_frame::catalog::ShipDisplay;
+use nova_sim_frame::cloak::CloakShown;
+use nova_sim_frame::combat::ship_frames::Alt;
+use nova_sim_frame::flight_frame::FrameShip;
 
 /// A paint of red 31, green 16 and blue 4.
 const PAINT: Rgb15 = Rgb15 { r: 31, g: 16, b: 4 };

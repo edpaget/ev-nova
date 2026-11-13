@@ -62,7 +62,7 @@
 
 pub mod str129;
 
-use nova_sim::RuleSource;
+use nova_sim_frame::RuleSource;
 
 use crate::input::{ControllerFamily, Device, Key, pad_axis_name, pad_button_name};
 use crate::key_names::{FIXED_NAMES, KeyNames, combo_name, key_name, modifier_words};

@@ -18,7 +18,7 @@ use crate::flight::touch_controls::layout::{ControlId, EDGE, LARGE, MENU};
 use crate::input::{ControllerFamily, Device, FingerId, PadAxis, Surroundings, Touch, TouchPhase};
 use crate::keymap::command::Kind;
 use crate::keymap::{FlightCommand as F, KeyMap, Modifiers, dead_zoned};
-use nova_sim::{Hailed, Turn};
+use nova_sim_frame::{Hailed, Turn};
 
 /// Finger `n` does `phase` on `view`'s touch controls; what the overlay
 /// raises is fed back through flight's input, as the router does. The
@@ -73,7 +73,7 @@ fn fire(view: &Faked) -> Point {
 }
 
 /// The step input after a tick.
-fn stepped(view: &mut Faked) -> nova_sim::flight_frame::StepInput {
+fn stepped(view: &mut Faked) -> nova_sim_frame::flight_frame::StepInput {
     ticked(view, 1);
     last_step_input(view)
 }
@@ -339,7 +339,7 @@ fn a_tap_off_the_controls_is_still_a_click_in_space() {
 fn a_control_whose_press_opens_a_dialog_is_released_as_it_opens_and_its_lift_does_nothing() {
     let mut view = touched();
     view.sim
-        .queue_answer(nova_sim::flight_frame::Answer::Hailed(Hailed::Comm(
+        .queue_answer(nova_sim_frame::flight_frame::Answer::Hailed(Hailed::Comm(
             hail_view("Channel open."),
         )));
     let hail = centre(&view, ControlId::Command(F::Communicate.into()));
@@ -403,7 +403,7 @@ fn combo_keys(command: Command) -> Option<Vec<Key>> {
 struct Outcome {
     applied: Vec<FlightCommand>,
     asks: Vec<FlightCommand>,
-    inputs: Vec<nova_sim::flight_frame::StepInput>,
+    inputs: Vec<nova_sim_frame::flight_frame::StepInput>,
     sounds: Vec<Sound>,
     message: Option<String>,
     map_open: bool,

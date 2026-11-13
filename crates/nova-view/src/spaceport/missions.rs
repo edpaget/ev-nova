@@ -114,10 +114,10 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::mission::screens::{
+use nova_sim_frame::mission::screens::{
     ABORT_LABEL, ACCEPT_LABEL, ACTIVE_MISSIONS, AVAILABLE_HERE, FAILED_MARK,
 };
-use nova_sim::{ComputerRow, InfoRow, MissionComputer, MissionId, MissionInfo};
+use nova_sim_frame::{ComputerRow, InfoRow, MissionComputer, MissionId, MissionInfo};
 
 use super::layout::{DONE_LABEL, LEAVE_LABEL};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
@@ -1445,7 +1445,7 @@ pub(crate) mod pad;
 pub(super) mod tests {
     use crate::input::Key;
     use crate::keymap::test_keys::MISSION_INFO_KEY;
-    use nova_sim::ComputerRow;
+    use nova_sim_frame::ComputerRow;
 
     /// The keys that leave the mission computer by default, besides
     /// Leave: Confirm's Return and its twin Enter, Back's Escape and the

@@ -9,7 +9,7 @@ use super::faked_keys::fleet;
 use super::faked_screen::{sent_count, sent_since};
 use super::*;
 use crate::keymap::{Bindings, FlightCommand as Fc, KeyCombo, PlayCommand, SharedBindings};
-use nova_sim::{StellarPick, TargetPick};
+use nova_sim_frame::{StellarPick, TargetPick};
 
 /// The default bindings with `command` bound to `k` alone.
 fn rebound(command: impl Into<crate::keymap::Command>, k: Key) -> SharedBindings {

@@ -73,14 +73,14 @@ fn faked_mid_fight() -> Faked {
     let mut catalog = armed(2, &[BLASTER]);
     catalog.sheet = Ok(layered_sheet());
     catalog.star_sheet = Ok(star_sheet());
-    let player = nova_sim::flight_frame::FrameShip {
-        drawn: nova_sim::combat::ship_frames::Drawn {
+    let player = nova_sim_frame::flight_frame::FrameShip {
+        drawn: nova_sim_frame::combat::ship_frames::Drawn {
             lights: Some(32),
-            ..nova_sim::combat::ship_frames::Drawn::default()
+            ..nova_sim_frame::combat::ship_frames::Drawn::default()
         },
-        frames: nova_sim::combat::ship_frames::FrameSpec {
+        frames: nova_sim_frame::combat::ship_frames::FrameSpec {
             lights: true,
-            ..nova_sim::combat::ship_frames::FrameSpec::NONE
+            ..nova_sim_frame::combat::ship_frames::FrameSpec::NONE
         },
         ..the_player_at(Vec2::ZERO, 0.0)
     };
@@ -103,7 +103,7 @@ fn faked_mid_fight() -> Faked {
             ship_type: ShipId(129),
             at: Vec2::new(0.0, -100.0),
             velocity: Vec2::ZERO,
-            explosion: Some(nova_sim::catalog::Explosion {
+            explosion: Some(nova_sim_frame::catalog::Explosion {
                 boom: BoomId(128),
                 extra: false,
             }),
@@ -215,7 +215,7 @@ fn a_placeholders_box_is_world_and_its_reason_overlay() {
 fn the_floating_map_and_the_escort_menu_are_world_and_their_text_overlay() {
     let mut view =
         super::faked_world::world(catalog(), in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]));
-    let mut hud = nova_sim::flight_frame::FrameHud::default();
+    let mut hud = nova_sim_frame::flight_frame::FrameHud::default();
     hud.escort_rows[0].present = true;
     view.escort_menu.toggle(view.elapsed, &hud.escort_rows);
     view.sim.queue_screen(floating_shown(sol_drawing(), None));
@@ -281,7 +281,7 @@ fn flights_world_tail_starts_at_the_floaters_and_the_particles_follow_it() {
 fn the_floating_map_and_the_escort_menu_follow_the_world_tail() {
     let mut view =
         super::faked_world::world(catalog(), in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]));
-    let mut hud = nova_sim::flight_frame::FrameHud::default();
+    let mut hud = nova_sim_frame::flight_frame::FrameHud::default();
     hud.escort_rows[0].present = true;
     view.escort_menu.toggle(view.elapsed, &hud.escort_rows);
     view.sim.queue_screen(floating_shown(sol_drawing(), None));

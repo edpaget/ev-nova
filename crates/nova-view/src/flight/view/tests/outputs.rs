@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::flight::escorts::fighters_abandoned_message;
-use nova_sim::flight_frame::FlightEvent;
+use nova_sim_frame::flight_frame::FlightEvent;
 
 #[test]
 fn the_save_due_the_holds_expiry_and_the_rescues_desc_are_taken_once() {
@@ -50,13 +50,13 @@ fn the_flights_sounds_come_before_the_interfaces() {
 #[test]
 fn the_flights_diagnostics_follow_the_looks_unread() {
     let mut view = faked(in_sol());
-    let unread = Diagnostic::Sim(nova_sim::SimDiagnostic::UnimplementedGuidance {
-        weapon: nova_sim::WeaponId(200),
+    let unread = Diagnostic::Sim(nova_sim_frame::SimDiagnostic::UnimplementedGuidance {
+        weapon: nova_sim_frame::WeaponId(200),
         guidance: 7,
     });
     view.unread_looks.push(unread.clone());
-    let sim = nova_sim::SimDiagnostic::UnimplementedGuidance {
-        weapon: nova_sim::WeaponId(128),
+    let sim = nova_sim_frame::SimDiagnostic::UnimplementedGuidance {
+        weapon: nova_sim_frame::WeaponId(128),
         guidance: 42,
     };
     view.sim.queue_event(FlightEvent::Diagnostic(sim));
@@ -87,7 +87,7 @@ fn an_arrival_takes_its_fighters_and_messages_and_leaves_the_rest() {
     let message = SimMessage::Buoy("Welcome.".to_owned());
     for event in [
         FlightEvent::FighterNote(FighterNote::Abandoned(3)),
-        FlightEvent::PayNote(nova_sim::PayNote::Defected(1)),
+        FlightEvent::PayNote(nova_sim_frame::PayNote::Defected(1)),
         FlightEvent::Message(message.clone()),
         FlightEvent::TakeoffNav(NavMode::Off),
     ] {
@@ -112,7 +112,7 @@ fn a_take_off_says_its_held_q_message_for_a_scripts_slot_and_takes_its_nav() {
     let message = SimMessage::Buoy("Hello.".to_owned());
     for event in [
         FlightEvent::LeaveMessage("Off you go.".to_owned()),
-        FlightEvent::PayNote(nova_sim::PayNote::Defected(2)),
+        FlightEvent::PayNote(nova_sim_frame::PayNote::Defected(2)),
         FlightEvent::Message(message.clone()),
         FlightEvent::TakeoffNav(NavMode::Stellar(Some(StellarId(128)))),
     ] {
@@ -134,8 +134,8 @@ fn a_take_off_says_its_held_q_message_for_a_scripts_slot_and_takes_its_nav() {
 /// with the nav `nav`.
 fn queued_text(mission: i16, texts: u64, nav: NavMode) -> FlightEvent {
     FlightEvent::MissionShown {
-        shown: MissionShown::Text(nova_sim::MissionText {
-            kind: nova_sim::MissionTextKind::Brief,
+        shown: MissionShown::Text(nova_sim_frame::mission_screens::MissionText {
+            kind: nova_sim_frame::mission_screens::MissionTextKind::Brief,
             mission: MissionId(mission),
             text: format!("text {mission}"),
             graphic: None,
@@ -145,7 +145,7 @@ fn queued_text(mission: i16, texts: u64, nav: NavMode) -> FlightEvent {
         bar: Some(TextBar {
             texts,
             nav,
-            reserves: nova_sim::Reserves::default(),
+            reserves: nova_sim_frame::Reserves::default(),
         }),
     }
 }
@@ -203,7 +203,7 @@ fn the_interface_changes_are_the_loads_since_the_last_run_that_each_load_another
     let load = |government, texts| InterfaceLoad {
         government,
         nav: NavMode::Off,
-        reserves: nova_sim::Reserves::default(),
+        reserves: nova_sim_frame::Reserves::default(),
         texts,
     };
     view.sim
@@ -237,8 +237,8 @@ fn a_drained_board_line_and_grant_are_each_taken_once_and_leave_the_rest() {
     let mut view = faked(in_sol());
     assert_eq!(view.board_line_drained(), None);
     assert_eq!(view.grant_drained(), None);
-    let granted = nova_sim::Granted {
-        outfit: nova_sim::OutfitId(128),
+    let granted = nova_sim_frame::Granted {
+        outfit: nova_sim_frame::OutfitId(128),
         count: 2,
     };
     let refuelled = MissionBoardLine::Refuelled { ship: ShipId(129) };
@@ -272,11 +272,11 @@ fn relay_the_steps(view: &mut Faked) {
 #[test]
 fn a_drained_comm_note_is_relayed_in_its_words_for_its_ticks() {
     let mut view = faked(in_sol());
-    let note = nova_sim::CommNote {
-        from: nova_sim::NpcId(3),
+    let note = nova_sim_frame::CommNote {
+        from: nova_sim_frame::NpcId(3),
         comm_name: "Shuttle".to_owned(),
         ship_name: "Kestrel".to_owned(),
-        done: nova_sim::Help::Refuel,
+        done: nova_sim_frame::Help::Refuel,
     };
     view.sim.queue_event(FlightEvent::Comm(note.clone()));
     relay_the_steps(&mut view);
@@ -294,14 +294,14 @@ fn a_drained_comm_note_is_relayed_in_its_words_for_its_ticks() {
 #[test]
 fn a_drained_quote_is_relayed_after_the_comm_and_stays() {
     let mut view = faked(in_sol());
-    let note = nova_sim::CommNote {
-        from: nova_sim::NpcId(3),
+    let note = nova_sim_frame::CommNote {
+        from: nova_sim_frame::NpcId(3),
         comm_name: "Shuttle".to_owned(),
         ship_name: "Kestrel".to_owned(),
-        done: nova_sim::Help::Repair,
+        done: nova_sim_frame::Help::Repair,
     };
-    let quote = nova_sim::PersonQuote {
-        npc: nova_sim::NpcId(4),
+    let quote = nova_sim_frame::PersonQuote {
+        npc: nova_sim_frame::NpcId(4),
         text: "Prepare to die.".to_owned(),
     };
     let ticks = quote.ticks();
