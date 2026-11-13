@@ -452,8 +452,16 @@ fn the_stock_readings_draw_no_seeded_galaxy() {
     let swapped = ids
         .replacen("\"brightwater\": 128", "\"brightwater\": 129", 1)
         .replacen("\"luyten-crossing\": 129", "\"luyten-crossing\": 128", 1);
+    assert_ne!(swapped, ids);
     let loaded = loaded!(new_game::fixture::modelled_sample().with("nova-ids.json", &swapped));
-    let (mut game, _) = flying_with_looks(loaded, Ruleset::Stock, &pilots);
+    let (mut game, assets) = flying_with_looks(loaded, Ruleset::Stock, &pilots);
+    // The system flown has a seed the renderer gives a galaxy, and no
+    // list in its place: the new game's readings would draw one here.
+    let flight = game.app.screen().flight_view().expect("flying");
+    let system = flight.session().expect("a session").system();
+    let seed = nova_view::flight::sky::sky_seed(system);
+    assert!(galaxy::seeded(seed).is_some(), "seed {seed} has a galaxy");
+    assert_eq!(assets.skies.decorations(seed), None, "no list");
     let frame = frame_drawn(&mut game);
     assert_eq!(sky_image_batches(&frame), []);
     assert_eq!(sky_image_uploads(&game), []);
