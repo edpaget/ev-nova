@@ -41,7 +41,9 @@
 //! app prints nothing: a save that fails is kept as a warning until the
 //! caller takes it ([`App::take_warnings`]) and shows it. So are the
 //! warnings the screen reports ([`Screen::take_warnings`]), which the app
-//! takes after every input and frame.
+//! takes after every input and frame, and a model or planet key a frame
+//! draws with nothing registered for it with the renderer, once a key (the
+//! `missing_keys` module).
 //!
 //! # Fullscreen
 //!
@@ -184,6 +186,7 @@ pub mod keyboard_access;
 pub mod last_device;
 mod loop_event;
 mod menu;
+mod missing_keys;
 mod pads;
 mod px_rect;
 mod safe_area;
@@ -1189,6 +1192,12 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         self.switch_upscaler(gpu);
         let report = self.renderer.render(&list, &self.viewport, gpu);
         self.failures.extend(report.new_failures);
+        // A key drawn with nothing registered for it, which the report
+        // names the first time only: one warning each.
+        self.warnings.extend(missing_keys::warnings(
+            &report.missing_models,
+            &report.missing_planets,
+        ));
         // What drawing it raised (an upscaler's fallback, say), to show.
         self.warnings.extend(gpu.take_warnings());
         self.show_pointer(window);
@@ -1737,6 +1746,7 @@ mod tests {
     mod exiting;
     mod gamepads;
     mod menu;
+    mod missing_keys;
     mod pointer_outside;
     mod pointer_release;
     mod safe_area;

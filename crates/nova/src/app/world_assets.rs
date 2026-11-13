@@ -5,8 +5,8 @@
 //! (`nova_render::sky_looks`). The table goes to the screen
 //! ([`AppScreen::with_world_models`](super::AppScreen::with_world_models));
 //! a key the screen draws with nothing registered for it draws nothing and
-//! is reported once (`nova_render::RenderReport`), and a sky whose seed has
-//! no look draws the default one.
+//! is kept as a warning, once ([`App::take_warnings`], the `missing_keys`
+//! module), and a sky whose seed has no look draws the default one.
 
 use nova_render::sky::SkyLooks;
 use nova_render::{ImageSource, LoadedPlanet, Mesh};
