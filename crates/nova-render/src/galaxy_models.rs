@@ -17,7 +17,11 @@
 //! material's base colour names is sniffed, held to the default budget's
 //! `texture` side and to the renderer's largest
 //! ([`MAX_TEXTURE_SIDE`]) and decoded (`nova_galaxy_media::image`), how
-//! its mip chain is built ([`ModelTexture::new`]), how it sits on a ship
+//! its mip chain is built ([`ModelTexture::new`]), which sampler, which
+//! coordinate set and which transform a base colour is sampled by
+//! (`nova_galaxy_media::sampling`: the sampler is handed on in the port's
+//! terms, and the coordinates arrive already resolved), how it sits on a
+//! ship
 //! (`nova_galaxy_media::Placement`), which livery slot the asset's `paint`
 //! puts each material in ([`nova_galaxy_media::slot_of`], the rule the
 //! top-down silhouettes use too), and how a placed primitive becomes a
@@ -49,12 +53,14 @@ use nova_galaxy_format::id::Id;
 use nova_galaxy_format::load::Galaxy;
 use nova_galaxy_format::source::Source;
 use nova_galaxy_media::budget::{self, Limits, limits, measure, over_budget, texture_limits};
+use nova_galaxy_media::sampling as media;
 use nova_galaxy_media::scene::{Scene, read_asset_scene};
 use nova_galaxy_media::{AssetScenes, NoImage, NoModel, Placement, Slot, read_image, slot_of};
 
 use crate::gpu::MAX_TEXTURE_SIDE;
 use crate::livery::Livery;
 use crate::model::MeshError;
+use crate::model_sampler::{Filter, Mip, ModelSampler, Wrap};
 use crate::model_source::{
     self, ImageRef, LoadedModel, Material, Measure, ModelError, ModelRequest, ModelSource, Overrun,
     PaintSlot, Texture,
@@ -292,6 +298,32 @@ fn paint_slot(slot: Slot) -> PaintSlot {
     }
 }
 
+/// A texture's sampler, as the port says it. It matches every variant of
+/// each of its values: each wrap, filter and mip mode the media crate
+/// reads has to reach the port as its own.
+fn sampler(from: media::Sampler) -> ModelSampler {
+    let wrap = |wrap| match wrap {
+        media::Wrap::Repeat => Wrap::Repeat,
+        media::Wrap::Mirror => Wrap::Mirror,
+        media::Wrap::Clamp => Wrap::Clamp,
+    };
+    let filter = |filter| match filter {
+        media::Filter::Nearest => Filter::Nearest,
+        media::Filter::Linear => Filter::Linear,
+    };
+    ModelSampler {
+        wrap_s: wrap(from.wrap_s),
+        wrap_t: wrap(from.wrap_t),
+        mag: filter(from.mag),
+        min: filter(from.min),
+        mip: match from.mip {
+            media::Mip::None => Mip::None,
+            media::Mip::Nearest => Mip::Nearest,
+            media::Mip::Linear => Mip::Linear,
+        },
+    }
+}
+
 /// A budget overrun, as the port says it. It matches every measure: each
 /// limit the media crate checks has to reach the port as its own.
 pub(crate) fn overrun(over: &budget::Overrun) -> Overrun {
@@ -309,7 +341,9 @@ pub(crate) fn overrun(over: &budget::Overrun) -> Overrun {
 
 /// `scene` placed by `placement`, its materials in the slots `paint`
 /// puts them in and naming their base colours' textures among
-/// `textures`, as the port hands it over.
+/// `textures`, each through its own sampler, as the port hands it over.
+/// A primitive's coordinates are forwarded as the scene resolved them
+/// (the set its base colour names, transformed).
 fn loaded(
     scene: &Scene,
     placement: &Placement,
@@ -355,20 +389,27 @@ fn loaded(
         materials: scene
             .materials
             .iter()
-            .map(|m| Material {
-                name: m.name.clone(),
-                paint: paint
-                    .zip(m.name.as_deref())
-                    .and_then(|(paint, name)| slot_of(paint, name))
-                    .map(paint_slot),
-                base_color: m.base_color,
-                metallic: m.metallic,
-                roughness: m.roughness,
-                unlit: m.unlit,
-                base_color_texture: m
-                    .base_color_texture
-                    .and_then(|texture| places.get(texture.image).copied().flatten()),
-                base_color_sampler: crate::ModelSampler::DEFAULT,
+            .map(|m| {
+                // The texture it draws, among those decoded, and the
+                // sampler it draws it through: the default for a material
+                // that draws none.
+                let drawn = m.base_color_texture.and_then(|texture| {
+                    let at = places.get(texture.image).copied().flatten()?;
+                    Some((at, sampler(texture.sampler)))
+                });
+                Material {
+                    name: m.name.clone(),
+                    paint: paint
+                        .zip(m.name.as_deref())
+                        .and_then(|(paint, name)| slot_of(paint, name))
+                        .map(paint_slot),
+                    base_color: m.base_color,
+                    metallic: m.metallic,
+                    roughness: m.roughness,
+                    unlit: m.unlit,
+                    base_color_texture: drawn.map(|(at, _)| at),
+                    base_color_sampler: drawn.map_or(ModelSampler::DEFAULT, |(_, sampler)| sampler),
+                }
             })
             .collect(),
         textures,
@@ -378,10 +419,13 @@ fn loaded(
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use nova_galaxy_format::asset::Front;
     use nova_galaxy_format::fixture::{CC0, galaxy};
     use nova_galaxy_format::load::load;
     use nova_galaxy_format::source::{CountingSource, MemSource};
-    use nova_galaxy_media::fixture::{Builder, ImageAt, JPEG, JPEG_SIZE, Mat, PNG, glb, png};
+    use nova_galaxy_media::fixture::{
+        Builder, ImageAt, JPEG, JPEG_SIZE, Mat, PNG, SamplerCodes, TransformJson, code, glb, png,
+    };
 
     use super::*;
     use crate::model_source::{PaintSlot, check_contract, vertex_color};
@@ -1096,16 +1140,230 @@ mod tests {
     }
 
     #[test]
+    fn each_media_sampler_value_is_the_port_s_of_the_same_name() {
+        use nova_galaxy_media::sampling as media;
+
+        use crate::model_sampler::{Filter, Mip, Wrap};
+        // Each field on its own, the others left at the default: no two
+        // fields are crossed.
+        let read = |change: &dyn Fn(&mut media::Sampler)| {
+            let mut from = media::Sampler::DEFAULT;
+            change(&mut from);
+            sampler(from)
+        };
+        assert_eq!(read(&|_| ()), ModelSampler::DEFAULT);
+        for (from, to) in [
+            (media::Wrap::Repeat, Wrap::Repeat),
+            (media::Wrap::Mirror, Wrap::Mirror),
+            (media::Wrap::Clamp, Wrap::Clamp),
+        ] {
+            let along_u = ModelSampler {
+                wrap_s: to,
+                ..ModelSampler::DEFAULT
+            };
+            assert_eq!(read(&|s| s.wrap_s = from), along_u);
+            let along_v = ModelSampler {
+                wrap_t: to,
+                ..ModelSampler::DEFAULT
+            };
+            assert_eq!(read(&|s| s.wrap_t = from), along_v);
+        }
+        for (from, to) in [
+            (media::Filter::Nearest, Filter::Nearest),
+            (media::Filter::Linear, Filter::Linear),
+        ] {
+            let mag = ModelSampler {
+                mag: to,
+                ..ModelSampler::DEFAULT
+            };
+            assert_eq!(read(&|s| s.mag = from), mag);
+            let min = ModelSampler {
+                min: to,
+                ..ModelSampler::DEFAULT
+            };
+            assert_eq!(read(&|s| s.min = from), min);
+        }
+        for (from, to) in [
+            (media::Mip::None, Mip::None),
+            (media::Mip::Nearest, Mip::Nearest),
+            (media::Mip::Linear, Mip::Linear),
+        ] {
+            let mip = ModelSampler {
+                mip: to,
+                ..ModelSampler::DEFAULT
+            };
+            assert_eq!(read(&|s| s.mip = from), mip);
+        }
+    }
+
+    /// A sampler that clamps along u and reads the nearest texel, as the
+    /// fixture writes it and as the port says it.
+    fn sharp() -> (SamplerCodes, ModelSampler) {
+        use crate::model_sampler::{Filter, Wrap};
+        let codes = SamplerCodes {
+            wrap_s: Some(code::CLAMP_TO_EDGE),
+            mag: Some(code::NEAREST),
+            ..SamplerCodes::default()
+        };
+        let sampler = ModelSampler {
+            wrap_s: Wrap::Clamp,
+            mag: Filter::Nearest,
+            ..ModelSampler::DEFAULT
+        };
+        (codes, sampler)
+    }
+
+    #[test]
+    fn two_materials_on_one_image_load_one_texture_and_their_own_samplers() {
+        let (codes, sharp) = sharp();
+        let builder = skinned()
+            .material(Mat {
+                textured: true,
+                sampler: Some(codes),
+                ..Mat::new("sharp", [1.0; 4])
+            })
+            .material(Mat::new("plain", [1.0; 4]));
+        let model = ask(&with_glb_hull(builder, &png(2, 2, &SKIN)), "hull", None).unwrap();
+        assert_eq!(model.textures.len(), 1, "one decode for the one image");
+        let read: Vec<_> = model
+            .materials
+            .iter()
+            .map(|m| (m.base_color_texture, m.base_color_sampler))
+            .collect();
+        assert_eq!(
+            read,
+            [
+                (Some(0), ModelSampler::DEFAULT),
+                (Some(0), sharp),
+                (None, ModelSampler::DEFAULT),
+            ]
+        );
+        // The merged mesh draws the one texture through each.
+        let mesh = model.mesh();
+        assert_eq!(mesh.textures().len(), 1);
+        let drawn: Vec<_> = mesh
+            .sections()
+            .iter()
+            .map(|s| (s.texture, s.sampler))
+            .collect();
+        assert_eq!(read, drawn);
+    }
+
+    #[test]
+    fn a_material_whose_image_was_not_decoded_carries_the_default_sampler() {
+        // The scene as read, handed over with none of its images decoded:
+        // the material draws no texture, so it says nothing of a sampler.
+        let (codes, sharp) = sharp();
+        let builder = Builder::new([1.0; 3])
+            .texcoords()
+            .material(Mat {
+                textured: true,
+                sampler: Some(codes),
+                ..Mat::new("sharp", [1.0; 4])
+            })
+            .image(ImageAt::Embedded);
+        let scene = nova_galaxy_media::read_scene("hull.glb", &builder.glb(), |_| None).unwrap();
+        assert_eq!(scene.images.len(), 1);
+        let placement = Placement::unscaled_bounds(scene.bounds, Front::MinusZ);
+        let texture = Texture {
+            image: Arc::new(ModelTexture::new(1, 1, vec![9; 4]).unwrap()),
+            path: None,
+        };
+        let decoded = loaded(&scene, &placement, None, (vec![texture], vec![Some(0)])).unwrap();
+        assert_eq!(decoded.materials[0].base_color_texture, Some(0));
+        assert_eq!(decoded.materials[0].base_color_sampler, sharp);
+        let undecoded = loaded(&scene, &placement, None, (Vec::new(), vec![None])).unwrap();
+        assert_eq!(undecoded.materials[0].base_color_texture, None);
+        assert_eq!(
+            undecoded.materials[0].base_color_sampler,
+            ModelSampler::DEFAULT
+        );
+    }
+
+    /// The box with both coordinate sets, its one material sampled as
+    /// `material` says.
+    fn two_sets(material: Mat) -> Builder {
+        Builder::new([1.0; 3])
+            .normals()
+            .texcoords()
+            .texcoords1()
+            .material(Mat {
+                textured: true,
+                ..material
+            })
+    }
+
+    /// The coordinates of `builder`'s one part, loaded, and as the media
+    /// crate reads them.
+    fn coordinates(builder: &Builder) -> (Vec<[f32; 2]>, Vec<[f32; 2]>) {
+        let source = with_glb_hull(builder.clone(), &png(2, 2, &SKIN));
+        let model = ask(&source, "hull", None).unwrap();
+        let glb = builder
+            .clone()
+            .image(ImageAt::Embedded)
+            .image_bytes(&png(2, 2, &SKIN))
+            .glb();
+        let scene = nova_galaxy_media::read_scene("hull.glb", &glb, |_| None).unwrap();
+        (
+            model.parts[0].uv.clone().expect("coordinates"),
+            scene.primitives[0].uvs.clone().expect("coordinates"),
+        )
+    }
+
+    #[test]
+    fn a_part_s_coordinates_are_the_set_and_transform_the_scene_resolved() {
+        let plain = coordinates(&two_sets(Mat::new("hull", [1.0; 4])));
+        assert_eq!(plain.0, plain.1);
+        // The second set, as read: not the first.
+        let second = coordinates(&two_sets(Mat {
+            tex_coord: 1,
+            ..Mat::new("hull", [1.0; 4])
+        }));
+        assert_eq!(second.0, second.1);
+        assert_ne!(second.0, plain.0);
+        // Transformed, as read: not as written.
+        let transformed = coordinates(&two_sets(Mat {
+            transform: Some(TransformJson {
+                offset: Some([0.25, 0.5]),
+                scale: Some([2.0, 0.5]),
+                ..TransformJson::default()
+            }),
+            ..Mat::new("hull", [1.0; 4])
+        }));
+        assert_eq!(transformed.0, transformed.1);
+        assert_ne!(transformed.0, plain.0);
+    }
+
+    /// A box that uses all three: a sampler of its own, the second
+    /// coordinate set and a transform.
+    fn sampled() -> Builder {
+        two_sets(Mat {
+            sampler: Some(sharp().0),
+            tex_coord: 1,
+            transform: Some(TransformJson {
+                offset: Some([0.25, 0.5]),
+                rotation: Some(0.5),
+                scale: Some([2.0, 0.5]),
+                tex_coord: None,
+            }),
+            ..Mat::new("hull", [1.0; 4])
+        })
+    }
+
+    #[test]
     fn the_adapter_meets_the_contract() {
         let source = faced_box();
         let (galaxy, _) = load(&source);
         let models = GalaxyModels::new(&galaxy, &source);
         check_contract(&models, &ModelRequest::new("hull", Some(8.0)), "nothing");
         check_contract(&models, &ModelRequest::new("hull", None), "nothing");
-        // Textured and unlit, a `.glb` and a `.gltf`.
+        // Textured and unlit, a `.glb` and a `.gltf`; and sampled its own
+        // way, by the second set, transformed.
         for source in [
             with_glb_hull(skinned(), &png(2, 2, &SKIN)),
             with_gltf_hull(skinned(), &png(2, 2, &SKIN)),
+            with_glb_hull(sampled(), &png(2, 2, &SKIN)),
+            with_gltf_hull(sampled(), &png(2, 2, &SKIN)),
         ] {
             let (galaxy, _) = load(&source);
             let models = GalaxyModels::new(&galaxy, &source);
