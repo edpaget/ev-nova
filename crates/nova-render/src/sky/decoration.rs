@@ -888,13 +888,18 @@ mod tests {
         assert!(most(&|p| p.y) > 270.0 && most(&|p| -p.y) > 270.0);
         // Across is not down.
         assert!(places.iter().any(|p| p.x.abs() > 288.0));
-        // No star or cloud draw is taken: the first star cell's, the
-        // seed's backdrop's and the first cloud cell's first draws differ
-        // from it.
-        let place = seeded_place(7, 0);
-        for salt in 0..=LAYERS.len() + 1 {
-            let mut draws = Draws::new(7, salt, 0, 0);
-            assert_ne!((2.0 * draws.unit() - 1.0) * 384.0, place.x, "{salt}");
+        // Its draws are salted two past the star layers, past the
+        // backdrop's two salts, with its index where a cell's column
+        // goes: no star's, cloud's or galaxy's draw is taken.
+        let (place, second) = (seeded_place(7, 0), seeded_place(7, 1));
+        let own = LAYERS.len() + 2;
+        for salt in 0..own + 12 {
+            let across = |index: i64| {
+                let mut draws = Draws::new(7, salt, index, 0);
+                (2.0 * draws.unit() - 1.0) * 384.0
+            };
+            assert_eq!(across(0) == place.x, salt == own, "{salt}");
+            assert_eq!(across(1) == second.x, salt == own, "{salt}");
         }
     }
 

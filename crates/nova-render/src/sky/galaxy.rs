@@ -335,6 +335,43 @@ mod tests {
     }
 
     #[test]
+    fn a_seeds_galaxy_is_pinned() {
+        // The sample's three systems (their Nova IDs are their seeds):
+        // Brightwater has an elliptical, Luyten Crossing none and Marrow
+        // a spiral. Pinned so a change to the draws, their order or
+        // their salt shows.
+        assert_eq!(
+            seeded(128),
+            Some(Galaxy {
+                kind: GalaxyKind::Elliptical,
+                at: Point::new(276.9146, -58.866_737),
+                size: 64.485_886,
+                tilt: 0.662_933_9,
+                heading: 214.897_87,
+                hue: [1.0, 0.93, 0.78],
+                light: 0.422_753_84,
+                clockwise: false,
+                grain: 7_568_530_573_109_403_012,
+            })
+        );
+        assert_eq!(seeded(129), None);
+        assert_eq!(
+            seeded(130),
+            Some(Galaxy {
+                kind: GalaxyKind::Spiral,
+                at: Point::new(296.214_94, -112.661_98),
+                size: 107.897_255,
+                tilt: 0.671_297_9,
+                heading: 94.861_73,
+                hue: [1.0, 0.84, 0.82],
+                light: 0.455_286_7,
+                clockwise: true,
+                grain: 3_548_471_114_448_882_018,
+            })
+        );
+    }
+
+    #[test]
     fn every_galaxy_is_within_its_ranges() {
         for (seed, galaxy) in galaxies(1500) {
             assert!(

@@ -744,6 +744,16 @@ mod tests {
         assert_eq!(alpha(&hulk, width, width / 2, 0), 255);
         assert_eq!(alpha(&hulk, width, 0, height / 2), 255);
         assert_eq!(alpha(&hulk, width, width - 1, height - 1), 255);
+        // Its hull is grey, lighter by 8 a column and darker by 6 a row
+        // from 90, its blue 20 over.
+        let texel = |pixels: &[u8], w: u32, x: u32, y: u32| {
+            let at = ((y * w + x) * 4) as usize;
+            [pixels[at], pixels[at + 1], pixels[at + 2], pixels[at + 3]]
+        };
+        assert_eq!(texel(&hulk, width, 15, 0), [210, 210, 230, 255]);
+        assert_eq!(texel(&hulk, width, 8, 7), [112, 112, 132, 255]);
+        assert_eq!(texel(&hulk, width, 0, 7), [48, 48, 68, 255]);
+        assert_eq!(texel(&hulk, width, 3, 3), [255, 0, 0, 0]);
         let (width, height) = SKY_GALAXY_SIZE;
         let galaxy = sky_galaxy_rgba();
         assert_eq!(galaxy.len(), (width * height * 4) as usize);
@@ -753,6 +763,15 @@ mod tests {
         assert_eq!(red(0, 0), 0);
         assert!(red(width / 2, height / 2) > red(1, height / 2));
         assert_eq!(alpha(&galaxy, width, 0, 0), 255);
+        // Each ring out from the middle is 36 darker, from 216, its blue
+        // an eighth under; the outermost ring is black.
+        assert_eq!(texel(&galaxy, width, 4, 4), [216, 216, 189, 255]);
+        assert_eq!(texel(&galaxy, width, 3, 3), [216, 216, 189, 255]);
+        assert_eq!(texel(&galaxy, width, 2, 5), [144, 144, 126, 255]);
+        assert_eq!(texel(&galaxy, width, 1, 4), [72, 72, 63, 255]);
+        assert_eq!(texel(&galaxy, width, 4, 6), [72, 72, 63, 255]);
+        assert_eq!(texel(&galaxy, width, 7, 3), [0, 0, 0, 255]);
+        assert_eq!(texel(&galaxy, width, 4, 0), [0, 0, 0, 255]);
         assert_ne!(SKY_HULK_SIZE, SKY_GALAXY_SIZE);
         assert_ne!(SKY_HULK_SIZE.0, SKY_HULK_SIZE.1, "the hulk is not square");
     }
