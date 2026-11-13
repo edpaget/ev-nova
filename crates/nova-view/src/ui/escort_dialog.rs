@@ -1052,6 +1052,25 @@ mod tests {
     }
 
     #[test]
+    fn a_portrait_that_draws_nothing_leaves_item_11_to_the_class_s_pict() {
+        let mut flat = stock();
+        let at = flat.items[PICTURE_ITEM - 1].bounds;
+        flat.items[PICTURE_ITEM - 1].bounds = Bounds::at(at.min, 0.0, at.height());
+        let plain = EscortDialog::new(&flat, &hired(), ButtonStyle::STOCK, Rc::new(MonoMetrics))
+            .expect("builds");
+        let modelled = plain.clone().with_ship_model(Some(portrait()));
+        let commands = drawn(&modelled);
+        assert_eq!(commands, drawn(&plain));
+        assert!(commands.contains(&class_picture(&modelled)));
+        assert!(
+            !commands
+                .iter()
+                .any(|command| matches!(command, DrawCommand::Model { .. })),
+            "no model"
+        );
+    }
+
+    #[test]
     fn with_no_model_item_11_stretches_the_class_s_pict_as_before() {
         let plain = dialog(&hired());
         assert!(drawn(&plain).contains(&class_picture(&plain)));

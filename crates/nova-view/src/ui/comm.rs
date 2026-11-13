@@ -1600,6 +1600,24 @@ mod tests {
     }
 
     #[test]
+    fn a_portrait_that_draws_nothing_leaves_item_11_to_the_ship_s_pict() {
+        let mut flat = stock();
+        let at = flat.items[PICTURE_ITEM - 1].bounds;
+        flat.items[PICTURE_ITEM - 1].bounds = Bounds::at(at.min, 0.0, at.height());
+        let plain = CommDialog::new(&flat, &view(), ButtonStyle::STOCK, Rc::new(MonoMetrics))
+            .expect("builds");
+        let modelled = plain.clone().with_ship_model(Some(portrait()));
+        assert_eq!(drawn(&modelled), drawn(&plain));
+        assert!(stretched(&modelled).contains(&ImageKey::picture(5001)));
+        assert!(
+            !drawn(&modelled)
+                .iter()
+                .any(|command| matches!(command, DrawCommand::Model { .. })),
+            "no model"
+        );
+    }
+
+    #[test]
     fn a_person_s_hail_picture_comes_before_a_ship_s_model() {
         let person = HailView {
             portrait: Some(7800),
