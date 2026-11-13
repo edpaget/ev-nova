@@ -25,6 +25,7 @@ use std::rc::Rc;
 use nova_sim::escort_dialog::EscortDialogView;
 #[cfg(doc)]
 use nova_view::flight::FlightView;
+use nova_view::model_picture::ShipPortrait;
 use nova_view::spaceport::SpaceportView;
 use nova_view::ui::DescriptionSource;
 use nova_view::ui::escort_dialog::{ESCORT_DIALOG, EscortDialog};
@@ -38,7 +39,9 @@ impl AppScreen {
     /// when the interface file has none). With no metrics to lay it out,
     /// the dialog is closed at once, with a warning. Flight's cursor hides
     /// first: `_DoEscortDialog` runs inside `_DoCommDialog` (@0x95742),
-    /// after `_HandlePlayerCommunication` hid its sprite (@0x62561).
+    /// after `_HandlePlayerCommunication` hid its sprite (@0x62561). The
+    /// escort's class draws as its model's portrait when the world models'
+    /// table has one ([`EscortDialog::with_ship_model`]).
     pub(super) fn open_escort_dialog(&mut self, view: &EscortDialogView) {
         self.hide_flight_cursor();
         let Some(metrics) = self.metrics() else {
@@ -69,7 +72,8 @@ impl AppScreen {
         self.escort_dialog = Some(
             dialog
                 .with_focus_ring(self.dialog_focus_ring())
-                .with_bindings(self.bindings.clone()),
+                .with_bindings(self.bindings.clone())
+                .with_ship_model(ShipPortrait::of(&self.world_models, view.ship)),
         );
     }
 

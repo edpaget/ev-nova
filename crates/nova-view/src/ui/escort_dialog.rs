@@ -21,7 +21,14 @@
 //!   at [`VALUE_COLUMN`] (the cost and price) or [`PAY_COLUMN`] (the pay,
 //!   followed by "per day", `STR#` 2002 #267). The amounts are
 //!   `_DrawCommaNumber`'s ([`comma_number`]).
-//! - **Item 11** shows the class's picture (`PICT` 5000 + its ID - 128).
+//! - **Item 11** shows the class's picture (`PICT` 5000 + its ID - 128),
+//!   stretched to fill it. A class the world models' table gives a model
+//!   (the new game's) draws its still portrait there instead
+//!   ([`EscortDialog::with_ship_model`], `crate::model_picture`), fitted
+//!   to the item. The portrait comes before the `PICT` because the dialog
+//!   never checks the `PICT` is there: the order shows only for a class
+//!   with a model, and only the new game's classes have models, which
+//!   never have that `PICT`.
 //! - **Items 1 to 4** are its buttons: "Close Channel" (`STR#` 150 #21),
 //!   "Release" (#32), "Upgrade Escort" (#52) or "Cancel Upgrade" (#53)
 //!   while marked, and "Sell Escort" (#54) or "Cancel Sale" (#55) while
@@ -61,6 +68,7 @@ use crate::input::Input;
 use crate::keymap::{
     Command, CommandReader, EscortDialogCommand, SharedBindings, UiCommand, contexts,
 };
+use crate::model_picture::ShipPortrait;
 use crate::screen::{Screen, ScreenAction};
 use crate::spaceport::credits::comma_number;
 use crate::text::TextMetrics;
@@ -244,6 +252,9 @@ pub struct EscortDialog {
     metrics: Rc<dyn TextMetrics>,
     picture: Option<ImageKey>,
     view: EscortDialogView,
+    /// The class's model, drawn in item 11 in its `PICT`'s place
+    /// ([`EscortDialog::with_ship_model`]).
+    model: Option<ShipPortrait>,
     dialog: Dialog,
     press: Option<EscortButton>,
     /// Its keys, as commands ([`contexts::ESCORT_DIALOG`]).
@@ -309,10 +320,20 @@ impl EscortDialog {
             metrics,
             picture,
             view: view.clone(),
+            model: None,
             dialog,
             press: None,
             reader: CommandReader::new(contexts::ESCORT_DIALOG),
         })
+    }
+
+    /// The escort dialog drawing `model`, the escort's class's portrait,
+    /// in item 11 in place of its `PICT` (see the module docs); none
+    /// draws the `PICT`.
+    #[must_use]
+    pub fn with_ship_model(mut self, model: Option<ShipPortrait>) -> Self {
+        self.model = model;
+        self
     }
 
     /// The escort dialog reading its keys through `bindings`.
@@ -466,11 +487,16 @@ impl Screen for EscortDialog {
     /// Nothing moves on its own.
     fn tick(&mut self, _dt: Duration) {}
 
-    /// The picture (or the backdrop), the class's picture, the buttons,
-    /// then the title and the info.
+    /// The picture (or the backdrop), the class's model or picture, the
+    /// buttons, then the title and the info.
     fn draw(&self, list: &mut DrawList) {
         backdrop(list, &self.dialog, self.picture);
-        if let Some(at) = self.dialog.item_bounds(PICTURE_ITEM) {
+        if let Some(at) = self.dialog.item_bounds(PICTURE_ITEM)
+            && !self
+                .model
+                .as_ref()
+                .is_some_and(|model| model.draw_in(list, at))
+        {
             list.stretched_picture(
                 ship_picture(self.view.ship),
                 at.min,
@@ -500,6 +526,7 @@ mod tests {
     use crate::draw::DrawCommand;
     use crate::input::{Key, MouseButton};
     use crate::keymap::{Bindings, KeyCombo};
+    use crate::model_picture::ShipPortrait;
     use crate::text::fixture::MonoMetrics;
 
     /// A hired Cruiser (ship 129), upgradable for 6,000, paid 1,000 a day.
@@ -983,5 +1010,54 @@ mod tests {
         let dialog = EscortDialog::new(&backed, &hired(), ButtonStyle::STOCK, Rc::new(MonoMetrics))
             .expect("builds");
         crate::ui::panel::testing::assert_backed_first(&drawn(&dialog), dialog.dialog().bounds());
+    }
+
+    fn portrait() -> ShipPortrait {
+        ShipPortrait::bare(crate::model::ModelKey(6), 3.0)
+    }
+
+    /// Item 11's stretched `PICT` 5000 + the class's ID - 128.
+    fn class_picture(dialog: &EscortDialog) -> DrawCommand {
+        let at = dialog.dialog().item_bounds(PICTURE_ITEM).expect("item 11");
+        DrawCommand::StretchedPicture {
+            image: ship_picture(ShipId(129)),
+            top_left: at.min,
+            width: at.width(),
+            height: at.height(),
+        }
+    }
+
+    #[test]
+    fn a_class_s_model_draws_its_portrait_in_item_11_and_no_pict() {
+        let dialog = dialog(&hired()).with_ship_model(Some(portrait()));
+        let at = dialog.dialog().item_bounds(PICTURE_ITEM).expect("item 11");
+        let mut want = DrawList::new();
+        assert!(portrait().draw_in(&mut want, at));
+        let want: Vec<DrawCommand> = want.iter().cloned().collect();
+        let commands = drawn(&dialog);
+        assert!(
+            commands
+                .windows(want.len())
+                .any(|run| run == want.as_slice()),
+            "{commands:?}"
+        );
+        assert!(!commands.contains(&class_picture(&dialog)));
+        // In the picture's place: after the backdrop, before the buttons.
+        let plain = drawn(&self::dialog(&hired()));
+        let at_picture = plain
+            .iter()
+            .position(|command| *command == class_picture(&dialog))
+            .expect("the PICT");
+        assert_eq!(commands[at_picture], want[0]);
+    }
+
+    #[test]
+    fn with_no_model_item_11_stretches_the_class_s_pict_as_before() {
+        let plain = dialog(&hired());
+        assert!(drawn(&plain).contains(&class_picture(&plain)));
+        assert_eq!(
+            drawn(&dialog(&hired()).with_ship_model(None)),
+            drawn(&plain)
+        );
     }
 }

@@ -3,8 +3,11 @@
 //! over the 3D sample (`nova_data::new_game::fixture::modelled_sample_3d`),
 //! wired as `main` wires it (the world models' table on the router, their
 //! meshes on the app), the status bar's target panel draws the target's
-//! class's model in its picture's place, in the overlay; and landed at
-//! Luyten Exchange, the spaceport's landscape draws the station hub.
+//! class's model in its picture's place, in the overlay; the comm dialog
+//! Y opens on it draws the same class's model in item 11; and landed at
+//! Luyten Exchange, the spaceport's landscape draws the station hub. The
+//! escort dialog's wiring is pinned in `combat.rs`, whose harness flies
+//! with an escort.
 //!
 //! The 3D sample's stations sell no ships, so no shipyard opens over it:
 //! the shipyard's and the hire screen's models are pinned on nova-view's
@@ -57,8 +60,9 @@ fn overlay_models(game: &Harness) -> Vec<ModelKey> {
         .collect()
 }
 
-#[test]
-fn the_target_panel_draws_the_target_s_class_as_its_model() {
+/// The app flying the 3D sample, targeting a ship of its traffic 100
+/// ahead and 60 to the right; and its class's hull's key.
+fn targeting() -> (Harness, ModelKey) {
     let (game, assets) = sample();
     let data = std::rc::Rc::new(game.data);
     let pilots = MemoryPilots::new();
@@ -89,8 +93,54 @@ fn the_target_panel_draws_the_target_s_class_as_its_model() {
         .expect("the target")
         .class;
     let key = assets.models.ship(class).expect("the class's model").key;
+    (harness, key)
+}
+
+#[test]
+fn the_target_panel_draws_the_target_s_class_as_its_model() {
+    let (harness, key) = targeting();
     let drawn = overlay_models(&harness);
     assert!(drawn.contains(&key), "the target's portrait: {drawn:?}");
+}
+
+/// Presses and releases `key`.
+fn tap(harness: &mut Harness, key: Key) {
+    for pressed in [true, false] {
+        let event = WindowEvent::Key {
+            key,
+            pressed,
+            repeat: false,
+        };
+        assert_eq!(harness.handle(event), Control::Continue);
+    }
+}
+
+/// The models `screen` draws, in order.
+fn models_of(screen: &impl Screen) -> Vec<ModelKey> {
+    let mut list = DrawList::new();
+    screen.draw(&mut list);
+    list.iter()
+        .filter_map(|command| match command {
+            DrawCommand::Model { model, .. } => Some(*model),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn the_comm_dialog_draws_the_hailed_ship_s_class_as_its_model() {
+    let (mut harness, key) = targeting();
+    // Y hails the target, pressed again each frame until it takes, as the
+    // flight may not step its first frames.
+    for _ in 0..2000 {
+        if harness.app.screen().comm().is_some() {
+            break;
+        }
+        tap(&mut harness, Key::KeyY);
+        draw(&mut harness);
+    }
+    let comm = harness.app.screen().comm().expect("hailed");
+    assert_eq!(models_of(comm), [key], "the hailed ship's portrait");
 }
 
 /// The Nova ID `table` gives the bible id `name`.
@@ -100,18 +150,6 @@ fn nova_id<K: std::fmt::Display>(table: &std::collections::BTreeMap<K, i16>, nam
         .find(|(id, _)| id.to_string() == name)
         .map(|(_, &nova)| nova)
         .expect("in the sample")
-}
-
-/// Presses and releases L, the land key.
-fn press_land(harness: &mut Harness) {
-    for pressed in [true, false] {
-        let event = WindowEvent::Key {
-            key: Key::KeyL,
-            pressed,
-            repeat: false,
-        };
-        assert_eq!(harness.handle(event), Control::Continue);
-    }
 }
 
 /// The app flying the 3D sample, landed at Luyten Exchange, at the
@@ -139,7 +177,7 @@ fn at_the_exchange() -> (Harness, ModelKey) {
         if harness.showing() == Showing::Spaceport {
             break;
         }
-        press_land(&mut harness);
+        tap(&mut harness, Key::KeyL);
         draw(&mut harness);
     }
     assert_eq!(harness.showing(), Showing::Spaceport, "landed");

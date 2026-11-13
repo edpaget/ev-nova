@@ -112,6 +112,17 @@ impl ShipPortrait {
         self.hull
     }
 
+    /// A portrait of hull `hull` reaching `radius`, with no parts: the
+    /// screens' tests' stand-in for a class's.
+    #[cfg(test)]
+    pub(crate) fn bare(hull: ModelKey, radius: f32) -> Self {
+        Self {
+            hull,
+            radius,
+            parts: Vec::new(),
+        }
+    }
+
     /// Draws it into `area`, centred, in [`portrait_orientation`], scaled
     /// so its radius reaches [`FIT`] of half the area's shorter side, its
     /// parts after it; says whether it drew. An area that gives no

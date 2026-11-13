@@ -1969,6 +1969,56 @@ impl Boarder {
     }
 }
 
+/// The escort dialog draws the escort's class as its model's portrait
+/// when the router's world models give the class one, and its `PICT`
+/// otherwise: wiring only, the dialog's draw is nova-view's
+/// (`ui::escort_dialog`).
+#[test]
+fn the_escort_dialog_draws_its_class_s_model_from_the_router_s_world_models() {
+    use nova_view::flight::{ShipModel, WorldModels};
+    use nova_view::{DrawCommand, DrawList, ModelKey, Screen};
+    let hull = ModelKey(41);
+    let models = Rc::new(WorldModels {
+        ships: [(
+            nova_sim::ShipId(129),
+            ShipModel {
+                key: hull,
+                scale: 1.0,
+                base_transp: 0,
+                radius: 5.0,
+            },
+        )]
+        .into(),
+        ..WorldModels::default()
+    });
+    let hulls = |models: Option<Rc<WorldModels>>| {
+        let store = MemoryPilots::new();
+        let mut game = escorted(&store, &[], &[129], |screen| match models {
+            Some(models) => screen.with_world_models(models),
+            None => screen,
+        });
+        game.key(Key::AltLeft, true);
+        game.tap(Key::Tab);
+        game.key(Key::AltLeft, false);
+        game.tap(Key::KeyY);
+        assert_eq!(game.showing(), Showing::EscortDialog);
+        let mut list = DrawList::new();
+        game.app
+            .screen()
+            .escort_dialog()
+            .expect("open")
+            .draw(&mut list);
+        list.iter()
+            .filter_map(|command| match command {
+                DrawCommand::Model { model, .. } => Some(*model),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(hulls(Some(models)), [hull]);
+    assert_eq!(hulls(None), []);
+}
+
 /// The escort dialog takes the rulebook's `dialog_focus_ring` as it
 /// opens: on by default, off under the engine's reading.
 #[test]

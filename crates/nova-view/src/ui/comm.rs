@@ -7,7 +7,14 @@
 //!
 //! **The comm dialog** shows a [`HailView`]: the ship's reply in item 10,
 //! its picture (`PICT` 5000 + its ID - 128) in item 11, all in Geneva 9
-//! ([`TEXT_SIZE`]). Item 12's class line (`_CommDialogUpdate`
+//! ([`TEXT_SIZE`]). In item 11 a person's `HailPict` comes first; then a
+//! class the world models' table gives a model (the new game's) draws
+//! its still portrait, fitted to the item ([`CommDialog::with_ship_model`],
+//! `crate::model_picture`); then the `PICT`. The portrait comes before
+//! the `PICT` because the dialog never checks the `PICT` is there: the
+//! order shows only for a class with a model, and only the new game's
+//! classes have models, which never have that `PICT`. Item 12's class
+//! line (`_CommDialogUpdate`
 //! @0x90505-0x905f0) is unwrapped runs: "Class:" (`STR#` 2002 #195) in
 //! grey at the item's left, on the baseline 12 pixels under its top, the
 //! ship's name in white 35 pixels right of the left on the same baseline,
@@ -89,6 +96,7 @@ use crate::input::{Input, Key};
 use crate::keymap::{
     CommCommand, Command, CommandReader, HaggleCommand, SharedBindings, UiCommand, contexts,
 };
+use crate::model_picture::ShipPortrait;
 use crate::screen::{Screen, ScreenAction};
 use crate::text::TextMetrics;
 
@@ -330,6 +338,9 @@ pub struct CommDialog {
     metrics: Rc<dyn TextMetrics>,
     picture: Option<ImageKey>,
     view: HailView,
+    /// The hailed ship's class's model, drawn in item 11 in its `PICT`'s
+    /// place ([`CommDialog::with_ship_model`]).
+    model: Option<ShipPortrait>,
     dialog: Dialog,
     /// Each option's hotkey, in order.
     keys: Vec<Option<char>>,
@@ -393,11 +404,21 @@ impl CommDialog {
             metrics,
             picture,
             view: view.clone(),
+            model: None,
             dialog,
             keys: view.options.iter().map(|option| option.key).collect(),
             press: None,
             reader: CommandReader::new(contexts::COMM),
         })
+    }
+
+    /// The comm dialog drawing `model`, the hailed ship's class's
+    /// portrait, in item 11 in place of its `PICT`, after a person's
+    /// `HailPict` (see the module docs); none draws the `PICT`.
+    #[must_use]
+    pub fn with_ship_model(mut self, model: Option<ShipPortrait>) -> Self {
+        self.model = model;
+        self
     }
 
     /// The comm dialog reading its keys through `bindings`.
@@ -727,17 +748,24 @@ impl Screen for CommDialog {
     fn tick(&mut self, _dt: Duration) {}
 
     /// The picture (or the backdrop), the ship's picture (a person's
-    /// `HailPict` in its place), then the dialog, the ship's class line
-    /// ([`CommDialog::draw_class`]) and its status line
-    /// ([`CommDialog::draw_status`]).
+    /// `HailPict`, else its class's model, in its place), then the
+    /// dialog, the ship's class line ([`CommDialog::draw_class`]) and its
+    /// status line ([`CommDialog::draw_status`]).
     fn draw(&self, list: &mut DrawList) {
         backdrop(list, &self.dialog, self.picture);
         if let Some(at) = self.dialog.item_bounds(PICTURE_ITEM) {
-            let picture = self
-                .view
-                .portrait
-                .map_or_else(|| ship_picture(self.view.ship), ImageKey::picture);
-            list.stretched_picture(picture, at.min, at.width(), at.height());
+            let modelled = self.view.portrait.is_none()
+                && self
+                    .model
+                    .as_ref()
+                    .is_some_and(|model| model.draw_in(list, at));
+            if !modelled {
+                let picture = self
+                    .view
+                    .portrait
+                    .map_or_else(|| ship_picture(self.view.ship), ImageKey::picture);
+                list.stretched_picture(picture, at.min, at.width(), at.height());
+            }
         }
         self.dialog.draw_items(list);
         if let Some(at) = self.dialog.item_bounds(CLASS_ITEM) {
@@ -1519,6 +1547,77 @@ mod tests {
         };
         assert_eq!(government_text(&independent), None);
         assert_eq!(government_text(&view()).as_deref(), Some("(Federation)"));
+    }
+
+    fn portrait() -> ShipPortrait {
+        ShipPortrait::bare(crate::model::ModelKey(8), 2.0)
+    }
+
+    /// The commands the portrait draws in `dialog`'s item 11.
+    fn portrait_in_item(dialog: &CommDialog) -> Vec<DrawCommand> {
+        let at = dialog.dialog().item_bounds(PICTURE_ITEM).expect("item 11");
+        let mut list = DrawList::new();
+        assert!(portrait().draw_in(&mut list, at));
+        list.iter().cloned().collect()
+    }
+
+    /// The stretched pictures `dialog` draws.
+    fn stretched(dialog: &CommDialog) -> Vec<ImageKey> {
+        drawn(dialog)
+            .into_iter()
+            .filter_map(|command| match command {
+                DrawCommand::StretchedPicture { image, .. } => Some(image),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_ship_s_model_draws_its_portrait_in_item_11_and_no_pict() {
+        let modelled = dialog(&view()).with_ship_model(Some(portrait()));
+        let commands = drawn(&modelled);
+        let want = portrait_in_item(&modelled);
+        assert!(
+            commands
+                .windows(want.len())
+                .any(|run| run == want.as_slice()),
+            "{commands:?}"
+        );
+        assert!(
+            !stretched(&modelled).contains(&ImageKey::picture(5001)),
+            "no PICT 5001"
+        );
+        // In the picture's place, right after the backdrop.
+        let plain = drawn(&dialog(&view()));
+        let at = plain
+            .iter()
+            .position(|command| {
+                matches!(command, DrawCommand::StretchedPicture { image, .. }
+                    if *image == ImageKey::picture(5001))
+            })
+            .expect("the PICT");
+        assert_eq!(commands[at], want[0]);
+    }
+
+    #[test]
+    fn a_person_s_hail_picture_comes_before_a_ship_s_model() {
+        let person = HailView {
+            portrait: Some(7800),
+            ..view()
+        };
+        let modelled = dialog(&person).with_ship_model(Some(portrait()));
+        assert_eq!(drawn(&modelled), drawn(&dialog(&person)));
+        assert!(stretched(&modelled).contains(&ImageKey::picture(7800)));
+    }
+
+    #[test]
+    fn with_no_model_item_11_stretches_the_ship_s_pict_as_before() {
+        let plain = dialog(&view());
+        assert_eq!(drawn(&plain.clone().with_ship_model(None)), drawn(&plain));
+        assert_eq!(
+            stretched(&plain)[..2],
+            [COMM_PICTURE, ImageKey::picture(5001)]
+        );
     }
 
     #[test]
