@@ -32,8 +32,14 @@
 //!   ([`GameData::with_star_dots`](crate::store::GameData::with_star_dots)).
 //!
 //! A model draws whenever one of its asset's files reads as a model,
-//! whatever its `placeholder` flag, as `galaxy`'s contact sheet draws it
-//! (`nova_galaxy_media::read_model`).
+//! whatever its `placeholder` flag, as `galaxy`'s contact sheet draws it.
+//! It is read whole, as the 3D layer draws it
+//! (`nova_galaxy_media::read_asset_scene`), once, and its scene is kept
+//! for that layer ([`NewGame::scenes`]); the stand-in is made from the
+//! scene's triangles. So a model reads here exactly when it reads there:
+//! a `.gltf` naming an image file that isn't there has no stand-in
+//! outline, and is reported, though its triangles alone would read.
+//! No image is decoded.
 //!
 //! # Problems
 //!
@@ -46,8 +52,9 @@
 //!
 //! A variant that inherits a base's missing livery or model draws the same
 //! way, reported against the base alone.
-//! - an asset whose model file doesn't decode, against the asset, once:
-//!   whatever shows it draws as its box or its disc.
+//! - an asset whose model file doesn't decode, or names a buffer or an
+//!   image file that isn't there, against the asset, once: whatever shows
+//!   it draws as its box or its disc.
 //!
 //! An LFS pointer isn't reported again: [`NewGame::lfs_pointers`] lists
 //! them. Nor is a reference to a file that failed to load. A model file
@@ -55,6 +62,7 @@
 //! `galaxy check` reports it.
 //!
 //! [`NewGame::lfs_pointers`]: super::NewGame::lfs_pointers
+//! [`NewGame::scenes`]: super::NewGame::scenes
 
 use std::collections::BTreeMap;
 
@@ -64,7 +72,9 @@ use nova_galaxy_format::id::Id;
 use nova_galaxy_format::load::{Doc, Galaxy, Problem};
 use nova_galaxy_format::model::{Stellar as BibleStellar, StellarKind, Visual};
 use nova_galaxy_format::source::Source;
-use nova_galaxy_media::{BARE, Model, NoModel, Placement, read_model, rgb, silhouette, top_down};
+use nova_galaxy_media::{
+    AssetScenes, BARE, Model, NoModel, Placement, read_asset_scene, rgb, silhouette, top_down,
+};
 
 use super::fleet::PX_PER_METRE;
 use super::ids::IdTable;
@@ -200,9 +210,19 @@ pub(super) fn asset<'a>(
 /// Each asset's model, read once through a [`Source`], whoever asks: the
 /// stand-ins ([`stand_ins`]) and the mounts (`super::mounts`) share one,
 /// so a model is read once and one that doesn't read is reported once.
+///
+/// What is read is the model's whole scene
+/// (`nova_galaxy_media::read_asset_scene`), and the triangles the
+/// stand-ins and mounts need are taken from it
+/// ([`Model::from_scene`]). The scenes are kept
+/// ([`into_scenes`](Self::into_scenes)) for the 3D layer, which would
+/// otherwise read every file again.
 pub struct Models<'a, S> {
     source: &'a S,
-    read: BTreeMap<&'a Id, Result<(Model, Front), NoModel>>,
+    /// Each model asked for, or none for one that didn't read.
+    read: BTreeMap<&'a Id, Option<(Model, Front)>>,
+    /// What reading each made, as it is handed on.
+    scenes: AssetScenes,
 }
 
 impl<'a, S: Source> Models<'a, S> {
@@ -212,6 +232,7 @@ impl<'a, S: Source> Models<'a, S> {
         Self {
             source,
             read: BTreeMap::new(),
+            scenes: AssetScenes::new(),
         }
     }
 
@@ -223,21 +244,32 @@ impl<'a, S: Source> Models<'a, S> {
         asset: &'a Doc<Asset>,
         problems: &mut Vec<Problem>,
     ) -> Option<&(Model, Front)> {
-        let source = self.source;
+        let (source, scenes) = (self.source, &mut self.scenes);
         self.read
             .entry(id)
             .or_insert_with(|| {
-                let read = read_model(source, &asset.data);
-                if let Err(NoModel::Unreadable(why)) = &read {
+                let scene = read_asset_scene(source, &asset.data);
+                if let Err(NoModel::Unreadable(why)) = &scene {
                     problems.push(Problem::new(
                         &asset.path,
                         format!("its model doesn't read: {why}; what shows it draws as a stand-in"),
                     ));
                 }
-                read
+                let model = scene
+                    .as_ref()
+                    .ok()
+                    .map(|(scene, front)| (Model::from_scene(scene), *front));
+                scenes.insert(id.clone(), scene);
+                model
             })
             .as_ref()
-            .ok()
+    }
+
+    /// The scene of every asset asked for, or why it has none, by the
+    /// asset's id.
+    #[must_use]
+    pub fn into_scenes(self) -> AssetScenes {
+        self.scenes
     }
 }
 
@@ -268,8 +300,8 @@ mod tests {
     use nova_galaxy_format::fixture::CC0;
     use nova_galaxy_format::fleet::Size;
     use nova_galaxy_format::media::LFS_POINTER;
-    use nova_galaxy_format::source::MemSource;
-    use nova_galaxy_media::{Outline, size_box};
+    use nova_galaxy_format::source::{CountingSource, MemSource};
+    use nova_galaxy_media::{Outline, Scene, size_box};
 
     use super::*;
     use crate::new_game::tests::galaxy;
@@ -424,6 +456,140 @@ mod tests {
         let game = loaded(&source);
         assert_eq!(problems(&game).len(), 1, "{:?}", problems(&game));
         assert!(matches!(ship(&game, "barge"), Some(StandIn::Outline(_))));
+    }
+
+    /// The scene the loaded `game` carries for the asset `asset`.
+    fn carried<'a>(game: &'a NewGame, asset: &str) -> Option<&'a Result<(Scene, Front), NoModel>> {
+        game.scenes.get(&id_of(asset))
+    }
+
+    #[test]
+    fn the_loaded_game_carries_the_scene_of_each_model_it_read() {
+        // The skiff's `hull`, and the yard's `yard`.
+        let source = yard_on_a_model().with_bytes(
+            HULL_GLB,
+            &nova_galaxy_media::fixture::glb([2.0, 1.0, 4.0], [0.0; 3]),
+        );
+        let game = loaded(&source);
+        for asset in ["hull", "yard"] {
+            let doc = &game.galaxy.assets[&id_of(asset)].data;
+            let read = read_asset_scene(&source, doc);
+            assert!(read.is_ok(), "{asset}");
+            assert_eq!(carried(&game, asset), Some(&read), "{asset}");
+        }
+        assert_eq!(problems(&game), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_model_that_does_not_read_is_carried_as_why() {
+        let pointer = [LFS_POINTER, b"\noid sha256:ab\nsize 12\n"].concat();
+        assert_eq!(
+            carried(&loaded(&galaxy().with_bytes(HULL_GLB, &pointer)), "hull"),
+            Some(&Err(NoModel::Pointer))
+        );
+        // The format's galaxy holds no media: `hull.glb` isn't there.
+        assert_eq!(
+            carried(&loaded(&galaxy()), "hull"),
+            Some(&Err(NoModel::Missing(HULL_GLB.into())))
+        );
+        let broken = loaded(&galaxy().with_bytes(HULL_GLB, b"glTF nonsense"));
+        assert!(
+            matches!(
+                carried(&broken, "hull"),
+                Some(Err(NoModel::Unreadable(why))) if why.contains(HULL_GLB)
+            ),
+            "{:?}",
+            carried(&broken, "hull")
+        );
+        // `alpha-yard` shows `spire`, a placeholder with no file.
+        assert_eq!(carried(&broken, "spire"), Some(&Err(NoModel::None)));
+    }
+
+    #[test]
+    fn the_loader_asks_each_model_file_once_for_its_stand_ins_and_mounts_together() {
+        use crate::new_game::fixture::{LIGHT_FREIGHTER_GLB, TURRET_MOUNT_GLB, modelled_sample};
+        // The freighter's model is read for its stand-in and its mounts,
+        // the turret's for the mounts that show it.
+        let memory = modelled_sample();
+        let counting = CountingSource::new(&memory);
+        let game = load(&counting, Path::new("sample"));
+        for asset in ["light-freighter", "turret-mount"] {
+            assert!(matches!(carried(&game, asset), Some(Ok(_))), "{asset}");
+        }
+        for file in [LIGHT_FREIGHTER_GLB, TURRET_MOUNT_GLB] {
+            assert_eq!(
+                counting.bytes_asked(file),
+                1,
+                "{file}: {:?}",
+                counting.all_bytes_asked()
+            );
+        }
+    }
+
+    #[test]
+    fn an_asset_nothing_shows_as_a_model_has_no_scene() {
+        // `alpha-prime`, a planet, shows `surface`, a texture; no ship,
+        // station or outfit shows `spare`.
+        let source = with_hull()
+            .with(
+                "assets/spare.md",
+                &format!(
+                    "---\nkind: model\nplaceholder: false\nfiles: [media/export/pack/spare.glb]\n{CC0}---\n"
+                ),
+            )
+            .with_bytes(
+                "media/export/pack/spare.glb",
+                &nova_galaxy_media::fixture::glb([1.0; 3], [0.0; 3]),
+            );
+        let game = loaded(&source);
+        assert!(carried(&game, "hull").is_some());
+        assert_eq!(carried(&game, "surface"), None);
+        assert_eq!(carried(&game, "spare"), None);
+    }
+
+    #[test]
+    fn a_gltf_whose_image_file_is_missing_is_its_box_and_reported_once() {
+        use nova_galaxy_media::fixture::{Builder, ImageAt, Mat};
+        // The skiff's model as a `.gltf` naming `skin.png`, which isn't
+        // there: its triangles read, its scene doesn't.
+        let (json, bin) = Builder::new([2.0, 1.0, 4.0])
+            .material(Mat::new("hull", [1.0; 4]))
+            .image(ImageAt::Uri("skin.png".into()))
+            .gltf("hull.bin");
+        let source = galaxy()
+            .with(
+                "assets/hull.md",
+                &format!(
+                    "---\nkind: model\nplaceholder: false\nfiles: [media/export/pack/hull.gltf]\n\
+                     paint: {{primary: [hull]}}\n{CC0}---\n"
+                ),
+            )
+            .with("media/export/pack/hull.gltf", &json)
+            .with_bytes("media/export/pack/hull.bin", &bin);
+        let game = loaded(&source);
+        assert_eq!(
+            ship(&game, "skiff"),
+            Some(StandIn::Outline(
+                size_box(skiff_size(), LEAGUE_PRIMARY).scaled(PX_PER_METRE)
+            ))
+        );
+        let problems = problems(&game);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(
+            problems[0].starts_with(
+                "assets/hull.md: its model doesn't read: `media/export/pack/hull.gltf`: \
+                 names `media/export/pack/skin.png`, which does not exist"
+            ),
+            "{problems:?}"
+        );
+        // With the image there, it is its silhouette again.
+        let whole = source.with_bytes(
+            "media/export/pack/skin.png",
+            nova_galaxy_media::fixture::PNG,
+        );
+        let game = loaded(&whole);
+        assert_eq!(outline(ship(&game, "skiff")).triangles.len(), 4);
+        assert_eq!(self::problems(&game), Vec::<String>::new());
     }
 
     #[test]

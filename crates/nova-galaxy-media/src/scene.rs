@@ -15,9 +15,12 @@
 //! than 0, `KHR_texture_transform`, and the metallic-roughness, normal,
 //! occlusion and emissive textures are not.
 
+use std::collections::BTreeMap;
+
 use gltf::Gltf;
 use gltf::mesh::Mode;
 use nova_galaxy_format::asset::{Asset, Front};
+use nova_galaxy_format::id::Id;
 use nova_galaxy_format::source::Source;
 
 use crate::model::{Bounds, NoModel, beside, first_model};
@@ -168,6 +171,13 @@ pub fn read_asset_scene(source: &impl Source, asset: &Asset) -> Result<(Scene, F
         read_scene(path, bytes, read)
     })
 }
+
+/// What [`read_asset_scene`] made of each asset somebody read, by the
+/// asset's id: its scene and which way it faces, or why it has none. One
+/// reader keeps these so the next needn't read the files again (the
+/// engine's loader reads each model for its 2D stand-in and hands them to
+/// the renderer's world builder).
+pub type AssetScenes = BTreeMap<Id, Result<(Scene, Front), NoModel>>;
 
 /// Triangles drawn by `primitives`.
 pub(crate) fn triangles_of(primitives: &[Primitive]) -> u32 {

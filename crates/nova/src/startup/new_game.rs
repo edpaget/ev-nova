@@ -167,7 +167,7 @@ mod tests {
         assert!(lines[2].ends_with("has no systems; starting with an empty galaxy"));
     }
 
-    // The app never names the format's `Galaxy`.
+    // The app never names the format's `Galaxy`, nor the media's scenes.
     #[allow(clippy::default_trait_access)]
     fn new_game(problems: Vec<Problem>) -> NewGame {
         NewGame {
@@ -176,6 +176,7 @@ mod tests {
             problems,
             lfs_pointers: vec!["media/export/a.glb".to_owned()],
             galaxy: Default::default(),
+            scenes: Default::default(),
         }
     }
 

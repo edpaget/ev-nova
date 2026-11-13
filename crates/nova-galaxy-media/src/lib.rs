@@ -74,5 +74,5 @@ pub use model::{Bounds, Face, Model, NoModel, model, read_model};
 pub use outline::{BARE, Outline, Triangle, painted, rgb, silhouette, size_box, top_down};
 pub use paint::{Slot, slot_of};
 pub use placement::Placement;
-pub use scene::{Scene, read_asset_scene, read_scene};
+pub use scene::{AssetScenes, Scene, read_asset_scene, read_scene};
 pub use texture::{NoTexture, read_texture};
