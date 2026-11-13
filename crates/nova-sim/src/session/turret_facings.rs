@@ -20,8 +20,9 @@
 //! The original keeps no turret facing, so this has no counterpart there
 //! and no rulebook key. Nothing in the simulation reads it, so stock play
 //! is unchanged, and no event carries it. One facing per ship serves all
-//! its turning mounts. Easing a turret's turn is not built. It plays no
-//! sound.
+//! its turning mounts. The view, not the simulation, swings a drawn
+//! turret toward it at a rate (`nova_view::flight::turret_swing`). It
+//! plays no sound.
 
 use super::{PlayerShip, Session, Space};
 use crate::combat::ShipRef;
