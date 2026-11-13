@@ -56,7 +56,7 @@
 
 use nova_view::{Color, Colorize, ModelPose, Mounting};
 
-use crate::gpu::ModelInstance;
+use crate::gpu::{ModelInstance, NO_COLORIZE};
 use crate::model::MeshId;
 use crate::viewport::LogicalSize;
 
@@ -232,6 +232,7 @@ fn placed(
         normal_from_model: [0, 1, 2].map(|col| r.map(|row| row[col])),
         shares_band,
         alpha: 1.0,
+        colorize: NO_COLORIZE,
     })
 }
 
@@ -383,15 +384,17 @@ mod tests {
     }
 
     #[test]
-    fn an_instance_and_a_part_draw_whole_until_faded() {
+    fn an_instance_and_a_part_draw_whole_and_uncolorized_until_told() {
         let pose = pose(12.0, 6.0, Orientation::IDENTITY, 5.0);
         assert_eq!(made(LOGICAL, &pose).alpha, 1.0);
+        assert_eq!(made(LOGICAL, &pose).colorize, NO_COLORIZE);
         let still = Mounting {
             at: [0.0; 3],
             turn: 0.0,
         };
         let part = part(LOGICAL, &pose, &still, MESH, 1.0).expect("drawable");
         assert_eq!(part.alpha, 1.0);
+        assert_eq!(part.colorize, NO_COLORIZE);
     }
 
     #[test]

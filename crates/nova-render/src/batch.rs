@@ -522,10 +522,11 @@ impl<S: ImageSource> Renderer<S> {
                 model,
                 ref pose,
                 alpha,
-                ..
+                colorize,
             } => {
                 let missing = &mut report.missing_models;
-                (self.models).draw_model(model, (pose, alpha), logical, batches, gpu, missing);
+                let shown = (pose, alpha, colorize);
+                (self.models).draw_model(model, shown, logical, batches, gpu, missing);
             }
             // Drawn uncut by a clip, as a model is.
             DrawCommand::Planet { planet, ref pose } => {

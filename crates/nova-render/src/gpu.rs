@@ -172,6 +172,14 @@ pub struct ModelInstance {
     /// settles which runs of a batch draw faded
     /// ([`crate::models::draw_runs`]); the adapter draws them as told.
     pub alpha: f32,
+    /// Its colorize, as a quad carries one ([`colorize_instance`]): the
+    /// colour's 5-bit red, green and blue, 0 to 31, and the level, 1 to 32
+    /// to mix; [`NO_COLORIZE`] for a model drawn in its own colours. Its
+    /// fragments' colour is mixed toward it after their lighting and
+    /// before the alpha ([`crate::camera::colorized`]). A part takes its
+    /// model's. It changes no run: a colorized opaque model draws with the
+    /// opaque ones.
+    pub colorize: [f32; 4],
 }
 
 /// Which planet's textures a [`PlanetInstance`] draws with: numbered by
@@ -953,6 +961,7 @@ mod tests {
             normal_from_model: [[0.0; 3]; 3],
             shares_band: false,
             alpha: 1.0,
+            colorize: NO_COLORIZE,
         };
         let planet = PlanetInstance {
             planet: PlanetId(0),

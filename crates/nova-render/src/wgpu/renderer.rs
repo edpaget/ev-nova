@@ -2440,6 +2440,7 @@ mod tests {
             normal_from_model: [[f; 3]; 3],
             shares_band: false,
             alpha: 1.0,
+            colorize: crate::gpu::NO_COLORIZE,
         }
     }
 

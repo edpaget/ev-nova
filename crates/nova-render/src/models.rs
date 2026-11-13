@@ -35,7 +35,11 @@
 //! A model drawn at an alpha ([`nova_view::DrawCommand::Model`]) carries
 //! it on its instance, held as [`camera::alpha`] holds it, and its parts
 //! take the same; one at an alpha that draws nothing draws nothing, its
-//! parts with it. How the adapter draws a batch's instances is settled
+//! parts with it. A model drawn colorized carries that on its instance
+//! too ([`ModelInstance::colorize`], none for one that doesn't mix), and
+//! its parts take the same; it changes no run, so an opaque colorized
+//! model draws among the opaque ones. How the adapter draws a batch's
+//! instances is settled
 //! here too ([`draw_runs`]): each faded model with its parts a run of its
 //! own, drawn depth first so only its nearest surface shows, and the
 //! opaque models between them in runs drawn as before. Bands and the
@@ -44,10 +48,10 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
-use nova_view::{ModelKey, ModelPose, Mounting};
+use nova_view::{Colorize, ModelKey, ModelPose, Mounting};
 
 use crate::camera::{self, Light};
-use crate::gpu::{Batch, Gpu, ModelInstance, ModelTextureId};
+use crate::gpu::{Batch, Gpu, ModelInstance, ModelTextureId, NO_COLORIZE, colorize_instance};
 use crate::model::{Mesh, MeshId};
 use crate::model_texture::ModelTexture;
 use crate::resident::Resident;
@@ -89,19 +93,35 @@ struct Group {
     start: usize,
     /// The alpha the model and its parts draw at.
     alpha: f32,
+    /// The colorize the model and its parts draw with
+    /// ([`ModelInstance::colorize`]).
+    colorize: [f32; 4],
+}
+
+impl Group {
+    /// `instance` as this group's model or one of its parts draws: at its
+    /// alpha and with its colorize.
+    fn shown(&self, instance: ModelInstance) -> ModelInstance {
+        ModelInstance {
+            alpha: self.alpha,
+            colorize: self.colorize,
+            ..instance
+        }
+    }
 }
 
 impl Models {
-    /// Draws model `key` at `pose` and `alpha` onto `batches` in the
-    /// `logical` space: its instance, uploaded first through `gpu` if need
-    /// be, and a key with no mesh pushed onto `missing` once. It is the
-    /// model the parts drawn next mount on, at its alpha, or, drawing
-    /// nothing (an alpha [`camera::alpha`] refuses among the rest), leaves
-    /// them nothing to mount on.
+    /// Draws model `key` at `pose` and `alpha`, mixed toward `colorize`
+    /// when it has one that mixes ([`colorize_instance`]), onto `batches`
+    /// in the `logical` space: its instance, uploaded first through `gpu`
+    /// if need be, and a key with no mesh pushed onto `missing` once. It
+    /// is the model the parts drawn next mount on, at its alpha and with
+    /// its colorize, or, drawing nothing (an alpha [`camera::alpha`]
+    /// refuses among the rest), leaves them nothing to mount on.
     pub(crate) fn draw_model(
         &mut self,
         key: ModelKey,
-        (pose, alpha): (&ModelPose, f32),
+        (pose, alpha, colorize): (&ModelPose, f32, Option<Colorize>),
         logical: LogicalSize,
         batches: &mut Vec<Batch>,
         gpu: &mut impl Gpu,
@@ -117,15 +137,18 @@ impl Models {
         let Some(instance) = camera::instance(logical, pose, mesh, radius) else {
             return;
         };
-        push(batches, ModelInstance { alpha, ..instance });
+        let mut group = Group {
+            pose: *pose,
+            hull: (mesh, radius),
+            parts: Vec::new(),
+            start: 0,
+            alpha,
+            colorize: colorize.map_or(NO_COLORIZE, colorize_instance),
+        };
+        push(batches, group.shown(instance));
         if let Some(Batch::Models { models, .. }) = batches.last() {
-            self.group = Some(Group {
-                pose: *pose,
-                hull: (mesh, radius),
-                parts: Vec::new(),
-                start: models.len() - 1,
-                alpha,
-            });
+            group.start = models.len() - 1;
+            self.group = Some(group);
         }
     }
 
@@ -163,9 +186,8 @@ impl Models {
         let Some(placed) = placed else {
             return;
         };
-        let alpha = group.alpha;
         models.truncate(group.start);
-        models.extend(placed.into_iter().map(|at| ModelInstance { alpha, ..at }));
+        models.extend(placed.into_iter().map(|at| group.shown(at)));
         group.parts.push((mesh, radius, *mounting));
     }
 
@@ -294,7 +316,8 @@ mod tests {
     use nova_data::graphics::Image;
     use nova_view::geometry::Bounds;
     use nova_view::{
-        Color, DrawCommand, DrawList, ImageKey, ImageKind, ModelPose, Mounting, Orientation, Point,
+        Color, Colorize, DrawCommand, DrawList, ImageKey, ImageKind, ModelPose, Mounting,
+        Orientation, Point,
     };
 
     use std::sync::Arc;
@@ -1148,6 +1171,109 @@ mod tests {
         let frame = frame_of(&mut renderer(), &opaque, &mut RecordingGpu::new());
         assert_eq!(draw_runs(&models_of(&frame)), [run(0..3, false)]);
         assert_eq!(draw_runs(&[]), []);
+    }
+
+    const HALF_BLUE: Colorize = Colorize {
+        level: 16,
+        rgb5: [0, 4, 31],
+    };
+
+    /// `instances` each colorized `colorize`.
+    fn colorized(instances: Vec<ModelInstance>, colorize: Colorize) -> Vec<ModelInstance> {
+        (instances.into_iter())
+            .map(|instance| ModelInstance {
+                colorize: colorize_instance(colorize),
+                ..instance
+            })
+            .collect()
+    }
+
+    /// The cube at `pose` at `alpha`, colorized [`HALF_BLUE`].
+    fn blue(pose: ModelPose, alpha: f32) -> DrawCommand {
+        DrawCommand::faded_model(CUBE, pose, alpha).with_colorize(Some(HALF_BLUE))
+    }
+
+    #[test]
+    fn a_colorized_model_and_its_parts_carry_its_colorize() {
+        let (low, high) = (on([0.0, 0.0, 0.5], 0.0), on([0.2, -0.3, 1.5], 1.0));
+        let mut list = DrawList::new();
+        list.push(blue(pose(12.0, 12.0), 1.0))
+            .mounted(PART, low)
+            .mounted(PART, high)
+            .model(CUBE, pose(30.0, 20.0))
+            .mounted(PART, low);
+        let frame = frame_of(&mut with_part(), &list, &mut RecordingGpu::new());
+        let mut expected = colorized(group(&pose(12.0, 12.0), &[low, high]), HALF_BLUE);
+        assert!(
+            expected
+                .iter()
+                .all(|instance| instance.colorize == [0.0, 4.0, 31.0, 16.0])
+        );
+        // The plain hull after it, and its part, take none.
+        let plain = group(&pose(30.0, 20.0), &[low]);
+        assert!(
+            plain
+                .iter()
+                .all(|instance| instance.colorize == NO_COLORIZE)
+        );
+        expected.extend(plain);
+        assert_eq!(models_of(&frame), banded(expected));
+    }
+
+    #[test]
+    fn a_colorize_that_does_not_mix_draws_as_none() {
+        let mut plain = DrawList::new();
+        plain.model(CUBE, pose(12.0, 12.0));
+        for level in [0, 33] {
+            // Built by hand: `with_colorize` would drop it.
+            let mut list = DrawList::new();
+            list.push(DrawCommand::Model {
+                model: CUBE,
+                pose: pose(12.0, 12.0),
+                alpha: 1.0,
+                colorize: Some(Colorize { level, ..HALF_BLUE }),
+            });
+            assert_eq!(
+                batches(renderer(), &list),
+                batches(renderer(), &plain),
+                "{level}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_opaque_colorized_model_draws_in_the_opaque_run() {
+        let mut list = DrawList::new();
+        list.model(CUBE, pose(12.0, 12.0))
+            .push(blue(pose(20.0, 12.0), 1.0))
+            .model(CUBE, pose(30.0, 12.0));
+        let frame = frame_of(&mut renderer(), &list, &mut RecordingGpu::new());
+        let models = models_of(&frame);
+        assert_eq!(models[1].colorize, colorize_instance(HALF_BLUE));
+        assert_eq!(draw_runs(&models), [run(0..3, false)]);
+    }
+
+    #[test]
+    fn a_faded_colorized_model_keeps_its_faded_run() {
+        let part = on([0.0, 0.0, 0.5], 0.0);
+        let mut list = DrawList::new();
+        list.model(CUBE, pose(12.0, 12.0))
+            .push(blue(pose(20.0, 12.0), 0.5))
+            .mounted(PART, part)
+            .model(CUBE, pose(30.0, 20.0));
+        let frame = frame_of(&mut with_part(), &list, &mut RecordingGpu::new());
+        let models = models_of(&frame);
+        let mut expected = vec![instance(&pose(12.0, 12.0))];
+        expected.extend(colorized(
+            at_alpha(group(&pose(20.0, 12.0), &[part]), 0.5),
+            HALF_BLUE,
+        ));
+        expected.push(instance(&pose(30.0, 20.0)));
+        assert_eq!(models, banded(expected));
+        assert_eq!(
+            draw_runs(&models),
+            [run(0..1, false), run(1..3, true), run(3..4, false)]
+        );
     }
 
     #[test]

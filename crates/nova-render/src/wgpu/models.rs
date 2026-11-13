@@ -19,10 +19,15 @@
 //!   passes run the one vertex shader, whose clip position is
 //!   `@invariant`, so the colour pass's depths equal the depth pass's.
 //!
-//! `models.wgsl` mirrors [`crate::camera::fragment`] and
-//! [`crate::camera::faded`]: the vertex colour times the texel, lit by
-//! [`crate::camera::shade`]'s formula unless the vertex is unlit, its
-//! alpha times the instance's.
+//! `models.wgsl` mirrors [`crate::camera::fragment`],
+//! [`crate::camera::colorized`] and [`crate::camera::faded`]: the vertex
+//! colour times the texel, lit by [`crate::camera::shade`]'s formula
+//! unless the vertex is unlit, mixed toward the instance's colorize when
+//! it mixes, its alpha times the instance's. The colorize is one more
+//! per-instance attribute ([`ModelData::colorize`], location 14, the 15th
+//! of the 16 a pipeline may take by default), read by the one fragment
+//! shader all three pipelines share, so it adds no pipeline and changes
+//! no run; the depth-only pass writes no colour and ignores it.
 //!
 //! A texture is uploaded once, with its mip chain, and bound once for
 //! each sampler a section samples it through: a bind group for each
@@ -92,7 +97,7 @@ impl From<&Vertex> for MeshVertex {
 
 /// One model as the model shader reads it, per instance: its transforms
 /// by columns (the normal's padded to four floats a column), its batch's
-/// light, the direction then the ambient, and its alpha.
+/// light, the direction then the ambient, its alpha, and its colorize.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub(super) struct ModelData {
@@ -104,6 +109,9 @@ pub(super) struct ModelData {
     pub light: [f32; 4],
     /// The alpha it draws at ([`ModelInstance::alpha`]).
     pub alpha: f32,
+    /// Its colorize ([`ModelInstance::colorize`]): the colour's 5-bit
+    /// channels, then the level.
+    pub colorize: [f32; 4],
 }
 
 impl ModelData {
@@ -115,6 +123,7 @@ impl ModelData {
             normal: model.normal_from_model.map(|[a, b, c]| [a, b, c, 0.0]),
             light: [x, y, z, light.ambient],
             alpha: model.alpha,
+            colorize: model.colorize,
         }
     }
 }
@@ -438,7 +447,7 @@ fn pipeline(
     let instance = wgpu::vertex_attr_array![
         5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4,
         9 => Float32x4, 10 => Float32x4, 11 => Float32x4, 12 => Float32x4,
-        13 => Float32,
+        13 => Float32, 14 => Float32x4,
     ];
     let (depth_write, depth_compare, write_mask) = match drawing {
         Drawing::Whole => (true, wgpu::CompareFunction::Less, wgpu::ColorWrites::ALL),
@@ -609,7 +618,7 @@ mod tests {
     }
 
     #[test]
-    fn a_model_becomes_its_columns_then_its_light_then_its_alpha() {
+    fn a_model_becomes_its_columns_then_its_light_then_its_alpha_then_its_colorize() {
         let model = ModelInstance {
             mesh: MeshId(2),
             clip_from_model: [
@@ -621,6 +630,7 @@ mod tests {
             normal_from_model: [[17.0, 18.0, 19.0], [20.0, 21.0, 22.0], [23.0, 24.0, 25.0]],
             shares_band: false,
             alpha: 0.375,
+            colorize: [29.0, 30.0, 31.0, 16.0],
         };
         let light = Light {
             direction: [26.0, 27.0, 28.0],
@@ -633,6 +643,7 @@ mod tests {
             .chain([17.0, 18.0, 19.0, 0.0, 20.0, 21.0, 22.0, 0.0])
             .chain([23.0, 24.0, 25.0, 0.0, 26.0, 27.0, 28.0, 0.5])
             .chain([0.375])
+            .chain([29.0, 30.0, 31.0, 16.0])
             .collect();
         assert_eq!(floats, expected.as_slice());
     }
